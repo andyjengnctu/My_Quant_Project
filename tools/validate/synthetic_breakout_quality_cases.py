@@ -11169,7 +11169,7 @@ def validate_breakout_quality_selection_strategy_realization_contract_case(_base
     menu_source = app_source[app_source.find("def _interactive_model_research") : app_source.find("def run_model_training_menu")]
     audit_path = root / "tools" / "audit" / "breakout_quality" / "selection_strategy_realization.py"
     audit_source = audit_path.read_text(encoding="utf-8")
-    optimizer_path = root / "tools" / "optimizer" / "outer_rolling_oos.py"
+    optimizer_path = root / "services" / "optimizer" / "outer_rolling_oos.py"
     optimizer_source = optimizer_path.read_text(encoding="utf-8")
     add_check(
         results,
@@ -13908,10 +13908,10 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     )
     project_root = Path(__file__).resolve().parents[2]
     ranker_source = (
-        project_root / "tools" / "filters" / "breakout_quality" / "train_continuous_ranker.py"
+        project_root / "services" / "breakout_quality" / "train_continuous_ranker.py"
     ).read_text(encoding="utf-8")
     pit_builder_source = (
-        project_root / "tools" / "filters" / "breakout_quality" / "build_point_in_time_scores.py"
+        project_root / "services" / "breakout_quality" / "point_in_time_scores.py"
     ).read_text(encoding="utf-8")
     pit_builder_tree = ast.parse(pit_builder_source)
     pit_builder_call_keywords = {
@@ -16625,7 +16625,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         project_root / "tools" / "filters" / "breakout_quality" / "strategy_adapt.py"
     ).read_text(encoding="utf-8")
     outer_source = (
-        project_root / "tools" / "optimizer" / "outer_rolling_oos.py"
+        project_root / "services" / "optimizer" / "outer_rolling_oos.py"
     ).read_text(encoding="utf-8")
     add_check(
         results,
@@ -17305,7 +17305,7 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         project_root / "tools" / "filters" / "breakout_quality" / "strategy_trade_path_label_gate.py"
     ).read_text(encoding="utf-8")
     binary_pit_source = (
-        project_root / "tools" / "filters" / "breakout_quality" / "build_binary_point_in_time_scores.py"
+        project_root / "services" / "breakout_quality" / "binary_point_in_time_scores.py"
     ).read_text(encoding="utf-8")
     add_check(
         results,
@@ -17704,6 +17704,57 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "sys.modules[__name__] = _impl" in portfolio_replay_wrapper_source,
     )
 
+    canonical_service_paths = (
+        project_root / "services" / "breakout_quality" / "point_in_time_scores.py",
+        project_root / "services" / "breakout_quality" / "binary_point_in_time_scores.py",
+        project_root / "services" / "breakout_quality" / "point_in_time_audit.py",
+        project_root / "services" / "breakout_quality" / "continuous_ranker_pipeline.py",
+        project_root / "services" / "optimizer" / "outer_rolling_oos.py",
+        project_root / "services" / "optimizer" / "runtime.py",
+        project_root / "services" / "optimizer" / "session_factory.py",
+    )
+    forbidden_reverse_imports: list[str] = []
+    for root_name in ("services", "filters", "core"):
+        for source_path in (project_root / root_name).rglob("*.py"):
+            source_tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+            for node in ast.walk(source_tree):
+                if isinstance(node, ast.ImportFrom) and str(node.module or "").startswith("tools"):
+                    forbidden_reverse_imports.append(f"{source_path.relative_to(project_root)}:{node.lineno}:{node.module}")
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if str(alias.name).startswith("tools"):
+                            forbidden_reverse_imports.append(f"{source_path.relative_to(project_root)}:{node.lineno}:{alias.name}")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "formal_domain_and_services_do_not_reverse_depend_on_tools",
+        True,
+        all(path.is_file() for path in canonical_service_paths)
+        and not forbidden_reverse_imports
+        and "from services.breakout_quality.point_in_time_scores import (" in preparation_source
+        and "from services.breakout_quality.point_in_time_audit import (" in preparation_source
+        and "from services.breakout_quality.binary_point_in_time_scores import (" in param_service_source
+        and "from services.optimizer.outer_rolling_oos import" in param_service_source
+        and "from services.optimizer.runtime import" in param_service_source
+        and "from services.optimizer.session_factory import (" in param_service_source,
+    )
+
+    import importlib
+    canonical_train_module = importlib.import_module("services.breakout_quality.train")
+    legacy_train_module = importlib.import_module("tools.filters.breakout_quality.train")
+    canonical_optimizer_module = importlib.import_module("services.optimizer.outer_rolling_oos")
+    legacy_optimizer_module = importlib.import_module("tools.optimizer.outer_rolling_oos")
+    canonical_pit_module = importlib.import_module("services.breakout_quality.point_in_time_scores")
+    legacy_pit_module = importlib.import_module("tools.filters.breakout_quality.build_point_in_time_scores")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "service_migration_preserves_legacy_module_aliases_and_project_root",
+        True,
+        canonical_train_module is legacy_train_module
+        and canonical_optimizer_module is legacy_optimizer_module
+        and canonical_pit_module is legacy_pit_module
+        and Path(canonical_train_module.PROJECT_ROOT).resolve() == project_root.resolve(),
+    )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "comparison_config_lists_individual_arms_contrasts_and_preparation_without_active_id",
@@ -17780,7 +17831,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "checkpoint_only=True" not in model_prepare_source
         and "缺少／不相容fold由模型訓練工作類型補訓" in model_prepare_source
         and "Strategy Compare不得因此訓練模型" in (
-            project_root / "tools" / "filters" / "breakout_quality" / "build_point_in_time_scores.py"
+            project_root / "services" / "breakout_quality" / "point_in_time_scores.py"
         ).read_text(encoding="utf-8")
         and any(
             source.artifact_contract is not None

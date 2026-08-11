@@ -208,14 +208,14 @@ python apps/research.py model audit-target-time-ablation --filter-id breakout_qu
 - `apps/`：正式入口層，只從對應 application/service façade 匯入公開介面。
 - `services/`：正式 application/service orchestration；可組合`core/`、`filters/`與其他正式service，不得反向依賴`tools/`。
 - `core/`：核心規則、帳務、價格、統計、path 與共用 helper；不得放 UI orchestration 或 validate 腳本。
-- `tools/`：Audit、CLI／GUI、下載、validate、local regression與尚待搬遷的相容/orchestration層；正式domain與services不得依賴其驗證／UI實作。
+- `tools/`：Audit、CLI／GUI、下載、validate、local regression與legacy import compatibility wrapper；canonical portfolio replay、optimizer library與Breakout Quality training／PIT application service均位於`services/`，正式domain與services不得反向依賴`tools/`。
 - `config/`：共用政策與執行預設。
 - `models/`：模型工件與 runtime 產生或使用者保留的可選最佳參數輸入；沒有 path override 時，預設參數 fallback 仍解析到 `models/run_best_params.json`，但 repository／交付 ZIP 不必預先包含該可變動工件。
 - `doc/`：架構、常用指令與 formal checklist 文件。
 
 ## 正式入口
 
-- `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練由`config/research.py`指定active model provider；策略參數最佳化目前仍由既有optimizer互動orchestrator承接；策略組合比較依`config/strategy_compare.py`執行並透過`services/portfolio_replay.py`重用canonical portfolio replay，其中Multiple-seed robustness以Strategy Compare作UI/orchestrator、模型權重仍只由canonical continuous-ranker trainer建立；Audit依`config/audit.py`指定active module。
+- `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練由`config/research.py`指定active model provider；策略參數最佳化目前仍由既有optimizer互動orchestrator承接；策略組合比較依`config/strategy_compare.py`執行並透過`services/portfolio_replay.py`重用canonical portfolio replay；策略參數訓練重用`services/optimizer/` canonical optimizer library，Breakout Quality training／PIT producer則由`services/breakout_quality/`承接，其中Multiple-seed robustness以Strategy Compare作UI/orchestrator、模型權重仍只由canonical continuous-ranker trainer建立；Audit依`config/audit.py`指定active module。
 - `tools/filters/breakout_quality/application.py`：Breakout Quality model provider，承接原完整model workflow、dataset、training、score export、易讀report與詳細evaluation；不是使用者直接入口。
 - `apps/test_suite.py`：日常一鍵測試正式入口。
 - `apps/package_zip.py`：打包正式入口。
@@ -291,7 +291,7 @@ Audit只建立Inner Train／Validation／Selection分布、同日rankability及�
 strategy_aligned_no_time_pass_magnitude_mse
 ```
 
-仍重用active `inception_time_v1`與既有2-logit head；模型結構與checkpoint shape不變。`tools.filters.breakout_quality.train_continuous_ranker`依profile的`training_label_scope=pass_only`，只在同日PASS groups內建立No-time Target percentile，並只用PASS groups更新gradient、選epoch與完整Selection refit。
+仍重用active `inception_time_v1`與既有2-logit head；模型結構與checkpoint shape不變。`services/breakout_quality/train_continuous_ranker.py`依profile的`training_label_scope=pass_only`，只在同日PASS groups內建立No-time Target percentile，並只用PASS groups更新gradient、選epoch與完整Selection refit。
 
 Checkpoint寫入前不得建立OOS percentile；模型凍結後才輸出OOS PASS-only主要指標、all-label次要診斷，以及actual PASS／REJECT round-trip分層結果。11G為research-only、CLI-only，不加入互動選單，不建立threshold、runtime combination或forward-OOS正式scores。
 
@@ -310,7 +310,7 @@ python apps/research.py model audit-pass-realization-gap --filter-id breakout_qu
 
 ### 11I Nested Selection Strategy-realization Coverage Audit
 
-11I重用既有Rolling OOS optimizer與canonical portfolio replay，建立2014～2020 Selection內nested OOS策略實現覆蓋。Nested params建立至2020-12-31，但策略replay與Target配對只允許到11F `final_refit_date_range.end=2020-11-05`，避免Target path跨入2021。研究參數透過`V16_MODELS_DIR`寫入獨立research models目錄；`tools/optimizer/outer_rolling_oos.py`必須忠實使用該models path，避免覆蓋正式`models/roos_*.json`。`--optimizer-trials`的CLI預設直接引用`config.training_policy.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`，確保config為單一真理來源；明確CLI值仍可單次覆蓋，已生成腳本不會隨config自動改寫。
+11I重用既有Rolling OOS optimizer與canonical portfolio replay，建立2014～2020 Selection內nested OOS策略實現覆蓋。Nested params建立至2020-12-31，但策略replay與Target配對只允許到11F `final_refit_date_range.end=2020-11-05`，避免Target path跨入2021。研究參數透過`V16_MODELS_DIR`寫入獨立research models目錄；`services/optimizer/outer_rolling_oos.py`必須忠實使用該models path，避免覆蓋正式`models/roos_*.json`。`--optimizer-trials`的CLI預設直接引用`config.training_policy.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`，確保config為單一真理來源；明確CLI值仍可單次覆蓋，已生成腳本不會隨config自動改寫。
 
 正式CLI為`audit-selection-strategy-realization`，只輸出qualified／orderable candidate、round trips、No-time Target匹配與Target↔strategy R診斷。Actual portfolio trades受資金與持倉競爭選擇，未交易候選保持unlabeled；本輪不建立訓練Target、profile、checkpoint或runtime score，亦不加入互動選單。
 

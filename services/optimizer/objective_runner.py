@@ -1,0 +1,794 @@
+import time
+from typing import Any
+
+import pandas as pd
+
+from config.training_policy import (
+    OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
+    OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS,
+)
+from core.portfolio_engine import run_portfolio_timeline
+from core.portfolio_stats import calc_portfolio_score
+from core.strategy_params import build_runtime_param_raw_value
+from services.optimizer.objective_filters import apply_filter_rules
+from core.walk_forward_policy import filter_search_train_dates
+from services.optimizer.objective_profiles import build_initial_profile_row, build_trial_params
+from services.optimizer.param_cache import build_full_evaluation_cache_key, build_prep_cache_key
+from services.optimizer.prep import is_insufficient_data_message, prepare_trial_inputs
+from services.optimizer.study_utils import (
+    INVALID_TRIAL_VALUE,
+    OBJECTIVE_MODE_LEGACY_BASE_SCORE,
+    OBJECTIVE_MODE_SPLIT_TRAIN_ROMD,
+    normalize_objective_mode,
+)
+
+
+def _append_invalid_profile_row(*, session, trial, profile_row, fail_reason: str, objective_start: float):
+    trial.set_user_attr("fail_reason", fail_reason)
+    profile_row["fail_reason"] = fail_reason
+    profile_row["trial_value"] = INVALID_TRIAL_VALUE
+    profile_row["objective_wall_sec"] = time.perf_counter() - objective_start
+    session.profile_recorder.append_row(profile_row)
+    trial.set_user_attr("profile_row", profile_row)
+    return INVALID_TRIAL_VALUE
+
+
+def is_inner_validate_anti_overfit_enabled_for_mode(objective_mode: str | None) -> bool:
+    mode = normalize_objective_mode(objective_mode or "")
+    return bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED) and mode == OBJECTIVE_MODE_SPLIT_TRAIN_ROMD
+
+
+def _policy_date(policy: dict, key: str) -> str:
+    text = str((policy or {}).get(key) or "").strip()
+    if not text:
+        return ""
+    return pd.Timestamp(text).normalize().strftime("%Y-%m-%d")
+
+
+def resolve_inner_validate_policy(session, *, objective_mode: str | None = None) -> dict[str, Any]:
+    mode = normalize_objective_mode(session.objective_mode if objective_mode is None else objective_mode)
+    if not is_inner_validate_anti_overfit_enabled_for_mode(mode):
+        return {"enabled": False, "mode": str(mode)}
+
+    runtime_policy = dict(getattr(session, "walk_forward_policy", {}) or {})
+    holdout_years = max(1, int(OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS))
+    train_start_date = _policy_date(runtime_policy, "train_start_date")
+    full_selection_end_date = _policy_date(runtime_policy, "search_train_end_date")
+    if full_selection_end_date:
+        full_end_ts = pd.Timestamp(full_selection_end_date).normalize()
+        validate_start_ts = (full_end_ts - pd.DateOffset(years=int(holdout_years)) + pd.Timedelta(days=1)).normalize()
+        inner_train_end_ts = validate_start_ts - pd.Timedelta(days=1)
+        train_start_ts = pd.Timestamp(train_start_date or f"{int(getattr(session, 'train_start_year', 0))}-01-01").normalize()
+        return {
+            "enabled": True,
+            "mode": str(mode),
+            "date_based": True,
+            "train_start_year": int(train_start_ts.year),
+            "train_start_date": train_start_ts.strftime("%Y-%m-%d"),
+            "inner_train_end_year": int(inner_train_end_ts.year),
+            "inner_train_end_date": inner_train_end_ts.strftime("%Y-%m-%d"),
+            "validate_start_year": int(validate_start_ts.year),
+            "validate_start_date": validate_start_ts.strftime("%Y-%m-%d"),
+            "validate_end_year": int(full_end_ts.year),
+            "validate_end_date": full_end_ts.strftime("%Y-%m-%d"),
+            "validate_year": int(full_end_ts.year),
+            "holdout_years": int(holdout_years),
+            "full_selection_end_year": int(full_end_ts.year),
+            "full_selection_end_date": full_end_ts.strftime("%Y-%m-%d"),
+        }
+
+    full_selection_end_year = int(
+        runtime_policy.get("search_train_end_year", getattr(session, "search_train_end_year", 0))
+    )
+    validate_start_year = int(full_selection_end_year) - int(holdout_years) + 1
+    validate_end_year = int(full_selection_end_year)
+    inner_train_end_year = int(validate_start_year) - 1
+    train_start_year = int(getattr(session, "train_start_year", 0))
+    return {
+        "enabled": True,
+        "mode": str(mode),
+        "date_based": False,
+        "train_start_year": int(train_start_year),
+        "inner_train_end_year": int(inner_train_end_year),
+        "validate_start_year": int(validate_start_year),
+        "validate_end_year": int(validate_end_year),
+        "validate_year": int(validate_end_year),
+        "holdout_years": int(holdout_years),
+        "full_selection_end_year": int(full_selection_end_year),
+    }
+
+
+def _filter_year_window_dates(sorted_dates, *, start_year: int, end_year: int):
+    filtered = []
+    start_year = int(start_year)
+    end_year = int(end_year)
+    for raw_date in list([] if sorted_dates is None else sorted_dates):
+        year = int(getattr(raw_date, "year", 0) or 0)
+        if year == 0:
+            raw_text = str(raw_date or "").strip()
+            try:
+                year = int(raw_text[:4])
+            except (TypeError, ValueError):
+                continue
+        if start_year <= year <= end_year:
+            filtered.append(raw_date)
+    return filtered
+
+
+def _filter_date_window_dates(sorted_dates, *, start_date: str, end_date: str):
+    start_ts = pd.Timestamp(start_date).normalize()
+    end_ts = pd.Timestamp(end_date).normalize()
+    filtered = []
+    for raw_date in list([] if sorted_dates is None else sorted_dates):
+        try:
+            ts = pd.Timestamp(raw_date).normalize()
+        except (TypeError, ValueError):
+            continue
+        if start_ts <= ts <= end_ts:
+            filtered.append(raw_date)
+    return filtered
+
+
+def resolve_inner_validate_scope(session, master_dates, *, objective_mode: str | None = None):
+    policy = resolve_inner_validate_policy(session, objective_mode=objective_mode)
+    if not bool(policy.get("enabled", False)):
+        return {"enabled": False, "policy": policy, "validate_dates": [], "fail_reason": None}
+    sorted_dates = sorted([] if master_dates is None else master_dates)
+    if bool(policy.get("date_based", False)):
+        validate_dates = _filter_date_window_dates(
+            sorted_dates,
+            start_date=str(policy["validate_start_date"]),
+            end_date=str(policy["validate_end_date"]),
+        )
+    else:
+        validate_dates = _filter_year_window_dates(
+            sorted_dates,
+            start_year=int(policy["validate_start_year"]),
+            end_year=int(policy["validate_end_year"]),
+        )
+    fail_reason = None if validate_dates else "inner validation 區間無有效資料"
+    return {
+        "enabled": True,
+        "policy": policy,
+        "validate_dates": validate_dates,
+        "fail_reason": fail_reason,
+    }
+
+
+def resolve_search_train_scope(session, master_dates, *, objective_mode: str | None = None):
+    mode = normalize_objective_mode(session.objective_mode if objective_mode is None else objective_mode)
+    base_policy = dict(getattr(session, "walk_forward_policy", {}) or {})
+    master_dates_list = list([] if master_dates is None else master_dates)
+    if not master_dates_list:
+        empty_policy = resolve_inner_validate_policy(session, objective_mode=mode)
+        return {
+            "mode": str(mode),
+            "sorted_dates": [],
+            "search_train_dates": [],
+            "effective_search_train_end_year": int(getattr(session, "search_train_end_year", 0)),
+            "effective_search_train_end_date": base_policy.get("search_train_end_date"),
+            "sort_dates_sec": 0.0,
+            "fail_reason": "無有效資料",
+            "inner_validate_policy": empty_policy,
+        }
+
+    sort_start = time.perf_counter()
+    sorted_dates = sorted(master_dates_list)
+    sort_dates_sec = time.perf_counter() - sort_start
+    use_full_history_search = mode == OBJECTIVE_MODE_LEGACY_BASE_SCORE
+    if use_full_history_search:
+        search_train_dates = list(sorted_dates)
+        effective_search_train_end_year = int(pd.Timestamp(sorted_dates[-1]).year)
+        effective_search_train_end_date = pd.Timestamp(sorted_dates[-1]).normalize().strftime("%Y-%m-%d")
+        fail_reason = None if search_train_dates else "主搜尋 train 區間無有效資料"
+        inner_policy = resolve_inner_validate_policy(session, objective_mode=mode)
+    else:
+        inner_policy = resolve_inner_validate_policy(session, objective_mode=mode)
+        train_start_date = _policy_date(base_policy, "train_start_date")
+        policy_search_end_date = _policy_date(base_policy, "search_train_end_date")
+        if bool(inner_policy.get("enabled", False)) and bool(inner_policy.get("date_based", False)):
+            effective_search_train_end_date = str(inner_policy["inner_train_end_date"])
+            effective_search_train_end_year = int(pd.Timestamp(effective_search_train_end_date).year)
+            start_ts = pd.Timestamp(train_start_date or f"{int(session.train_start_year)}-01-01").normalize()
+            if pd.Timestamp(effective_search_train_end_date).normalize() < start_ts:
+                search_train_dates = []
+                fail_reason = "inner validation 切分後 training dates 不足"
+            else:
+                search_train_dates = filter_search_train_dates(
+                    sorted_dates=sorted_dates,
+                    train_start_year=int(session.train_start_year),
+                    search_train_end_year=int(effective_search_train_end_year),
+                    train_start_date=train_start_date,
+                    search_train_end_date=effective_search_train_end_date,
+                )
+                fail_reason = None if search_train_dates else "主搜尋 train 區間無有效資料"
+        elif bool(inner_policy.get("enabled", False)):
+            effective_search_train_end_year = int(inner_policy["inner_train_end_year"])
+            effective_search_train_end_date = None
+            if effective_search_train_end_year < int(session.train_start_year):
+                search_train_dates = []
+                fail_reason = "inner validation 切分後 training years 不足"
+            else:
+                search_train_dates = filter_search_train_dates(
+                    sorted_dates=sorted_dates,
+                    train_start_year=int(session.train_start_year),
+                    search_train_end_year=int(effective_search_train_end_year),
+                    train_start_date=train_start_date,
+                )
+                fail_reason = None if search_train_dates else "主搜尋 train 區間無有效資料"
+        else:
+            effective_search_train_end_year = int(session.search_train_end_year)
+            effective_search_train_end_date = policy_search_end_date or None
+            search_train_dates = filter_search_train_dates(
+                sorted_dates=sorted_dates,
+                train_start_year=int(session.train_start_year),
+                search_train_end_year=int(effective_search_train_end_year),
+                train_start_date=train_start_date,
+                search_train_end_date=effective_search_train_end_date,
+            )
+            fail_reason = None if search_train_dates else "主搜尋 train 區間無有效資料"
+
+    return {
+        "mode": str(mode),
+        "sorted_dates": sorted_dates,
+        "search_train_dates": search_train_dates,
+        "effective_search_train_end_year": int(effective_search_train_end_year),
+        "effective_search_train_end_date": effective_search_train_end_date,
+        "sort_dates_sec": float(sort_dates_sec),
+        "fail_reason": fail_reason,
+        "inner_validate_policy": inner_policy,
+    }
+
+
+def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_scope: dict[str, Any], profile_stats=None):
+    fail_reason = str(search_scope.get("fail_reason") or "").strip()
+    if fail_reason:
+        return {
+            "ok": False,
+            "fail_reason": fail_reason,
+            "score": float(INVALID_TRIAL_VALUE),
+            "profile_stats": {},
+        }
+
+    all_dfs_fast = prep_result["all_dfs_fast"]
+    all_trade_logs = prep_result["all_trade_logs"]
+    all_pit_stats_index = prep_result.get("all_pit_stats_index")
+    benchmark_data = all_dfs_fast.get("0050", None)
+    # AI註: local_min review 只需要完整統計值，不需要每個 portfolio 子步驟的 timing。
+    # AI註: profile_stats=None 時仍保留 yearly/dependency 等統計輸出，但關閉細部計時以避免重複 perf_counter 成本。
+    pf_profile = {"_timing_enabled": False} if profile_stats is None else profile_stats
+
+    with session.optimizer_runtime_context():
+        (
+            ret_pct,
+            mdd,
+            trade_count,
+            final_eq,
+            avg_exp,
+            max_exp,
+            bm_ret,
+            bm_mdd,
+            win_rate,
+            pf_ev,
+            pf_payoff,
+            total_missed,
+            total_missed_sells,
+            r_sq,
+            m_win_rate,
+            bm_r_sq,
+            bm_m_win_rate,
+            normal_trade_count,
+            extended_trade_count,
+            annual_trades,
+            reserved_buy_fill_rate,
+            annual_return_pct,
+            bm_annual_return_pct,
+        ) = run_portfolio_timeline(
+            all_dfs_fast,
+            all_trade_logs,
+            list(search_scope["search_train_dates"]),
+            session.train_start_year,
+            ai_params,
+            session.train_max_positions,
+            session.train_enable_rotation,
+            benchmark_ticker="0050",
+            benchmark_data=benchmark_data,
+            is_training=True,
+            profile_stats=pf_profile,
+            verbose=False,
+            pit_stats_index=all_pit_stats_index,
+        )
+
+    full_year_count = int(pf_profile.get("full_year_count", 0))
+    min_full_year_return_pct = float(pf_profile.get("min_full_year_return_pct", 0.0))
+    full_month_count = int(pf_profile.get("full_month_count", 0))
+    min_month_return_pct = float(pf_profile.get("min_month_return_pct", 0.0))
+    full_quarter_count = int(pf_profile.get("full_quarter_count", 0))
+    min_quarter_return_pct = float(pf_profile.get("min_quarter_return_pct", 0.0))
+    bm_min_full_year_return_pct = float(pf_profile.get("bm_min_full_year_return_pct", 0.0))
+    bm_min_month_return_pct = float(pf_profile.get("bm_min_month_return_pct", 0.0))
+    bm_min_quarter_return_pct = float(pf_profile.get("bm_min_quarter_return_pct", 0.0))
+    portfolio_total_r = float(pf_profile.get("portfolio_total_r", 0.0))
+    portfolio_median_r = float(pf_profile.get("portfolio_median_r", 0.0))
+    normal_trade_count = int(pf_profile.get("normal_trades", normal_trade_count) or 0)
+    extended_trade_count = int(pf_profile.get("extended_trades", extended_trade_count) or 0)
+    breakout_trade_count = int(pf_profile.get("breakout_trades", normal_trade_count) or 0)
+    reentry_trade_count = int(pf_profile.get("reentry_trades", 0) or 0)
+    single_stock_trade_stats = {
+        "trade_count": int(pf_profile.get("single_stock_trade_count", 0) or 0),
+        "win_rate": float(pf_profile.get("single_stock_win_rate", 0.0) or 0.0),
+        "payoff_r": float(pf_profile.get("single_stock_payoff_r", 0.0) or 0.0),
+        "avg_r": float(pf_profile.get("single_stock_avg_r", 0.0) or 0.0),
+        "median_r": float(pf_profile.get("single_stock_median_r", 0.0) or 0.0),
+        "total_r": float(pf_profile.get("single_stock_total_r", 0.0) or 0.0),
+    }
+    score_total_r = float(pf_profile.get("score_total_r", single_stock_trade_stats["total_r"]) or 0.0)
+    score_median_r = float(pf_profile.get("score_median_r", single_stock_trade_stats["median_r"]) or 0.0)
+    metrics = {
+        "mdd": mdd,
+        "annual_trades": annual_trades,
+        "reserved_buy_fill_rate": reserved_buy_fill_rate,
+        "annual_return_pct": annual_return_pct,
+        "full_year_count": full_year_count,
+        "min_full_year_return_pct": min_full_year_return_pct,
+        "min_month_return_pct": min_month_return_pct,
+        "min_quarter_return_pct": min_quarter_return_pct,
+        "win_rate": win_rate,
+        "m_win_rate": m_win_rate,
+        "r_sq": r_sq,
+    }
+    objective_fail_reason = apply_filter_rules(metrics)
+    if objective_fail_reason is not None:
+        return {
+            "ok": False,
+            "fail_reason": str(objective_fail_reason),
+            "score": float(INVALID_TRIAL_VALUE),
+            "profile_stats": pf_profile,
+            "ret_pct": ret_pct,
+            "mdd": mdd,
+            "trade_count": trade_count,
+            "final_equity": final_eq,
+            "avg_exposure": avg_exp,
+            "max_exposure": max_exp,
+            "bm_return": bm_ret,
+            "bm_mdd": bm_mdd,
+            "win_rate": win_rate,
+            "pf_ev": pf_ev,
+            "pf_payoff": pf_payoff,
+            "portfolio_total_r": portfolio_total_r,
+            "portfolio_median_r": portfolio_median_r,
+            "score_total_r": score_total_r,
+            "score_median_r": score_median_r,
+            "score_r_source": str(pf_profile.get("score_r_source", "single_stock")),
+            "single_stock_trade_stats": single_stock_trade_stats,
+            "missed_buys": total_missed,
+            "missed_sells": total_missed_sells,
+            "normal_trades": normal_trade_count,
+            "extended_trades": extended_trade_count,
+            "breakout_trades": breakout_trade_count,
+            "reentry_trades": reentry_trade_count,
+            "annual_trades": annual_trades,
+            "reserved_buy_fill_rate": reserved_buy_fill_rate,
+            "annual_return_pct": annual_return_pct,
+            "bm_annual_return_pct": bm_annual_return_pct,
+            "full_year_count": full_year_count,
+            "min_full_year_return_pct": min_full_year_return_pct,
+            "full_month_count": full_month_count,
+            "min_month_return_pct": min_month_return_pct,
+            "full_quarter_count": full_quarter_count,
+            "min_quarter_return_pct": min_quarter_return_pct,
+            "yearly_return_rows": pf_profile.get("yearly_return_rows", []),
+            "monthly_return_rows": pf_profile.get("monthly_return_rows", []),
+            "quarterly_return_rows": pf_profile.get("quarterly_return_rows", []),
+            "dominant_year_dependency_diagnostics": pf_profile.get("dominant_year_dependency_diagnostics", {}),
+            "bm_min_full_year_return_pct": bm_min_full_year_return_pct,
+            "bm_min_month_return_pct": bm_min_month_return_pct,
+            "bm_min_quarter_return_pct": bm_min_quarter_return_pct,
+            "r_squared": r_sq,
+            "m_win_rate": m_win_rate,
+            "bm_r_squared": bm_r_sq,
+            "bm_m_win_rate": bm_m_win_rate,
+            "base_score": float(INVALID_TRIAL_VALUE),
+        }
+
+    base_score = calc_portfolio_score(
+        ret_pct,
+        mdd,
+        m_win_rate,
+        r_sq,
+        annual_return_pct=annual_return_pct,
+        trade_win_rate_pct=win_rate,
+        min_full_year_return_pct=min_full_year_return_pct,
+        min_month_return_pct=min_month_return_pct,
+        min_quarter_return_pct=min_quarter_return_pct,
+        total_r=score_total_r,
+        median_r=score_median_r,
+    )
+    return {
+        "ok": True,
+        "fail_reason": None,
+        "score": float(base_score),
+        "profile_stats": pf_profile,
+        "ret_pct": ret_pct,
+        "mdd": mdd,
+        "trade_count": trade_count,
+        "final_equity": final_eq,
+        "avg_exposure": avg_exp,
+        "max_exposure": max_exp,
+        "bm_return": bm_ret,
+        "bm_mdd": bm_mdd,
+        "win_rate": win_rate,
+        "pf_ev": pf_ev,
+        "pf_payoff": pf_payoff,
+        "portfolio_total_r": portfolio_total_r,
+        "portfolio_median_r": portfolio_median_r,
+        "score_total_r": score_total_r,
+        "score_median_r": score_median_r,
+        "score_r_source": str(pf_profile.get("score_r_source", "single_stock")),
+        "single_stock_trade_stats": single_stock_trade_stats,
+        "missed_buys": total_missed,
+        "missed_sells": total_missed_sells,
+        "normal_trades": normal_trade_count,
+        "extended_trades": extended_trade_count,
+        "breakout_trades": breakout_trade_count,
+        "reentry_trades": reentry_trade_count,
+        "annual_trades": annual_trades,
+        "reserved_buy_fill_rate": reserved_buy_fill_rate,
+        "annual_return_pct": annual_return_pct,
+        "bm_annual_return_pct": bm_annual_return_pct,
+        "full_year_count": full_year_count,
+        "min_full_year_return_pct": min_full_year_return_pct,
+        "full_month_count": full_month_count,
+        "min_month_return_pct": min_month_return_pct,
+        "full_quarter_count": full_quarter_count,
+        "min_quarter_return_pct": min_quarter_return_pct,
+        "yearly_return_rows": pf_profile.get("yearly_return_rows", []),
+        "monthly_return_rows": pf_profile.get("monthly_return_rows", []),
+        "quarterly_return_rows": pf_profile.get("quarterly_return_rows", []),
+        "dominant_year_dependency_diagnostics": pf_profile.get("dominant_year_dependency_diagnostics", {}),
+        "bm_min_full_year_return_pct": bm_min_full_year_return_pct,
+        "bm_min_month_return_pct": bm_min_month_return_pct,
+        "bm_min_quarter_return_pct": bm_min_quarter_return_pct,
+        "r_squared": r_sq,
+        "m_win_rate": m_win_rate,
+        "bm_r_squared": bm_r_sq,
+        "bm_m_win_rate": bm_m_win_rate,
+        "base_score": float(base_score),
+    }
+
+
+def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, validate_scope: dict[str, Any], profile_stats=None):
+    if not bool(validate_scope.get("enabled", False)):
+        return {"enabled": False, "inner_validate_score": None, "inner_validate_gate": None}
+
+    fail_reason = str(validate_scope.get("fail_reason") or "").strip()
+    policy = dict(validate_scope.get("policy") or {})
+    if fail_reason:
+        return {
+            "enabled": True,
+            "inner_validate_score": float(INVALID_TRIAL_VALUE),
+            "inner_validate_gate": False,
+            "fail_reason": fail_reason,
+            "validate_year": policy.get("validate_year"),
+            "validate_start_year": policy.get("validate_start_year"),
+            "validate_end_year": policy.get("validate_end_year"),
+            "inner_train_end_year": policy.get("inner_train_end_year"),
+        }
+
+    all_dfs_fast = prep_result["all_dfs_fast"]
+    all_trade_logs = prep_result["all_trade_logs"]
+    all_pit_stats_index = prep_result.get("all_pit_stats_index")
+    benchmark_data = all_dfs_fast.get("0050", None)
+    pf_profile = {} if profile_stats is None else profile_stats
+    validate_dates = list(validate_scope.get("validate_dates") or [])
+    validate_start_year = int(policy.get("validate_start_year", policy.get("validate_year", 0)))
+
+    with session.optimizer_runtime_context():
+        (
+            ret_pct,
+            mdd,
+            trade_count,
+            final_eq,
+            avg_exp,
+            max_exp,
+            bm_ret,
+            bm_mdd,
+            win_rate,
+            pf_ev,
+            pf_payoff,
+            total_missed,
+            total_missed_sells,
+            r_sq,
+            m_win_rate,
+            bm_r_sq,
+            bm_m_win_rate,
+            normal_trade_count,
+            extended_trade_count,
+            annual_trades,
+            reserved_buy_fill_rate,
+            annual_return_pct,
+            bm_annual_return_pct,
+        ) = run_portfolio_timeline(
+            all_dfs_fast,
+            all_trade_logs,
+            validate_dates,
+            validate_start_year,
+            ai_params,
+            session.train_max_positions,
+            session.train_enable_rotation,
+            benchmark_ticker="0050",
+            benchmark_data=benchmark_data,
+            is_training=True,
+            profile_stats=pf_profile,
+            verbose=False,
+            pit_stats_index=all_pit_stats_index,
+        )
+    min_full_year_return_pct = float(pf_profile.get("min_full_year_return_pct", 0.0))
+    min_month_return_pct = float(pf_profile.get("min_month_return_pct", 0.0))
+    min_quarter_return_pct = float(pf_profile.get("min_quarter_return_pct", 0.0))
+    portfolio_total_r = float(pf_profile.get("portfolio_total_r", 0.0))
+    portfolio_median_r = float(pf_profile.get("portfolio_median_r", 0.0))
+    score_total_r = float(pf_profile.get("score_total_r", pf_profile.get("single_stock_total_r", 0.0)) or 0.0)
+    score_median_r = float(pf_profile.get("score_median_r", pf_profile.get("single_stock_median_r", 0.0)) or 0.0)
+    inner_validate_score = calc_portfolio_score(
+        ret_pct,
+        mdd,
+        m_win_rate,
+        r_sq,
+        annual_return_pct=annual_return_pct,
+        trade_win_rate_pct=win_rate,
+        min_full_year_return_pct=min_full_year_return_pct,
+        min_month_return_pct=min_month_return_pct,
+        min_quarter_return_pct=min_quarter_return_pct,
+        total_r=score_total_r,
+        median_r=score_median_r,
+    )
+    return {
+        "enabled": True,
+        "inner_validate_score": float(inner_validate_score),
+        "inner_validate_gate": bool(float(inner_validate_score) > 0.0),
+        "validate_year": policy.get("validate_year"),
+        "validate_start_year": policy.get("validate_start_year"),
+        "validate_end_year": policy.get("validate_end_year"),
+        "inner_train_end_year": policy.get("inner_train_end_year"),
+        "ret_pct": float(ret_pct),
+        "mdd": float(mdd),
+        "trade_count": int(trade_count),
+        "annual_return_pct": float(annual_return_pct),
+        "min_full_year_return_pct": float(min_full_year_return_pct),
+        "min_month_return_pct": float(min_month_return_pct),
+        "min_quarter_return_pct": float(min_quarter_return_pct),
+        "portfolio_total_r": float(portfolio_total_r),
+        "portfolio_median_r": float(portfolio_median_r),
+        "score_total_r": float(score_total_r),
+        "score_median_r": float(score_median_r),
+        "score_r_source": str(pf_profile.get("score_r_source", "single_stock")),
+        "monthly_win_rate": float(m_win_rate),
+        "r_squared": float(r_sq),
+        "normal_trades": int(pf_profile.get("normal_trades", normal_trade_count) or 0),
+        "extended_trades": int(pf_profile.get("extended_trades", extended_trade_count) or 0),
+        "breakout_trades": int(pf_profile.get("breakout_trades", pf_profile.get("normal_trades", normal_trade_count)) or 0),
+        "reentry_trades": int(pf_profile.get("reentry_trades", 0) or 0),
+        "reserved_buy_fill_rate": float(reserved_buy_fill_rate),
+    }
+
+
+def run_optimizer_objective(session, trial):
+    objective_start = time.perf_counter()
+    fixed_overrides = dict(
+        getattr(session, "fixed_strategy_param_overrides", {}) or {}
+    )
+    if fixed_overrides:
+        trial.set_user_attr("fixed_strategy_param_overrides", fixed_overrides)
+    ai_params = build_trial_params(session, trial)
+    ai_params = session.apply_fixed_strategy_param_overrides(ai_params)
+    prep_cache_key = build_prep_cache_key(
+        ai_params, runtime_identity=session.runtime_cache_identity
+    )
+    get_cached_prep = getattr(session, "get_prepared_trial_inputs_from_cache", None)
+    prep_result = get_cached_prep(prep_cache_key) if callable(get_cached_prep) else None
+    if prep_result is None:
+        prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
+        prep_result = prepare_trial_inputs(
+            raw_data_cache=session.raw_data_cache,
+            params=ai_params,
+            default_max_workers=session.default_max_workers,
+            executor_bundle=prep_executor_bundle,
+            static_fast_cache=session.static_fast_cache,
+            static_master_dates=session.master_dates,
+            include_trade_logs=False,
+            include_pit_stats_index=True,
+        )
+        cache_prep = getattr(session, "cache_prepared_trial_inputs", None)
+        if callable(cache_prep):
+            cache_prep(prep_cache_key, prep_result)
+    trial.set_user_attr("prep_mode", prep_result["prep_mode"])
+    trial.set_user_attr("prep_start_method", prep_result["pool_start_method"] or "default")
+    if prep_result["pool_error_text"] is not None:
+        trial.set_user_attr("prep_pool_error", prep_result["pool_error_text"])
+
+    prep_failures = prep_result["prep_failures"]
+    if prep_failures:
+        insufficient_failures = [item for item in prep_failures if is_insufficient_data_message(item[1])]
+        session.record_optimizer_prep_failures(insufficient_failures)
+
+    profile_row = build_initial_profile_row(trial.number, prep_result["prep_wall_sec"], prep_result["prep_profile"])
+    search_scope = resolve_search_train_scope(session, prep_result["master_dates"])
+    mode = str(search_scope["mode"])
+    profile_row["objective_mode"] = mode
+    profile_row["search_train_end_year"] = int(search_scope["effective_search_train_end_year"])
+    profile_row["sort_dates_sec"] = float(search_scope.get("sort_dates_sec", 0.0))
+    profile_row["search_train_date_count"] = int(len(search_scope["search_train_dates"]))
+    inner_policy = dict(search_scope.get("inner_validate_policy") or {})
+    profile_row["inner_validate_enabled"] = bool(inner_policy.get("enabled", False))
+    if bool(inner_policy.get("enabled", False)):
+        profile_row["inner_validate_year"] = int(inner_policy["validate_year"])
+        profile_row["inner_train_end_year"] = int(inner_policy["inner_train_end_year"])
+    trial.set_user_attr("objective_mode", mode)
+    trial.set_user_attr("search_train_end_year", int(search_scope["effective_search_train_end_year"]))
+    trial.set_user_attr("search_train_date_count", int(len(search_scope["search_train_dates"])))
+    trial.set_user_attr("inner_validate_enabled", bool(inner_policy.get("enabled", False)))
+    if bool(inner_policy.get("enabled", False)):
+        trial.set_user_attr("inner_validate_year", int(inner_policy["validate_year"]))
+        trial.set_user_attr("inner_train_end_year", int(inner_policy["inner_train_end_year"]))
+    if search_scope.get("fail_reason") is not None:
+        return _append_invalid_profile_row(
+            session=session,
+            trial=trial,
+            profile_row=profile_row,
+            fail_reason=str(search_scope["fail_reason"]),
+            objective_start=objective_start,
+        )
+
+    full_evaluation_cache_key = build_full_evaluation_cache_key(
+        ai_params,
+        objective_mode=mode,
+        train_start_year=session.train_start_year,
+        search_train_end_year=int(search_scope["effective_search_train_end_year"]),
+        train_start_date=(getattr(session, "walk_forward_policy", {}) or {}).get("train_start_date"),
+        search_train_end_date=search_scope.get("effective_search_train_end_date"),
+        max_positions=session.train_max_positions,
+        enable_rotation=session.train_enable_rotation,
+        runtime_identity=session.runtime_cache_identity,
+    )
+    get_cached_evaluation = getattr(session, "get_full_evaluation_from_cache", None)
+    evaluation = get_cached_evaluation(full_evaluation_cache_key) if callable(get_cached_evaluation) else None
+
+    pf_profile = {}
+    portfolio_start = time.perf_counter()
+    score_start = time.perf_counter()
+    if evaluation is None:
+        evaluation = evaluate_prepared_train_score(
+            session,
+            ai_params=ai_params,
+            prep_result=prep_result,
+            search_scope=search_scope,
+            profile_stats=pf_profile,
+        )
+        cache_evaluation = getattr(session, "cache_full_evaluation", None)
+        if callable(cache_evaluation):
+            cache_evaluation(full_evaluation_cache_key, evaluation)
+    profile_row["score_calc_sec"] = time.perf_counter() - score_start
+    profile_row["portfolio_wall_sec"] = time.perf_counter() - portfolio_start
+    profile_row["portfolio_total_sec"] = float(pf_profile.get("portfolio_wall_sec", 0.0))
+    profile_row["portfolio_ticker_dates_sec"] = float(pf_profile.get("portfolio_ticker_dates_sec", 0.0))
+    profile_row["portfolio_build_trade_index_sec"] = float(pf_profile.get("portfolio_build_trade_index_sec", 0.0))
+    profile_row["portfolio_day_loop_sec"] = float(pf_profile.get("portfolio_day_loop_sec", 0.0))
+    profile_row["portfolio_candidate_scan_sec"] = float(pf_profile.get("portfolio_candidate_scan_sec", 0.0))
+    profile_row["portfolio_rotation_sec"] = float(pf_profile.get("portfolio_rotation_sec", 0.0))
+    profile_row["portfolio_settle_sec"] = float(pf_profile.get("portfolio_settle_sec", 0.0))
+    profile_row["portfolio_buy_sec"] = float(pf_profile.get("portfolio_buy_sec", 0.0))
+    profile_row["portfolio_equity_mark_sec"] = float(pf_profile.get("portfolio_equity_mark_sec", 0.0))
+    profile_row["portfolio_closeout_sec"] = float(pf_profile.get("portfolio_closeout_sec", 0.0))
+    profile_row["portfolio_curve_stats_sec"] = float(pf_profile.get("curve_stats_sec", 0.0))
+    profile_row["ret_pct"] = float(evaluation.get("ret_pct", 0.0))
+    profile_row["mdd"] = float(evaluation.get("mdd", 0.0))
+    profile_row["trade_count"] = int(evaluation.get("trade_count", 0))
+    profile_row["annual_return_pct"] = float(evaluation.get("annual_return_pct", 0.0))
+    profile_row["annual_trades"] = float(evaluation.get("annual_trades", 0.0))
+    profile_row["reserved_buy_fill_rate"] = float(evaluation.get("reserved_buy_fill_rate", 0.0))
+    profile_row["full_year_count"] = int(evaluation.get("full_year_count", 0))
+    profile_row["min_full_year_return_pct"] = float(evaluation.get("min_full_year_return_pct", 0.0))
+    profile_row["full_month_count"] = int(evaluation.get("full_month_count", 0))
+    profile_row["min_month_return_pct"] = float(evaluation.get("min_month_return_pct", 0.0))
+    profile_row["full_quarter_count"] = int(evaluation.get("full_quarter_count", 0))
+    profile_row["min_quarter_return_pct"] = float(evaluation.get("min_quarter_return_pct", 0.0))
+    profile_row["m_win_rate"] = float(evaluation.get("m_win_rate", 0.0))
+    profile_row["r_squared"] = float(evaluation.get("r_squared", 0.0))
+    single_stock_trade_stats = dict(evaluation.get("single_stock_trade_stats") or {})
+    profile_row["single_stock_trade_count"] = int(single_stock_trade_stats.get("trade_count", 0) or 0)
+    profile_row["single_stock_win_rate"] = float(single_stock_trade_stats.get("win_rate", 0.0) or 0.0)
+    profile_row["single_stock_payoff_r"] = float(single_stock_trade_stats.get("payoff_r", 0.0) or 0.0)
+    profile_row["single_stock_avg_r"] = float(single_stock_trade_stats.get("avg_r", 0.0) or 0.0)
+    profile_row["single_stock_median_r"] = float(single_stock_trade_stats.get("median_r", 0.0) or 0.0)
+    profile_row["single_stock_total_r"] = float(single_stock_trade_stats.get("total_r", 0.0) or 0.0)
+    profile_row["pf_total_r"] = float(evaluation.get("portfolio_total_r", 0.0) or 0.0)
+    profile_row["pf_median_r"] = float(evaluation.get("portfolio_median_r", 0.0) or 0.0)
+    profile_row["score_total_r"] = float(evaluation.get("score_total_r", single_stock_trade_stats.get("total_r", 0.0)) or 0.0)
+    profile_row["score_median_r"] = float(evaluation.get("score_median_r", single_stock_trade_stats.get("median_r", 0.0)) or 0.0)
+    profile_row["score_r_source"] = str(evaluation.get("score_r_source", "single_stock") or "single_stock")
+    profile_row["base_score"] = float(evaluation.get("base_score", INVALID_TRIAL_VALUE))
+    if not evaluation["ok"]:
+        return _append_invalid_profile_row(
+            session=session,
+            trial=trial,
+            profile_row=profile_row,
+            fail_reason=str(evaluation["fail_reason"]),
+            objective_start=objective_start,
+        )
+
+    trial.set_user_attr("pf_return", evaluation["ret_pct"])
+    trial.set_user_attr("pf_mdd", evaluation["mdd"])
+    trial.set_user_attr("pf_trades", evaluation["trade_count"])
+    trial.set_user_attr("final_equity", evaluation["final_equity"])
+    trial.set_user_attr("avg_exposure", evaluation["avg_exposure"])
+    trial.set_user_attr("max_exposure", evaluation["max_exposure"])
+    trial.set_user_attr("bm_return", evaluation["bm_return"])
+    trial.set_user_attr("bm_mdd", evaluation["bm_mdd"])
+    trial.set_user_attr("win_rate", evaluation["win_rate"])
+    trial.set_user_attr("pf_ev", evaluation["pf_ev"])
+    trial.set_user_attr("pf_payoff", evaluation["pf_payoff"])
+    trial.set_user_attr("pf_total_r", evaluation.get("portfolio_total_r", 0.0))
+    trial.set_user_attr("pf_median_r", evaluation.get("portfolio_median_r", 0.0))
+    trial.set_user_attr("score_total_r", evaluation.get("score_total_r", single_stock_trade_stats.get("total_r", 0.0)))
+    trial.set_user_attr("score_median_r", evaluation.get("score_median_r", single_stock_trade_stats.get("median_r", 0.0)))
+    trial.set_user_attr("score_r_source", evaluation.get("score_r_source", "single_stock"))
+    trial.set_user_attr("single_stock_trade_count", int(single_stock_trade_stats.get("trade_count", 0) or 0))
+    trial.set_user_attr("single_stock_win_rate", float(single_stock_trade_stats.get("win_rate", 0.0) or 0.0))
+    trial.set_user_attr("single_stock_payoff_r", float(single_stock_trade_stats.get("payoff_r", 0.0) or 0.0))
+    trial.set_user_attr("single_stock_avg_r", float(single_stock_trade_stats.get("avg_r", 0.0) or 0.0))
+    trial.set_user_attr("single_stock_median_r", float(single_stock_trade_stats.get("median_r", 0.0) or 0.0))
+    trial.set_user_attr("single_stock_total_r", float(single_stock_trade_stats.get("total_r", 0.0) or 0.0))
+    trial.set_user_attr("missed_buys", evaluation["missed_buys"])
+    trial.set_user_attr("missed_sells", evaluation["missed_sells"])
+    trial.set_user_attr("normal_trades", evaluation["normal_trades"])
+    trial.set_user_attr("extended_trades", evaluation["extended_trades"])
+    trial.set_user_attr("breakout_trades", evaluation.get("breakout_trades", evaluation["normal_trades"]))
+    trial.set_user_attr("reentry_trades", evaluation.get("reentry_trades", 0))
+    trial.set_user_attr("annual_trades", evaluation["annual_trades"])
+    trial.set_user_attr("reserved_buy_fill_rate", evaluation["reserved_buy_fill_rate"])
+    trial.set_user_attr("annual_return_pct", evaluation["annual_return_pct"])
+    trial.set_user_attr("bm_annual_return_pct", evaluation["bm_annual_return_pct"])
+    trial.set_user_attr("full_year_count", evaluation["full_year_count"])
+    trial.set_user_attr("min_full_year_return_pct", evaluation["min_full_year_return_pct"])
+    trial.set_user_attr("full_month_count", evaluation.get("full_month_count", 0))
+    trial.set_user_attr("min_month_return_pct", evaluation.get("min_month_return_pct", 0.0))
+    trial.set_user_attr("full_quarter_count", evaluation.get("full_quarter_count", 0))
+    trial.set_user_attr("min_quarter_return_pct", evaluation.get("min_quarter_return_pct", 0.0))
+    trial.set_user_attr("yearly_return_rows", evaluation["yearly_return_rows"])
+    trial.set_user_attr("monthly_return_rows", evaluation.get("monthly_return_rows", []))
+    trial.set_user_attr("quarterly_return_rows", evaluation.get("quarterly_return_rows", []))
+    trial.set_user_attr("dominant_year_dependency_diagnostics", evaluation.get("dominant_year_dependency_diagnostics", {}))
+    trial.set_user_attr("base_score", evaluation["base_score"])
+    trial.set_user_attr("bm_min_full_year_return_pct", evaluation["bm_min_full_year_return_pct"])
+    trial.set_user_attr("bm_min_month_return_pct", evaluation.get("bm_min_month_return_pct", 0.0))
+    trial.set_user_attr("bm_min_quarter_return_pct", evaluation.get("bm_min_quarter_return_pct", 0.0))
+    trial.set_user_attr("r_squared", evaluation["r_squared"])
+    trial.set_user_attr("m_win_rate", evaluation["m_win_rate"])
+    trial.set_user_attr("bm_r_squared", evaluation["bm_r_squared"])
+    trial.set_user_attr("bm_m_win_rate", evaluation["bm_m_win_rate"])
+
+    cache_trial_milestone_inputs = getattr(session, "cache_trial_milestone_inputs", None)
+    if callable(cache_trial_milestone_inputs):
+        cache_trial_milestone_inputs(
+            trial.number,
+            sorted_master_dates=sorted(prep_result["master_dates"]),
+            all_pit_stats_index=prep_result.get("all_pit_stats_index"),
+            all_dfs_fast=prep_result.get("all_dfs_fast"),
+        )
+
+    final_score = float(evaluation["base_score"])
+    if mode not in {OBJECTIVE_MODE_LEGACY_BASE_SCORE, OBJECTIVE_MODE_SPLIT_TRAIN_ROMD}:
+        return _append_invalid_profile_row(
+            session=session,
+            trial=trial,
+            profile_row=profile_row,
+            fail_reason=f"未知 objective_mode: {session.objective_mode}",
+            objective_start=objective_start,
+        )
+
+    profile_row["trial_value"] = float(final_score)
+    profile_row["objective_wall_sec"] = time.perf_counter() - objective_start
+    session.profile_recorder.append_row(profile_row)
+    trial.set_user_attr("profile_row", profile_row)
+    return float(final_score)

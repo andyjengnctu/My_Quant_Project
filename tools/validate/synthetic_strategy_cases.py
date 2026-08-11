@@ -1941,10 +1941,10 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     callbacks_source = Path(optimizer_callbacks.__file__).read_text(encoding="utf-8")
     static_ensemble_dashboard_source = (project_root / "tools" / "optimizer" / "static_ensemble_dashboard.py").read_text(encoding="utf-8")
     optimizer_main_source = (project_root / "tools" / "optimizer" / "main.py").read_text(encoding="utf-8")
-    optimizer_robustness_source = (project_root / "tools" / "optimizer" / "robustness.py").read_text(encoding="utf-8")
-    optimizer_outer_rolling_source = (project_root / "tools" / "optimizer" / "outer_rolling_oos.py").read_text(encoding="utf-8")
-    optimizer_walk_forward_source = (project_root / "tools" / "optimizer" / "walk_forward.py").read_text(encoding="utf-8")
-    objective_runner_source = (project_root / "tools" / "optimizer" / "objective_runner.py").read_text(encoding="utf-8")
+    optimizer_robustness_source = (project_root / "services" / "optimizer" / "robustness.py").read_text(encoding="utf-8")
+    optimizer_outer_rolling_source = (project_root / "services" / "optimizer" / "outer_rolling_oos.py").read_text(encoding="utf-8")
+    optimizer_walk_forward_source = (project_root / "services" / "optimizer" / "walk_forward.py").read_text(encoding="utf-8")
+    objective_runner_source = (project_root / "services" / "optimizer" / "objective_runner.py").read_text(encoding="utf-8")
     add_check(results, "strategy_contract", case_id, "optimizer_callbacks_imports_pandas_for_oos_year_parsing", True, "import pandas as pd" in callbacks_source)
     add_check(results, "strategy_contract", case_id, "search_train_date_filter_reuses_core_single_source_in_callbacks", True, "from core.walk_forward_policy import filter_search_train_dates" in callbacks_source and "def _filter_search_train_dates" not in callbacks_source)
     add_check(results, "strategy_contract", case_id, "search_train_date_filter_reuses_core_single_source_in_objective_runner", True, "from core.walk_forward_policy import filter_search_train_dates" in objective_runner_source and "def _filter_search_train_dates" not in objective_runner_source)
@@ -2105,7 +2105,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     pipe_positions = [_pipe_display_positions(line) for line in table_lines]
     add_check(results, "strategy_contract", case_id, "optimizer_console_table_keeps_pipe_alignment_for_long_first_zone_rows", True, len(pipe_positions) == 6 and len(set(pipe_positions)) == 1)
 
-    optimizer_study_utils_source = (project_root / "tools" / "optimizer" / "study_utils.py").read_text(encoding="utf-8")
+    optimizer_study_utils_source = (project_root / "services" / "optimizer" / "study_utils.py").read_text(encoding="utf-8")
     train_test_policy_lines = [line for line in optimizer_main_source.splitlines() if "Train/Test policy:" in line]
     add_check(results, "strategy_contract", case_id, "optimizer_start_banner_omits_raw_objective_mode_token", True, bool(train_test_policy_lines) and all("objective=" not in line for line in train_test_policy_lines))
     add_check(results, "strategy_contract", case_id, "system_score_display_formatter_applies_multiplier", f"{1.23 * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.2f}", format_system_score_for_display(1.23, decimals=2))

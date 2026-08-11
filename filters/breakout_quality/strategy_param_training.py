@@ -67,7 +67,7 @@ from strategies.breakout.search_space import (
     BREAKOUT_OPTIMIZER_SEARCH_SPACE,
     get_breakout_optimizer_required_min_rows,
 )
-from tools.filters.breakout_quality.build_binary_point_in_time_scores import (
+from services.breakout_quality.binary_point_in_time_scores import (
     build_binary_point_in_time_scores,
 )
 from filters.breakout_quality.strategy_optimizer_policy import (
@@ -87,10 +87,10 @@ from filters.breakout_quality.strategy_compare_engine import (
     _validate_requested_param_policy,
     run_comparison,
 )
-from tools.optimizer.outer_rolling_oos import FOLD_FIXED_STRATEGY_OVERRIDES_KEY, run_outer_rolling_oos
-from tools.optimizer.prep import load_all_raw_data
-from tools.optimizer.runtime import create_optimizer_study
-from tools.optimizer.session_factory import (
+from services.optimizer.outer_rolling_oos import FOLD_FIXED_STRATEGY_OVERRIDES_KEY, run_outer_rolling_oos
+from services.optimizer.prep import load_all_raw_data
+from services.optimizer.runtime import create_optimizer_study
+from services.optimizer.session_factory import (
     build_optimizer_session,
     configure_optuna_logging,
     ensure_study_effective_policy_compatible,

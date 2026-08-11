@@ -1,10 +1,6 @@
-from tools.optimizer.objective_filters import apply_filter_rules
-from tools.optimizer.objective_profiles import build_initial_profile_row, build_trial_params
-from tools.optimizer.objective_runner import run_optimizer_objective
+"""Compatibility alias for the canonical optimizer service module."""
 
-__all__ = [
-    "apply_filter_rules",
-    "build_initial_profile_row",
-    "build_trial_params",
-    "run_optimizer_objective",
-]
+import sys
+from services.optimizer import objective as _impl
+
+sys.modules[__name__] = _impl
