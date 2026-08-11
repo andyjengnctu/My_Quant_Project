@@ -21244,7 +21244,7 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         project_root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
     ).read_text(encoding="utf-8")
     pipeline_source = (
-        project_root / "tools" / "filters" / "breakout_quality" /
+        project_root / "services" / "breakout_quality" /
         "continuous_ranker_pipeline.py"
     ).read_text(encoding="utf-8")
     add_check(
