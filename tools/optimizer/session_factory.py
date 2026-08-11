@@ -6,12 +6,13 @@ from core.output_paths import build_output_dir
 from core.runtime_utils import get_taipei_now
 from core.walk_forward_policy import build_optimizer_effective_policy_fingerprint
 from config.training_policy import OPTIMIZER_FIXED_TP_PERCENT
+from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "ml_optimizer")
-TRAIN_MAX_POSITIONS = 10
-TRAIN_ENABLE_ROTATION = False
+TRAIN_MAX_POSITIONS = DEFAULT_PORTFOLIO_MAX_POSITIONS
+TRAIN_ENABLE_ROTATION = DEFAULT_PORTFOLIO_ROTATION == "on"
 DEFAULT_OPTIMIZER_MAX_WORKERS = min(8, max(1, (os.cpu_count() or 1))) if os.name == "nt" else min(6, max(1, (os.cpu_count() or 1) // 2))
 ENABLE_OPTIMIZER_PROFILING = True
 ENABLE_PROFILE_CONSOLE_PRINT = False

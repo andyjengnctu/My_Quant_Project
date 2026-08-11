@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS
+
 import argparse
 from contextlib import ExitStack
 import copy
@@ -2276,7 +2278,7 @@ def run_no_filter_candidate_replay_from_metadata(
         params=no_filter_params,
         start_date=start_date,
         end_date=end_date,
-        max_positions=int(payload.get("max_positions", 10) or 10),
+        max_positions=int(payload.get("max_positions", DEFAULT_PORTFOLIO_MAX_POSITIONS) or DEFAULT_PORTFOLIO_MAX_POSITIONS),
         enable_rotation=bool(payload.get("enable_rotation", False)),
         quiet=bool(quiet),
         replay_counts=replay_counts,
@@ -2556,7 +2558,7 @@ def run_standalone_baseline(
     dataset="full",
     params_path=None,
     param_policy=PARAM_POLICY_AUTO,
-    max_positions=10,
+    max_positions=DEFAULT_PORTFOLIO_MAX_POSITIONS,
     enable_rotation=False,
     optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
     output_dir_override=None,
@@ -2803,7 +2805,7 @@ def _resolve_continuous_score_override_period(
 
 def run_comparison(
     *, project_root=PROJECT_ROOT, dataset="full", params_path=None,
-    param_policy=PARAM_POLICY_AUTO, max_positions=10, enable_rotation=False,
+    param_policy=PARAM_POLICY_AUTO, max_positions=DEFAULT_PORTFOLIO_MAX_POSITIONS, enable_rotation=False,
     fixed_risk=None, max_position_cap_pct=None, allow_static_diagnostic=False,
     comparison_mode=COMPARISON_MODE_HARD_FILTER,
     ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_SCORE,

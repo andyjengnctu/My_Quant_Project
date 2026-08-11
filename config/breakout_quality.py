@@ -18,6 +18,12 @@ from config.breakout_policy import (
     build_breakout_optimizer_high_len_values,
 )
 from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
+from config.execution_policy import (
+    DEFAULT_FIXED_RISK,
+    DEFAULT_MAX_POSITION_CAP_PCT,
+    DEFAULT_PORTFOLIO_MAX_POSITIONS,
+    DEFAULT_PORTFOLIO_ROTATION,
+)
 
 
 # =============================================================================
@@ -197,14 +203,14 @@ BREAKOUT_QUALITY_POINT_IN_TIME_RESUME = True
 
 BREAKOUT_QUALITY_STRATEGY_DATASET = "full"
 BREAKOUT_QUALITY_STRATEGY_PARAM_POLICY = "base-finalist-best"
-BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS = 10
+BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS = DEFAULT_PORTFOLIO_MAX_POSITIONS
 # Continuous-ranker品質報表預設以策略最大持倉數作Top-K邊界。
 # 兩者只影響checkpoint後評估／顯示，不參與訓練、score export或selector runtime。
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K = BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_BOUNDARY_WIDTH = 3
-BREAKOUT_QUALITY_STRATEGY_ROTATION = "off"
-BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK = 0.01
-BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT = 0.30
+BREAKOUT_QUALITY_STRATEGY_ROTATION = DEFAULT_PORTFOLIO_ROTATION
+BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK = DEFAULT_FIXED_RISK
+BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT = DEFAULT_MAX_POSITION_CAP_PCT
 
 # Continuous-ranker read-only comparison is config-driven.  The interactive menu must
 # never hard-code experiment/model/arm IDs; it only renders this configured work item.

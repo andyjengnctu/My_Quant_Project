@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT
+
 import json
 from pathlib import Path
 from typing import Any, Callable
@@ -1141,8 +1143,8 @@ def _execute_preparation_action(
             trials_per_fold=int(options["trials_per_fold"]),
             max_positions=int(settings.max_positions),
             rotation=str(settings.rotation),
-            fixed_risk=float(options.get("fixed_risk", 0.01)),
-            max_position_cap_pct=float(options.get("max_position_cap_pct", 0.30)),
+            fixed_risk=float(options.get("fixed_risk", DEFAULT_FIXED_RISK)),
+            max_position_cap_pct=float(options.get("max_position_cap_pct", DEFAULT_MAX_POSITION_CAP_PCT)),
             p3_variant=(
                 None
                 if options.get("p3_variant") in (None, "")

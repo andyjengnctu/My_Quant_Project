@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional
 from zoneinfo import ZoneInfo
 
+from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_REGRESSION_DIR = PROJECT_ROOT / "tools" / "local_regression"
@@ -48,8 +49,8 @@ MANIFEST_DEFAULTS: Dict[str, Any] = {
     "coverage_branch_min_percent": 50,
     "coverage_critical_line_min_percent": 30,
     "coverage_critical_branch_min_percent": 25,
-    "portfolio_enable_rotation": False,
-    "portfolio_max_positions": 10,
+    "portfolio_enable_rotation": DEFAULT_PORTFOLIO_ROTATION == "on",
+    "portfolio_max_positions": DEFAULT_PORTFOLIO_MAX_POSITIONS,
     "portfolio_start_year": 2015,
     "retention_enabled": True,
     "subprocess_timeout_sec": 300,

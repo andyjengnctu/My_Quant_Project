@@ -107,6 +107,9 @@ OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT = 1000
 # Rolling OOS 與 Selection rolling adaptation 每個 fold 的預設 trial 數。
 OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 300
 
+# Canonical optimizer stochastic seed.  Model-training seeds remain owned by their model config.
+OPTIMIZER_RANDOM_SEED_DEFAULT = 42
+
 # random seed ensemble：每次 retrain 隨機抽 N 個 seeds，正式輸出用同一個 JSON 保存 N 組參數
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = False
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 8

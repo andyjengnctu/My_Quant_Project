@@ -23,6 +23,7 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
+from config.execution_policy import DEFAULT_FIXED_RISK
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.output_paths import ensure_output_dir
 from core.runtime_utils import parse_float_strict
@@ -98,7 +99,7 @@ SIDEBAR_CHIP_INACTIVE_BG = "#04070c"
 WORKBENCH_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKBENCH_OUTPUT_CATEGORY = "workbench_ui"
 WORKBENCH_CACHE_FILENAME = "reduced_stock_company_names_cache.json"
-FIXED_RISK_LABELS = ("0.01", "0.02", "自訂")
+FIXED_RISK_LABELS = (f"{DEFAULT_FIXED_RISK:.2f}", "0.02", "自訂")
 COMBOBOX_WIDTH_RULES = {
     "reduced": {"min_chars": 16, "max_chars": 24, "extra_px": 34},
     "candidate": {"min_chars": 18, "max_chars": 44, "extra_px": 24},
@@ -446,8 +447,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._reduced_stock_display_var = tk.StringVar()
         self._param_source_labels, self._param_source_path_by_label, self._param_source_key_by_label, default_param_source_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT)
         self._param_source_display_var = tk.StringVar(value=default_param_source_label)
-        self._fixed_risk_display_var = tk.StringVar(value="0.01")
-        self._custom_fixed_risk_var = tk.StringVar(value="0.01")
+        self._fixed_risk_display_var = tk.StringVar(value=str(DEFAULT_FIXED_RISK))
+        self._custom_fixed_risk_var = tk.StringVar(value=str(DEFAULT_FIXED_RISK))
         self._reduced_stock_map = {}
         self._reduced_stock_company_name_map = {}
         self._show_volume_var = tk.BooleanVar(value=False)

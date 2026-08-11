@@ -13,12 +13,13 @@ from core.rolling_oos_params import format_rolling_oos_summary_lines, get_active
 from core.portfolio_param_runtime import build_params_schedule_rows_from_payload
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, parse_int_strict, parse_float_strict, validate_cli_args
+from config.execution_policy import DEFAULT_FIXED_RISK
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=RuntimeWarning)
 
 
-_FIXED_RISK_MENU_DEFAULT = 0.01
+_FIXED_RISK_MENU_DEFAULT = DEFAULT_FIXED_RISK
 _FIXED_RISK_MENU_QUICK_CHOICE_2 = 0.02
 
 

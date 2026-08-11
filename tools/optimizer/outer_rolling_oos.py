@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS
+
 import csv
 import glob
 import hashlib
@@ -3600,7 +3602,7 @@ def _evaluate_finalist_ensemble_oos_metrics(*, session, item: dict, policy_name:
     result = run_portfolio_simulation_with_param_ensemble(
         str(data_dir),
         payload,
-        max_positions=int(getattr(session, "train_max_positions", 10) or 10),
+        max_positions=int(getattr(session, "train_max_positions", DEFAULT_PORTFOLIO_MAX_POSITIONS) or DEFAULT_PORTFOLIO_MAX_POSITIONS),
         enable_rotation=bool(getattr(session, "train_enable_rotation", False)),
         start_year=int(pd.Timestamp(start_text).year),
         end_year=int(pd.Timestamp(end_text).year),
@@ -8207,7 +8209,7 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
     selection_end = str(task.get("selection_end_date") or seed_rows[0].get("selection_end_date") or "")
     oos_start_date = str(task.get("oos_start_date") or seed_rows[0].get("oos_start_date") or f"{oos_year}-01-01")
     oos_end_date = str(task.get("oos_end_date") or seed_rows[0].get("oos_end_date") or f"{oos_year}-12-31")
-    chain_max_positions = int((seed_results[0] or {}).get("chain_max_positions", 10) or 10)
+    chain_max_positions = int((seed_results[0] or {}).get("chain_max_positions", DEFAULT_PORTFOLIO_MAX_POSITIONS) or DEFAULT_PORTFOLIO_MAX_POSITIONS)
     chain_enable_rotation = bool((seed_results[0] or {}).get("chain_enable_rotation", False))
 
     eval_started = time.perf_counter()
@@ -9582,7 +9584,7 @@ def run_outer_rolling_oos(
 
     _shutdown_rolling_shared_prep_executor_holder(rolling_shared_prep_executor_holder)
 
-    resolved_chain_max_positions = int(chain_max_positions if chain_max_positions is not None else 10)
+    resolved_chain_max_positions = int(chain_max_positions if chain_max_positions is not None else DEFAULT_PORTFOLIO_MAX_POSITIONS)
     resolved_chain_enable_rotation = bool(chain_enable_rotation if chain_enable_rotation is not None else False)
     active_replay_started = time.perf_counter()
     if rows:

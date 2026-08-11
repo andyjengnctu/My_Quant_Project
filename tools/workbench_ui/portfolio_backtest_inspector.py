@@ -17,6 +17,7 @@ import tkinter as tk
 import numpy as np
 import pandas as pd
 
+from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_PORTFOLIO_MAX_POSITIONS
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from tools.workbench_ui.param_sources import DEFAULT_PARAM_SOURCE_LABEL, build_workbench_param_source_options
@@ -94,7 +95,7 @@ ROTATION_LABEL_TO_BOOL = {
     "啟用 (強勢輪動)": True,
 }
 DEFAULT_ROTATION_LABEL = "關閉 (穩定鎖倉)"
-FIXED_RISK_LABELS = ("參數檔", "0.01", "0.02", "自訂")
+FIXED_RISK_LABELS = ("參數檔", f"{DEFAULT_FIXED_RISK:.2f}", "0.02", "自訂")
 END_YEAR_LATEST_LABEL = "最新"
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 PORTFOLIO_CONSOLE_COLORS = {
@@ -1243,11 +1244,11 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._param_source_labels, self._param_source_path_by_label, self._param_source_key_by_label, default_param_source_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT, include_rolling_oos=True, include_active_param_ensemble=True)
         self._param_source_display_var = tk.StringVar(value=default_param_source_label)
         self._rotation_display_var = tk.StringVar(value=DEFAULT_ROTATION_LABEL)
-        self._max_positions_var = tk.StringVar(value="10")
+        self._max_positions_var = tk.StringVar(value=str(DEFAULT_PORTFOLIO_MAX_POSITIONS))
         self._start_year_var = tk.StringVar(value=str(_resolve_default_portfolio_start_year_hint()))
         self._end_year_display_var = tk.StringVar(value=END_YEAR_LATEST_LABEL)
         self._fixed_risk_display_var = tk.StringVar(value="參數檔")
-        self._custom_fixed_risk_var = tk.StringVar(value="0.01")
+        self._custom_fixed_risk_var = tk.StringVar(value=str(DEFAULT_FIXED_RISK))
         self._ticker_display_var = tk.StringVar()
         self._show_volume_var = tk.BooleanVar(value=False)
         self._show_price_ma_var = tk.BooleanVar(value=False)

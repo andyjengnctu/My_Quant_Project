@@ -62,6 +62,8 @@ from config.training_policy import (
     resolve_optimizer_local_finalists_agree_min_agree,
     resolve_optimizer_retention_finalists_agree_min_agree,
 )
+from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION
+from config.training_policy import OPTIMIZER_RANDOM_SEED_DEFAULT
 
 
 from config.training_performance_policy import resolve_optimizer_random_seed_ensemble_parallel_backend_default, resolve_optimizer_random_seed_ensemble_parallel_workers_default
@@ -111,8 +113,8 @@ CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "candidate_val_s
 CANDIDATE_VAL_SCORE_BEST_SUMMARY_PATH = os.path.join(MODELS_DIR, "candidate_val_score_best_summary.json")
 RUN_BEST_SUMMARY_PATH = os.path.join(MODELS_DIR, "run_best_summary.json")
 DEFAULT_WALK_FORWARD_POLICY = load_walk_forward_policy(PROJECT_ROOT)
-TRAIN_MAX_POSITIONS = 10
-TRAIN_ENABLE_ROTATION = False
+TRAIN_MAX_POSITIONS = DEFAULT_PORTFOLIO_MAX_POSITIONS
+TRAIN_ENABLE_ROTATION = DEFAULT_PORTFOLIO_ROTATION == "on"
 DEFAULT_OPTIMIZER_MAX_WORKERS = min(8, max(1, (os.cpu_count() or 1))) if os.name == "nt" else min(6, max(1, (os.cpu_count() or 1) // 2))
 ENABLE_OPTIMIZER_PROFILING = True
 ENABLE_PROFILE_CONSOLE_PRINT = False
@@ -2908,7 +2910,7 @@ def main(argv=None, environ=None):
             return 1
         outer_timing_mode = bool(cli_run_request and cli_run_request.get("timing_mode"))
         if outer_timing_mode and optimizer_seed is None:
-            optimizer_seed, seed_source = 42, 'TIMING_DEFAULT:42'
+            optimizer_seed, seed_source = OPTIMIZER_RANDOM_SEED_DEFAULT, f'TIMING_DEFAULT:{OPTIMIZER_RANDOM_SEED_DEFAULT}'
         return run_outer_rolling_oos(
             argv=argv,
             environ=environ,
@@ -2949,7 +2951,7 @@ def main(argv=None, environ=None):
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
     if timing_mode and optimizer_seed is None:
-        optimizer_seed, seed_source = 42, 'TIMING_DEFAULT:42'
+        optimizer_seed, seed_source = OPTIMIZER_RANDOM_SEED_DEFAULT, f'TIMING_DEFAULT:{OPTIMIZER_RANDOM_SEED_DEFAULT}'
     if selected_model_mode == "study" and optimizer_seed is None and int(getattr(session, "n_trials", 0) or 0) > 0:
         optimizer_seed = int(generate_random_seed_ensemble(1)[0])
         seed_source = "STUDY_RANDOM_SEED"

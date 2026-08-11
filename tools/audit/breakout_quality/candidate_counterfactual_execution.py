@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS
+
 import argparse
 import hashlib
 import json
@@ -694,7 +696,7 @@ def main(argv=None) -> int:
     if not data_dir.is_dir():
         raise FileNotFoundError(f"11J找不到11I dataset: {data_dir}")
     strategy=dict(source_report.get("strategy") or {})
-    max_positions=int(strategy.get("max_positions",10) or 10)
+    max_positions=int(strategy.get("max_positions", DEFAULT_PORTFOLIO_MAX_POSITIONS) or DEFAULT_PORTFOLIO_MAX_POSITIONS)
     enable_rotation=bool(strategy.get("rotation",False))
     discovery_counts: dict[str, dict[str, Any]] = {}
     execution_rows: list[dict[str, Any]] = []

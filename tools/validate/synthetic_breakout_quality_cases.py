@@ -17573,6 +17573,60 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and '"trials_per_fold": 200' not in config_source
         and '"baseline_trials_per_fold"' not in config_source,
     )
+    from config.execution_policy import (
+        DEFAULT_FIXED_RISK,
+        DEFAULT_MAX_POSITION_CAP_PCT,
+        DEFAULT_PORTFOLIO_MAX_POSITIONS,
+        DEFAULT_PORTFOLIO_ROTATION,
+    )
+    from config.training_policy import OPTIMIZER_RANDOM_SEED_DEFAULT
+    workflow_settings = strategy_config.get_breakout_quality_workflow_settings()
+    builder_options = [
+        dict(source.builder.options or {})
+        for source in settings.parameter_sources.values()
+        if source.builder is not None
+    ]
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_compare_profile_membership_is_single_activation_source",
+        True,
+        all("enabled" not in raw for raw in strategy_config.STRATEGY_COMPARE_ARMS.values())
+        and all("enabled" not in raw for raw in strategy_config.STRATEGY_COMPARE_CONTRASTS.values())
+        and all(
+            {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings(profile_id).enabled_arms}
+            == set(raw_profile["arm_ids"])
+            and {
+                contrast.contrast_id
+                for contrast in strategy_config.get_strategy_comparison_settings(profile_id).enabled_contrasts
+            } == set(raw_profile["contrast_ids"])
+            for profile_id, raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.items()
+        ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_execution_and_optimizer_defaults_have_config_ssot",
+        True,
+        int(workflow_settings.strategy_max_positions) == int(DEFAULT_PORTFOLIO_MAX_POSITIONS)
+        and str(workflow_settings.strategy_rotation) == str(DEFAULT_PORTFOLIO_ROTATION)
+        and float(workflow_settings.strategy_adapt_fixed_risk) == float(DEFAULT_FIXED_RISK)
+        and float(workflow_settings.strategy_adapt_max_position_cap_pct) == float(DEFAULT_MAX_POSITION_CAP_PCT)
+        and all(
+            "fixed_risk" not in options
+            or float(options["fixed_risk"]) == float(DEFAULT_FIXED_RISK)
+            for options in builder_options
+        )
+        and all(
+            "max_position_cap_pct" not in options
+            or float(options["max_position_cap_pct"]) == float(DEFAULT_MAX_POSITION_CAP_PCT)
+            for options in builder_options
+        )
+        and all(
+            "optimizer_seed" not in options
+            or int(options["optimizer_seed"]) == int(OPTIMIZER_RANDOM_SEED_DEFAULT)
+            for options in builder_options
+        ),
+    )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "comparison_config_lists_individual_arms_contrasts_and_preparation_without_active_id",

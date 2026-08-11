@@ -8088,3 +8088,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - `tools/` formal reverse dependencies尚未在本批完全消除；本批只先移除CLI `main(argv)`耦合並建立可搬遷的public service boundary，後續Service Boundary batch再把producer實作移出`tools/`。
 - 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。依`doc/PROJECT_SETTINGS.md`，GPT不執行`apps/test_suite.py`。
 
+
+## 2026-08-12 — Config SSOT Batch 2-A：execution defaults／optimizer seed／Strategy Compare activation收斂
+
+- 程式基準：`test-branch-1_20260812_004224_2b988ae.zip`；SHA256 `2904b2409463b81a9bdf4f52e8298ba521147835bb7215b9956d52b06c9c6986`。
+- 本輪屬config/infrastructure refactor，不新增／修改任何`MR-*`、`DL-*`、`SR-C*`、Target、architecture、loss、Selection／Forward期間、策略參數數值或交易會計；目前數值保持完全相同，只收斂owner。
+- `config/execution_policy.py`新增canonical `DEFAULT_PORTFOLIO_MAX_POSITIONS`、`DEFAULT_PORTFOLIO_ROTATION`、`DEFAULT_FIXED_RISK`、`DEFAULT_MAX_POSITION_CAP_PCT`；Breakout Quality workflow、optimizer session/main/rolling fallback、Strategy Compare builder fallback、Audit與Workbench/local-regression預設均改引用同一owner，不再各自硬編`10 / off / 0.01 / 0.30`。
+- `config/training_policy.py`新增`OPTIMIZER_RANDOM_SEED_DEFAULT`作optimizer stochastic seed唯一owner；Selection historical parameter builders與optimizer timing fallback改引用該設定。模型training seed仍由`config/breakout_quality.py`獨立擁有，robustness generator seed仍由`config/strategy_compare.py`獨立擁有，避免不同seed語意被錯誤合併。
+- `STRATEGY_COMPARE_ARMS`與`STRATEGY_COMPARE_CONTRASTS`移除無效的個別`enabled`欄位；active狀態只由`STRATEGY_COMPARE_PROFILES[*].arm_ids / contrast_ids`決定。Runtime dataclass仍保留衍生`enabled`布林值供既有consumer使用，因此不改正式介面與結果。
+- `validate_strategy_compare_config_driven_app_contract_case`新增profile-membership單一啟用來源與execution/optimizer defaults SSOT guard；targeted contract由72增至74項且0 fail。歷史arm／contrast定義本輪仍留在同一config，後續Batch 2-B再做active/historical物理隔離，避免同批同時改identity與設定owner。
+- 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。依`doc/PROJECT_SETTINGS.md`，GPT不執行`apps/test_suite.py`。
