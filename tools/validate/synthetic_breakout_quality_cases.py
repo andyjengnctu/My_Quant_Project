@@ -7578,9 +7578,10 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         command_modules.get("train-continuous-ranker"),
     )
 
+    project_root = Path(__file__).resolve().parents[2]
     ranker_source = (
-        Path(__file__).resolve().parents[1]
-        / "filters"
+        project_root
+        / "services"
         / "breakout_quality"
         / "train_continuous_ranker.py"
     ).read_text(encoding="utf-8")
@@ -7604,8 +7605,8 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         ),
     )
     train_source = (
-        Path(__file__).resolve().parents[1]
-        / "filters"
+        project_root
+        / "services"
         / "breakout_quality"
         / "train.py"
     ).read_text(encoding="utf-8")
@@ -7777,7 +7778,7 @@ def validate_breakout_quality_pass_conditional_ranker_contract_case(_base_params
     menu_source = app_source[
         app_source.find("def _interactive_model_research") : app_source.find("def run_model_training_menu")
     ]
-    ranker_path = root / "tools" / "filters" / "breakout_quality" / "train_continuous_ranker.py"
+    ranker_path = root / "services" / "breakout_quality" / "train_continuous_ranker.py"
     ranker_source = ranker_path.read_text(encoding="utf-8")
     add_check(
         results,
