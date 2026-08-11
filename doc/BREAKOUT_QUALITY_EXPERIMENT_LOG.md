@@ -8054,3 +8054,14 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 2×GPU僅改orchestrator排程：每個seed/model仍呼叫相同canonical trainer subprocess、相同Dataset/Target/architecture/batch/loss/optimizer/epoch selection/final refit與score export；per-seed model/research/replay目錄維持隔離，失敗時必須終止所有active trainer subprocess並保留resumable manifest。`gpu_train_workers`仍屬execution option，不進scientific fingerprint。
 - 本輪目的只量測wall-time因果，不新增MR/DL/SR identity、不改任何模型或策略scientific condition。正式判讀只比較相同8 seeds/2 arms下的16-observation總耗時與per-seed training時間；若總時間顯著下降而單seed training不變，即證明收益來自training overlap。
 - 狀態：`IMPLEMENTED / ISOLATED_PERFORMANCE_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。
+
+## 2026-08-11 — Formal bundle 閉環：2×GPU isolated robustness core capability validator 同步
+
+- 程式基準：`test-branch-1_20260811_171754_178cc64.zip`；SHA256 `fb811dc5a269dcb1b88c8d7918943547ebfcdae500c5126c72182388d5b22efa`。
+- Formal bundle：`to_chatgpt_bundle_20260811_171856_a29bd126.zip`；SHA256 `b5874f39bf752bcd20aa7dfadb3f53d256b90d5e4f51eaf40192a8a3be4db4c8`。
+- Formal consistency共987 checks，真實股票檢查皆正常，唯一FAIL為synthetic suite啟動時`validate_strategy_multi_seed_robustness_settings()`仍要求`gpu_train_workers == 1`，但目前config與orchestrator已正式支援`1～2`且隔離重測設定為2，因此直接拋`ValueError: 目前multi-seed robustness採單一GPU training queue`。
+- Root cause是上一輪GPU=2-only覆蓋式patch漏帶`core/strategy_comparison.py`：`config/strategy_compare.py`與`strategy_multi_seed_robustness.py`已支援2個isolated canonical trainers，direct synthetic亦按`1～2`驗證，但core capability contract仍停留舊單GPU限制。這是infrastructure contract不一致，不是模型／策略runtime結果回歸。
+- Core validator改為明確能力範圍`MULTI_SEED_GPU_TRAIN_WORKERS_MIN=1`、`MAX=2`；只驗證config值落在合法範圍，不把目前值2硬編成唯一答案。CPU replay、Dataset/Target、architecture、batch/loss/optimizer、epoch selection、final refit、score export、scientific fingerprint與策略accounting均不改。
+- Bundle中的六個meta-quality coverage FAIL均為synthetic suite在coverage收集起點即被上述ValueError中止的連鎖結果：`synthetic_case_count=0`，target line/branch只剩27.82%/23.63%，不能解讀成實際coverage退化；修正後需由本機正式入口重新生成coverage。
+- 不新增／修改任何`MR-*`、`DL-*`、`SR-C*` identity；2×GPU仍只屬execution option。狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。
+

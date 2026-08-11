@@ -157,7 +157,8 @@ class StrategyComparisonArm:
         }
 
 
-MULTI_SEED_GPU_TRAIN_WORKERS = 1
+MULTI_SEED_GPU_TRAIN_WORKERS_MIN = 1
+MULTI_SEED_GPU_TRAIN_WORKERS_MAX = 2
 
 
 @dataclass(frozen=True)
@@ -220,8 +221,16 @@ def validate_strategy_multi_seed_robustness_settings(
         raise ValueError("multi-seed robustness seed_count必須>=2")
     if int(settings.seed_generator_seed) < 0:
         raise ValueError("multi-seed robustness seed_generator_seed必須>=0")
-    if int(settings.gpu_train_workers) != MULTI_SEED_GPU_TRAIN_WORKERS:
-        raise ValueError("目前multi-seed robustness採單一GPU training queue")
+    gpu_train_workers = int(settings.gpu_train_workers)
+    if not (
+        MULTI_SEED_GPU_TRAIN_WORKERS_MIN
+        <= gpu_train_workers
+        <= MULTI_SEED_GPU_TRAIN_WORKERS_MAX
+    ):
+        raise ValueError(
+            "multi-seed robustness gpu_train_workers必須介於"
+            f"{MULTI_SEED_GPU_TRAIN_WORKERS_MIN}～{MULTI_SEED_GPU_TRAIN_WORKERS_MAX}"
+        )
     if int(settings.cpu_replay_workers) < 1:
         raise ValueError("multi-seed robustness cpu_replay_workers必須>=1")
     if str(settings.console_mode) not in {"compact", "verbose"}:
@@ -729,7 +738,8 @@ def strategy_comparison_fingerprint(
 
 
 __all__ = [
-    "MULTI_SEED_GPU_TRAIN_WORKERS",
+    "MULTI_SEED_GPU_TRAIN_WORKERS_MIN",
+    "MULTI_SEED_GPU_TRAIN_WORKERS_MAX",
     "StrategyArtifactBuilder",
     "StrategyComparisonArm",
     "StrategyComparisonContrast",
