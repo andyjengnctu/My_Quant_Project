@@ -15,6 +15,7 @@ from filters.breakout_quality.score_store import load_shared_group_score_table
 from core.serialization_utils import clean_optional_text as _clean_text, json_native_value as _json_native
 
 ATTRIBUTION_SCHEMA_VERSION = 1
+CANONICAL_TRADE_MATCH_FIELDS = ("ticker", "entry_date", "entry_type")
 _BUY_PREFIX = "買進 ("
 _FULL_EXIT_PREFIXES = ("全倉結算", "汰弱賣出", "期末強制結算")
 _ROUND_TRIP_COLUMNS = [
@@ -68,6 +69,33 @@ def _is_buy_row(type_text: str) -> bool:
 
 def _is_full_exit_row(type_text: str) -> bool:
     return any(type_text.startswith(prefix) for prefix in _FULL_EXIT_PREFIXES)
+
+
+def assign_canonical_trade_match_key(frame: pd.DataFrame) -> pd.DataFrame:
+    """Assign the project-wide closed-trade identity used by strategy attribution.
+
+    Signal/candidate dates remain diagnostic metadata; actual trade identity is
+    ticker + actual entry date + entry type + occurrence.
+    """
+
+    out = pd.DataFrame(frame).copy()
+    if out.empty:
+        out["match_occurrence"] = pd.Series(dtype=int)
+        out["match_key"] = pd.Series(dtype=str)
+        return out
+    missing = sorted(set(CANONICAL_TRADE_MATCH_FIELDS) - set(out.columns))
+    if missing:
+        raise ValueError(f"closed trade缺少canonical match欄位: {missing}")
+    out["match_occurrence"] = out.groupby(
+        list(CANONICAL_TRADE_MATCH_FIELDS), sort=False
+    ).cumcount() + 1
+    out["match_key"] = (
+        out["ticker"].astype(str)
+        + "|" + out["entry_date"].astype(str)
+        + "|" + out["entry_type"].astype(str)
+        + "|" + out["match_occurrence"].astype(str)
+    )
+    return out
 
 
 def reconstruct_round_trips(trade_history: pd.DataFrame, *, scenario: str) -> pd.DataFrame:
@@ -144,14 +172,7 @@ def reconstruct_round_trips(trade_history: pd.DataFrame, *, scenario: str) -> pd
     out = pd.DataFrame(closed_rows)
     if out.empty:
         return pd.DataFrame(columns=_ROUND_TRIP_COLUMNS)
-    key_columns = ["ticker", "entry_date", "entry_type"]
-    out["match_occurrence"] = out.groupby(key_columns, sort=False).cumcount() + 1
-    out["match_key"] = (
-        out["ticker"].astype(str)
-        + "|" + out["entry_date"].astype(str)
-        + "|" + out["entry_type"].astype(str)
-        + "|" + out["match_occurrence"].astype(str)
-    )
+    out = assign_canonical_trade_match_key(out)
     for column in ("quality_score", "quality_score_date", "quality_score_date_source", "quality_score_pass"):
         out[column] = np.nan if column in {"quality_score", "quality_score_pass"} else ""
     return out.reindex(columns=_ROUND_TRIP_COLUMNS)
@@ -185,14 +206,7 @@ def _normalize_closed_trade_rows(rows: list[dict[str, Any]], *, scenario: str) -
     frame = pd.DataFrame(normalized)
     if frame.empty:
         return pd.DataFrame(columns=_ROUND_TRIP_COLUMNS)
-    key_columns = ["ticker", "entry_date", "entry_type"]
-    frame["match_occurrence"] = frame.groupby(key_columns, sort=False).cumcount() + 1
-    frame["match_key"] = (
-        frame["ticker"].astype(str)
-        + "|" + frame["entry_date"].astype(str)
-        + "|" + frame["entry_type"].astype(str)
-        + "|" + frame["match_occurrence"].astype(str)
-    )
+    frame = assign_canonical_trade_match_key(frame)
     for column in ("quality_score", "quality_score_date", "quality_score_date_source", "quality_score_pass"):
         frame[column] = np.nan if column in {"quality_score", "quality_score_pass"} else ""
     return frame.reindex(columns=_ROUND_TRIP_COLUMNS)

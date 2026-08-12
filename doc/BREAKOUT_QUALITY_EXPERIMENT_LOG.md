@@ -8423,3 +8423,15 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Audit輸出：`audit.md/json`、`seed_summary.csv`，以及gzip合併的trade attribution、daily wealth、daily capacity、selection-day明細；逐seed同列ΔDL選擇R、ΔReturn、ΔMDD、ΔRoMD、exclusive ΔPnL、common risk-size effect與slot-gap，並以描述性driver分類輔助定位，不新增promotion gate。
 - 下一步：先從`Research → 策略組合比較 → Forward-OOS Multi-seed robustness → 執行`重建缺少的16個compact attribution units；完成後再由`Research → Audit／診斷 → 執行目前 Audit 設定`產生全8-seed attribution結果。Audit結果前不擴seed、不跑Selection PIT multi-seed、不開新MR、不調loss/selector/hyperparameter。
 
+
+
+## 2026-08-12 — Forward robustness portfolio Audit 首次執行被 canonical trade match-key 漂移擋下；infra 修正
+
+- 程式基準：`test-branch-1_20260812_194457_5f1b0ba.zip`；SHA256 `dd2440fe6fe7abdbc8cc83ecdf0e492ec584b7f0bdf83c15a4dec34bdb16022a`。
+- 既有 scientific condition 不變：Forward robustness `seed_count=8`、`generator_seed=20260810`、scientific fingerprint=`2f70dbe73dcf3fed`；16/16 compact attribution units 已以原 observation 成功重建並保存，無需再次train/replay。
+- 首次執行 `AUD-forward-robustness-portfolio-translation` 時，S1 fail-fast：compact attribution 的 arm-pair `exclusive selection R` 與既有 robustness 同seed `ΔDL選擇R` 不一致。
+- 根因不是 compact source 或 scientific result：Strategy Compare canonical `trade_attribution.py` 的 closed-trade identity 固定為 `ticker + 實際進場日 + 進場類型 + 同鍵序號`，但共用 `c15_strategy_attribution` 額外把 `signal_date` 放進 match key；同一筆實際交易若兩arm沿用不同 signal date，會被Audit錯拆成兩筆exclusive。
+- 修正：新增／集中 `assign_canonical_trade_match_key()` 為closed-trade配對單一真理，`reconstruct_round_trips`、exact closed rows與`c15_strategy_attribution`全部reuse；`signal_date`保留為selection/diagnostic metadata，但不得改變actual trade identity。Audit原本的 `exclusive selection ΔR == 同seed ΔDL選擇R` consistency gate保留，不放寬。
+- Synthetic fixture原本已有同ticker／同entry／同entry type但signal_date不同的BBB案例，更新為必須判定common trade並驗證common risk-dollar decomposition；此修正屬infra/attribution semantic bug fix，不新增MR/DL/SR identity，也不改模型、Target、selector、策略replay或既有scientific aggregate。
+- 歷史影響：修正前由`c15_strategy_attribution`產生的既有Audit數值保留作`PRE_FIX_HISTORICAL`紀錄；若未來要重新依賴其數值做current promotion／淘汰決策，必須以修正後canonical match key重跑。這不要求本輪回溯重跑已停止的舊研究鏈。
+- 下一步：套用修正後直接從 `Research → Audit／診斷 → forward-robustness-portfolio-translation` 重跑read-only Audit；不得重跑robustness除非compact source本身另被驗證為缺失或損壞。

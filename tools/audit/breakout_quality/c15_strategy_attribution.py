@@ -32,7 +32,10 @@ from tools.audit.sources.strategy_compare import (
     resolve_arm_artifacts,
     resolve_strategy_compare_run_selector,
 )
-from filters.breakout_quality.trade_attribution import reconstruct_round_trips
+from filters.breakout_quality.trade_attribution import (
+    assign_canonical_trade_match_key,
+    reconstruct_round_trips,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 AUDIT_RESULT_SCHEMA_VERSION = 3
@@ -407,21 +410,7 @@ def _selection_day_differences(candidate: pd.DataFrame, comparator: pd.DataFrame
 
 
 def _with_match_key(lifecycle: pd.DataFrame) -> pd.DataFrame:
-    out = pd.DataFrame(lifecycle).copy()
-    if out.empty:
-        out["match_key"] = pd.Series(dtype=str)
-        return out
-    keys = ["ticker", "entry_date", "entry_type", "signal_date"]
-    out["signal_date"] = out["signal_date"].fillna("").astype(str)
-    out["match_occurrence"] = out.groupby(keys, sort=False, dropna=False).cumcount() + 1
-    out["match_key"] = (
-        out["ticker"].astype(str)
-        + "|" + out["entry_date"].astype(str)
-        + "|" + out["entry_type"].astype(str)
-        + "|" + out["signal_date"].astype(str)
-        + "|" + out["match_occurrence"].astype(str)
-    )
-    return out
+    return assign_canonical_trade_match_key(lifecycle)
 
 
 def _implied_initial_risk(pnl: Any, r_multiple: Any) -> float | None:

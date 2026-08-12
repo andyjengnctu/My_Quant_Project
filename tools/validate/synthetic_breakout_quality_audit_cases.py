@@ -3385,13 +3385,13 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and [item["comparator_arm_id"] for item in c15_payload["comparisons"]] == ["C3", "C12"]
             and all(exact_paths)
             and all(item["selection"]["changed_days"] == 1 for item in c15_payload["comparisons"])
-            and c15_vs_c12["trade_contribution"]["common_trade_count"] == 2
-            and c15_vs_c12["trade_contribution"]["candidate_only_trade_count"] == 1
-            and c15_vs_c12["trade_contribution"]["comparator_only_trade_count"] == 1
-            and c15_vs_c12["risk_dollar_translation"]["common"]["risk_covered_trade_count"] == 1
-            and math.isclose(c15_vs_c12["risk_dollar_translation"]["common"]["risk_coverage_pct"], 50.0, rel_tol=0.0, abs_tol=1e-9)
-            and math.isclose(c15_vs_c12["risk_dollar_translation"]["common"]["risk_size_effect_pnl"], -2000.0, rel_tol=0.0, abs_tol=1e-9)
-            and math.isclose(c15_vs_c12["risk_dollar_translation"]["common"]["r_difference_effect_pnl"], 0.0, rel_tol=0.0, abs_tol=1e-9)
+            and c15_vs_c12["trade_contribution"]["common_trade_count"] == 3
+            and c15_vs_c12["trade_contribution"]["candidate_only_trade_count"] == 0
+            and c15_vs_c12["trade_contribution"]["comparator_only_trade_count"] == 0
+            and c15_vs_c12["risk_dollar_translation"]["common"]["risk_covered_trade_count"] == 2
+            and math.isclose(c15_vs_c12["risk_dollar_translation"]["common"]["risk_coverage_pct"], 200.0 / 3.0, rel_tol=0.0, abs_tol=1e-9)
+            and math.isclose(c15_vs_c12["risk_dollar_translation"]["common"]["risk_size_effect_pnl"], 3833.333333333333, rel_tol=0.0, abs_tol=1e-6)
+            and math.isclose(c15_vs_c12["risk_dollar_translation"]["common"]["r_difference_effect_pnl"], -4833.333333333333, rel_tol=0.0, abs_tol=1e-6)
             and math.isclose(c15_vs_c12["risk_dollar_translation"]["common"]["decomposition_residual_pnl"], 0.0, rel_tol=0.0, abs_tol=1e-9)
             and math.isclose(
                 c15_vs_c3["concentration"]["non_focus_delta_log_wealth"],
