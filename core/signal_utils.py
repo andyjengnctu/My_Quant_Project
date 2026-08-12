@@ -11,6 +11,18 @@ from core.breakout_false_filter import build_breakout_false_filter_pass_conditio
 from filters.breakout_quality.runtime import build_breakout_quality_filter_pass_condition
 OPTIMIZER_TRUE_RANGE_ATTR = '_optimizer_true_range'
 
+
+def extract_precomputed_signals(df):
+    required_columns = {"ATR", "is_setup", "ind_sell_signal", "buy_limit"}
+    if not required_columns.issubset(df.columns):
+        return None
+    return (
+        df["ATR"].to_numpy(copy=False),
+        df["is_setup"].to_numpy(copy=False),
+        df["ind_sell_signal"].to_numpy(copy=False),
+        df["buy_limit"].to_numpy(copy=False),
+    )
+
 def unpack_precomputed_signals(precomputed_signals):
     atr_main, buy_condition, sell_condition, buy_limits = precomputed_signals[:4]
     return atr_main, buy_condition, sell_condition, buy_limits

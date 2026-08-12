@@ -519,21 +519,6 @@ def _compatibility_catalogs() -> tuple[
     )
 
 
-def get_strategy_comparison_catalog_counts() -> dict[str, int]:
-    """Expose active/history counts without making historical entries active config."""
-
-    return {
-        "active_parameter_sources": len(STRATEGY_PARAM_SOURCES),
-        "historical_parameter_sources": len(HISTORICAL_STRATEGY_PARAM_SOURCES),
-        "active_dl_sources": len(STRATEGY_DL_SOURCES),
-        "historical_dl_sources": len(HISTORICAL_STRATEGY_DL_SOURCES),
-        "active_arms": len(STRATEGY_COMPARE_ARMS),
-        "historical_arms": len(HISTORICAL_STRATEGY_COMPARE_ARMS),
-        "active_contrasts": len(STRATEGY_COMPARE_CONTRASTS),
-        "historical_contrasts": len(HISTORICAL_STRATEGY_COMPARE_CONTRASTS),
-    }
-
-
 def _builder(raw) -> StrategyArtifactBuilder | None:
     if raw in (None, {}):
         return None
@@ -793,7 +778,6 @@ __all__ = [
     "STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES",
     "STRATEGY_DL_SOURCES",
     "STRATEGY_PARAM_SOURCES",
-    "get_strategy_comparison_catalog_counts",
     "get_strategy_comparison_profiles",
     "get_strategy_multi_seed_robustness_profiles",
     "get_strategy_multi_seed_robustness_settings",

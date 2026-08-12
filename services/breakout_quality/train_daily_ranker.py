@@ -25,39 +25,21 @@ from filters.breakout_quality.daily_ranker_data import (
     load_daily_universal_ranker_data,
     select_breakout_candidate_group_ids,
 )
-from filters.breakout_quality.models.factory import count_trainable_parameters, require_torch
+from filters.breakout_quality.models.factory import count_trainable_parameters
 from filters.breakout_quality.ranker_sample_contract import (
     build_score_eligibility_contract,
     resolve_forward_oos_score_group_ids,
 )
 from filters.breakout_quality.ranking_score_store import DAILY_RANKER_OOS_SCORE_FILENAME
-from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from core.console_report import print_artifact_paths
 
 from services.breakout_quality import ranker_training as ranker_api
+from services.breakout_quality.continuous_ranker_pipeline import resolve_ranker_execution_plan
 
 DAILY_SPLIT_FILENAME = "daily_split_by_date.csv"
 
 
-def _execution_plan(args):
-    torch, _nn = require_torch()
-    plan = resolve_torch_execution_plan(
-        torch,
-        requested_device=str(args.device),
-        mixed_precision=bool(args.mixed_precision),
-        mixed_precision_dtype=str(args.mixed_precision_dtype),
-        deterministic_algorithms=bool(args.deterministic_algorithms),
-        allow_tf32=bool(args.allow_tf32),
-    )
-    if plan.device_type == "cpu":
-        torch.set_num_threads(1)
-        try:
-            torch.set_num_interop_threads(1)
-        except RuntimeError as exc:
-            if "cannot set number of interop threads" not in str(exc):
-                raise
-    return torch, plan
 
 
 def _empty_split_metrics(group_count: int, reason: str) -> dict:
@@ -176,7 +158,7 @@ def run(args) -> int:
     )
     percentile_target[split.selection_ids] = selection_percentiles[split.selection_ids]
 
-    torch, plan = _execution_plan(args)
+    torch, plan = resolve_ranker_execution_plan(args)
     print(
         f"torch=device={plan.device_type}, mixed_precision={plan.mixed_precision_enabled}, "
         f"dtype={plan.autocast_dtype_name}, deterministic={plan.deterministic_algorithms}, tf32={plan.allow_tf32}"

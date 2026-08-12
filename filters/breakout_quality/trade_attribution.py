@@ -12,6 +12,7 @@ import pandas as pd
 
 from filters.breakout_quality.contract import SCORE_COLUMN
 from filters.breakout_quality.score_store import load_shared_group_score_table
+from core.serialization_utils import clean_optional_text as _clean_text, json_native_value as _json_native
 
 ATTRIBUTION_SCHEMA_VERSION = 1
 _BUY_PREFIX = "買進 ("
@@ -38,12 +39,6 @@ _ROUND_TRIP_COLUMNS = [
     "match_occurrence",
     "match_key",
 ]
-
-
-def _clean_text(value: Any) -> str:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
-        return ""
-    return str(value).strip()
 
 
 def _date_text(value: Any) -> str:
@@ -575,22 +570,6 @@ def render_trade_attribution_markdown(result: dict[str, Any], *, metadata: dict[
         "",
     ]
     return "\n".join(lines)
-
-
-def _json_native(value: Any) -> Any:
-    if value is None or isinstance(value, (str, bool)):
-        return value
-    if type(value) is int:
-        return value
-    if type(value) is float:
-        return value if math.isfinite(value) else None
-    if hasattr(value, "item"):
-        return _json_native(value.item())
-    if isinstance(value, dict):
-        return {str(key): _json_native(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_native(item) for item in value]
-    return str(value)
 
 
 def write_trade_attribution_outputs(

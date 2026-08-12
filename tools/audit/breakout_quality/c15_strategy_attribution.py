@@ -25,6 +25,7 @@ from core.console_report import (
     render_table,
     render_title,
 )
+from tools.audit.primitives import finite_or_none as _finite
 from tools.audit.portfolio.score_ranking_capture import build_trade_lifecycle_rows
 from tools.audit.sources.strategy_compare import (
     StrategyCompareArmArtifacts,
@@ -35,16 +36,6 @@ from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 AUDIT_RESULT_SCHEMA_VERSION = 3
-
-
-def _finite(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def _json_native(value: Any) -> Any:

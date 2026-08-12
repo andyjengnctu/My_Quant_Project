@@ -7,6 +7,8 @@ from datetime import date, datetime, timedelta
 from typing import Any, Mapping
 
 from core.active_param_ensemble import (
+    load_json_file,
+    parse_effective_date as _parse_effective_date,
     ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
     ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
     build_active_param_ensemble_schedule as _build_generic_active_param_ensemble_schedule,
@@ -40,14 +42,6 @@ def is_rolling_oos_param_set_payload(payload: Mapping[str, Any] | None) -> bool:
     )
 
 
-def load_json_file(path: str | os.PathLike[str]) -> dict:
-    with open(path, "r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    if not isinstance(payload, dict):
-        raise ValueError(f"JSON 根層必須是 object/dict，收到 {type(payload).__name__}")
-    return payload
-
-
 def load_rolling_oos_param_set(path: str | os.PathLike[str]) -> dict:
     payload = load_json_file(path)
     if not is_rolling_oos_param_set_payload(payload):
@@ -64,20 +58,6 @@ def load_rolling_oos_param_set(path: str | os.PathLike[str]) -> dict:
             f"rolling OOS 參數組缺少 params_by_oos_year / params_by_effective_date / params_ensemble_by_effective_date: {path}"
         )
     return payload
-
-
-def _parse_effective_date(value: Any) -> date:
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    text = str(value).strip()
-    if len(text) == 4 and text.isdigit():
-        text = f"{text}-01-01"
-    try:
-        return datetime.strptime(text[:10], "%Y-%m-%d").date()
-    except ValueError as exc:
-        raise ValueError(f"無法解析參數生效日: {value!r}") from exc
 
 
 def _coerce_trade_date(value: Any) -> date:

@@ -58,6 +58,7 @@ from tools.audit.breakout_quality.target_statistics import (
     spearman as _spearman,
 )
 from tools.audit.breakout_quality.artifact_primitives import (
+    continuous_target_component_paths as _artifact_paths,
     read_json as _read_json,
     resolve_ranker_dir as _ranker_dir,
     sha256_file as _sha256_file,
@@ -114,16 +115,6 @@ def parse_args(argv=None):
     )
     return parser.parse_args(argv)
 
-
-def _artifact_paths(target_dir: Path) -> dict[str, Path]:
-    return {
-        "target_raw_r": target_dir / TARGET_RAW_FILENAME,
-        "favorable_return": target_dir / TARGET_FAVORABLE_RETURN_FILENAME,
-        "adverse_return_to_peak": target_dir / TARGET_ADVERSE_RETURN_FILENAME,
-        "opportunity_bar": target_dir / TARGET_OPPORTUNITY_BAR_FILENAME,
-        "first_risk_breach_bar": target_dir / TARGET_RISK_BREACH_BAR_FILENAME,
-        "valid_mask": target_dir / TARGET_VALID_MASK_FILENAME,
-    }
 
 
 def _validated_11e_report(

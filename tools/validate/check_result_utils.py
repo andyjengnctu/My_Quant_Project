@@ -1,3 +1,4 @@
+from core.runtime_utils import is_insufficient_data_error
 import copy
 import math
 
@@ -20,10 +21,6 @@ def normalize_ticker_text(value):
         text = text.zfill(4)
 
     return text
-
-
-def is_insufficient_data_error(exc):
-    return isinstance(exc, ValueError) and ("有效資料不足" in str(exc))
 
 
 def make_consistency_params(base_params):

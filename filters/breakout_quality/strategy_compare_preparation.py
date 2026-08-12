@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT
 
-import json
 from pathlib import Path
 from typing import Any, Callable
 
@@ -44,6 +43,8 @@ from filters.breakout_quality.ranking_score_store import (
     resolve_continuous_ranker_oos_score_path,
 )
 from filters.breakout_quality.strategy_compare_sources import (
+    read_json_object_or_none as _read_json,
+    resolve_project_relative_path as _resolve_relative_path,
     PARAM_POLICY_SPECS,
     _load_param_source,
     _resolve_params_path,
@@ -58,16 +59,6 @@ from filters.breakout_quality.strategy_param_training import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _read_json(path: Path) -> dict[str, Any] | None:
-    if not path.is_file():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
 
 
 def model_upstream_prerequisite_blockers(
@@ -89,13 +80,6 @@ def model_upstream_prerequisite_blockers(
         dataset=dataset,
         max_tickers=max_tickers,
     )
-
-
-def _resolve_relative_path(root: Path, value: str) -> Path:
-    path = Path(str(value))
-    if path.is_absolute() or ".." in path.parts:
-        raise ValueError(f"設定路徑必須是專案root相對路徑: {value}")
-    return (root / path).resolve()
 
 
 def resolve_param_source_path(

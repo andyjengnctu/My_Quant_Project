@@ -9,16 +9,10 @@ import numpy as np
 import pandas as pd
 
 from filters.breakout_quality.contract import LABEL_PASS, LABEL_REJECT
+from filters.breakout_quality.continuous_ranker_data import source_data_end
 
 PERCENTILES = (0.00, 0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99, 1.00)
 
-def source_data_end(summary: dict[str, Any], events: pd.DataFrame) -> str:
-    source_range = summary.get("source_data_date_range")
-    if isinstance(source_range, dict):
-        value = str(source_range.get("end") or "").strip()
-        if value:
-            return pd.Timestamp(value).strftime("%Y-%m-%d")
-    return str(pd.to_datetime(events["label_eval_end_date"], errors="raise").max().date())
 
 def collapse_group_frame(
     events: pd.DataFrame,

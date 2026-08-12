@@ -796,7 +796,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         "synthetic_breakout_quality",
         case_id,
         "continuous_ranker_research_command_is_registered",
-        "tools.filters.breakout_quality.train_continuous_ranker",
+        "services.breakout_quality.ranker_cli",
         command_modules.get("train-continuous-ranker"),
     )
 
@@ -853,7 +853,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         (True, True, True, True),
         (
             command_modules.get("train-continuous-ranker")
-            == "tools.filters.breakout_quality.train_continuous_ranker",
+            == "services.breakout_quality.ranker_cli",
             'print("[10] 11B 同日 Percentile Ranker（research-only）")' not in app_source,
             'elif choice == "10":' not in app_source,
             "_interactive_train_continuous_ranker" not in app_source,
@@ -903,7 +903,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             'choices=(' in ranker_source,
             "11G" not in app_source[app_source.index("def _interactive_model_research"):app_source.index("def run_model_training_menu")],
             command_modules.get("train-continuous-ranker")
-            == "tools.filters.breakout_quality.train_continuous_ranker",
+            == "services.breakout_quality.ranker_cli",
         ),
     )
 
@@ -1063,7 +1063,7 @@ def validate_breakout_quality_pass_conditional_ranker_contract_case(_base_params
         (True, True, True, True),
         (
             command_modules.get("train-continuous-ranker")
-            == "tools.filters.breakout_quality.train_continuous_ranker",
+            == "services.breakout_quality.ranker_cli",
             "STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE" in ranker_source,
             "11G" not in menu_source,
             "strategy_aligned_no_time_pass_magnitude_mse" not in menu_source,

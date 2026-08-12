@@ -81,7 +81,16 @@ from core.raw_universe_contract import (
     coerce_raw_universe_required_min_rows,
     resolve_raw_universe_required_min_rows,
 )
-from core.runtime_utils import choose_inline_progress_message, get_process_pool_executor_kwargs, get_taipei_now, is_interactive_console, safe_prompt_choice, stdout_supports_inline_progress, write_inline_progress
+from core.runtime_utils import (
+    choose_inline_progress_message,
+    get_process_pool_executor_kwargs,
+    get_taipei_now,
+    is_interactive_console,
+    resolve_environment_flag as _env_flag,
+    safe_prompt_choice,
+    stdout_supports_inline_progress,
+    write_inline_progress,
+)
 from core.rolling_oos_params import ROLLING_OOS_PARAM_SET_SCHEMA_TYPE, ROLLING_OOS_USAGE
 from core.seed_ensemble_policy import (
     build_seed_ensemble_policy_snapshot,
@@ -519,17 +528,6 @@ def _set_env_default(environ, name: str, value: str) -> None:
     os.environ[name] = str(value)
     if isinstance(environ, dict):
         environ[name] = str(value)
-
-
-def _env_flag(environ, name: str, default: bool) -> bool:
-    value = None
-    if isinstance(environ, dict):
-        value = environ.get(name)
-    if value is None:
-        value = os.environ.get(name)
-    if value is None or str(value).strip() == "":
-        return bool(default)
-    return str(value).strip().lower() not in {"0", "false", "no", "off", "n"}
 
 
 def _resolve_single_fold_search_parallel_trials(environ, *, sampler_kind: str) -> int:
@@ -5483,12 +5481,15 @@ def _build_policies_schedule(rows: list[dict]) -> dict:
     return policies
 
 
-def _build_random_seed_ensemble_policy_payload() -> dict:
+def _build_seed_ensemble_policy_payload() -> dict:
     return build_seed_ensemble_policy_snapshot(
         enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
         seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
         min_agree=OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     )
+
+
+_build_random_seed_ensemble_policy_payload = _build_seed_ensemble_policy_payload
 
 
 def _resolve_policy_min_agree_for_member_count(policy_name: str | None, member_count: int) -> int | str:
@@ -7803,12 +7804,7 @@ def _is_rolling_random_seed_ensemble_enabled() -> bool:
     return bool(OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED) and int(OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE or 1) > 1
 
 
-def _build_rolling_seed_ensemble_policy_payload() -> dict:
-    return build_seed_ensemble_policy_snapshot(
-        enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
-        seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
-        min_agree=OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
-    )
+_build_rolling_seed_ensemble_policy_payload = _build_seed_ensemble_policy_payload
 
 
 def _extract_seed_from_policy_schedules(row: dict) -> int | None:

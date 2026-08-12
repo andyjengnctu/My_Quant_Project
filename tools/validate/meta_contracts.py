@@ -14,6 +14,12 @@ LEGACY_DOC_GUIDANCE_FILES = ("doc/CMD.md", "doc/ARCHITECTURE.md")
 SUSPICIOUS_APP_ENTRY_PATTERN = re.compile(r"(?:test|validate|regression|consistency)", re.IGNORECASE)
 
 CRITICAL_HELPER_SINGLE_SOURCE_SPECS: Dict[str, Tuple[str, ...]] = {
+    "core/signal_utils.py": (
+        "extract_precomputed_signals",
+    ),
+    "core/position_step.py": (
+        "first_exec_context",
+    ),
     "core/price_utils.py": (
         "calc_entry_price",
         "calc_net_sell_price",
@@ -31,6 +37,43 @@ CRITICAL_HELPER_SINGLE_SOURCE_SPECS: Dict[str, Tuple[str, ...]] = {
         "build_sell_ledger",
         "allocate_cost_basis_milli",
         "round_price_milli_to_tick",
+    ),
+    "core/runtime_utils.py": (
+        "is_insufficient_data_error",
+        "resolve_environment_flag",
+        "resolve_strict_environment_flag",
+    ),
+    "core/path_utils.py": (
+        "contains_any_path_separator",
+        "is_windows_absolute_path",
+        "split_cross_platform_parts",
+    ),
+    "core/serialization_utils.py": (
+        "clean_optional_text",
+        "json_native_value",
+    ),
+    "core/file_integrity.py": (
+        "canonical_json_sha256",
+        "compute_file_sha256",
+    ),
+    "filters/breakout_quality/continuous_ranker_data.py": (
+        "source_data_end",
+    ),
+    "filters/breakout_quality/strategy_compare_sources.py": (
+        "read_json_object_or_none",
+        "resolve_project_relative_path",
+    ),
+    "services/breakout_quality/continuous_ranker_pipeline.py": (
+        "resolve_ranker_execution_plan",
+    ),
+    "services/optimizer/dependency_stats.py": (
+        "empty_local_min_dependency_stats",
+    ),
+    "services/optimizer/outer_rolling_oos.py": (
+        "_build_seed_ensemble_policy_payload",
+    ),
+    "tools/audit/primitives.py": (
+        "finite_or_none",
     ),
 }
 
@@ -99,7 +142,7 @@ def _load_named_string_dict_keys(module_path: Path, constant_name: str) -> List[
 
 def summarize_no_reverse_app_import_contract(project_root: Path) -> Dict[str, Any]:
     violations: List[Dict[str, Any]] = []
-    for rel_dir in ("core", "tools"):
+    for rel_dir in ("config", "core", "filters", "services", "strategies"):
         for path in sorted((project_root / rel_dir).rglob("*.py")):
             tree = _read_python_ast(path)
             for node in ast.walk(tree):
@@ -109,7 +152,7 @@ def summarize_no_reverse_app_import_contract(project_root: Path) -> Dict[str, An
                 elif isinstance(node, ast.Import):
                     modules = [alias.name for alias in node.names]
                 for module_name in modules:
-                    if module_name == "apps" or module_name.startswith("apps."):
+                    if module_name == "apps" or module_name.startswith("apps.") or module_name == "tools" or module_name.startswith("tools."):
                         violations.append({
                             "path": str(path.relative_to(project_root)).replace("\\", "/"),
                             "lineno": getattr(node, "lineno", 0),
@@ -128,7 +171,7 @@ def _module_name_from_path(project_root: Path, path: Path) -> str:
 
 def _load_project_module_index(project_root: Path) -> Dict[str, Path]:
     module_index: Dict[str, Path] = {}
-    for rel_dir in ("apps", "core", "tools"):
+    for rel_dir in ("apps", "config", "core", "filters", "services", "strategies", "tools"):
         for path in sorted((project_root / rel_dir).rglob("*.py")):
             module_name = _module_name_from_path(project_root, path)
             if module_name:
@@ -455,7 +498,7 @@ def summarize_single_formal_test_entry_contract(project_root: Path) -> Dict[str,
 def summarize_critical_helper_single_source_contract(project_root: Path) -> Dict[str, Any]:
     top_level_definitions: Dict[str, List[str]] = {}
     scanned_files: List[str] = []
-    for rel_dir in ("apps", "core", "tools", "config", "strategies"):
+    for rel_dir in ("apps", "config", "core", "filters", "services", "strategies", "tools"):
         base_dir = project_root / rel_dir
         if not base_dir.is_dir():
             continue

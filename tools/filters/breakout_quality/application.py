@@ -109,7 +109,7 @@ COMMAND_MODULES = {
     "report": "tools.filters.breakout_quality.report",
     "evaluate": "tools.filters.breakout_quality.evaluate",
     "prepare-continuous-target": "tools.filters.breakout_quality.prepare_continuous_target",
-    "train-continuous-ranker": "tools.filters.breakout_quality.train_continuous_ranker",
+    "train-continuous-ranker": "services.breakout_quality.ranker_cli",
     "compare-continuous-rankers": "tools.filters.breakout_quality.compare_continuous_rankers",
     "build-point-in-time-scores": "tools.filters.breakout_quality.build_point_in_time_scores",
     "build-binary-point-in-time-scores": (
@@ -140,7 +140,7 @@ COMMAND_DESCRIPTIONS = {
     "report": "產生表格化終端報表、Markdown 報表與完整 metrics JSON",
     "evaluate": "輸出 train、validation、selection 或 OOS 的詳細 JSON",
     "prepare-continuous-target": "依目前workflow檢查並建立continuous target工件",
-    "train-continuous-ranker": "執行continuous ranker模型研究（MR-12／MR-13系列）；正式選單亦可使用",
+    "train-continuous-ranker": "執行目前設定的continuous ranker模型研究；正式選單亦可使用",
     "compare-continuous-rankers": (
         "只讀config設定的continuous-ranker frozen scores，做paired／random baseline／Dynamic-K品質比較"
     ),

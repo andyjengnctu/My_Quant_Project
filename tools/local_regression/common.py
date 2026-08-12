@@ -6,7 +6,6 @@ import hashlib
 import io
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -14,11 +13,17 @@ import time
 import uuid
 import zipfile
 from datetime import datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 from zoneinfo import ZoneInfo
 
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION
+from core.file_integrity import compute_file_sha256
+from core.path_utils import (
+    contains_any_path_separator as _contains_any_path_separator,
+    is_windows_absolute_path as _is_windows_absolute_path,
+    split_cross_platform_parts as _split_cross_platform_parts,
+)
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_REGRESSION_DIR = PROJECT_ROOT / "tools" / "local_regression"
@@ -107,22 +112,6 @@ DATASET_INFO_KEYS = (
 
 class LocalRegressionError(RuntimeError):
     pass
-
-
-_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
-
-
-def _contains_any_path_separator(value: str) -> bool:
-    return ("/" in value) or ("\\" in value)
-
-
-def _is_windows_absolute_path(raw_value: str) -> bool:
-    return bool(_WINDOWS_ABSOLUTE_PATH_RE.match(raw_value)) or raw_value.startswith("\\\\")
-
-
-def _split_cross_platform_parts(raw_value: str) -> tuple[str, tuple[str, ...]]:
-    normalized = raw_value.replace("\\", "/")
-    return normalized, PurePosixPath(normalized).parts
 
 
 def _normalize_bundle_name(bundle_name: Any) -> str:
@@ -489,16 +478,6 @@ def resolve_git_commit() -> str:
         )
     return "unknown"
 
-
-def compute_file_sha256(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def build_artifacts_manifest(run_dir: Path) -> Dict[str, Any]:

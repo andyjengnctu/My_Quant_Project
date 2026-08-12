@@ -26,6 +26,11 @@ def _warn_stdout_runtime_fallback_once(key, exc):
 
 
 # # (AI註: 台灣盤前/交易日推導統一使用 Asia/Taipei，避免容器或異地主機時區漂移)
+def is_insufficient_data_error(exc):
+    """Return whether a runtime ValueError represents canonical insufficient data."""
+    return isinstance(exc, ValueError) and ("有效資料不足" in str(exc))
+
+
 def get_taipei_now():
     return datetime.now(TAIPEI_TIMEZONE)
 
@@ -388,3 +393,23 @@ class PeakTracedMemoryTracker:
         if (not self._was_tracing) and tracemalloc.is_tracing():
             tracemalloc.stop()
         return False
+
+def resolve_environment_flag(environ, name: str, default: bool) -> bool:
+    """Read a permissive boolean env override where only explicit false tokens disable."""
+    value = None
+    if isinstance(environ, dict):
+        value = environ.get(name)
+    if value is None:
+        value = os.environ.get(name)
+    if value is None or str(value).strip() == "":
+        return bool(default)
+    return str(value).strip().lower() not in {"0", "false", "no", "off", "n"}
+
+
+def resolve_strict_environment_flag(name: str, default: bool = False) -> bool:
+    """Read a strict opt-in env flag where only explicit true tokens enable."""
+    raw = str(os.environ.get(name, "")).strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "y", "on"}
+

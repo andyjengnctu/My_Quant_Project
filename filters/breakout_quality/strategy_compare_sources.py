@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -21,6 +20,7 @@ from core.model_paths import resolve_default_primary_param_source_record
 from core.params_io import build_params_from_mapping, load_params_from_json, params_to_json_dict
 from core.rolling_oos_params import build_active_param_schedule, is_rolling_oos_param_set_payload
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
+from filters.breakout_quality.artifacts import compute_file_sha256 as _sha256_file
 from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CANONICAL_RUNTIME,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
@@ -32,6 +32,23 @@ from filters.breakout_quality.strategy_compare_contracts import (
     comparison_labels as _comparison_labels,
     comparison_switch_spec as _comparison_switch_spec,
 )
+
+def read_json_object_or_none(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def resolve_project_relative_path(root: Path, value: str) -> Path:
+    path = Path(str(value))
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"設定路徑必須是專案root相對路徑: {value}")
+    return (root / path).resolve()
+
 
 PARAM_POLICY_AUTO = "auto"
 PARAM_POLICY_BASE_FINALIST_BEST = "base-finalist-best"
@@ -67,14 +84,6 @@ OPTIONAL_ENTRY_FILTER_FIELDS = (
     "use_breakout_return_filter",
     "use_breakout_false_filter",
 )
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _assert_controlled_param_pair(no_filter_params, quality_params, *, comparison_mode=COMPARISON_MODE_HARD_FILTER) -> None:

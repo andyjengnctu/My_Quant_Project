@@ -67,6 +67,7 @@ from filters.breakout_quality.workflow_io import (
 from filters.breakout_quality.strategy_compare_engine import canonical_strategy_compare_output_dir_names
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 
+from tools.audit.breakout_quality.artifact_primitives import continuous_target_component_paths as _artifact_paths
 from tools.audit.breakout_quality.target_statistics import (
     collapse_group_frame as _collapse_group_frame,
     daily_rankability as _daily_rankability,
@@ -601,16 +602,6 @@ def render_continuous_target_audit_markdown(payload: dict[str, Any]) -> str:
     ]
     return "\n".join(lines)
 
-
-def _artifact_paths(target_dir: Path) -> dict[str, Path]:
-    return {
-        "target_raw_r": target_dir / TARGET_RAW_FILENAME,
-        "favorable_return": target_dir / TARGET_FAVORABLE_RETURN_FILENAME,
-        "adverse_return_to_peak": target_dir / TARGET_ADVERSE_RETURN_FILENAME,
-        "opportunity_bar": target_dir / TARGET_OPPORTUNITY_BAR_FILENAME,
-        "first_risk_breach_bar": target_dir / TARGET_RISK_BREACH_BAR_FILENAME,
-        "valid_mask": target_dir / TARGET_VALID_MASK_FILENAME,
-    }
 
 
 def main(argv=None) -> int:

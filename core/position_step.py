@@ -56,6 +56,13 @@ def _record_exec_context(
     )
 
 
+
+def first_exec_context(position, event_name):
+    for context in position.get("_last_exec_contexts", []):
+        if context.get("event") == event_name:
+            return context
+    return None
+
 def sum_last_exec_contexts_milli(position):
     contexts = position.get('_last_exec_contexts', [])
     freed_cash_milli = sum(int(ctx.get('net_total_milli', 0)) for ctx in contexts)

@@ -24,7 +24,7 @@ from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.portfolio_fast_data import build_score_single_stock_profile_fields
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score, calc_score_median_r_multiplier, calc_score_min_full_year_return_multiplier, calc_score_min_month_return_multiplier, calc_score_min_quarter_return_multiplier, calc_score_portfolio_return_multiplier, calc_score_positive_return_multiplier, calc_score_win_rate_multiplier
-from tools.optimizer.objective_runner import run_optimizer_objective
+from services.optimizer.objective_runner import run_optimizer_objective
 from tools.optimizer.session import OptimizerSession
 from tools.optimizer import callbacks as optimizer_callbacks, study_utils
 from tools.portfolio_sim.reporting import print_yearly_return_report
@@ -936,17 +936,17 @@ def validate_strategy_repeatability_case(base_params):
             preset_values=_optimizer_synthetic_trial_values(prefer_enabled=True),
         )
         perf_counter_values = iter([0.00, 0.01, 0.02, 0.03, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10])
-        with patch("tools.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02", "2026-01-03"])), patch(
-            "tools.optimizer.objective_runner.run_portfolio_timeline",
+        with patch("services.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02", "2026-01-03"])), patch(
+            "services.optimizer.objective_runner.run_portfolio_timeline",
             side_effect=_make_fake_portfolio_runner(
                 ret_pct=26.0,
                 mdd=-9.0,
                 annual_return_pct=18.0,
                 yearly_return_rows=[{"year": 2024, "return_pct": 12.5}, {"year": 2025, "return_pct": 9.3}],
             ),
-        ), patch("tools.optimizer.objective_runner.apply_filter_rules", return_value=None), patch(
-            "tools.optimizer.objective_runner.calc_portfolio_score", return_value=88.123
-        ), patch("tools.optimizer.objective_runner.time.perf_counter", side_effect=lambda: next(perf_counter_values)):
+        ), patch("services.optimizer.objective_runner.apply_filter_rules", return_value=None), patch(
+            "services.optimizer.objective_runner.calc_portfolio_score", return_value=88.123
+        ), patch("services.optimizer.objective_runner.time.perf_counter", side_effect=lambda: next(perf_counter_values)):
             objective_value = run_optimizer_objective(session, trial)
 
         stable_user_attrs = {
@@ -1018,17 +1018,17 @@ def validate_strategy_minimum_viability_case(base_params):
         preset_values=_optimizer_synthetic_trial_values(prefer_enabled=True),
     )
     perf_counter_values = iter([0.00, 0.01, 0.02, 0.03, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10])
-    with patch("tools.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02", "2026-01-03"])), patch(
-        "tools.optimizer.objective_runner.run_portfolio_timeline",
+    with patch("services.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02", "2026-01-03"])), patch(
+        "services.optimizer.objective_runner.run_portfolio_timeline",
         side_effect=_make_fake_portfolio_runner(
             ret_pct=26.0,
             mdd=-9.0,
             annual_return_pct=18.0,
             yearly_return_rows=[{"year": 2024, "return_pct": 12.5}, {"year": 2025, "return_pct": 9.3}],
         ),
-    ), patch("tools.optimizer.objective_runner.apply_filter_rules", return_value=None), patch(
-        "tools.optimizer.objective_runner.calc_portfolio_score", return_value=88.123
-    ), patch("tools.optimizer.objective_runner.time.perf_counter", side_effect=lambda: next(perf_counter_values)):
+    ), patch("services.optimizer.objective_runner.apply_filter_rules", return_value=None), patch(
+        "services.optimizer.objective_runner.calc_portfolio_score", return_value=88.123
+    ), patch("services.optimizer.objective_runner.time.perf_counter", side_effect=lambda: next(perf_counter_values)):
         optimizer_value = run_optimizer_objective(session, trial)
     add_check(results, "strategy_viability", case_id, "optimizer_smoke_returns_score", 88.123, optimizer_value)
 
@@ -1317,15 +1317,15 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         number=0,
         preset_values=_optimizer_synthetic_trial_values(prefer_enabled=True),
     )
-    with patch("tools.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02"])), patch(
-        "tools.optimizer.objective_runner.run_portfolio_timeline",
+    with patch("services.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02"])), patch(
+        "services.optimizer.objective_runner.run_portfolio_timeline",
         side_effect=_make_fake_portfolio_runner(
             ret_pct=18.0,
             mdd=-11.0,
             annual_return_pct=14.0,
             yearly_return_rows=[{"year": 2024, "return_pct": 8.5}],
         ),
-    ), patch("tools.optimizer.objective_runner.apply_filter_rules", return_value="月勝率偏低 (30%)"):
+    ), patch("services.optimizer.objective_runner.apply_filter_rules", return_value="月勝率偏低 (30%)"):
         filter_fail_value = run_optimizer_objective(filter_fail_session, filter_fail_trial)
 
     filter_fail_profile = filter_fail_trial.user_attrs.get("profile_row", {})
@@ -1342,16 +1342,16 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         number=1,
         preset_values=_optimizer_synthetic_trial_values(prefer_enabled=True),
     )
-    with patch("tools.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02", "2026-01-03"])), patch(
-        "tools.optimizer.objective_runner.run_portfolio_timeline",
+    with patch("services.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02", "2026-01-03"])), patch(
+        "services.optimizer.objective_runner.run_portfolio_timeline",
         side_effect=_make_fake_portfolio_runner(
             ret_pct=26.0,
             mdd=-9.0,
             annual_return_pct=18.0,
             yearly_return_rows=[{"year": 2024, "return_pct": 12.5}, {"year": 2025, "return_pct": 9.3}],
         ),
-    ), patch("tools.optimizer.objective_runner.apply_filter_rules", return_value=None), patch(
-        "tools.optimizer.objective_runner.calc_portfolio_score", return_value=88.123
+    ), patch("services.optimizer.objective_runner.apply_filter_rules", return_value=None), patch(
+        "services.optimizer.objective_runner.calc_portfolio_score", return_value=88.123
     ):
         success_value = run_optimizer_objective(success_session, success_trial)
 

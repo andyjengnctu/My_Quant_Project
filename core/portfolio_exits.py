@@ -11,7 +11,7 @@ from core.exact_accounting import (
     register_display_realized_pnl,
     round_money_for_display,
 )
-from core.position_step import execute_bar_step
+from core.position_step import execute_bar_step, first_exec_context as _first_exec_context
 from core.price_utils import (
     adjust_long_sell_fill_price,
     get_exit_sell_block_reason,
@@ -24,12 +24,6 @@ from core.portfolio_fast_data import (
     is_extended_entry_type,
 )
 
-
-def _first_exec_context(position, event_name):
-    for ctx in position.get('_last_exec_contexts', []):
-        if ctx.get('event') == event_name:
-            return ctx
-    return None
 
 
 def _round_money_for_history(value):

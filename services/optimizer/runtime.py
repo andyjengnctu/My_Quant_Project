@@ -14,6 +14,7 @@ from config.training_performance_policy import (
 from core.display import print_strategy_dashboard
 from services.optimizer.callbacks import print_optimizer_trial_milestone_dashboard
 from core.runtime_utils import is_interactive_console, safe_prompt_choice
+from core.runtime_utils import resolve_environment_flag as _env_flag_for_optimizer_runtime
 from services.optimizer.study_utils import (
     build_best_params_payload_from_trial,
     build_optimizer_trial_params,
@@ -76,17 +77,6 @@ def _env_value_for_optimizer_runtime(environ, name: str, default: str) -> str:
     if value is None or str(value).strip() == "":
         return str(default)
     return str(value).strip()
-
-
-def _env_flag_for_optimizer_runtime(environ, name: str, default: bool) -> bool:
-    value = None
-    if isinstance(environ, dict):
-        value = environ.get(name)
-    if value is None:
-        value = os.environ.get(name)
-    if value is None or str(value).strip() == "":
-        return bool(default)
-    return str(value).strip().lower() not in {"0", "false", "no", "off", "n"}
 
 
 def resolve_optimizer_single_fold_search_parallel_trials(environ=None, *, sampler_kind: str) -> int:

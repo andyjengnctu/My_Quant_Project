@@ -37,6 +37,7 @@ HELP_TARGETS = [
     ([sys.executable, "apps/research.py", "optimizer", "--help"], "python apps/research.py optimizer"),
     ([sys.executable, "apps/workbench.py", "--help"], "python apps/workbench.py"),
     ([sys.executable, "apps/package_zip.py", "--help"], "python apps/package_zip.py"),
+    ([sys.executable, "apps/run_bundle.py", "--help"], "python apps/run_bundle.py"),
     ([sys.executable, "apps/portfolio_sim.py", "--help"], "python apps/portfolio_sim.py"),
     ([sys.executable, "apps/smart_downloader.py", "--help"], "python apps/smart_downloader.py"),
     ([sys.executable, "apps/test_suite.py", "--help"], "python apps/test_suite.py"),

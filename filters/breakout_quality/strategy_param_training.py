@@ -29,6 +29,7 @@ from config.training_policy import (
     OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
     SELECTION_POLICY_PARAM_SPECS,
 )
+from core.file_integrity import canonical_json_sha256 as _canonical_hash
 from core.dataset_profiles import get_dataset_dir
 from core.model_paths import resolve_models_dir
 from core.runtime_utils import get_taipei_now
@@ -76,6 +77,7 @@ from filters.breakout_quality.strategy_optimizer_policy import (
 )
 from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_HARD_FILTER
 from filters.breakout_quality.strategy_compare_sources import (
+    read_json_object_or_none as _load_json,
     OPTIONAL_ENTRY_FILTER_FIELDS,
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
@@ -196,25 +198,10 @@ def _parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def _canonical_hash(payload: Any) -> str:
-    return hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-    ).hexdigest()
-
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False, default=str) + "\n", encoding="utf-8")
-
-
-def _load_json(path: Path) -> dict[str, Any] | None:
-    if not path.is_file():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
 
 
 def _load_baseline_contract(*, root: Path, args) -> dict[str, Any]:

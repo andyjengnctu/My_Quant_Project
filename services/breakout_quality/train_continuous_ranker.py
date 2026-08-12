@@ -57,6 +57,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
+from filters.breakout_quality.continuous_ranker_data import source_data_end
 from filters.breakout_quality.continuous_ranker_quality import (
     daily_top_k_metrics as shared_daily_top_k_metrics,
 )
@@ -306,7 +307,7 @@ def resolve_training_output_paths(args):
 
 
 
-def _validate_args(args) -> None:
+def validate_args(args) -> None:
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     model_spec = get_model_spec(str(args.model_architecture))
     if (
@@ -360,15 +361,6 @@ def _validate_args(args) -> None:
         raise ValueError("inner validation months必須>=1，patience必須>=0")
     if float(args.early_stopping_min_delta) < 0.0:
         raise ValueError("early stopping min delta必須>=0")
-
-
-def _source_data_end(summary: dict[str, Any], events: pd.DataFrame) -> str:
-    source_range = summary.get("source_data_date_range")
-    if isinstance(source_range, dict):
-        value = str(source_range.get("end") or "").strip()
-        if value:
-            return value
-    return str(pd.to_datetime(events["label_eval_end_date"], errors="raise").max().date())
 
 
 def _group_table(events: pd.DataFrame, event_group_index: np.ndarray, labels: np.ndarray) -> pd.DataFrame:
@@ -1348,15 +1340,15 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def main(argv=None) -> int:
-    args = parse_args(argv)
-    _validate_args(args)
+def run(args) -> int:
+    validate_args(args)
     started = time.perf_counter()
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
-        from services.breakout_quality.train_daily_ranker import run as run_daily_ranker
-
-        return int(run_daily_ranker(args))
+        raise ValueError(
+            "daily-universal ranker必須由services.breakout_quality.ranker_cli dispatch，"
+            "event trainer不得直接承載daily orchestration"
+        )
     contract = _profile_contract(profile)
     model_spec = get_model_spec(str(args.model_architecture))
     summary, indexed_features, context, labels, events = load_validated_dataset_bundle(
@@ -1390,7 +1382,7 @@ def main(argv=None) -> int:
 
     outer_policy = resolve_breakout_quality_outer_policy(
         PROJECT_ROOT,
-        source_data_end_date=_source_data_end(summary, events),
+        source_data_end_date=source_data_end(summary, events),
     )
     (
         split_assignments,
@@ -1778,11 +1770,18 @@ def main(argv=None) -> int:
     return 0
 
 
+def main(argv=None) -> int:
+    """Compatibility event-ranker CLI; formal profile dispatch lives in ranker_cli."""
+    return int(run(parse_args(argv)))
+
+
 __all__ = [
     "RANKER_SCHEMA_VERSION",
     "build_daily_percentile_targets",
     "main",
     "parse_args",
+    "run",
+    "validate_args",
 ]
 
 

@@ -4,6 +4,7 @@ import threading
 from collections import OrderedDict
 from contextlib import nullcontext
 from services.optimizer.callbacks import run_optimizer_monitoring_callback
+from services.optimizer.dependency_stats import empty_local_min_dependency_stats as _empty_local_min_dependency_stats
 from services.optimizer.objective import run_optimizer_objective
 from config.training_performance_policy import resolve_optimizer_rolling_parallel_prep_cache_max_items_default
 from services.optimizer.trial_inputs import _build_process_pool_executor
@@ -27,25 +28,6 @@ def close_study_storage(study):
     dispose = getattr(engine, "dispose", None)
     if callable(dispose):
         dispose()
-
-
-def _empty_local_min_dependency_stats():
-    return {
-        "dependency_signal_total": 0,
-        "dependency_signal_evaluated": 0,
-        "dependency_portfolio_total": 0,
-        "dependency_portfolio_evaluated": 0,
-        "dependency_mixed_total": 0,
-        "dependency_mixed_evaluated": 0,
-        "dependency_unknown_total": 0,
-        "dependency_unknown_evaluated": 0,
-        "signal_reuse_candidate_total": 0,
-        "signal_reuse_candidate_evaluated": 0,
-        "signal_recompute_required_total": 0,
-        "signal_recompute_required_evaluated": 0,
-        "dependency_field_total_counts": {},
-        "dependency_field_evaluated_counts": {},
-    }
 
 
 def _merge_int_count_dict(target: dict, source) -> None:

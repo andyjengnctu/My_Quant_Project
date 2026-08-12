@@ -3,9 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
-def _contains_any_path_separator(value: str) -> bool:
-    return ("/" in value) or ("\\" in value)
+from core.path_utils import contains_any_path_separator as _contains_any_path_separator
 
 
 def normalize_output_category(category: str) -> str:

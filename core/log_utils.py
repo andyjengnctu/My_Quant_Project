@@ -1,22 +1,19 @@
 # core/log_utils.py
 import os
-import re
 import traceback
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
+from core.path_utils import (
+    contains_any_path_separator as _contains_any_path_separator,
+    is_windows_absolute_path as _is_windows_absolute_path,
+    split_cross_platform_parts as _split_cross_platform_parts,
+)
 from core.runtime_utils import get_taipei_now
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_ROOT_PATH = Path(PROJECT_ROOT).resolve()
 OUTPUTS_ROOT_PATH = (PROJECT_ROOT_PATH / "outputs").resolve()
-_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
-
-
-def _contains_any_path_separator(value):
-    return ("/" in value) or ("\\" in value)
-
-
 def _normalize_log_file_prefix(prefix):
     if prefix is None:
         raise ValueError("prefix 必填，且不可包含路徑分隔或 . / ..")
@@ -36,15 +33,6 @@ def _normalize_log_file_prefix(prefix):
         raise ValueError("prefix 不可包含路徑分隔或 . / ..")
 
     return parts[0]
-
-
-def _is_windows_absolute_path(raw_value):
-    return bool(_WINDOWS_ABSOLUTE_PATH_RE.match(raw_value)) or raw_value.startswith("\\\\")
-
-
-def _split_cross_platform_parts(raw_value):
-    normalized = raw_value.replace("\\", "/")
-    return normalized, PurePosixPath(normalized).parts
 
 
 def _resolve_project_scoped_path(path_value, *, field_name, allow_file_name_only):

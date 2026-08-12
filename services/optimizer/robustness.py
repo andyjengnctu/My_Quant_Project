@@ -31,6 +31,7 @@ from strategies.breakout.search_space import (
     get_breakout_local_min_candidate_fields,
     resolve_breakout_neighbor_spec,
 )
+from services.optimizer.dependency_stats import empty_local_min_dependency_stats as _empty_local_min_dependency_runtime_stats
 from services.optimizer.objective_runner import (
     evaluate_prepared_inner_validate_score,
     evaluate_prepared_train_score,
@@ -285,25 +286,6 @@ def _classify_local_min_neighbor_dependency(center_payload: dict, payload: dict)
     if len(changed_fields) > 1:
         return "mixed", "+".join(changed_fields)
     return "unknown", "unchanged"
-
-
-def _empty_local_min_dependency_runtime_stats() -> dict:
-    return {
-        "dependency_signal_total": 0,
-        "dependency_signal_evaluated": 0,
-        "dependency_portfolio_total": 0,
-        "dependency_portfolio_evaluated": 0,
-        "dependency_mixed_total": 0,
-        "dependency_mixed_evaluated": 0,
-        "dependency_unknown_total": 0,
-        "dependency_unknown_evaluated": 0,
-        "signal_reuse_candidate_total": 0,
-        "signal_reuse_candidate_evaluated": 0,
-        "signal_recompute_required_total": 0,
-        "signal_recompute_required_evaluated": 0,
-        "dependency_field_total_counts": {},
-        "dependency_field_evaluated_counts": {},
-    }
 
 
 def _record_local_min_dependency(stats: dict, *, layer: str, field_name: str, bucket: str) -> None:

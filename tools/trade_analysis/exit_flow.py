@@ -10,18 +10,12 @@ from core.exact_accounting import (
     round_money_for_display,
 )
 from core.breakout_reentry import create_breakout_reentry_watch_state
-from core.position_step import execute_bar_step, sum_last_exec_contexts_milli
+from core.position_step import execute_bar_step, first_exec_context as _first_exec_context, sum_last_exec_contexts_milli
 from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
 from tools.trade_analysis.charting import record_active_levels, record_trade_marker, resolve_position_tp_half_line
 from tools.trade_analysis.history_snapshot import build_pit_history_snapshot
 from tools.trade_analysis.log_rows import append_debug_trade_row
 
-
-def _first_exec_context(position, event_name):
-    for ctx in position.get('_last_exec_contexts', []):
-        if ctx.get('event') == event_name:
-            return ctx
-    return None
 
 
 def _resolve_completed_trade_count(history_snapshot, *, include_current_round_trip):

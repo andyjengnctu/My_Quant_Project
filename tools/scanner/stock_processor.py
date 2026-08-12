@@ -6,6 +6,7 @@ from core.config import get_buy_sort_method
 from core.data_utils import get_required_min_rows, resolve_latest_trade_date_from_frame, sanitize_ohlcv_dataframe
 from core.exact_accounting import calc_entry_total_cost
 from core.price_utils import calc_reference_candidate_qty, can_execute_half_take_profit
+from core.signal_utils import extract_precomputed_signals as _build_precomputed_signals
 from core.scanner_display import build_scanner_sort_probe_text
 from .runtime_common import is_insufficient_data_error
 
@@ -275,18 +276,6 @@ def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats, 
         history_row['sanitize_issue'],
     )
 
-
-def _build_precomputed_signals(df):
-    required_columns = {'ATR', 'is_setup', 'ind_sell_signal', 'buy_limit'}
-    if not required_columns.issubset(df.columns):
-        return None
-    signals = (
-        df['ATR'].to_numpy(copy=False),
-        df['is_setup'].to_numpy(copy=False),
-        df['ind_sell_signal'].to_numpy(copy=False),
-        df['buy_limit'].to_numpy(copy=False),
-    )
-    return signals
 
 
 def process_prepared_stock(df, ticker, params, sanitize_stats=None):

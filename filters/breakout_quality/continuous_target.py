@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
+from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.contract import BreakoutQualityLabelPolicy
 
 CONTINUOUS_TARGET_SCHEMA_VERSION = 1
@@ -452,15 +453,6 @@ def resolve_continuous_target_dir(
     )
 
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-
 def _artifact_record_identity(record: object) -> tuple[str, int, str] | None:
     if not isinstance(record, dict):
         return None
@@ -507,7 +499,7 @@ def _validate_target_dataset_artifact_source(
         actual_source_manifest_identity = (
             source_manifest_path.name,
             int(source_manifest_path.stat().st_size),
-            _file_sha256(source_manifest_path).lower(),
+            compute_file_sha256(source_manifest_path).lower(),
         )
         if actual_source_manifest_identity != expected_source_manifest_identity:
             raise ValueError("continuous target source manifest已改變；請重建目前Target")
@@ -598,7 +590,7 @@ def load_validated_continuous_target_manifest(
             raise ValueError(f"continuous target artifact不存在或filename不一致: {name}")
         if int(record.get("size_bytes", -1)) != int(path.stat().st_size):
             raise ValueError(f"continuous target artifact size不一致: {name}")
-        if str(record.get("sha256") or "").lower() != _file_sha256(path).lower():
+        if str(record.get("sha256") or "").lower() != compute_file_sha256(path).lower():
             raise ValueError(f"continuous target artifact SHA256不一致: {name}")
     return manifest
 
@@ -692,7 +684,7 @@ def load_validated_continuous_target_component_arrays(
             raise ValueError(f"continuous target component不存在或filename不一致: {name}")
         if int(record.get("size_bytes", -1)) != int(path.stat().st_size):
             raise ValueError(f"continuous target component size不一致: {name}")
-        if str(record.get("sha256") or "").lower() != _file_sha256(path).lower():
+        if str(record.get("sha256") or "").lower() != compute_file_sha256(path).lower():
             raise ValueError(f"continuous target component SHA256不一致: {name}")
         arrays[name] = np.load(path, allow_pickle=False)
 

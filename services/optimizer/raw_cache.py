@@ -1,3 +1,4 @@
+from core.runtime_utils import is_insufficient_data_error
 import hashlib
 import json
 import os
@@ -16,19 +17,13 @@ from core.dataset_profiles import (
     build_missing_dataset_dir_message,
     infer_dataset_profile_key_from_data_dir,
 )
+from core.runtime_utils import resolve_strict_environment_flag as _env_flag
 
 RAW_CACHE_SCHEMA_VERSION = 1
 RAW_CACHE_LOCK_POLL_SEC = 0.25
 RAW_CACHE_LOCK_STALE_SEC = 6 * 60 * 60
 RAW_CACHE_REPLACE_RETRY_COUNT = 20
 RAW_CACHE_REPLACE_RETRY_SEC = 0.10
-
-
-def _env_flag(name: str, default: bool = False) -> bool:
-    raw = str(os.environ.get(name, "")).strip().lower()
-    if not raw:
-        return bool(default)
-    return raw in {"1", "true", "yes", "y", "on"}
 
 
 def _raw_cache_use_enabled() -> bool:
@@ -282,10 +277,6 @@ def _print_load_summary(*, fresh_raw_data_cache, totals, load_issues, issue_path
 
 def is_insufficient_data_message(message):
     return isinstance(message, str) and ("有效資料不足" in message)
-
-
-def is_insufficient_data_error(exc):
-    return isinstance(exc, ValueError) and ("有效資料不足" in str(exc))
 
 
 def resolve_optimizer_max_workers(params, default_max_workers):

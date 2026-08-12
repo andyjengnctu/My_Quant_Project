@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
+
+from core.file_integrity import compute_file_sha256
 from typing import Any
 
 from config.breakout_quality import (
@@ -95,13 +96,6 @@ class BreakoutQualityRuntimeContract:
     execution_start: date
     shared_group_score_broadcast: bool
 
-
-def compute_file_sha256(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def build_file_manifest(path: str | Path) -> dict[str, Any]:

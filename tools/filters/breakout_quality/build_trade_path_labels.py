@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from config.breakout_quality import get_breakout_quality_workflow_settings
+from core.file_integrity import canonical_json_sha256 as _canonical_hash
 from core.dataset_profiles import get_dataset_dir
 from core.runtime_utils import get_taipei_now
 from filters.breakout_quality.artifacts import build_file_manifest, compute_file_sha256
@@ -110,17 +111,6 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args(argv)
 
-
-def _canonical_hash(payload: Any) -> str:
-    return hashlib.sha256(
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-    ).hexdigest()
 
 
 def _ticker_shard_path(shard_dir: Path, ticker: str) -> Path:

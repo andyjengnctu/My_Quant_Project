@@ -27,7 +27,7 @@ from tools.local_regression import run_quick_gate as run_quick_gate_module
 from tools.local_regression.meta_quality_coverage import build_coverage_summary
 from tools.local_regression.meta_quality_performance import build_performance_summary
 from tools.local_regression.meta_quality_targets import COVERAGE_BRANCH_MIN_FLOOR, COVERAGE_LINE_MIN_FLOOR, COVERAGE_TARGETS, CRITICAL_COVERAGE_TARGETS
-from tools.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
+from services.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json, write_csv, write_text
 from tools.validate.reporting import write_issue_excel_report, write_local_regression_summary
 from tools.validate.meta_contracts import load_synthetic_registry_entries_from_source

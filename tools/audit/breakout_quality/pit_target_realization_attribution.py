@@ -33,10 +33,14 @@ from filters.breakout_quality.ranking_score_store import (
     load_selection_point_in_time_ranking_contract,
     load_selection_point_in_time_score_table,
 )
+from tools.audit.primitives import finite_or_none as _finite
 from tools.audit.breakout_quality.c15_strategy_attribution import (
     build_strategy_attribution_pair_payload,
 )
-from tools.audit.breakout_quality.pit_primitives import candidate_pit_identity as _candidate_pit_identity
+from tools.audit.breakout_quality.pit_primitives import (
+    candidate_pit_identity as _candidate_pit_identity,
+    pit_json_native as _json_native,
+)
 from tools.audit.sources.strategy_compare import (
     StrategyCompareArmArtifacts,
     resolve_arm_artifacts,
@@ -45,41 +49,6 @@ from tools.audit.sources.strategy_compare import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 AUDIT_RESULT_SCHEMA_VERSION = 1
-
-
-def _finite(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
-
-
-def _json_native(value: Any) -> Any:
-    if value is None or isinstance(value, (str, bool)):
-        return value
-    if type(value) is int:
-        return value
-    if isinstance(value, np.integer):
-        return int(value)
-    if isinstance(value, (float, np.floating)):
-        number = float(value)
-        return number if math.isfinite(number) else None
-    if isinstance(value, pd.Timestamp):
-        return value.isoformat()
-    if isinstance(value, Path):
-        return value.as_posix()
-    if isinstance(value, dict):
-        return {str(key): _json_native(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_native(item) for item in value]
-    try:
-        missing = pd.isna(value)
-    except (TypeError, ValueError):
-        return value
-    return None if bool(missing) else value
 
 
 def _validate_definition(definition: AuditDefinition) -> tuple[str, tuple[str, ...], int, int, int, int]:

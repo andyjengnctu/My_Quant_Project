@@ -11,7 +11,7 @@ def get_market_last_date():
     try:
         search_start = (rt.get_taipei_now() - timedelta(days=15)).strftime("%Y-%m-%d")
         loader = rt.get_finmind_loader()
-        df = loader.get_data(dataset='TaiwanStockPrice', data_id='0050', start_date=search_start)
+        df = loader.get_data(dataset=rt.FINMIND_PRICE_DATASET, data_id='0050', start_date=search_start)
         if df is not None and not df.empty:
             df.columns = [c.lower() for c in df.columns]
             actual_date = str(df['date'].max()).split(' ')[0]

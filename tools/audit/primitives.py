@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
-import hashlib
+import math
 from pathlib import Path
 
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+from core.file_integrity import compute_file_sha256 as sha256_file
 
 
-__all__ = ["sha256_file"]
+def finite_or_none(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+
+__all__ = ["finite_or_none", "sha256_file"]

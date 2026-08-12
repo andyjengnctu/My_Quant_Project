@@ -1186,21 +1186,7 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
     )
 
     breakout_quality_facade_path = SYNTHETIC_VALIDATE_DIR / "synthetic_breakout_quality_cases.py"
-    breakout_quality_facade_tree = read_source_ast(breakout_quality_facade_path)
-    breakout_quality_facade_validator_defs = sorted(
-        node.name
-        for node in breakout_quality_facade_tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name.startswith("validate_")
-    )
-    breakout_quality_facade_imports = sorted(
-        alias.asname or alias.name
-        for node in breakout_quality_facade_tree.body
-        if isinstance(node, ast.ImportFrom)
-        and (node.module or "").startswith("synthetic_breakout_quality_")
-        for alias in node.names
-        if alias.name.startswith("validate_")
-    )
+    breakout_quality_facade_exists = breakout_quality_facade_path.exists()
 
     synthetic_cases_source = read_source_text(SYNTHETIC_VALIDATE_DIR / "synthetic_cases.py")
     synthetic_cases_uses_breakout_quality_facade = (
@@ -1242,17 +1228,9 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
         results,
         "meta_registry",
         case_id,
-        "breakout_quality_compatibility_facade_has_no_validator_implementation",
-        [],
-        breakout_quality_facade_validator_defs,
-    )
-    add_check(
-        results,
-        "meta_registry",
-        case_id,
-        "breakout_quality_compatibility_facade_reexports_all_domain_validators",
-        sorted(declared_breakout_quality_validators),
-        breakout_quality_facade_imports,
+        "breakout_quality_retired_compatibility_facade_absent",
+        False,
+        breakout_quality_facade_exists,
     )
     add_check(
         results,
@@ -1285,6 +1263,36 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
         "breakout_quality_compatibility_facade_is_not_key_coverage_target",
         False,
         breakout_quality_facade_coverage_target,
+    )
+
+    retired_unused_paths = (
+        "filters/breakout_quality/mantis_pretrained.py",
+        "filters/breakout_quality/moment_pretrained.py",
+        "filters/registry.py",
+        "tools/local_regression/run_scanner_terminal_guard.py",
+        "tools/validate/synthetic_breakout_quality_cases.py",
+        "tools/filters/breakout_quality/train_daily_ranker.py",
+        "tools/optimizer/objective.py",
+        "tools/optimizer/objective_filters.py",
+        "tools/optimizer/objective_profiles.py",
+        "tools/optimizer/objective_runner.py",
+        "tools/optimizer/param_cache.py",
+        "tools/optimizer/profile.py",
+        "tools/optimizer/trial_inputs.py",
+        "tools/portfolio_sim/runtime_common.py",
+    )
+    resurrected_retired_paths = [
+        rel_path
+        for rel_path in retired_unused_paths
+        if (SYNTHETIC_VALIDATE_DIR.parents[1] / rel_path).exists()
+    ]
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "retired_unused_modules_remain_absent",
+        [],
+        resurrected_retired_paths,
     )
 
     with tempfile.TemporaryDirectory(prefix="source_index_cache_contract_") as temp_dir_text:

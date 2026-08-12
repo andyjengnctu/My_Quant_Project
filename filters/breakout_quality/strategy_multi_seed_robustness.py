@@ -56,6 +56,7 @@ from config.strategy_compare import (
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_settings,
 )
+from core.file_integrity import canonical_json_sha256
 from core.console_report import (
     console_color_enabled,
     paint,
@@ -145,12 +146,6 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         encoding="utf-8",
     )
 
-
-def _canonical_hash(payload: Any, *, length: int = 16) -> str:
-    raw = json.dumps(
-        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
-    ).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()[:length]
 
 
 def resolve_multi_seed_values(*, seed_count: int, generator_seed: int) -> tuple[int, ...]:
@@ -567,7 +562,7 @@ def build_multi_seed_robustness_contract(
         },
     }
     # 只有scientific identity改變才換fingerprint；console/report/parallelism/retention不觸發重訓。
-    contract["fingerprint"] = _canonical_hash(scientific, length=16)
+    contract["fingerprint"] = canonical_json_sha256(scientific, length=16)
     return contract
 
 

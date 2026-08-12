@@ -19,7 +19,7 @@ def run_cmd(cmd: list[str], step_name: str, *, check: bool = True) -> subprocess
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Stage/commit changes, then run package_zip.py and test_suite.py."
+        description="Stage changes, run formal tests, commit only on PASS, then package the verified HEAD."
     )
     parser.add_argument(
         "-m",
@@ -30,36 +30,45 @@ def main() -> int:
     parser.add_argument(
         "--no-commit",
         action="store_true",
-        help="Skip git add/commit and only run package_zip.py and test_suite.py.",
+        help="Run formal tests and package without git add/commit.",
     )
     args = parser.parse_args()
 
     print(f"[1/5] Repo root: {REPO_ROOT}")
     run_cmd(["git", "rev-parse", "--show-toplevel"], "git rev-parse")
 
+    staged_changes = False
     if not args.no_commit:
         print("[2/5] Stage changes")
         run_cmd(["git", "add", "-A"], "git add -A")
-
-        diff_result = run_cmd(["git", "diff", "--cached", "--quiet"], "git diff --cached --quiet", check=False)
+        diff_result = run_cmd(
+            ["git", "diff", "--cached", "--quiet"],
+            "git diff --cached --quiet",
+            check=False,
+        )
         if diff_result.returncode == 1:
-            message = args.message.strip() or f"bundle run {datetime.now():%Y-%m-%d %H:%M:%S}"
-            print(f"[3/5] Commit: {message}")
-            run_cmd(["git", "commit", "-m", message], "git commit")
-        elif diff_result.returncode == 0:
-            print("[3/5] No staged changes. Skip commit.")
-        else:
+            staged_changes = True
+        elif diff_result.returncode != 0:
             raise SystemExit(
                 f"git diff --cached --quiet failed with exit code {diff_result.returncode}"
             )
     else:
         print("[2/5] --no-commit set. Skip git add/commit.")
 
-    print("[4/5] Run package_zip.py")
-    run_cmd([sys.executable, "apps/package_zip.py"], "python apps/package_zip.py")
-
-    print("[5/5] Run test_suite.py")
+    print("[3/5] Run test_suite.py before commit")
     run_cmd([sys.executable, "apps/test_suite.py"], "python apps/test_suite.py")
+
+    if args.no_commit:
+        print("[4/5] --no-commit set. Skip commit.")
+    elif staged_changes:
+        message = args.message.strip() or f"bundle run {datetime.now():%Y-%m-%d %H:%M:%S}"
+        print(f"[4/5] Commit verified changes: {message}")
+        run_cmd(["git", "commit", "-m", message], "git commit")
+    else:
+        print("[4/5] No staged changes. Skip commit.")
+
+    print("[5/5] Run package_zip.py from verified HEAD")
+    run_cmd([sys.executable, "apps/package_zip.py"], "python apps/package_zip.py")
     return 0
 
 

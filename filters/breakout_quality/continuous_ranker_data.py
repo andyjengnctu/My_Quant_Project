@@ -80,7 +80,7 @@ def _group_table(events: pd.DataFrame, event_group_index: np.ndarray, labels: np
     return group.reset_index(drop=True)
 
 
-def _source_data_end(summary: dict[str, Any], events: pd.DataFrame) -> str:
+def source_data_end(summary: dict[str, Any], events: pd.DataFrame) -> str:
     source_range = summary.get("source_data_date_range")
     if isinstance(source_range, dict):
         value = str(source_range.get("end") or "").strip()
@@ -143,7 +143,7 @@ def load_continuous_ranker_data(
     )
     outer_policy = resolve_breakout_quality_outer_policy(
         Path(project_root),
-        source_data_end_date=_source_data_end(summary, events),
+        source_data_end_date=source_data_end(summary, events),
     )
     return ContinuousRankerDataBundle(
         summary=dict(summary),

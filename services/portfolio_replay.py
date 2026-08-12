@@ -47,6 +47,7 @@ from core.portfolio_fast_data import (
     prep_stock_data_and_trades,
     summarize_single_stock_r_values,
 )
+from core.runtime_utils import resolve_strict_environment_flag as _env_flag
 from services.optimizer.raw_cache import load_all_raw_data
 from services.optimizer.trial_inputs import prepare_trial_inputs
 from services.optimizer.walk_forward import resolve_first_walk_forward_test_boundary
@@ -54,13 +55,6 @@ from services.portfolio_replay_runtime import LOAD_PROGRESS_EVERY, OUTPUT_DIR, P
 
 PORTFOLIO_DEFAULT_BENCHMARK_TICKER = "0050"
 PORTFOLIO_PREP_CACHE_SCHEMA_VERSION = 3
-
-
-def _env_flag(name: str, default: bool = False) -> bool:
-    raw = str(os.environ.get(name, "")).strip().lower()
-    if not raw:
-        return bool(default)
-    return raw in {"1", "true", "yes", "y", "on"}
 
 
 def _portfolio_prepared_cache_include_trade_logs() -> bool:

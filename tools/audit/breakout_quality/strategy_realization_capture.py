@@ -27,6 +27,7 @@ from core.console_report import (
     render_title,
 )
 from core.runtime_utils import get_taipei_now
+from tools.audit.primitives import finite_or_none as _finite
 from tools.audit.breakout_quality.c15_strategy_attribution import (
     build_strategy_attribution_pair_payload,
 )
@@ -40,16 +41,6 @@ from tools.audit.sources.strategy_compare import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 AUDIT_RESULT_SCHEMA_VERSION = 1
-
-
-def _finite(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def _json_native(value: Any) -> Any:

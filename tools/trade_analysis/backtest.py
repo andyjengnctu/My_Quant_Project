@@ -15,7 +15,7 @@ from core.exact_accounting import (
     round_money_for_display,
 )
 from core.portfolio_fast_data import build_trade_stats_index
-from core.signal_utils import generate_signals, unpack_precomputed_signals
+from core.signal_utils import extract_precomputed_signals as _extract_precomputed_signals, generate_signals, unpack_precomputed_signals
 from tools.trade_analysis.charting import (
     create_debug_chart_context,
     record_active_levels,
@@ -35,18 +35,6 @@ from tools.trade_analysis.reporting import finalize_debug_analysis
 # 保留 stable patch seam 供 synthetic contract / GUI coverage 路徑覆寫 PIT history snapshot。
 _build_pit_history_snapshot = build_pit_history_snapshot
 
-
-def _extract_precomputed_signals(df):
-    required_columns = {'ATR', 'is_setup', 'ind_sell_signal', 'buy_limit'}
-    if not required_columns.issubset(df.columns):
-        return None
-    signals = (
-        df['ATR'].to_numpy(copy=False),
-        df['is_setup'].to_numpy(copy=False),
-        df['ind_sell_signal'].to_numpy(copy=False),
-        df['buy_limit'].to_numpy(copy=False),
-    )
-    return signals
 
 
 def _resolve_active_tp_half(position):
