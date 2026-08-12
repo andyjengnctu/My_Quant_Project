@@ -8313,3 +8313,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 獨立靜態檢查確認：全專案Python syntax PASS、bare `except`=0、production反向依賴=0、import cycle=0；全專案AST掃描沒有其他「module function/imported callable被local assignment遮蔽後又呼叫」案例。未執行formal suite。
 - 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。正式本機double check依專案契約使用`apps/run_bundle.py`預設流程。
 
+## 2026-08-12 — Forward-OOS robustness replay path closeout：portfolio runtime project root
+
+- 使用者最新程式基準：`test-branch-1_20260812_163023_610efae.zip`；SHA256 `3370687f2c32bb828d58d16a59312341d057203e32640e116b7314abd810a1b2`。本輪為既有MR-12B／MR-13A multi-seed robustness replay infrastructure bug修正，不新增／修改任何`MR-*`、`DL-*`、`SR-C*`、Dataset、Target、architecture、loss、seed、epoch-selection、Selection／Forward期間、strategy selector或artifact schema。
+- 使用者以Forward-OOS Multi-seed robustness（8 seeds、generator_seed=20260810）執行；MR-12B seed 1已完成training（epoch=1）後，strategy replay因`ValueError: log_dir 必須落在專案目錄內`停止。
+- Root cause：`services/portfolio_replay_runtime.py`已位於專案根目錄下一層`services/`，但`PROJECT_ROOT`仍沿用舊層級的三次`dirname`算法，Windows實際解析成專案父目錄；因此`OUTPUT_DIR`錯成專案外的`outputs/portfolio_sim`。`core/log_utils.py`的project-scope guard正確拒絕該路徑。
+- 修正：`PROJECT_ROOT`改為依目前module層級向上兩次`dirname`，使`OUTPUT_DIR`重新落在`outputs/portfolio_sim`；不放寬`core/log_utils.py`任何path-safety規則。既有output-path contract新增portfolio replay runtime root/output invariant，避免module搬移後再次漂移。
+- 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。既有robustness manifest可由同一正式選單接續；GPT不執行formal `apps/test_suite.py`／`apps/run_bundle.py`，使用者本機最終以`apps/run_bundle.py`完成double check並正常commit。
+

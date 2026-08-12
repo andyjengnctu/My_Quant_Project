@@ -28,6 +28,7 @@ from tools.local_regression.meta_quality_coverage import build_coverage_summary
 from tools.local_regression.meta_quality_performance import build_performance_summary
 from tools.local_regression.meta_quality_targets import COVERAGE_BRANCH_MIN_FLOOR, COVERAGE_LINE_MIN_FLOOR, COVERAGE_TARGETS, CRITICAL_COVERAGE_TARGETS
 from services.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
+from services import portfolio_replay_runtime as portfolio_replay_runtime_module
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json, write_csv, write_text
 from tools.validate.reporting import write_issue_excel_report, write_local_regression_summary
 from tools.validate.meta_contracts import load_synthetic_registry_entries_from_source
@@ -413,6 +414,25 @@ def validate_quick_gate_output_path_guard_contract_case(_base_params):
     case_id = "QUICK_GATE_OUTPUT_PATH_GUARD_CONTRACT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+
+    runtime_project_root = Path(portfolio_replay_runtime_module.PROJECT_ROOT).resolve()
+    runtime_output_dir = Path(portfolio_replay_runtime_module.OUTPUT_DIR).resolve()
+    add_check(
+        results,
+        "output_contract",
+        case_id,
+        "portfolio_replay_runtime_project_root_matches_repository_root",
+        PROJECT_ROOT.resolve(),
+        runtime_project_root,
+    )
+    add_check(
+        results,
+        "output_contract",
+        case_id,
+        "portfolio_replay_runtime_output_dir_is_project_scoped",
+        (PROJECT_ROOT / "outputs" / "portfolio_sim").resolve(),
+        runtime_output_dir,
+    )
 
     with tempfile.TemporaryDirectory(prefix="quick_gate_log_utils_contract_") as log_tmp_dir:
         project_root = Path(log_tmp_dir)
