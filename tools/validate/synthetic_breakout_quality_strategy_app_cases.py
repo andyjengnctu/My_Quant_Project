@@ -830,6 +830,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 "arm_order": arm_order,
                 "seed_order": seed_order,
                 **_robustness_metrics(romd, romd * 10.0, 50.0 + seed_order),
+                "direct_selection_r": float(romd * 2.0),
             })
             for year, annual_return in ((2021, romd), (2022, romd + 1.0)):
                 synthetic_yearly_rows.append({
@@ -908,6 +909,26 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and math.isclose(same_seed_compare["right_minus_left_median"], 3.0)
         )
     )
+    direct_same_seed_compare = synthetic_summary[
+        "direct_selection_r_same_seed_comparison"
+    ]
+    direct_same_seed_compare_ok = (
+        direct_same_seed_compare is None
+        if len(robustness_stochastic) != 2
+        else (
+            isinstance(direct_same_seed_compare, dict)
+            and direct_same_seed_compare["n"] == 2
+            and direct_same_seed_compare["right_gt_left_count"] == 2
+            and direct_same_seed_compare["left_gt_right_count"] == 0
+            and direct_same_seed_compare["tie_count"] == 0
+            and math.isclose(
+                direct_same_seed_compare["right_minus_left_mean"], 6.0
+            )
+            and math.isclose(
+                direct_same_seed_compare["right_minus_left_median"], 6.0
+            )
+        )
+    )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_report_uses_mean_for_all_strategy_metrics_and_full_romd_distribution_with_fixed_baselines",
@@ -942,6 +963,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == full_reference_arm.arm_id
         and distribution_compare_ok
         and same_seed_compare_ok
+        and direct_same_seed_compare_ok
         and len(synthetic_summary["yearly_statistics"]) >= len(robustness_fixed) * 2 + len(robustness_stochastic) * 2
         and len(synthetic_summary["yearly_same_seed_comparison"]) == (2 if len(robustness_stochastic) == 2 else 0)
         and math.isclose(fixed_yearly_side[0]["return_pct"], 1.25)

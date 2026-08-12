@@ -8321,3 +8321,49 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 修正：`PROJECT_ROOT`改為依目前module層級向上兩次`dirname`，使`OUTPUT_DIR`重新落在`outputs/portfolio_sim`；不放寬`core/log_utils.py`任何path-safety規則。既有output-path contract新增portfolio replay runtime root/output invariant，避免module搬移後再次漂移。
 - 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。既有robustness manifest可由同一正式選單接續；GPT不執行formal `apps/test_suite.py`／`apps/run_bundle.py`，使用者本機最終以`apps/run_bundle.py`完成double check並正常commit。
 
+## 2026-08-12 — Forward-OOS 8-seed robustness完成：MR-13A平均優勢成立但matched-pair仍不足，補同seedΔDL選擇R報表
+
+### 結果來源與固定條件
+
+- 程式基準：`test-branch-1_20260812_164416_3e2e5e0.zip`；SHA256 `0bcc8e29fa2fee65ef7afb07c662073cae5055e347e70e23f65b553d4cbbd064`。
+- 使用者由`apps/research.py` → Strategy Compare → Forward-OOS Multi-seed robustness正式完成：`seed_count=8`、`seed_generator_seed=20260810`、GPU training workers=2、CPU strategy replay workers=1；共同期間`2021-01-01～2026-03-02`。
+- Full／Min baseline直接重用既有current Forward-OOS正式工件；MR-12B／MR-13A各8個deterministic generated seeds均使用isolated canonical trainer + same frozen feasible-ascent strategy replay。
+- Dataset、Label、Target、architecture、loss、training sample definition、epoch-selection、Min ROOS參數、selector、K/R0、sizing、accounting、max positions=10、rotation=off皆固定；本輪不挑best seed、不做ensemble、不依Forward結果調hyperparameter。
+
+### 8-seed正式aggregate
+
+- Full ROOS：Return `129.08%`、MDD `17.41%`、RoMD `7.42`、Annual `17.43%`、EV `0.53R`。
+- Min ROOS：Return `101.60%`、MDD `13.12%`、RoMD `7.74`、Annual `14.56%`、EV `1.02R`。
+- Min MR-12B：Return Mean `129.01%`、MDD Mean `15.87%`、RoMD Mean/Median `8.21/7.70`、Annual Mean `17.15%`、EV Mean `0.77R`、Payoff `3.12`、Win `42.61%`、Monthly Win `61.31%`、Log R² `0.8772`、DL選擇R Mean `-105.34R`。
+- Min MR-13A：Return Mean `148.18%`、MDD Mean `15.47%`、RoMD Mean/Median `9.97/10.87`、Annual Mean `19.02%`、EV Mean `0.94R`、Payoff `3.19`、Win `43.66%`、Monthly Win `59.33%`、Log R² `0.8830`、DL選擇R Mean `-54.70R`。
+- MR-13A − MR-12B的aggregate mean差為Return `+19.17pp`、MDD `-0.40pp`、RoMD `+1.76`、Annual `+1.87pp`、EV `+0.17R`、Payoff `+0.07`、Win `+1.05pp`、DL選擇R Mean差 `+50.64R`；Monthly Win為`-1.98pp`。
+
+### 同seed RoMD與年度穩定性
+
+- MR-12B RoMD完整分布：Mean `8.21`、Median `7.70`、Std `2.63`、CV `0.32`、Min/P25/P75/Max=`3.94/6.76/10.77/11.51`，勝Min/Full=`4/8`、`4/8`。
+- MR-13A：Mean `9.97`、Median `10.87`、Std `3.68`、CV `0.37`、Min/P25/P75/Max=`4.38/6.84/12.92/14.49`，勝Min/Full=`5/8`、`5/8`。
+- 同seed MR-13A − MR-12B RoMD：4勝4敗、0 tie；ΔRoMD Mean/Median/Std=`+1.76/+1.48/4.47`。因此MR-13A的平均與中位數優勢不是單一best seed造成，但優勢仍未形成一致seed方向，且seed dispersion高於MR-12B。
+- 年度MR-13A相對MR-12B的Mean ΔReturn：2021 `+1.86pp`、2022 `+0.12pp`、2023 `+4.27pp`、2024 `+3.82pp`、2025 `+0.88pp`、2026 YTD `-0.61pp`；同seed右勝左依序`6/8, 5/8, 5/8, 7/8, 5/8, 3/8`。改善不是只集中單一年份，但2026 YTD已反轉。
+
+### 判定
+
+1. canonical seed 42的MR-13A Forward失敗仍是有效單一run證據，但本次8-seed結果再次確認不能把seed 42外推成模型普遍失敗。
+2. MR-13A在Return／MDD／RoMD／Annual／EV／Payoff／Win Rate與DL選擇R的cross-seed Mean均優於MR-12B，但RoMD同seed只有4勝4敗，故目前只可判定`AVERAGE_EDGE / MATCHED_ROMD_INCONCLUSIVE`，不得升格current anchor。
+3. 兩個stochastic arms的DL選擇R Mean都仍為負值（MR-12B `-105.34R`、MR-13A `-54.70R`）；MR-13A相對MR-12B的Mean改善`+50.64R`尚不能回答是否在相同training seed下穩定改善。這是下一個判讀所缺的唯一主要統計，不應再啟動新的模型訓練或擴seed。
+4. 若同seedΔDL選擇R多數為正、但ΔRoMD仍4/8附近，下一步應做portfolio translation attribution；若同seedΔDL選擇R本身亦正負混雜，則問題主要仍在training-seed ranking stability，才設計下一個MR假設。
+
+### Report schema v5實作
+
+- `filters/breakout_quality/strategy_multi_seed_robustness.py`新增泛化same-seed metric comparison helper；RoMD與DL選擇R共用同一pivot／distribution邏輯，不複製統計實作。
+- `direct_selection_r`只有兩個stochastic arms的`param_source`與`rule_policy`完全相同時才允許matched comparison，遵守既有same-param attribution universe契約。
+- `robustness_summary.json`新增`direct_selection_r_same_seed_comparison`；console與Markdown新增「DL選擇R同seed配對比較」，輸出雙方勝數、tie與Δ Mean/Median/Std/Min/P25/P75/Max。
+- report schema `4 → 5`；scientific fingerprint不包含report schema，因此不觸發模型重訓或strategy replay。
+- 「查看最新報表」若偵測既有summary為舊schema且同run `seed_results.csv`仍在，會只用永久raw seed aggregate重建衍生matched-pair欄位與Markdown；不需要重跑8×2 observations，也不讀已清除checkpoint／score／replay details。
+- direct synthetic contract同步覆蓋DL選擇R matched-pair；formal double check仍由使用者本機`apps/run_bundle.py`完成，GPT不執行formal suite。
+
+### 狀態與下一步
+
+- `MR-13A`：`RESULT_AVAILABLE / MULTI_SEED_REOPENED / AVERAGE_EDGE / MATCHED_ROMD_INCONCLUSIVE / MATCHED_SELECTION_R_PENDING / NOT_PROMOTED`。
+- `MR-12B / DL-CONT12B`：維持current canonical runtime anchor，`MULTI_SEED_SUPERIORITY_NOT_ESTABLISHED`。
+- 下一個正式操作不需再訓練：套用schema v5後由`Research → 策略組合比較 → Forward-OOS Multi-seed robustness → 查看最新報表`，讓既有`seed_results.csv`直接補出同seedΔDL選擇R；取得數值後再決定portfolio translation Audit或下一個MR。
+

@@ -112,7 +112,7 @@ SEED_RESULTS_FILENAME = "seed_results.csv"
 SEED_YEARLY_RESULTS_FILENAME = "seed_yearly_returns.csv"
 MANIFEST_FILENAME = "manifest.json"
 LATEST_FILENAME = "latest.json"
-ROBUSTNESS_SCHEMA_VERSION = 4
+ROBUSTNESS_SCHEMA_VERSION = 5
 ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 1
 TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
@@ -1127,6 +1127,88 @@ def _distribution_stats(values: np.ndarray) -> dict[str, Any]:
     }
 
 
+
+def _same_seed_metric_comparison(
+    *,
+    seed_frame: pd.DataFrame,
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    metric_key: str,
+    require_same_parameter_runtime_universe: bool = False,
+) -> dict[str, Any] | None:
+    if len(stochastic_arms) != 2 or metric_key not in seed_frame.columns:
+        return None
+    left, right = stochastic_arms
+    if require_same_parameter_runtime_universe and (
+        left.param_source != right.param_source
+        or left.rule_policy != right.rule_policy
+    ):
+        return None
+    paired = seed_frame.loc[
+        seed_frame["arm_id"].isin((left.arm_id, right.arm_id)),
+        ["arm_id", "seed", metric_key],
+    ].copy()
+    paired[metric_key] = pd.to_numeric(paired[metric_key], errors="coerce")
+    pivot = paired.dropna().pivot(index="seed", columns="arm_id", values=metric_key)
+    if left.arm_id not in pivot.columns or right.arm_id not in pivot.columns:
+        return None
+    pivot = pivot[[left.arm_id, right.arm_id]].dropna()
+    if pivot.empty:
+        return None
+    delta = (
+        pivot[right.arm_id].to_numpy(dtype=float)
+        - pivot[left.arm_id].to_numpy(dtype=float)
+    )
+    stats = _distribution_stats(delta)
+    tie = np.isclose(delta, 0.0, rtol=0.0, atol=1e-12)
+    return {
+        "metric_key": metric_key,
+        "left": left.name,
+        "right": right.name,
+        "n": int(len(delta)),
+        "left_gt_right_count": int(np.sum((delta < 0.0) & ~tie)),
+        "right_gt_left_count": int(np.sum((delta > 0.0) & ~tie)),
+        "tie_count": int(np.sum(tie)),
+        **{f"right_minus_left_{key}": value for key, value in stats.items()},
+    }
+
+
+def _upgrade_derived_report_summary(
+    summary: dict[str, Any],
+    *,
+    seed_frame: pd.DataFrame,
+) -> dict[str, Any]:
+    contract = dict(summary.get("contract") or {})
+    profile_id = str(contract.get("profile_id") or "").strip()
+    if not profile_id:
+        return summary
+    settings = get_strategy_comparison_settings(profile_id)
+    _fixed, stochastic = _robustness_arms(settings)
+    resolved_seeds = tuple(int(value) for value in contract.get("resolved_seeds") or ())
+    if resolved_seeds:
+        _validate_seed_results_frame(
+            seed_frame,
+            stochastic_arms=stochastic,
+            seeds=resolved_seeds,
+        )
+    upgraded = dict(summary)
+    contract["report_schema_version"] = ROBUSTNESS_SCHEMA_VERSION
+    upgraded["contract"] = contract
+    upgraded["romd_same_seed_comparison"] = _same_seed_metric_comparison(
+        seed_frame=seed_frame,
+        stochastic_arms=stochastic,
+        metric_key="return_over_max_drawdown",
+    )
+    upgraded["direct_selection_r_same_seed_comparison"] = _same_seed_metric_comparison(
+        seed_frame=seed_frame,
+        stochastic_arms=stochastic,
+        metric_key="direct_selection_r",
+        require_same_parameter_runtime_universe=True,
+    )
+    upgraded["schema_version"] = ROBUSTNESS_SCHEMA_VERSION
+    upgraded["report_refreshed_at_utc"] = datetime.now(timezone.utc).isoformat()
+    return upgraded
+
+
 def _robustness_summary(
     *, contract: dict[str, Any], fixed_results: dict[str, dict[str, Any]],
     seed_frame: pd.DataFrame, seed_yearly_frame: pd.DataFrame,
@@ -1182,7 +1264,6 @@ def _robustness_summary(
 
     stochastic_rows = [row for row in romd_rows if int(row["n"]) > 1]
     distribution_compare = None
-    same_seed_compare = None
     if len(stochastic_rows) == 2:
         a, b = stochastic_rows
         av = pd.to_numeric(seed_frame.loc[seed_frame["arm_id"] == a["arm_id"], "return_over_max_drawdown"], errors="coerce").dropna().to_numpy(dtype=float)
@@ -1193,25 +1274,17 @@ def _robustness_summary(
                 "pairwise_left_gt_right_probability": float(np.mean(av[:, None] > bv[None, :])),
                 "pair_count": int(len(av) * len(bv)),
             }
-        paired = seed_frame.loc[
-            seed_frame["arm_id"].isin((a["arm_id"], b["arm_id"])),
-            ["arm_id", "seed", "return_over_max_drawdown"],
-        ].copy()
-        paired["return_over_max_drawdown"] = pd.to_numeric(paired["return_over_max_drawdown"], errors="coerce")
-        pivot = paired.dropna().pivot(index="seed", columns="arm_id", values="return_over_max_drawdown")
-        if a["arm_id"] in pivot.columns and b["arm_id"] in pivot.columns:
-            pivot = pivot[[a["arm_id"], b["arm_id"]]].dropna()
-            if not pivot.empty:
-                delta = pivot[b["arm_id"]].to_numpy(dtype=float) - pivot[a["arm_id"]].to_numpy(dtype=float)
-                stats = _distribution_stats(delta)
-                tie = np.isclose(delta, 0.0, rtol=0.0, atol=1e-12)
-                same_seed_compare = {
-                    "left": a["name"], "right": b["name"], "n": int(len(delta)),
-                    "left_gt_right_count": int(np.sum((delta < 0.0) & ~tie)),
-                    "right_gt_left_count": int(np.sum((delta > 0.0) & ~tie)),
-                    "tie_count": int(np.sum(tie)),
-                    **{f"right_minus_left_{key}": value for key, value in stats.items()},
-                }
+    same_seed_compare = _same_seed_metric_comparison(
+        seed_frame=seed_frame,
+        stochastic_arms=stochastic,
+        metric_key="return_over_max_drawdown",
+    )
+    direct_selection_r_same_seed_compare = _same_seed_metric_comparison(
+        seed_frame=seed_frame,
+        stochastic_arms=stochastic,
+        metric_key="direct_selection_r",
+        require_same_parameter_runtime_universe=True,
+    )
 
     yearly_statistics: list[dict[str, Any]] = []
     yearly_same_seed: list[dict[str, Any]] = []
@@ -1260,6 +1333,7 @@ def _robustness_summary(
         "contract": contract, "mean_strategy_metrics": mean_rows,
         "romd_statistics": romd_rows, "romd_distribution_comparison": distribution_compare,
         "romd_same_seed_comparison": same_seed_compare,
+        "direct_selection_r_same_seed_comparison": direct_selection_r_same_seed_compare,
         "yearly_statistics": yearly_statistics, "yearly_same_seed_comparison": yearly_same_seed,
     }
 
@@ -1323,6 +1397,21 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
             f"Median {_fmt(same['right_minus_left_median'])}；Std {_fmt(same['right_minus_left_std'])}；"
             f"Min {_fmt(same['right_minus_left_min'])}；P25 {_fmt(same['right_minus_left_p25'])}；"
             f"P75 {_fmt(same['right_minus_left_p75'])}；Max {_fmt(same['right_minus_left_max'])}。"]
+    direct_same = summary.get("direct_selection_r_same_seed_comparison")
+    if isinstance(direct_same, dict):
+        n = int(direct_same["n"])
+        lines += ["", "### DL選擇R同seed配對比較", "",
+            f"- {direct_same['right']} > {direct_same['left']}：{direct_same['right_gt_left_count']}/{n}；"
+            f"{direct_same['left']} > {direct_same['right']}：{direct_same['left_gt_right_count']}/{n}；平手：{direct_same['tie_count']}/{n}。",
+            f"- ΔDL選擇R（{direct_same['right']} − {direct_same['left']}）："
+            f"Mean {_fmt(direct_same['right_minus_left_mean'], suffix=' R')}；"
+            f"Median {_fmt(direct_same['right_minus_left_median'], suffix=' R')}；"
+            f"Std {_fmt(direct_same['right_minus_left_std'], suffix=' R')}；"
+            f"Min {_fmt(direct_same['right_minus_left_min'], suffix=' R')}；"
+            f"P25 {_fmt(direct_same['right_minus_left_p25'], suffix=' R')}；"
+            f"P75 {_fmt(direct_same['right_minus_left_p75'], suffix=' R')}；"
+            f"Max {_fmt(direct_same['right_minus_left_max'], suffix=' R')}。"]
+
     compare = summary.get("romd_distribution_comparison")
     if isinstance(compare, dict):
         lines += ["", "### RoMD任意seed分布交叉比較", "",
@@ -1394,6 +1483,14 @@ def _print_report_tables(summary: dict[str, Any]) -> None:
         print("\nRoMD同seed配對比較")
         print(f"{same['right']} > {same['left']}：{same['right_gt_left_count']}/{n} | {same['left']} > {same['right']}：{same['left_gt_right_count']}/{n} | 平手：{same['tie_count']}/{n}")
         print("ΔRoMD Mean：" + _color_delta(_fmt(delta), delta) + f" | Median {_fmt(same['right_minus_left_median'])} | Std {_fmt(same['right_minus_left_std'])}")
+    direct_same = summary.get("direct_selection_r_same_seed_comparison")
+    if isinstance(direct_same, dict):
+        n = int(direct_same["n"])
+        delta = direct_same["right_minus_left_mean"]
+        print("\nDL選擇R同seed配對比較")
+        print(f"{direct_same['right']} > {direct_same['left']}：{direct_same['right_gt_left_count']}/{n} | {direct_same['left']} > {direct_same['right']}：{direct_same['left_gt_right_count']}/{n} | 平手：{direct_same['tie_count']}/{n}")
+        print("ΔDL選擇R Mean：" + _color_delta(_fmt(delta, suffix=" R"), delta) + f" | Median {_fmt(direct_same['right_minus_left_median'], suffix=' R')} | Std {_fmt(direct_same['right_minus_left_std'], suffix=' R')}")
+
     yearly = list(summary.get("yearly_statistics") or [])
     annual_pair = list(summary.get("yearly_same_seed_comparison") or [])
     if yearly:
@@ -1455,7 +1552,32 @@ def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None
     if not latest.is_file():
         raise FileNotFoundError("尚無Multiple-seed robustness最新結果")
     pointer = _read_json(latest)
-    report = PROJECT_ROOT / str(pointer["report_path"])
+    report = (PROJECT_ROOT / str(pointer["report_path"])).resolve()
+    summary_path = (
+        PROJECT_ROOT / str(pointer.get("summary_path") or "")
+    ).resolve()
+    if summary_path.is_file():
+        summary = _read_json(summary_path)
+        needs_upgrade = (
+            int(summary.get("schema_version") or 0) < ROBUSTNESS_SCHEMA_VERSION
+            or "direct_selection_r_same_seed_comparison" not in summary
+        )
+        seed_results_path = summary_path.parent / SEED_RESULTS_FILENAME
+        seed_frame = _load_seed_results(seed_results_path)
+        if (
+            needs_upgrade
+            and not seed_frame.empty
+            and "direct_selection_r" in seed_frame.columns
+        ):
+            upgraded = _upgrade_derived_report_summary(
+                summary,
+                seed_frame=seed_frame,
+            )
+            _write_json(summary_path, upgraded)
+            report.write_text(
+                render_multi_seed_robustness_report(upgraded),
+                encoding="utf-8",
+            )
     if not report.is_file():
         raise FileNotFoundError(f"最新robustness報表不存在: {report}")
     print(report.read_text(encoding="utf-8"))
