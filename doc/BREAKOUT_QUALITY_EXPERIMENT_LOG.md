@@ -8445,3 +8445,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Synthetic E2E刻意建立每個seed的baseline-relative `ΔDL選擇R=+4R`、direct-pair trades為空因此`direct_pair_exclusive_delta_r=0R`；Audit必須仍可READY→run，且`selection_basis_gap_r=-4R`，直接鎖定「兩種basis不得混為一個metric」。
 - 使用者同輪`apps/run_bundle.py`正式摘要：quick gate PASS、consistency PASS、chain checks PASS、ml smoke PASS；meta quality唯一FAIL=`checklist_g_rows_sorted_by_date_then_id`。Root cause為前一輪新增2026-08-12 B190兩列被追加在同日T297之後，違反G表date→tracking ID機械排序；本輪已將整個G表穩定重排（同ID transition原順序保留），不改任何runtime/testing scientific semantics。
 - 狀態：`AUD-forward-robustness-portfolio-translation = IMPLEMENTED / COMPACT_SOURCE_READY / SELECTION_BASIS_FIX_APPLIED / AWAITING_AUDIT_RERUN / READ_ONLY / ALL_SEEDS_REQUIRED`。下一步只需重跑Audit；不得重新跑37分鐘robustness，除非compact source另被完整性檢查判為缺失／損壞。
+
+
+## 2026-08-12 — Forward robustness portfolio Audit完成：平均translation為正但S1/S8存在R→Dollar反轉
+
+- 最新程式基準：`test-branch-1_20260812_205417_4f33303.zip`；SHA256 `123445f876f307e7d942ca3afa7c7cbab9d54a25a7219387e63b0a0008c57874`。使用者直接重跑既有`AUD-forward-robustness-portfolio-translation`；scientific fingerprint=`2f70dbe73dcf3fed`、8 deterministic generated seeds、generator_seed=`20260810`與16/16 VERIFIED compact source不變；Audit只讀既有工件，不train、不replay。
+- 全8-seed結果：Ranking↑=`6/8`；Ranking↑且RoMD↑=`3/6`；ranking/RoMD同方向=`4/8`。Direct-pair Exclusive ΔR Mean=`+50.64R`、Selection basis gap Mean=`+0.00R`、Exclusive ΔPnL Mean=`+173,208.15`、Common risk-size effect Mean=`+18,544.82`、ΔGap slot-days Mean=`-99.00`。
+- Driver分布：`TRANSLATION_SUCCESS=3`（S2/S3/S4）、`TRADE_SET_DOLLAR_TRANSLATION=2`（S1/S8）、`MDD_WEALTH_PATH=1`（S7）、`PORTFOLIO_OVERRIDE=1`（S6）、`ALIGNED_DECLINE=1`（S5）。
+- Discordant evidence：S1 direct-pair Exclusive ΔR=`+11.59R`但Exclusive ΔPnL=`-103,422`、Common sizing ΔPnL=`-12,360`、ΔGap slot-days=`+101`；S8=`+74.70R/-434,639/-68,710/+210`。S7雖Exclusive ΔPnL=`+164,262`、ΔReturn=`+24.21pp`，但ΔMDD=`+2.59pp`使ΔRoMD=`-0.33`；S6則ranking=`-41.02R`卻ΔReturn=`+53.14pp`、ΔRoMD=`+4.66`。
+- 判定：MR-13A的ranking／direct-pair trade-set edge在平均上已取得經濟支持，且平均exclusive PnL、common sizing與slot-gap均偏向MR-13A；但seed-level portfolio translation仍高度heterogeneous，因此`MR-13A`維持`NOT_PROMOTED`，`MR-12B / DL-CONT12B`繼續作current runtime anchor。現階段不得再改MR-13A target／loss／architecture／hyperparameter，也不擴seed、不跑Selection PIT multi-seed。
+- 下一步不建立新Audit或新模型：現有canonical attribution primitive已計算candidate-only／comparator-only的`risk_weighted_r`、`total/avg implied initial risk`、`winner/loser avg implied initial risk`，只是schema v2報表未顯示。Audit report schema v3只將這些既有欄位拉到`Exclusive trade R→Dollar bridge`，並保存`exclusive_risk_weighted_r_gap`與`exclusive_total_implied_risk_delta`；scientific fingerprint不變。套用後只需重跑同一read-only Audit，直接判定S1/S8是risk weighting、總risk budget scale或trade-set quality造成，不需任何training/replay。

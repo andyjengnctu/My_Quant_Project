@@ -42,7 +42,7 @@ from tools.audit.breakout_quality.c15_strategy_attribution import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-AUDIT_RESULT_SCHEMA_VERSION = 2
+AUDIT_RESULT_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -365,6 +365,14 @@ def _row_summary(
         "comparator_only_total_r": float(comparator_only.get("total_r") or 0.0),
         "candidate_only_risk_weighted_r": _finite(candidate_only.get("risk_weighted_r")),
         "comparator_only_risk_weighted_r": _finite(comparator_only.get("risk_weighted_r")),
+        "candidate_only_total_implied_initial_risk": float(candidate_only.get("total_implied_initial_risk") or 0.0),
+        "comparator_only_total_implied_initial_risk": float(comparator_only.get("total_implied_initial_risk") or 0.0),
+        "candidate_only_avg_implied_initial_risk": _finite(candidate_only.get("avg_implied_initial_risk")),
+        "comparator_only_avg_implied_initial_risk": _finite(comparator_only.get("avg_implied_initial_risk")),
+        "candidate_only_winner_avg_implied_initial_risk": _finite(candidate_only.get("winner_avg_implied_initial_risk")),
+        "comparator_only_winner_avg_implied_initial_risk": _finite(comparator_only.get("winner_avg_implied_initial_risk")),
+        "candidate_only_loser_avg_implied_initial_risk": _finite(candidate_only.get("loser_avg_implied_initial_risk")),
+        "comparator_only_loser_avg_implied_initial_risk": _finite(comparator_only.get("loser_avg_implied_initial_risk")),
         "candidate_only_total_pnl": float(candidate_only.get("total_pnl") or 0.0),
         "comparator_only_total_pnl": float(comparator_only.get("total_pnl") or 0.0),
         "common_risk_size_effect_pnl": float(common.get("risk_size_effect_pnl") or 0.0),
@@ -377,6 +385,15 @@ def _row_summary(
     }
     row["selection_basis_gap_r"] = (
         row["direct_pair_exclusive_delta_r"] - row["delta_direct_selection_r"]
+    )
+    c_rw = row["candidate_only_risk_weighted_r"]
+    b_rw = row["comparator_only_risk_weighted_r"]
+    row["exclusive_risk_weighted_r_gap"] = (
+        float(c_rw) - float(b_rw) if c_rw is not None and b_rw is not None else None
+    )
+    row["exclusive_total_implied_risk_delta"] = (
+        row["candidate_only_total_implied_initial_risk"]
+        - row["comparator_only_total_implied_initial_risk"]
     )
     row["driver"] = _driver_label(row)
     return row
@@ -411,6 +428,24 @@ def _render_report(payload: dict[str, Any]) -> str:
             f"{row['delta_end_position_gap_slot_days']:+d}",
             row["driver"],
         ))
+    bridge_rows = []
+    for row in payload["seed_summary"]:
+        def _rw(value: Any) -> str:
+            return "-" if value is None else f"{float(value):+.3f} R"
+
+        def _money(value: Any) -> str:
+            return "-" if value is None else f"{float(value):,.0f}"
+
+        bridge_rows.append((
+            f"S{row['seed_order']}",
+            f"{row['candidate_only_total_r']:+.2f} R / {_rw(row['candidate_only_risk_weighted_r'])}",
+            f"{row['comparator_only_total_r']:+.2f} R / {_rw(row['comparator_only_risk_weighted_r'])}",
+            _money(row['candidate_only_avg_implied_initial_risk']),
+            _money(row['comparator_only_avg_implied_initial_risk']),
+            f"{_money(row['candidate_only_winner_avg_implied_initial_risk'])} / {_money(row['candidate_only_loser_avg_implied_initial_risk'])}",
+            f"{_money(row['comparator_only_winner_avg_implied_initial_risk'])} / {_money(row['comparator_only_loser_avg_implied_initial_risk'])}",
+            f"{row['direct_pair_exclusive_delta_pnl']:+,.0f}",
+        ))
     drivers = payload["aggregate"]["driver_counts"]
     driver_rows = [(key, value) for key, value in sorted(drivers.items())]
     aggregate = payload["aggregate"]
@@ -428,7 +463,12 @@ def _render_report(payload: dict[str, Any]) -> str:
             ("Seed", "ΔDL選擇R", "ΔReturn", "ΔMDD", "ΔRoMD", "Direct-pair Exclusive ΔR", "Exclusive ΔPnL", "Common sizing ΔPnL", "ΔGap slot-days", "主要機制"),
             seed_rows,
         ),
-        render_section("8-seed aggregate", number=2),
+        render_section("Exclusive trade R→Dollar bridge", number=2),
+        render_table(
+            ("Seed", "MR-13A-only ΣR / RW-R", "MR-12B-only ΣR / RW-R", "13A-only Avg risk", "12B-only Avg risk", "13A Winner/Loser risk", "12B Winner/Loser risk", "Exclusive ΔPnL"),
+            bridge_rows,
+        ),
+        render_section("8-seed aggregate", number=3),
         render_key_values((
             ("Ranking↑ seeds", f"{aggregate['ranking_positive_count']}/{aggregate['seed_count']}"),
             ("Ranking↑ 且 RoMD↑", f"{aggregate['ranking_positive_romd_positive_count']}/{aggregate['ranking_positive_count']}"),
@@ -436,11 +476,13 @@ def _render_report(payload: dict[str, Any]) -> str:
             ("Direct-pair Exclusive ΔR Mean", f"{aggregate['direct_pair_exclusive_delta_r']['mean']:+.2f} R"),
             ("Selection basis gap Mean", f"{aggregate['selection_basis_gap_r']['mean']:+.2f} R"),
             ("Exclusive ΔPnL Mean", f"{aggregate['direct_pair_exclusive_delta_pnl']['mean']:+,.2f}"),
+            ("Exclusive RW-R gap Mean", "-" if aggregate['exclusive_risk_weighted_r_gap']['mean'] is None else f"{aggregate['exclusive_risk_weighted_r_gap']['mean']:+.3f} R"),
+            ("Exclusive implied-risk Δ Mean", f"{aggregate['exclusive_total_implied_risk_delta']['mean']:+,.2f}"),
             ("Common risk-size effect Mean", f"{aggregate['common_risk_size_effect_pnl']['mean']:+,.2f}"),
             ("ΔGap slot-days Mean", f"{aggregate['delta_end_position_gap_slot_days']['mean']:+.2f}"),
         )),
         render_table(("機制", "Seeds"), driver_rows),
-        render_section("限制", number=3),
+        render_section("限制", number=4),
         "本Audit只做既有8-seed結果的trade-set／risk-dollar／slot／wealth-path歸因；ΔDL選擇R是兩個arm各自相對共同DL-off baseline的差，Direct-pair Exclusive ΔR則是MR-13A對MR-12B直接trade partition，兩者比較基準不同不得強制相等；不得挑best seed，不是新的promotion gate，也不得回流模型training semantics。",
     )).rstrip() + "\n"
 
@@ -518,6 +560,8 @@ def run_forward_robustness_portfolio_translation_audit(
         "direct_pair_exclusive_delta_r": _distribution(seed_df["direct_pair_exclusive_delta_r"]),
         "selection_basis_gap_r": _distribution(seed_df["selection_basis_gap_r"]),
         "direct_pair_exclusive_delta_pnl": _distribution(seed_df["direct_pair_exclusive_delta_pnl"]),
+        "exclusive_risk_weighted_r_gap": _distribution(seed_df["exclusive_risk_weighted_r_gap"]),
+        "exclusive_total_implied_risk_delta": _distribution(seed_df["exclusive_total_implied_risk_delta"]),
         "direct_pair_common_delta_r": _distribution(seed_df["direct_pair_common_delta_r"]),
         "direct_pair_all_trade_delta_r": _distribution(seed_df["direct_pair_all_trade_delta_r"]),
         "common_trade_pnl_delta": _distribution(seed_df["common_trade_pnl_delta"]),
