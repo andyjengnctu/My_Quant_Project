@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Set, Tuple
 
 from .source_index import read_source_ast
 
-CMD_SINGLE_ENTRY_TEXT = "正式對外入口為 `apps/test_suite.py`"
-ARCHITECTURE_SINGLE_ENTRY_TEXT = "`apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口"
+CMD_SINGLE_ENTRY_TEXT = "正式對外入口為 `apps/run_bundle.py`"
+ARCHITECTURE_SINGLE_ENTRY_TEXT = "`apps/run_bundle.py` 是日常唯一建議使用的本機 double check 與交付打包入口"
 LEGACY_APP_ENTRY_PATHS = ("apps/local_regression.py", "apps/validate_consistency.py")
 LEGACY_DOC_GUIDANCE_FILES = ("doc/CMD.md", "doc/ARCHITECTURE.md")
 SUSPICIOUS_APP_ENTRY_PATTERN = re.compile(r"(?:test|validate|regression|consistency)", re.IGNORECASE)

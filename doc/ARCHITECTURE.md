@@ -224,7 +224,7 @@ python apps/research.py model audit-target-time-ablation --filter-id breakout_qu
 
 ## 子系統責任
 
-- `apps/run_bundle.py` 是修改完成後日常正式本機double check的唯一建議使用者入口；`apps/test_suite.py`只作其內部formal test runner。
+- `apps/run_bundle.py` 是日常唯一建議使用的本機 double check 與交付打包入口。
 
 - `apps/`：正式入口層，只從對應 application/service façade 匯入公開介面。
 - `services/`：正式 application/service orchestration；可組合`core/`、`filters/`與其他正式service，不得反向依賴`tools/`。
@@ -238,9 +238,9 @@ python apps/research.py model audit-target-time-ablation --filter-id breakout_qu
 
 - `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練由`config/research.py`指定active model provider；策略參數最佳化目前仍由既有optimizer互動orchestrator承接；策略組合比較依`config/strategy_compare.py`執行並透過`services/portfolio_replay.py`重用canonical portfolio replay；策略參數訓練重用`services/optimizer/` canonical optimizer library，Breakout Quality training／PIT producer則由`services/breakout_quality/`承接，其中Multiple-seed robustness以Strategy Compare作UI/orchestrator、模型權重仍只由canonical continuous-ranker trainer建立；MR-12B／MR-13A／PIT／robustness的共用training／inference primitives經`services/breakout_quality/ranker_training.py` public API取得，避免workflow依賴trainer private helper；Audit依`config/audit.py`指定active module。
 - `tools/filters/breakout_quality/application.py`：Breakout Quality model provider，承接原完整model workflow、dataset、training、score export、易讀report與詳細evaluation；不是使用者直接入口。
-- `apps/run_bundle.py`：修改完成後的正式本機double check／交付整合單一使用者入口；固定順序為stage → formal test → PASS後commit → package verified HEAD。formal test失敗時不得先commit。
-- `apps/test_suite.py`：`run_bundle.py`內部formal test runner；保留給明確的test-only開發診斷，不作日常正式整合入口。
-- `apps/package_zip.py`：打包正式入口；直接呼叫只負責snapshot/package，不取代`run_bundle.py`的驗證後commit順序。
+- `apps/run_bundle.py`：日常本機 double check 與修改交付的單一使用者入口；固定順序為stage → commit current snapshot → package ZIP → formal test。formal test失敗時保留commit與ZIP，讓該失敗版本可被完整重現與交付。
+- `apps/test_suite.py`：`run_bundle.py`內部formal test runner；不作為一般日常使用者入口。
+- `apps/package_zip.py`：打包正式入口；直接呼叫只負責snapshot/package，不取代`run_bundle.py`的整合流程。
 - `apps/portfolio_sim.py`：投組模擬正式入口。
 - `apps/smart_downloader.py`：下載器正式入口。
 - `apps/vip_scanner.py`：scanner 正式入口。
@@ -267,7 +267,7 @@ python apps/research.py model audit-target-time-ablation --filter-id breakout_qu
 
 - 依賴方向以正式domain/service為中心：`apps -> services -> filters/core`，或薄入口直接`apps -> filters/core`；CLI／GUI／Audit可為`apps -> tools -> services/filters/core`。
 - `services/`、`core/`與`filters/`不得反向依賴`tools/`或`apps/`；跨層共用application orchestration放`services/`，純計算真理放正式domain／core。
-- 正式 test chain 只由 `apps/test_suite.py` 與 `tools/local_regression/formal_pipeline.py` 收斂；修改交付使用`apps/run_bundle.py`，必須先取得formal PASS才允許commit與package。
+- 正式 test chain 只由 `apps/test_suite.py` 與 `tools/local_regression/formal_pipeline.py` 收斂；修改交付使用`apps/run_bundle.py`，先固化commit與package，再執行formal test，FAIL時保留該snapshot供閉環修正。
 
 ## 共享邊界
 

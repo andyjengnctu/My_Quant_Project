@@ -19,7 +19,7 @@ def run_cmd(cmd: list[str], step_name: str, *, check: bool = True) -> subprocess
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Stage changes, run formal tests, commit only on PASS, then package the verified HEAD."
+        description="Stage changes, commit the current snapshot, package it, then run formal tests."
     )
     parser.add_argument(
         "-m",
@@ -30,7 +30,7 @@ def main() -> int:
     parser.add_argument(
         "--no-commit",
         action="store_true",
-        help="Run formal tests and package without git add/commit.",
+        help="Package the current working tree and run formal tests without git add/commit.",
     )
     args = parser.parse_args()
 
@@ -55,20 +55,20 @@ def main() -> int:
     else:
         print("[2/5] --no-commit set. Skip git add/commit.")
 
-    print("[3/5] Run test_suite.py before commit")
-    run_cmd([sys.executable, "apps/test_suite.py"], "python apps/test_suite.py")
-
     if args.no_commit:
-        print("[4/5] --no-commit set. Skip commit.")
+        print("[3/5] --no-commit set. Skip commit.")
     elif staged_changes:
         message = args.message.strip() or f"bundle run {datetime.now():%Y-%m-%d %H:%M:%S}"
-        print(f"[4/5] Commit verified changes: {message}")
+        print(f"[3/5] Commit current snapshot: {message}")
         run_cmd(["git", "commit", "-m", message], "git commit")
     else:
-        print("[4/5] No staged changes. Skip commit.")
+        print("[3/5] No staged changes. Skip commit.")
 
-    print("[5/5] Run package_zip.py from verified HEAD")
+    print("[4/5] Run package_zip.py before formal tests")
     run_cmd([sys.executable, "apps/package_zip.py"], "python apps/package_zip.py")
+
+    print("[5/5] Run test_suite.py after package")
+    run_cmd([sys.executable, "apps/test_suite.py"], "python apps/test_suite.py")
     return 0
 
 

@@ -2308,27 +2308,29 @@ def validate_package_zip_commit_test_suite_orchestration_case(_base_params):
         add_check(results, "cli_contract", case_id, "package_zip_orchestration_bundle_preserved", True, (project_root / "to_chatgpt_bundle_20250103_deadbeef.zip").exists())
 
     run_bundle_source = (Path(__file__).resolve().parents[2] / "apps" / "run_bundle.py").read_text(encoding="utf-8")
-    test_marker = 'print("[3/5] Run test_suite.py before commit")'
-    commit_marker = 'print(f"[4/5] Commit verified changes: {message}")'
-    package_marker = 'print("[5/5] Run package_zip.py from verified HEAD")'
-    safe_order = (
-        test_marker in run_bundle_source
-        and commit_marker in run_bundle_source
+    commit_marker = 'print(f"[3/5] Commit current snapshot: {message}")'
+    package_marker = 'print("[4/5] Run package_zip.py before formal tests")'
+    test_marker = 'print("[5/5] Run test_suite.py after package")'
+    delivery_first_order = (
+        commit_marker in run_bundle_source
         and package_marker in run_bundle_source
-        and run_bundle_source.index(test_marker)
-        < run_bundle_source.index(commit_marker)
+        and test_marker in run_bundle_source
+        and run_bundle_source.index(commit_marker)
         < run_bundle_source.index(package_marker)
+        < run_bundle_source.index(test_marker)
     )
-    add_check(results, "cli_contract", case_id, "run_bundle_tests_before_commit_and_packages_verified_head", True, safe_order)
+    add_check(results, "cli_contract", case_id, "run_bundle_commits_and_packages_before_formal_test", True, delivery_first_order)
     add_check(
         results,
-        "cli_contract",
-        case_id,
-        "run_bundle_failure_cannot_commit_before_formal_test",
+        "cli_contract", case_id,
+        "run_bundle_formal_failure_keeps_prebuilt_delivery_snapshot",
         True,
-        'run_cmd([sys.executable, "apps/test_suite.py"]' in run_bundle_source
-        and run_bundle_source.index('run_cmd([sys.executable, "apps/test_suite.py"]')
-        < run_bundle_source.index('run_cmd(["git", "commit", "-m", message]'),
+        'run_cmd(["git", "commit", "-m", message]' in run_bundle_source
+        and 'run_cmd([sys.executable, "apps/package_zip.py"]' in run_bundle_source
+        and 'run_cmd([sys.executable, "apps/test_suite.py"]' in run_bundle_source
+        and run_bundle_source.index('run_cmd(["git", "commit", "-m", message]')
+        < run_bundle_source.index('run_cmd([sys.executable, "apps/package_zip.py"]')
+        < run_bundle_source.index('run_cmd([sys.executable, "apps/test_suite.py"]'),
     )
 
     summary["checks"] = len(results)

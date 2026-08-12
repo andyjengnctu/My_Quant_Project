@@ -7,14 +7,15 @@ python apps/research.py optimizer --dataset full --outer-oos --timing --trials 1
 
 ```bash
 python requirements/export_requirements_lock.py
+python apps/test_suite.py
 python apps/run_bundle.py
 python tools/local_regression/run_all.py --only quick_gate
 python tools/validate/preflight_env.py
 ```
 
-- 修改完成後的正式本機double check單一使用者入口：`python apps/run_bundle.py`；順序固定為 stage → formal test → PASS後commit → package verified HEAD。
-- `apps/test_suite.py`為`run_bundle.py`內部formal test runner，不作日常正式整合入口；只有在明確需要「只跑formal test、不做stage/commit/package」的開發診斷情境才直接呼叫。
-- formal test失敗時`run_bundle.py`不得先產生commit。
+- 正式對外入口為 `apps/run_bundle.py`；一般本機 double check 與交付打包直接執行：`python apps/run_bundle.py`。
+- `apps/run_bundle.py`順序固定為 stage → commit current snapshot → package ZIP → formal test；formal test失敗時仍保留已建立的commit與ZIP，供閉環修正與交付。
+- `apps/test_suite.py`是`run_bundle.py`內部formal test runner；只有在針對正式測試器本身除錯時才直接執行。
 - 只有正式入口已指出失敗步驟時，才用 `python tools/local_regression/run_all.py --only ...` 重跑指定步驟。
 - `python tools/validate/preflight_env.py` 只檢查環境，不自動安裝依賴。
 
@@ -25,7 +26,7 @@ python apps/run_bundle.py
 python apps/package_zip.py
 ```
 
-- 一般交付使用`apps/run_bundle.py`，由通過formal test的HEAD建立ZIP並正常commit。
+- 一般交付使用`apps/run_bundle.py`，先commit當前snapshot並建立ZIP，再執行formal test；測試FAIL不回滾該commit或刪除ZIP。
 - `apps/package_zip.py`直接模式保留給單純snapshot／歷史相容用途，不取代正式整合入口。
 
 ## 主工具入口

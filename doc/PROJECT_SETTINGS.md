@@ -10,7 +10,7 @@
 1. 本輪基準為使用者最新提供的程式、ZIP、檔案，或本輪最新 GPT 交付之程式碼、patched ZIP；後出現者即為當前基準。
 2. 每次開始前，必須先回報當前工作基準與已讀文件；若當前基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
 3. GPT 每輪都必須對當前基準做全專案完整檢查，並於同一輪內盡可能找出所有問題、直接提供修正，不得以多輪零碎修補取代完整檢查。
-4. `apps/run_bundle.py` 為本地正式 double check 的單一使用者入口；預設流程會 stage 變更、執行 `apps/test_suite.py`、僅於 PASS 後 commit，再由 verified HEAD 打包。`apps/test_suite.py` 是 `run_bundle.py` 內部正式測試執行器，不再作為後續要求使用者直接執行的主要入口。正式 double check 不取代 GPT 的全專案完整檢查。
+4. `apps/run_bundle.py` 為本地正式 double check 與交付打包的單一使用者入口；預設流程固定為 stage 變更 → commit 當前 snapshot → package ZIP → 執行 `apps/test_suite.py`。formal test 即使 FAIL 仍必須保留先前已建立的 commit 與 ZIP，讓失敗版本可被完整交付與閉環修正；`apps/test_suite.py` 是 `run_bundle.py` 內部正式測試執行器，不再作為後續要求使用者直接執行的主要入口。正式 double check 不取代 GPT 的全專案完整檢查。
 5. GPT 不得執行 `apps/run_bundle.py` 或 `apps/test_suite.py`，也不得以重建 formal suite 或直接執行其涵蓋 step 的方式替代本地正式執行；但仍必須以非 formal-suite 的方式獨立檢查整個專案，並檢查 `apps/run_bundle.py`、`apps/test_suite.py` 本身是否可信，以及 `doc/TEST_SUITE_CHECKLIST.md` 是否涵蓋必要測項。
 6. 若使用者提供由 `apps/run_bundle.py`／`apps/test_suite.py` 產生的 bundle 測試結果，GPT 必須完成閉環修正；若未提供 bundle，僅代表本地端尚未提供 formal double check 證據。後續正式本機整合測試一律以 `apps/run_bundle.py` 預設流程執行，不使用 `--no-commit`，除非使用者當輪明確要求。
 7. `/doc/PROJECT_SETTINGS.md` 不得被 `apps/run_bundle.py`／`apps/test_suite.py` 反向檢查。
