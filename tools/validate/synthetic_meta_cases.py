@@ -908,6 +908,8 @@ def validate_specific_pass_only_exception_traceability_contract_case(_base_param
         PROJECT_ROOT / "apps",
         PROJECT_ROOT / "config",
         PROJECT_ROOT / "core",
+        PROJECT_ROOT / "filters",
+        PROJECT_ROOT / "services",
         PROJECT_ROOT / "strategies",
         PROJECT_ROOT / "tools",
     ]
@@ -1017,10 +1019,10 @@ def validate_broad_exception_traceability_contract_case(_base_params):
             for node in ast.walk(parsed):
                 if not isinstance(node, ast.ExceptHandler) or node.type is None or not _is_broad_exception_type(node.type):
                     continue
-                if not node.name:
-                    broad_exception_traceability_failures.append(f"{rel_path}:{node.lineno}: broad exception handler must bind exception name")
-                    continue
                 if _handler_reraises(node):
+                    continue
+                if not node.name:
+                    broad_exception_traceability_failures.append(f"{rel_path}:{node.lineno}: broad exception handler must bind exception name unless it re-raises")
                     continue
                 if not _handler_uses_exception_name(node, node.name):
                     broad_exception_traceability_failures.append(f"{rel_path}:{node.lineno}: broad exception handler must use bound exception or re-raise")

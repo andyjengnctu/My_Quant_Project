@@ -1143,7 +1143,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             rebuilt=rebuilt_observation,
             existing_yearly=yearly_observation,
         )
-    except Exception:
+    except RuntimeError:
         rebuild_identity_match = False
     drifted_observation = dict(rebuilt_observation)
     drifted_observation["selected_epoch"] = 3
