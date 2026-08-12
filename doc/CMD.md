@@ -88,7 +88,7 @@ python apps/research.py compare robustness run
 python apps/research.py compare robustness latest
 ```
 
-`run`會以deterministic generated seeds對`robustness_role=stochastic` arms逐一建立隔離模型／score並做final strategy replay；`fixed_baseline`只計算一次。預設單GPU training queue與CPU replay queue重疊，永久只保存aggregate工件，不保存每seed完整模型／score／replay。
+`run`會以deterministic generated seeds對`robustness_role=stochastic` arms逐一建立隔離模型／score並做final strategy replay；`fixed_baseline`只計算一次。GPU training queue與CPU replay queue依config worker數重疊。checkpoint、full score與完整replay tree仍依retention清除；`keep_attribution_source=true`時會在清除前只永久抽取active `trades/equity/daily_capacity/selected_buys`的gzip compact attribution source。舊completed robustness若scientific observation已存在但compact source缺失，再次`run`會顯示`REBUILD ATTRIBUTION`，使用完全相同scientific fingerprint／resolved seeds重建缺失工件，compact unit先以`PENDING`落盤，並驗證selected epoch／fold count、正式策略metrics與逐年報酬與既有observation一致；既有model/score SHA可得時亦須一致，全部通過後才標記`VERIFIED`供resume/Audit使用。程序若在驗證前中止，PENDING unit下次不得列READY；整個流程不建立新的scientific結果。
 
 選擇 `[4] Audit／診斷` 會進入固定Audit子選單；Audit module由`config/audit.py`指定，不在選單中選擇：
 
@@ -100,7 +100,7 @@ python apps/research.py compare robustness latest
 [0]  返回
 ```
 
-全專案Audit inventory與dispatch的單一真理位於`tools/audit/catalog.py`；`config/audit.py`只保存目前反覆執行的正式active policy，不再承擔所有歷史Audit命令的inventory。正式入口可直接執行`python apps/research.py audit`；`apps/research.py`的Audit子選單呼叫`tools/audit/runner.py`，App本身不硬編碼A9／C15或個別Audit module。`tools/audit/`可跨filter、portfolio、optimizer、data與其他domain；正式`core/`／`filters/`不得反向依賴Audit。Formal Audit只能使用catalog中`mode=formal`且`read_only=true`的handler，只讀既有正式工件；缺件顯示`BLOCKED`，不得自行重跑策略、建立Label、訓練模型或修改runtime。歷史research audit仍由catalog統一登記，但可明確標示`research`／`historical`與`read_only=false`，不會被formal runner誤執行。Candidate validity仍維持Strategy owns validity / DL owns quality / Portfolio selector owns allocation。
+全專案Audit inventory與dispatch的單一真理位於`tools/audit/catalog.py`；`config/audit.py`只保存目前反覆執行的正式active policy，不再承擔所有歷史Audit命令的inventory。正式入口可直接執行`python apps/research.py audit`；`apps/research.py`的Audit子選單呼叫`tools/audit/runner.py`，App本身不硬編碼A9／C15或個別Audit module。`tools/audit/`可跨filter、portfolio、optimizer、data與其他domain；正式`core/`／`filters/`不得反向依賴Audit。Formal Audit只能使用catalog中`mode=formal`且`read_only=true`的handler，只讀既有正式工件；缺件顯示`BLOCKED`，不得自行重跑策略、建立Label、訓練模型或修改runtime。`forward-robustness-portfolio-translation`只讀上述compact attribution source與既有`seed_results.csv`，固定分析完整matched 8-seed集合，逐seed重用canonical strategy attribution primitive分解exclusive/common trade、risk-dollar sizing、slot occupancy與wealth/MDD path；Audit本身不負責重建來源工件。歷史research audit仍由catalog統一登記，但可明確標示`research`／`historical`與`read_only=false`，不會被formal runner誤執行。Candidate validity仍維持Strategy owns validity / DL owns quality / Portfolio selector owns allocation。
 
 
 Audit也可直接由Research CLI子命令執行：

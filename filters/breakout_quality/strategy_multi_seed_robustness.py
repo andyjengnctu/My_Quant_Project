@@ -9,6 +9,7 @@ artifacts are temporary work products and are removed after their metrics are st
 from __future__ import annotations
 
 import argparse
+import gzip
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict
@@ -112,7 +113,9 @@ SEED_RESULTS_FILENAME = "seed_results.csv"
 SEED_YEARLY_RESULTS_FILENAME = "seed_yearly_returns.csv"
 MANIFEST_FILENAME = "manifest.json"
 LATEST_FILENAME = "latest.json"
-ROBUSTNESS_SCHEMA_VERSION = 6
+ATTRIBUTION_SOURCE_DIRNAME = "attribution_source"
+ATTRIBUTION_SOURCE_SCHEMA_VERSION = 1
+ROBUSTNESS_SCHEMA_VERSION = 7
 ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 1
 TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
@@ -343,7 +346,7 @@ def _render_robustness_execution_plan(
         rows.append((
             "TRAIN+REPLAY",
             arm.name,
-            f"{cfg.seed_count}個deterministic generated seeds；isolated canonical trainer + same strategy replay",
+            f"{cfg.seed_count}個deterministic generated seeds；isolated canonical trainer + same strategy replay；若scientific observation已完成但compact attribution缺少，僅重建同一observation的歸因工件",
         ))
     pit_workload_lines: list[str] = []
     if settings.profile_id == "selection_pit" and start is not None and end is not None:
@@ -387,7 +390,7 @@ def _render_robustness_execution_plan(
         f"CPU strategy replay：workers={cfg.cpu_replay_workers}",
         f"Console mode        ：{cfg.console_mode}",
         f"年度報表顯示        ：{'on' if cfg.yearly_report else 'off'}（raw yearly永遠保留）",
-        f"永久保留模型/Scores/Replay：{cfg.keep_checkpoints}/{cfg.keep_scores}/{cfg.keep_replay_details}",
+        f"永久保留模型/Scores/Replay/Attribution：{cfg.keep_checkpoints}/{cfg.keep_scores}/{cfg.keep_replay_details}/{cfg.keep_attribution_source}",
         *pit_workload_lines,
         render_table(("動作", "項目", "說明"), colored_rows),
     ]
@@ -559,6 +562,7 @@ def build_multi_seed_robustness_contract(
             "keep_checkpoints": bool(robustness.keep_checkpoints),
             "keep_scores": bool(robustness.keep_scores),
             "keep_replay_details": bool(robustness.keep_replay_details),
+            "keep_attribution_source": bool(robustness.keep_attribution_source),
         },
     }
     # 只有scientific identity改變才換fingerprint；console/report/parallelism/retention不觸發重訓。
@@ -579,6 +583,300 @@ def _model_work_root(contract: dict[str, Any]) -> Path:
 def _unit_key(arm_id: str, seed: int) -> str:
     return f"{arm_id}__seed_{int(seed)}"
 
+
+
+def _attribution_source_root(run_root: Path) -> Path:
+    return Path(run_root).resolve() / ATTRIBUTION_SOURCE_DIRNAME
+
+
+def _attribution_unit_dir(run_root: Path, arm_id: str, seed: int) -> Path:
+    return _attribution_source_root(run_root) / _unit_key(arm_id, seed)
+
+
+def _gzip_copy_deterministic(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with source.open("rb") as src, destination.open("wb") as raw:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
+            shutil.copyfileobj(src, gz)
+
+
+def _csv_row_count(path: Path) -> int:
+    with path.open("rb") as handle:
+        return max(0, sum(1 for _ in handle) - 1)
+
+
+def _write_compact_attribution_source(
+    *,
+    pair_dir: Path,
+    destination_dir: Path,
+    job: dict[str, Any],
+    arm: StrategyComparisonArm,
+    dl,
+    runtime_spec: dict[str, str],
+) -> dict[str, Any]:
+    prefix = str(runtime_spec["active_key"])
+    source_files = {
+        "trades": pair_dir / f"{prefix}_trades.csv",
+        "equity": pair_dir / f"{prefix}_equity.csv",
+        "daily_capacity": pair_dir / f"{prefix}_daily_capacity.csv",
+        "selected_buys": pair_dir / f"{prefix}_selected_buys.csv",
+    }
+    missing = [path.name for path in source_files.values() if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "compact attribution source缺少replay工件: " + ", ".join(missing)
+        )
+    destination_dir = Path(destination_dir).resolve()
+    try:
+        destination_dir.relative_to(PROJECT_ROOT)
+    except ValueError as exc:
+        raise ValueError("compact attribution destination必須位於專案root內") from exc
+    shutil.rmtree(destination_dir, ignore_errors=True)
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    files: dict[str, Any] = {}
+    for role, source in source_files.items():
+        destination = destination_dir / f"{role}.csv.gz"
+        _gzip_copy_deterministic(source, destination)
+        files[role] = {
+            "path": project_relative_display_path(destination, project_root=PROJECT_ROOT),
+            "source_filename": source.name,
+            "source_sha256": compute_file_sha256(source),
+            "sha256": compute_file_sha256(destination),
+            "row_count": _csv_row_count(source),
+        }
+    payload = {
+        "schema_version": ATTRIBUTION_SOURCE_SCHEMA_VERSION,
+        "scientific_fingerprint": str(job["scientific_fingerprint"]),
+        "robustness_id": str(job["robustness_id"]),
+        "profile_id": str(job["profile_id"]),
+        "arm_id": arm.arm_id,
+        "arm_name": arm.name,
+        "arm_order": int(job["arm_order"]),
+        "seed": int(job["seed"]),
+        "seed_order": int(job["seed_order"]),
+        "comparison_period": {
+            "start": str(job["comparison_start"]),
+            "end": str(job["comparison_end"]),
+        },
+        "param_source": arm.param_source,
+        "rule_policy": arm.rule_policy,
+        "dl_runtime_mode": arm.dl_runtime_mode,
+        "dl_runtime_options": dict(arm.dl_runtime_options or {}),
+        "dl_source": {
+            "dl_id": dl.dl_id,
+            "filter_id": dl.filter_id,
+            "model_architecture": dl.model_architecture,
+            "experiment_profile": dl.experiment_profile,
+            "score_source": dl.score_source,
+            "threshold": dl.threshold,
+        },
+        "training_identity": {
+            "selected_epoch": int(job.get("selected_epoch", 0) or 0),
+            "fold_count": job.get("fold_count"),
+            "model_sha256": str(job.get("model_sha256") or "") or None,
+            "score_sha256": str(job.get("score_sha256") or "") or None,
+        },
+        "scientific_observation_validation": {
+            "status": "PENDING",
+            "verified_at_utc": None,
+            "source": None,
+        },
+        "files": files,
+    }
+    _write_json(destination_dir / MANIFEST_FILENAME, payload)
+    return payload
+
+
+def _read_attribution_unit_manifest(
+    run_root: Path,
+    *,
+    arm_id: str,
+    seed: int,
+    expected_fingerprint: str,
+    require_verified: bool = True,
+) -> dict[str, Any] | None:
+    unit_dir = _attribution_unit_dir(run_root, arm_id, seed)
+    path = unit_dir / MANIFEST_FILENAME
+    if not path.is_file():
+        return None
+    try:
+        payload = _read_json(path)
+        if int(payload.get("schema_version") or 0) != ATTRIBUTION_SOURCE_SCHEMA_VERSION:
+            return None
+        if str(payload.get("scientific_fingerprint") or "") != str(expected_fingerprint):
+            return None
+        if str(payload.get("arm_id") or "") != str(arm_id) or int(payload.get("seed", -1)) != int(seed):
+            return None
+        validation = dict(payload.get("scientific_observation_validation") or {})
+        if require_verified and str(validation.get("status") or "") != "VERIFIED":
+            return None
+        files = dict(payload.get("files") or {})
+        for role in ("trades", "equity", "daily_capacity", "selected_buys"):
+            item = dict(files.get(role) or {})
+            relative = str(item.get("path") or "")
+            if not relative:
+                return None
+            file_path = (PROJECT_ROOT / relative).resolve()
+            try:
+                file_path.relative_to(PROJECT_ROOT)
+            except ValueError:
+                return None
+            if not file_path.is_file():
+                return None
+            expected_sha = str(item.get("sha256") or "").strip().lower()
+            if expected_sha and compute_file_sha256(file_path).lower() != expected_sha:
+                return None
+        return payload
+    except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def _mark_attribution_unit_verified(
+    run_root: Path,
+    *,
+    arm_id: str,
+    seed: int,
+    expected_fingerprint: str,
+    source: str,
+) -> None:
+    payload = _read_attribution_unit_manifest(
+        run_root,
+        arm_id=arm_id,
+        seed=seed,
+        expected_fingerprint=expected_fingerprint,
+        require_verified=False,
+    )
+    if payload is None:
+        raise RuntimeError(f"compact attribution source無法在驗證後標記READY: {arm_id}/seed={seed}")
+    payload["scientific_observation_validation"] = {
+        "status": "VERIFIED",
+        "verified_at_utc": datetime.now(timezone.utc).isoformat(),
+        "source": str(source),
+    }
+    _write_json(_attribution_unit_dir(run_root, arm_id, seed) / MANIFEST_FILENAME, payload)
+
+
+def _attribution_ready_units(
+    run_root: Path,
+    *,
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    seeds: tuple[int, ...],
+    fingerprint: str,
+) -> set[tuple[str, int]]:
+    ready: set[tuple[str, int]] = set()
+    for arm in stochastic_arms:
+        for seed in seeds:
+            if _read_attribution_unit_manifest(
+                run_root,
+                arm_id=arm.arm_id,
+                seed=int(seed),
+                expected_fingerprint=fingerprint,
+            ) is not None:
+                ready.add((arm.arm_id, int(seed)))
+    return ready
+
+
+
+def _write_attribution_index_manifest(
+    run_root: Path,
+    *,
+    contract: dict[str, Any],
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    seeds: tuple[int, ...],
+) -> Path:
+    root = _attribution_source_root(run_root)
+    units: list[dict[str, Any]] = []
+    for arm in stochastic_arms:
+        for seed in seeds:
+            payload = _read_attribution_unit_manifest(
+                run_root,
+                arm_id=arm.arm_id,
+                seed=int(seed),
+                expected_fingerprint=str(contract["fingerprint"]),
+            )
+            if payload is None:
+                raise RuntimeError(
+                    f"compact attribution source不完整: {_unit_key(arm.arm_id, int(seed))}"
+                )
+            units.append({
+                "arm_id": arm.arm_id,
+                "arm_name": arm.name,
+                "seed": int(seed),
+                "seed_order": int(payload["seed_order"]),
+                "manifest_path": project_relative_display_path(
+                    _attribution_unit_dir(run_root, arm.arm_id, int(seed)) / MANIFEST_FILENAME,
+                    project_root=PROJECT_ROOT,
+                ),
+            })
+    index = {
+        "schema_version": ATTRIBUTION_SOURCE_SCHEMA_VERSION,
+        "scientific_fingerprint": str(contract["fingerprint"]),
+        "robustness_id": str(contract["robustness_id"]),
+        "profile_id": str(contract["profile_id"]),
+        "comparison_period": dict(contract.get("comparison_period") or {}),
+        "unit_count": len(units),
+        "units": sorted(units, key=lambda item: (int(item["seed_order"]), str(item["arm_id"]))),
+        "read_only_audit_source": True,
+    }
+    path = root / MANIFEST_FILENAME
+    _write_json(path, index)
+    return path
+
+
+def _validate_rebuilt_observation(
+    *,
+    existing_row: dict[str, Any],
+    rebuilt: dict[str, Any],
+    existing_yearly: pd.DataFrame,
+    tolerance: float = 1e-6,
+) -> None:
+    for _label, key, _unit in MEAN_METRICS:
+        left = pd.to_numeric(pd.Series([existing_row.get(key)]), errors="coerce").iloc[0]
+        right = pd.to_numeric(pd.Series([rebuilt.get(key)]), errors="coerce").iloc[0]
+        if pd.isna(left) and pd.isna(right):
+            continue
+        if pd.isna(left) or pd.isna(right) or not math.isclose(float(left), float(right), rel_tol=0.0, abs_tol=tolerance):
+            raise RuntimeError(
+                f"attribution rebuild scientific observation漂移: metric={key}, existing={left}, rebuilt={right}"
+            )
+
+    def optional_int(value: Any) -> int | None:
+        parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+        return None if pd.isna(parsed) else int(parsed)
+
+    for key in ("selected_epoch", "fold_count"):
+        left = optional_int(existing_row.get(key))
+        right = optional_int(rebuilt.get(key))
+        if left != right:
+            raise RuntimeError(
+                f"attribution rebuild training identity漂移: field={key}, existing={left}, rebuilt={right}"
+            )
+    def optional_hash(value: Any) -> str:
+        if value is None or pd.isna(value):
+            return ""
+        return str(value).strip().lower()
+
+    for key in ("model_sha256", "score_sha256"):
+        left = optional_hash(existing_row.get(key))
+        right = optional_hash(rebuilt.get(key))
+        if left and left != right:
+            raise RuntimeError(
+                f"attribution rebuild artifact identity漂移: field={key}, existing={left}, rebuilt={right}"
+            )
+
+    rebuilt_yearly = pd.DataFrame(rebuilt.get("yearly") or [])
+    expected = existing_yearly.copy()
+    if not expected.empty:
+        expected = expected[["year", "return_pct", "is_complete_year"]].sort_values("year").reset_index(drop=True)
+    if not rebuilt_yearly.empty:
+        rebuilt_yearly = rebuilt_yearly[["year", "return_pct", "is_complete_year"]].sort_values("year").reset_index(drop=True)
+    if len(expected) != len(rebuilt_yearly):
+        raise RuntimeError("attribution rebuild年度observation列數漂移")
+    for left, right in zip(expected.to_dict("records"), rebuilt_yearly.to_dict("records")):
+        if int(left["year"]) != int(right["year"]) or bool(left["is_complete_year"]) != bool(right["is_complete_year"]):
+            raise RuntimeError("attribution rebuild年度observation identity漂移")
+        if not math.isclose(float(left["return_pct"]), float(right["return_pct"]), rel_tol=0.0, abs_tol=tolerance):
+            raise RuntimeError("attribution rebuild年度報酬漂移")
 
 def _load_seed_results(path: Path) -> pd.DataFrame:
     if not path.is_file():
@@ -1091,12 +1389,23 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         "fold_count": job.get("fold_count"),
         "training_elapsed_sec": float(job.get("training_elapsed_sec", 0.0) or 0.0),
         "replay_elapsed_sec": round(time.perf_counter() - started, 3),
+        "model_sha256": str(job.get("model_sha256") or "") or None,
+        "score_sha256": str(job.get("score_sha256") or "") or None,
         **{key: metrics.get(key) for _label, key, _unit in MEAN_METRICS},
         "yearly": _normalize_yearly_rows(
             payload.get("yearly"), arm_id=arm.arm_id, name=arm.name, seed=int(job["seed"]),
             seed_order=int(job["seed_order"]), arm_order=int(job["arm_order"]),
         ),
     }
+    if bool(job.get("keep_attribution_source")):
+        _write_compact_attribution_source(
+            pair_dir=pair_dir,
+            destination_dir=Path(str(job["attribution_dir"])).resolve(),
+            job=job,
+            arm=arm,
+            dl=dl,
+            runtime_spec=runtime_spec,
+        )
     result_path = Path(str(job["result_path"])).resolve(); _write_json(result_path, result)
     if not bool(job.get("keep_replay_details")): shutil.rmtree(pair_dir, ignore_errors=True)
     return result
@@ -1744,13 +2053,20 @@ def show_multi_seed_robustness_status(*, robustness_id: str | None = None) -> No
     seeds = tuple(int(value) for value in contract["resolved_seeds"])
     _validate_seed_results_frame(existing, stochastic_arms=stochastic, seeds=seeds)
     print(f"Fingerprint       ：{contract['fingerprint']}")
+    ready_attribution = _attribution_ready_units(
+        run_root, stochastic_arms=stochastic, seeds=seeds, fingerprint=str(contract["fingerprint"])
+    ) if cfg.keep_attribution_source else set()
     print(f"已完成seed結果    ：{len(existing)}/{len(stochastic) * cfg.seed_count}")
+    if cfg.keep_attribution_source:
+        print(f"Attribution工件   ：{len(ready_attribution)}/{len(stochastic) * cfg.seed_count}")
     print("永久輸出：")
     print(f"- {project_relative_display_path(run_root / MANIFEST_FILENAME, project_root=PROJECT_ROOT)}")
     print(f"- {project_relative_display_path(run_root / SEED_RESULTS_FILENAME, project_root=PROJECT_ROOT)}")
     print(f"- {project_relative_display_path(run_root / SEED_YEARLY_RESULTS_FILENAME, project_root=PROJECT_ROOT)}")
     print(f"- {project_relative_display_path(run_root / SUMMARY_FILENAME, project_root=PROJECT_ROOT)}")
     print(f"- {project_relative_display_path(run_root / REPORT_FILENAME, project_root=PROJECT_ROOT)}")
+    if cfg.keep_attribution_source:
+        print(f"- {project_relative_display_path(_attribution_source_root(run_root), project_root=PROJECT_ROOT)}")
 
 
 def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None) -> None:
@@ -1976,28 +2292,49 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         (arm.param_source, arm.rule_policy): fixed_results[arm.arm_id]["baseline_dir"]
         for arm in fixed_arms
     }
-    completed = {
+    scientific_completed = {
         (str(row.arm_id), int(row.seed))
         for row in existing.itertuples(index=False)
     } if not existing.empty and cfg.reuse_completed else set()
-    if completed:
+    if scientific_completed:
         yearly_units = set() if existing_yearly.empty else {
             (str(row.arm_id), int(row.seed)) for row in existing_yearly.itertuples(index=False)
         }
-        completed &= yearly_units
+        scientific_completed &= yearly_units
+    attribution_ready = (
+        _attribution_ready_units(
+            run_root,
+            stochastic_arms=stochastic_arms,
+            seeds=seeds,
+            fingerprint=str(contract["fingerprint"]),
+        )
+        if cfg.keep_attribution_source
+        else set(scientific_completed)
+    )
+    completed = set(scientific_completed & attribution_ready)
     rows = (
-        [row for row in existing.to_dict("records") if (str(row.get("arm_id")), int(row.get("seed"))) in completed]
+        [row for row in existing.to_dict("records") if (str(row.get("arm_id")), int(row.get("seed"))) in scientific_completed]
         if not existing.empty and cfg.reuse_completed else []
     )
     yearly_rows = (
-        [row for row in existing_yearly.to_dict("records") if (str(row.get("arm_id")), int(row.get("seed"))) in completed]
+        [row for row in existing_yearly.to_dict("records") if (str(row.get("arm_id")), int(row.get("seed"))) in scientific_completed]
         if cfg.reuse_completed and not existing_yearly.empty else []
     )
+    existing_by_unit = {
+        (str(row.get("arm_id")), int(row.get("seed"))): dict(row)
+        for row in rows
+    }
     total_units = len(stochastic_arms) * len(seeds)
     done_units = len(completed)
     print("\n" + render_title("Multiple-seed robustness 執行"))
     print(f"Seeds={len(seeds)} | stochastic arms={len(stochastic_arms)} | work units={total_units}")
     print(f"GPU train workers={cfg.gpu_train_workers} | CPU replay workers={cfg.cpu_replay_workers}")
+    if cfg.keep_attribution_source:
+        missing_attr = scientific_completed - attribution_ready
+        print(
+            f"Compact attribution source={len(attribution_ready)}/{total_units} ready"
+            + (f" | rebuild={len(missing_attr)}" if missing_attr else "")
+        )
     color_enabled = console_color_enabled()
     progress = InlineProgress()
     min_ref_arm = str(dict(dict(contract.get("romd_reference_baselines") or {}).get("min") or {}).get("arm_id") or "")
@@ -2041,10 +2378,16 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
 
     for seed_order, seed in enumerate(seeds, start=1):
         for arm_order, arm in enumerate(stochastic_arms, start=1):
-            if (arm.arm_id, int(seed)) in completed:
+            unit_key = (arm.arm_id, int(seed))
+            if unit_key in completed:
                 progress.print_line(
                     paint(f"[REUSE {done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
                     + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name}"
+                )
+            elif unit_key in scientific_completed:
+                progress.print_line(
+                    paint("[REBUILD ATTRIBUTION]", "yellow", enabled=color_enabled, bold=True)
+                    + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} | scientific result reuse"
                 )
 
     def current_training_snapshot() -> dict[str, Any] | None:
@@ -2081,25 +2424,58 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         for future in finished:
             meta = replay_futures.pop(future)
             result = future.result()
-            rows = [
-                row for row in rows
-                if not (
-                    str(row.get("arm_id")) == str(result["arm_id"])
-                    and int(row.get("seed")) == int(result["seed"])
+            unit_identity = (str(result["arm_id"]), int(result["seed"]))
+            if unit_identity in scientific_completed:
+                existing_row = existing_by_unit.get(unit_identity)
+                if existing_row is None:
+                    raise RuntimeError("attribution rebuild找不到既有scientific observation")
+                unit_yearly = existing_yearly[
+                    (existing_yearly["arm_id"].astype(str) == unit_identity[0])
+                    & (existing_yearly["seed"].astype(int) == unit_identity[1])
+                ] if not existing_yearly.empty else pd.DataFrame()
+                _validate_rebuilt_observation(
+                    existing_row=existing_row,
+                    rebuilt=result,
+                    existing_yearly=unit_yearly,
                 )
-            ]
-            rows.append(_result_row(result))
-            _write_seed_results(seed_results_path, pd.DataFrame(rows))
-            yearly_rows = [
-                row for row in yearly_rows
-                if not (
-                    str(row.get("arm_id")) == str(result["arm_id"])
-                    and int(row.get("seed")) == int(result["seed"])
-                )
-            ]
-            yearly_rows.extend(list(result.get("yearly") or []))
-            _write_seed_yearly_results(seed_yearly_results_path, pd.DataFrame(yearly_rows))
-            completed.add((str(result["arm_id"]), int(result["seed"])))
+                if cfg.keep_attribution_source:
+                    _mark_attribution_unit_verified(
+                        run_root,
+                        arm_id=unit_identity[0],
+                        seed=unit_identity[1],
+                        expected_fingerprint=str(contract["fingerprint"]),
+                        source="existing_scientific_observation_rebuild",
+                    )
+            else:
+                rows = [
+                    row for row in rows
+                    if not (
+                        str(row.get("arm_id")) == str(result["arm_id"])
+                        and int(row.get("seed")) == int(result["seed"])
+                    )
+                ]
+                rows.append(_result_row(result))
+                _write_seed_results(seed_results_path, pd.DataFrame(rows))
+                yearly_rows = [
+                    row for row in yearly_rows
+                    if not (
+                        str(row.get("arm_id")) == str(result["arm_id"])
+                        and int(row.get("seed")) == int(result["seed"])
+                    )
+                ]
+                yearly_rows.extend(list(result.get("yearly") or []))
+                _write_seed_yearly_results(seed_yearly_results_path, pd.DataFrame(yearly_rows))
+                scientific_completed.add(unit_identity)
+                existing_by_unit[unit_identity] = _result_row(result)
+                if cfg.keep_attribution_source:
+                    _mark_attribution_unit_verified(
+                        run_root,
+                        arm_id=unit_identity[0],
+                        seed=unit_identity[1],
+                        expected_fingerprint=str(contract["fingerprint"]),
+                        source="new_scientific_observation",
+                    )
+            completed.add(unit_identity)
             done_units = len(completed)
             romd = float(result.get("return_over_max_drawdown"))
             delta_min = romd - min_baseline_romd
@@ -2186,9 +2562,15 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
                 "selected_epoch": artifacts["selected_epoch"],
                 "fold_count": artifacts.get("fold_count"),
                 "training_elapsed_sec": artifacts["training_elapsed_sec"],
+                "model_sha256": artifacts.get("model_sha256"),
+                "score_sha256": artifacts.get("score_sha256"),
                 "pair_dir": str(pair_dir),
                 "result_path": str(result_path),
+                "scientific_fingerprint": str(contract["fingerprint"]),
+                "robustness_id": cfg.robustness_id,
                 "keep_replay_details": cfg.keep_replay_details,
+                "keep_attribution_source": cfg.keep_attribution_source,
+                "attribution_dir": str(_attribution_unit_dir(run_root, arm.arm_id, int(meta["seed"]))),
             }
             ready_replays.append((
                 replay_job,
@@ -2286,6 +2668,24 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         missing_yearly = expected_yearly_units - actual_yearly_units
         if missing_yearly:
             raise RuntimeError(f"multi-seed年度結果不完整: missing_observations={len(missing_yearly)}")
+        attribution_index_path = None
+        if cfg.keep_attribution_source:
+            ready_attribution = _attribution_ready_units(
+                run_root,
+                stochastic_arms=stochastic_arms,
+                seeds=seeds,
+                fingerprint=str(contract["fingerprint"]),
+            )
+            if len(ready_attribution) != expected:
+                raise RuntimeError(
+                    f"compact attribution source不完整: expected={expected}, actual={len(ready_attribution)}"
+                )
+            attribution_index_path = _write_attribution_index_manifest(
+                run_root,
+                contract=contract,
+                stochastic_arms=stochastic_arms,
+                seeds=seeds,
+            )
         summary = _robustness_summary(
             contract=contract, fixed_results=fixed_results, seed_frame=seed_frame,
             seed_yearly_frame=seed_yearly_frame,
@@ -2299,6 +2699,10 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             "completed_at_utc": datetime.now(timezone.utc).isoformat(),
             "elapsed_sec": summary["elapsed_sec"],
             "completed_seed_strategy_observations": int(len(seed_frame)),
+            "attribution_source_units": (expected if cfg.keep_attribution_source else 0),
+            "attribution_source_manifest_path": (
+                None if attribution_index_path is None else project_relative_display_path(attribution_index_path, project_root=PROJECT_ROOT)
+            ),
             "summary_path": project_relative_display_path(run_root / SUMMARY_FILENAME, project_root=PROJECT_ROOT),
             "report_path": project_relative_display_path(run_root / REPORT_FILENAME, project_root=PROJECT_ROOT),
         })
@@ -2308,6 +2712,9 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             "fingerprint": contract["fingerprint"],
             "report_path": project_relative_display_path(run_root / REPORT_FILENAME, project_root=PROJECT_ROOT),
             "summary_path": project_relative_display_path(run_root / SUMMARY_FILENAME, project_root=PROJECT_ROOT),
+            "attribution_source_manifest_path": (
+                None if attribution_index_path is None else project_relative_display_path(attribution_index_path, project_root=PROJECT_ROOT)
+            ),
         })
     except BaseException as exc:
         manifest.update({
@@ -2351,6 +2758,8 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
     )
     print("永久工件：")
     permanent_paths = [manifest_path, seed_results_path, seed_yearly_results_path]
+    if cfg.keep_attribution_source:
+        permanent_paths.append(_attribution_source_root(run_root) / MANIFEST_FILENAME)
     permanent_paths.extend([run_root / SUMMARY_FILENAME, run_root / REPORT_FILENAME])
     for path in permanent_paths:
         print("- " + project_relative_display_path(path, project_root=PROJECT_ROOT))

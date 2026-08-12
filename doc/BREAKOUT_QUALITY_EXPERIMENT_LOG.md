@@ -8411,3 +8411,15 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 3. 下一步新增planned read-only `AUD-forward-robustness-portfolio-translation`，必須涵蓋全部8個matched seeds，逐seed與aggregate拆common/exclusive active trades、realized R、dollar PnL、risk-dollar sizing、slot/capital geometry、equity/MDD wealth path；不得只挑discordant或best/worst seeds。
 4. 目前robustness成功run依retention policy已清除per-seed replay details，因此`seed_results.csv`不足以推導交易層歸因；後續若實作Audit，應由同一scientific contract重建**compact attribution source**並在數值落盤後清除完整checkpoint/score/replay detail，避免為Audit永久保留整棵暫存工件。
 5. 在portfolio attribution完成前，不擴到16 seeds、不跑Selection PIT multi-seed、不開新MR、不調MR-13A hyperparameter／loss／selector。
+
+## 2026-08-12 — AUD-forward-robustness-portfolio-translation實作：compact evidence rebuild + 全8-seed只讀歸因
+
+- 程式基準：`test-branch-1_20260812_183330_4d84fda.zip`；SHA256=`5b180cf5d709c116c3293384536fc644997b99281292ea9a9dcb2dd09567fb7b`。
+- Identity：沿用Registry既有`AUD-forward-robustness-portfolio-translation`；不新增MR/DL/SR/PARAM identity。狀態由`PLANNED`更新為`IMPLEMENTED / AWAITING_COMPACT_SOURCE_REBUILD / READ_ONLY / ALL_SEEDS_REQUIRED`；尚無Audit結果。
+- Scientific condition：完全沿用Forward robustness fingerprint `2f70dbe73dcf3fed`、seed_count=8、generator_seed=20260810、MR-12B/MR-13A canonical trainers、相同Min ROOS參數與feasible-ascent replay；retention/reporting變更不進scientific fingerprint。
+- Robustness工件政策：每個seed/arm replay成功後，在full replay tree清理前只抽取active `trades/equity/daily_capacity/selected_buys`四類CSV並以gzip永久保存於fingerprint-scoped `attribution_source/`；不保存full scores、orderable candidates、checkpoint或完整replay tree。每個unit manifest保存arm/seed/profile/period/DL/runtime identity、selected epoch／fold count、重建時model/score SHA（可取得時）、原始CSV SHA、gzip SHA與row count；新產生的`seed_results.csv` observation亦保存model/score SHA供後續稽核。
+- 舊完成run補資料：若`seed_results.csv`與年度結果已有scientific observation但compact attribution unit缺失，正式robustness入口顯示`REBUILD ATTRIBUTION`並只把該unit重新排入canonical train+replay；重建後先以既有seed observation核對selected epoch／fold count、Return/MDD/RoMD/EV/DL選擇R等全部正式策略metrics及逐年度Return；若既有observation本來就保存model/score SHA則亦必須exact一致。舊schema沒有原始SHA時不得假造歷史hash，只把本次rebuild hash寫入compact manifest。compact unit先以`PENDING`落盤；完全一致後才標記`VERIFIED`並允許resume/Audit讀取。若程序在驗證前中止，PENDING unit不算READY，下次必須重新取得；既有scientific結果不因重建覆寫或重新判定。
+- Audit架構：`config/audit.py`啟用`forward-robustness-portfolio-translation`，舊`c23-c26-pit-portfolio-translation`改為歷史OFF；formal handler只讀compact source與既有`seed_results.csv`。每個matched seed直接reuse `build_strategy_attribution_pair_payload()` canonical common/exclusive trade、risk-dollar sizing、slot occupancy與wealth-path分解，再聚合8 seeds；不得自己train/replay。
+- Audit輸出：`audit.md/json`、`seed_summary.csv`，以及gzip合併的trade attribution、daily wealth、daily capacity、selection-day明細；逐seed同列ΔDL選擇R、ΔReturn、ΔMDD、ΔRoMD、exclusive ΔPnL、common risk-size effect與slot-gap，並以描述性driver分類輔助定位，不新增promotion gate。
+- 下一步：先從`Research → 策略組合比較 → Forward-OOS Multi-seed robustness → 執行`重建缺少的16個compact attribution units；完成後再由`Research → Audit／診斷 → 執行目前 Audit 設定`產生全8-seed attribution結果。Audit結果前不擴seed、不跑Selection PIT multi-seed、不開新MR、不調loss/selector/hyperparameter。
+

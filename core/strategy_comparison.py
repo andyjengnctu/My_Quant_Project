@@ -178,6 +178,7 @@ class StrategyMultiSeedRobustnessSettings:
     keep_checkpoints: bool
     keep_scores: bool
     keep_replay_details: bool
+    keep_attribution_source: bool
     romd_reference_baselines: Mapping[str, Mapping[str, str]]
     output_root: str
     model_work_root: str
@@ -199,6 +200,7 @@ class StrategyMultiSeedRobustnessSettings:
             "keep_checkpoints": bool(self.keep_checkpoints),
             "keep_scores": bool(self.keep_scores),
             "keep_replay_details": bool(self.keep_replay_details),
+            "keep_attribution_source": bool(self.keep_attribution_source),
             "romd_reference_baselines": {
                 str(key): dict(value)
                 for key, value in self.romd_reference_baselines.items()

@@ -87,6 +87,16 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         status_function="collect_strategy_attribution_status",
         run_function="run_strategy_attribution_audit",
     ),
+    "robustness_portfolio_translation": AuditCatalogEntry(
+        audit_type="robustness_portfolio_translation",
+        domain="breakout_quality",
+        module="tools.audit.breakout_quality.forward_robustness_portfolio_translation",
+        mode="formal",
+        description="Multi-seed robustness既有compact replay工件的全seed portfolio translation歸因",
+        read_only=True,
+        status_function="collect_forward_robustness_portfolio_translation_status",
+        run_function="run_forward_robustness_portfolio_translation_audit",
+    ),
     "strategy_realization_capture": AuditCatalogEntry(
         audit_type="strategy_realization_capture",
         domain="breakout_quality",

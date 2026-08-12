@@ -57,6 +57,7 @@ STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT = True
 STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS = False
 STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES = False
 STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS = False
+STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE = True
 
 # Current Strategy Compare核心比較名稱的單一真理。
 # Selection PIT／Forward-OOS由profile頁首區分，不把研究階段或固定selector語意塞進arm顯示名稱。
@@ -117,6 +118,7 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
         "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
         "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
+        "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
         "romd_reference_baselines": {
             "min": {"param_source": "selection_min_roos", "rule_policy": "all_off"},
             "full": {"param_source": "selection_full_roos", "rule_policy": "formal"},
@@ -139,6 +141,7 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
         "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
         "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
+        "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
         "romd_reference_baselines": {
             "min": {"param_source": "min_roos", "rule_policy": "all_off"},
             "full": {"param_source": "full_roos", "rule_policy": "formal"},
@@ -560,6 +563,7 @@ def get_strategy_multi_seed_robustness_settings(
         keep_checkpoints=bool(raw.get("keep_checkpoints", False)),
         keep_scores=bool(raw.get("keep_scores", False)),
         keep_replay_details=bool(raw.get("keep_replay_details", False)),
+        keep_attribution_source=bool(raw.get("keep_attribution_source", True)),
         romd_reference_baselines={
             str(key).strip(): {
                 "param_source": str(dict(value or {}).get("param_source") or "").strip(),

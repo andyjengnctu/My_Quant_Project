@@ -782,6 +782,43 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "selected_best_seed" not in robustness_source.lower(),
     )
 
+    synthetic_period = {"start": "2001-01-01", "end": "2001-12-31"}
+    deterministic_dataset_identity = {"dataset": "synthetic", "status": "READY", "sha256": "synthetic"}
+    with patch.object(
+        robustness_module, "_dataset_identity_snapshot", return_value=deterministic_dataset_identity
+    ), patch.object(
+        robustness_module, "get_strategy_multi_seed_robustness_settings", return_value=robustness_settings
+    ):
+        retention_contract_a = robustness_module.build_multi_seed_robustness_contract(
+            robustness_id=robustness_settings.robustness_id,
+            comparison_period=synthetic_period,
+            artifact_identities={},
+        )
+    alternate_retention = replace(
+        robustness_settings,
+        keep_attribution_source=not robustness_settings.keep_attribution_source,
+    )
+    with patch.object(
+        robustness_module, "_dataset_identity_snapshot", return_value=deterministic_dataset_identity
+    ), patch.object(
+        robustness_module, "get_strategy_multi_seed_robustness_settings", return_value=alternate_retention
+    ):
+        retention_contract_b = robustness_module.build_multi_seed_robustness_contract(
+            robustness_id=alternate_retention.robustness_id,
+            comparison_period=synthetic_period,
+            artifact_identities={},
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_retention_policy_changes_do_not_change_scientific_fingerprint",
+        (True, True),
+        (
+            retention_contract_a["fingerprint"] == retention_contract_b["fingerprint"],
+            retention_contract_a["retention"]["keep_attribution_source"]
+            != retention_contract_b["retention"]["keep_attribution_source"],
+        ),
+    )
+
     def _robustness_metrics(romd, total_return, win_rate):
         return {
             "total_return_pct": float(total_return),
@@ -995,20 +1032,135 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "multi_seed_work_artifacts_are_isolated_and_default_retention_is_aggregate_only",
+        "multi_seed_work_artifacts_are_isolated_and_retention_is_config_driven_with_optional_compact_attribution",
         True,
         all(token in robustness_source for token in (
             "--model-output-dir", "--research-output-dir",
-            "keep_checkpoints", "keep_scores", "keep_replay_details",
+            "keep_checkpoints", "keep_scores", "keep_replay_details", "keep_attribution_source",
             "seed_results.csv", "seed_yearly_returns.csv", "robustness_summary.json", "robustness_report.md",
+            "attribution_source", "_write_compact_attribution_source", "REBUILD ATTRIBUTION",
             "ThreadPoolExecutor", "CPU strategy replay",
         ))
-        and not robustness_settings.keep_checkpoints
-        and not robustness_settings.keep_scores
-        and not robustness_settings.keep_replay_details
+        and all(isinstance(value, bool) for value in (
+            robustness_settings.keep_checkpoints,
+            robustness_settings.keep_scores,
+            robustness_settings.keep_replay_details,
+            robustness_settings.keep_attribution_source,
+        ))
+        and "STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE" in config_source
         and "get_strategy_multi_seed_robustness_profiles" in app_source
         and "compare robustness" in app_source
         and "quiet=True" in robustness_source,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        compact_root = Path(tmp).resolve()
+        pair_dir = compact_root / "pair"
+        run_root = compact_root / "run"
+        pair_dir.mkdir(parents=True)
+        active_prefix = robustness_module._arm_runtime_spec(robustness_stochastic[0])["active_key"]
+        for suffix in ("trades", "equity", "daily_capacity", "selected_buys"):
+            pd.DataFrame([{"x": 1}, {"x": 2}]).to_csv(
+                pair_dir / f"{active_prefix}_{suffix}.csv", index=False, encoding="utf-8-sig"
+            )
+        arm = robustness_stochastic[0]
+        dl = robustness_profile.dl_sources[str(arm.dl_id)]
+        runtime_spec = robustness_module._arm_runtime_spec(arm)
+        attribution_dir = run_root / robustness_module.ATTRIBUTION_SOURCE_DIRNAME / f"{arm.arm_id}__seed_101"
+        job = {
+            "scientific_fingerprint": "synthetic-fingerprint",
+            "robustness_id": robustness_settings.robustness_id,
+            "profile_id": robustness_settings.profile_id,
+            "arm_order": 1,
+            "seed": 101,
+            "seed_order": 1,
+            "comparison_start": "2021-01-01",
+            "comparison_end": "2022-12-31",
+        }
+        with patch.object(robustness_module, "PROJECT_ROOT", compact_root):
+            compact_manifest = robustness_module._write_compact_attribution_source(
+                pair_dir=pair_dir,
+                destination_dir=attribution_dir,
+                job=job,
+                arm=arm,
+                dl=dl,
+                runtime_spec=runtime_spec,
+            )
+            pending_manifest = robustness_module._read_attribution_unit_manifest(
+                run_root,
+                arm_id=arm.arm_id,
+                seed=101,
+                expected_fingerprint="synthetic-fingerprint",
+                require_verified=False,
+            )
+            preverify_ready = robustness_module._read_attribution_unit_manifest(
+                run_root,
+                arm_id=arm.arm_id,
+                seed=101,
+                expected_fingerprint="synthetic-fingerprint",
+            )
+            robustness_module._mark_attribution_unit_verified(
+                run_root,
+                arm_id=arm.arm_id,
+                seed=101,
+                expected_fingerprint="synthetic-fingerprint",
+                source="synthetic_contract",
+            )
+            reloaded_manifest = robustness_module._read_attribution_unit_manifest(
+                run_root,
+                arm_id=arm.arm_id,
+                seed=101,
+                expected_fingerprint="synthetic-fingerprint",
+            )
+        compact_files_ok = (
+            pending_manifest is not None
+            and preverify_ready is None
+            and reloaded_manifest is not None
+            and dict(reloaded_manifest.get("scientific_observation_validation") or {}).get("status") == "VERIFIED"
+            and compact_manifest["schema_version"] == robustness_module.ATTRIBUTION_SOURCE_SCHEMA_VERSION
+            and set(compact_manifest["files"]) == {"trades", "equity", "daily_capacity", "selected_buys"}
+            and all((attribution_dir / f"{role}.csv.gz").is_file() for role in compact_manifest["files"])
+            and not any("orderable" in path.name or "score" in path.name for path in attribution_dir.iterdir())
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_compact_attribution_source_keeps_only_audit_required_active_replay_artifacts",
+        True,
+        compact_files_ok,
+    )
+
+    existing_observation = {key: 1.0 for _label, key, _unit in robustness_module.MEAN_METRICS}
+    existing_observation.update({"selected_epoch": 2, "fold_count": None})
+    rebuilt_observation = dict(existing_observation)
+    rebuilt_observation["yearly"] = [
+        {"year": 2024, "return_pct": 10.0, "is_complete_year": True}
+    ]
+    yearly_observation = pd.DataFrame(rebuilt_observation["yearly"])
+    rebuild_identity_match = True
+    try:
+        robustness_module._validate_rebuilt_observation(
+            existing_row=existing_observation,
+            rebuilt=rebuilt_observation,
+            existing_yearly=yearly_observation,
+        )
+    except Exception:
+        rebuild_identity_match = False
+    drifted_observation = dict(rebuilt_observation)
+    drifted_observation["selected_epoch"] = 3
+    rebuild_identity_drift_blocked = False
+    try:
+        robustness_module._validate_rebuilt_observation(
+            existing_row=existing_observation,
+            rebuilt=drifted_observation,
+            existing_yearly=yearly_observation,
+        )
+    except RuntimeError:
+        rebuild_identity_drift_blocked = True
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_attribution_rebuild_reuses_scientific_observation_only_when_metrics_years_and_training_identity_match",
+        (True, True),
+        (rebuild_identity_match, rebuild_identity_drift_blocked),
     )
 
     add_check(

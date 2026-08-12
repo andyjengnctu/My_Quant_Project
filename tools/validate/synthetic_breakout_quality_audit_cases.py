@@ -2417,6 +2417,10 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         collect_strategy_realization_capture_status,
         run_strategy_realization_capture_audit,
     )
+    from tools.audit.breakout_quality.forward_robustness_portfolio_translation import (
+        collect_forward_robustness_portfolio_translation_status,
+        run_forward_robustness_portfolio_translation_audit,
+    )
     from tools.audit.breakout_quality.pit_fold_runtime_attribution import (
         build_pit_fold_runtime_attribution,
     )
@@ -2458,6 +2462,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     portfolio_translation_definition = next(
         (item for item in all_definitions if item.audit_id == "c23-c26-pit-portfolio-translation"), None
+    )
+    forward_robustness_translation_definition = next(
+        (item for item in all_definitions if item.audit_id == "forward-robustness-portfolio-translation"), None
     )
     validate_audit_catalog(all_definitions)
     project_root = Path(__file__).resolve().parents[2]
@@ -2517,6 +2524,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     from tools.audit.breakout_quality import candidate_counterfactual_execution as counterfactual_audit
     from tools.audit.breakout_quality import target_component_attribution as target_component_audit
     from tools.audit.breakout_quality import pit_fold_runtime_attribution as pit_fold_audit
+    from tools.audit.breakout_quality import c15_strategy_attribution as strategy_attribution_audit
+    from tools.audit.breakout_quality import forward_robustness_portfolio_translation as forward_robustness_translation_audit
 
     add_check(
         results,
@@ -2548,6 +2557,15 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
+        "forward_robustness_translation_reuses_public_canonical_strategy_attribution_primitive",
+        True,
+        forward_robustness_translation_audit.build_strategy_attribution_pair_payload
+        is strategy_attribution_audit.build_strategy_attribution_pair_payload,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
         "project_audit_app_and_breakout_quality_facade_share_catalog_runner_and_cli_smoke_registry",
         True,
         "from tools.audit.runner import" in audit_app_source
@@ -2573,9 +2591,200 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and pit_target_realization_definition is not None
         and portfolio_translation_definition is not None
         and portfolio_translation_definition.outcomes.get("risk_dollar_translation") is True
+        and forward_robustness_translation_definition is not None
+        and forward_robustness_translation_definition.audit_type == "robustness_portfolio_translation"
+        and forward_robustness_translation_definition.source.get("kind") == "multi_seed_robustness"
+        and forward_robustness_translation_definition.outcomes.get("all_seed_required") is True
+        and isinstance(forward_robustness_translation_definition.enabled, bool)
+        and isinstance(portfolio_translation_definition.enabled, bool)
         and "breakout_quality" in get_audit_module_ids(enabled_only=True)
         and bool(enabled_definitions)
         and all(bool(str(item.source.get("kind") or "").strip()) for item in all_definitions),
+    )
+
+    if forward_robustness_translation_definition is None:
+        forward_status_blocked = False
+    else:
+        with tempfile.TemporaryDirectory() as tmp:
+            forward_status = collect_forward_robustness_portfolio_translation_status(
+                forward_robustness_translation_definition,
+                project_root=Path(tmp),
+            )
+        forward_status_blocked = (
+            forward_status.get("status") == "BLOCKED"
+            and "candidate_arm_id" in dict(forward_status.get("source") or {})
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "forward_robustness_portfolio_translation_audit_is_read_only_and_blocks_when_compact_source_is_missing",
+        True,
+        forward_status_blocked,
+    )
+
+    forward_e2e_ok = False
+    if forward_robustness_translation_definition is not None:
+        from config.strategy_compare import (
+            get_strategy_comparison_settings as get_compare_settings,
+            get_strategy_multi_seed_robustness_settings as get_robustness_settings,
+        )
+        from filters.breakout_quality import strategy_multi_seed_robustness as robustness_source_module
+
+        source_cfg = dict(forward_robustness_translation_definition.source)
+        robustness_id = str(source_cfg["robustness_id"])
+        robustness_cfg = get_robustness_settings(robustness_id)
+        compare_settings = get_compare_settings(robustness_cfg.profile_id)
+        candidate_arm_id = str(source_cfg["candidate_arm_id"])
+        comparator_arm_id = str(source_cfg["comparator_arm_id"])
+        synthetic_seed_values = (101, 202)
+        with tempfile.TemporaryDirectory() as tmp:
+            synthetic_root = Path(tmp).resolve()
+            synthetic_run_root = synthetic_root / robustness_cfg.output_root / "syntheticfp"
+            synthetic_run_root.mkdir(parents=True, exist_ok=True)
+            result_rows = []
+            for arm_order, arm_id in enumerate((comparator_arm_id, candidate_arm_id), start=1):
+                arm = compare_settings.arms[arm_id]
+                dl = compare_settings.dl_sources[str(arm.dl_id)]
+                runtime_spec = robustness_source_module._arm_runtime_spec(arm)
+                active_prefix = str(runtime_spec["active_key"])
+                for seed_order, seed in enumerate(synthetic_seed_values, start=1):
+                    pair_dir = synthetic_root / "pairs" / f"{arm_id}_{seed}"
+                    pair_dir.mkdir(parents=True, exist_ok=True)
+                    pd.DataFrame(columns=["Date", "Ticker", "Type"]).to_csv(
+                        pair_dir / f"{active_prefix}_trades.csv", index=False, encoding="utf-8-sig"
+                    )
+                    pd.DataFrame([
+                        {"Date": "2024-01-02", "Equity": 100000.0},
+                        {"Date": "2024-01-03", "Equity": 100000.0},
+                    ]).to_csv(
+                        pair_dir / f"{active_prefix}_equity.csv", index=False, encoding="utf-8-sig"
+                    )
+                    pd.DataFrame([
+                        {
+                            "Date": "2024-01-02",
+                            "Post_Execution_Positions": 0,
+                            "End_Position_Gap": 10,
+                            "Filled_Buys_Today": 0,
+                            "Missed_Buys_Today": 0,
+                        },
+                        {
+                            "Date": "2024-01-03",
+                            "Post_Execution_Positions": 0,
+                            "End_Position_Gap": 10,
+                            "Filled_Buys_Today": 0,
+                            "Missed_Buys_Today": 0,
+                        },
+                    ]).to_csv(
+                        pair_dir / f"{active_prefix}_daily_capacity.csv", index=False, encoding="utf-8-sig"
+                    )
+                    pd.DataFrame(columns=["ticker", "trade_date", "signal_date"]).to_csv(
+                        pair_dir / f"{active_prefix}_selected_buys.csv", index=False, encoding="utf-8-sig"
+                    )
+                    attribution_job = {
+                        "scientific_fingerprint": "syntheticfp",
+                        "robustness_id": robustness_id,
+                        "profile_id": robustness_cfg.profile_id,
+                        "arm_order": arm_order,
+                        "seed": seed,
+                        "seed_order": seed_order,
+                        "comparison_start": "2024-01-01",
+                        "comparison_end": "2024-12-31",
+                        "selected_epoch": 1,
+                        "fold_count": None,
+                        "model_sha256": "synthetic-model",
+                        "score_sha256": "synthetic-score",
+                    }
+                    with patch.object(robustness_source_module, "PROJECT_ROOT", synthetic_root):
+                        robustness_source_module._write_compact_attribution_source(
+                            pair_dir=pair_dir,
+                            destination_dir=robustness_source_module._attribution_unit_dir(
+                                synthetic_run_root, arm_id, seed
+                            ),
+                            job=attribution_job,
+                            arm=arm,
+                            dl=dl,
+                            runtime_spec=runtime_spec,
+                        )
+                        robustness_source_module._mark_attribution_unit_verified(
+                            synthetic_run_root,
+                            arm_id=arm_id,
+                            seed=seed,
+                            expected_fingerprint="syntheticfp",
+                            source="synthetic_formal_contract",
+                        )
+                    result_rows.append({
+                        "arm_id": arm_id,
+                        "name": arm.name,
+                        "seed": seed,
+                        "seed_order": seed_order,
+                        "arm_order": arm_order,
+                        "total_return_pct": 0.0,
+                        "max_drawdown_pct": 1.0,
+                        "return_over_max_drawdown": 0.0,
+                        "expected_value_r": 0.0,
+                        "direct_selection_r": 0.0,
+                    })
+            pd.DataFrame(result_rows).to_csv(
+                synthetic_run_root / robustness_source_module.SEED_RESULTS_FILENAME,
+                index=False,
+                encoding="utf-8-sig",
+            )
+            synthetic_contract = {
+                "fingerprint": "syntheticfp",
+                "robustness_id": robustness_id,
+                "profile_id": robustness_cfg.profile_id,
+                "seed_count": len(synthetic_seed_values),
+                "resolved_seeds": list(synthetic_seed_values),
+            }
+            (synthetic_run_root / robustness_source_module.MANIFEST_FILENAME).write_text(
+                json.dumps({"status": "COMPLETED", "contract": synthetic_contract}),
+                encoding="utf-8",
+            )
+            (synthetic_run_root / robustness_source_module.SUMMARY_FILENAME).write_text(
+                json.dumps({"fingerprint": "syntheticfp", "contract": synthetic_contract}),
+                encoding="utf-8",
+            )
+            latest_path = synthetic_root / robustness_cfg.output_root / robustness_source_module.LATEST_FILENAME
+            latest_path.parent.mkdir(parents=True, exist_ok=True)
+            latest_path.write_text(
+                json.dumps({
+                    "summary_path": (synthetic_run_root / robustness_source_module.SUMMARY_FILENAME)
+                    .relative_to(synthetic_root)
+                    .as_posix()
+                }),
+                encoding="utf-8",
+            )
+            synthetic_status = collect_forward_robustness_portfolio_translation_status(
+                forward_robustness_translation_definition,
+                project_root=synthetic_root,
+            )
+            synthetic_payload = run_forward_robustness_portfolio_translation_audit(
+                forward_robustness_translation_definition,
+                project_root=synthetic_root,
+                quiet=True,
+            )
+            latest_audit = (
+                synthetic_root
+                / AUDIT_OUTPUT_ROOT
+                / forward_robustness_translation_definition.output_subdir
+                / "latest"
+            )
+            forward_e2e_ok = (
+                synthetic_status.get("status") == "READY"
+                and int(synthetic_payload["metadata"]["seed_count"]) == len(synthetic_seed_values)
+                and synthetic_payload["metadata"]["training_performed"] is False
+                and synthetic_payload["metadata"]["portfolio_replay_executed"] is False
+                and (latest_audit / "audit.json").is_file()
+                and (latest_audit / "seed_summary.csv").is_file()
+            )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "forward_robustness_portfolio_translation_runs_all_resolved_seeds_from_verified_compact_source_without_training_or_replay",
+        True,
+        forward_e2e_ok,
     )
 
     synthetic_scores = pd.DataFrame([
