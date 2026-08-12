@@ -42,7 +42,7 @@ from tools.audit.breakout_quality.c15_strategy_attribution import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-AUDIT_RESULT_SCHEMA_VERSION = 3
+AUDIT_RESULT_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -339,6 +339,7 @@ def _row_summary(
     common = dict(risk.get("common") or {})
     candidate_only = dict(risk.get("candidate_only") or {})
     comparator_only = dict(risk.get("comparator_only") or {})
+    exclusive_bridge = dict(risk.get("exclusive_bridge") or {})
     slots = dict(pair.get("slot_occupancy") or {})
     row = {
         "seed_order": int(seed_order),
@@ -375,6 +376,13 @@ def _row_summary(
         "comparator_only_loser_avg_implied_initial_risk": _finite(comparator_only.get("loser_avg_implied_initial_risk")),
         "candidate_only_total_pnl": float(candidate_only.get("total_pnl") or 0.0),
         "comparator_only_total_pnl": float(comparator_only.get("total_pnl") or 0.0),
+        "exclusive_reference_risk": _finite(exclusive_bridge.get("reference_risk")),
+        "exclusive_equal_risk_selection_effect_pnl": float(exclusive_bridge.get("equal_risk_selection_effect_pnl") or 0.0),
+        "exclusive_average_risk_scale_effect_pnl": float(exclusive_bridge.get("average_risk_scale_effect_pnl") or 0.0),
+        "exclusive_within_set_weighting_effect_pnl": float(exclusive_bridge.get("within_set_weighting_effect_pnl") or 0.0),
+        "exclusive_uncovered_pnl_delta": float(exclusive_bridge.get("uncovered_pnl_delta") or 0.0),
+        "exclusive_bridge_total_pnl_delta": float(exclusive_bridge.get("total_pnl_delta") or 0.0),
+        "exclusive_bridge_residual_pnl": float(exclusive_bridge.get("total_decomposition_residual_pnl") or 0.0),
         "common_risk_size_effect_pnl": float(common.get("risk_size_effect_pnl") or 0.0),
         "common_r_difference_effect_pnl": float(common.get("r_difference_effect_pnl") or 0.0),
         "common_decomposition_residual_pnl": float(common.get("decomposition_residual_pnl") or 0.0),
@@ -446,6 +454,18 @@ def _render_report(payload: dict[str, Any]) -> str:
             f"{_money(row['comparator_only_winner_avg_implied_initial_risk'])} / {_money(row['comparator_only_loser_avg_implied_initial_risk'])}",
             f"{row['direct_pair_exclusive_delta_pnl']:+,.0f}",
         ))
+    exact_bridge_rows = []
+    for row in payload["seed_summary"]:
+        exact_bridge_rows.append((
+            f"S{row['seed_order']}",
+            "-" if row["exclusive_reference_risk"] is None else f"{float(row['exclusive_reference_risk']):,.0f}",
+            f"{row['exclusive_equal_risk_selection_effect_pnl']:+,.0f}",
+            f"{row['exclusive_average_risk_scale_effect_pnl']:+,.0f}",
+            f"{row['exclusive_within_set_weighting_effect_pnl']:+,.0f}",
+            f"{row['exclusive_uncovered_pnl_delta']:+,.0f}",
+            f"{row['direct_pair_exclusive_delta_pnl']:+,.0f}",
+            f"{row['exclusive_bridge_residual_pnl']:+,.2f}",
+        ))
     drivers = payload["aggregate"]["driver_counts"]
     driver_rows = [(key, value) for key, value in sorted(drivers.items())]
     aggregate = payload["aggregate"]
@@ -468,7 +488,12 @@ def _render_report(payload: dict[str, Any]) -> str:
             ("Seed", "MR-13A-only ΣR / RW-R", "MR-12B-only ΣR / RW-R", "13A-only Avg risk", "12B-only Avg risk", "13A Winner/Loser risk", "12B Winner/Loser risk", "Exclusive ΔPnL"),
             bridge_rows,
         ),
-        render_section("8-seed aggregate", number=3),
+        render_section("Exclusive ΔPnL exact decomposition", number=3),
+        render_table(
+            ("Seed", "Reference risk", "Equal-risk selection", "Avg-risk scale", "Within-set weighting", "Uncovered", "Actual Exclusive ΔPnL", "Residual"),
+            exact_bridge_rows,
+        ),
+        render_section("8-seed aggregate", number=4),
         render_key_values((
             ("Ranking↑ seeds", f"{aggregate['ranking_positive_count']}/{aggregate['seed_count']}"),
             ("Ranking↑ 且 RoMD↑", f"{aggregate['ranking_positive_romd_positive_count']}/{aggregate['ranking_positive_count']}"),
@@ -478,11 +503,16 @@ def _render_report(payload: dict[str, Any]) -> str:
             ("Exclusive ΔPnL Mean", f"{aggregate['direct_pair_exclusive_delta_pnl']['mean']:+,.2f}"),
             ("Exclusive RW-R gap Mean", "-" if aggregate['exclusive_risk_weighted_r_gap']['mean'] is None else f"{aggregate['exclusive_risk_weighted_r_gap']['mean']:+.3f} R"),
             ("Exclusive implied-risk Δ Mean", f"{aggregate['exclusive_total_implied_risk_delta']['mean']:+,.2f}"),
+            ("Equal-risk selection effect Mean", f"{aggregate['exclusive_equal_risk_selection_effect_pnl']['mean']:+,.2f}"),
+            ("Average-risk scale effect Mean", f"{aggregate['exclusive_average_risk_scale_effect_pnl']['mean']:+,.2f}"),
+            ("Within-set weighting effect Mean", f"{aggregate['exclusive_within_set_weighting_effect_pnl']['mean']:+,.2f}"),
+            ("Uncovered exclusive ΔPnL Mean", f"{aggregate['exclusive_uncovered_pnl_delta']['mean']:+,.2f}"),
+            ("Exclusive bridge residual Mean", f"{aggregate['exclusive_bridge_residual_pnl']['mean']:+,.6f}"),
             ("Common risk-size effect Mean", f"{aggregate['common_risk_size_effect_pnl']['mean']:+,.2f}"),
             ("ΔGap slot-days Mean", f"{aggregate['delta_end_position_gap_slot_days']['mean']:+.2f}"),
         )),
         render_table(("機制", "Seeds"), driver_rows),
-        render_section("限制", number=4),
+        render_section("限制", number=5),
         "本Audit只做既有8-seed結果的trade-set／risk-dollar／slot／wealth-path歸因；ΔDL選擇R是兩個arm各自相對共同DL-off baseline的差，Direct-pair Exclusive ΔR則是MR-13A對MR-12B直接trade partition，兩者比較基準不同不得強制相等；不得挑best seed，不是新的promotion gate，也不得回流模型training semantics。",
     )).rstrip() + "\n"
 
@@ -535,6 +565,30 @@ def run_forward_robustness_portfolio_translation_audit(
             raise RuntimeError(
                 f"seed S{seed_order} direct-pair R decomposition不閉合"
             )
+        bridge_sum = (
+            summary_row["exclusive_equal_risk_selection_effect_pnl"]
+            + summary_row["exclusive_average_risk_scale_effect_pnl"]
+            + summary_row["exclusive_within_set_weighting_effect_pnl"]
+            + summary_row["exclusive_uncovered_pnl_delta"]
+        )
+        if (
+            not math.isclose(
+                bridge_sum,
+                summary_row["direct_pair_exclusive_delta_pnl"],
+                rel_tol=0.0,
+                abs_tol=1e-6,
+            )
+            or not math.isclose(
+                summary_row["exclusive_bridge_total_pnl_delta"],
+                summary_row["direct_pair_exclusive_delta_pnl"],
+                rel_tol=0.0,
+                abs_tol=1e-6,
+            )
+            or abs(summary_row["exclusive_bridge_residual_pnl"]) > 1e-6
+        ):
+            raise RuntimeError(
+                f"seed S{seed_order} exclusive R→Dollar decomposition不閉合"
+            )
         seed_summaries.append(summary_row)
         frames = pair.pop("frames")
         for collection, key in (
@@ -562,6 +616,11 @@ def run_forward_robustness_portfolio_translation_audit(
         "direct_pair_exclusive_delta_pnl": _distribution(seed_df["direct_pair_exclusive_delta_pnl"]),
         "exclusive_risk_weighted_r_gap": _distribution(seed_df["exclusive_risk_weighted_r_gap"]),
         "exclusive_total_implied_risk_delta": _distribution(seed_df["exclusive_total_implied_risk_delta"]),
+        "exclusive_equal_risk_selection_effect_pnl": _distribution(seed_df["exclusive_equal_risk_selection_effect_pnl"]),
+        "exclusive_average_risk_scale_effect_pnl": _distribution(seed_df["exclusive_average_risk_scale_effect_pnl"]),
+        "exclusive_within_set_weighting_effect_pnl": _distribution(seed_df["exclusive_within_set_weighting_effect_pnl"]),
+        "exclusive_uncovered_pnl_delta": _distribution(seed_df["exclusive_uncovered_pnl_delta"]),
+        "exclusive_bridge_residual_pnl": _distribution(seed_df["exclusive_bridge_residual_pnl"]),
         "direct_pair_common_delta_r": _distribution(seed_df["direct_pair_common_delta_r"]),
         "direct_pair_all_trade_delta_r": _distribution(seed_df["direct_pair_all_trade_delta_r"]),
         "common_trade_pnl_delta": _distribution(seed_df["common_trade_pnl_delta"]),

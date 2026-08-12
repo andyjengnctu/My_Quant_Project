@@ -2777,7 +2777,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             synthetic_seed_summary = list(synthetic_payload.get("seed_summary") or [])
             forward_e2e_ok = (
                 synthetic_status.get("status") == "READY"
-                and int(synthetic_payload.get("schema_version") or 0) == 3
+                and int(synthetic_payload.get("schema_version") or 0) == 4
                 and int(synthetic_payload["metadata"]["seed_count"]) == len(synthetic_seed_values)
                 and synthetic_payload["metadata"]["training_performed"] is False
                 and synthetic_payload["metadata"]["portfolio_replay_executed"] is False
@@ -2788,7 +2788,12 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 and all("candidate_only_avg_implied_initial_risk" in row for row in synthetic_seed_summary)
                 and all("comparator_only_avg_implied_initial_risk" in row for row in synthetic_seed_summary)
                 and all("exclusive_risk_weighted_r_gap" in row for row in synthetic_seed_summary)
+                and all("exclusive_equal_risk_selection_effect_pnl" in row for row in synthetic_seed_summary)
+                and all("exclusive_average_risk_scale_effect_pnl" in row for row in synthetic_seed_summary)
+                and all("exclusive_within_set_weighting_effect_pnl" in row for row in synthetic_seed_summary)
+                and all(abs(float(row["exclusive_bridge_residual_pnl"])) <= 1e-8 for row in synthetic_seed_summary)
                 and "Exclusive trade R→Dollar bridge" in (latest_audit / "audit.md").read_text(encoding="utf-8")
+                and "Exclusive ΔPnL exact decomposition" in (latest_audit / "audit.md").read_text(encoding="utf-8")
                 and (latest_audit / "audit.json").is_file()
                 and (latest_audit / "seed_summary.csv").is_file()
             )

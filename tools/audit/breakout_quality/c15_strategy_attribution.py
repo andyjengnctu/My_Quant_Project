@@ -485,11 +485,175 @@ def _risk_bucket_summary(frame: pd.DataFrame, *, pnl_col: str, r_col: str, risk_
     }
 
 
+def _exclusive_risk_dollar_bridge(
+    candidate_only: pd.DataFrame,
+    comparator_only: pd.DataFrame,
+) -> dict[str, Any]:
+    """Exact covered-trade bridge from equal-risk selection edge to realized dollar PnL.
+
+    For each exclusive trade set, realized dollar PnL is R * implied initial risk.
+    Using one pooled covered-trade reference risk q_ref, the covered PnL delta closes as:
+
+        equal-risk selection effect
+      + average-risk scale effect
+      + within-set R×risk weighting effect
+
+    Any trades whose initial risk cannot be recovered stay in an explicit uncovered
+    PnL bucket.  This is a diagnostic decomposition only; it does not change sizing.
+    """
+
+    def _side(
+        frame: pd.DataFrame,
+        *,
+        pnl_col: str,
+        r_col: str,
+        risk_col: str,
+    ) -> dict[str, Any]:
+        rows = pd.DataFrame(frame).copy()
+        if rows.empty:
+            return {
+                "trade_count": 0,
+                "covered_trade_count": 0,
+                "covered_total_r": 0.0,
+                "covered_total_pnl": 0.0,
+                "covered_total_risk": 0.0,
+                "covered_avg_risk": None,
+                "all_total_pnl": 0.0,
+                "uncovered_pnl": 0.0,
+            }
+        pnl = pd.to_numeric(rows[pnl_col], errors="coerce")
+        r_values = pd.to_numeric(rows[r_col], errors="coerce")
+        risk = pd.to_numeric(rows[risk_col], errors="coerce")
+        valid = (
+            np.isfinite(pnl)
+            & np.isfinite(r_values)
+            & np.isfinite(risk)
+            & (risk > 0.0)
+        )
+        covered_pnl = pnl[valid].astype(float)
+        covered_r = r_values[valid].astype(float)
+        covered_risk = risk[valid].astype(float)
+        all_total_pnl = float(pnl.fillna(0.0).sum())
+        covered_total_pnl = float(covered_pnl.sum()) if len(covered_pnl) else 0.0
+        covered_total_risk = float(covered_risk.sum()) if len(covered_risk) else 0.0
+        return {
+            "trade_count": int(len(rows)),
+            "covered_trade_count": int(valid.sum()),
+            "covered_total_r": float(covered_r.sum()) if len(covered_r) else 0.0,
+            "covered_total_pnl": covered_total_pnl,
+            "covered_total_risk": covered_total_risk,
+            "covered_avg_risk": (
+                float(covered_risk.mean()) if len(covered_risk) else None
+            ),
+            "all_total_pnl": all_total_pnl,
+            "uncovered_pnl": float(all_total_pnl - covered_total_pnl),
+        }
+
+    candidate = _side(
+        candidate_only,
+        pnl_col="candidate_pnl",
+        r_col="candidate_r",
+        risk_col="candidate_initial_risk",
+    )
+    comparator = _side(
+        comparator_only,
+        pnl_col="comparator_pnl",
+        r_col="comparator_r",
+        risk_col="comparator_initial_risk",
+    )
+    covered_count = (
+        int(candidate["covered_trade_count"])
+        + int(comparator["covered_trade_count"])
+    )
+    covered_risk = (
+        float(candidate["covered_total_risk"])
+        + float(comparator["covered_total_risk"])
+    )
+    reference_risk = (
+        float(covered_risk / covered_count)
+        if covered_count > 0 and covered_risk > 0.0
+        else None
+    )
+
+    if reference_risk is None:
+        equal_risk_selection_effect = 0.0
+        average_risk_scale_effect = 0.0
+        within_set_weighting_effect = 0.0
+        covered_pnl_delta = (
+            float(candidate["covered_total_pnl"])
+            - float(comparator["covered_total_pnl"])
+        )
+    else:
+        c_total_r = float(candidate["covered_total_r"])
+        b_total_r = float(comparator["covered_total_r"])
+        c_avg_risk = float(candidate["covered_avg_risk"] or reference_risk)
+        b_avg_risk = float(comparator["covered_avg_risk"] or reference_risk)
+
+        equal_risk_selection_effect = float(
+            reference_risk * (c_total_r - b_total_r)
+        )
+        average_risk_scale_effect = float(
+            (c_avg_risk - reference_risk) * c_total_r
+            - (b_avg_risk - reference_risk) * b_total_r
+        )
+        candidate_weighting = float(
+            float(candidate["covered_total_pnl"]) - c_avg_risk * c_total_r
+        )
+        comparator_weighting = float(
+            float(comparator["covered_total_pnl"]) - b_avg_risk * b_total_r
+        )
+        within_set_weighting_effect = float(
+            candidate_weighting - comparator_weighting
+        )
+        covered_pnl_delta = float(
+            float(candidate["covered_total_pnl"])
+            - float(comparator["covered_total_pnl"])
+        )
+
+    uncovered_pnl_delta = float(
+        float(candidate["uncovered_pnl"]) - float(comparator["uncovered_pnl"])
+    )
+    total_pnl_delta = float(
+        float(candidate["all_total_pnl"]) - float(comparator["all_total_pnl"])
+    )
+    covered_residual = float(
+        covered_pnl_delta
+        - equal_risk_selection_effect
+        - average_risk_scale_effect
+        - within_set_weighting_effect
+    )
+    total_residual = float(
+        total_pnl_delta
+        - equal_risk_selection_effect
+        - average_risk_scale_effect
+        - within_set_weighting_effect
+        - uncovered_pnl_delta
+    )
+    return {
+        "reference_risk": reference_risk,
+        "candidate": candidate,
+        "comparator": comparator,
+        "covered_pnl_delta": covered_pnl_delta,
+        "equal_risk_selection_effect_pnl": equal_risk_selection_effect,
+        "average_risk_scale_effect_pnl": average_risk_scale_effect,
+        "within_set_weighting_effect_pnl": within_set_weighting_effect,
+        "uncovered_pnl_delta": uncovered_pnl_delta,
+        "covered_decomposition_residual_pnl": covered_residual,
+        "total_pnl_delta": total_pnl_delta,
+        "total_decomposition_residual_pnl": total_residual,
+    }
+
+
 def _risk_dollar_translation(frame: pd.DataFrame) -> dict[str, Any]:
     rows = pd.DataFrame(frame).copy()
     if rows.empty:
         empty = _risk_bucket_summary(rows, pnl_col="candidate_pnl", r_col="candidate_r", risk_col="candidate_initial_risk")
-        return {"candidate_only": empty, "comparator_only": dict(empty), "common": {}}
+        return {
+            "candidate_only": empty,
+            "comparator_only": dict(empty),
+            "exclusive_bridge": _exclusive_risk_dollar_bridge(rows, rows),
+            "common": {},
+        }
 
     candidate_only = rows[rows["category"] == "candidate_only"]
     comparator_only = rows[rows["category"] == "comparator_only"]
@@ -547,6 +711,10 @@ def _risk_dollar_translation(frame: pd.DataFrame) -> dict[str, Any]:
             pnl_col="comparator_pnl",
             r_col="comparator_r",
             risk_col="comparator_initial_risk",
+        ),
+        "exclusive_bridge": _exclusive_risk_dollar_bridge(
+            candidate_only,
+            comparator_only,
         ),
         "common": common_summary,
     }
