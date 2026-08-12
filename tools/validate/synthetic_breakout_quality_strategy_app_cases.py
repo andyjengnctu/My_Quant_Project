@@ -929,6 +929,25 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             )
         )
     )
+    translation_diagnostic = synthetic_summary[
+        "selection_r_to_strategy_same_seed_translation"
+    ]
+    translation_diagnostic_ok = (
+        translation_diagnostic is None
+        if len(robustness_stochastic) != 2
+        else (
+            isinstance(translation_diagnostic, dict)
+            and translation_diagnostic["n"] == 2
+            and translation_diagnostic["selection_r_positive_count"] == 2
+            and translation_diagnostic["selection_r_positive_romd_positive_count"] == 2
+            and translation_diagnostic["selection_r_positive_romd_nonpositive_count"] == 0
+            and translation_diagnostic["sign_concordant_count"] == 2
+            and translation_diagnostic["sign_discordant_count"] == 0
+            and len(translation_diagnostic["seed_rows"]) == 2
+            and [row["seed_index"] for row in translation_diagnostic["seed_rows"]] == [1, 2]
+        )
+    )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_report_uses_mean_for_all_strategy_metrics_and_full_romd_distribution_with_fixed_baselines",
@@ -964,6 +983,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and distribution_compare_ok
         and same_seed_compare_ok
         and direct_same_seed_compare_ok
+        and translation_diagnostic_ok
         and len(synthetic_summary["yearly_statistics"]) >= len(robustness_fixed) * 2 + len(robustness_stochastic) * 2
         and len(synthetic_summary["yearly_same_seed_comparison"]) == (2 if len(robustness_stochastic) == 2 else 0)
         and math.isclose(fixed_yearly_side[0]["return_pct"], 1.25)

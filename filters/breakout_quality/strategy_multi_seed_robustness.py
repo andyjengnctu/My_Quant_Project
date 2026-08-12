@@ -112,7 +112,7 @@ SEED_RESULTS_FILENAME = "seed_results.csv"
 SEED_YEARLY_RESULTS_FILENAME = "seed_yearly_returns.csv"
 MANIFEST_FILENAME = "manifest.json"
 LATEST_FILENAME = "latest.json"
-ROBUSTNESS_SCHEMA_VERSION = 5
+ROBUSTNESS_SCHEMA_VERSION = 6
 ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 1
 TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
@@ -1172,6 +1172,131 @@ def _same_seed_metric_comparison(
     }
 
 
+
+
+def _paired_seed_translation_diagnostic(
+    *,
+    seed_frame: pd.DataFrame,
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    resolved_seeds: tuple[int, ...] = (),
+) -> dict[str, Any] | None:
+    """Describe whether same-seed selection-R improvements translate to strategy gains.
+
+    This is a read-only derived diagnostic over the persisted per-seed aggregate
+    table. It does not select seeds or change any scientific condition.
+    """
+    if len(stochastic_arms) != 2:
+        return None
+    left, right = stochastic_arms
+    if left.param_source != right.param_source or left.rule_policy != right.rule_policy:
+        return None
+
+    required_metrics = (
+        "direct_selection_r",
+        "total_return_pct",
+        "max_drawdown_pct",
+        "return_over_max_drawdown",
+        "expected_value_r",
+    )
+    required_columns = {"arm_id", "seed", *required_metrics}
+    if not required_columns.issubset(seed_frame.columns):
+        return None
+
+    subset = seed_frame.loc[
+        seed_frame["arm_id"].isin((left.arm_id, right.arm_id)),
+        ["arm_id", "seed", *required_metrics],
+    ].copy()
+    for key in required_metrics:
+        subset[key] = pd.to_numeric(subset[key], errors="coerce")
+    left_rows = subset[subset["arm_id"] == left.arm_id].set_index("seed")
+    right_rows = subset[subset["arm_id"] == right.arm_id].set_index("seed")
+    common_seeds = left_rows.index.intersection(right_rows.index)
+    if common_seeds.empty:
+        return None
+
+    seed_order = {int(seed): index for index, seed in enumerate(resolved_seeds, start=1)}
+    ordered_seeds = sorted(
+        (int(seed) for seed in common_seeds),
+        key=lambda seed: (seed_order.get(seed, len(seed_order) + 1), seed),
+    )
+    rows: list[dict[str, Any]] = []
+    for fallback_index, seed in enumerate(ordered_seeds, start=1):
+        left_row = left_rows.loc[seed]
+        right_row = right_rows.loc[seed]
+        if isinstance(left_row, pd.DataFrame) or isinstance(right_row, pd.DataFrame):
+            raise ValueError(f"multi-seed aggregate同一arm/seed不得重複: seed={seed}")
+        values = {
+            key: (float(right_row[key]) - float(left_row[key]))
+            for key in required_metrics
+        }
+        if not all(math.isfinite(value) for value in values.values()):
+            continue
+        selection_delta = values["direct_selection_r"]
+        romd_delta = values["return_over_max_drawdown"]
+        selection_sign = 1 if selection_delta > 0 else -1 if selection_delta < 0 else 0
+        romd_sign = 1 if romd_delta > 0 else -1 if romd_delta < 0 else 0
+        rows.append({
+            "seed_index": int(seed_order.get(seed, fallback_index)),
+            "right_minus_left_direct_selection_r": selection_delta,
+            "right_minus_left_total_return_pct": values["total_return_pct"],
+            "right_minus_left_max_drawdown_pct": values["max_drawdown_pct"],
+            "right_minus_left_return_over_max_drawdown": romd_delta,
+            "right_minus_left_expected_value_r": values["expected_value_r"],
+            "selection_r_sign": selection_sign,
+            "romd_sign": romd_sign,
+        })
+    if not rows:
+        return None
+    rows.sort(key=lambda row: int(row["seed_index"]))
+
+    def _rank_corr(x_key: str, y_key: str) -> float | None:
+        frame = pd.DataFrame({
+            "x": [row[x_key] for row in rows],
+            "y": [row[y_key] for row in rows],
+        }).dropna()
+        if len(frame) < 2 or frame["x"].nunique() < 2 or frame["y"].nunique() < 2:
+            return None
+        value = frame["x"].corr(frame["y"], method="spearman")
+        return None if pd.isna(value) else float(value)
+
+    non_tie_rows = [
+        row for row in rows
+        if int(row["selection_r_sign"]) != 0 and int(row["romd_sign"]) != 0
+    ]
+    selection_up = [row for row in rows if int(row["selection_r_sign"]) > 0]
+    selection_up_romd_up = [
+        row for row in selection_up if int(row["romd_sign"]) > 0
+    ]
+    return {
+        "left": left.name,
+        "right": right.name,
+        "n": int(len(rows)),
+        "selection_r_positive_count": int(len(selection_up)),
+        "selection_r_positive_romd_positive_count": int(len(selection_up_romd_up)),
+        "selection_r_positive_romd_nonpositive_count": int(
+            len(selection_up) - len(selection_up_romd_up)
+        ),
+        "sign_concordant_count": int(sum(
+            int(row["selection_r_sign"]) == int(row["romd_sign"])
+            for row in non_tie_rows
+        )),
+        "sign_discordant_count": int(sum(
+            int(row["selection_r_sign"]) != int(row["romd_sign"])
+            for row in non_tie_rows
+        )),
+        "sign_non_tie_n": int(len(non_tie_rows)),
+        "selection_r_delta_vs_romd_spearman": _rank_corr(
+            "right_minus_left_direct_selection_r",
+            "right_minus_left_return_over_max_drawdown",
+        ),
+        "selection_r_delta_vs_return_spearman": _rank_corr(
+            "right_minus_left_direct_selection_r",
+            "right_minus_left_total_return_pct",
+        ),
+        "seed_rows": rows,
+    }
+
+
 def _upgrade_derived_report_summary(
     summary: dict[str, Any],
     *,
@@ -1203,6 +1328,13 @@ def _upgrade_derived_report_summary(
         stochastic_arms=stochastic,
         metric_key="direct_selection_r",
         require_same_parameter_runtime_universe=True,
+    )
+    upgraded["selection_r_to_strategy_same_seed_translation"] = (
+        _paired_seed_translation_diagnostic(
+            seed_frame=seed_frame,
+            stochastic_arms=stochastic,
+            resolved_seeds=resolved_seeds,
+        )
     )
     upgraded["schema_version"] = ROBUSTNESS_SCHEMA_VERSION
     upgraded["report_refreshed_at_utc"] = datetime.now(timezone.utc).isoformat()
@@ -1285,6 +1417,11 @@ def _robustness_summary(
         metric_key="direct_selection_r",
         require_same_parameter_runtime_universe=True,
     )
+    translation_diagnostic = _paired_seed_translation_diagnostic(
+        seed_frame=seed_frame,
+        stochastic_arms=stochastic,
+        resolved_seeds=tuple(int(value) for value in contract.get("resolved_seeds") or ()),
+    )
 
     yearly_statistics: list[dict[str, Any]] = []
     yearly_same_seed: list[dict[str, Any]] = []
@@ -1334,6 +1471,7 @@ def _robustness_summary(
         "romd_statistics": romd_rows, "romd_distribution_comparison": distribution_compare,
         "romd_same_seed_comparison": same_seed_compare,
         "direct_selection_r_same_seed_comparison": direct_selection_r_same_seed_compare,
+        "selection_r_to_strategy_same_seed_translation": translation_diagnostic,
         "yearly_statistics": yearly_statistics, "yearly_same_seed_comparison": yearly_same_seed,
     }
 
@@ -1411,6 +1549,58 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
             f"P25 {_fmt(direct_same['right_minus_left_p25'], suffix=' R')}；"
             f"P75 {_fmt(direct_same['right_minus_left_p75'], suffix=' R')}；"
             f"Max {_fmt(direct_same['right_minus_left_max'], suffix=' R')}。"]
+
+    translation = summary.get("selection_r_to_strategy_same_seed_translation")
+    if isinstance(translation, dict):
+        n = int(translation["n"])
+        positive_n = int(translation["selection_r_positive_count"])
+        translated_n = int(translation["selection_r_positive_romd_positive_count"])
+        pair_rows = []
+        for row in translation.get("seed_rows") or []:
+            selection_delta = float(row["right_minus_left_direct_selection_r"])
+            romd_delta = float(row["right_minus_left_return_over_max_drawdown"])
+            if selection_delta > 0 and romd_delta > 0:
+                verdict = "ranking↑／RoMD↑"
+            elif selection_delta > 0:
+                verdict = "ranking↑／RoMD↓"
+            elif romd_delta > 0:
+                verdict = "ranking↓／RoMD↑"
+            else:
+                verdict = "ranking↓／RoMD↓"
+            pair_rows.append([
+                f"S{int(row['seed_index'])}",
+                _fmt(selection_delta, suffix=" R"),
+                _fmt(row["right_minus_left_total_return_pct"], suffix="%"),
+                _fmt(row["right_minus_left_max_drawdown_pct"], suffix="%"),
+                _fmt(romd_delta),
+                _fmt(row["right_minus_left_expected_value_r"], suffix=" R"),
+                verdict,
+            ])
+        lines += ["", "### DL選擇R → 策略績效同seed轉化", ""]
+        if pair_rows:
+            lines += [_markdown_table(
+                ["Seed", "ΔDL選擇R", "ΔReturn", "ΔMDD", "ΔRoMD", "ΔEV", "方向"],
+                pair_rows,
+            ), ""]
+        translated_rate = None if positive_n == 0 else translated_n / positive_n
+        lines += [
+            f"- ΔDL選擇R > 0：{positive_n}/{n}；其中ΔRoMD > 0："
+            f"{translated_n}/{positive_n if positive_n else 0}"
+            + (
+                ""
+                if translated_rate is None
+                else f"（{translated_rate * 100:.1f}%）"
+            )
+            + "。",
+            f"- ΔDL選擇R與ΔRoMD方向一致：{translation['sign_concordant_count']}/"
+            f"{translation['sign_non_tie_n']}；方向相反：{translation['sign_discordant_count']}/"
+            f"{translation['sign_non_tie_n']}。",
+            f"- Spearman(ΔDL選擇R, ΔRoMD) = "
+            f"{_fmt(translation.get('selection_r_delta_vs_romd_spearman'), digits=3)}；"
+            f"Spearman(ΔDL選擇R, ΔReturn) = "
+            f"{_fmt(translation.get('selection_r_delta_vs_return_spearman'), digits=3)}。",
+            "- 此段只描述同seed ranking→portfolio轉化，不作best-seed選擇，也不是新的promotion gate。",
+        ]
 
     compare = summary.get("romd_distribution_comparison")
     if isinstance(compare, dict):
@@ -1491,6 +1681,23 @@ def _print_report_tables(summary: dict[str, Any]) -> None:
         print(f"{direct_same['right']} > {direct_same['left']}：{direct_same['right_gt_left_count']}/{n} | {direct_same['left']} > {direct_same['right']}：{direct_same['left_gt_right_count']}/{n} | 平手：{direct_same['tie_count']}/{n}")
         print("ΔDL選擇R Mean：" + _color_delta(_fmt(delta, suffix=" R"), delta) + f" | Median {_fmt(direct_same['right_minus_left_median'], suffix=' R')} | Std {_fmt(direct_same['right_minus_left_std'], suffix=' R')}")
 
+    translation = summary.get("selection_r_to_strategy_same_seed_translation")
+    if isinstance(translation, dict):
+        positive_n = int(translation["selection_r_positive_count"])
+        translated_n = int(translation["selection_r_positive_romd_positive_count"])
+        print("\nDL選擇R → 策略績效同seed轉化")
+        print(
+            f"ΔDL選擇R>0：{positive_n}/{translation['n']} | "
+            f"其中ΔRoMD>0：{translated_n}/{positive_n if positive_n else 0} | "
+            f"方向一致：{translation['sign_concordant_count']}/{translation['sign_non_tie_n']}"
+        )
+        print(
+            "Spearman ΔDL選擇R↔ΔRoMD："
+            + _fmt(translation.get("selection_r_delta_vs_romd_spearman"), digits=3)
+            + " | ΔDL選擇R↔ΔReturn："
+            + _fmt(translation.get("selection_r_delta_vs_return_spearman"), digits=3)
+        )
+
     yearly = list(summary.get("yearly_statistics") or [])
     annual_pair = list(summary.get("yearly_same_seed_comparison") or [])
     if yearly:
@@ -1561,6 +1768,7 @@ def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None
         needs_upgrade = (
             int(summary.get("schema_version") or 0) < ROBUSTNESS_SCHEMA_VERSION
             or "direct_selection_r_same_seed_comparison" not in summary
+            or "selection_r_to_strategy_same_seed_translation" not in summary
         )
         seed_results_path = summary_path.parent / SEED_RESULTS_FILENAME
         seed_frame = _load_seed_results(seed_results_path)

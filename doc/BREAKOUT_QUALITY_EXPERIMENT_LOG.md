@@ -8367,3 +8367,23 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - `MR-12B / DL-CONT12B`：維持current canonical runtime anchor，`MULTI_SEED_SUPERIORITY_NOT_ESTABLISHED`。
 - 下一個正式操作不需再訓練：套用schema v5後由`Research → 策略組合比較 → Forward-OOS Multi-seed robustness → 查看最新報表`，讓既有`seed_results.csv`直接補出同seedΔDL選擇R；取得數值後再決定portfolio translation Audit或下一個MR。
 
+
+
+## 2026-08-12 — Forward-OOS robustness matched selection-R結案與ranking→portfolio同seed轉化診斷
+
+### 結果來源與判定
+
+- 本輪最新程式基準：`test-branch-1_20260812_173706_6ac42f1.zip`；SHA256 `56bcb2357275a5529f1c3020284bcbd7a48769ccdfb6ff63f33da498504dbb9a`。
+- 使用者由既有`outputs/strategy_compare/robustness/2f70dbe73dcf3fed/seed_results.csv`透過report schema v5重建Forward-OOS 8-seed正式報表；scientific fingerprint仍為`2f70dbe73dcf3fed`，沒有重訓或replay。
+- MR-13A相對MR-12B同seedΔDL選擇R：`6/8`勝、`2/8`敗、0 tie；Mean/Median/Std=`+50.64R/+46.36R/77.12R`，Min/P25/P75/Max=`-41.02R/+4.25R/+74.36R/+210.64R`。
+- 同批ΔRoMD仍為`4/8`勝、`4/8`敗；Mean/Median/Std=`+1.76/+1.48/4.47`，Min/P25/P75/Max=`-6.40/-0.32/+5.05/+7.29`。
+- 年度同seedMR-13A勝MR-12B：2021～2026依序`6/8,5/8,5/8,7/8,5/8,3/8`；Mean ΔReturn依序`+1.86,+0.12,+4.27,+3.82,+0.88,-0.61pp`。改善並非單一年份獨占，但2026 YTD反轉。
+- 判定更新：`MR-13A = MATCHED_SELECTION_R_EDGE / MATCHED_ROMD_INCONCLUSIVE / PORTFOLIO_TRANSLATION_UNRESOLVED / NOT_PROMOTED`。同參數ranking改善在多數training seeds成立，且P25仍為正；但portfolio RoMD方向只有4/8，不能由selection R單一指標升格。`DL-CONT12B / MR-12B`繼續作current canonical runtime anchor。
+
+### Report schema v6：零重訓ranking→portfolio同seed轉化
+
+- `filters/breakout_quality/strategy_multi_seed_robustness.py`新增read-only derived diagnostic，只讀永久`seed_results.csv`，逐seed配對MR-13A−MR-12B的`ΔDL選擇R / ΔReturn / ΔMDD / ΔRoMD / ΔEV`。
+- 報表以`S1...Sn`顯示seed順序，不把actual resolved seed值變成績效挑選介面；resolved seeds仍只存在scientific contract／manifest供重現。
+- 新增`ΔDL選擇R>0`中`ΔRoMD>0`的轉化數、ranking與RoMD方向一致／相反數，以及描述性Spearman(`ΔDL選擇R`,`ΔRoMD`)與Spearman(`ΔDL選擇R`,`ΔReturn`)。這些統計只作歸因，不是新的promotion gate，不可用來挑best seed或調training semantics。
+- report schema `5 → 6`；scientific fingerprint不包含report schema。`查看最新報表`可由既有raw seed aggregate直接升級，不需要model training、score rebuild或strategy replay。
+- 下一步先讀schema v6結果。如果多數`ΔDL選擇R>0`的seed仍有大量`ΔRoMD<=0`且兩者相關性弱／反向，才進trade/path級portfolio translation attribution；若seed aggregate已顯示ranking與RoMD高度同向，則不建立新的Audit，優先把remaining instability歸因到少數ranking-failure seeds。Selection PIT multi-seed、擴seed與新MR目前都不是第一優先。
