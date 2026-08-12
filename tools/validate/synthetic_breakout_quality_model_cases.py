@@ -948,6 +948,14 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
+        "continuous_ranker_run_does_not_rebind_shared_public_api_names",
+        True,
+        not (set(public_api_names) & set(canonical_ranker.run.__code__.co_varnames)),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
         "legacy_private_ranker_names_alias_the_public_training_api_without_second_implementation",
         True,
         canonical_ranker._select_epoch is ranker_training_api.select_epoch

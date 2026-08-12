@@ -8303,3 +8303,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - **Adjusted-price特例獨立檢查**：正式下載SSOT為`tools/downloader/runtime.py::FINMIND_PRICE_DATASET = TaiwanStockPriceAdj`；最新交易日探測原本仍硬編`TaiwanStockPrice`，雖只取max date且不使用raw OHLC計算策略，仍不完全符合Project Settings E3。本輪改為`universe.py`直接引用同一`rt.FINMIND_PRICE_DATASET`，正式downloader source不再出現第二個raw price dataset字串。此暫時特例只作GPT獨立檢查，不升格為Checklist formal blocker。
 - **科學／策略條件**：未修改Dataset、Label、Target、active model、loss、seed、score、Strategy Compare current arms/fingerprint、portfolio accounting／order／fill／no-lookahead語意。Experiment Registry identity不變。
 - **狀態**：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。GPT不執行formal `apps/test_suite.py`／`apps/run_bundle.py`；使用者本機最終以`apps/run_bundle.py`驗證，只有formal PASS後才commit並package。
+
+## 2026-08-12 — Ranker Training API Batch 4 runtime closeout：`split_metrics` local shadowing
+
+- 使用者最新程式基準：`test-branch-1_20260812_161354_7929cfb.zip`；SHA256 `1919023f9555c4b43f60f63b2e4d4494d4b9c10d5984c7792a70be44ee3ac4d1`。本輪為既有MR-12B／MR-13A multi-seed robustness runtime bug修正，不新增／修改任何`MR-*`、`DL-*`、`SR-C*`、Dataset、Target、architecture、loss、seed、epoch-selection metric、Selection／Forward期間、strategy replay或artifact schema。
+- 使用者於Forward-OOS Multi-seed robustness（8 seeds、generator_seed=20260810）正式執行時，MR-12B seed index 1在checkpoint後split metrics階段失敗：`TypeError: 'dict' object is not callable`。
+- Root cause：Batch 4把canonical `_split_metrics()`提升為public `split_metrics()`，但`services/breakout_quality/train_continuous_ranker.py::run()`內原本同名的結果字典仍保留`split_metrics`名稱，造成Python local binding遮蔽module-level public function；因此checkpoint寫入後第一次呼叫`split_metrics(...)`時實際呼叫到空dict。
+- 修正：只把`run()`內結果容器改名為`split_metrics_by_split`，payload仍輸出既有key `"split_metrics"`，console/report/artifact schema完全不變；public `split_metrics()`與legacy `_split_metrics`仍維持同function-object compatibility。
+- 獨立靜態檢查確認：全專案Python syntax PASS、bare `except`=0、production反向依賴=0、import cycle=0；全專案AST掃描沒有其他「module function/imported callable被local assignment遮蔽後又呼叫」案例。未執行formal suite。
+- 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。正式本機double check依專案契約使用`apps/run_bundle.py`預設流程。
+

@@ -1526,7 +1526,7 @@ def run(args) -> int:
 
     score_by_group = np.full((group_count,), np.nan, dtype=np.float32)
     all_group_split_metrics: dict[str, Any] = {}
-    split_metrics: dict[str, Any] = {}
+    split_metrics_by_split: dict[str, Any] = {}
     for name, ids in all_split_ids.items():
         scores = predict_scores(
             torch,
@@ -1547,7 +1547,7 @@ def run(args) -> int:
             include_top_k_quality=True,
         )
         scoped_ids = scoped_split_ids[name]
-        split_metrics[name] = split_metrics(
+        split_metrics_by_split[name] = split_metrics(
             scoped_ids,
             group_table,
             raw_target,
@@ -1661,7 +1661,7 @@ def run(args) -> int:
             "seed": int(args.seed),
         },
         "split_report": split_report,
-        "split_metrics": split_metrics,
+        "split_metrics": split_metrics_by_split,
         "all_group_split_metrics": all_group_split_metrics,
         "trade_alignment": trade_alignment,
         "target_manifest": target_manifest,
@@ -1747,7 +1747,7 @@ def run(args) -> int:
     )
     print("checkpoint後split metrics（原Validation rows已納入完整Selection重訓；以下不再用於選模）")
     for name in ("inner_train", "validation", "selection", "oos"):
-        metrics = split_metrics[name]
+        metrics = split_metrics_by_split[name]
         print(
             f"- {name:<11} scope={profile.training_label_scope} groups={metrics['group_count']:,} "
             f"daily_spearman={metrics['mean_daily_spearman']:.4f} "
