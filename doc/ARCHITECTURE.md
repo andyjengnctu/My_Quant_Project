@@ -224,7 +224,7 @@ python apps/research.py model audit-target-time-ablation --filter-id breakout_qu
 
 ## 子系統責任
 
-- `apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口。
+- `apps/run_bundle.py` 是修改完成後日常正式本機double check的唯一建議使用者入口；`apps/test_suite.py`只作其內部formal test runner。
 
 - `apps/`：正式入口層，只從對應 application/service façade 匯入公開介面。
 - `services/`：正式 application/service orchestration；可組合`core/`、`filters/`與其他正式service，不得反向依賴`tools/`。
@@ -238,8 +238,8 @@ python apps/research.py model audit-target-time-ablation --filter-id breakout_qu
 
 - `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練由`config/research.py`指定active model provider；策略參數最佳化目前仍由既有optimizer互動orchestrator承接；策略組合比較依`config/strategy_compare.py`執行並透過`services/portfolio_replay.py`重用canonical portfolio replay；策略參數訓練重用`services/optimizer/` canonical optimizer library，Breakout Quality training／PIT producer則由`services/breakout_quality/`承接，其中Multiple-seed robustness以Strategy Compare作UI/orchestrator、模型權重仍只由canonical continuous-ranker trainer建立；MR-12B／MR-13A／PIT／robustness的共用training／inference primitives經`services/breakout_quality/ranker_training.py` public API取得，避免workflow依賴trainer private helper；Audit依`config/audit.py`指定active module。
 - `tools/filters/breakout_quality/application.py`：Breakout Quality model provider，承接原完整model workflow、dataset、training、score export、易讀report與詳細evaluation；不是使用者直接入口。
-- `apps/test_suite.py`：日常一鍵測試正式入口。
-- `apps/run_bundle.py`：修改交付的正式整合入口；固定順序為stage → formal test → PASS後commit → package verified HEAD。formal test失敗時不得先commit。
+- `apps/run_bundle.py`：修改完成後的正式本機double check／交付整合單一使用者入口；固定順序為stage → formal test → PASS後commit → package verified HEAD。formal test失敗時不得先commit。
+- `apps/test_suite.py`：`run_bundle.py`內部formal test runner；保留給明確的test-only開發診斷，不作日常正式整合入口。
 - `apps/package_zip.py`：打包正式入口；直接呼叫只負責snapshot/package，不取代`run_bundle.py`的驗證後commit順序。
 - `apps/portfolio_sim.py`：投組模擬正式入口。
 - `apps/smart_downloader.py`：下載器正式入口。

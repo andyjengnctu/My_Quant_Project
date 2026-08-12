@@ -8387,3 +8387,27 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 新增`ΔDL選擇R>0`中`ΔRoMD>0`的轉化數、ranking與RoMD方向一致／相反數，以及描述性Spearman(`ΔDL選擇R`,`ΔRoMD`)與Spearman(`ΔDL選擇R`,`ΔReturn`)。這些統計只作歸因，不是新的promotion gate，不可用來挑best seed或調training semantics。
 - report schema `5 → 6`；scientific fingerprint不包含report schema。`查看最新報表`可由既有raw seed aggregate直接升級，不需要model training、score rebuild或strategy replay。
 - 下一步先讀schema v6結果。如果多數`ΔDL選擇R>0`的seed仍有大量`ΔRoMD<=0`且兩者相關性弱／反向，才進trade/path級portfolio translation attribution；若seed aggregate已顯示ranking與RoMD高度同向，則不建立新的Audit，優先把remaining instability歸因到少數ranking-failure seeds。Selection PIT multi-seed、擴seed與新MR目前都不是第一優先。
+
+
+## 2026-08-12 — Forward robustness schema v6：ranking edge只部分轉成portfolio結果
+
+### 結果來源與固定條件
+
+- 最新程式基準：`test-branch-1_20260812_175546_c5b1e25.zip`；SHA256 `17bd88c37e775c53cf59601f10f49eda5a0e27095f19d62757606055272093a2`。
+- 使用者由既有Forward robustness scientific fingerprint=`2f70dbe73dcf3fed`、8 deterministic generated seeds（generator_seed=`20260810`）透過report schema v6查看同seedranking→strategy轉化；本輪報表只讀既有`seed_results.csv`，沒有model training或strategy replay。
+- Dataset、Target、architecture、loss、epoch-selection、Min ROOS參數、feasible-ascent selector、K/R0、max positions、rotation、sizing與accounting均未改變；不得依本結果挑best seed、做ensemble或回頭調training semantics。
+
+### schema v6同seed轉化結果
+
+- `ΔDL選擇R = MR-13A − MR-12B`為正的seeds=`6/8`；其中`ΔRoMD>0`只有`3/6 (50.0%)`。
+- ranking與RoMD方向一致=`4/8`，方向相反=`4/8`。描述性Spearman：`rho(ΔDL選擇R, ΔRoMD)=0.476`、`rho(ΔDL選擇R, ΔReturn)=0.333`。
+- Discordant rows：S1 `+11.59R / ΔReturn -11.58pp / ΔMDD -0.95pp / ΔRoMD -0.31`；S7 `+35.01R / +24.21pp / +2.59pp / -0.33`；S8 `+74.70R / -50.34pp / -4.40pp / -0.21`，三者皆ranking↑但RoMD↓。S6則`-41.02R / +53.14pp / -1.22pp / +4.66`，為ranking↓但RoMD↑。
+- 因此不能再把問題簡化為ranking training-seed stability：MR-13A ranking edge在多數seed成立，但equal-weighted selection R只部分映射到最終Return/MDD/RoMD；S1/S8顯示主要Return path反向，S7顯示MDD path足以吃掉正Return差。
+
+### 判定與下一步
+
+1. `MR-13A`更新為`MATCHED_SELECTION_R_EDGE / MATCHED_ROMD_INCONCLUSIVE / RANKING_TO_PORTFOLIO_PARTIAL_TRANSLATION / TRADE_PATH_ATTRIBUTION_REQUIRED / NOT_PROMOTED`。
+2. `MR-12B / DL-CONT12B`繼續作current canonical runtime anchor；schema v6的Spearman與seed quadrant只是歸因證據，不是promotion gate。
+3. 下一步新增planned read-only `AUD-forward-robustness-portfolio-translation`，必須涵蓋全部8個matched seeds，逐seed與aggregate拆common/exclusive active trades、realized R、dollar PnL、risk-dollar sizing、slot/capital geometry、equity/MDD wealth path；不得只挑discordant或best/worst seeds。
+4. 目前robustness成功run依retention policy已清除per-seed replay details，因此`seed_results.csv`不足以推導交易層歸因；後續若實作Audit，應由同一scientific contract重建**compact attribution source**並在數值落盤後清除完整checkpoint/score/replay detail，避免為Audit永久保留整棵暫存工件。
+5. 在portfolio attribution完成前，不擴到16 seeds、不跑Selection PIT multi-seed、不開新MR、不調MR-13A hyperparameter／loss／selector。

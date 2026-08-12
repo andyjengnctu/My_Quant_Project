@@ -7,14 +7,13 @@ python apps/research.py optimizer --dataset full --outer-oos --timing --trials 1
 
 ```bash
 python requirements/export_requirements_lock.py
-python apps/test_suite.py
 python apps/run_bundle.py
 python tools/local_regression/run_all.py --only quick_gate
 python tools/validate/preflight_env.py
 ```
 
-- 純formal test正式對外入口為 `apps/test_suite.py`；直接執行：`python apps/test_suite.py`。
-- 修改完成後的正式整合入口：`python apps/run_bundle.py`；順序固定為 stage → formal test → PASS後commit → package verified HEAD。
+- 修改完成後的正式本機double check單一使用者入口：`python apps/run_bundle.py`；順序固定為 stage → formal test → PASS後commit → package verified HEAD。
+- `apps/test_suite.py`為`run_bundle.py`內部formal test runner，不作日常正式整合入口；只有在明確需要「只跑formal test、不做stage/commit/package」的開發診斷情境才直接呼叫。
 - formal test失敗時`run_bundle.py`不得先產生commit。
 - 只有正式入口已指出失敗步驟時，才用 `python tools/local_regression/run_all.py --only ...` 重跑指定步驟。
 - `python tools/validate/preflight_env.py` 只檢查環境，不自動安裝依賴。
