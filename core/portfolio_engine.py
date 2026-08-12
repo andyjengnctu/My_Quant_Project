@@ -616,6 +616,7 @@ def run_portfolio_timeline(
                     is_training=is_training,
                     total_missed_buys=total_missed_buys,
                     entry_stats=portfolio_entry_stats,
+                    replay_execution_rows=replay_execution_rows,
                 )
                 if profile_timing_enabled:
                     buy_sec += time.perf_counter() - t0

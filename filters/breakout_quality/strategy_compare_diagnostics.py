@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 from pathlib import Path
@@ -10,12 +11,234 @@ from typing import Any
 
 import pandas as pd
 
+from core.exact_accounting import (
+    build_buy_ledger_from_price,
+    build_sell_ledger_from_price,
+    calc_initial_risk_total_milli,
+    milli_to_money,
+    rate_to_ppm,
+)
+from core.order_lot_policy import apply_board_lot_preferred_qty
+from core.price_utils import calc_position_size
+
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from filters.breakout_quality.ranking_score_store import (
     load_selection_point_in_time_score_table,
     load_selection_point_in_time_score_table_from_path,
 )
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _exact_planned_initial_risk(
+    *,
+    limit_price: float,
+    stop_price: float,
+    qty: int,
+    params,
+    ticker: str,
+    security_profile,
+    trade_date: str,
+) -> float | None:
+    if qty <= 0:
+        return 0.0
+    try:
+        buy = build_buy_ledger_from_price(limit_price, int(qty), params)
+        stop = build_sell_ledger_from_price(
+            stop_price,
+            int(qty),
+            params,
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=trade_date,
+        )
+        risk_milli = calc_initial_risk_total_milli(
+            int(buy["net_buy_total_milli"]),
+            int(stop["net_sell_total_milli"]),
+            rate_to_ppm(float(params.fixed_risk)),
+        )
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return None
+    return float(milli_to_money(risk_milli))
+
+
+def _flatten_entry_execution_rows(replay_execution_rows: list[dict[str, Any]] | None) -> pd.DataFrame:
+    columns = [
+        "execution_order", "ticker", "trade_date", "candidate_date", "signal_date", "entry_type",
+        "candidate_qty", "chosen_qty", "filled_qty", "entry_filled",
+        "limit_px", "init_sl", "entry_fill_price",
+        "sizing_equity", "candidate_sizing_capital", "effective_entry_budget",
+        "available_cash_before", "reserved_cost", "fixed_risk",
+        "max_position_cap_pct", "max_qty", "core_qty", "qty_without_risk_cap",
+        "qty_without_position_cap", "qty_without_risk_or_position_cap",
+        "qty_after_max_qty_before_lot", "lot_rounding_qty_loss",
+        "candidate_initial_risk", "chosen_initial_risk", "actual_initial_risk", "risk_budget",
+        "candidate_risk_utilization", "chosen_risk_utilization", "actual_risk_utilization",
+        "risk_cap_binding", "position_cap_binding", "risk_position_tie",
+        "capital_binding", "max_qty_binding", "lot_rounding_binding",
+        "entry_budget_cash_binding", "binding_signature",
+    ]
+    rows: list[dict[str, Any]] = []
+    for raw in list(replay_execution_rows or []):
+        item = dict(raw or {})
+        if str(item.get("_event_type") or "") != "entry_execution":
+            continue
+        params = item.get("params_obj")
+        if params is None:
+            continue
+        ticker = str(item.get("ticker") or "").strip()
+        trade_date = str(item.get("trade_date") or "")
+        limit_px = _finite_float(item.get("limit_px"))
+        init_sl = _finite_float(item.get("init_sl"))
+        sizing_capital = _finite_float(item.get("candidate_sizing_capital"))
+        if sizing_capital is None:
+            sizing_capital = _finite_float(item.get("sizing_equity"))
+        candidate_qty = int(item.get("candidate_qty", 0) or 0)
+        chosen_qty = int(item.get("chosen_qty", 0) or 0)
+        filled_qty = int(item.get("filled_qty", 0) or 0)
+        max_qty_raw = item.get("max_qty")
+        try:
+            max_qty = int(max_qty_raw) if max_qty_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            max_qty = None
+
+        core_qty = no_risk_qty = no_position_qty = no_both_qty = 0
+        qty_after_max = 0
+        lot_loss = 0
+        risk_binding = position_binding = risk_position_tie = capital_binding = False
+        max_qty_binding = lot_binding = cash_binding = False
+        candidate_initial_risk = chosen_initial_risk = actual_initial_risk = risk_budget = None
+        candidate_utilization = chosen_utilization = actual_utilization = None
+        fixed_risk = _finite_float(getattr(params, "fixed_risk", None))
+        max_position_cap_pct = _finite_float(getattr(params, "max_position_cap_pct", None))
+
+        if limit_px is not None and init_sl is not None and sizing_capital is not None and sizing_capital > 0.0:
+            core_qty = int(calc_position_size(
+                limit_px, init_sl, sizing_capital, float(params.fixed_risk), params,
+                ticker=ticker, security_profile=item.get("security_profile"), trade_date=trade_date,
+            ))
+            no_risk_qty = int(calc_position_size(
+                limit_px, init_sl, sizing_capital, 1.0, params,
+                ticker=ticker, security_profile=item.get("security_profile"), trade_date=trade_date,
+            ))
+            no_position_params = copy.copy(params)
+            no_position_params.max_position_cap_pct = 1.0
+            no_position_qty = int(calc_position_size(
+                limit_px, init_sl, sizing_capital, float(params.fixed_risk), no_position_params,
+                ticker=ticker, security_profile=item.get("security_profile"), trade_date=trade_date,
+            ))
+            no_both_qty = int(calc_position_size(
+                limit_px, init_sl, sizing_capital, 1.0, no_position_params,
+                ticker=ticker, security_profile=item.get("security_profile"), trade_date=trade_date,
+            ))
+            risk_gain = no_risk_qty - core_qty
+            position_gain = no_position_qty - core_qty
+            both_gain = no_both_qty - core_qty
+            risk_binding = risk_gain > 0 and position_gain <= 0
+            position_binding = position_gain > 0 and risk_gain <= 0
+            risk_position_tie = risk_gain <= 0 and position_gain <= 0 and both_gain > 0
+            capital_binding = both_gain <= 0
+            qty_after_max = min(core_qty, max_qty) if max_qty is not None and max_qty > 0 else core_qty
+            max_qty_binding = bool(max_qty is not None and max_qty > 0 and qty_after_max < core_qty)
+            lot_qty = int(apply_board_lot_preferred_qty(limit_px, qty_after_max, params)) if qty_after_max > 0 else 0
+            lot_loss = max(0, int(qty_after_max) - int(lot_qty))
+            lot_binding = lot_loss > 0
+            candidate_initial_risk = _exact_planned_initial_risk(
+                limit_price=limit_px, stop_price=init_sl, qty=candidate_qty, params=params,
+                ticker=ticker, security_profile=item.get("security_profile"), trade_date=trade_date,
+            )
+            chosen_initial_risk = _exact_planned_initial_risk(
+                limit_price=limit_px, stop_price=init_sl, qty=chosen_qty, params=params,
+                ticker=ticker, security_profile=item.get("security_profile"), trade_date=trade_date,
+            )
+            risk_budget = float(sizing_capital * float(params.fixed_risk))
+            if risk_budget > 0.0 and candidate_initial_risk is not None:
+                candidate_utilization = float(candidate_initial_risk / risk_budget)
+            if risk_budget > 0.0 and chosen_initial_risk is not None:
+                chosen_utilization = float(chosen_initial_risk / risk_budget)
+
+        actual_risk_milli = int(item.get("actual_initial_risk_total_milli", 0) or 0)
+        if actual_risk_milli > 0:
+            actual_initial_risk = float(milli_to_money(actual_risk_milli))
+            if risk_budget is not None and risk_budget > 0.0:
+                actual_utilization = float(actual_initial_risk / risk_budget)
+        cash_binding = chosen_qty > 0 and candidate_qty > 0 and chosen_qty < candidate_qty
+
+        signature: list[str] = []
+        if risk_binding:
+            signature.append("RISK_CAP")
+        if position_binding:
+            signature.append("POSITION_CAP")
+        if risk_position_tie:
+            signature.append("RISK_POSITION_TIE")
+        if capital_binding:
+            signature.append("CAPITAL")
+        if max_qty_binding:
+            signature.append("MAX_QTY")
+        if lot_binding:
+            signature.append("LOT_ROUNDING")
+        if cash_binding:
+            signature.append("ENTRY_BUDGET_CASH")
+        if not signature:
+            signature.append("NONE_DETECTED")
+
+        rows.append({
+            "execution_order": int(item.get("execution_order", len(rows)) or 0),
+            "ticker": ticker,
+            "trade_date": trade_date,
+            "candidate_date": str(item.get("candidate_date") or ""),
+            "signal_date": str(item.get("signal_date") or ""),
+            "entry_type": str(item.get("type") or "normal"),
+            "candidate_qty": candidate_qty,
+            "chosen_qty": chosen_qty,
+            "filled_qty": filled_qty,
+            "entry_filled": bool(item.get("entry_filled", False)),
+            "limit_px": limit_px,
+            "init_sl": init_sl,
+            "entry_fill_price": _finite_float(item.get("entry_fill_price")),
+            "sizing_equity": _finite_float(item.get("sizing_equity")),
+            "candidate_sizing_capital": sizing_capital,
+            "effective_entry_budget": _finite_float(item.get("effective_entry_budget")),
+            "available_cash_before": _finite_float(item.get("available_cash_before")),
+            "reserved_cost": _finite_float(item.get("reserved_cost")),
+            "fixed_risk": fixed_risk,
+            "max_position_cap_pct": max_position_cap_pct,
+            "max_qty": max_qty,
+            "core_qty": core_qty,
+            "qty_without_risk_cap": no_risk_qty,
+            "qty_without_position_cap": no_position_qty,
+            "qty_without_risk_or_position_cap": no_both_qty,
+            "qty_after_max_qty_before_lot": qty_after_max,
+            "lot_rounding_qty_loss": lot_loss,
+            "candidate_initial_risk": candidate_initial_risk,
+            "chosen_initial_risk": chosen_initial_risk,
+            "actual_initial_risk": actual_initial_risk,
+            "risk_budget": risk_budget,
+            "candidate_risk_utilization": candidate_utilization,
+            "chosen_risk_utilization": chosen_utilization,
+            "actual_risk_utilization": actual_utilization,
+            "risk_cap_binding": risk_binding,
+            "position_cap_binding": position_binding,
+            "risk_position_tie": risk_position_tie,
+            "capital_binding": capital_binding,
+            "max_qty_binding": max_qty_binding,
+            "lot_rounding_binding": lot_binding,
+            "entry_budget_cash_binding": cash_binding,
+            "binding_signature": "+".join(signature),
+        })
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    frame = pd.DataFrame(rows)
+    return frame[columns].sort_values(
+        ["execution_order"], kind="mergesort"
+    ).reset_index(drop=True)
 
 def _flatten_candidate_replay_rows(replay_counts: dict[str, dict[str, Any]], field: str) -> pd.DataFrame:
     if field not in {"candidate_rows", "orderable_rows"}:

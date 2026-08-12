@@ -77,6 +77,7 @@ from filters.breakout_quality.strategy_compare_replay import (
 )
 from filters.breakout_quality.strategy_compare_diagnostics import (
     _flatten_candidate_replay_rows,
+    _flatten_entry_execution_rows,
     _flatten_selected_buy_rows,
     _load_isolated_selection_pit_contract,
     _selection_target_lookup,
@@ -447,6 +448,7 @@ def run_comparison(
     selection_pit_score_path_override=None,
     selection_pit_manifest_path_override=None,
     selection_pit_expected_seed_override=None,
+    capture_execution_diagnostics=False,
 ):
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
@@ -810,13 +812,19 @@ def run_comparison(
             replay_counts=baseline_replay_counts,
         )
     quality_replay_counts = {} if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
+    quality_execution_rows = (
+        []
+        if bool(capture_execution_diagnostics)
+        and comparison_mode == COMPARISON_MODE_SCORE_RANKING
+        else None
+    )
     quality_payload = _run_scenario(
         name=labels["active_name"], data_dir=data_dir,
         param_source_kind=param_source_kind, params=quality_params,
         start_date=start_date, end_date=end_date, max_positions=max_positions,
         enable_rotation=enable_rotation, quiet=quiet,
-        replay_counts=quality_replay_counts, ranking_source=ranking_source,
-        filter_source=filter_source,
+        replay_counts=quality_replay_counts, replay_execution_rows=quality_execution_rows,
+        ranking_source=ranking_source, filter_source=filter_source,
     )
     _assert_shared_benchmark(baseline_payload, quality_payload)
 
@@ -891,6 +899,12 @@ def run_comparison(
             output_dir / "score_ranking_selected_buys.csv", index=False,
             encoding="utf-8-sig"
         )
+        if quality_execution_rows is not None:
+            _flatten_entry_execution_rows(quality_execution_rows).to_csv(
+                output_dir / "score_ranking_execution.csv",
+                index=False,
+                encoding="utf-8-sig",
+            )
         if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
             lookup = _selection_target_lookup(
                 root=root, filter_id=filter_id, architecture=manifest_architecture,
@@ -1214,6 +1228,7 @@ def run_comparison(
             None if max_position_cap_pct is None else float(max_position_cap_pct)
         ),
         "output_scope": output_scope,
+        "execution_diagnostics_captured": bool(quality_execution_rows is not None),
         "baseline_reused": baseline_reuse_dir is not None,
         "baseline_reuse_source": (
             None

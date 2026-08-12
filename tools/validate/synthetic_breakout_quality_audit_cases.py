@@ -2527,6 +2527,55 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     from tools.audit.breakout_quality import c15_strategy_attribution as strategy_attribution_audit
     from tools.audit.breakout_quality import forward_robustness_portfolio_translation as forward_robustness_translation_audit
 
+    synthetic_execution_trade = pd.DataFrame([{
+        "category": "candidate_only",
+        "match_key": "AAA|2024-01-05|normal|1",
+        "candidate_r": 2.0,
+        "comparator_r": 0.0,
+    }])
+    synthetic_execution_rows = pd.DataFrame([{
+        "execution_order": 7,
+        "ticker": "AAA",
+        "trade_date": "2024-01-05",
+        "candidate_date": "2024-01-04",
+        "signal_date": "2024-01-03",
+        "entry_type": "normal",
+        "entry_filled": True,
+        "candidate_risk_utilization": 0.95,
+        "chosen_risk_utilization": 0.80,
+        "actual_risk_utilization": 0.75,
+        "risk_cap_binding": True,
+        "position_cap_binding": False,
+        "risk_position_tie": False,
+        "capital_binding": False,
+        "max_qty_binding": False,
+        "lot_rounding_binding": False,
+        "entry_budget_cash_binding": True,
+        "candidate_qty": 1000,
+        "chosen_qty": 800,
+        "filled_qty": 800,
+        "binding_signature": "RISK_CAP+ENTRY_BUDGET_CASH",
+    }])
+    synthetic_execution_summary = forward_robustness_translation_audit._exclusive_execution_side_summary(
+        synthetic_execution_trade,
+        synthetic_execution_rows,
+        category="candidate_only",
+        r_col="candidate_r",
+        side_label="candidate",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "forward_robustness_execution_binding_uses_canonical_trade_identity_and_preserves_binding_counts",
+        True,
+        synthetic_execution_summary["trade_count"] == 1
+        and math.isclose(float(synthetic_execution_summary["actual_risk_utilization_mean"]), 0.75)
+        and synthetic_execution_summary["cash_binding_count"] == 1
+        and synthetic_execution_summary["risk_cap_binding_count"] == 1
+        and synthetic_execution_summary["binding_signature_counts"] == {"RISK_CAP+ENTRY_BUDGET_CASH": 1},
+    )
+
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -2681,6 +2730,16 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                     pd.DataFrame(columns=["ticker", "trade_date", "signal_date"]).to_csv(
                         pair_dir / f"{active_prefix}_selected_buys.csv", index=False, encoding="utf-8-sig"
                     )
+                    pd.DataFrame(columns=[
+                        "execution_order", "ticker", "trade_date", "candidate_date", "signal_date", "entry_type",
+                        "candidate_qty", "chosen_qty", "filled_qty", "entry_filled",
+                        "candidate_risk_utilization", "chosen_risk_utilization", "actual_risk_utilization",
+                        "risk_cap_binding", "position_cap_binding", "risk_position_tie",
+                        "capital_binding", "max_qty_binding", "lot_rounding_binding",
+                        "entry_budget_cash_binding", "binding_signature",
+                    ]).to_csv(
+                        pair_dir / f"{active_prefix}_execution.csv", index=False, encoding="utf-8-sig"
+                    )
                     attribution_job = {
                         "scientific_fingerprint": "syntheticfp",
                         "robustness_id": robustness_id,
@@ -2777,7 +2836,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             synthetic_seed_summary = list(synthetic_payload.get("seed_summary") or [])
             forward_e2e_ok = (
                 synthetic_status.get("status") == "READY"
-                and int(synthetic_payload.get("schema_version") or 0) == 4
+                and int(synthetic_payload.get("schema_version") or 0) == 5
                 and int(synthetic_payload["metadata"]["seed_count"]) == len(synthetic_seed_values)
                 and synthetic_payload["metadata"]["training_performed"] is False
                 and synthetic_payload["metadata"]["portfolio_replay_executed"] is False
@@ -2794,6 +2853,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 and all(abs(float(row["exclusive_bridge_residual_pnl"])) <= 1e-8 for row in synthetic_seed_summary)
                 and "Exclusive trade R→Dollar bridge" in (latest_audit / "audit.md").read_text(encoding="utf-8")
                 and "Exclusive ΔPnL exact decomposition" in (latest_audit / "audit.md").read_text(encoding="utf-8")
+                and "Exclusive risk utilization / binding attribution" in (latest_audit / "audit.md").read_text(encoding="utf-8")
+                and (latest_audit / "execution_binding.csv.gz").is_file()
                 and (latest_audit / "audit.json").is_file()
                 and (latest_audit / "seed_summary.csv").is_file()
             )

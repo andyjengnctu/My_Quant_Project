@@ -114,7 +114,7 @@ SEED_YEARLY_RESULTS_FILENAME = "seed_yearly_returns.csv"
 MANIFEST_FILENAME = "manifest.json"
 LATEST_FILENAME = "latest.json"
 ATTRIBUTION_SOURCE_DIRNAME = "attribution_source"
-ATTRIBUTION_SOURCE_SCHEMA_VERSION = 1
+ATTRIBUTION_SOURCE_SCHEMA_VERSION = 2
 ROBUSTNESS_SCHEMA_VERSION = 7
 ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 1
 TRAINER_TERMINATION_GRACE_SECONDS = 5.0
@@ -620,6 +620,7 @@ def _write_compact_attribution_source(
         "equity": pair_dir / f"{prefix}_equity.csv",
         "daily_capacity": pair_dir / f"{prefix}_daily_capacity.csv",
         "selected_buys": pair_dir / f"{prefix}_selected_buys.csv",
+        "execution": pair_dir / f"{prefix}_execution.csv",
     }
     missing = [path.name for path in source_files.values() if not path.is_file()]
     if missing:
@@ -711,7 +712,7 @@ def _read_attribution_unit_manifest(
         if require_verified and str(validation.get("status") or "") != "VERIFIED":
             return None
         files = dict(payload.get("files") or {})
-        for role in ("trades", "equity", "daily_capacity", "selected_buys"):
+        for role in ("trades", "equity", "daily_capacity", "selected_buys", "execution"):
             item = dict(files.get(role) or {})
             relative = str(item.get("path") or "")
             if not relative:
@@ -1377,6 +1378,7 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         selection_pit_score_path_override=(str(job["score_path"]) if is_selection else None),
         selection_pit_manifest_path_override=(str(job["score_manifest_path"]) if is_selection else None),
         selection_pit_expected_seed_override=(int(job["seed"]) if is_selection else None),
+        capture_execution_diagnostics=bool(job.get("keep_attribution_source")),
     )
     metrics = dict(payload.get("score_ranking") or {})
     metrics["direct_selection_r"] = _load_direct_selection_r(

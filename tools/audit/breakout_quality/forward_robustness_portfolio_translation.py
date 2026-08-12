@@ -30,6 +30,7 @@ from core.console_report import (
 )
 from core.runtime_utils import get_taipei_now
 from filters.breakout_quality.artifacts import compute_file_sha256
+from filters.breakout_quality.trade_attribution import assign_canonical_trade_match_key
 from filters.breakout_quality.strategy_multi_seed_robustness import (
     ATTRIBUTION_SOURCE_DIRNAME,
     ATTRIBUTION_SOURCE_SCHEMA_VERSION,
@@ -42,7 +43,7 @@ from tools.audit.breakout_quality.c15_strategy_attribution import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-AUDIT_RESULT_SCHEMA_VERSION = 4
+AUDIT_RESULT_SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,7 @@ class CompactArmArtifacts:
     equity_path: Path
     capacity_path: Path
     selected_path: Path
+    execution_path: Path
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -157,7 +159,7 @@ def _unit_manifest(
     if str(validation.get("status") or "") != "VERIFIED":
         raise ValueError(f"compact attribution尚未通過scientific observation驗證: {arm_id}/seed={seed}")
     files = dict(payload.get("files") or {})
-    for role in ("trades", "equity", "daily_capacity", "selected_buys"):
+    for role in ("trades", "equity", "daily_capacity", "selected_buys", "execution"):
         item = dict(files.get(role) or {})
         rel = str(item.get("path") or "")
         if not rel:
@@ -194,6 +196,7 @@ def _artifacts_from_unit(
         equity_path=path_for("equity"),
         capacity_path=path_for("daily_capacity"),
         selected_path=path_for("selected_buys"),
+        execution_path=path_for("execution"),
     )
 
 
@@ -306,6 +309,174 @@ def _json_native(value: Any) -> Any:
     return value
 
 
+def _boolean_series(values: pd.Series, *, field: str, arm_label: str) -> pd.Series:
+    series = pd.Series(values).copy()
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return series.fillna(False).astype(bool)
+    normalized = series.fillna("").astype(str).str.strip().str.lower()
+    allowed = {"", "true", "false", "1", "0"}
+    invalid = sorted(set(normalized.unique()) - allowed)
+    if invalid:
+        raise ValueError(f"{arm_label} execution attribution欄位{field}含無效布林值: {invalid}")
+    return normalized.isin({"true", "1"})
+
+
+def _execution_with_match_key(frame: pd.DataFrame, *, arm_label: str) -> pd.DataFrame:
+    rows = pd.DataFrame(frame).copy()
+    required = {
+        "execution_order", "ticker", "trade_date", "entry_type", "entry_filled",
+        "actual_risk_utilization", "chosen_risk_utilization", "candidate_risk_utilization",
+        "risk_cap_binding", "position_cap_binding", "risk_position_tie",
+        "capital_binding", "max_qty_binding", "lot_rounding_binding",
+        "entry_budget_cash_binding", "candidate_qty", "chosen_qty", "filled_qty",
+        "binding_signature",
+    }
+    missing = sorted(required - set(rows.columns))
+    if missing:
+        raise ValueError(f"{arm_label} execution attribution缺少欄位: {missing}")
+    if rows.empty:
+        rows["entry_date"] = pd.Series(dtype=str)
+        return assign_canonical_trade_match_key(rows)
+    filled_mask = _boolean_series(rows["entry_filled"], field="entry_filled", arm_label=arm_label)
+    filled = rows[filled_mask].copy()
+    filled["ticker"] = filled["ticker"].fillna("").astype(str).str.strip()
+    filled["entry_date"] = pd.to_datetime(
+        filled["trade_date"], errors="coerce"
+    ).dt.strftime("%Y-%m-%d").fillna("")
+    filled["entry_type"] = filled["entry_type"].fillna("normal").astype(str)
+    filled["execution_order"] = pd.to_numeric(
+        filled["execution_order"], errors="coerce"
+    )
+    if filled["execution_order"].isna().any():
+        raise ValueError(f"{arm_label} execution attribution含無效execution_order")
+    filled = filled.sort_values(["execution_order"], kind="mergesort").reset_index(drop=True)
+    return assign_canonical_trade_match_key(filled)
+
+
+def _exclusive_execution_side_summary(
+    trade_rows: pd.DataFrame,
+    execution_rows: pd.DataFrame,
+    *,
+    category: str,
+    r_col: str,
+    side_label: str,
+) -> dict[str, Any]:
+    trades = pd.DataFrame(trade_rows).copy()
+    if trades.empty:
+        exclusive = trades.copy()
+    else:
+        missing_trade_columns = sorted({"category", "match_key", r_col} - set(trades.columns))
+        if missing_trade_columns:
+            raise ValueError(
+                f"{side_label} trade attribution缺少欄位: {missing_trade_columns}"
+            )
+        exclusive = trades[trades["category"] == category].copy()
+    execution = _execution_with_match_key(execution_rows, arm_label=side_label)
+    if exclusive.empty:
+        return {
+            "trade_count": 0,
+            "actual_risk_utilization_mean": None,
+            "candidate_risk_utilization_mean": None,
+            "chosen_risk_utilization_mean": None,
+            "winner_actual_risk_utilization_mean": None,
+            "loser_actual_risk_utilization_mean": None,
+            "winner_minus_loser_actual_risk_utilization": None,
+            "cash_binding_count": 0,
+            "risk_cap_binding_count": 0,
+            "position_cap_binding_count": 0,
+            "risk_position_tie_count": 0,
+            "capital_binding_count": 0,
+            "max_qty_binding_count": 0,
+            "lot_rounding_binding_count": 0,
+            "candidate_to_chosen_qty_reduction_mean": 0.0,
+            "chosen_to_filled_qty_reduction_mean": 0.0,
+            "binding_signature_counts": {},
+        }
+    if execution.empty:
+        raise RuntimeError(f"{side_label} exclusive trades存在但execution attribution為空")
+    if execution["match_key"].duplicated().any():
+        raise RuntimeError(f"{side_label} execution attribution canonical match key重複")
+    missing_keys = sorted(
+        set(exclusive["match_key"].astype(str)) - set(execution["match_key"].astype(str))
+    )
+    if missing_keys:
+        raise RuntimeError(
+            f"{side_label} exclusive trades缺少execution attribution: count={len(missing_keys)}"
+        )
+    joined = exclusive[["match_key", r_col]].merge(
+        execution, on="match_key", how="left", validate="one_to_one"
+    )
+    realized_r = pd.to_numeric(joined[r_col], errors="coerce")
+    actual_util = pd.to_numeric(joined["actual_risk_utilization"], errors="coerce")
+    chosen_util = pd.to_numeric(joined["chosen_risk_utilization"], errors="coerce")
+    candidate_util = pd.to_numeric(joined["candidate_risk_utilization"], errors="coerce")
+
+    def mean_for(mask: pd.Series, values: pd.Series) -> float | None:
+        subset = pd.to_numeric(values[mask], errors="coerce")
+        subset = subset[np.isfinite(subset)]
+        return float(subset.mean()) if len(subset) else None
+
+    winner_mean = mean_for(realized_r > 0.0, actual_util)
+    loser_mean = mean_for(realized_r < 0.0, actual_util)
+    finite_actual = actual_util[np.isfinite(actual_util)]
+    finite_chosen = chosen_util[np.isfinite(chosen_util)]
+    finite_candidate = candidate_util[np.isfinite(candidate_util)]
+    bool_fields = (
+        "entry_budget_cash_binding", "risk_cap_binding", "position_cap_binding",
+        "risk_position_tie", "capital_binding", "max_qty_binding",
+        "lot_rounding_binding",
+    )
+    counts = {
+        field: int(_boolean_series(joined[field], field=field, arm_label=side_label).sum())
+        for field in bool_fields
+    }
+    candidate_qty = pd.to_numeric(joined["candidate_qty"], errors="coerce").fillna(0.0)
+    chosen_qty = pd.to_numeric(joined["chosen_qty"], errors="coerce").fillna(0.0)
+    filled_qty = pd.to_numeric(joined["filled_qty"], errors="coerce").fillna(0.0)
+    signature_counts = {
+        str(key): int(value)
+        for key, value in joined["binding_signature"].fillna("NONE_DETECTED").astype(str).value_counts().to_dict().items()
+    }
+    return {
+        "trade_count": int(len(joined)),
+        "actual_risk_utilization_mean": float(finite_actual.mean()) if len(finite_actual) else None,
+        "chosen_risk_utilization_mean": float(finite_chosen.mean()) if len(finite_chosen) else None,
+        "candidate_risk_utilization_mean": float(finite_candidate.mean()) if len(finite_candidate) else None,
+        "winner_actual_risk_utilization_mean": winner_mean,
+        "loser_actual_risk_utilization_mean": loser_mean,
+        "winner_minus_loser_actual_risk_utilization": (
+            None if winner_mean is None or loser_mean is None else float(winner_mean - loser_mean)
+        ),
+        "cash_binding_count": counts["entry_budget_cash_binding"],
+        "risk_cap_binding_count": counts["risk_cap_binding"],
+        "position_cap_binding_count": counts["position_cap_binding"],
+        "risk_position_tie_count": counts["risk_position_tie"],
+        "capital_binding_count": counts["capital_binding"],
+        "max_qty_binding_count": counts["max_qty_binding"],
+        "lot_rounding_binding_count": counts["lot_rounding_binding"],
+        "candidate_to_chosen_qty_reduction_mean": float((candidate_qty - chosen_qty).mean()),
+        "chosen_to_filled_qty_reduction_mean": float((chosen_qty - filled_qty).mean()),
+        "binding_signature_counts": signature_counts,
+    }
+
+
+def _exclusive_execution_binding_summary(
+    trade_rows: pd.DataFrame,
+    candidate_execution: pd.DataFrame,
+    comparator_execution: pd.DataFrame,
+) -> dict[str, Any]:
+    return {
+        "candidate_only": _exclusive_execution_side_summary(
+            trade_rows, candidate_execution,
+            category="candidate_only", r_col="candidate_r", side_label="candidate",
+        ),
+        "comparator_only": _exclusive_execution_side_summary(
+            trade_rows, comparator_execution,
+            category="comparator_only", r_col="comparator_r", side_label="comparator",
+        ),
+    }
+
+
 def _driver_label(row: dict[str, Any]) -> str:
     selection = float(row["delta_direct_selection_r"])
     ret = float(row["delta_return_pct"])
@@ -333,6 +504,7 @@ def _row_summary(
     candidate_row: dict[str, Any],
     comparator_row: dict[str, Any],
     pair: dict[str, Any],
+    execution_binding: dict[str, Any],
 ) -> dict[str, Any]:
     trade = dict(pair.get("trade_contribution") or {})
     risk = dict(pair.get("risk_dollar_translation") or {})
@@ -341,6 +513,8 @@ def _row_summary(
     comparator_only = dict(risk.get("comparator_only") or {})
     exclusive_bridge = dict(risk.get("exclusive_bridge") or {})
     slots = dict(pair.get("slot_occupancy") or {})
+    candidate_binding = dict(execution_binding.get("candidate_only") or {})
+    comparator_binding = dict(execution_binding.get("comparator_only") or {})
     row = {
         "seed_order": int(seed_order),
         "seed": int(seed),
@@ -390,6 +564,32 @@ def _row_summary(
         "comparator_end_position_gap_slot_days": int(slots.get("comparator_end_position_gap_slot_days") or 0),
         "delta_end_position_gap_slot_days": int(slots.get("candidate_end_position_gap_slot_days") or 0) - int(slots.get("comparator_end_position_gap_slot_days") or 0),
         "wealth_advantage_pct": float(dict(pair.get("wealth_path") or {}).get("final_relative_wealth_advantage_pct") or 0.0),
+        "candidate_only_actual_risk_utilization_mean": _finite(candidate_binding.get("actual_risk_utilization_mean")),
+        "comparator_only_actual_risk_utilization_mean": _finite(comparator_binding.get("actual_risk_utilization_mean")),
+        "candidate_only_candidate_risk_utilization_mean": _finite(candidate_binding.get("candidate_risk_utilization_mean")),
+        "comparator_only_candidate_risk_utilization_mean": _finite(comparator_binding.get("candidate_risk_utilization_mean")),
+        "candidate_only_chosen_risk_utilization_mean": _finite(candidate_binding.get("chosen_risk_utilization_mean")),
+        "comparator_only_chosen_risk_utilization_mean": _finite(comparator_binding.get("chosen_risk_utilization_mean")),
+        "candidate_only_winner_minus_loser_risk_utilization": _finite(candidate_binding.get("winner_minus_loser_actual_risk_utilization")),
+        "comparator_only_winner_minus_loser_risk_utilization": _finite(comparator_binding.get("winner_minus_loser_actual_risk_utilization")),
+        "candidate_only_cash_binding_count": int(candidate_binding.get("cash_binding_count") or 0),
+        "comparator_only_cash_binding_count": int(comparator_binding.get("cash_binding_count") or 0),
+        "candidate_only_risk_cap_binding_count": int(candidate_binding.get("risk_cap_binding_count") or 0),
+        "comparator_only_risk_cap_binding_count": int(comparator_binding.get("risk_cap_binding_count") or 0),
+        "candidate_only_position_cap_binding_count": int(candidate_binding.get("position_cap_binding_count") or 0),
+        "comparator_only_position_cap_binding_count": int(comparator_binding.get("position_cap_binding_count") or 0),
+        "candidate_only_risk_position_tie_count": int(candidate_binding.get("risk_position_tie_count") or 0),
+        "comparator_only_risk_position_tie_count": int(comparator_binding.get("risk_position_tie_count") or 0),
+        "candidate_only_capital_binding_count": int(candidate_binding.get("capital_binding_count") or 0),
+        "comparator_only_capital_binding_count": int(comparator_binding.get("capital_binding_count") or 0),
+        "candidate_only_max_qty_binding_count": int(candidate_binding.get("max_qty_binding_count") or 0),
+        "comparator_only_max_qty_binding_count": int(comparator_binding.get("max_qty_binding_count") or 0),
+        "candidate_only_lot_rounding_binding_count": int(candidate_binding.get("lot_rounding_binding_count") or 0),
+        "comparator_only_lot_rounding_binding_count": int(comparator_binding.get("lot_rounding_binding_count") or 0),
+        "candidate_only_qty_cash_reduction_mean": float(candidate_binding.get("candidate_to_chosen_qty_reduction_mean") or 0.0),
+        "comparator_only_qty_cash_reduction_mean": float(comparator_binding.get("candidate_to_chosen_qty_reduction_mean") or 0.0),
+        "candidate_only_binding_signature_counts": dict(candidate_binding.get("binding_signature_counts") or {}),
+        "comparator_only_binding_signature_counts": dict(comparator_binding.get("binding_signature_counts") or {}),
     }
     row["selection_basis_gap_r"] = (
         row["direct_pair_exclusive_delta_r"] - row["delta_direct_selection_r"]
@@ -402,6 +602,11 @@ def _row_summary(
     row["exclusive_total_implied_risk_delta"] = (
         row["candidate_only_total_implied_initial_risk"]
         - row["comparator_only_total_implied_initial_risk"]
+    )
+    c_util = row["candidate_only_actual_risk_utilization_mean"]
+    b_util = row["comparator_only_actual_risk_utilization_mean"]
+    row["exclusive_actual_risk_utilization_gap"] = (
+        None if c_util is None or b_util is None else float(c_util - b_util)
     )
     row["driver"] = _driver_label(row)
     return row
@@ -466,6 +671,28 @@ def _render_report(payload: dict[str, Any]) -> str:
             f"{row['direct_pair_exclusive_delta_pnl']:+,.0f}",
             f"{row['exclusive_bridge_residual_pnl']:+,.2f}",
         ))
+    binding_rows = []
+    for row in payload["seed_summary"]:
+        def _util(value: Any) -> str:
+            return "-" if value is None else f"{float(value) * 100.0:.1f}%"
+
+        def _pair_count(left_key: str, right_key: str) -> str:
+            return f"{int(row[left_key])}/{int(row[right_key])}"
+
+        binding_rows.append((
+            f"S{row['seed_order']}",
+            f"{_util(row['candidate_only_candidate_risk_utilization_mean'])} → {_util(row['candidate_only_chosen_risk_utilization_mean'])} → {_util(row['candidate_only_actual_risk_utilization_mean'])}",
+            f"{_util(row['comparator_only_candidate_risk_utilization_mean'])} → {_util(row['comparator_only_chosen_risk_utilization_mean'])} → {_util(row['comparator_only_actual_risk_utilization_mean'])}",
+            _util(row['candidate_only_winner_minus_loser_risk_utilization']),
+            _util(row['comparator_only_winner_minus_loser_risk_utilization']),
+            _pair_count('candidate_only_cash_binding_count', 'comparator_only_cash_binding_count'),
+            _pair_count('candidate_only_position_cap_binding_count', 'comparator_only_position_cap_binding_count'),
+            _pair_count('candidate_only_risk_cap_binding_count', 'comparator_only_risk_cap_binding_count'),
+            _pair_count('candidate_only_risk_position_tie_count', 'comparator_only_risk_position_tie_count'),
+            _pair_count('candidate_only_capital_binding_count', 'comparator_only_capital_binding_count'),
+            _pair_count('candidate_only_max_qty_binding_count', 'comparator_only_max_qty_binding_count'),
+            _pair_count('candidate_only_lot_rounding_binding_count', 'comparator_only_lot_rounding_binding_count'),
+        ))
     drivers = payload["aggregate"]["driver_counts"]
     driver_rows = [(key, value) for key, value in sorted(drivers.items())]
     aggregate = payload["aggregate"]
@@ -493,7 +720,13 @@ def _render_report(payload: dict[str, Any]) -> str:
             ("Seed", "Reference risk", "Equal-risk selection", "Avg-risk scale", "Within-set weighting", "Uncovered", "Actual Exclusive ΔPnL", "Residual"),
             exact_bridge_rows,
         ),
-        render_section("8-seed aggregate", number=4),
+        render_section("Exclusive risk utilization / binding attribution", number=4),
+        render_table(
+            ("Seed", "13A-only Pre→Chosen→Actual util", "12B-only Pre→Chosen→Actual util", "13A Winner−Loser util", "12B Winner−Loser util", "Cash bind 13A/12B", "Position cap", "Risk cap", "Risk/Pos tie", "Capital", "MaxQty", "Lot"),
+            binding_rows,
+        ),
+        "Pre→Chosen→Actual util依序表示candidate sizing、cash-capped entry plan、實際成交後initial risk占預定risk budget比例。Winner−Loser util > 0 表示winner平均取得較高actual utilization；< 0 表示risk dollars較偏向loser。各binding欄為13A-only/12B-only exclusive trade count；constraint stages可重疊，例如upstream risk cap後仍可能再被MaxQty或cash cap縮小。",
+        render_section("8-seed aggregate", number=5),
         render_key_values((
             ("Ranking↑ seeds", f"{aggregate['ranking_positive_count']}/{aggregate['seed_count']}"),
             ("Ranking↑ 且 RoMD↑", f"{aggregate['ranking_positive_romd_positive_count']}/{aggregate['ranking_positive_count']}"),
@@ -508,11 +741,21 @@ def _render_report(payload: dict[str, Any]) -> str:
             ("Within-set weighting effect Mean", f"{aggregate['exclusive_within_set_weighting_effect_pnl']['mean']:+,.2f}"),
             ("Uncovered exclusive ΔPnL Mean", f"{aggregate['exclusive_uncovered_pnl_delta']['mean']:+,.2f}"),
             ("Exclusive bridge residual Mean", f"{aggregate['exclusive_bridge_residual_pnl']['mean']:+,.6f}"),
+            ("Actual risk-util gap Mean", "-" if aggregate['exclusive_actual_risk_utilization_gap']['mean'] is None else f"{aggregate['exclusive_actual_risk_utilization_gap']['mean'] * 100.0:+.2f}pp"),
+            ("13A Winner−Loser util Mean", "-" if aggregate['candidate_only_winner_minus_loser_risk_utilization']['mean'] is None else f"{aggregate['candidate_only_winner_minus_loser_risk_utilization']['mean'] * 100.0:+.2f}pp"),
+            ("12B Winner−Loser util Mean", "-" if aggregate['comparator_only_winner_minus_loser_risk_utilization']['mean'] is None else f"{aggregate['comparator_only_winner_minus_loser_risk_utilization']['mean'] * 100.0:+.2f}pp"),
+            ("Cash binding trades 13A/12B", f"{aggregate['candidate_only_cash_binding_total']}/{aggregate['comparator_only_cash_binding_total']}"),
+            ("Position-cap binding trades 13A/12B", f"{aggregate['candidate_only_position_cap_binding_total']}/{aggregate['comparator_only_position_cap_binding_total']}"),
+            ("Risk-cap binding trades 13A/12B", f"{aggregate['candidate_only_risk_cap_binding_total']}/{aggregate['comparator_only_risk_cap_binding_total']}"),
+            ("Risk/Position tie trades 13A/12B", f"{aggregate['candidate_only_risk_position_tie_total']}/{aggregate['comparator_only_risk_position_tie_total']}"),
+            ("Capital binding trades 13A/12B", f"{aggregate['candidate_only_capital_binding_total']}/{aggregate['comparator_only_capital_binding_total']}"),
+            ("MaxQty binding trades 13A/12B", f"{aggregate['candidate_only_max_qty_binding_total']}/{aggregate['comparator_only_max_qty_binding_total']}"),
+            ("Lot-rounding binding trades 13A/12B", f"{aggregate['candidate_only_lot_rounding_binding_total']}/{aggregate['comparator_only_lot_rounding_binding_total']}"),
             ("Common risk-size effect Mean", f"{aggregate['common_risk_size_effect_pnl']['mean']:+,.2f}"),
             ("ΔGap slot-days Mean", f"{aggregate['delta_end_position_gap_slot_days']['mean']:+.2f}"),
         )),
         render_table(("機制", "Seeds"), driver_rows),
-        render_section("限制", number=5),
+        render_section("限制", number=6),
         "本Audit只做既有8-seed結果的trade-set／risk-dollar／slot／wealth-path歸因；ΔDL選擇R是兩個arm各自相對共同DL-off baseline的差，Direct-pair Exclusive ΔR則是MR-13A對MR-12B直接trade partition，兩者比較基準不同不得強制相等；不得挑best seed，不是新的promotion gate，也不得回流模型training semantics。",
     )).rstrip() + "\n"
 
@@ -533,6 +776,7 @@ def run_forward_robustness_portfolio_translation_audit(
     wealth_frames: list[pd.DataFrame] = []
     capacity_frames: list[pd.DataFrame] = []
     selection_frames: list[pd.DataFrame] = []
+    execution_frames: list[pd.DataFrame] = []
 
     for seed_order, seed in source["seed_pairs"]:
         c_row = frame[(frame["arm_id"] == candidate) & (frame["seed"] == seed)].iloc[0].to_dict()
@@ -548,12 +792,31 @@ def run_forward_robustness_portfolio_translation_audit(
             top_month_count=source["top_month_count"],
             top_trade_count=source["top_trade_count"],
         )
+        trade_frame_for_binding = pd.DataFrame(
+            dict(pair.get("frames") or {}).get("trade_contributions")
+        ).copy()
+        candidate_execution = pd.read_csv(c_artifacts.execution_path, encoding="utf-8-sig")
+        comparator_execution = pd.read_csv(b_artifacts.execution_path, encoding="utf-8-sig")
+        execution_binding = _exclusive_execution_binding_summary(
+            trade_frame_for_binding, candidate_execution, comparator_execution
+        )
+        for arm_id, side, execution_frame in (
+            (candidate, "candidate", candidate_execution),
+            (comparator, "comparator", comparator_execution),
+        ):
+            ef = pd.DataFrame(execution_frame).copy()
+            ef.insert(0, "arm_id", str(arm_id))
+            ef.insert(0, "side", side)
+            ef.insert(0, "seed", int(seed))
+            ef.insert(0, "seed_order", int(seed_order))
+            execution_frames.append(ef)
         summary_row = _row_summary(
             seed_order=seed_order,
             seed=seed,
             candidate_row=c_row,
             comparator_row=b_row,
             pair=pair,
+            execution_binding=execution_binding,
         )
         if not math.isclose(
             summary_row["direct_pair_exclusive_delta_r"]
@@ -621,6 +884,31 @@ def run_forward_robustness_portfolio_translation_audit(
         "exclusive_within_set_weighting_effect_pnl": _distribution(seed_df["exclusive_within_set_weighting_effect_pnl"]),
         "exclusive_uncovered_pnl_delta": _distribution(seed_df["exclusive_uncovered_pnl_delta"]),
         "exclusive_bridge_residual_pnl": _distribution(seed_df["exclusive_bridge_residual_pnl"]),
+        "exclusive_actual_risk_utilization_gap": _distribution(seed_df["exclusive_actual_risk_utilization_gap"]),
+        "candidate_only_winner_minus_loser_risk_utilization": _distribution(seed_df["candidate_only_winner_minus_loser_risk_utilization"]),
+        "comparator_only_winner_minus_loser_risk_utilization": _distribution(seed_df["comparator_only_winner_minus_loser_risk_utilization"]),
+        "candidate_only_cash_binding_count": _distribution(seed_df["candidate_only_cash_binding_count"]),
+        "comparator_only_cash_binding_count": _distribution(seed_df["comparator_only_cash_binding_count"]),
+        "candidate_only_position_cap_binding_count": _distribution(seed_df["candidate_only_position_cap_binding_count"]),
+        "comparator_only_position_cap_binding_count": _distribution(seed_df["comparator_only_position_cap_binding_count"]),
+        "candidate_only_risk_position_tie_count": _distribution(seed_df["candidate_only_risk_position_tie_count"]),
+        "comparator_only_risk_position_tie_count": _distribution(seed_df["comparator_only_risk_position_tie_count"]),
+        "candidate_only_capital_binding_count": _distribution(seed_df["candidate_only_capital_binding_count"]),
+        "comparator_only_capital_binding_count": _distribution(seed_df["comparator_only_capital_binding_count"]),
+        "candidate_only_cash_binding_total": int(pd.to_numeric(seed_df["candidate_only_cash_binding_count"], errors="coerce").fillna(0).sum()),
+        "comparator_only_cash_binding_total": int(pd.to_numeric(seed_df["comparator_only_cash_binding_count"], errors="coerce").fillna(0).sum()),
+        "candidate_only_position_cap_binding_total": int(pd.to_numeric(seed_df["candidate_only_position_cap_binding_count"], errors="coerce").fillna(0).sum()),
+        "comparator_only_position_cap_binding_total": int(pd.to_numeric(seed_df["comparator_only_position_cap_binding_count"], errors="coerce").fillna(0).sum()),
+        "candidate_only_risk_position_tie_total": int(pd.to_numeric(seed_df["candidate_only_risk_position_tie_count"], errors="coerce").fillna(0).sum()),
+        "comparator_only_risk_position_tie_total": int(pd.to_numeric(seed_df["comparator_only_risk_position_tie_count"], errors="coerce").fillna(0).sum()),
+        "candidate_only_capital_binding_total": int(pd.to_numeric(seed_df["candidate_only_capital_binding_count"], errors="coerce").fillna(0).sum()),
+        "comparator_only_capital_binding_total": int(pd.to_numeric(seed_df["comparator_only_capital_binding_count"], errors="coerce").fillna(0).sum()),
+        "candidate_only_risk_cap_binding_total": int(pd.to_numeric(seed_df["candidate_only_risk_cap_binding_count"], errors="coerce").fillna(0).sum()),
+        "comparator_only_risk_cap_binding_total": int(pd.to_numeric(seed_df["comparator_only_risk_cap_binding_count"], errors="coerce").fillna(0).sum()),
+        "candidate_only_max_qty_binding_total": int(pd.to_numeric(seed_df["candidate_only_max_qty_binding_count"], errors="coerce").fillna(0).sum()),
+        "comparator_only_max_qty_binding_total": int(pd.to_numeric(seed_df["comparator_only_max_qty_binding_count"], errors="coerce").fillna(0).sum()),
+        "candidate_only_lot_rounding_binding_total": int(pd.to_numeric(seed_df["candidate_only_lot_rounding_binding_count"], errors="coerce").fillna(0).sum()),
+        "comparator_only_lot_rounding_binding_total": int(pd.to_numeric(seed_df["comparator_only_lot_rounding_binding_count"], errors="coerce").fillna(0).sum()),
         "direct_pair_common_delta_r": _distribution(seed_df["direct_pair_common_delta_r"]),
         "direct_pair_all_trade_delta_r": _distribution(seed_df["direct_pair_all_trade_delta_r"]),
         "common_trade_pnl_delta": _distribution(seed_df["common_trade_pnl_delta"]),
@@ -668,6 +956,7 @@ def run_forward_robustness_portfolio_translation_audit(
         ("daily_wealth.csv.gz", wealth_frames),
         ("daily_capacity.csv.gz", capacity_frames),
         ("selection_days.csv.gz", selection_frames),
+        ("execution_binding.csv.gz", execution_frames),
     ):
         path = audit_run_dir / filename
         pd.concat(frames, ignore_index=True).to_csv(path, index=False, encoding="utf-8-sig", compression="gzip")

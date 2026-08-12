@@ -1059,7 +1059,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         run_root = compact_root / "run"
         pair_dir.mkdir(parents=True)
         active_prefix = robustness_module._arm_runtime_spec(robustness_stochastic[0])["active_key"]
-        for suffix in ("trades", "equity", "daily_capacity", "selected_buys"):
+        for suffix in ("trades", "equity", "daily_capacity", "selected_buys", "execution"):
             pd.DataFrame([{"x": 1}, {"x": 2}]).to_csv(
                 pair_dir / f"{active_prefix}_{suffix}.csv", index=False, encoding="utf-8-sig"
             )
@@ -1118,7 +1118,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and reloaded_manifest is not None
             and dict(reloaded_manifest.get("scientific_observation_validation") or {}).get("status") == "VERIFIED"
             and compact_manifest["schema_version"] == robustness_module.ATTRIBUTION_SOURCE_SCHEMA_VERSION
-            and set(compact_manifest["files"]) == {"trades", "equity", "daily_capacity", "selected_buys"}
+            and set(compact_manifest["files"]) == {"trades", "equity", "daily_capacity", "selected_buys", "execution"}
             and all((attribution_dir / f"{role}.csv.gz").is_file() for role in compact_manifest["files"])
             and not any("orderable" in path.name or "score" in path.name for path in attribution_dir.iterdir())
         )
@@ -1127,6 +1127,44 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "multi_seed_compact_attribution_source_keeps_only_audit_required_active_replay_artifacts",
         True,
         compact_files_ok,
+    )
+
+    from filters.breakout_quality.strategy_compare_diagnostics import _flatten_entry_execution_rows
+    synthetic_execution_frame = _flatten_entry_execution_rows([{
+        "_event_type": "entry_execution",
+        "execution_order": 7,
+        "ticker": "2330",
+        "type": "normal",
+        "signal_date": "2024-01-02",
+        "candidate_date": "2024-01-03",
+        "trade_date": "2024-01-04",
+        "limit_px": 100.0,
+        "init_sl": 95.0,
+        "candidate_qty": 1000,
+        "chosen_qty": 800,
+        "max_qty": None,
+        "candidate_sizing_capital": 1_000_000.0,
+        "sizing_equity": 1_000_000.0,
+        "effective_entry_budget": 800_000.0,
+        "available_cash_before": 800_000.0,
+        "reserved_cost": 80_000.0,
+        "params_obj": _base_params,
+        "security_profile": None,
+        "entry_filled": True,
+        "filled_qty": 800,
+        "actual_initial_risk_total_milli": 8_000_000,
+        "entry_fill_price": 100.0,
+    }])
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "entry_execution_diagnostics_capture_risk_utilization_and_cash_binding_without_changing_runtime",
+        True,
+        len(synthetic_execution_frame) == 1
+        and int(synthetic_execution_frame.iloc[0]["execution_order"]) == 7
+        and bool(synthetic_execution_frame.iloc[0]["entry_budget_cash_binding"])
+        and "ENTRY_BUDGET_CASH" in str(synthetic_execution_frame.iloc[0]["binding_signature"])
+        and pd.notna(synthetic_execution_frame.iloc[0]["risk_budget"])
+        and pd.notna(synthetic_execution_frame.iloc[0]["actual_risk_utilization"]),
     )
 
     existing_observation = {key: 1.0 for _label, key, _unit in robustness_module.MEAN_METRICS}

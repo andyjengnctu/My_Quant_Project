@@ -80,6 +80,7 @@ def execute_reserved_entries_for_day(
     is_training,
     total_missed_buys,
     entry_stats=None,
+    replay_execution_rows=None,
 ):
     pre_market_occupied = len(portfolio) + len(sold_today)
     remaining_orderable_candidates = list(orderable_candidates_today)
@@ -113,6 +114,35 @@ def execute_reserved_entries_for_day(
         if chosen_entry_plan is None:
             continue
 
+        execution_snapshot = None
+        if replay_execution_rows is not None:
+            execution_snapshot = {
+                "_event_type": "entry_execution",
+                "execution_order": int(len(replay_execution_rows)),
+                "ticker": cand.get("ticker"),
+                "type": cand.get("type"),
+                "entry_source": cand.get("entry_source"),
+                "signal_date": signal_date_text,
+                "candidate_date": candidate_date_text,
+                "trade_date": _format_candidate_date(today),
+                "limit_px": chosen_entry_plan.get("limit_price"),
+                "init_sl": chosen_entry_plan.get("init_sl"),
+                "candidate_qty": int(cand.get("qty", 0) or 0),
+                "chosen_qty": int(chosen_entry_plan.get("qty", 0) or 0),
+                "max_qty": cand.get("max_qty"),
+                "candidate_sizing_capital": cand.get("sizing_capital"),
+                "sizing_equity": sizing_equity,
+                "effective_entry_budget": effective_entry_budget,
+                "available_cash_before": milli_to_money(available_cash_milli),
+                "reserved_cost": chosen_entry_plan.get("reserved_cost"),
+                "params_obj": candidate_params,
+                "security_profile": cand.get("security_profile"),
+                "entry_filled": False,
+                "filled_qty": 0,
+                "actual_initial_risk_total_milli": 0,
+            }
+            replay_execution_rows.append(execution_snapshot)
+
         candidate_context = cand.get('_ensemble_context') if isinstance(cand.get('_ensemble_context'), dict) else {}
         candidate_all_dfs_fast = candidate_context.get('all_dfs_fast') or all_dfs_fast
         fast_df = candidate_all_dfs_fast[cand['ticker']]
@@ -142,6 +172,17 @@ def execute_reserved_entries_for_day(
             ticker=cand['ticker'],
             trade_date=today,
         )
+
+        if execution_snapshot is not None:
+            execution_snapshot["entry_filled"] = bool(entry_result.get("filled", False))
+            if entry_result.get("filled"):
+                execution_snapshot["filled_qty"] = int(entry_result["position"].get("initial_qty", 0) or 0)
+                execution_snapshot["actual_initial_risk_total_milli"] = int(
+                    entry_result["position"].get("initial_risk_total_milli", 0) or 0
+                )
+                execution_snapshot["entry_fill_price"] = entry_result.get(
+                    "entry_fill_price", entry_result.get("buy_price")
+                )
 
         if entry_result['filled']:
             actual_total_cost_milli = entry_result['position']['net_buy_total_milli']
