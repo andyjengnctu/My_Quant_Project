@@ -8249,3 +8249,10 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - `validate_synthetic_registry_metadata_contract_case`擴充為test-architecture guard：七個domain modules必須存在、每個Breakout Quality validator只能有一個owner、compatibility façade不得重新定義validator、façade必須完整re-export、formal registry不得再從façade匯入並須直接列出所有domain owner。`meta_quality_targets.py`同步納入support、七個domain modules與compatibility façade，避免拆檔後coverage只量到85行wrapper。
 - Experiment Registry未修改；本輪無scientific identity。狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。GPT不執行formal `apps/test_suite.py`；使用者本機以`apps/run_bundle.py`完成final double check並正常commit。
 
+## 2026-08-12 — Test Refactor Batch 8 formal recheck：compatibility façade退出key coverage target
+
+- 使用者本機`apps/run_bundle.py`結果：Breakout Quality registry validators 31個／618 checks全部PASS、test architecture 15/15 PASS、Selection PIT與Forward-OOS均READY；formal suite僅meta quality的`coverage_key_targets_hit`失敗，其餘quick gate／consistency／chain checks／ml smoke全部PASS。
+- Debug bundle顯示唯一zero-covered key target為`tools/validate/synthetic_breakout_quality_cases.py`。Batch 8已刻意讓正式registry直接import七個domain implementation owners，因此85行compatibility façade不應被正式執行；0 coverage正是owner split後的預期結果，不代表implementation漏測。
+- 修正coverage ownership：新增`BREAKOUT_QUALITY_IMPLEMENTATION_COVERAGE_TARGETS`，只包含shared support與七個domain implementation modules；compatibility façade退出key coverage target，但仍由meta registry contract以AST/source方式驗證「不得重新定義validator」與「完整re-export」。另新增guard釘死implementation modules必須納入coverage、façade不得再成為key-hit target。
+- 不以人工import façade灌coverage，不修改任何validator body、production code、Dataset、Target、模型、Strategy Compare或scientific identity。狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。使用者本機正式double check以`apps/run_bundle.py`執行並正常commit。
+

@@ -39,6 +39,7 @@ from tools.local_regression.formal_pipeline import FORMAL_STEP_SPECS
 from tools.local_regression.meta_quality_coverage import build_coverage_summary
 from tools.local_regression.meta_quality_targets import (
     CORE_TRADING_COVERAGE_TARGETS,
+    BREAKOUT_QUALITY_IMPLEMENTATION_COVERAGE_TARGETS,
     COVERAGE_BRANCH_MIN_FLOOR,
     COVERAGE_LINE_MIN_FLOOR,
     COVERAGE_MAX_LINE_BRANCH_GAP,
@@ -1217,6 +1218,16 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
         for module_name in breakout_quality_case_modules
         if f"from .{module_name} import (" not in synthetic_cases_source
     )
+    breakout_quality_implementation_coverage_targets = set(
+        BREAKOUT_QUALITY_IMPLEMENTATION_COVERAGE_TARGETS
+    )
+    declared_coverage_targets = set(COVERAGE_TARGETS)
+    missing_breakout_quality_implementation_coverage_targets = sorted(
+        breakout_quality_implementation_coverage_targets - declared_coverage_targets
+    )
+    breakout_quality_facade_coverage_target = (
+        "tools/validate/synthetic_breakout_quality_cases.py" in declared_coverage_targets
+    )
 
     add_check(
         results,
@@ -1265,6 +1276,22 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
         "synthetic_registry_has_all_breakout_quality_domain_imports",
         [],
         missing_direct_breakout_quality_case_imports,
+    )
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "breakout_quality_implementation_modules_are_coverage_targets",
+        [],
+        missing_breakout_quality_implementation_coverage_targets,
+    )
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "breakout_quality_compatibility_facade_is_not_key_coverage_target",
+        False,
+        breakout_quality_facade_coverage_target,
     )
 
     layer_counts = {}

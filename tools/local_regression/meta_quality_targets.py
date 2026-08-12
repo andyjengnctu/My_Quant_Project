@@ -53,15 +53,7 @@ FORMAL_STEP_ENTRY_COVERAGE_TARGETS = [
 FORMAL_STEP_IMPLEMENTATION_COVERAGE_TARGETS = [
     "tools/validate/main.py",
 ]
-COVERAGE_TARGETS = list(dict.fromkeys([
-    "tools/validate/synthetic_cases.py",
-    "tools/validate/synthetic_meta_cases.py",
-    "tools/validate/synthetic_unit_cases.py",
-    "tools/validate/synthetic_history_cases.py",
-    "tools/validate/synthetic_flow_cases.py",
-    "tools/validate/synthetic_take_profit_cases.py",
-    "tools/validate/synthetic_contract_cases.py",
-    "tools/validate/synthetic_breakout_quality_cases.py",
+BREAKOUT_QUALITY_IMPLEMENTATION_COVERAGE_TARGETS = [
     "tools/validate/synthetic_breakout_quality_support.py",
     "tools/validate/synthetic_breakout_quality_policy_cases.py",
     "tools/validate/synthetic_breakout_quality_artifact_cases.py",
@@ -70,6 +62,16 @@ COVERAGE_TARGETS = list(dict.fromkeys([
     "tools/validate/synthetic_breakout_quality_pit_cases.py",
     "tools/validate/synthetic_breakout_quality_strategy_cases.py",
     "tools/validate/synthetic_breakout_quality_strategy_app_cases.py",
+]
+COVERAGE_TARGETS = list(dict.fromkeys([
+    "tools/validate/synthetic_cases.py",
+    "tools/validate/synthetic_meta_cases.py",
+    "tools/validate/synthetic_unit_cases.py",
+    "tools/validate/synthetic_history_cases.py",
+    "tools/validate/synthetic_flow_cases.py",
+    "tools/validate/synthetic_take_profit_cases.py",
+    "tools/validate/synthetic_contract_cases.py",
+    *BREAKOUT_QUALITY_IMPLEMENTATION_COVERAGE_TARGETS,
     "tools/validate/synthetic_guardrail_cases.py",
     "tools/validate/synthetic_display_cases.py",
     "tools/validate/synthetic_reporting_cases.py",
@@ -108,6 +110,7 @@ __all__ = [
     "POLICY_CONTRACT_COVERAGE_TARGETS",
     "FORMAL_STEP_ENTRY_COVERAGE_TARGETS",
     "FORMAL_STEP_IMPLEMENTATION_COVERAGE_TARGETS",
+    "BREAKOUT_QUALITY_IMPLEMENTATION_COVERAGE_TARGETS",
     "COVERAGE_TARGETS",
     "COVERAGE_LINE_MIN_FLOOR",
     "COVERAGE_BRANCH_MIN_FLOOR",

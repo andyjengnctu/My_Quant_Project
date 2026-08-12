@@ -123,7 +123,7 @@ project/
 
 ### `tools/validate/`
 
-Breakout Quality synthetic validators依測試責任拆成policy、artifact、model、audit、PIT、strategy與strategy-app七個case modules；`synthetic_breakout_quality_support.py`只提供共享fixture imports／helpers，`synthetic_breakout_quality_cases.py`僅保留歷史import相容re-export。正式synthetic registry `synthetic_cases.py`直接import各domain owner，不再把21k行單檔作implementation owner；meta registry contract會驗證每個Breakout Quality validator只有一個domain owner、compatibility façade不得重新定義validator，並將所有domain modules納入coverage targets。
+Breakout Quality synthetic validators依測試責任拆成policy、artifact、model、audit、PIT、strategy與strategy-app七個case modules；`synthetic_breakout_quality_support.py`只提供共享fixture imports／helpers，`synthetic_breakout_quality_cases.py`僅保留歷史import相容re-export。正式synthetic registry `synthetic_cases.py`直接import各domain owner，不再把21k行單檔作implementation owner；meta registry contract會驗證每個Breakout Quality validator只有一個domain owner、compatibility façade不得重新定義validator，並將support與所有domain implementation modules納入key coverage targets；compatibility façade本身不列為key-hit target，因正式registry刻意不經過它。
 
 ### 11A Strategy-aligned Continuous Target audit
 
