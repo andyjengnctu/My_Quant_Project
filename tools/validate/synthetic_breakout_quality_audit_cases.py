@@ -2723,7 +2723,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                         "max_drawdown_pct": 1.0,
                         "return_over_max_drawdown": 0.0,
                         "expected_value_r": 0.0,
-                        "direct_selection_r": 0.0,
+                        # Same-param direct-selection R is baseline-relative per arm.
+                        # Deliberately make candidate-comparator delta non-zero while
+                        # direct pair trade partition remains empty (=0) to prove the
+                        # Audit does not conflate the two attribution bases.
+                        "direct_selection_r": 5.0 if arm_id == candidate_arm_id else 1.0,
                     })
             pd.DataFrame(result_rows).to_csv(
                 synthetic_run_root / robustness_source_module.SEED_RESULTS_FILENAME,
@@ -2770,11 +2774,16 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 / forward_robustness_translation_definition.output_subdir
                 / "latest"
             )
+            synthetic_seed_summary = list(synthetic_payload.get("seed_summary") or [])
             forward_e2e_ok = (
                 synthetic_status.get("status") == "READY"
                 and int(synthetic_payload["metadata"]["seed_count"]) == len(synthetic_seed_values)
                 and synthetic_payload["metadata"]["training_performed"] is False
                 and synthetic_payload["metadata"]["portfolio_replay_executed"] is False
+                and len(synthetic_seed_summary) == len(synthetic_seed_values)
+                and all(math.isclose(float(row["delta_direct_selection_r"]), 4.0, abs_tol=1e-12) for row in synthetic_seed_summary)
+                and all(math.isclose(float(row["direct_pair_exclusive_delta_r"]), 0.0, abs_tol=1e-12) for row in synthetic_seed_summary)
+                and all(math.isclose(float(row["selection_basis_gap_r"]), -4.0, abs_tol=1e-12) for row in synthetic_seed_summary)
                 and (latest_audit / "audit.json").is_file()
                 and (latest_audit / "seed_summary.csv").is_file()
             )

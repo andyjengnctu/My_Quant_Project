@@ -622,6 +622,7 @@ def _trade_contributions(
     exclusive = frame[frame["category"] != "common"] if not frame.empty else frame
     selection_r_delta = float(exclusive["r_delta"].sum()) if not exclusive.empty else 0.0
     selection_pnl_delta = float(exclusive["pnl_delta"].sum()) if not exclusive.empty else 0.0
+    common_r_delta = float(frame.loc[frame["category"] == "common", "r_delta"].sum()) if not frame.empty else 0.0
     common_pnl_delta = float(frame.loc[frame["category"] == "common", "pnl_delta"].sum()) if not frame.empty else 0.0
     summary = {
         "candidate_trade_count": int(len(candidate_rt)),
@@ -631,7 +632,9 @@ def _trade_contributions(
         "comparator_only_trade_count": int((frame["category"] == "comparator_only").sum()) if not frame.empty else 0,
         "exclusive_selection_delta_r": selection_r_delta,
         "exclusive_selection_delta_pnl": selection_pnl_delta,
+        "common_trade_delta_r": common_r_delta,
         "common_trade_pnl_delta": common_pnl_delta,
+        "all_trade_delta_r": float(frame["r_delta"].sum()) if not frame.empty else 0.0,
         "all_trade_pnl_delta": float(frame["pnl_delta"].sum()) if not frame.empty else 0.0,
     }
     geometry = {

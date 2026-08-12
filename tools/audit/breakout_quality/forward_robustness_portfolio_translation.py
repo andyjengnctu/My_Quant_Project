@@ -42,7 +42,7 @@ from tools.audit.breakout_quality.c15_strategy_attribution import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-AUDIT_RESULT_SCHEMA_VERSION = 1
+AUDIT_RESULT_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -311,7 +311,7 @@ def _driver_label(row: dict[str, Any]) -> str:
     ret = float(row["delta_return_pct"])
     mdd = float(row["delta_mdd_pct"])
     romd = float(row["delta_romd"])
-    exclusive_pnl = float(row["exclusive_selection_delta_pnl"])
+    exclusive_pnl = float(row["direct_pair_exclusive_delta_pnl"])
     common_pnl = float(row["common_trade_pnl_delta"])
     if selection > 0 and romd > 0:
         return "TRANSLATION_SUCCESS"
@@ -348,9 +348,15 @@ def _row_summary(
         "delta_mdd_pct": float(candidate_row["max_drawdown_pct"]) - float(comparator_row["max_drawdown_pct"]),
         "delta_romd": float(candidate_row["return_over_max_drawdown"]) - float(comparator_row["return_over_max_drawdown"]),
         "delta_ev_r": float(candidate_row["expected_value_r"]) - float(comparator_row["expected_value_r"]),
-        "exclusive_selection_delta_r": float(trade.get("exclusive_selection_delta_r") or 0.0),
-        "exclusive_selection_delta_pnl": float(trade.get("exclusive_selection_delta_pnl") or 0.0),
+        # delta_direct_selection_r is a baseline-relative edge: each arm's canonical
+        # same-param direct-selection R is measured against the shared DL-off baseline,
+        # then candidate - comparator is taken.  The direct pair attribution below is
+        # a different basis and must remain separate rather than be forced equal.
+        "direct_pair_exclusive_delta_r": float(trade.get("exclusive_selection_delta_r") or 0.0),
+        "direct_pair_exclusive_delta_pnl": float(trade.get("exclusive_selection_delta_pnl") or 0.0),
+        "direct_pair_common_delta_r": float(trade.get("common_trade_delta_r") or 0.0),
         "common_trade_pnl_delta": float(trade.get("common_trade_pnl_delta") or 0.0),
+        "direct_pair_all_trade_delta_r": float(trade.get("all_trade_delta_r") or 0.0),
         "all_trade_pnl_delta": float(trade.get("all_trade_pnl_delta") or 0.0),
         "candidate_only_trade_count": int(trade.get("candidate_only_trade_count") or 0),
         "comparator_only_trade_count": int(trade.get("comparator_only_trade_count") or 0),
@@ -369,6 +375,9 @@ def _row_summary(
         "delta_end_position_gap_slot_days": int(slots.get("candidate_end_position_gap_slot_days") or 0) - int(slots.get("comparator_end_position_gap_slot_days") or 0),
         "wealth_advantage_pct": float(dict(pair.get("wealth_path") or {}).get("final_relative_wealth_advantage_pct") or 0.0),
     }
+    row["selection_basis_gap_r"] = (
+        row["direct_pair_exclusive_delta_r"] - row["delta_direct_selection_r"]
+    )
     row["driver"] = _driver_label(row)
     return row
 
@@ -396,7 +405,8 @@ def _render_report(payload: dict[str, Any]) -> str:
             f"{row['delta_return_pct']:+.2f}%",
             f"{row['delta_mdd_pct']:+.2f}%",
             f"{row['delta_romd']:+.2f}",
-            f"{row['exclusive_selection_delta_pnl']:+,.0f}",
+            f"{row['direct_pair_exclusive_delta_r']:+.2f} R",
+            f"{row['direct_pair_exclusive_delta_pnl']:+,.0f}",
             f"{row['common_risk_size_effect_pnl']:+,.0f}",
             f"{row['delta_end_position_gap_slot_days']:+d}",
             row["driver"],
@@ -415,7 +425,7 @@ def _render_report(payload: dict[str, Any]) -> str:
         )),
         render_section("同seed translation attribution", number=1),
         render_table(
-            ("Seed", "ΔDL選擇R", "ΔReturn", "ΔMDD", "ΔRoMD", "Exclusive ΔPnL", "Common sizing ΔPnL", "ΔGap slot-days", "主要機制"),
+            ("Seed", "ΔDL選擇R", "ΔReturn", "ΔMDD", "ΔRoMD", "Direct-pair Exclusive ΔR", "Exclusive ΔPnL", "Common sizing ΔPnL", "ΔGap slot-days", "主要機制"),
             seed_rows,
         ),
         render_section("8-seed aggregate", number=2),
@@ -423,13 +433,15 @@ def _render_report(payload: dict[str, Any]) -> str:
             ("Ranking↑ seeds", f"{aggregate['ranking_positive_count']}/{aggregate['seed_count']}"),
             ("Ranking↑ 且 RoMD↑", f"{aggregate['ranking_positive_romd_positive_count']}/{aggregate['ranking_positive_count']}"),
             ("Ranking/RoMD同方向", f"{aggregate['direction_aligned_count']}/{aggregate['seed_count']}"),
-            ("Exclusive ΔPnL Mean", f"{aggregate['exclusive_selection_delta_pnl']['mean']:+,.2f}"),
+            ("Direct-pair Exclusive ΔR Mean", f"{aggregate['direct_pair_exclusive_delta_r']['mean']:+.2f} R"),
+            ("Selection basis gap Mean", f"{aggregate['selection_basis_gap_r']['mean']:+.2f} R"),
+            ("Exclusive ΔPnL Mean", f"{aggregate['direct_pair_exclusive_delta_pnl']['mean']:+,.2f}"),
             ("Common risk-size effect Mean", f"{aggregate['common_risk_size_effect_pnl']['mean']:+,.2f}"),
             ("ΔGap slot-days Mean", f"{aggregate['delta_end_position_gap_slot_days']['mean']:+.2f}"),
         )),
         render_table(("機制", "Seeds"), driver_rows),
         render_section("限制", number=3),
-        "本Audit只做既有8-seed結果的trade-set／risk-dollar／slot／wealth-path歸因；不得挑best seed，不是新的promotion gate，也不得回流模型training semantics。",
+        "本Audit只做既有8-seed結果的trade-set／risk-dollar／slot／wealth-path歸因；ΔDL選擇R是兩個arm各自相對共同DL-off baseline的差，Direct-pair Exclusive ΔR則是MR-13A對MR-12B直接trade partition，兩者比較基準不同不得強制相等；不得挑best seed，不是新的promotion gate，也不得回流模型training semantics。",
     )).rstrip() + "\n"
 
 
@@ -472,13 +484,14 @@ def run_forward_robustness_portfolio_translation_audit(
             pair=pair,
         )
         if not math.isclose(
-            summary_row["exclusive_selection_delta_r"],
-            summary_row["delta_direct_selection_r"],
+            summary_row["direct_pair_exclusive_delta_r"]
+            + summary_row["direct_pair_common_delta_r"],
+            summary_row["direct_pair_all_trade_delta_r"],
             rel_tol=0.0,
-            abs_tol=1e-6,
+            abs_tol=1e-9,
         ):
             raise RuntimeError(
-                f"seed S{seed_order} compact attribution的exclusive selection R與robustness aggregate不一致"
+                f"seed S{seed_order} direct-pair R decomposition不閉合"
             )
         seed_summaries.append(summary_row)
         frames = pair.pop("frames")
@@ -502,7 +515,11 @@ def run_forward_robustness_portfolio_translation_audit(
         "ranking_positive_count": int(ranking_positive.sum()),
         "ranking_positive_romd_positive_count": int((ranking_positive & romd_positive).sum()),
         "direction_aligned_count": int(direction_aligned.sum()),
-        "exclusive_selection_delta_pnl": _distribution(seed_df["exclusive_selection_delta_pnl"]),
+        "direct_pair_exclusive_delta_r": _distribution(seed_df["direct_pair_exclusive_delta_r"]),
+        "selection_basis_gap_r": _distribution(seed_df["selection_basis_gap_r"]),
+        "direct_pair_exclusive_delta_pnl": _distribution(seed_df["direct_pair_exclusive_delta_pnl"]),
+        "direct_pair_common_delta_r": _distribution(seed_df["direct_pair_common_delta_r"]),
+        "direct_pair_all_trade_delta_r": _distribution(seed_df["direct_pair_all_trade_delta_r"]),
         "common_trade_pnl_delta": _distribution(seed_df["common_trade_pnl_delta"]),
         "common_risk_size_effect_pnl": _distribution(seed_df["common_risk_size_effect_pnl"]),
         "common_r_difference_effect_pnl": _distribution(seed_df["common_r_difference_effect_pnl"]),
