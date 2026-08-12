@@ -8232,3 +8232,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Formal recheck：`REQUIRED_ON_USER_MACHINE`
 - Scientific condition：`UNCHANGED`
 - Experiment Registry identity：`UNCHANGED`
+
+## 2026-08-12 — Legacy Cleanup Batch 7 formal recheck：retired T283 checklist convergence同步
+
+- 使用者本機`apps/run_bundle.py`已正常git commit Batch 7（commit `80d7cc2`）；targeted cleanup contracts 305/305 PASS、Selection PIT／Forward-OOS均READY、quick gate／consistency／chain checks／ml smoke全PASS。
+- Formal唯一failure為meta quality的Checklist convergence一致性：B186主表已隨`strategy_adapt.py`與其專屬validator退役轉為`N/A`，但G區漏記`T283 DONE -> N/A`，使DONE測試摘要相對G最新狀態被判定缺少T283。此為文件收斂紀錄漏同步，不是runtime／strategy／model／artifact failure。
+- 修正：補入`T283 DONE -> N/A` retirement transition；DONE測試摘要維持不列退役T283。沒有修改production code、validator語意、Dataset、Target、模型、策略參數、Strategy Compare identity或portfolio semantics。
+- 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。使用者本機正式double check應以`apps/run_bundle.py`執行並正常commit。
+
