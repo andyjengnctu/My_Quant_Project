@@ -8240,3 +8240,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 修正：補入`T283 DONE -> N/A` retirement transition；DONE測試摘要維持不列退役T283。沒有修改production code、validator語意、Dataset、Target、模型、策略參數、Strategy Compare identity或portfolio semantics。
 - 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。使用者本機正式double check應以`apps/run_bundle.py`執行並正常commit。
 
+## 2026-08-12 — Test Refactor Batch 8：Breakout Quality synthetic validator domain split
+
+- 使用者最新程式基準：`test-branch-1_20260812_103415_e9916eb.zip`；SHA256 `0bee501136ddc7824ca5acadfcdfb17ac1e64f759acfcca8ad163ab00f98c485`。本輪只重構test implementation ownership，不修改production code、Dataset、Target、model、score、Strategy Compare、portfolio semantics或任何scientific identity。
+- 盤點時`tools/validate/synthetic_breakout_quality_cases.py`為21,267行，30個public Breakout Quality validators與runtime-artifact helper共用同一global import surface；單檔包含policy/config SSOT、artifact、ranker、Audit、PIT、Strategy Compare與App contract，造成owner不明與source-contract改動容易互相影響。
+- 新增`synthetic_breakout_quality_support.py`保存共享fixture imports／helpers；implementation依責任拆至`synthetic_breakout_quality_policy_cases.py`、`artifact_cases.py`、`model_cases.py`、`audit_cases.py`、`pit_cases.py`、`strategy_cases.py`、`strategy_app_cases.py`。原`synthetic_breakout_quality_cases.py`縮為compatibility re-export façade；`synthetic_cases.py`正式registry改直接import各domain owner。
+- 行為保護：原30個public validator及`_clear_breakout_quality_caches`、`_validate_signal_runtime_wiring`、`_validate_breakout_quality_report_rendering`共33個函式以AST去位置資訊後逐一比對，body完全等價；不重寫fixture、expected values或production monkeypatch semantics。
+- `validate_synthetic_registry_metadata_contract_case`擴充為test-architecture guard：七個domain modules必須存在、每個Breakout Quality validator只能有一個owner、compatibility façade不得重新定義validator、façade必須完整re-export、formal registry不得再從façade匯入並須直接列出所有domain owner。`meta_quality_targets.py`同步納入support、七個domain modules與compatibility façade，避免拆檔後coverage只量到85行wrapper。
+- Experiment Registry未修改；本輪無scientific identity。狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。GPT不執行formal `apps/test_suite.py`；使用者本機以`apps/run_bundle.py`完成final double check並正常commit。
+

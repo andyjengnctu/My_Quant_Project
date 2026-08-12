@@ -1147,6 +1147,126 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
     add_check(results, "meta_registry", case_id, "registry_metadata_impacted_modules_normalized", [], invalid_impacted_modules)
     add_check(results, "meta_registry", case_id, "registry_metadata_impacted_modules_unique_per_entry", [], duplicated_impacted_modules)
 
+    breakout_quality_case_modules = (
+        "synthetic_breakout_quality_policy_cases",
+        "synthetic_breakout_quality_artifact_cases",
+        "synthetic_breakout_quality_model_cases",
+        "synthetic_breakout_quality_audit_cases",
+        "synthetic_breakout_quality_pit_cases",
+        "synthetic_breakout_quality_strategy_cases",
+        "synthetic_breakout_quality_strategy_app_cases",
+    )
+    breakout_quality_module_paths = [
+        SYNTHETIC_VALIDATE_DIR / f"{module_name}.py"
+        for module_name in breakout_quality_case_modules
+    ]
+    missing_breakout_quality_case_modules = [
+        path.name
+        for path in breakout_quality_module_paths
+        if not path.exists()
+    ]
+
+    declared_breakout_quality_validators = []
+    for path in breakout_quality_module_paths:
+        if not path.exists():
+            continue
+        module_tree = ast.parse(
+            path.read_text(encoding="utf-8"),
+            filename=str(path),
+        )
+        declared_breakout_quality_validators.extend(
+            node.name
+            for node in module_tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("validate_")
+        )
+    duplicate_breakout_quality_validator_owners = sorted(
+        name
+        for name in set(declared_breakout_quality_validators)
+        if declared_breakout_quality_validators.count(name) > 1
+    )
+
+    breakout_quality_facade_path = SYNTHETIC_VALIDATE_DIR / "synthetic_breakout_quality_cases.py"
+    breakout_quality_facade_tree = ast.parse(
+        breakout_quality_facade_path.read_text(encoding="utf-8"),
+        filename=str(breakout_quality_facade_path),
+    )
+    breakout_quality_facade_validator_defs = sorted(
+        node.name
+        for node in breakout_quality_facade_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("validate_")
+    )
+    breakout_quality_facade_imports = sorted(
+        alias.asname or alias.name
+        for node in breakout_quality_facade_tree.body
+        if isinstance(node, ast.ImportFrom)
+        and (node.module or "").startswith("synthetic_breakout_quality_")
+        for alias in node.names
+        if alias.name.startswith("validate_")
+    )
+
+    synthetic_cases_source = (
+        SYNTHETIC_VALIDATE_DIR / "synthetic_cases.py"
+    ).read_text(encoding="utf-8")
+    synthetic_cases_uses_breakout_quality_facade = (
+        "from .synthetic_breakout_quality_cases import (" in synthetic_cases_source
+    )
+    missing_direct_breakout_quality_case_imports = sorted(
+        module_name
+        for module_name in breakout_quality_case_modules
+        if f"from .{module_name} import (" not in synthetic_cases_source
+    )
+
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "breakout_quality_case_modules_exist",
+        [],
+        missing_breakout_quality_case_modules,
+    )
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "breakout_quality_validators_have_single_domain_owner",
+        [],
+        duplicate_breakout_quality_validator_owners,
+    )
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "breakout_quality_compatibility_facade_has_no_validator_implementation",
+        [],
+        breakout_quality_facade_validator_defs,
+    )
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "breakout_quality_compatibility_facade_reexports_all_domain_validators",
+        sorted(declared_breakout_quality_validators),
+        breakout_quality_facade_imports,
+    )
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "synthetic_registry_imports_breakout_quality_domain_owners_directly",
+        False,
+        synthetic_cases_uses_breakout_quality_facade,
+    )
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "synthetic_registry_has_all_breakout_quality_domain_imports",
+        [],
+        missing_direct_breakout_quality_case_imports,
+    )
+
     layer_counts = {}
     for entry in entries:
         layer_counts[entry["layer"]] = layer_counts.get(entry["layer"], 0) + 1

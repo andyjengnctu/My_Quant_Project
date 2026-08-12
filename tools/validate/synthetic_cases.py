@@ -128,37 +128,49 @@ from .synthetic_meta_cases import (
     validate_synthetic_registry_metadata_contract_case,
     validate_test_suite_orchestrator_coverage_targets_case,
 )
-from .synthetic_breakout_quality_cases import (
+from .synthetic_breakout_quality_policy_cases import (
+    validate_breakout_quality_policy_single_source_case,
     validate_breakout_quality_chronological_embargo_case,
+)
+from .synthetic_breakout_quality_artifact_cases import (
+    validate_breakout_quality_runtime_artifact_contract_case,
+)
+from .synthetic_breakout_quality_model_cases import (
     validate_breakout_quality_continuous_target_contract_case,
     validate_breakout_quality_continuous_ranker_contract_case,
     validate_breakout_quality_pass_conditional_ranker_contract_case,
     validate_breakout_quality_all_event_no_time_ranker_contract_case,
     validate_breakout_quality_pairwise_ranker_contract_case,
     validate_breakout_quality_listwise_ranker_contract_case,
-    validate_breakout_quality_pass_realization_gap_attribution_contract_case,
-    validate_breakout_quality_selection_strategy_realization_contract_case,
-    validate_breakout_quality_candidate_counterfactual_execution_contract_case,
-    validate_breakout_quality_portfolio_selection_pressure_contract_case,
-    validate_breakout_quality_point_in_time_score_builder_contract_case,
-    validate_breakout_quality_selection_point_in_time_score_sort_contract_case,
-    validate_breakout_quality_score_ranking_capture_audit_contract_case,
-    validate_breakout_quality_binary_dl_param_adaptation_contract_case,
-    validate_breakout_quality_trade_path_label_contract_case,
-    validate_breakout_quality_single_seed_single_entry_contract_case,
-    validate_strategy_compare_config_driven_app_contract_case,
-    validate_breakout_quality_stale_score_membership_guard_contract_case,
-    validate_breakout_quality_daily_pit_strategy_runtime_contract_case,
-    validate_breakout_quality_audit_framework_contract_case,
+)
+from .synthetic_breakout_quality_audit_cases import (
     validate_breakout_quality_qualified_candidate_set_audit_contract_case,
     validate_breakout_quality_target_component_attribution_contract_case,
     validate_breakout_quality_target_time_penalty_ablation_contract_case,
     validate_breakout_quality_no_time_target_selection_audit_contract_case,
-    validate_breakout_quality_policy_single_source_case,
-    validate_breakout_quality_runtime_artifact_contract_case,
+    validate_breakout_quality_pass_realization_gap_attribution_contract_case,
+    validate_breakout_quality_selection_strategy_realization_contract_case,
+    validate_breakout_quality_candidate_counterfactual_execution_contract_case,
+    validate_breakout_quality_portfolio_selection_pressure_contract_case,
+    validate_breakout_quality_score_ranking_capture_audit_contract_case,
+    validate_breakout_quality_audit_framework_contract_case,
+)
+from .synthetic_breakout_quality_pit_cases import (
+    validate_breakout_quality_point_in_time_score_builder_contract_case,
+    validate_breakout_quality_selection_point_in_time_score_sort_contract_case,
+)
+from .synthetic_breakout_quality_strategy_cases import (
     validate_breakout_quality_strategy_comparison_contract_case,
-    validate_breakout_quality_strategy_readable_report_contract_case,
+    validate_breakout_quality_binary_dl_param_adaptation_contract_case,
+    validate_breakout_quality_trade_path_label_contract_case,
     validate_breakout_quality_legacy_research_cleanup_contract_case,
+    validate_breakout_quality_strategy_readable_report_contract_case,
+)
+from .synthetic_breakout_quality_strategy_app_cases import (
+    validate_breakout_quality_single_seed_single_entry_contract_case,
+    validate_strategy_compare_config_driven_app_contract_case,
+    validate_breakout_quality_stale_score_membership_guard_contract_case,
+    validate_breakout_quality_daily_pit_strategy_runtime_contract_case,
 )
 from .synthetic_display_cases import validate_display_reporting_sanity_case
 from .synthetic_reporting_cases import (
@@ -427,7 +439,7 @@ def get_synthetic_validator_entries():
         _entry(validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_take_profit_cases.py", "tools/validate/synthetic_meta_cases.py")),
         _entry(validate_validator_oracles_use_exact_ledger_totals_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_unit_cases.py", "tools/validate/synthetic_take_profit_cases.py", "tools/validate/synthetic_meta_cases.py")),
         _entry(validate_debug_backtest_history_snapshot_patch_seam_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/trade_analysis/backtest.py", "tools/validate/synthetic_meta_cases.py", "tools/validate/synthetic_contract_cases.py")),
-        _entry(validate_synthetic_registry_metadata_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_cases.py",)),
+        _entry(validate_synthetic_registry_metadata_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_cases.py", "tools/validate/synthetic_breakout_quality_cases.py", "tools/validate/synthetic_breakout_quality_support.py", "tools/validate/synthetic_breakout_quality_policy_cases.py", "tools/validate/synthetic_breakout_quality_artifact_cases.py", "tools/validate/synthetic_breakout_quality_model_cases.py", "tools/validate/synthetic_breakout_quality_audit_cases.py", "tools/validate/synthetic_breakout_quality_pit_cases.py", "tools/validate/synthetic_breakout_quality_strategy_cases.py", "tools/validate/synthetic_breakout_quality_strategy_app_cases.py")),
         _entry(validate_core_trading_modules_in_coverage_targets_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_meta_quality.py",)),
         _entry(validate_critical_helper_single_source_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("core/price_utils.py", "core/capital_policy.py", "tools/validate/meta_contracts.py", "tools/validate/synthetic_meta_cases.py")),
         _entry(validate_policy_contract_modules_in_coverage_targets_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/local_regression/meta_quality_targets.py", "tools/validate/synthetic_meta_cases.py", "core/capital_policy.py", "core/strategy_params.py", "core/params_io.py", "config/execution_policy.py", "config/training_policy.py")),

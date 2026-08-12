@@ -123,6 +123,8 @@ project/
 
 ### `tools/validate/`
 
+Breakout Quality synthetic validators依測試責任拆成policy、artifact、model、audit、PIT、strategy與strategy-app七個case modules；`synthetic_breakout_quality_support.py`只提供共享fixture imports／helpers，`synthetic_breakout_quality_cases.py`僅保留歷史import相容re-export。正式synthetic registry `synthetic_cases.py`直接import各domain owner，不再把21k行單檔作implementation owner；meta registry contract會驗證每個Breakout Quality validator只有一個domain owner、compatibility façade不得重新定義validator，並將所有domain modules納入coverage targets。
+
 ### 11A Strategy-aligned Continuous Target audit
 
 11A第一階段是獨立research-target子系統，不是新的model architecture。`filters/breakout_quality/continuous_target.py`以既有canonical event anchor與future high／low path cache建立group-level `strategy_aligned_opportunity_r_v1`；`tools/audit/breakout_quality/continuous_target.py`負責固定split分布、同日排序可學性及可選Round-trip R方向診斷，正式入口為：
