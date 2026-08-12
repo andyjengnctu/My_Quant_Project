@@ -4,8 +4,16 @@ CORE_TRADING_COVERAGE_TARGETS = [
     "core/backtest_core.py",
     "core/backtest_finalize.py",
     "core/portfolio_engine.py",
+    "core/portfolio_benchmark.py",
+    "core/portfolio_replay_support.py",
+    "core/portfolio_levels.py",
+    "core/portfolio_ensemble.py",
     "core/position_step.py",
     "core/portfolio_entries.py",
+    "core/portfolio_entry_plans.py",
+    "core/portfolio_entry_selection.py",
+    "core/portfolio_entry_selection_common.py",
+    "core/portfolio_entry_selection_max_dl.py",
     "core/portfolio_exits.py",
     "core/portfolio_ops.py",
     "core/trade_plans.py",
@@ -17,6 +25,10 @@ CORE_TRADING_COVERAGE_TARGETS = [
 ]
 ENTRY_PATH_CRITICAL_COVERAGE_TARGETS = [
     "core/portfolio_entries.py",
+    "core/portfolio_entry_plans.py",
+    "core/portfolio_entry_selection.py",
+    "core/portfolio_entry_selection_common.py",
+    "core/portfolio_entry_selection_max_dl.py",
     "core/entry_plans.py",
 ]
 CRITICAL_COVERAGE_TARGETS = [

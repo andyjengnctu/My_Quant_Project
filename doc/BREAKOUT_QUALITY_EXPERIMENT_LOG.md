@@ -8281,3 +8281,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Direct regression：Policy 153、Runtime Artifact 65、Continuous Ranker 17、Pass Conditional 8、All-event No-time 4、Pairwise 18、Listwise 8、PIT Builder 29、Daily PIT Runtime 9、App Simple Report 7，合計318項0 fail。Experiment Registry identity不變。
 - Full synthetic close-loop另同步CLI contract：正式workflow改以active `inception_time_v1`驗證train/export/report參數傳遞，TS2Vec／Patch Transformer／Mantis／MOMENT四個legacy architecture改驗證在任何command execution前fail-fast；historical runtime/package/artifact reconstruction contract仍保留。`validate_dataset_cli_contract_case`更新後163項0 fail；正式`apps/research.py model` command registry同時移除`build-pretrain-dataset`／`pretrain`，底層historical modules仍保留但不屬於current app surface。
 - 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。GPT不執行formal `apps/test_suite.py`；使用者本機以`apps/run_bundle.py`完成final double check並正常commit。
+
+## 2026-08-12｜Infrastructure：Portfolio Core responsibility split（Batch 10）
+
+- **性質**：infrastructure refactor；不建立新的MR／ARCH／DL／SR-C／PARAM／AUD identity，Registry不變。
+- **基準**：`test-branch-1_20260812_120614_c81b8a5.zip`。
+- **唯一變更**：`core/portfolio_engine.py`的benchmark／replay diagnostic／active-level／seed-ensemble helpers移至專責modules；`core/portfolio_entries.py`的entry-plan與resource-aware selection移至`portfolio_entry_plans.py`、selection router／common／max-DL modules，`portfolio_entries.py`只保留order fill／missed-buy／extended-signal cleanup state transition。
+- **行為保護**：`run_portfolio_timeline()` body與原基準AST完全相同；entry plan、全部resource-aware selector、`execute_reserved_entries_for_day()`及cleanup helper逐函式AST與拆分前一致。歷史`portfolio_engine._*`／`portfolio_entries.*` import以同function-object façade保留。
+- **獨立驗證**：受Portfolio Core影響的56個validators合計1,074 checks全數PASS，覆蓋same-day buy/sell、miss buy/sell、fee/tax、half-TP、Round-Trip、rotation T+1、candidate/order/fill separation、ensemble re-entry、exact-accounting parity、Strategy Compare與stale-score guard。
+- **科學語意**：Dataset、Label、model weights、DL score、Strategy Compare arms/fingerprint與resource-aware selector公式均不變；不需要重建任何模型或策略工件。
+

@@ -2097,6 +2097,101 @@ def validate_meta_quality_coverage_threshold_uses_target_scope_case(_base_params
     return results, summary
 
 
+
+def validate_portfolio_core_module_boundary_contract_case(_base_params):
+    case_id = "META_PORTFOLIO_CORE_MODULE_BOUNDARY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    import ast as _ast
+    from core import portfolio_engine as engine
+    from core import portfolio_benchmark as benchmark
+    from core import portfolio_ensemble as ensemble
+    from core import portfolio_entries as entries
+    from core import portfolio_entry_plans as entry_plans
+    from core import portfolio_entry_selection as selection
+    from core import portfolio_entry_selection_common as selection_common
+    from core import portfolio_entry_selection_max_dl as selection_max_dl
+    from core import portfolio_levels as levels
+    from core import portfolio_replay_support as replay_support
+    from core.trade_plans import clone_shadow_position as canonical_clone_shadow_position
+
+    required_paths = [
+        "core/portfolio_benchmark.py",
+        "core/portfolio_replay_support.py",
+        "core/portfolio_levels.py",
+        "core/portfolio_ensemble.py",
+        "core/portfolio_entry_plans.py",
+        "core/portfolio_entry_selection.py",
+        "core/portfolio_entry_selection_common.py",
+        "core/portfolio_entry_selection_max_dl.py",
+    ]
+    missing_paths = sorted(path for path in required_paths if not (PROJECT_ROOT / path).is_file())
+
+    engine_source = read_source_text(PROJECT_ROOT / "core" / "portfolio_engine.py")
+    engine_tree = _ast.parse(engine_source)
+    engine_defs = sorted(
+        node.name for node in engine_tree.body
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+    )
+    entries_source = read_source_text(PROJECT_ROOT / "core" / "portfolio_entries.py")
+    entries_tree = _ast.parse(entries_source)
+    entries_defs = sorted(
+        node.name for node in entries_tree.body
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+    )
+    expected_entries_defs = sorted([
+        "_candidate_kind_label",
+        "_format_candidate_date",
+        "cleanup_extended_signals_for_day",
+        "execute_reserved_entries_for_day",
+    ])
+
+    owner_expectations = {
+        "benchmark": engine._get_benchmark_period_stats.__module__ == benchmark.__name__,
+        "replay_snapshot": engine._candidate_replay_snapshot.__module__ == replay_support.__name__,
+        "levels": engine._append_portfolio_active_level_rows.__module__ == levels.__name__,
+        "ensemble": engine._aggregate_ensemble_candidate_rows.__module__ == ensemble.__name__,
+        "entry_plan": entries.build_candidate_plan_seed.__module__ == entry_plans.__name__,
+        "selection_router": entries.reorder_candidates_for_resource_aware_quality.__module__ == selection.__name__,
+        "selection_common": entries._simulate_reserved_candidate_order.__module__ == selection_common.__name__,
+        "selection_max_dl": entries._reorder_resource_aware_continuous_max_dl.__module__ == selection_max_dl.__name__,
+        "entry_execution": entries.execute_reserved_entries_for_day.__module__ == entries.__name__,
+    }
+    alias_expectations = {
+        "engine_benchmark_alias": engine._get_benchmark_period_stats is benchmark._get_benchmark_period_stats,
+        "engine_ensemble_alias": engine._aggregate_ensemble_candidate_rows is ensemble._aggregate_ensemble_candidate_rows,
+        "engine_replay_alias": engine._candidate_replay_snapshot is replay_support._candidate_replay_snapshot,
+        "engine_levels_alias": engine._append_portfolio_active_level_rows is levels._append_portfolio_active_level_rows,
+        "entries_plan_alias": entries.build_candidate_plan_seed is entry_plans.build_candidate_plan_seed,
+        "entries_selection_alias": entries.reorder_candidates_for_resource_aware_quality is selection.reorder_candidates_for_resource_aware_quality,
+        "entries_clone_shadow_compat": entries.clone_shadow_position is canonical_clone_shadow_position,
+    }
+
+    forbidden_reverse_imports = []
+    for rel_path in required_paths:
+        source = read_source_text(PROJECT_ROOT / rel_path)
+        if "from core.portfolio_engine" in source or "import core.portfolio_engine" in source:
+            forbidden_reverse_imports.append(f"{rel_path}:portfolio_engine")
+        if rel_path.startswith("core/portfolio_entry_") and (
+            "from core.portfolio_entries" in source or "import core.portfolio_entries" in source
+        ):
+            forbidden_reverse_imports.append(f"{rel_path}:portfolio_entries")
+
+    add_check(results, "meta_contract", case_id, "portfolio_core_split_modules_exist", [], missing_paths)
+    add_check(results, "meta_contract", case_id, "portfolio_engine_is_timeline_orchestrator_only", ["run_portfolio_timeline"], engine_defs)
+    add_check(results, "meta_contract", case_id, "portfolio_entries_keeps_only_entry_state_transition_defs", expected_entries_defs, entries_defs)
+    add_check(results, "meta_contract", case_id, "portfolio_split_canonical_owners_match_responsibility", True, all(owner_expectations.values()), note=str(owner_expectations))
+    add_check(results, "meta_contract", case_id, "portfolio_legacy_import_aliases_share_same_function_objects", True, all(alias_expectations.values()), note=str(alias_expectations))
+    add_check(results, "meta_contract", case_id, "portfolio_split_has_no_reverse_engine_or_entries_import", [], forbidden_reverse_imports)
+
+    summary["required_module_count"] = len(required_paths)
+    summary["engine_defs"] = engine_defs
+    summary["entries_defs"] = entries_defs
+    summary["owner_expectations"] = owner_expectations
+    return results, summary
+
+
 def validate_core_trading_modules_in_coverage_targets_case(_base_params):
     case_id = "META_CORE_TRADING_MODULES_IN_COVERAGE_TARGETS"
     results = []
@@ -2848,8 +2943,8 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     signal_source = signal_path.read_text(encoding="utf-8")
     backtest_path = build_project_absolute_path("core", "backtest_core.py")
     backtest_source = backtest_path.read_text(encoding="utf-8")
-    entry_path = build_project_absolute_path("core", "portfolio_entries.py")
-    entry_source = entry_path.read_text(encoding="utf-8")
+    entry_plan_seed_path = build_project_absolute_path("core", "portfolio_entry_plans.py")
+    entry_plan_seed_source = entry_plan_seed_path.read_text(encoding="utf-8")
     candidate_path = build_project_absolute_path("core", "portfolio_candidates.py")
     candidate_source = candidate_path.read_text(encoding="utf-8")
     fast_data_path = build_project_absolute_path("core", "portfolio_fast_data.py")
@@ -2882,7 +2977,7 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "portfolio_candidates_normal_candidate_threads_security_profile", True, "candidate_plan = build_normal_candidate_plan(" in candidate_source and "security_profile=security_profile" in candidate_source)
     add_check(results, "meta_contract", case_id, "portfolio_candidates_normal_signal_state_threads_security_profile", True, "signal_state = create_signal_tracking_state(" in candidate_source and "security_profile=security_profile" in candidate_source)
     add_check(results, "meta_contract", case_id, "portfolio_candidates_extended_candidate_threads_security_profile", True, "candidate_plan = build_extended_candidate_plan_from_signal(" in candidate_source and "security_profile=security_profile" in candidate_source)
-    add_check(results, "meta_contract", case_id, "portfolio_entry_seed_preserves_ticker_for_execution", True, "'ticker': candidate_row.get('ticker')" in entry_source)
+    add_check(results, "meta_contract", case_id, "portfolio_entry_seed_preserves_ticker_for_execution", True, "'ticker': candidate_row.get('ticker')" in entry_plan_seed_source)
     add_check(results, "meta_contract", case_id, "entry_plan_resize_threads_ticker_security_profile_and_trade_date", True, 'ticker=candidate_plan.get("ticker")' in entry_plans_source and 'security_profile=candidate_plan.get("security_profile")' in entry_plans_source and 'trade_date=candidate_plan.get("trade_date")' in entry_plans_source)
     add_check(results, "meta_contract", case_id, "scanner_projected_qty_threads_ticker_and_trade_date", True, "calc_reference_candidate_qty(stats['buy_limit'], stats['stop_loss'], params, ticker=ticker, trade_date=trade_date)" in scanner_processor_source and "calc_reference_candidate_qty(limit_price, init_sl, params, ticker=ticker, trade_date=trade_date)" in scanner_processor_source)
     add_check(results, "meta_contract", case_id, "scanner_response_threads_latest_trade_date", True, 'resolve_latest_trade_date_from_frame' in scanner_processor_source and 'trade_date = resolve_latest_trade_date_from_frame(df)' in scanner_processor_source and 'build_scanner_response_from_stats(ticker=ticker, stats=stats, params=params, sanitize_stats=sanitize_stats, trade_date=trade_date)' in scanner_processor_source)

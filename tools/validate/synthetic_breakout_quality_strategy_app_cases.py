@@ -1662,7 +1662,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     portfolio_source = (
-        project_root / "core" / "portfolio_entries.py"
+        project_root / "core" / "portfolio_entry_selection_max_dl.py"
     ).read_text(encoding="utf-8")
     max_dl_source = portfolio_source.split("def _max_dl_execution_order", 1)[1]
     add_check(
@@ -3569,7 +3569,7 @@ def validate_breakout_quality_stale_score_membership_guard_contract_case(_base_p
     )
 
     core_source = (
-        Path(__file__).resolve().parents[2] / "core" / "portfolio_entries.py"
+        Path(__file__).resolve().parents[2] / "core" / "portfolio_entry_selection_max_dl.py"
     ).read_text(encoding="utf-8")
     add_check(
         results, "synthetic_breakout_quality", case_id,
