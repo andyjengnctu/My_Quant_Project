@@ -74,8 +74,8 @@ from filters.breakout_quality.strategy_optimizer_policy import (
     build_outer_rolling_argv,
     build_rolling_base_policy,
 )
-from filters.breakout_quality.strategy_compare_engine import (
-    COMPARISON_MODE_HARD_FILTER,
+from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_HARD_FILTER
+from filters.breakout_quality.strategy_compare_sources import (
     OPTIONAL_ENTRY_FILTER_FIELDS,
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
@@ -85,8 +85,8 @@ from filters.breakout_quality.strategy_compare_engine import (
     _load_param_source,
     _resolve_params_path,
     _validate_requested_param_policy,
-    run_comparison,
 )
+from filters.breakout_quality.strategy_compare_engine import run_comparison
 from services.optimizer.outer_rolling_oos import FOLD_FIXED_STRATEGY_OVERRIDES_KEY, run_outer_rolling_oos
 from services.optimizer.prep import load_all_raw_data
 from services.optimizer.runtime import create_optimizer_study

@@ -8204,11 +8204,11 @@ def validate_breakout_quality_qualified_candidate_set_audit_contract_case(_base_
         / "breakout_quality"
         / "qualified_candidate_set.py"
     ).read_text(encoding="utf-8")
-    strategy_source = (
+    strategy_replay_source = (
         Path(__file__).resolve().parents[2]
         / "filters"
         / "breakout_quality"
-        / "strategy_compare_engine.py"
+        / "strategy_compare_replay.py"
     ).read_text(encoding="utf-8")
     engine_source = (
         Path(__file__).resolve().parents[2]
@@ -8232,7 +8232,7 @@ def validate_breakout_quality_qualified_candidate_set_audit_contract_case(_base_
             'print("[11] 11C Qualified Candidate-set Audit（research-only）")' not in app_source,
             'elif choice == "11":' not in app_source,
             "run_no_filter_candidate_replay_from_metadata" in audit_source,
-            "replay_counts=replay_counts" in strategy_source,
+            "replay_counts=replay_counts" in strategy_replay_source,
             "replay_counts=None" in engine_source and "replay_counts=None" in runner_source,
         ),
     )
@@ -11689,8 +11689,8 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
     menu_source = app_source[app_source.find("def _interactive_model_research") : app_source.find("def run_model_training_menu")]
     engine_source = (root / "core" / "portfolio_engine.py").read_text(encoding="utf-8")
     runner_source = (root / "services" / "portfolio_replay.py").read_text(encoding="utf-8")
-    compare_source = (
-        root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
+    compare_replay_source = (
+        root / "filters" / "breakout_quality" / "strategy_compare_replay.py"
     ).read_text(encoding="utf-8")
     entry_source = (root / "core" / "portfolio_entries.py").read_text(encoding="utf-8")
     audit_source = (
@@ -11709,7 +11709,7 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
             'getattr(replay_counts, "observe_replay_candidates", None)' not in engine_source,
             "replay_execution_rows=None" in engine_source,
             "replay_execution_rows=replay_execution_rows" in runner_source,
-            "replay_execution_rows=replay_execution_rows" in compare_source,
+            "replay_execution_rows=replay_execution_rows" in compare_replay_source,
         ),
     )
     add_check(
@@ -15027,7 +15027,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             )
 
         with patch(
-            "filters.breakout_quality.strategy_compare_engine._run_scenario_inside_source_context",
+            "filters.breakout_quality.strategy_compare_replay._run_scenario_inside_source_context",
             side_effect=lambda **_kwargs: get_breakout_quality_filter_source_context(),
         ):
             scenario_context = run_strategy_comparison_scenario(
@@ -15308,7 +15308,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             return json.loads(completed.stdout.strip())
 
         with patch(
-            "filters.breakout_quality.strategy_compare_engine._run_scenario_inside_source_context",
+            "filters.breakout_quality.strategy_compare_replay._run_scenario_inside_source_context",
             side_effect=_probe_spawned_worker_environment,
         ):
             worker_probe = run_strategy_comparison_scenario(
@@ -17581,6 +17581,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     orchestration_path = project_root / "filters" / "breakout_quality" / "strategy_comparison.py"
     preparation_path = project_root / "filters" / "breakout_quality" / "strategy_compare_preparation.py"
     engine_path = project_root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
+    contracts_path = project_root / "filters" / "breakout_quality" / "strategy_compare_contracts.py"
+    sources_path = project_root / "filters" / "breakout_quality" / "strategy_compare_sources.py"
+    reporting_path = project_root / "filters" / "breakout_quality" / "strategy_compare_reporting.py"
+    diagnostics_path = project_root / "filters" / "breakout_quality" / "strategy_compare_diagnostics.py"
+    replay_path = project_root / "filters" / "breakout_quality" / "strategy_compare_replay.py"
     export_service_path = project_root / "filters" / "breakout_quality" / "export_scores.py"
     param_service_path = project_root / "filters" / "breakout_quality" / "strategy_param_training.py"
     workflow_io_path = project_root / "filters" / "breakout_quality" / "workflow_io.py"
@@ -17601,6 +17606,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     orchestration_source = orchestration_path.read_text(encoding="utf-8")
     preparation_source = preparation_path.read_text(encoding="utf-8")
     strategy_compare_source = engine_path.read_text(encoding="utf-8")
+    contracts_source = contracts_path.read_text(encoding="utf-8")
+    sources_source = sources_path.read_text(encoding="utf-8")
+    reporting_source = reporting_path.read_text(encoding="utf-8")
+    diagnostics_source = diagnostics_path.read_text(encoding="utf-8")
+    replay_source = replay_path.read_text(encoding="utf-8")
     param_service_source = param_service_path.read_text(encoding="utf-8")
     artifact_registry_source = artifact_registry_path.read_text(encoding="utf-8")
     portfolio_replay_service_source = portfolio_replay_service_path.read_text(encoding="utf-8")
@@ -17749,8 +17759,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and optimizer_raw_service_path.is_file()
         and optimizer_trial_service_path.is_file()
         and optimizer_walk_forward_service_path.is_file()
-        and "from services.portfolio_replay import (" in strategy_compare_source
-        and "from tools.portfolio_sim.simulation_runner import (" not in strategy_compare_source
+        and "from services.portfolio_replay import (" in replay_source
+        and "from filters.breakout_quality.strategy_compare_replay import (" in strategy_compare_source
+        and "from tools.portfolio_sim.simulation_runner import (" not in replay_source
         and "from tools." not in portfolio_replay_service_source
         and "import tools." not in portfolio_replay_service_source
         and "from tools." not in optimizer_raw_service_source
@@ -17808,6 +17819,45 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and canonical_optimizer_module is legacy_optimizer_module
         and canonical_pit_module is legacy_pit_module
         and Path(canonical_train_module.PROJECT_ROOT).resolve() == project_root.resolve(),
+    )
+
+    engine_tree = ast.parse(strategy_compare_source, filename=str(engine_path))
+    engine_defined_functions = {
+        node.name for node in engine_tree.body if isinstance(node, ast.FunctionDef)
+    }
+    moved_strategy_compare_functions = {
+        "_assert_controlled_param_pair",
+        "_build_controlled_param_source_pair",
+        "_load_param_source",
+        "_resolve_params_path",
+        "_scenario_summary",
+        "_build_yearly_comparison",
+        "_strategy_selection_diagnostics",
+        "_run_scenario",
+        "_resolve_comparison_period",
+        "_load_reusable_no_filter_baseline",
+        "run_standalone_baseline",
+    }
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_compare_engine_delegates_sources_reporting_and_diagnostics_to_single_owner_modules",
+        True,
+        all(path.is_file() for path in (contracts_path, sources_path, reporting_path, diagnostics_path, replay_path))
+        and not moved_strategy_compare_functions.intersection(engine_defined_functions)
+        and "from filters.breakout_quality.strategy_compare_contracts import (" in strategy_compare_source
+        and "from filters.breakout_quality.strategy_compare_sources import (" in strategy_compare_source
+        and "from filters.breakout_quality.strategy_compare_reporting import (" in strategy_compare_source
+        and "from filters.breakout_quality.strategy_compare_diagnostics import (" in strategy_compare_source
+        and "from filters.breakout_quality.strategy_compare_replay import (" in strategy_compare_source
+        and "def comparison_switch_spec(" in contracts_source
+        and "def _build_controlled_param_source_pair(" in sources_source
+        and "def _scenario_summary(" in reporting_source
+        and "def _strategy_selection_diagnostics(" in diagnostics_source
+        and "def _run_scenario(" in replay_source
+        and "def run_standalone_baseline(" in replay_source
+        and "from filters.breakout_quality.strategy_compare_reporting import (" in orchestration_source
+        and "from filters.breakout_quality.strategy_compare_sources import (" in preparation_source
+        and "from filters.breakout_quality.strategy_compare_sources import (" in param_service_source,
     )
 
     add_check(
@@ -21294,8 +21344,8 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
     )
 
     project_root = Path(__file__).resolve().parents[2]
-    strategy_engine_source = (
-        project_root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
+    strategy_diagnostics_source = (
+        project_root / "filters" / "breakout_quality" / "strategy_compare_diagnostics.py"
     ).read_text(encoding="utf-8")
     pipeline_source = (
         project_root / "services" / "breakout_quality" /
@@ -21305,7 +21355,7 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         results, "synthetic_breakout_quality", case_id,
         "training_and_strategy_diagnostics_share_domain_layer_profile_sample_provider",
         True,
-        "load_profile_continuous_ranker_data" in strategy_engine_source
+        "load_profile_continuous_ranker_data" in strategy_diagnostics_source
         and "load_profile_continuous_ranker_data" in pipeline_source,
     )
 
@@ -22326,7 +22376,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     contracts = (
         (
             "strategy_compare_pair",
-            project_root / "filters/breakout_quality/strategy_compare_engine.py",
+            project_root / "filters/breakout_quality/strategy_compare_reporting.py",
             "strategy_comparison.md",
             "render_strategy_pair_simple_report",
         ),
@@ -22398,8 +22448,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     comparison_source = (
         project_root / "filters/breakout_quality/strategy_comparison.py"
     ).read_text(encoding="utf-8")
-    engine_source = (
-        project_root / "filters/breakout_quality/strategy_compare_engine.py"
+    reporting_source = (
+        project_root / "filters/breakout_quality/strategy_compare_reporting.py"
     ).read_text(encoding="utf-8")
     add_check(
         results,
@@ -22409,7 +22459,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         True,
         "materialize_strategy_pair_readable_report" in comparison_source
         and "render_strategy_pair_simple_report" in comparison_source
-        and "materialize_strategy_pair_readable_report" in engine_source
+        and "materialize_strategy_pair_readable_report" in reporting_source
         and 'pair_dir / "strategy_comparison.md"' in comparison_source,
     )
 

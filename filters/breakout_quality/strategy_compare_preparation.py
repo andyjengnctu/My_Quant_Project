@@ -43,7 +43,7 @@ from filters.breakout_quality.ranking_score_store import (
     load_selection_point_in_time_ranking_contract,
     resolve_continuous_ranker_oos_score_path,
 )
-from filters.breakout_quality.strategy_compare_engine import (
+from filters.breakout_quality.strategy_compare_sources import (
     PARAM_POLICY_SPECS,
     _load_param_source,
     _resolve_params_path,

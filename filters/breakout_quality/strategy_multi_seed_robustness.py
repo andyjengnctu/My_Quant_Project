@@ -81,12 +81,12 @@ from filters.breakout_quality.ranking_score_store import (
     load_selection_point_in_time_score_table_from_path,
 )
 from filters.breakout_quality.splits import resolve_breakout_quality_outer_policy
-from filters.breakout_quality.strategy_compare_engine import (
+from filters.breakout_quality.strategy_compare_sources import (
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
-    run_comparison,
-    run_standalone_baseline,
 )
+from filters.breakout_quality.strategy_compare_engine import run_comparison
+from filters.breakout_quality.strategy_compare_replay import run_standalone_baseline
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
 from filters.breakout_quality.strategy_report_style import (
     signal_for_delta,

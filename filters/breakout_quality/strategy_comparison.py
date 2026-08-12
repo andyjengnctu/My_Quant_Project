@@ -37,17 +37,21 @@ from core.console_report import (
     render_table,
     render_title,
 )
-from filters.breakout_quality.strategy_compare_engine import (
-    SCHEMA_VERSION as STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
+from filters.breakout_quality.strategy_compare_contracts import (
     COMPARISON_MODE_HARD_FILTER,
     COMPARISON_MODE_SCORE_RANKING,
+    STRATEGY_COMPARE_SCHEMA_VERSION as STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
+)
+from filters.breakout_quality.strategy_compare_sources import (
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+)
+from filters.breakout_quality.strategy_compare_reporting import (
     materialize_strategy_pair_readable_report,
     render_strategy_pair_simple_report,
-    run_comparison,
-    run_standalone_baseline,
 )
+from filters.breakout_quality.strategy_compare_engine import run_comparison
+from filters.breakout_quality.strategy_compare_replay import run_standalone_baseline
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
