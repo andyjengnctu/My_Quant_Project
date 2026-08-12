@@ -128,7 +128,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 
 | ID | 名稱 | 狀態 |
 |---|---|---|
-| `MR-13A` | Daily Universal No-time Pairwise Ranker / `daily_universal_no_time_pairwise` | RESULT_AVAILABLE／FORWARD_OOS_MODEL_GATE_PASS／SELECTION_PIT_MODEL_GATE_PASS／STAGE3_PIT_RUNTIME_READY／SELECTION_STRATEGY_GATE_PASS／FORWARD_OOS_STRATEGY_FAIL／NOT_PROMOTED。Stage 1/2模型Gate與Selection C28仍有效；frozen Forward checkpoint亦有效。future-independent Forward scores重建後，2021-01-01～2026-03-02 C29 Return=83.81%、MDD=15.71%、RoMD=5.34、EV=0.52R、selection R=-183.42R；相對C20 Return -106.45pp、RoMD -4.81、EV -0.65R、selection R -219.35R。此為post-fix current Gate，不再使用舊target-complete-only結果；Forward evidence可用於錯誤歸因與形成下一實驗假設，但不得直接選training hyperparameter或best seed。 |
+| `MR-13A` | Daily Universal No-time Pairwise Ranker / `daily_universal_no_time_pairwise` | RESULT_AVAILABLE／FORWARD_OOS_MODEL_GATE_PASS／SELECTION_PIT_MODEL_GATE_PASS／STAGE3_PIT_RUNTIME_READY／SELECTION_STRATEGY_GATE_PASS／MULTI_SEED_REOPENED／MATCHED_SELECTION_R_EDGE／MATCHED_ROMD_INCONCLUSIVE／RANKING_TO_PORTFOLIO_PARTIAL_TRANSLATION／TRADE_PATH_ATTRIBUTION_REQUIRED／NOT_PROMOTED。seed 42 的future-independent Forward replay仍是有效單一run證據：2021-01-01～2026-03-02 C29 Return=83.81%、MDD=15.71%、RoMD=5.34、EV=0.52R、selection R=-183.42R；相對C20 Return -106.45pp、RoMD -4.81、EV -0.65R、selection R -219.35R。但2026-08-12正式8-seed robustness已推翻「單一seed可代表模型普遍Forward失敗」的外推：MR-13A同seedΔDL選擇R 6勝2敗、Median=+46.36R，但ΔRoMD仍4勝4敗，且6個ranking改善seed僅3個RoMD同步改善。故目前問題固定轉為ranking→portfolio translation attribution；在全8-seed trade/path歸因完成前維持NOT_PROMOTED，不擴seed、不跑Selection PIT multi-seed，也不得依Forward結果選training hyperparameter或best seed。 |
 
 `MR-13A` 已正式占用。後續daily-universal target、loss、architecture或training-data semantics若再變更，必須使用新的 `MR-*`，不得覆寫13A。
 

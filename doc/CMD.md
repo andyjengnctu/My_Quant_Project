@@ -7,7 +7,6 @@ python apps/research.py optimizer --dataset full --outer-oos --timing --trials 1
 
 ```bash
 python requirements/export_requirements_lock.py
-python apps/test_suite.py
 python apps/run_bundle.py
 python tools/local_regression/run_all.py --only quick_gate
 python tools/validate/preflight_env.py

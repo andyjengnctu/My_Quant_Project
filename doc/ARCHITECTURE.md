@@ -10,8 +10,9 @@ project/
 │  ├─ research.py                     # 研究單一正式入口：模型訓練／策略參數最佳化／策略組合比較／Audit
 │  ├─ portfolio_sim.py                # 投組模擬正式入口（薄入口）
 │  ├─ smart_downloader.py             # 資料下載正式入口（薄入口）
-│  ├─ package_zip.py                  # 專案打包正式入口
-│  ├─ test_suite.py                   # 一鍵測試正式入口（reduced）
+│  ├─ run_bundle.py                   # 本機 double check／commit／package／formal test 單一使用者入口
+│  ├─ package_zip.py                  # run_bundle 使用的專案打包 helper；亦保留直接 snapshot 用途
+│  ├─ test_suite.py                   # run_bundle 內部 formal test runner
 │  ├─ vip_scanner.py                  # 掃描器正式入口（薄入口）
 │  └─ workbench.py                    # GUI 工作台正式入口（薄入口）
 ├─ config/
