@@ -114,6 +114,7 @@ from .synthetic_breakout_quality_support import (
     build_breakout_quality_default_high_len_values,
     build_breakout_quality_inception_kernel_sizes,
     build_breakout_quality_inference_dataset_for_frame,
+    build_active_model,
     build_breakout_quality_model,
     build_breakout_quality_pretraining_profile_payload,
     build_event_label,
@@ -130,6 +131,7 @@ from .synthetic_breakout_quality_support import (
     compute_outer_policy_fingerprint,
     compute_pretraining_configuration_fingerprint,
     count_trainable_parameters,
+    get_active_model_spec,
     get_breakout_quality_experiment_profile,
     get_model_spec,
     hierarchical_contrastive_loss,
@@ -3706,7 +3708,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     )
 
     torch.manual_seed(20260712)
-    actual_evaluation_model = breakout_quality_train.build_model(2, 2, architecture="tiny_cnn_v1")
+    actual_evaluation_model = build_breakout_quality_model(2, 2, architecture="tiny_cnn_v1")
     state_before_evaluation = {
         key: value.detach().clone()
         for key, value in actual_evaluation_model.state_dict().items()
@@ -4366,3 +4368,113 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
     summary["split_report_off"] = report_off
     summary["split_report_on"] = report_on
     return results, summary
+
+def validate_breakout_quality_active_legacy_model_isolation_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_ACTIVE_LEGACY_MODEL_ISOLATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    project_root = Path(__file__).resolve().parents[2]
+    configured_model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+    active_spec = get_active_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "formal_active_model_api_resolves_configured_architecture",
+        configured_model_spec.as_manifest_payload(),
+        active_spec.as_manifest_payload(),
+    )
+    try:
+        get_active_model_spec("tiny_cnn_v1")
+        active_spec_rejects_legacy = False
+    except ValueError as exc:
+        active_spec_rejects_legacy = "正式新訓練只允許 active architecture" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "formal_active_model_api_rejects_legacy_architecture",
+        True,
+        active_spec_rejects_legacy,
+    )
+    try:
+        build_active_model(10, 4, architecture="tiny_cnn_v1")
+        active_builder_rejects_legacy = False
+    except ValueError as exc:
+        active_builder_rejects_legacy = "正式新訓練只允許 active architecture" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "formal_active_model_builder_rejects_legacy_architecture",
+        True,
+        active_builder_rejects_legacy,
+    )
+    try:
+        breakout_quality_train.get_model_spec("tiny_cnn_v1")
+        binary_trainer_rejects_legacy = False
+    except ValueError as exc:
+        binary_trainer_rejects_legacy = "正式新訓練只允許 active architecture" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_formal_trainer_uses_active_model_spec_api",
+        True,
+        binary_trainer_rejects_legacy,
+    )
+    active_factory_source = read_source_text(
+        project_root / "filters" / "breakout_quality" / "models" / "active.py"
+    )
+    compatibility_factory_source = read_source_text(
+        project_root / "filters" / "breakout_quality" / "models" / "factory.py"
+    )
+    binary_train_source = read_source_text(
+        project_root / "services" / "breakout_quality" / "train.py"
+    )
+    continuous_train_source = read_source_text(
+        project_root / "services" / "breakout_quality" / "train_continuous_ranker.py"
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "active_model_factory_does_not_import_legacy_builders",
+        True,
+        all(
+            token not in active_factory_source
+            for token in (
+                "models.moment",
+                "models.mantis_v2",
+                "models.ts2vec",
+                "models.tiny_cnn",
+                "models.patch_transformer",
+                "models.modern_tcn",
+                "models.residual_tcn",
+            )
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "compatibility_factory_lazy_loads_historical_builder_owner",
+        True,
+        "from filters.breakout_quality.models.legacy_compatibility import build_legacy_model"
+        in compatibility_factory_source,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "formal_trainers_do_not_import_compatibility_model_factory",
+        True,
+        "filters.breakout_quality.models.factory" not in binary_train_source
+        and "filters.breakout_quality.model import" not in binary_train_source
+        and "filters.breakout_quality.models.factory" not in continuous_train_source
+        and "filters.breakout_quality.model import" not in continuous_train_source
+        and "filters.breakout_quality.models.active" in binary_train_source
+        and "filters.breakout_quality.models.active" in continuous_train_source,
+    )
+    return results, summary
+

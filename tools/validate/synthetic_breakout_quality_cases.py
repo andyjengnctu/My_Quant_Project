@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .synthetic_breakout_quality_policy_cases import (
     validate_breakout_quality_policy_single_source_case,
+    validate_breakout_quality_active_legacy_model_isolation_contract_case,
     validate_breakout_quality_chronological_embargo_case,
 )
 
@@ -53,6 +54,7 @@ from .synthetic_breakout_quality_strategy_app_cases import (
 
 __all__ = [
     "validate_breakout_quality_policy_single_source_case",
+    "validate_breakout_quality_active_legacy_model_isolation_contract_case",
     "validate_breakout_quality_chronological_embargo_case",
     "validate_breakout_quality_runtime_artifact_contract_case",
     "validate_breakout_quality_continuous_target_contract_case",

@@ -20,15 +20,11 @@ from config.breakout_quality import (
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
-    build_breakout_quality_pretraining_profile_payload,
     get_breakout_quality_continuous_ranker_comparison_settings,
     get_breakout_quality_experiment_profile,
 )
 from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
-    BREAKOUT_QUALITY_PRETRAINING_FAMILY,
-    BREAKOUT_QUALITY_PRETRAINING_PROFILE,
-    BREAKOUT_QUALITY_PRETRAINING_STRIDE,
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS,
@@ -57,15 +53,7 @@ from filters.breakout_quality.continuous_target import (
     TARGET_MANIFEST_FILENAME,
     resolve_continuous_target_dir,
 )
-from filters.breakout_quality.mantis_contract import require_mantis_v2_class
-from filters.breakout_quality.moment_contract import (
-    MOMENT_PACKAGE_NAME,
-    MOMENT_PACKAGE_VERSION,
-    MOMENT_TRANSFORMERS_PACKAGE_NAME,
-    MOMENT_TRANSFORMERS_VERSION,
-    require_moment_pipeline_class,
-)
-from filters.breakout_quality.models.spec import get_model_spec
+from filters.breakout_quality.models.active import get_active_model_spec
 from filters.breakout_quality.market_set import market_set_contract_payload
 from filters.breakout_quality.dataset_store import (
     DATASET_STORAGE_FORMAT,
@@ -74,12 +62,6 @@ from filters.breakout_quality.dataset_store import (
     market_set_artifact_metadata_reasons,
     resolve_dataset_paths,
 )
-from filters.breakout_quality.pretraining_store import (
-    load_validated_pretrained_encoder_manifest,
-    load_validated_pretraining_dataset,
-    resolve_pretrained_encoder_paths,
-)
-from filters.breakout_quality.splits import resolve_breakout_quality_outer_policy
 from filters.breakout_quality.paths import (
     normalize_filter_id,
     resolve_existing_filter_artifact_paths,
@@ -122,8 +104,6 @@ from core.console_report import (
 
 COMMAND_MODULES = {
     "build-dataset": "tools.filters.breakout_quality.build_dataset",
-    "build-pretrain-dataset": "tools.filters.breakout_quality.build_pretraining_dataset",
-    "pretrain": "tools.filters.breakout_quality.pretrain",
     "train": "tools.filters.breakout_quality.train",
     "export-scores": "filters.breakout_quality.export_scores",
     "report": "tools.filters.breakout_quality.report",
@@ -153,10 +133,8 @@ INTERACTIVE_EVALUATE_OOS = True
 
 COMMAND_DESCRIPTIONS = {
     "menu": "開啟互動式操作選單",
-    "workflow": "依序執行 dataset、必要的Selection-only預訓練、train、research score export與報表",
+    "workflow": "依序執行 dataset、active model train、research score export與報表",
     "build-dataset": "建立 breakout quality event dataset",
-    "build-pretrain-dataset": "建立 Selection-only self-supervised rolling windows",
-    "pretrain": "訓練 Selection-only TS2Vec encoder",
     "train": "訓練模型；可選擇 inner validation 選 epoch 後完整 Selection 重訓",
     "export-scores": "匯出 research 或 forward-OOS score table",
     "report": "產生表格化終端報表、Markdown 報表與完整 metrics JSON",
@@ -1178,130 +1156,7 @@ def _build_export_score_argv(
     return argv
 
 
-def _pretraining_refresh_plan(
-    *,
-    filter_id: str,
-    dataset: str,
-    model_spec,
-    experiment_profile: str,
-    max_tickers: int,
-) -> tuple[bool, bool, list[str]]:
-    if str(model_spec.family) != "ts2vec_frozen_linear":
-        return False, False, []
-    reasons: list[str] = []
-    summary = _read_dataset_summary(filter_id)
-    if summary is None:
-        return True, True, ["supervised dataset summary 尚不可用"]
-    date_range = summary.get("source_data_date_range")
-    source_end = str(date_range.get("end") or "").strip() if isinstance(date_range, dict) else ""
-    if not source_end:
-        return True, True, ["supervised dataset summary 缺少 source_data_end"]
-    outer_policy = resolve_breakout_quality_outer_policy(
-        PROJECT_ROOT,
-        source_data_end_date=source_end,
-    )
-    try:
-        pretrain_summary, _windows, _index = load_validated_pretraining_dataset(
-            PROJECT_ROOT,
-            filter_id,
-            dataset_profile=str(dataset),
-            family=BREAKOUT_QUALITY_PRETRAINING_FAMILY,
-            stride=int(BREAKOUT_QUALITY_PRETRAINING_STRIDE),
-            expected_selection_start=str(outer_policy["selection_start_date"]),
-            expected_selection_end=str(outer_policy["selection_end_date"]),
-            expected_window_bars=int(DEFAULT_LABEL_POLICY.feature_window_bars),
-            expected_max_tickers=max(0, int(max_tickers)),
-            require_current_source=True,
-            load_windows=False,
-        )
-        rebuild_dataset = False
-    except (OSError, ValueError, FileNotFoundError) as exc:
-        reasons.append(f"pretraining dataset 需重建: {type(exc).__name__}: {exc}")
-        return True, True, reasons
-    encoder_paths = resolve_pretrained_encoder_paths(
-        PROJECT_ROOT,
-        filter_id,
-        model_architecture=model_spec.architecture,
-        experiment_profile=experiment_profile,
-    )
-    try:
-        load_validated_pretrained_encoder_manifest(
-            encoder_paths,
-            expected_architecture=model_spec.architecture,
-            expected_experiment_profile=experiment_profile,
-            expected_dataset_fingerprint=str(pretrain_summary["configuration_fingerprint"]),
-            expected_model_spec=model_spec.as_manifest_payload(),
-            expected_pretraining_profile=(
-                build_breakout_quality_pretraining_profile_payload(
-                    BREAKOUT_QUALITY_PRETRAINING_PROFILE
-                )
-            ),
-        )
-        rebuild_encoder = False
-    except (OSError, ValueError, FileNotFoundError) as exc:
-        reasons.append(f"pretrained encoder 需重訓: {type(exc).__name__}: {exc}")
-        rebuild_encoder = True
-    return rebuild_dataset, rebuild_encoder, reasons
-
-
 def _model_runtime_description(model_spec) -> str:
-    if str(model_spec.family) == "moment_frozen_linear":
-        return (
-            f"family=moment_frozen_linear, source={model_spec.moment_repository}, "
-            f"revision={model_spec.moment_revision}, "
-            f"runtime={MOMENT_PACKAGE_NAME}-{MOMENT_PACKAGE_VERSION}/"
-            f"{MOMENT_TRANSFORMERS_PACKAGE_NAME}-{MOMENT_TRANSFORMERS_VERSION}, "
-            f"input_resize={model_spec.moment_input_length}, "
-            f"patch={model_spec.moment_patch_length}/{model_spec.moment_patch_stride}, "
-            f"embedding={model_spec.moment_embedding_dim}, "
-            f"layers={model_spec.moment_transformer_layers}, heads={model_spec.moment_transformer_heads}, "
-            f"channel_aggregation={model_spec.moment_channel_aggregation}, "
-            f"patch_reduction={model_spec.moment_patch_reduction}, "
-            "encoder=frozen, head=linear, dataset_context=disabled"
-        )
-    if str(model_spec.family) == "mantis_v2_frozen_linear":
-        return (
-            f"family=mantis_v2_frozen_linear, source={model_spec.mantis_repository}, "
-            f"revision={model_spec.mantis_revision}, input_resize={model_spec.mantis_input_length}, "
-            f"patches={model_spec.mantis_num_patches}, output_layer={model_spec.mantis_return_transformer_layer}, "
-            f"output_token={model_spec.mantis_output_token}, "
-            f"channel_aggregation={model_spec.mantis_channel_aggregation}, "
-            "encoder=frozen, head=linear, dataset_context=disabled"
-        )
-    if str(model_spec.family) == "ts2vec_frozen_linear":
-        return (
-            f"family=ts2vec_frozen_linear, depth={model_spec.ts2vec_depth}, "
-            f"hidden={model_spec.ts2vec_hidden_dims}, output={model_spec.ts2vec_output_dims}, "
-            f"dilations={'/'.join(str(value) for value in model_spec.dilations)}, "
-            f"encoder=frozen, head=linear, "
-            f"dataset_context={'enabled' if model_spec.use_dataset_context else 'disabled'}, "
-            f"pooling={'+'.join(model_spec.pooling)}"
-        )
-    if str(model_spec.family) == "patch_transformer":
-        return (
-            f"family=patch_transformer, patch={model_spec.patch_transformer_patch_size}/"
-            f"{model_spec.patch_transformer_patch_stride}, "
-            f"embedding={model_spec.patch_transformer_embedding_dim}, "
-            f"depth={model_spec.patch_transformer_depth}, heads={model_spec.patch_transformer_heads}, "
-            f"mlp={model_spec.patch_transformer_mlp_dim}, "
-            f"position={model_spec.patch_transformer_positional_encoding}, "
-            f"dataset_context={'enabled' if model_spec.use_dataset_context else 'disabled'}, "
-            f"pooling={model_spec.patch_transformer_pooling}"
-        )
-    if str(model_spec.family) == "inception_time_market_set":
-        kernels = "/".join(str(value) for value in model_spec.inception_kernel_sizes)
-        query_mode = str(model_spec.market_set_query_mode or "global_learned")
-        return (
-            f"family=inception_time_market_set, candidate_depth={model_spec.inception_depth}, "
-            f"candidate_kernels={kernels}, candidate_rf={model_spec.receptive_field_bars} bars, "
-            f"market_history={model_spec.market_set_history_bars} bars, "
-            f"stock_embedding={model_spec.market_set_stock_embedding_dim}, "
-            f"market_norm={model_spec.market_set_temporal_normalization}/"
-            f"{model_spec.market_set_temporal_normalization_groups}, "
-            f"query_mode={query_mode}, queries={model_spec.market_set_query_count}, "
-            f"heads={model_spec.market_set_attention_heads}, "
-            f"market_embedding={model_spec.market_set_embedding_dim}, dataset_context=disabled"
-        )
     if str(model_spec.family) == "inception_time":
         kernels = "/".join(str(value) for value in model_spec.inception_kernel_sizes)
         target_fragment = (
@@ -1319,17 +1174,6 @@ def _model_runtime_description(model_spec) -> str:
             f"receptive_field={model_spec.receptive_field_bars} bars, "
             f"pooling={'+'.join(model_spec.pooling)}"
         )
-    if str(model_spec.family) == "modern_tcn":
-        return (
-            f"family=modern_tcn, depth={model_spec.modern_tcn_depth}, "
-            f"channels={model_spec.modern_tcn_channels}, "
-            f"large_kernel={model_spec.modern_tcn_kernel_size}, "
-            f"expansion={model_spec.modern_tcn_expansion_ratio}x, "
-            f"normalization={model_spec.normalization}, "
-            f"dataset_context={'enabled' if model_spec.use_dataset_context else 'disabled'}, "
-            f"receptive_field={model_spec.receptive_field_bars} bars, "
-            f"pooling={'+'.join(model_spec.pooling)}"
-        )
     branch_inputs = "+".join(model_spec.branch_input_representations) or "level"
     branch_channels = model_spec.branch_channels or (model_spec.channels,) * 3
     derived_context = ",".join(model_spec.derived_context_features) or "none"
@@ -1341,7 +1185,6 @@ def _model_runtime_description(model_spec) -> str:
         f"receptive_field={model_spec.receptive_field_bars} bars, "
         f"pooling={'+'.join(model_spec.pooling)}"
     )
-
 
 def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     filter_id = normalize_filter_id(args.filter_id)
@@ -1358,11 +1201,7 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
 
     workflow_started = time.perf_counter()
     color_time = bool(sys.stdout.isatty())
-    model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
-    if str(model_spec.family) == "moment_frozen_linear":
-        require_moment_pipeline_class()
-    if str(model_spec.family) == "mantis_v2_frozen_linear":
-        require_mantis_v2_class()
+    model_spec = get_active_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     experiment = get_breakout_quality_experiment_profile(args.experiment_profile)
     schedule_parameters = experiment.lr_schedule_parameters()
     augmentation_parameters = experiment.augmentation_parameters()
@@ -1385,21 +1224,6 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
         ("Inner Validation", bool(args.use_inner_validation)),
         ("Torch", f"device={args.device}, mixed_precision={bool(args.mixed_precision)}, dtype={args.mixed_precision_dtype}, deterministic={bool(args.deterministic_algorithms)}, tf32={bool(args.allow_tf32)}"),
     ]
-    if str(model_spec.family) == "moment_frozen_linear":
-        workflow_rows.append((
-            "External Encoder",
-            f"external_encoder=repository={model_spec.moment_repository}, revision={model_spec.moment_revision}, runtime={MOMENT_PACKAGE_NAME}-{MOMENT_PACKAGE_VERSION}/{MOMENT_TRANSFORMERS_PACKAGE_NAME}-{MOMENT_TRANSFORMERS_VERSION}, project_pretraining=False, encoder_fine_tuning=False",
-        ))
-    elif str(model_spec.family) == "mantis_v2_frozen_linear":
-        workflow_rows.append((
-            "External Encoder",
-            f"external_encoder=repository={model_spec.mantis_repository}, revision={model_spec.mantis_revision}, project_pretraining=False, encoder_fine_tuning=False",
-        ))
-    elif str(model_spec.family) == "ts2vec_frozen_linear":
-        workflow_rows.append((
-            "Selection Pretrain",
-            f"pretrain=profile={BREAKOUT_QUALITY_PRETRAINING_PROFILE}, stride={int(BREAKOUT_QUALITY_PRETRAINING_STRIDE)}, settings={build_breakout_quality_pretraining_profile_payload(BREAKOUT_QUALITY_PRETRAINING_PROFILE)}, selection_only=True, oos_windows=False, pass_reject_labels=False",
-        ))
     print("\n" + render_title("Breakout Quality Research Workflow"))
     print(render_key_values(workflow_rows))
     print(render_section("研究邊界"))
@@ -1419,75 +1243,6 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
         steps.append(dataset_step)
     else:
         print("[skip] dataset 工件、來源 CSV inventory、ticker coverage 與 policy 均未變更。")
-
-    if str(model_spec.family) == "ts2vec_frozen_linear":
-        if refresh_mode in {"rebuild", "relabel"}:
-            rebuild_pretrain_dataset = True
-            rebuild_pretrained_encoder = True
-            pretraining_reasons = ["supervised dataset 將更新，pretraining chain 必須同步重建"]
-        else:
-            rebuild_pretrain_dataset, rebuild_pretrained_encoder, pretraining_reasons = (
-                _pretraining_refresh_plan(
-                    filter_id=filter_id,
-                    dataset=str(args.dataset),
-                    model_spec=model_spec,
-                    experiment_profile=str(args.experiment_profile),
-                    max_tickers=int(args.max_tickers),
-                )
-            )
-        for reason in pretraining_reasons:
-            print(f"[pretraining] {reason}")
-        if rebuild_pretrain_dataset:
-            build_pretrain_args = [
-                "--dataset",
-                str(args.dataset),
-                "--filter-id",
-                filter_id,
-                "--stride",
-                str(int(BREAKOUT_QUALITY_PRETRAINING_STRIDE)),
-            ]
-            if int(args.max_tickers) > 0:
-                build_pretrain_args.extend(["--max-tickers", str(int(args.max_tickers))])
-            steps.append(
-                (
-                    "build-pretrain-dataset",
-                    build_pretrain_args,
-                    "建立 Selection-only TS2Vec rolling windows",
-                )
-            )
-        if rebuild_pretrain_dataset or rebuild_pretrained_encoder:
-            pretrain_args = [
-                "--dataset",
-                str(args.dataset),
-                "--filter-id",
-                filter_id,
-                "--stride",
-                str(int(BREAKOUT_QUALITY_PRETRAINING_STRIDE)),
-                "--experiment-profile",
-                str(args.experiment_profile),
-                "--pretraining-profile",
-                str(BREAKOUT_QUALITY_PRETRAINING_PROFILE),
-                "--device",
-                str(args.device),
-                "--mixed-precision-dtype",
-                str(args.mixed_precision_dtype),
-                "--seed",
-                str(int(args.seed)),
-            ]
-            pretrain_args.append(
-                "--mixed-precision" if bool(args.mixed_precision) else "--no-mixed-precision"
-            )
-            pretrain_args.append(
-                "--deterministic-algorithms"
-                if bool(args.deterministic_algorithms)
-                else "--no-deterministic-algorithms"
-            )
-            pretrain_args.append(
-                "--allow-tf32" if bool(args.allow_tf32) else "--no-allow-tf32"
-            )
-            steps.append(("pretrain", pretrain_args, "Selection-only TS2Vec encoder 預訓練"))
-        else:
-            print("[skip] Selection-only pretraining dataset 與 pretrained encoder 均符合目前契約。")
 
     report_args = [
         "--filter-id",
@@ -1637,89 +1392,13 @@ def _print_policy_defaults(
     if train_settings is None:
         return
     print(render_section("模型與訓練設定", number=2))
-    model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+    model_spec = get_active_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     experiment = get_breakout_quality_experiment_profile(
         train_settings.experiment_profile
     )
     schedule_parameters = experiment.lr_schedule_parameters()
     augmentation_parameters = experiment.augmentation_parameters()
-    if str(model_spec.family) == "moment_frozen_linear":
-        architecture_details = (
-            f"- Model Family：MOMENT-1-base Frozen Linear\n"
-            f"- External Encoder：{model_spec.moment_repository}\n"
-            f"- Pinned Revision：{model_spec.moment_revision}\n"
-            f"- Runtime：{MOMENT_PACKAGE_NAME} {MOMENT_PACKAGE_VERSION} / "
-            f"{MOMENT_TRANSFORMERS_PACKAGE_NAME} {MOMENT_TRANSFORMERS_VERSION}\n"
-            f"- Input Resize：{DEFAULT_LABEL_POLICY.feature_window_bars} → {model_spec.moment_input_length} bars\n"
-            f"- Patch：{model_spec.moment_patch_length} / stride {model_spec.moment_patch_stride}\n"
-            f"- Transformer：{model_spec.moment_transformer_layers} layers / {model_spec.moment_transformer_heads} heads\n"
-            f"- Channel Aggregation：{model_spec.moment_channel_aggregation}\n"
-            f"- Patch Reduction：{model_spec.moment_patch_reduction}\n"
-            f"- Per-channel Representation：{model_spec.moment_embedding_dim}\n"
-            f"- Encoder：official pretrained and frozen\n"
-            f"- Head：Linear"
-        )
-    elif str(model_spec.family) == "mantis_v2_frozen_linear":
-        architecture_details = (
-            f"- Model Family：MantisV2 Frozen Linear\n"
-            f"- External Encoder：{model_spec.mantis_repository}\n"
-            f"- Pinned Revision：{model_spec.mantis_revision}\n"
-            f"- Input Resize：{DEFAULT_LABEL_POLICY.feature_window_bars} → {model_spec.mantis_input_length} bars\n"
-            f"- Patches：{model_spec.mantis_num_patches}\n"
-            f"- Transformer Output：layer {model_spec.mantis_return_transformer_layer} / {model_spec.mantis_output_token}\n"
-            f"- Channel Aggregation：{model_spec.mantis_channel_aggregation}\n"
-            f"- Per-channel Representation：{model_spec.mantis_embedding_dim}\n"
-            f"- Encoder：official pretrained and frozen\n"
-            f"- Head：Linear"
-        )
-    elif str(model_spec.family) == "ts2vec_frozen_linear":
-        pretraining_settings = build_breakout_quality_pretraining_profile_payload(
-            BREAKOUT_QUALITY_PRETRAINING_PROFILE
-        )
-        architecture_details = (
-            f"- Model Family：TS2Vec Frozen Linear\n"
-            f"- Encoder Depth：{model_spec.ts2vec_depth}\n"
-            f"- Hidden Dimensions：{model_spec.ts2vec_hidden_dims}\n"
-            f"- Representation Dimensions：{model_spec.ts2vec_output_dims}\n"
-            f"- Encoder：Selection-only pretrained and frozen\n"
-            f"- Head：Linear\n"
-            f"- Pretraining Profile：{BREAKOUT_QUALITY_PRETRAINING_PROFILE}\n"
-            f"- Pretraining Settings：{pretraining_settings}\n"
-            f"- Pretraining Dataset Stride：{int(BREAKOUT_QUALITY_PRETRAINING_STRIDE)}"
-        )
-    elif str(model_spec.family) == "patch_transformer":
-        architecture_details = (
-            f"- Model Family：Small Patch Transformer\n"
-            f"- Patch / Stride：{model_spec.patch_transformer_patch_size} / {model_spec.patch_transformer_patch_stride}\n"
-            f"- Embedding Dimensions：{model_spec.patch_transformer_embedding_dim}\n"
-            f"- Transformer Depth：{model_spec.patch_transformer_depth}\n"
-            f"- Attention Heads：{model_spec.patch_transformer_heads}\n"
-            f"- MLP Dimensions：{model_spec.patch_transformer_mlp_dim}\n"
-            f"- Positional Encoding：{model_spec.patch_transformer_positional_encoding}\n"
-            f"- Patch Pooling：{model_spec.patch_transformer_pooling}"
-        )
-    elif str(model_spec.family) == "inception_time_market_set":
-        query_mode = str(model_spec.market_set_query_mode or "global_learned")
-        query_label = (
-            "Candidate-conditioned Queries"
-            if query_mode == "candidate_conditioned"
-            else "Global Learned Queries"
-        )
-        architecture_details = (
-            f"- Model Family：InceptionTime + Learned Market Set\n"
-            f"- Candidate Depth：{model_spec.inception_depth}\n"
-            f"- Candidate Kernel Sizes：{'/'.join(str(value) for value in model_spec.inception_kernel_sizes)}\n"
-            f"- Candidate Receptive Field：{model_spec.receptive_field_bars} bars\n"
-            f"- Market History：{model_spec.market_set_history_bars} bars\n"
-            f"- Market Base Features：{'/'.join(model_spec.market_set_base_features)}\n"
-            f"- Shared Stock Embedding：{model_spec.market_set_stock_embedding_dim}\n"
-            f"- Market Temporal Normalization：{model_spec.market_set_temporal_normalization} / groups {model_spec.market_set_temporal_normalization_groups}\n"
-            f"- Market Query Mode：{query_mode}\n"
-            f"- {query_label}：{model_spec.market_set_query_count} / heads {model_spec.market_set_attention_heads}\n"
-            f"- Market Embedding：{model_spec.market_set_embedding_dim}\n"
-            f"- Runtime Eligibility：research only"
-        )
-    elif str(model_spec.family) == "inception_time":
+    if str(model_spec.family) == "inception_time":
         target_line = (
             f"- Configured Receptive Field Target：{int(BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS)} bars\n"
             if str(model_spec.architecture) == "inception_time_v1"
@@ -1733,15 +1412,6 @@ def _print_policy_defaults(
             f"- Kernel Sizes：{'/'.join(str(value) for value in model_spec.inception_kernel_sizes)}\n"
             f"{target_line}"
             f"- Residual Every：{model_spec.inception_residual_every} modules"
-        )
-    elif str(model_spec.family) == "modern_tcn":
-        architecture_details = (
-            f"- Model Family：ModernTCN\n"
-            f"- Depth：{model_spec.modern_tcn_depth}\n"
-            f"- Channels：{model_spec.modern_tcn_channels}\n"
-            f"- Large Kernel：{model_spec.modern_tcn_kernel_size}\n"
-            f"- Pointwise Expansion：{model_spec.modern_tcn_expansion_ratio}x\n"
-            f"- Normalization：{model_spec.normalization}"
         )
     else:
         branch_inputs = "+".join(model_spec.branch_input_representations) or "level"

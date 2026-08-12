@@ -29,21 +29,6 @@ from config.breakout_quality import (
     resolve_breakout_quality_inception_receptive_field_bars,
 )
 
-from filters.breakout_quality.mantis_contract import (
-    MANTIS_V2_REPOSITORY,
-    MANTIS_V2_REVISION,
-)
-from filters.breakout_quality.moment_contract import (
-    MOMENT_EMBEDDING_DIM,
-    MOMENT_INPUT_LENGTH,
-    MOMENT_PATCH_LENGTH,
-    MOMENT_PATCH_STRIDE,
-    MOMENT_REPOSITORY,
-    MOMENT_REVISION,
-    MOMENT_TRANSFORMER_HEADS,
-    MOMENT_TRANSFORMER_LAYERS,
-)
-
 from filters.breakout_quality.models.regime_context import (
     REGIME_CONTEXT_ANNUALIZATION_BARS,
     REGIME_CONTEXT_FEATURES,
@@ -508,6 +493,17 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
         )
 
     if normalized == MOMENT_1_BASE_FROZEN_LINEAR_V1:
+        from filters.breakout_quality.moment_contract import (
+            MOMENT_EMBEDDING_DIM,
+            MOMENT_INPUT_LENGTH,
+            MOMENT_PATCH_LENGTH,
+            MOMENT_PATCH_STRIDE,
+            MOMENT_REPOSITORY,
+            MOMENT_REVISION,
+            MOMENT_TRANSFORMER_HEADS,
+            MOMENT_TRANSFORMER_LAYERS,
+        )
+
         return BreakoutQualityModelSpec(
             architecture=MOMENT_1_BASE_FROZEN_LINEAR_V1,
             family="moment_frozen_linear",
@@ -534,6 +530,11 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
         )
 
     if normalized == MANTIS_V2_FROZEN_LINEAR_V1:
+        from filters.breakout_quality.mantis_contract import (
+            MANTIS_V2_REPOSITORY,
+            MANTIS_V2_REVISION,
+        )
+
         return BreakoutQualityModelSpec(
             architecture=MANTIS_V2_FROZEN_LINEAR_V1,
             family="mantis_v2_frozen_linear",

@@ -188,7 +188,7 @@ def validate_dataset_cli_contract_case(_base_params):
         )
 
     for command in (
-        "menu", "workflow", "build-dataset", "build-pretrain-dataset", "pretrain",
+        "menu", "workflow", "build-dataset",
         "train", "export-scores", "report", "evaluate", "regime-audit",
         "prepare-continuous-target", "build-point-in-time-scores",
         "compare-continuous-rankers",
@@ -1029,13 +1029,12 @@ def validate_dataset_cli_contract_case(_base_params):
 
     workflow_output = StringIO()
     with (
-        patch("tools.filters.breakout_quality.application.BREAKOUT_QUALITY_MODEL_ARCHITECTURE", "ts2vec_frozen_linear_v1"),
+        patch(
+            "tools.filters.breakout_quality.application.BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
+            "inception_time_v1",
+        ),
         patch("tools.filters.breakout_quality.application._load_command_module", return_value=fake_train_module),
         patch("tools.filters.breakout_quality.application._dataset_refresh_plan", return_value=("none", [])),
-        patch(
-            "tools.filters.breakout_quality.application._pretraining_refresh_plan",
-            return_value=(True, True, ["synthetic pretraining refresh"]),
-        ),
         patch("tools.filters.breakout_quality.application._run_command", side_effect=_fake_run_command),
         redirect_stdout(workflow_output),
     ):
@@ -1052,8 +1051,8 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_workflow_uses_report_not_verbose_evaluate",
-        ["build-pretrain-dataset", "pretrain", "train", "export-scores", "report"],
+        "breakout_quality_active_workflow_runs_supervised_stages_only",
+        ["train", "export-scores", "report"],
         [call[0] for call in workflow_calls],
     )
     add_check(
@@ -1068,13 +1067,13 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_workflow_propagates_experiment_to_all_model_stages",
+        "breakout_quality_workflow_propagates_experiment_to_active_model_stages",
         True,
         all(
             "--experiment-profile" in workflow_calls_by_command[command]
             and ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
             in workflow_calls_by_command[command]
-            for command in ("pretrain", "train", "export-scores", "report")
+            for command in ("train", "export-scores", "report")
         ),
     )
     add_check(
@@ -1091,17 +1090,15 @@ def validate_dataset_cli_contract_case(_base_params):
         case_id,
         "breakout_quality_workflow_propagates_torch_execution_contract",
         True,
-        (
-            all(
-                "--device" in workflow_calls_by_command[command]
-                and "cpu" in workflow_calls_by_command[command]
-                and "--no-mixed-precision" in workflow_calls_by_command[command]
-                and "--mixed-precision-dtype" in workflow_calls_by_command[command]
-                and "float16" in workflow_calls_by_command[command]
-                and "--deterministic-algorithms" in workflow_calls_by_command[command]
-                and "--no-allow-tf32" in workflow_calls_by_command[command]
-                for command in ("pretrain", "train", "export-scores")
-            )
+        all(
+            "--device" in workflow_calls_by_command[command]
+            and "cpu" in workflow_calls_by_command[command]
+            and "--no-mixed-precision" in workflow_calls_by_command[command]
+            and "--mixed-precision-dtype" in workflow_calls_by_command[command]
+            and "float16" in workflow_calls_by_command[command]
+            and "--deterministic-algorithms" in workflow_calls_by_command[command]
+            and "--no-allow-tf32" in workflow_calls_by_command[command]
+            for command in ("train", "export-scores")
         ),
     )
     add_check(
@@ -1138,8 +1135,8 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_workflow_shows_each_stage_elapsed",
-        5,
+        "breakout_quality_active_workflow_shows_each_stage_elapsed",
+        3,
         workflow_console.count("[完成]") if "總耗時" in workflow_console else -1,
     )
     add_check(
@@ -1151,175 +1148,49 @@ def validate_dataset_cli_contract_case(_base_params):
         "\x1b[" in workflow_console,
     )
 
-    patch_workflow_calls = []
-
-    def _fake_run_patch_command(command, args, *, program_name):
-        patch_workflow_calls.append((command, list(args), program_name))
-        return 0
-
-    patch_workflow_output = StringIO()
-    with (
-        patch(
-            "tools.filters.breakout_quality.application.BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
-            "patch_transformer_v1",
-        ),
-        patch(
-            "tools.filters.breakout_quality.application.require_mantis_v2_class",
-            side_effect=AssertionError("9F 不得載入 Mantis"),
-        ),
-        patch(
-            "tools.filters.breakout_quality.application.require_moment_pipeline_class",
-            side_effect=AssertionError("9F 不得載入 MOMENT"),
-        ),
-        patch("tools.filters.breakout_quality.application._load_command_module", return_value=fake_train_module),
-        patch("tools.filters.breakout_quality.application._dataset_refresh_plan", return_value=("none", [])),
-        patch("tools.filters.breakout_quality.application._pretraining_refresh_plan") as mocked_patch_pretraining_plan,
-        patch("tools.filters.breakout_quality.application._run_command", side_effect=_fake_run_patch_command),
-        redirect_stdout(patch_workflow_output),
+    legacy_workflow_rejections = {}
+    for legacy_architecture in (
+        "ts2vec_frozen_linear_v1",
+        "patch_transformer_v1",
+        "mantis_v2_frozen_linear_v1",
+        "moment_1_base_frozen_linear_v1",
     ):
-        patch_workflow_rc = app_breakout_quality._run_workflow(
-            workflow_args,
-            program_name="apps/research.py model",
-        )
-    patch_commands = [call[0] for call in patch_workflow_calls]
-    patch_console = patch_workflow_output.getvalue()
+        legacy_calls = []
+
+        def _unexpected_legacy_command(command, args, *, program_name):
+            legacy_calls.append(command)
+            return 0
+
+        with (
+            patch(
+                "tools.filters.breakout_quality.application.BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
+                legacy_architecture,
+            ),
+            patch("tools.filters.breakout_quality.application._load_command_module", return_value=fake_train_module),
+            patch("tools.filters.breakout_quality.application._dataset_refresh_plan", return_value=("none", [])),
+            patch("tools.filters.breakout_quality.application._run_command", side_effect=_unexpected_legacy_command),
+        ):
+            try:
+                app_breakout_quality._run_workflow(
+                    workflow_args,
+                    program_name="apps/research.py model",
+                )
+            except ValueError as exc:
+                legacy_workflow_rejections[legacy_architecture] = (
+                    "正式新訓練只允許 active architecture" in str(exc)
+                    and not legacy_calls
+                )
+            else:
+                legacy_workflow_rejections[legacy_architecture] = False
+
     add_check(
         results,
         "cli_contract",
         case_id,
-        "patch_transformer_workflow_runs_supervised_stages_only",
-        (0, ["train", "export-scores", "report"], 0, 3),
-        (
-            patch_workflow_rc,
-            patch_commands,
-            mocked_patch_pretraining_plan.call_count,
-            patch_console.count("[完成]"),
-        ),
-    )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "patch_transformer_workflow_prints_fixed_model_contract",
+        "breakout_quality_workflow_rejects_legacy_architectures_before_execution",
         True,
-        (
-            "model=patch_transformer_v1" in patch_console
-            and "family=patch_transformer" in patch_console
-            and "patch=10/10" in patch_console
-            and "embedding=128" in patch_console
-            and "depth=3" in patch_console
-            and "heads=4" in patch_console
-            and "mlp=256" in patch_console
-            and "position=sinusoidal" in patch_console
-            and "dataset_context=disabled" in patch_console
-            and "pooling=mean" in patch_console
-            and "external_encoder=" not in patch_console
-            and "pretrain=" not in patch_console
-        ),
-    )
-
-    mantis_workflow_calls = []
-
-    def _fake_run_mantis_command(command, args, *, program_name):
-        mantis_workflow_calls.append((command, list(args), program_name))
-        return 0
-
-    mantis_workflow_output = StringIO()
-    with (
-        patch(
-            "tools.filters.breakout_quality.application.BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
-            "mantis_v2_frozen_linear_v1",
-        ),
-        patch("tools.filters.breakout_quality.application.require_mantis_v2_class", return_value=object),
-        patch("tools.filters.breakout_quality.application._load_command_module", return_value=fake_train_module),
-        patch("tools.filters.breakout_quality.application._dataset_refresh_plan", return_value=("none", [])),
-        patch("tools.filters.breakout_quality.application._pretraining_refresh_plan") as mocked_mantis_pretraining_plan,
-        patch("tools.filters.breakout_quality.application._run_command", side_effect=_fake_run_mantis_command),
-        redirect_stdout(mantis_workflow_output),
-    ):
-        mantis_workflow_rc = app_breakout_quality._run_workflow(
-            workflow_args,
-            program_name="apps/research.py model",
-        )
-    mantis_commands = [call[0] for call in mantis_workflow_calls]
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "mantis_workflow_skips_project_pretraining_and_runs_supervised_stages",
-        (0, ["train", "export-scores", "report"], 0, 3),
-        (
-            mantis_workflow_rc,
-            mantis_commands,
-            mocked_mantis_pretraining_plan.call_count,
-            mantis_workflow_output.getvalue().count("[完成]"),
-        ),
-    )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "mantis_workflow_prints_pinned_external_encoder_contract",
-        True,
-        (
-            "external_encoder=repository=paris-noah/MantisV2"
-            in mantis_workflow_output.getvalue()
-            and "project_pretraining=False" in mantis_workflow_output.getvalue()
-            and "encoder_fine_tuning=False" in mantis_workflow_output.getvalue()
-        ),
-    )
-
-    moment_workflow_calls = []
-
-    def _fake_run_moment_command(command, args, *, program_name):
-        moment_workflow_calls.append((command, list(args), program_name))
-        return 0
-
-    moment_workflow_output = StringIO()
-    with (
-        patch(
-            "tools.filters.breakout_quality.application.BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
-            "moment_1_base_frozen_linear_v1",
-        ),
-        patch("tools.filters.breakout_quality.application.require_moment_pipeline_class", return_value=object),
-        patch("tools.filters.breakout_quality.application._load_command_module", return_value=fake_train_module),
-        patch("tools.filters.breakout_quality.application._dataset_refresh_plan", return_value=("none", [])),
-        patch("tools.filters.breakout_quality.application._pretraining_refresh_plan") as mocked_moment_pretraining_plan,
-        patch("tools.filters.breakout_quality.application._run_command", side_effect=_fake_run_moment_command),
-        redirect_stdout(moment_workflow_output),
-    ):
-        moment_workflow_rc = app_breakout_quality._run_workflow(
-            workflow_args,
-            program_name="apps/research.py model",
-        )
-    moment_commands = [call[0] for call in moment_workflow_calls]
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "moment_workflow_skips_project_pretraining_and_runs_supervised_stages",
-        (0, ["train", "export-scores", "report"], 0, 3),
-        (
-            moment_workflow_rc,
-            moment_commands,
-            mocked_moment_pretraining_plan.call_count,
-            moment_workflow_output.getvalue().count("[完成]"),
-        ),
-    )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "moment_workflow_prints_pinned_external_encoder_contract",
-        True,
-        (
-            "external_encoder=repository=AutonLab/MOMENT-1-base"
-            in moment_workflow_output.getvalue()
-            and "runtime=momentfm-0.1.4/transformers-5.5.0"
-            in moment_workflow_output.getvalue()
-            and "project_pretraining=False" in moment_workflow_output.getvalue()
-            and "encoder_fine_tuning=False" in moment_workflow_output.getvalue()
-        ),
+        all(legacy_workflow_rejections.values()),
+        note=str(legacy_workflow_rejections),
     )
 
     def _valid_moment_runtime_version(package_name):
@@ -1935,7 +1806,7 @@ def validate_dataset_cli_contract_case(_base_params):
                 else:
                     path.write_bytes(b"npy")
 
-            model_spec = app_breakout_quality.get_model_spec(
+            model_spec = app_breakout_quality.get_active_model_spec(
                 app_breakout_quality.BREAKOUT_QUALITY_MODEL_ARCHITECTURE
             )
             market_set_artifacts = None

@@ -81,15 +81,16 @@ from filters.breakout_quality.contract import (
     LABEL_REJECT,
 )
 from filters.breakout_quality.inference import strict_parallel_batched_logits
-from filters.breakout_quality.models.factory import (
-    build_model,
+from filters.breakout_quality.models.active import (
+    ACTIVE_MODEL_ARCHITECTURES,
+    build_active_model as build_model,
+    get_active_model_spec as get_model_spec,
+)
+from filters.breakout_quality.models.runtime import (
     count_trainable_parameters,
     require_torch,
 )
-from filters.breakout_quality.models.spec import (
-    get_model_spec,
-    validate_model_sequence_length,
-)
+from filters.breakout_quality.models.spec import validate_model_sequence_length
 from filters.breakout_quality.paths import (
     build_filter_artifact_paths_from_dir,
     resolve_filter_artifact_paths,
@@ -180,7 +181,8 @@ def parse_args(argv=None):
     parser.add_argument(
         "--model-architecture",
         default=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-        help="continuous ranker architecture；必須是 sequence-only model",
+        choices=ACTIVE_MODEL_ARCHITECTURES,
+        help="continuous ranker architecture；正式新訓練只允許 active sequence-only model",
     )
     parser.add_argument(
         "--experiment-profile",

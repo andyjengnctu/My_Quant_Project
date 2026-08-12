@@ -37,7 +37,6 @@ from config.breakout_quality import (
     TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT,
     TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM,
     TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
-    build_breakout_quality_pretraining_profile_payload,
     get_breakout_quality_experiment_profile,
     resolve_breakout_quality_random_seed,
 )
@@ -58,9 +57,6 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_EVALUATION_WORKERS,
     BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION,
     BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
-    BREAKOUT_QUALITY_PRETRAINING_FAMILY,
-    BREAKOUT_QUALITY_PRETRAINING_PROFILE,
-    BREAKOUT_QUALITY_PRETRAINING_STRIDE,
     BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
     BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES,
@@ -117,29 +113,15 @@ from filters.breakout_quality.lr_schedule import (
     build_learning_rate_schedule_plan as _build_learning_rate_schedule_plan,
     learning_rate_for_optimizer_step as _learning_rate_for_optimizer_step,
 )
-from filters.breakout_quality.models.spec import (
-    MANTIS_V2_FROZEN_LINEAR_V1,
-    MOMENT_1_BASE_FROZEN_LINEAR_V1,
-    TS2VEC_FROZEN_LINEAR_V1,
+from filters.breakout_quality.models.active import (
+    build_active_model as build_model,
+    get_active_model_spec as get_model_spec,
 )
-from filters.breakout_quality.mantis_pretrained import (
-    load_mantis_v2_pretrained_encoder_state,
-)
-from filters.breakout_quality.moment_pretrained import (
-    load_moment_pretrained_encoder_state,
-)
-from filters.breakout_quality.pretraining_store import (
-    load_validated_pretrained_encoder_manifest,
-    load_validated_pretraining_dataset,
-    resolve_pretrained_encoder_paths,
-)
-from filters.breakout_quality.model import (
-    build_model,
+from filters.breakout_quality.models.runtime import (
     count_trainable_parameters,
-    get_model_spec,
-    validate_model_sequence_length,
     require_torch,
 )
+from filters.breakout_quality.models.spec import validate_model_sequence_length
 from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
     resolve_filter_research_manifest_path,
@@ -1353,99 +1335,6 @@ def _set_optimizer_learning_rate(optimizer, learning_rate: float) -> None:
         parameter_group["lr"] = resolved
 
 
-def _load_pretrained_encoder_for_training(
-    torch,
-    *,
-    filter_id: str,
-    experiment_profile: str,
-    dataset_summary: dict,
-    outer_oos_policy: dict,
-    model_spec,
-):
-    architecture = str(model_spec.architecture)
-    if architecture == MOMENT_1_BASE_FROZEN_LINEAR_V1:
-        state, external_record = load_moment_pretrained_encoder_state(
-            model_spec=model_spec
-        )
-        return state, None, external_record
-    if architecture == MANTIS_V2_FROZEN_LINEAR_V1:
-        state, external_record = load_mantis_v2_pretrained_encoder_state(
-            model_spec=model_spec
-        )
-        return state, None, external_record
-    if architecture != TS2VEC_FROZEN_LINEAR_V1:
-        return None, None, None
-    dataset_profile = str(dataset_summary.get("dataset") or "").strip()
-    if not dataset_profile:
-        raise ValueError("TS2Vec training 缺少 supervised dataset profile")
-    source_selection = dataset_summary.get("source_selection")
-    if not isinstance(source_selection, dict):
-        raise ValueError("TS2Vec training 缺少 supervised dataset source_selection")
-    expected_max_tickers = max(
-        0, int(source_selection.get("requested_max_tickers", -1))
-    )
-    pretrain_summary, _windows, _index = load_validated_pretraining_dataset(
-        PROJECT_ROOT,
-        filter_id,
-        dataset_profile=dataset_profile,
-        family=BREAKOUT_QUALITY_PRETRAINING_FAMILY,
-        stride=int(BREAKOUT_QUALITY_PRETRAINING_STRIDE),
-        expected_selection_start=str(outer_oos_policy["selection_start_date"]),
-        expected_selection_end=str(outer_oos_policy["selection_end_date"]),
-        expected_window_bars=int(DEFAULT_LABEL_POLICY.feature_window_bars),
-        expected_max_tickers=expected_max_tickers,
-        require_current_source=True,
-        load_windows=False,
-    )
-    paths = resolve_pretrained_encoder_paths(
-        PROJECT_ROOT,
-        filter_id,
-        model_architecture=model_spec.architecture,
-        experiment_profile=experiment_profile,
-    )
-    pretraining_manifest = load_validated_pretrained_encoder_manifest(
-        paths,
-        expected_architecture=model_spec.architecture,
-        expected_experiment_profile=experiment_profile,
-        expected_dataset_fingerprint=str(pretrain_summary["configuration_fingerprint"]),
-        expected_model_spec=model_spec.as_manifest_payload(),
-        expected_pretraining_profile=(
-            build_breakout_quality_pretraining_profile_payload(
-                BREAKOUT_QUALITY_PRETRAINING_PROFILE
-            )
-        ),
-    )
-    payload = torch.load(paths.encoder, map_location="cpu", weights_only=True)
-    if not isinstance(payload, dict):
-        raise ValueError("pretrained encoder payload 必須是 object")
-    if payload.get("model_spec") != model_spec.as_manifest_payload():
-        raise ValueError("pretrained encoder payload model_spec 不一致")
-    expected_pretraining_profile = build_breakout_quality_pretraining_profile_payload(
-        BREAKOUT_QUALITY_PRETRAINING_PROFILE
-    )
-    if payload.get("pretraining_profile") != expected_pretraining_profile:
-        raise ValueError("pretrained encoder payload pretraining_profile 不一致")
-    if str(payload.get("pretraining_dataset_fingerprint") or "") != str(
-        pretrain_summary["configuration_fingerprint"]
-    ):
-        raise ValueError("pretrained encoder payload dataset fingerprint 不一致")
-    state = payload.get("encoder_state_dict")
-    if not isinstance(state, dict) or not state:
-        raise ValueError("pretrained encoder payload 缺少 encoder_state_dict")
-    record = {
-        "manifest": pretraining_manifest,
-        "dataset_summary": {
-            "family": pretrain_summary["family"],
-            "stride": int(pretrain_summary["stride"]),
-            "window_count": int(pretrain_summary["window_count"]),
-            "selection_start_date": pretrain_summary["selection_start_date"],
-            "selection_end_date": pretrain_summary["selection_end_date"],
-            "configuration_fingerprint": pretrain_summary["configuration_fingerprint"],
-        },
-    }
-    return state, record, None
-
-
 def _new_training_state(
     torch,
     *,
@@ -1466,6 +1355,7 @@ def _new_training_state(
     model = build_model(
         feature_count,
         context_count,
+        architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
         pretrained_encoder_state=pretrained_encoder_state,
     ).to(execution_plan.device)
     trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
@@ -2216,18 +2106,9 @@ def main(argv=None) -> int:
         PROJECT_ROOT,
         source_data_end_date=source_data_end,
     )
-    (
-        pretrained_encoder_state,
-        pretraining_record,
-        external_pretrained_encoder_record,
-    ) = _load_pretrained_encoder_for_training(
-        torch,
-        filter_id=args.filter_id,
-        experiment_profile=experiment_profile,
-        dataset_summary=dataset_summary,
-        outer_oos_policy=outer_oos_policy,
-        model_spec=model_spec,
-    )
+    pretrained_encoder_state = None
+    pretraining_record = None
+    external_pretrained_encoder_record = None
     early_stopping_enabled = bool(use_inner_validation and patience > 0)
     (
         split_assignments,
@@ -2733,7 +2614,7 @@ def main(argv=None) -> int:
             "eligible Selection groups with the configured refit-step policy; fixed threshold "
             "is committed before OOS; "
             "training sampling uses ticker/date and existing feature-group identity only; "
-            "TS2Vec pretraining, when configured, uses only rolling-window endpoints inside Selection and never OOS; "
+            "formal active training does not load historical pretrained encoders; "
             "OOS predictions and metrics are not used by train.py"
         ),
         "elapsed_sec": round(time.perf_counter() - started, 3),

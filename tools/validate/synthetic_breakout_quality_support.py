@@ -228,6 +228,8 @@ from filters.breakout_quality.contract import (
 )
 from filters.breakout_quality.models import (
     ACTIVE_MODEL_ARCHITECTURES,
+    build_active_model,
+    get_active_model_spec,
     INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
     INCEPTION_TIME_MARKET_SET_V1,
     PATCH_TRANSFORMER_V1,

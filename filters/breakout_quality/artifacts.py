@@ -63,29 +63,6 @@ from filters.breakout_quality.models.spec import (
     model_spec_from_manifest,
     validate_model_sequence_length,
 )
-from filters.breakout_quality.mantis_contract import (
-    MANTIS_PACKAGE_NAME,
-    MANTIS_PACKAGE_VERSION,
-    MANTIS_V2_CHECKPOINT_FILENAME,
-    MANTIS_V2_CHECKPOINT_SHA256,
-    MANTIS_V2_CONFIG_FILENAME,
-    MANTIS_V2_CONFIG_SHA256,
-    MANTIS_V2_REPOSITORY,
-    MANTIS_V2_REVISION,
-)
-from filters.breakout_quality.moment_contract import (
-    MOMENT_CHECKPOINT_FILENAME,
-    MOMENT_CHECKPOINT_SHA256,
-    MOMENT_CHECKPOINT_SIZE_BYTES,
-    MOMENT_CONFIG_FILENAME,
-    MOMENT_CONFIG_SIZE_BYTES,
-    MOMENT_PACKAGE_NAME,
-    MOMENT_PACKAGE_VERSION,
-    MOMENT_REPOSITORY,
-    MOMENT_REVISION,
-    MOMENT_TRANSFORMERS_PACKAGE_NAME,
-    MOMENT_TRANSFORMERS_VERSION,
-)
 from filters.breakout_quality.torch_runtime import (
     SUPPORTED_MIXED_PRECISION_DTYPES,
     SUPPORTED_TORCH_DEVICES,
@@ -456,6 +433,20 @@ def load_model_artifact_contract(
     ):
         raise ValueError("breakout quality total/frozen/trainable parameter count 不一致")
     if model_spec.family == "moment_frozen_linear":
+        from filters.breakout_quality.moment_contract import (
+            MOMENT_CHECKPOINT_FILENAME,
+            MOMENT_CHECKPOINT_SHA256,
+            MOMENT_CHECKPOINT_SIZE_BYTES,
+            MOMENT_CONFIG_FILENAME,
+            MOMENT_CONFIG_SIZE_BYTES,
+            MOMENT_PACKAGE_NAME,
+            MOMENT_PACKAGE_VERSION,
+            MOMENT_REPOSITORY,
+            MOMENT_REVISION,
+            MOMENT_TRANSFORMERS_PACKAGE_NAME,
+            MOMENT_TRANSFORMERS_VERSION,
+        )
+
         if frozen_parameter_count < 1:
             raise ValueError("MOMENT frozen probe 必須包含 frozen encoder parameters")
         if manifest.get("self_supervised_pretraining") is not None:
@@ -521,6 +512,17 @@ def load_model_artifact_contract(
             raise ValueError("MOMENT project data isolation contract 不一致")
 
     if model_spec.family == "mantis_v2_frozen_linear":
+        from filters.breakout_quality.mantis_contract import (
+            MANTIS_PACKAGE_NAME,
+            MANTIS_PACKAGE_VERSION,
+            MANTIS_V2_CHECKPOINT_FILENAME,
+            MANTIS_V2_CHECKPOINT_SHA256,
+            MANTIS_V2_CONFIG_FILENAME,
+            MANTIS_V2_CONFIG_SHA256,
+            MANTIS_V2_REPOSITORY,
+            MANTIS_V2_REVISION,
+        )
+
         if frozen_parameter_count < 1:
             raise ValueError("MantisV2 frozen probe 必須包含 frozen encoder parameters")
         if manifest.get("self_supervised_pretraining") is not None:

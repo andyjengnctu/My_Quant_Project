@@ -1,56 +1,21 @@
-"""Single model factory for breakout quality training and inference."""
+"""Compatibility model factory for active and historical breakout quality artifacts."""
 
 from __future__ import annotations
 
 from typing import Mapping
 
 from config.breakout_quality import BREAKOUT_QUALITY_MODEL_ARCHITECTURE
-from filters.breakout_quality.models.inception_time import build_inception_time
-from filters.breakout_quality.models.inception_time_market_set import build_inception_time_market_set
-from filters.breakout_quality.models.mantis_v2 import build_mantis_v2_frozen_linear
-from filters.breakout_quality.models.moment import build_moment_frozen_linear
-from filters.breakout_quality.models.modern_tcn import build_modern_tcn
-from filters.breakout_quality.models.patch_transformer import build_patch_transformer
-from filters.breakout_quality.models.multiscale_cnn import build_multiscale_cnn
-from filters.breakout_quality.models.residual_tcn import build_residual_tcn
+from filters.breakout_quality.models.active import build_active_model
+from filters.breakout_quality.models.runtime import (
+    count_trainable_parameters,
+    require_torch,
+)
 from filters.breakout_quality.models.spec import (
-    INCEPTION_TIME_GROUP_NORM_V1,
-    INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
-    INCEPTION_TIME_MARKET_SET_V1,
-    INCEPTION_TIME_V1,
-    MANTIS_V2_FROZEN_LINEAR_V1,
-    MOMENT_1_BASE_FROZEN_LINEAR_V1,
-    MODERN_TCN_V1,
-    PATCH_TRANSFORMER_V1,
-    MULTISCALE_CNN_V1,
-    MULTISCALE_CNN_V2,
-    MULTISCALE_CNN_V3,
-    MULTISCALE_CNN_V4,
-    MULTISCALE_CNN_V5,
-    MULTISCALE_CNN_V6,
-    MULTISCALE_CNN_V7,
-    MULTISCALE_CNN_V8,
-    MULTISCALE_CNN_REGIME_CONTEXT_V1,
-    MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1,
-    MULTISCALE_CNN_SEQUENCE_ONLY_V1,
-    RESIDUAL_TCN_V1,
-    TINY_CNN_V1,
-    TS2VEC_FROZEN_LINEAR_V1,
+    ACTIVE_MODEL_ARCHITECTURES,
     get_model_spec,
     model_spec_from_manifest,
     normalize_model_architecture,
 )
-from filters.breakout_quality.models.tiny_cnn import build_tiny_cnn
-from filters.breakout_quality.models.ts2vec import build_ts2vec_frozen_linear
-
-
-def require_torch():
-    try:
-        import torch  # type: ignore
-        import torch.nn as nn  # type: ignore
-    except ImportError as exc:
-        raise RuntimeError("breakout quality DL 訓練需要 PyTorch；請先安裝 torch") from exc
-    return torch, nn
 
 
 def resolve_model_spec(
@@ -75,110 +40,27 @@ def build_model(
     model_spec: Mapping[str, object] | None = None,
     pretrained_encoder_state: Mapping[str, object] | None = None,
 ):
-    torch, nn = require_torch()
+    """Build active models or lazily reconstruct historical artifact models."""
+
     spec = resolve_model_spec(architecture=architecture, model_spec=model_spec)
-    if spec.architecture == MOMENT_1_BASE_FROZEN_LINEAR_V1:
-        return build_moment_frozen_linear(
-            nn,
-            torch,
-            feature_count=int(feature_count),
-            context_count=int(context_count),
-            spec=spec,
+    if spec.architecture in ACTIVE_MODEL_ARCHITECTURES:
+        return build_active_model(
+            feature_count,
+            context_count,
+            architecture=spec.architecture,
+            model_spec=spec.as_manifest_payload(),
             pretrained_encoder_state=pretrained_encoder_state,
         )
-    if spec.architecture == MANTIS_V2_FROZEN_LINEAR_V1:
-        return build_mantis_v2_frozen_linear(
-            nn,
-            torch,
-            feature_count=int(feature_count),
-            context_count=int(context_count),
-            spec=spec,
-            pretrained_encoder_state=pretrained_encoder_state,
-        )
-    if spec.architecture == TS2VEC_FROZEN_LINEAR_V1:
-        return build_ts2vec_frozen_linear(
-            nn,
-            torch,
-            feature_count=int(feature_count),
-            context_count=int(context_count),
-            spec=spec,
-            pretrained_encoder_state=pretrained_encoder_state,
-        )
-    if spec.architecture == PATCH_TRANSFORMER_V1:
-        return build_patch_transformer(
-            nn,
-            torch,
-            feature_count=int(feature_count),
-            context_count=int(context_count),
-            spec=spec,
-        )
-    if spec.architecture == MODERN_TCN_V1:
-        return build_modern_tcn(
-            nn,
-            torch,
-            feature_count=int(feature_count),
-            context_count=int(context_count),
-            spec=spec,
-        )
-    if spec.architecture in {
-        INCEPTION_TIME_MARKET_SET_V1,
-        INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
-    }:
-        return build_inception_time_market_set(
-            nn,
-            torch,
-            feature_count=int(feature_count),
-            context_count=int(context_count),
-            spec=spec,
-        )
-    if spec.architecture in {INCEPTION_TIME_V1, INCEPTION_TIME_GROUP_NORM_V1}:
-        return build_inception_time(
-            nn,
-            torch,
-            feature_count=int(feature_count),
-            context_count=int(context_count),
-            spec=spec,
-        )
-    if spec.architecture == TINY_CNN_V1:
-        return build_tiny_cnn(
-            nn,
-            torch,
-            feature_count=int(feature_count),
-            context_count=int(context_count),
-        )
-    if spec.architecture in {
-        MULTISCALE_CNN_V1,
-        MULTISCALE_CNN_V2,
-        MULTISCALE_CNN_V3,
-        MULTISCALE_CNN_V4,
-        MULTISCALE_CNN_V5,
-        MULTISCALE_CNN_V6,
-        MULTISCALE_CNN_V7,
-        MULTISCALE_CNN_V8,
-        MULTISCALE_CNN_REGIME_CONTEXT_V1,
-        MULTISCALE_CNN_SEQUENCE_ONLY_V1,
-        MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1,
-    }:
-        return build_multiscale_cnn(
-            nn,
-            torch,
-            feature_count=int(feature_count),
-            context_count=int(context_count),
-            spec=spec,
-        )
-    if spec.architecture == RESIDUAL_TCN_V1:
-        return build_residual_tcn(
-            nn,
-            torch,
-            feature_count=int(feature_count),
-            context_count=int(context_count),
-            spec=spec,
-        )
-    raise AssertionError(f"未處理的 model architecture: {spec.architecture}")
 
+    from filters.breakout_quality.models.legacy_compatibility import build_legacy_model
 
-def count_trainable_parameters(model) -> int:
-    return sum(int(parameter.numel()) for parameter in model.parameters() if parameter.requires_grad)
+    return build_legacy_model(
+        feature_count,
+        context_count,
+        architecture=spec.architecture,
+        model_spec=spec.as_manifest_payload(),
+        pretrained_encoder_state=pretrained_encoder_state,
+    )
 
 
 __all__ = [

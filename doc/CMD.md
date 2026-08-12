@@ -486,7 +486,7 @@ outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_pr
 ```bash
 python apps/research.py model build-dataset --dataset full --filter-id breakout_quality_v1
 
-# 9C TS2Vec已淘汰；build-pretrain-dataset／pretrain只保留歷史工件重建，active 9A workflow不執行。
+# 9C TS2Vec已淘汰；正式 apps/research.py model 不再公開 build-pretrain-dataset／pretrain。歷史重建僅保留底層 compatibility module，不屬於 current Research command surface。
 
 # 只更新 label；通常由 workflow 自動偵測，不需手動執行
 python apps/research.py model build-dataset --dataset full --filter-id breakout_quality_v1 --relabel-only
