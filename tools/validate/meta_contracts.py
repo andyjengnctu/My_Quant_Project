@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
+from .source_index import read_source_ast
+
 CMD_SINGLE_ENTRY_TEXT = "正式對外入口為 `apps/test_suite.py`"
 ARCHITECTURE_SINGLE_ENTRY_TEXT = "`apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口"
 LEGACY_APP_ENTRY_PATHS = ("apps/local_regression.py", "apps/validate_consistency.py")
@@ -76,7 +78,7 @@ def extract_markdown_table_rows(text: str, heading: str) -> List[List[str]]:
 
 
 def _read_python_ast(path: Path) -> ast.AST:
-    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return read_source_ast(path)
 
 
 def _load_named_string_dict_keys(module_path: Path, constant_name: str) -> List[str]:

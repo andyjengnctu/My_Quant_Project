@@ -65,6 +65,7 @@ BREAKOUT_QUALITY_IMPLEMENTATION_COVERAGE_TARGETS = [
 ]
 COVERAGE_TARGETS = list(dict.fromkeys([
     "tools/validate/synthetic_cases.py",
+    "tools/validate/source_index.py",
     "tools/validate/synthetic_meta_cases.py",
     "tools/validate/synthetic_unit_cases.py",
     "tools/validate/synthetic_history_cases.py",

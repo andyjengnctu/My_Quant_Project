@@ -29,6 +29,8 @@ from .synthetic_breakout_quality_support import (
     tempfile,
 )
 
+from .source_index import read_source_ast, read_source_text
+
 def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_BUILDER"
     results = []

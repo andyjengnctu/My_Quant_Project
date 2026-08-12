@@ -23,6 +23,7 @@ CHECKLIST_PATH = PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md"
 CMD_PATH = PROJECT_ROOT / "doc" / "CMD.md"
 SYNTHETIC_VALIDATE_DIR = PROJECT_ROOT / "tools" / "validate"
 
+from .source_index import read_source_ast, read_source_text
 from .meta_contracts import (
     extract_markdown_table_rows,
     load_defined_validate_names_from_synthetic_case_modules,
@@ -806,8 +807,8 @@ def validate_gui_tcl_fallback_traceability_contract_case(_base_params):
         rel_path = path.relative_to(PROJECT_ROOT).as_posix()
         scanned_files.append(rel_path)
         try:
-            source_text = path.read_text(encoding="utf-8")
-            parsed = ast.parse(source_text, filename=str(path))
+            source_text = read_source_text(path)
+            parsed = read_source_ast(path)
         except SyntaxError as exc:
             syntax_errors.append(f"{rel_path}:{exc.lineno}: {exc.msg}")
             continue
@@ -872,8 +873,8 @@ def validate_optional_dependency_fallback_traceability_contract_case(_base_param
         rel_path = path.relative_to(PROJECT_ROOT).as_posix()
         scanned_files.append(rel_path)
         try:
-            source_text = path.read_text(encoding="utf-8")
-            parsed = ast.parse(source_text, filename=str(path))
+            source_text = read_source_text(path)
+            parsed = read_source_ast(path)
         except SyntaxError as exc:
             syntax_errors.append(f"{rel_path}:{exc.lineno}: {exc.msg}")
             continue
@@ -938,8 +939,8 @@ def validate_specific_pass_only_exception_traceability_contract_case(_base_param
             rel_path = path.relative_to(PROJECT_ROOT).as_posix()
             scanned_files.append(rel_path)
             try:
-                source_text = path.read_text(encoding="utf-8")
-                parsed = ast.parse(source_text, filename=str(path))
+                source_text = read_source_text(path)
+                parsed = read_source_ast(path)
             except SyntaxError as exc:
                 syntax_errors.append(f"{rel_path}:{exc.lineno}: {exc.msg}")
                 continue
@@ -1007,8 +1008,8 @@ def validate_broad_exception_traceability_contract_case(_base_params):
             rel_path = path.relative_to(PROJECT_ROOT).as_posix()
             scanned_files.append(rel_path)
             try:
-                source_text = path.read_text(encoding="utf-8")
-                parsed = ast.parse(source_text, filename=str(path))
+                source_text = read_source_text(path)
+                parsed = read_source_ast(path)
             except SyntaxError as exc:
                 syntax_errors.append(f"{rel_path}:{exc.lineno}: {exc.msg}")
                 continue
@@ -1171,10 +1172,7 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
     for path in breakout_quality_module_paths:
         if not path.exists():
             continue
-        module_tree = ast.parse(
-            path.read_text(encoding="utf-8"),
-            filename=str(path),
-        )
+        module_tree = read_source_ast(path)
         declared_breakout_quality_validators.extend(
             node.name
             for node in module_tree.body
@@ -1188,10 +1186,7 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
     )
 
     breakout_quality_facade_path = SYNTHETIC_VALIDATE_DIR / "synthetic_breakout_quality_cases.py"
-    breakout_quality_facade_tree = ast.parse(
-        breakout_quality_facade_path.read_text(encoding="utf-8"),
-        filename=str(breakout_quality_facade_path),
-    )
+    breakout_quality_facade_tree = read_source_ast(breakout_quality_facade_path)
     breakout_quality_facade_validator_defs = sorted(
         node.name
         for node in breakout_quality_facade_tree.body
@@ -1207,9 +1202,7 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
         if alias.name.startswith("validate_")
     )
 
-    synthetic_cases_source = (
-        SYNTHETIC_VALIDATE_DIR / "synthetic_cases.py"
-    ).read_text(encoding="utf-8")
+    synthetic_cases_source = read_source_text(SYNTHETIC_VALIDATE_DIR / "synthetic_cases.py")
     synthetic_cases_uses_breakout_quality_facade = (
         "from .synthetic_breakout_quality_cases import (" in synthetic_cases_source
     )
@@ -1292,6 +1285,48 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
         "breakout_quality_compatibility_facade_is_not_key_coverage_target",
         False,
         breakout_quality_facade_coverage_target,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="source_index_cache_contract_") as temp_dir_text:
+        cache_probe_path = Path(temp_dir_text) / "probe.py"
+        cache_probe_path.write_text("VALUE = 1\n", encoding="utf-8")
+        first_tree = read_source_ast(cache_probe_path)
+        second_tree = read_source_ast(cache_probe_path)
+        cache_reuses_unchanged_ast = first_tree is second_tree
+
+        cache_probe_path.write_text("VALUE = 22\n", encoding="utf-8")
+        third_tree = read_source_ast(cache_probe_path)
+        third_value = None
+        for statement in third_tree.body:
+            if not isinstance(statement, ast.Assign):
+                continue
+            if not any(
+                isinstance(target, ast.Name) and target.id == "VALUE"
+                for target in statement.targets
+            ):
+                continue
+            if isinstance(statement.value, ast.Constant):
+                third_value = statement.value.value
+                break
+        cache_invalidates_changed_file = bool(
+            third_tree is not second_tree and third_value == 22
+        )
+
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "source_index_reuses_unchanged_ast",
+        True,
+        cache_reuses_unchanged_ast,
+    )
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "source_index_invalidates_changed_file",
+        True,
+        cache_invalidates_changed_file,
     )
 
     layer_counts = {}

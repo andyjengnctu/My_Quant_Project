@@ -32,6 +32,8 @@ from .synthetic_breakout_quality_support import (
     tempfile,
 )
 
+from .source_index import read_source_ast, read_source_text
+
 def validate_breakout_quality_single_seed_single_entry_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_SINGLE_SEED_SINGLE_ENTRY"
     results = []
@@ -181,7 +183,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     legacy_ranker_imports = []
     private_strategy_compare_engine_imports = []
     for audit_path in audit_python_files:
-        audit_tree = ast.parse(audit_path.read_text(encoding="utf-8"), filename=str(audit_path))
+        audit_tree = read_source_ast(audit_path)
         for node in ast.walk(audit_tree):
             if not isinstance(node, ast.ImportFrom) or not node.module:
                 continue
@@ -439,7 +441,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     forbidden_reverse_imports: list[str] = []
     for root_name in ("services", "filters", "core"):
         for source_path in (project_root / root_name).rglob("*.py"):
-            source_tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+            source_tree = read_source_ast(source_path)
             for node in ast.walk(source_tree):
                 if isinstance(node, ast.ImportFrom) and str(node.module or "").startswith("tools"):
                     forbidden_reverse_imports.append(f"{source_path.relative_to(project_root)}:{node.lineno}:{node.module}")
@@ -478,7 +480,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and Path(canonical_train_module.PROJECT_ROOT).resolve() == project_root.resolve(),
     )
 
-    engine_tree = ast.parse(strategy_compare_source, filename=str(engine_path))
+    engine_tree = read_source_ast(engine_path)
     engine_defined_functions = {
         node.name for node in engine_tree.body if isinstance(node, ast.FunctionDef)
     }

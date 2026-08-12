@@ -56,6 +56,8 @@ from .synthetic_breakout_quality_support import (
     tempfile,
 )
 
+from .source_index import read_source_ast, read_source_text
+
 def validate_breakout_quality_continuous_target_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_CONTINUOUS_TARGET"
     results = []
@@ -781,7 +783,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         )
 
     app_path = Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py"
-    tree = ast.parse(app_path.read_text(encoding="utf-8"), filename=str(app_path))
+    tree = read_source_ast(app_path)
     command_modules = {}
     for node in tree.body:
         if not isinstance(node, ast.Assign):
@@ -1038,8 +1040,8 @@ def validate_breakout_quality_pass_conditional_ranker_contract_case(_base_params
 
     root = Path(__file__).resolve().parents[2]
     app_path = root / "tools" / "filters" / "breakout_quality" / "application.py"
-    app_source = app_path.read_text(encoding="utf-8")
-    tree = ast.parse(app_source, filename=str(app_path))
+    app_source = read_source_text(app_path)
+    tree = read_source_ast(app_path)
     command_modules = {}
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(

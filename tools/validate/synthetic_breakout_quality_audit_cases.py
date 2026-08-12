@@ -61,6 +61,8 @@ from .synthetic_breakout_quality_support import (
     validated_11e_report_for_no_time_target,
 )
 
+from .source_index import read_source_ast, read_source_text
+
 def validate_breakout_quality_qualified_candidate_set_audit_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_QUALIFIED_CANDIDATE_SET_AUDIT"
     results = []
@@ -322,8 +324,8 @@ def validate_breakout_quality_qualified_candidate_set_audit_contract_case(_base_
     )
 
     app_path = Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py"
-    app_source = app_path.read_text(encoding="utf-8")
-    app_tree = ast.parse(app_source, filename=str(app_path))
+    app_source = read_source_text(app_path)
+    app_tree = read_source_ast(app_path)
     command_modules = {}
     for node in app_tree.body:
         if not isinstance(node, ast.Assign):
@@ -481,8 +483,8 @@ def validate_breakout_quality_target_component_attribution_contract_case(_base_p
     )
 
     app_path = Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py"
-    app_source = app_path.read_text(encoding="utf-8")
-    app_tree = ast.parse(app_source, filename=str(app_path))
+    app_source = read_source_text(app_path)
+    app_tree = read_source_ast(app_path)
     command_modules = {}
     for node in app_tree.body:
         if not isinstance(node, ast.Assign):
@@ -702,8 +704,8 @@ def validate_breakout_quality_target_time_penalty_ablation_contract_case(_base_p
     )
 
     app_path = Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py"
-    app_source = app_path.read_text(encoding="utf-8")
-    app_tree = ast.parse(app_source, filename=str(app_path))
+    app_source = read_source_text(app_path)
+    app_tree = read_source_ast(app_path)
     command_modules = {}
     for node in app_tree.body:
         if not isinstance(node, ast.Assign):
@@ -1057,8 +1059,8 @@ def validate_breakout_quality_no_time_target_selection_audit_contract_case(_base
     )
 
     app_path = Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py"
-    app_source = app_path.read_text(encoding="utf-8")
-    app_tree = ast.parse(app_source, filename=str(app_path))
+    app_source = read_source_text(app_path)
+    app_tree = read_source_ast(app_path)
     command_modules = {}
     for node in app_tree.body:
         if isinstance(node, ast.Assign) and any(
@@ -1222,8 +1224,8 @@ def validate_breakout_quality_pass_realization_gap_attribution_contract_case(_ba
 
     root = Path(__file__).resolve().parents[2]
     app_path = root / "tools" / "filters" / "breakout_quality" / "application.py"
-    app_source = app_path.read_text(encoding="utf-8")
-    tree = ast.parse(app_source, filename=str(app_path))
+    app_source = read_source_text(app_path)
+    tree = read_source_ast(app_path)
     command_modules = {}
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
@@ -1422,8 +1424,8 @@ def validate_breakout_quality_selection_strategy_realization_contract_case(_base
 
     root = Path(__file__).resolve().parents[2]
     app_path = root / "tools" / "filters" / "breakout_quality" / "application.py"
-    app_source = app_path.read_text(encoding="utf-8")
-    tree = ast.parse(app_source, filename=str(app_path))
+    app_source = read_source_text(app_path)
+    tree = read_source_ast(app_path)
     command_modules = {}
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
@@ -2467,7 +2469,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     legacy_ranker_imports = []
     private_strategy_compare_engine_imports = []
     for audit_path in audit_python_files:
-        audit_tree = ast.parse(audit_path.read_text(encoding="utf-8"), filename=str(audit_path))
+        audit_tree = read_source_ast(audit_path)
         for node in ast.walk(audit_tree):
             if not isinstance(node, ast.ImportFrom) or not node.module:
                 continue

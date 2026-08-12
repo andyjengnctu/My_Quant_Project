@@ -8256,3 +8256,14 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 修正coverage ownership：新增`BREAKOUT_QUALITY_IMPLEMENTATION_COVERAGE_TARGETS`，只包含shared support與七個domain implementation modules；compatibility façade退出key coverage target，但仍由meta registry contract以AST/source方式驗證「不得重新定義validator」與「完整re-export」。另新增guard釘死implementation modules必須納入coverage、façade不得再成為key-hit target。
 - 不以人工import façade灌coverage，不修改任何validator body、production code、Dataset、Target、模型、Strategy Compare或scientific identity。狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。使用者本機正式double check以`apps/run_bundle.py`執行並正常commit。
 
+
+
+## 2026-08-12 — Test Execution Optimization Batch 8-B：source／AST process-local cache
+
+- 使用者最新程式基準：`test-branch-1_20260812_110242_c8b5875.zip`；SHA256 `e7020d1a28cf4be6941adf762c8e6ed784038ffd3eeea5b47e70b85c2a8c3475`。本輪只優化test execution infrastructure，不修改production code、Dataset、Target、model、score、Strategy Compare、portfolio semantics或scientific identity。
+- Timing盤點逐一執行253個synthetic registry validators，最大非策略運算成本集中於source/meta contracts反覆對相同Python files執行`read_text`與`ast.parse`；不採validator平行化，避免既有monkeypatch、module globals與temporary-artifact fixture產生競爭。
+- 新增`tools/validate/source_index.py`：同一process內以canonical path＋`mtime_ns`＋file size為signature快取source text與AST；未變檔案重用同一AST，檔案內容／signature改變即自動失效。cache不保存validator結果、不跨process、不改directory inventory，因此不會跳過contract或讓修改後source沿用舊AST。
+- `meta_contracts.py`的reverse-app／import-cycle／critical-helper等全專案source contracts改共用source index；Breakout Quality policy、Audit、strategy-app、model/PIT source contracts與meta exception scans同步使用cache。`meta_quality_targets.py`把`source_index.py`納入coverage target。
+- `validate_synthetic_registry_metadata_contract_case`新增cache correctness guards：未變檔案AST必須reuse；同一路徑內容變更後必須取得新AST與新值。
+- 非formal timing：baseline ZIP完整253 validators／4,401 checks約30.7秒；修改後253 validators／4,403 checks約26.7秒，約13%下降，0 fail。此數字只作同環境synthetic harness比較，不宣稱Windows formal consistency必然等比例下降。
+- 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。GPT不執行formal `apps/test_suite.py`；使用者本機以`apps/run_bundle.py`完成final double check並正常commit。

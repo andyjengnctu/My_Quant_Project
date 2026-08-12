@@ -156,6 +156,9 @@ from .synthetic_breakout_quality_support import (
     validate_model_sequence_length,
 )
 
+from .source_index import read_source_ast, read_source_text
+
+
 def validate_breakout_quality_policy_single_source_case(_base_params):
     case_id = "BREAKOUT_QUALITY_POLICY_SSOT"
     results = []
@@ -163,7 +166,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
 
     project_root = Path(__file__).resolve().parents[2]
     canonical_config_path = project_root / "config" / "breakout_quality.py"
-    canonical_source = canonical_config_path.read_text(encoding="utf-8")
+    canonical_source = read_source_text(canonical_config_path)
     removed_legacy_config_paths = tuple(
         project_root / "config" / filename
         for filename in (
@@ -210,7 +213,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     )
     first_implementation_line = min(
         node.lineno
-        for node in ast.parse(canonical_source).body
+        for node in read_source_ast(canonical_config_path).body
         if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
     )
     add_check(
@@ -245,7 +248,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         for source_path in (project_root / source_root).rglob("*.py"):
             if source_path.resolve() == current_validator_path:
                 continue
-            source_text = source_path.read_text(encoding="utf-8")
+            source_text = read_source_text(source_path)
             if any(pattern in source_text for pattern in stale_import_patterns):
                 stale_import_files.append(source_path.relative_to(project_root).as_posix())
     add_check(
