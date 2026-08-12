@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import time
@@ -30,14 +29,14 @@ from filters.breakout_quality.contract import LABEL_PASS, LABEL_REJECT
 from filters.breakout_quality.paths import resolve_filter_output_dir
 from core.console_report import print_artifact_paths, project_relative_display_path
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, load_validated_dataset_bundle, write_json
-from filters.breakout_quality.strategy_compare_engine import (
-    COMPARISON_MODE_HARD_FILTER,
-    _build_controlled_param_source_pair,
-    _flatten_candidate_replay_rows,
-    _load_param_source,
-    _run_scenario,
-    _scenario_summary,
+from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_HARD_FILTER
+from filters.breakout_quality.strategy_compare_sources import (
+    build_controlled_param_source_pair as _build_controlled_param_source_pair,
+    load_param_source as _load_param_source,
 )
+from filters.breakout_quality.strategy_compare_replay import run_scenario as _run_scenario
+from filters.breakout_quality.strategy_compare_diagnostics import flatten_candidate_replay_rows as _flatten_candidate_replay_rows
+from filters.breakout_quality.strategy_compare_reporting import scenario_summary as _scenario_summary
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 from filters.breakout_quality.trade_path_label import (
     TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
@@ -45,11 +44,21 @@ from filters.breakout_quality.trade_path_label import (
     TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
     TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
 )
-from tools.filters.breakout_quality.train_continuous_ranker import _spearman
+from services.breakout_quality.ranker_training import calculate_spearman as _spearman
+
+from tools.audit.primitives import sha256_file as _sha256_file
+from tools.audit.breakout_quality.selection_replay_primitives import (
+    SELECTION_STRATEGY_REALIZATION_AUDIT_DIRNAME as AUDIT_DIRNAME,
+    attach_targets as _attach_targets,
+    date_text as _date_text,
+    selection_strategy_realization_output_dir as _output_dir,
+    target_lookup as _target_lookup,
+    unique_signals as _unique_signals,
+    validate_param_coverage as _validate_param_coverage,
+)
 
 AUDIT_SCHEMA_VERSION = 1
 EXPERIMENT_NAME = "11I Nested Selection Strategy-realization Coverage Audit"
-AUDIT_DIRNAME = "selection_strategy_realization_audit"
 AUDIT_JSON_FILENAME = "selection_strategy_realization_audit.json"
 AUDIT_MARKDOWN_FILENAME = "selection_strategy_realization_audit.md"
 QUALIFIED_FILENAME = "selection_qualified_candidates.csv"
@@ -72,13 +81,6 @@ def default_params_path() -> Path:
     return default_research_models_dir() / "roos_base_finalists_agree.json"
 
 
-def _output_dir(filter_id: str) -> Path:
-    return (
-        resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
-        / "continuous_targets"
-        / STRATEGY_ALIGNED_NO_TIME_TARGET_ID
-        / AUDIT_DIRNAME
-    )
 
 
 def parse_args(argv=None):
@@ -105,12 +107,6 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def _sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _write_prepare_script(*, output_dir: Path, trials: int, dataset_profile: str = "full") -> Path:
@@ -135,28 +131,8 @@ def _write_prepare_script(*, output_dir: Path, trials: int, dataset_profile: str
     return path
 
 
-def _date_text(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    return pd.Timestamp(text).strftime("%Y-%m-%d")
 
 
-def _validate_param_coverage(source: dict[str, Any], *, start_date: str, end_date: str) -> tuple[str, str, str]:
-    kind = str(source.get("kind") or "")
-    payload = source.get("payload") or {}
-    if kind == "rolling_active_param_ensemble":
-        first, last = get_active_param_ensemble_date_range(payload)
-    elif kind == "rolling_oos_param_schedule":
-        first, last = get_active_param_date_range(payload)
-    else:
-        raise ValueError(f"11I只接受rolling lookahead-safe params，收到: {kind}")
-    if _date_text(first) > _date_text(start_date) or _date_text(last) < _date_text(end_date):
-        raise ValueError(
-            "11I nested params未完整覆蓋Selection replay期間: "
-            f"params={first}~{last}, requested={start_date}~{end_date}"
-        )
-    return kind, _date_text(first), _date_text(last)
 
 
 def _validate_replay_target_bounds(
@@ -179,65 +155,12 @@ def _validate_replay_target_bounds(
     return eligible_start, eligible_end
 
 
-def _resolve_target_date(frame: pd.DataFrame) -> pd.Series:
-    signal = frame.get("signal_date", pd.Series("", index=frame.index)).fillna("").astype(str).str.strip()
-    candidate = frame.get("candidate_date", pd.Series("", index=frame.index)).fillna("").astype(str).str.strip()
-    entry = frame.get("entry_date", pd.Series("", index=frame.index)).fillna("").astype(str).str.strip()
-    trade = frame.get("trade_date", pd.Series("", index=frame.index)).fillna("").astype(str).str.strip()
-    target = signal.where(signal != "", candidate)
-    target = target.where(target != "", entry)
-    target = target.where(target != "", trade)
-    return pd.to_datetime(target, errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
 
 
-def _target_lookup(filter_id: str) -> tuple[pd.DataFrame, dict[str, Any]]:
-    summary, _bank, labels, event_group_index, events = load_validated_dataset_bundle(filter_id)
-    group_count = int(summary.get("feature_group_count", 0) or len(np.unique(event_group_index)))
-    manifest, target, valid = load_validated_continuous_target_arrays(
-        PROJECT_ROOT,
-        filter_id,
-        target_id=STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
-        expected_group_count=group_count,
-        expected_dataset_policy=summary.get("policy"),
-    )
-    frame = events[["ticker", "date", "group_index", "label"]].copy()
-    frame["date"] = pd.to_datetime(frame["date"], errors="raise").dt.strftime("%Y-%m-%d")
-    frame["group_index"] = pd.to_numeric(frame["group_index"], errors="raise").astype(np.int64)
-    frame["label"] = pd.to_numeric(frame["label"], errors="raise").astype(np.int64)
-    mixed = frame.groupby("group_index", sort=False)["label"].nunique()
-    if bool((mixed != 1).any()):
-        raise ValueError("11I dataset同group存在混合label")
-    group = frame.drop_duplicates("group_index", keep="first").sort_values("group_index", kind="mergesort")
-    if len(group) != len(target):
-        raise ValueError("11I group lookup與No-time target長度不一致")
-    ids = group["group_index"].to_numpy(dtype=np.int64)
-    group["target_raw_r"] = np.asarray(target, dtype=np.float64)[ids]
-    group["target_valid"] = np.asarray(valid, dtype=bool)[ids]
-    return group.rename(columns={"date": "target_date"}).reset_index(drop=True), manifest
 
 
-def _attach_targets(frame: pd.DataFrame, lookup: pd.DataFrame) -> pd.DataFrame:
-    work = frame.copy()
-    work["ticker"] = work["ticker"].astype(str)
-    work["target_date"] = _resolve_target_date(work)
-    merged = work.merge(
-        lookup[["ticker", "target_date", "group_index", "label", "target_raw_r", "target_valid"]],
-        how="left",
-        on=["ticker", "target_date"],
-        validate="many_to_one",
-    )
-    merged["target_match"] = merged["target_valid"].fillna(False).astype(bool) & np.isfinite(
-        pd.to_numeric(merged["target_raw_r"], errors="coerce")
-    )
-    return merged
 
 
-def _unique_signals(frame: pd.DataFrame) -> pd.DataFrame:
-    if frame.empty:
-        return frame.copy()
-    return frame.sort_values(
-        ["ticker", "target_date", "trade_date", "candidate_type"], kind="mergesort"
-    ).drop_duplicates(["ticker", "target_date"], keep="first").reset_index(drop=True)
 
 
 def _trade_metrics(frame: pd.DataFrame) -> dict[str, Any]:

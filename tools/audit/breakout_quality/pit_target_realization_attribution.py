@@ -36,7 +36,7 @@ from filters.breakout_quality.ranking_score_store import (
 from tools.audit.breakout_quality.c15_strategy_attribution import (
     build_strategy_attribution_pair_payload,
 )
-from tools.audit.breakout_quality.pit_fold_runtime_attribution import _candidate_pit_identity
+from tools.audit.breakout_quality.pit_primitives import candidate_pit_identity as _candidate_pit_identity
 from tools.audit.sources.strategy_compare import (
     StrategyCompareArmArtifacts,
     resolve_arm_artifacts,

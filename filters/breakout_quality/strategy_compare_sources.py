@@ -640,3 +640,7 @@ def _build_controlled_param_source_pair(
         policy,
     )
 
+# Stable public aliases for read-only consumers.
+first_existing_comparison_dir = _first_existing_comparison_dir
+load_param_source = _load_param_source
+build_controlled_param_source_pair = _build_controlled_param_source_pair

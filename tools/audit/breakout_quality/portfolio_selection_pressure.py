@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import time
@@ -16,13 +15,13 @@ import pandas as pd
 
 from config.breakout_quality import BREAKOUT_QUALITY_DEFAULT_FILTER_ID
 from filters.breakout_quality.continuous_target import STRATEGY_ALIGNED_NO_TIME_TARGET_ID
-from tools.audit.breakout_quality.selection_strategy_realization import (
-    AUDIT_JSON_FILENAME as SOURCE_AUDIT_JSON_FILENAME,
-    _output_dir as selection_strategy_output_dir,
-)
+from tools.audit.breakout_quality.selection_strategy_realization import AUDIT_JSON_FILENAME as SOURCE_AUDIT_JSON_FILENAME
+from tools.audit.breakout_quality.selection_replay_primitives import selection_strategy_realization_output_dir
 from core.console_report import print_artifact_paths
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
-from tools.filters.breakout_quality.train_continuous_ranker import _spearman
+from services.breakout_quality.ranker_training import calculate_spearman as _spearman
+
+from tools.audit.primitives import sha256_file as _sha256_file
 
 AUDIT_SCHEMA_VERSION = 1
 EXPERIMENT_NAME = "11K Portfolio Selection-pressure Attribution Audit"
@@ -45,12 +44,6 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def _sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -395,7 +388,7 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     filter_id = str(args.filter_id)
     started = time.perf_counter()
-    source_dir = selection_strategy_output_dir(filter_id)
+    source_dir = selection_strategy_realization_output_dir(filter_id)
     source_json_path = source_dir / SOURCE_AUDIT_JSON_FILENAME
     if not source_json_path.is_file():
         raise FileNotFoundError(f"11K需要先完成11I: {source_json_path}")

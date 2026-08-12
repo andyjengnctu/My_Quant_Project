@@ -24,13 +24,15 @@ from tools.audit.breakout_quality.target_component_attribution import (
     AUDIT_DIRNAME as ATTRIBUTION_AUDIT_DIRNAME,
     AUDIT_JSON_FILENAME as ATTRIBUTION_AUDIT_JSON_FILENAME,
     QUALIFIED_ATTRIBUTION_FILENAME,
-    _ranker_dir,
-    _read_json,
-    _sha256_file,
+)
+from tools.audit.breakout_quality.artifact_primitives import (
+    read_json as _read_json,
+    resolve_ranker_dir as _ranker_dir,
+    sha256_file as _sha256_file,
 )
 from core.console_report import print_artifact_paths
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
-from tools.filters.breakout_quality.train_continuous_ranker import _spearman
+from services.breakout_quality.ranker_training import calculate_spearman as _spearman
 
 AUDIT_SCHEMA_VERSION = 1
 AUDIT_DIRNAME = "target_time_penalty_ablation_audit"

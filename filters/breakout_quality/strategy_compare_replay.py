@@ -615,3 +615,5 @@ def run_standalone_baseline(
         )
     return json_payload
 
+# Stable public aliases for read-only consumers.
+run_scenario = _run_scenario

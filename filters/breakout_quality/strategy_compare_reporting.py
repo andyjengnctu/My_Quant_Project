@@ -1016,3 +1016,5 @@ def _remove_legacy_html_outputs(output_dir: Path) -> None:
         if path.is_file():
             path.unlink()
 
+# Stable public aliases for read-only consumers.
+scenario_summary = _scenario_summary

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import time
@@ -28,17 +27,22 @@ from filters.breakout_quality.continuous_target import (
 from filters.breakout_quality.paths import resolve_filter_model_output_dir
 from core.console_report import print_artifact_paths
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
-from filters.breakout_quality.strategy_compare_engine import (
-    COMPARISON_MODE_HARD_FILTER,
-    _first_existing_comparison_dir,
-    _scenario_summary as summarize_strategy_scenario,
-    run_no_filter_candidate_replay_from_metadata,
-)
-from tools.filters.breakout_quality.train_continuous_ranker import (
+from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_HARD_FILTER
+from filters.breakout_quality.strategy_compare_sources import first_existing_comparison_dir as _first_existing_comparison_dir
+from filters.breakout_quality.strategy_compare_reporting import scenario_summary as summarize_strategy_scenario
+from filters.breakout_quality.strategy_compare_engine import run_no_filter_candidate_replay_from_metadata
+from services.breakout_quality.ranker_training import (
     RANKER_REPORT_JSON_FILENAME,
     RANKER_SCORE_FILENAME,
-    _daily_rank_metrics,
-    _spearman,
+    daily_rank_metrics as _daily_rank_metrics,
+    calculate_spearman as _spearman,
+)
+
+from tools.audit.primitives import sha256_file as _sha256_file
+
+from tools.audit.breakout_quality.artifact_primitives import (
+    read_json as _read_json,
+    resolve_ranker_dir as _ranker_dir,
 )
 
 AUDIT_SCHEMA_VERSION = 1
@@ -76,22 +80,8 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
-def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"讀取JSON失敗: {path}｜{type(exc).__name__}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError(f"JSON root必須是object: {path}")
-    return payload
 
 
 def _strategy_compare_dir(filter_id: str, explicit_dir: str | None) -> Path:
@@ -113,13 +103,6 @@ def _strategy_compare_dir(filter_id: str, explicit_dir: str | None) -> Path:
     return path
 
 
-def _ranker_dir(filter_id: str, ranker_profile: str) -> Path:
-    return resolve_filter_model_output_dir(
-        PROJECT_ROOT,
-        filter_id,
-        BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-        ranker_profile,
-    )
 
 
 def _validate_strategy_metadata(metadata: dict[str, Any], *, filter_id: str) -> None:

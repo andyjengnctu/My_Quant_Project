@@ -5,7 +5,6 @@ from __future__ import annotations
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS
 
 import argparse
-import hashlib
 import json
 import math
 import time
@@ -29,25 +28,27 @@ from tools.audit.breakout_quality.selection_strategy_realization import (
     AUDIT_JSON_FILENAME as SOURCE_AUDIT_JSON_FILENAME,
     AUDIT_DIRNAME as SOURCE_AUDIT_DIRNAME,
     DEFAULT_NESTED_OOS_END_DATE,
-    _attach_targets,
-    _build_controlled_param_source_pair,
-    _date_text,
-    _load_param_source,
-    _output_dir as source_output_dir,
-    _sha256_file,
-    _target_lookup,
-    _unique_signals,
-    _validate_param_coverage,
 )
+from tools.audit.breakout_quality.selection_replay_primitives import (
+    attach_targets as _attach_targets,
+    date_text as _date_text,
+    selection_strategy_realization_output_dir as source_output_dir,
+    target_lookup as _target_lookup,
+    unique_signals as _unique_signals,
+    validate_param_coverage as _validate_param_coverage,
+)
+from tools.audit.primitives import sha256_file as _sha256_file
 from core.console_report import print_artifact_paths
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
-from filters.breakout_quality.strategy_compare_engine import (
-    COMPARISON_MODE_HARD_FILTER,
-    _flatten_candidate_replay_rows,
-    _run_scenario,
-    _scenario_summary,
+from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_HARD_FILTER
+from filters.breakout_quality.strategy_compare_sources import (
+    build_controlled_param_source_pair as _build_controlled_param_source_pair,
+    load_param_source as _load_param_source,
 )
-from tools.filters.breakout_quality.train_continuous_ranker import _spearman
+from filters.breakout_quality.strategy_compare_replay import run_scenario as _run_scenario
+from filters.breakout_quality.strategy_compare_diagnostics import flatten_candidate_replay_rows as _flatten_candidate_replay_rows
+from filters.breakout_quality.strategy_compare_reporting import scenario_summary as _scenario_summary
+from services.breakout_quality.ranker_training import calculate_spearman as _spearman
 
 AUDIT_SCHEMA_VERSION = 1
 EXPERIMENT_NAME = "11J Canonical Per-candidate Counterfactual Execution Audit"

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import time
@@ -33,9 +32,15 @@ from tools.audit.breakout_quality.qualified_candidate_set import (
 )
 from core.console_report import print_artifact_paths
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
-from tools.filters.breakout_quality.train_continuous_ranker import (
+from services.breakout_quality.ranker_training import (
     RANKER_SCORE_FILENAME,
-    _spearman,
+    calculate_spearman as _spearman,
+)
+
+from tools.audit.breakout_quality.artifact_primitives import (
+    read_json as _read_json,
+    resolve_ranker_dir as _ranker_dir,
+    sha256_file as _sha256_file,
 )
 
 AUDIT_SCHEMA_VERSION = 1
@@ -69,31 +74,10 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
-def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"讀取JSON失敗: {path}｜{type(exc).__name__}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError(f"JSON root必須是object: {path}")
-    return payload
 
 
-def _ranker_dir(filter_id: str, ranker_profile: str) -> Path:
-    return resolve_filter_model_output_dir(
-        PROJECT_ROOT,
-        filter_id,
-        BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-        ranker_profile,
-    )
 
 
 def _validated_csv_from_report(

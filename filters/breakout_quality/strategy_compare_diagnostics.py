@@ -355,3 +355,5 @@ def _strategy_selection_diagnostics(
     }
     return metrics, orderable_joined, selected_joined
 
+# Stable public aliases for read-only consumers.
+flatten_candidate_replay_rows = _flatten_candidate_replay_rows

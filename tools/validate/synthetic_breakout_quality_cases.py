@@ -17599,6 +17599,86 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     legacy_export_path = project_root / "tools" / "filters" / "breakout_quality" / "export_scores.py"
     legacy_param_path = project_root / "tools" / "filters" / "breakout_quality" / "strategy_dl_filter_param_adapt_gate.py"
     quick_gate_source = (project_root / "tools" / "local_regression" / "run_quick_gate.py").read_text(encoding="utf-8")
+    audit_python_files = sorted((project_root / "tools" / "audit").rglob("*.py"))
+    private_cross_audit_imports = []
+    legacy_ranker_imports = []
+    private_strategy_compare_engine_imports = []
+    for audit_path in audit_python_files:
+        audit_tree = ast.parse(audit_path.read_text(encoding="utf-8"), filename=str(audit_path))
+        for node in ast.walk(audit_tree):
+            if not isinstance(node, ast.ImportFrom) or not node.module:
+                continue
+            imported_names = [item.name for item in node.names]
+            if node.module.startswith("tools.audit"):
+                for imported_name in imported_names:
+                    if imported_name.startswith("_"):
+                        private_cross_audit_imports.append(
+                            f"{audit_path.relative_to(project_root)}:{node.lineno}:{node.module}.{imported_name}"
+                        )
+            if node.module == "tools.filters.breakout_quality.train_continuous_ranker":
+                legacy_ranker_imports.append(
+                    f"{audit_path.relative_to(project_root)}:{node.lineno}:{','.join(imported_names)}"
+                )
+            if node.module == "filters.breakout_quality.strategy_compare_engine":
+                for imported_name in imported_names:
+                    if imported_name.startswith("_"):
+                        private_strategy_compare_engine_imports.append(
+                            f"{audit_path.relative_to(project_root)}:{node.lineno}:{imported_name}"
+                        )
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "audit_modules_do_not_cross_import_other_audit_private_helpers",
+        [],
+        private_cross_audit_imports,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "audit_modules_use_public_ranker_and_strategy_compare_owners",
+        ([], []),
+        (legacy_ranker_imports, private_strategy_compare_engine_imports),
+    )
+
+    from tools.audit import primitives as audit_primitives
+    from tools.audit.breakout_quality import artifact_primitives, pit_primitives
+    from tools.audit.breakout_quality import selection_replay_primitives, target_statistics
+    from tools.audit.breakout_quality import continuous_target as continuous_target_audit
+    from tools.audit.breakout_quality import no_time_continuous_target as no_time_target_audit
+    from tools.audit.breakout_quality import selection_strategy_realization as selection_realization_audit
+    from tools.audit.breakout_quality import candidate_counterfactual_execution as counterfactual_audit
+    from tools.audit.breakout_quality import target_component_attribution as target_component_audit
+    from tools.audit.breakout_quality import pit_fold_runtime_attribution as pit_fold_audit
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_audits_share_one_statistics_implementation",
+        (True, True, True),
+        (
+            continuous_target_audit._distribution_metrics is target_statistics.distribution_metrics,
+            no_time_target_audit._distribution_metrics is target_statistics.distribution_metrics,
+            continuous_target_audit._daily_rankability is no_time_target_audit._daily_rankability,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_and_pit_audits_share_identity_and_artifact_primitives",
+        (True, True, True, True),
+        (
+            selection_realization_audit._attach_targets is selection_replay_primitives.attach_targets,
+            counterfactual_audit._attach_targets is selection_replay_primitives.attach_targets,
+            pit_fold_audit._candidate_pit_identity is pit_primitives.candidate_pit_identity,
+            target_component_audit._sha256_file is audit_primitives.sha256_file
+            and artifact_primitives.sha256_file is audit_primitives.sha256_file,
+        ),
+    )
 
     config_source = config_path.read_text(encoding="utf-8")
     app_source = app_path.read_text(encoding="utf-8")
@@ -21430,6 +21510,86 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     audit_app_source = (project_root / "apps" / "research.py").read_text(encoding="utf-8")
     model_app_source = (project_root / "tools" / "filters" / "breakout_quality" / "application.py").read_text(encoding="utf-8")
     quick_gate_source = (project_root / "tools" / "local_regression" / "run_quick_gate.py").read_text(encoding="utf-8")
+    audit_python_files = sorted((project_root / "tools" / "audit").rglob("*.py"))
+    private_cross_audit_imports = []
+    legacy_ranker_imports = []
+    private_strategy_compare_engine_imports = []
+    for audit_path in audit_python_files:
+        audit_tree = ast.parse(audit_path.read_text(encoding="utf-8"), filename=str(audit_path))
+        for node in ast.walk(audit_tree):
+            if not isinstance(node, ast.ImportFrom) or not node.module:
+                continue
+            imported_names = [item.name for item in node.names]
+            if node.module.startswith("tools.audit"):
+                for imported_name in imported_names:
+                    if imported_name.startswith("_"):
+                        private_cross_audit_imports.append(
+                            f"{audit_path.relative_to(project_root)}:{node.lineno}:{node.module}.{imported_name}"
+                        )
+            if node.module == "tools.filters.breakout_quality.train_continuous_ranker":
+                legacy_ranker_imports.append(
+                    f"{audit_path.relative_to(project_root)}:{node.lineno}:{','.join(imported_names)}"
+                )
+            if node.module == "filters.breakout_quality.strategy_compare_engine":
+                for imported_name in imported_names:
+                    if imported_name.startswith("_"):
+                        private_strategy_compare_engine_imports.append(
+                            f"{audit_path.relative_to(project_root)}:{node.lineno}:{imported_name}"
+                        )
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "audit_modules_do_not_cross_import_other_audit_private_helpers",
+        [],
+        private_cross_audit_imports,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "audit_modules_use_public_ranker_and_strategy_compare_owners",
+        ([], []),
+        (legacy_ranker_imports, private_strategy_compare_engine_imports),
+    )
+
+    from tools.audit import primitives as audit_primitives
+    from tools.audit.breakout_quality import artifact_primitives, pit_primitives
+    from tools.audit.breakout_quality import selection_replay_primitives, target_statistics
+    from tools.audit.breakout_quality import continuous_target as continuous_target_audit
+    from tools.audit.breakout_quality import no_time_continuous_target as no_time_target_audit
+    from tools.audit.breakout_quality import selection_strategy_realization as selection_realization_audit
+    from tools.audit.breakout_quality import candidate_counterfactual_execution as counterfactual_audit
+    from tools.audit.breakout_quality import target_component_attribution as target_component_audit
+    from tools.audit.breakout_quality import pit_fold_runtime_attribution as pit_fold_audit
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_audits_share_one_statistics_implementation",
+        (True, True, True),
+        (
+            continuous_target_audit._distribution_metrics is target_statistics.distribution_metrics,
+            no_time_target_audit._distribution_metrics is target_statistics.distribution_metrics,
+            continuous_target_audit._daily_rankability is no_time_target_audit._daily_rankability,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_and_pit_audits_share_identity_and_artifact_primitives",
+        (True, True, True, True),
+        (
+            selection_realization_audit._attach_targets is selection_replay_primitives.attach_targets,
+            counterfactual_audit._attach_targets is selection_replay_primitives.attach_targets,
+            pit_fold_audit._candidate_pit_identity is pit_primitives.candidate_pit_identity,
+            target_component_audit._sha256_file is audit_primitives.sha256_file
+            and artifact_primitives.sha256_file is audit_primitives.sha256_file,
+        ),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
