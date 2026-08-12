@@ -209,8 +209,6 @@ BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS = DEFAULT_PORTFOLIO_MAX_POSITIONS
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K = BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_BOUNDARY_WIDTH = 3
 BREAKOUT_QUALITY_STRATEGY_ROTATION = DEFAULT_PORTFOLIO_ROTATION
-BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK = DEFAULT_FIXED_RISK
-BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT = DEFAULT_MAX_POSITION_CAP_PCT
 
 # Continuous-ranker read-only comparison is config-driven.  The interactive menu must
 # never hard-code experiment/model/arm IDs; it only renders this configured work item.
@@ -1008,9 +1006,9 @@ class BreakoutQualityWorkflowSettings:
     strategy_param_policy: str
     strategy_max_positions: int
     strategy_rotation: str
-    strategy_adapt_trials_per_fold: int
-    strategy_adapt_fixed_risk: float
-    strategy_adapt_max_position_cap_pct: float
+    strategy_trials_per_fold: int
+    strategy_fixed_risk: float
+    strategy_max_position_cap_pct: float
     strategy_comparison_mode: str
     strategy_score_source: str
     strategy_buy_sort: str
@@ -1064,11 +1062,11 @@ class BreakoutQualityWorkflowSettings:
                 "max_positions": int(self.strategy_max_positions),
                 "rotation": self.strategy_rotation,
                 "adaptation": {
-                    "trials_per_fold": int(self.strategy_adapt_trials_per_fold),
+                    "trials_per_fold": int(self.strategy_trials_per_fold),
                     "trial_source": "OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT",
-                    "fixed_risk": float(self.strategy_adapt_fixed_risk),
+                    "fixed_risk": float(self.strategy_fixed_risk),
                     "max_position_cap_pct": float(
-                        self.strategy_adapt_max_position_cap_pct
+                        self.strategy_max_position_cap_pct
                     ),
                 },
                 "comparison_mode": self.strategy_comparison_mode,
@@ -1154,10 +1152,10 @@ def get_breakout_quality_workflow_settings(
         raise ValueError("strategy rotation 必須是 off 或 on")
     if int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT) < 1:
         raise ValueError("outer rolling optimizer trials per fold 必須 >= 1")
-    if not 0.0 < float(BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK) <= 1.0:
-        raise ValueError("strategy adaptation fixed risk 必須介於0與1")
-    if not 0.0 < float(BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT) <= 1.0:
-        raise ValueError("strategy adaptation max position cap pct 必須介於0與1")
+    if not 0.0 < float(DEFAULT_FIXED_RISK) <= 1.0:
+        raise ValueError("strategy fixed risk 必須介於0與1")
+    if not 0.0 < float(DEFAULT_MAX_POSITION_CAP_PCT) <= 1.0:
+        raise ValueError("strategy max position cap pct 必須介於0與1")
 
     raw_comparison_mode = str(BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE).strip()
     if raw_comparison_mode not in SUPPORTED_WORKFLOW_STRATEGY_MODES:
@@ -1256,13 +1254,11 @@ def get_breakout_quality_workflow_settings(
         strategy_param_policy=str(BREAKOUT_QUALITY_STRATEGY_PARAM_POLICY),
         strategy_max_positions=int(BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS),
         strategy_rotation=str(BREAKOUT_QUALITY_STRATEGY_ROTATION),
-        strategy_adapt_trials_per_fold=int(
+        strategy_trials_per_fold=int(
             OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
         ),
-        strategy_adapt_fixed_risk=float(BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK),
-        strategy_adapt_max_position_cap_pct=float(
-            BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT
-        ),
+        strategy_fixed_risk=float(DEFAULT_FIXED_RISK),
+        strategy_max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
         strategy_comparison_mode=strategy_comparison_mode,
         strategy_score_source=strategy_score_source,
         strategy_buy_sort=strategy_buy_sort,
@@ -1414,8 +1410,6 @@ __all__ = [
     'normalize_breakout_quality_experiment_profile',
     'normalize_breakout_quality_pretraining_profile',
     'BREAKOUT_QUALITY_STRATEGY_BUY_SORT',
-    'BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK',
-    'BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT',
     'BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE',
     'BREAKOUT_QUALITY_STRATEGY_SCORE_SOURCE',
     'BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE',

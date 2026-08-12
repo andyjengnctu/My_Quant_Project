@@ -93,15 +93,15 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--historical-teacher-trials-per-fold",
         type=int,
-        default=int(settings.strategy_adapt_trials_per_fold),
+        default=int(settings.strategy_trials_per_fold),
     )
     parser.add_argument("--max-positions", type=int, default=int(settings.strategy_max_positions))
     parser.add_argument("--rotation", choices=("off", "on"), default=str(settings.strategy_rotation))
-    parser.add_argument("--fixed-risk", type=float, default=float(settings.strategy_adapt_fixed_risk))
+    parser.add_argument("--fixed-risk", type=float, default=float(settings.strategy_fixed_risk))
     parser.add_argument(
         "--max-position-cap-pct",
         type=float,
-        default=float(settings.strategy_adapt_max_position_cap_pct),
+        default=float(settings.strategy_max_position_cap_pct),
     )
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)

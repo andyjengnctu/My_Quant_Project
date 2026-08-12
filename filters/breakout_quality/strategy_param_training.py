@@ -164,11 +164,11 @@ def _parse_args(argv=None):
     parser.add_argument("--model-architecture", default=settings.model_architecture)
     parser.add_argument("--experiment-profile", default=settings.experiment_profile)
     parser.add_argument("--param-policy", choices=PARAM_POLICIES, default=PARAM_POLICY_BASE_FINALIST_BEST)
-    parser.add_argument("--trials-per-fold", "--trials", dest="trials_per_fold", type=int, default=settings.strategy_adapt_trials_per_fold)
+    parser.add_argument("--trials-per-fold", "--trials", dest="trials_per_fold", type=int, default=settings.strategy_trials_per_fold)
     parser.add_argument("--max-positions", type=int, default=settings.strategy_max_positions)
     parser.add_argument("--rotation", choices=("off", "on"), default=settings.strategy_rotation)
-    parser.add_argument("--fixed-risk", type=float, default=settings.strategy_adapt_fixed_risk)
-    parser.add_argument("--max-position-cap-pct", type=float, default=settings.strategy_adapt_max_position_cap_pct)
+    parser.add_argument("--fixed-risk", type=float, default=settings.strategy_fixed_risk)
+    parser.add_argument("--max-position-cap-pct", type=float, default=settings.strategy_max_position_cap_pct)
     parser.add_argument(
         "--build-binary-pit",
         action=argparse.BooleanOptionalAction,

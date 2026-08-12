@@ -186,17 +186,7 @@ python apps/research.py model build-trade-path-labels `
 
 Builder先以2014～2020 Selection rolling基準建立rules全關／DL關的risk-only A2 teacher，再合併既有2021～2026 P2 active params。每個Label日期只能使用當時已生效teacher params；衍生Dataset沿用9A 300×10 feature bank，但以獨立filter目錄保存Label、events與summary。
 
-確認新模型Prediction報表後，正式策略比較使用獨立App。舊Old／New專用Gate僅保留歷史診斷；若需重現，可直接執行：
-
-```powershell
-python -m tools.filters.breakout_quality.strategy_trade_path_label_gate `
-  --dataset full `
-  --param-policy base-finalist-best `
-  --max-positions 10 `
-  --rotation off
-```
-
-Gate不重新訓練，只更新兩個既有凍結模型的forward-OOS Scores，並在同一套A2／P2 active params、rules全關、原position-aware buy-sort與threshold 0.5下比較：A2 Base（DL關）、Old Label 9A（DL開）、New Trade-path Label（DL開）。主判定為`New−Base`，輔助判定為`New−Old`；不得依同一段OOS回頭調整threshold、Label或模型。輸出位於`models/research/breakout_quality/trade_path_label_gate/a2_realized_trade_path_v1/`。
+確認新模型Prediction報表後，正式策略比較使用`apps/research.py`的`[3] 策略組合比較`與`config/strategy_compare.py`。舊Old／New專用Trade-path Gate已於Legacy Cleanup Batch 7退役；既有歷史結果與科學判定保留在Experiment Registry／Experiment Log，不再保留獨立可執行CLI。Label建立、模型訓練與forward-OOS score產生仍由上述正式模型流程負責。
 
 ### Continuous Target自動準備
 
@@ -628,21 +618,7 @@ python -m filters.breakout_quality.strategy_compare_engine --dataset full --comp
 
 R3只對當日具有有效PIT Score的可掛單候選，依正式`deployment_rate`的當日橫斷面1/3與2/3分位切成高／中／低三桶，先按部署桶高到低，再於桶內按Score高到低，最後沿用既有buy-sort。分桶只使用當日盤前已知候選與正式sizing，不使用Future Target或回放績效調整邊界；同部署率跨分位時保持同桶。輸出隔離於`strategy_compare_score_ranking_base_finalist_best_capital_bucket_then_score_selection_point_in_time/`。
 
-Optional entry filters × Ranking A～E Gate為CLI-only研究，不加入互動選單。Gate固定使用continuous-ranker的filter／architecture／experiment profile；dataset／部位與rotation採正式config，不會因主workflow切回binary `unique_group_sampling`而改錯PIT profile。它固定舊正式ROOS與Selection PIT Scores，依序執行：A目前filters＋原buy-sort、B目前filters＋R3、C五個optional entry filters全關＋原buy-sort、D五個filters全關＋R3、E五個filters全關＋原始Score sort：
-
-```bash
-python -m tools.filters.breakout_quality.strategy_filter_gate --dataset full --param-policy base-finalist-best --start-date 2014-01-01 --end-date 2020-12-31 --max-positions 10 --rotation off
-```
-
-全關欄位固定為`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_return_filter`與`use_breakout_false_filter`；不關閉`high_len`、ATR buy／stop／trail、`use_kc` exit、reclaim re-entry、fixed risk或position cap。主要判讀為`B−A`、`D−C`、`E−C`、`D−E`及R3交互作用`(D−C)−(B−A)`。E用來確認關閉filters後原始Score是否恢復，D−E則判斷R3資金分桶是否仍有必要。Gate不重訓模型、不重建PIT Scores、不執行optimizer；三個pair工件與合併`strategy_filter_gate.md/json`均輸出至`strategy_filter_gate_base_finalist_best_selection_point_in_time/`隔離目錄。
-
-Binary DL Filter Rule Ablation Gate同樣為CLI-only研究，使用9A binary canonical runtime score與固定threshold，不使用continuous PIT Score或R3。它固定正式rolling params與原position-aware buy-sort，將原A／B／C／F重新命名為A0／B0／A1／B1，並加入A2／B2關歷史門檻、A3／B3再關Re-entry、A4／B4再關KC出場。每層A為DL關、B為DL開；未指定日期時自動使用9A runtime manifest宣告的正式execution start與available through：
-
-```bash
-python -m tools.filters.breakout_quality.strategy_dl_filter_gate --dataset full --param-policy base-finalist-best --max-positions 10 --rotation off
-```
-
-Gate只關閉`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_return_filter`與`use_breakout_false_filter`；保留`high_len`突破事件、ATR buy／initial stop／trail、`use_kc` exit、reclaim re-entry、fixed risk、position cap及原buy-sort。`B−A`檢查DL疊加現有filters，`F−C`檢查DL作唯一品質Gate，`F−A`才是DL-only replacement對目前正式策略的採用比較，interaction=`(F−C)−(B−A)`只作機制判讀。兩個hard-filter pair都固定threshold 0.5、canonical runtime score與相同active params；不重訓模型、不調threshold、不執行optimizer、不使用Future Target。輸出隔離於`strategy_dl_filter_gate_<param_policy>_canonical_runtime/`，包含A/B與C/F pair的完整策略比較、交易歸因及合併`strategy_dl_filter_gate.md/json`。
+舊Optional-entry-filter A～E Gate與Binary DL rule-ablation Gate已於Legacy Cleanup Batch 7退役。其歷史研究結果保留於Experiment Log；現行策略經濟比較一律由`apps/research.py`的`[3] 策略組合比較`與config-driven arms／contrasts執行，不再維護兩套專用Gate orchestration。
 
 Binary DL risk-only parameter adaptation同樣為CLI-only暫時研究，不加入互動選單。正式比較固定為4種參數 × Binary DL關／開，共8個操作點：P0原ROOS＋原正式規則、P1原ROOS＋Rule-based filters全關、P2在rules全關／DL關環境只訓練Min ROOS五個欄位、P3在rules全關／DL開環境以Binary PIT Scores只訓練同五個欄位。每套參數各回放DL關／開，命名為A0／B0至A3／B3：
 
@@ -673,25 +649,11 @@ python apps/research.py model build-binary-point-in-time-scores `
 - `--param-policy` 與參數檔內 `selector` 不一致時直接拒絕；`base-finalist-best` 另要求每期 `1 member / min_agree=1`。
 - 可正常評分但低 Score 的候選仍保留，只是順位靠後。Hard-filter模式的正式不可評分事件仍保守REJECT；Score-ranking模式的缺分候選不得排除或填0，必須保存`available=false`與原始Score來源，排在有效Score後並完整回退既有buy-sort。Continuation與STOP後Re-entry沿用原始breakout Score及原始Score事件日期。
 - Score-ranking capture attribution已從正式strategy compare runtime拆離。`filters/breakout_quality/strategy_compare_engine.py`只產生canonical策略比較工件，不import `tools/audit/`、不在replay流程內自動產生Audit，也不提供`--capture-audit-only`。
-- 通用capture實作位於`tools/audit/portfolio/score_ranking_capture.py`，只能從**已完成的pair工件**物化read-only報表；需要此歷史研究診斷的`strategy_filter_gate.py`／`strategy_adapt.py`會在正式比較完成或重用既有pair後顯式呼叫它，不因此重跑portfolio。Future Target仍只可在replay後join，不進候選排序、資金配置、成交或optimizer。
+- 通用capture實作位於`tools/audit/portfolio/score_ranking_capture.py`，只能從**已完成的pair工件**物化read-only報表；歷史pair若需診斷可直接由Audit materializer讀取，不需要已退役的Gate／Adapt CLI orchestration，也不因此重跑portfolio。Future Target仍只可在replay後join，不進候選排序、資金配置、成交或optimizer。
 - 原策略比較主要工件維持`strategy_comparison.md`、`strategy_comparison.json`及canonical equity／trades／daily-capacity／selected diagnostics；capture audit如被研究工具要求，另輸出`score_ranking_capture_audit.md`、`score_ranking_capture_audit.json`與lifecycle／年度／scenario CSV。兩份報表彼此獨立，strategy comparison JSON不再內嵌Audit payload。
 - Capture audit可分解平均實際投入、預留／投入比例、stop distance、保留買單成交率、持有期、首次半倉時間、尾倉slot-days、entry-date／月份集中度、可用時的產業集中度、exit reason、Realized R、Target R、Target capture ratio、realization gap與年度差異；若交易列沒有canonical產業欄位則顯示N/A，不自行推測類股。
-- 一般Optimizer search space固定ranking=`False`，不得把ranking開關設成trial維度。策略適應使用專用固定context，而不是搜尋ranking開關。
-- PIT build與model audit完成後，Selection ranking參數適應仍屬明確research CLI，不加入模型或正式策略比較選單：
-
-```bash
-python -m tools.filters.breakout_quality.strategy_adapt --dataset full --param-policy base-finalist-best
-```
-
-  上述未指定`--ranking-policy`時維持既有原始Score Adapted流程。R3參數適應為CLI-only研究，不加入互動選單；執行：
-
-```bash
-python -m tools.filters.breakout_quality.strategy_adapt --dataset full --param-policy base-finalist-best --ranking-policy capital-bucket-then-score
-```
-
-  R3流程固定`capital-bucket-then-score`於optimizer trial外，不把ranking policy、桶數或桶邊界放入搜尋；Baseline／R3 Sort Only使用舊正式ROOS，Param Only／R3 Adapted共用同一套R3 Adapted active params。工件隔離於`models/research/breakout_quality/score_ranking_adaptation/capital_bucket_then_score/rolling_validation/`，不得重用或覆蓋原始Score Adapted study。
-
-  流程先對原Baseline全部rolling folds輸出training Score coverage，並以`BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE`代表延伸前的正式PIT起點。全部Baseline folds與原OOS期間均保留；actual coverage必須逐fold不低於reference、至少一個fold嚴格改善且加權總coverage提高。實際PIT起點以前可依正式缺分契約回退existing buy-sort，實際PIT期間內缺口仍fail-fast，全部OOS replay必須完整位於PIT期間。接著在相同期間自動建立或重用Baseline／Sort Only，只訓練一套固定`use_breakout_quality_ranking=True`、hard filter=False的新active params，再輸出Param Only／Adapted。四組fold schedule、期間、PIT identity、risk、position cap與交易規則完全一致；Param Only與Adapted共用同一套新active params，只有ranking不同。結果只屬`ROLLING_SELECTION_DIAGNOSTIC`，不執行完整Selection final refit或正式OOS。未達100% coverage不會單獨構成拒絕，但若延伸後沒有提升、任何fold退步或PIT期間內缺分，流程會在optimizer前拒絕。
+- 一般Optimizer search space固定ranking=`False`，不得把ranking開關設成trial維度；已退役的Selection ranking×parameter adaptation CLI不得被重新引入正式optimizer或互動選單。
+- 歷史Selection ranking×parameter adaptation研究已完成並於Legacy Cleanup Batch 7退役；其coverage、2×2 replay與R3研究證據保留於Experiment Log，不再提供`strategy_adapt` CLI。現行參數工件由`filters/breakout_quality/strategy_param_training.py`及Strategy Compare preparation管理；任何新ranking研究必須建立新的config／registry identity，不得復活舊臨時入口。
 - 此研究是在已查看既有OOS後進行的迭代證據；任何候選改法仍須凍結契約後再做無前視驗證，不能由Selection結果直接部署。
 
 ### `run_best_params.json` 的用途與產生方式

@@ -8182,3 +8182,53 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 明確保留by-case責任：各Audit的hypothesis、cohort、contrast、Future Label／R使用邊界、attribution interpretation與Markdown／console renderer不抽成通用God-audit；目前仍重名的`_fmt`／`_render_report`／CLI `parse_args/main`因語意與缺值／單位／section policy不同，刻意留在各Audit。
 - Direct regression：Qualified Candidate、Target Component、Time-penalty Ablation、No-time Target、PASS Realization Gap、Selection Strategy Realization、Candidate Counterfactual、Portfolio Selection Pressure、Score Ranking Capture與Audit Framework合計99項0 fail；Audit Framework新增private-boundary與shared-identity guards。狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。GPT不執行formal suite；使用者本機以`apps/run_bundle.py --no-commit`完成final double check。
 
+
+## 2026-08-12 — Legacy Cleanup Batch 7：退役Strategy Gate／Adapt研究工具與temp輸出
+
+### 基準
+
+- Baseline：`test-branch-1_20260812_093336_f0627a6(1).zip`
+- Baseline SHA256：`02836c0e775a155445b0dde12d26772a2a007d1410c02cfbdc58da067be0a711`
+- 本批只做current code/test/document maintenance surface縮減；不修改Dataset、Target、model、score、active params、Strategy Compare fingerprint或portfolio semantics。
+
+### 安全刪除證明
+
+刪除前逐項以三層依賴檢查：
+
+1. AST/import與全專案source reference：四個research CLI只有synthetic validator inbound import，沒有production/app/service/domain import。
+2. Formal menu/config/registry：`tools/filters/breakout_quality/application.py`與`apps/research.py`沒有四個CLI的current command routing；current Strategy Compare、parameter training與trade-path model workflow皆已有正式owner。
+3. Historical reconstruction：Legacy architecture/pretraining/checkpoint reconstruction仍可能需要TS2Vec／Mantis／MOMENT等相容code，本批明確保留，不因檔名舊而刪除。
+
+### 退役並移除
+
+- `tools/filters/breakout_quality/strategy_adapt.py` — 已完成Selection ranking×parameter adaptation研究；current參數準備由`filters/breakout_quality/strategy_param_training.py`與Strategy Compare preparation承接。
+- `tools/filters/breakout_quality/strategy_filter_gate.py` — 歷史Optional-entry-filter A～E research Gate；current策略經濟比較統一由config-driven Strategy Compare承接。
+- `tools/filters/breakout_quality/strategy_dl_filter_gate.py` — 歷史Binary DL rule-ablation Gate；其科學結果已記錄，current比較不再維護獨立orchestration。
+- `tools/filters/breakout_quality/strategy_trade_path_label_gate.py` — 歷史Old/New trade-path Label策略Gate；Label/model/forward-score仍由formal model workflow產生，策略比較由Strategy Compare承接。
+- `doc/result_tmp.md` — 無任何reference的臨時console/result dump。
+
+四個Python CLI原始碼合計5,122行；另同步移除只為上述retired implementation服務的synthetic test surface與current docs CLI說明。
+
+設定命名同步清理：`BreakoutQualityWorkflowSettings`中的`strategy_adapt_trials_per_fold / strategy_adapt_fixed_risk / strategy_adapt_max_position_cap_pct`改為中性`strategy_trials_per_fold / strategy_fixed_risk / strategy_max_position_cap_pct`；移除只等於execution-policy default的`BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK / MAX_POSITION_CAP_PCT` alias。既有`as_manifest_payload()`的`strategy.adaptation` payload前後逐值完全相同，不改fingerprint／artifact identity。
+
+### 保留的current與historical compatibility
+
+- current：`filters/breakout_quality/strategy_comparison.py`
+- current：`filters/breakout_quality/strategy_param_training.py`
+- current：`tools/filters/breakout_quality/build_trade_path_labels.py`
+- historical reconstruction：`tools/filters/breakout_quality/build_pretraining_dataset.py`、`pretrain.py`與TS2Vec／Mantis／MOMENT model compatibility。
+
+### Test contract同步
+
+- 移除`validate_breakout_quality_strategy_adaptation_contract_case`；B186轉`N/A`，歷史證據由本Log保留。
+- `validate_breakout_quality_strategy_comparison_contract_case`移除已退役A～E／Binary-DL Gate專屬測試，只保留canonical all-off／ranking與正式Strategy Compare contract。
+- `validate_breakout_quality_trade_path_label_contract_case`保留Label/model/PIT/formal-menu契約，移除已退役Old/New strategy Gate renderer／artifact identity測試。
+- `validate_breakout_quality_strategy_readable_report_contract_case`只盤點三個current persistent result owners。
+- 新增`validate_breakout_quality_legacy_research_cleanup_contract_case`，釘死retired paths不存在、current replacements存在、historical checkpoint reconstruction compatibility保留、正式menu/docs不重新宣告舊CLI。
+
+### 狀態
+
+- Infrastructure status：`IMPLEMENTED`
+- Formal recheck：`REQUIRED_ON_USER_MACHINE`
+- Scientific condition：`UNCHANGED`
+- Experiment Registry identity：`UNCHANGED`
