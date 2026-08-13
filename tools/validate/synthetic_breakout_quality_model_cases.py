@@ -1853,6 +1853,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     summary["training_performed"] = False
     return results, summary
 
+
 def validate_breakout_quality_listwise_ranker_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_LISTWISE_RANKER"
     results = []
@@ -2162,3 +2163,92 @@ def validate_breakout_quality_listwise_ranker_contract_case(_base_params):
     summary["training_objective"] = TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING
     summary["training_performed"] = False
     return results, summary
+
+def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_params):
+    """Pin the profile-driven continuous-ranker boundary before adding new Daily MR variants."""
+
+    case_id = "BREAKOUT_QUALITY_MULTI_DL_RANKER_ARCHITECTURE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config.breakout_quality import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+        CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+        SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+        SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_research_spec,
+    )
+
+    continuous_profiles = tuple(
+        name
+        for name in SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
+        if get_breakout_quality_experiment_profile(name).training_objective
+        in CONTINUOUS_RANKER_TRAINING_OBJECTIVES
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_profile_and_research_spec_registry_are_one_to_one",
+        continuous_profiles,
+        tuple(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES),
+    )
+
+    mr12b = get_continuous_ranker_research_spec(
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
+    )
+    mr13a = get_continuous_ranker_research_spec(DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "existing_pairwise_research_identity_and_reduction_remain_explicit",
+        (
+            "MR-12B", CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+            "MR-13A", CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+            "daily_opportunity_rank",
+        ),
+        (
+            mr12b.model_research_id, mr12b.pairwise_reduction,
+            mr13a.model_research_id, mr13a.trainer_family,
+            mr13a.pairwise_reduction, mr13a.score_semantic_id,
+        ),
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    daily_source = (project_root / "services" / "breakout_quality" / "train_daily_ranker.py").read_text(encoding="utf-8")
+    cli_source = (project_root / "services" / "breakout_quality" / "ranker_cli.py").read_text(encoding="utf-8")
+    continuous_source = (project_root / "services" / "breakout_quality" / "train_continuous_ranker.py").read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "daily_trainer_and_dispatch_are_profile_driven",
+        (False, False, True, True),
+        (
+            "MR-13A" in daily_source,
+            "daily_universal_no_time_pairwise" in daily_source,
+            "get_continuous_ranker_research_spec" in cli_source,
+            "SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES" in continuous_source,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "existing_pairwise_profiles_keep_equal_pair_reduction_until_new_mr_is_registered",
+        (CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,),
+        tuple(sorted({
+            str(get_continuous_ranker_research_spec(name).pairwise_reduction)
+            for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+            if get_breakout_quality_experiment_profile(name).training_objective
+            == "daily_pairwise_ranking"
+        })),
+    )
+    return results, summary
+

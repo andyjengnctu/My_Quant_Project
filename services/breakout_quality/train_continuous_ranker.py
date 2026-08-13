@@ -18,12 +18,11 @@ import pandas as pd
 
 from config.breakout_quality import (
     STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
-    STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
-    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
-    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
-    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE,
-    DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
     CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+    CONTINUOUS_RANKER_TRAINER_EVENT,
+    SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
     TRAINING_LABEL_SCOPE_ALL,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
@@ -31,6 +30,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
+    get_continuous_ranker_research_spec,
     resolve_breakout_quality_random_seed,
 )
 from config.breakout_quality import (
@@ -62,8 +62,6 @@ from filters.breakout_quality.continuous_ranker_quality import (
     daily_top_k_metrics as shared_daily_top_k_metrics,
 )
 from filters.breakout_quality.continuous_target import (
-    DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
-    STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
     STRATEGY_ALIGNED_TARGET_ID,
     TARGET_TRADE_MATCHES_CSV_FILENAME,
     load_validated_continuous_target_arrays,
@@ -133,7 +131,7 @@ RANKER_TARGET_FILENAME = "group_target_daily_percentile.npy"
 
 PAIRWISE_TRAINING_CONTRACT = {
     "pair_scope": "same_date_non_tied_target_pairs",
-    "pair_weighting": "equal_pair_weight",
+    "pair_weighting": CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     "model_margin": "pass_logit_minus_reject_logit",
     "batching": "whole_date_pack_no_date_split",
     "runtime_score": "softmax_pass_probability",
@@ -153,9 +151,12 @@ LISTWISE_TRAINING_CONTRACT = {
 
 def training_semantics(profile) -> dict[str, Any]:
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
+        spec = get_continuous_ranker_research_spec(profile.name)
+        pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
+        pairwise_contract["pair_weighting"] = str(spec.pairwise_reduction)
         return {
-            "batching": PAIRWISE_TRAINING_CONTRACT["batching"],
-            "pairwise_contract": dict(PAIRWISE_TRAINING_CONTRACT),
+            "batching": pairwise_contract["batching"],
+            "pairwise_contract": pairwise_contract,
             "listwise_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING:
@@ -188,14 +189,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--experiment-profile",
         default=STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
-        choices=(
-            STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
-            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
-            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
-            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
-            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE,
-            DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
-        ),
+        choices=SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
     )
     parser.add_argument("--epochs", type=int, default=BREAKOUT_QUALITY_DEFAULT_EPOCHS)
     parser.add_argument("--batch-size", type=int, default=BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE)
@@ -318,35 +312,18 @@ def validate_args(args) -> None:
         raise ValueError("continuous ranker只允許sequence-only architecture")
     if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
         raise ValueError("continuous ranker命令只接受continuous ranking profile")
-    expected_targets = {
-        STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE: (
-            STRATEGY_ALIGNED_TARGET_ID,
-            TRAINING_LABEL_SCOPE_ALL,
-        ),
-        STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE: (
-            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
-            TRAINING_LABEL_SCOPE_PASS_ONLY,
-        ),
-        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE: (
-            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
-            TRAINING_LABEL_SCOPE_ALL,
-        ),
-        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE: (
-            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
-            TRAINING_LABEL_SCOPE_ALL,
-        ),
-        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE: (
-            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
-            TRAINING_LABEL_SCOPE_ALL,
-        ),
-        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE: (
-            DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
-            TRAINING_LABEL_SCOPE_ALL,
-        ),
-    }
-    expected = expected_targets.get(args.experiment_profile)
-    if expected is None or (profile.continuous_target_id, profile.training_label_scope) != expected:
-        raise ValueError("continuous ranker profile target／label scope契約不一致")
+    spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
+    expected_family = (
+        CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL
+        if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+        else CONTINUOUS_RANKER_TRAINER_EVENT
+    )
+    if spec.trainer_family != expected_family:
+        raise ValueError(
+            "continuous ranker research spec與profile sample scope不一致: "
+            f"profile={args.experiment_profile}, expected={expected_family}, "
+            f"actual={spec.trainer_family}"
+        )
     if not bool(args.use_inner_validation):
         raise ValueError("continuous ranker必須使用inner validation選epoch")
     if int(args.epochs) < 1 or int(args.batch_size) < 2 or int(args.evaluation_batch_size) < 1:
@@ -385,55 +362,16 @@ def _group_table(events: pd.DataFrame, event_group_index: np.ndarray, labels: np
 
 
 def _profile_contract(profile) -> dict[str, str]:
-    if profile.name == STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE:
-        return {
-            "experiment": "11B Strategy-aligned Daily Percentile Ranker",
-            "phase": "11B",
-            "target_description": "same_date_rank_percentile_of_strategy_aligned_opportunity_r_v1",
-            "objective_description": "同日11A target percentile的MSE",
-            "metric_scope": "all_labels",
-        }
-    if profile.name == STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE:
-        return {
-            "experiment": "11G PASS-conditional No-time Magnitude Ranker",
-            "phase": "11G",
-            "target_description": "same_date_pass_only_rank_percentile_of_strategy_aligned_opportunity_no_time_r_v1",
-            "objective_description": "同日PASS-only 11F No-time target percentile的MSE",
-            "metric_scope": "pass_only",
-        }
-    if profile.name == STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE:
-        return {
-            "experiment": "MR-12A All-event No-time Continuous Ranker",
-            "phase": "12A",
-            "target_description": "same_date_all_event_rank_percentile_of_strategy_aligned_opportunity_no_time_r_v1",
-            "objective_description": "同日all-event No-time target percentile的MSE",
-            "metric_scope": "all_labels",
-        }
-    if profile.name == STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE:
-        return {
-            "experiment": "MR-12B All-event No-time Pairwise Ranker",
-            "phase": "12B",
-            "target_description": "same_date_all_event_order_of_strategy_aligned_opportunity_no_time_r_v1",
-            "objective_description": "同日all-event No-time target ordering的RankNet pairwise logistic loss",
-            "metric_scope": "all_labels",
-        }
-    if profile.name == STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE:
-        return {
-            "experiment": "MR-12C All-event No-time ListNet Top-one Ranker",
-            "phase": "12C",
-            "target_description": "same_date_all_event_listnet_distribution_of_strategy_aligned_opportunity_no_time_r_v1",
-            "objective_description": "同日all-event No-time完整候選榜單的ListNet top-one cross-entropy",
-            "metric_scope": "all_labels",
-        }
-    if profile.name == DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE:
-        return {
-            "experiment": "MR-13A Daily Universal No-time Pairwise Ranker",
-            "phase": "13A",
-            "target_description": "same_date_all_stock_order_of_daily_opportunity_no_time_r_v1",
-            "objective_description": "同日全部合法stock-day No-time target ordering的RankNet pairwise logistic loss",
-            "metric_scope": "all_stock_days",
-        }
-    raise ValueError(f"不支援的continuous ranker profile: {profile.name}")
+    spec = get_continuous_ranker_research_spec(profile.name)
+    return {
+        "experiment": spec.experiment_name,
+        "phase": spec.phase,
+        "model_research_id": spec.model_research_id,
+        "target_description": spec.target_description,
+        "objective_description": spec.objective_description,
+        "metric_scope": spec.metric_scope,
+        "score_semantic_id": spec.score_semantic_id,
+    }
 
 
 def _scope_group_ids(
@@ -1344,7 +1282,7 @@ def run(args) -> int:
     validate_args(args)
     started = time.perf_counter()
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
-    if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+    if get_continuous_ranker_research_spec(profile.name).trainer_family == CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL:
         raise ValueError(
             "daily-universal ranker必須由services.breakout_quality.ranker_cli dispatch，"
             "event trainer不得直接承載daily orchestration"

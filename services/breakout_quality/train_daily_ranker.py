@@ -1,8 +1,8 @@
-"""MR-13A daily-universal pairwise ranker orchestration.
+"""Profile-driven daily-universal continuous-ranker orchestration.
 
-Learning/loss/epoch-selection stay centralized in ``train_continuous_ranker``.  This module
-only supplies the daily stock/day sample universe, no-lookahead split, and daily/candidate
-validation views.
+Learning/loss/epoch-selection stay centralized in ``train_continuous_ranker``. This module
+only owns the daily stock/day sample universe, no-lookahead split, and daily/candidate
+validation views so additional Daily DL experiments do not fork a new trainer.
 """
 
 from __future__ import annotations
@@ -13,8 +13,11 @@ import time
 import numpy as np
 import pandas as pd
 
+from config.breakout_quality import (
+    CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+    get_continuous_ranker_research_spec,
+)
 from filters.breakout_quality.artifacts import build_file_manifest
-from filters.breakout_quality.continuous_target import DAILY_OPPORTUNITY_NO_TIME_TARGET_ID
 from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
     FEATURE_COLUMNS,
@@ -129,7 +132,8 @@ def _render_markdown(payload: dict) -> str:
         "",
         "## Boundary",
         "",
-        "- 第一版固定沿用 MR-12B 的 InceptionTime、pairwise logistic、optimizer、LR 與 epoch metric；scientific change 只包含 daily stock-day sample universe 與對應 daily target identity。",
+        f"- Research identity：`{payload['model_research_id']}`；trainer由profile metadata驅動，不綁定單一MR版本。",
+        f"- Pairwise reduction：`{payload['training'].get('pairwise_reduction') or '-'}`；其餘learning semantics由profile固定。",
         "- Breakout candidate slice 只作 checkpoint 後診斷；candidate membership 不進模型輸入，也不進 training sample selection。",
         "- 本模型目前 research-only，不提供 strategy runtime source，不建立 PIT scores，不執行 ROOS。",
     ])
@@ -138,6 +142,12 @@ def _render_markdown(payload: dict) -> str:
 
 def run(args) -> int:
     started = time.perf_counter()
+    research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
+    if research_spec.trainer_family != CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL:
+        raise ValueError(
+            "daily ranker orchestrator只接受daily_universal research spec: "
+            f"profile={args.experiment_profile}, family={research_spec.trainer_family}"
+        )
     bundle = load_daily_universal_ranker_data(
         filter_id=str(args.filter_id),
         model_architecture=str(args.model_architecture),
@@ -145,8 +155,9 @@ def run(args) -> int:
         preload_feature_bank=bool(args.preload_feature_bank),
         allow_stale_source=bool(args.allow_stale_source),
     )
-    if str(bundle.profile.continuous_target_id) != DAILY_OPPORTUNITY_NO_TIME_TARGET_ID:
-        raise ValueError("MR-13A target identity不一致")
+    target_id = str(bundle.profile.continuous_target_id or "").strip()
+    if not target_id:
+        raise ValueError("daily-universal continuous ranker缺少target identity")
     split = build_daily_ranker_split(bundle, inner_validation_months=int(args.inner_validation_months))
     forward_score_ids = resolve_forward_oos_score_group_ids(bundle)
 
@@ -298,8 +309,10 @@ def run(args) -> int:
     payload = {
         "schema_version": ranker_api.RANKER_SCHEMA_VERSION + 1,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "experiment": "MR-13A Daily Universal No-time Pairwise Ranker",
-        "phase": "13A",
+        "experiment": research_spec.experiment_name,
+        "phase": research_spec.phase,
+        "model_research_id": research_spec.model_research_id,
+        "score_semantic_id": research_spec.score_semantic_id,
         "status": "RESULT_AVAILABLE_PENDING_REVIEW",
         "filter_id": str(args.filter_id),
         "model_architecture": str(args.model_architecture),
@@ -310,10 +323,11 @@ def run(args) -> int:
             "loss": bundle.profile.loss_name,
             "sample_scope": bundle.profile.training_sample_scope,
             "training_label_scope": bundle.profile.training_label_scope,
-            "target": DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
+            "target": target_id,
             "model_score": "softmax_pass_probability_monotonic_to_two_logit_margin",
-            "batching": ranker_api.PAIRWISE_TRAINING_CONTRACT["batching"],
-            "pairwise_contract": dict(ranker_api.PAIRWISE_TRAINING_CONTRACT),
+            "batching": ranker_api.training_semantics(bundle.profile)["batching"],
+            "pairwise_contract": ranker_api.training_semantics(bundle.profile)["pairwise_contract"],
+            "pairwise_reduction": research_spec.pairwise_reduction,
             "selected_epoch": selected_epoch,
             "epoch_selection_metric": bundle.profile.epoch_selection_metric,
             "epoch_selection": epoch_selection,
@@ -338,7 +352,10 @@ def run(args) -> int:
         "runtime_eligibility": {
             "eligible": False,
             "scope": "research_only",
-            "reason": "MR-13A先通過daily forward-OOS與breakout-candidate slice模型Gate後，才建立PIT／策略source",
+            "reason": (
+                f"{research_spec.model_research_id}先通過daily forward-OOS與breakout-candidate "
+                "slice模型Gate後，才建立PIT／策略source"
+            ),
         },
         "artifacts": {
             "model": build_file_manifest(artifact_paths.model_path),
@@ -364,7 +381,7 @@ def run(args) -> int:
         "training_label_scope": bundle.profile.training_label_scope,
         "training_sample_scope": bundle.profile.training_sample_scope,
         "training_semantics": ranker_api.training_semantics(bundle.profile),
-        "continuous_target_id": DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
+        "continuous_target_id": target_id,
         "sequence_length": int(bundle.feature_bank.shape[1]),
         "feature_columns": list(FEATURE_COLUMNS),
         "context_columns": [],
@@ -393,7 +410,7 @@ def run(args) -> int:
     def _fmt_metric(value) -> str:
         return "-" if value is None else f"{float(value):.4f}"
 
-    print("\nDaily Universal Ranker完成")
+    print(f"\nDaily Universal Ranker完成｜{research_spec.model_research_id}")
     print(
         f"selected_epoch={selected_epoch} | OOS daily rho={_fmt_metric(oos_metrics.get('mean_daily_spearman'))} | "
         f"pair={_fmt_metric(oos_metrics.get('pairwise_concordance'))}"

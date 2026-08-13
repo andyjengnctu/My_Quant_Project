@@ -773,6 +773,171 @@ def get_breakout_quality_experiment_profile(
     ]
 
 
+CONTINUOUS_RANKER_TRAINER_EVENT = "event"
+CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL = "daily_universal"
+CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR = "equal_pair_weight"
+
+
+@dataclass(frozen=True)
+class ContinuousRankerResearchSpec:
+    profile_name: str
+    model_research_id: str
+    experiment_name: str
+    phase: str
+    trainer_family: str
+    target_description: str
+    objective_description: str
+    metric_scope: str
+    score_semantic_id: str
+    pairwise_reduction: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.profile_name not in _EXPERIMENT_PROFILES:
+            raise ValueError(f"continuous ranker research spec引用未知profile: {self.profile_name}")
+        profile = _EXPERIMENT_PROFILES[self.profile_name]
+        if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
+            raise ValueError(f"continuous ranker research spec只接受continuous profile: {self.profile_name}")
+        if self.trainer_family not in {
+            CONTINUOUS_RANKER_TRAINER_EVENT,
+            CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        }:
+            raise ValueError(f"不支援的continuous ranker trainer family: {self.trainer_family}")
+        expected_family = (
+            CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL
+            if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+            else CONTINUOUS_RANKER_TRAINER_EVENT
+        )
+        if self.trainer_family != expected_family:
+            raise ValueError(
+                "continuous ranker trainer family與training sample scope不一致: "
+                f"profile={self.profile_name}, expected={expected_family}, actual={self.trainer_family}"
+            )
+        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
+            if self.pairwise_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR:
+                raise ValueError(
+                    f"pairwise profile必須指定合法pairwise reduction: {self.profile_name}"
+                )
+        elif self.pairwise_reduction is not None:
+            raise ValueError(
+                f"非pairwise profile不得指定pairwise reduction: {self.profile_name}"
+            )
+        for field_name in (
+            "model_research_id",
+            "experiment_name",
+            "phase",
+            "target_description",
+            "objective_description",
+            "metric_scope",
+            "score_semantic_id",
+        ):
+            if not str(getattr(self, field_name) or "").strip():
+                raise ValueError(
+                    f"continuous ranker research spec缺少{field_name}: {self.profile_name}"
+                )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "profile_name": self.profile_name,
+            "model_research_id": self.model_research_id,
+            "experiment_name": self.experiment_name,
+            "phase": self.phase,
+            "trainer_family": self.trainer_family,
+            "target_description": self.target_description,
+            "objective_description": self.objective_description,
+            "metric_scope": self.metric_scope,
+            "score_semantic_id": self.score_semantic_id,
+            "pairwise_reduction": self.pairwise_reduction,
+        }
+
+
+_CONTINUOUS_RANKER_RESEARCH_SPECS = {
+    STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
+        model_research_id="MR-11B",
+        experiment_name="11B Strategy-aligned Daily Percentile Ranker",
+        phase="11B",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_EVENT,
+        target_description="same_date_rank_percentile_of_strategy_aligned_opportunity_r_v1",
+        objective_description="同日11A target percentile的MSE",
+        metric_scope="all_labels",
+        score_semantic_id="opportunity_rank",
+    ),
+    STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+        model_research_id="MR-11G",
+        experiment_name="11G PASS-conditional No-time Magnitude Ranker",
+        phase="11G",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_EVENT,
+        target_description="same_date_pass_only_rank_percentile_of_strategy_aligned_opportunity_no_time_r_v1",
+        objective_description="同日PASS-only 11F No-time target percentile的MSE",
+        metric_scope="pass_only",
+        score_semantic_id="opportunity_rank",
+    ),
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
+        model_research_id="MR-12A",
+        experiment_name="MR-12A All-event No-time Continuous Ranker",
+        phase="12A",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_EVENT,
+        target_description="same_date_all_event_rank_percentile_of_strategy_aligned_opportunity_no_time_r_v1",
+        objective_description="同日all-event No-time target percentile的MSE",
+        metric_scope="all_labels",
+        score_semantic_id="opportunity_rank",
+    ),
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+        model_research_id="MR-12B",
+        experiment_name="MR-12B All-event No-time Pairwise Ranker",
+        phase="12B",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_EVENT,
+        target_description="same_date_all_event_order_of_strategy_aligned_opportunity_no_time_r_v1",
+        objective_description="同日all-event No-time target ordering的RankNet pairwise logistic loss",
+        metric_scope="all_labels",
+        score_semantic_id="opportunity_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    ),
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE,
+        model_research_id="MR-12C",
+        experiment_name="MR-12C All-event No-time ListNet Top-one Ranker",
+        phase="12C",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_EVENT,
+        target_description="same_date_all_event_listnet_distribution_of_strategy_aligned_opportunity_no_time_r_v1",
+        objective_description="同日all-event No-time完整候選榜單的ListNet top-one cross-entropy",
+        metric_scope="all_labels",
+        score_semantic_id="opportunity_rank",
+    ),
+    DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        model_research_id="MR-13A",
+        experiment_name="MR-13A Daily Universal No-time Pairwise Ranker",
+        phase="13A",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="same_date_all_stock_order_of_daily_opportunity_no_time_r_v1",
+        objective_description="同日全部合法stock-day No-time target ordering的RankNet pairwise logistic loss",
+        metric_scope="all_stock_days",
+        score_semantic_id="daily_opportunity_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    ),
+}
+
+SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES = tuple(
+    _CONTINUOUS_RANKER_RESEARCH_SPECS
+)
+
+
+def get_continuous_ranker_research_spec(
+    experiment_profile: str,
+) -> ContinuousRankerResearchSpec:
+    profile_name = normalize_breakout_quality_experiment_profile(experiment_profile)
+    spec = _CONTINUOUS_RANKER_RESEARCH_SPECS.get(profile_name)
+    if spec is None:
+        raise ValueError(
+            f"continuous ranker profile缺少research spec登記: {profile_name}"
+        )
+    return spec
+
+
 def resolve_breakout_quality_random_seed() -> int:
     """Return the single configured breakout-quality random seed."""
 
@@ -1396,6 +1561,12 @@ __all__ = [
     'TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS',
     'SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLE_SCOPES',
     'DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE',
+    'ContinuousRankerResearchSpec',
+    'CONTINUOUS_RANKER_TRAINER_EVENT',
+    'CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL',
+    'CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR',
+    'get_continuous_ranker_research_spec',
+    'SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES',
     'TIME_WEIGHT_MODE_DATE_BALANCED',
     'TIME_WEIGHT_MODE_NONE',
     'TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT',
