@@ -35,7 +35,7 @@ from core.strategy_comparison import (
     validate_strategy_multi_seed_robustness_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 20
+STRATEGY_COMPARE_SCHEMA_VERSION = 21
 
 # =============================================================================
 # 1. 常用設定
@@ -65,36 +65,39 @@ STRATEGY_COMPARE_DISPLAY_FULL_ROOS = "Full ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_ROOS = "Min ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_MR12B = "Min MR-12B"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13A = "Min MR-13A"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13E = "Min MR-13E"
 
 # Strategy Compare以研究階段profile隔離設定與輸出；App只顯示泛化階段名稱，
 # arms／contrasts／period／output namespace全部由本檔驅動。
 STRATEGY_COMPARE_PROFILES = {
     "selection_pit": {
         "label": "Selection PIT 策略比較",
-        "description": "2014～2020 point-in-time策略轉化Gate；核心比較固定為Full／Min baseline與Min MR-12B／MR-13A。",
+        "description": "2014～2020 point-in-time策略轉化Gate；核心比較固定為Full／Min baseline與Min MR-12B／MR-13A／MR-13E。",
         "display_alignment_group": "core_strategy_compare",
         "start_date": "2014-01-01",
         "end_date": "2020-12-31",
         "output_root": "outputs/strategy_compare/selection_pit",
         "reuse_output_roots": ("outputs/strategy_compare",),
-        "arm_ids": ("C32", "C23", "C25", "C28"),
+        "arm_ids": ("C32", "C23", "C25", "C28", "C35"),
         "contrast_ids": (
             "C32-C23",
             "C25-C23", "C28-C23", "C28-C25",
+            "C35-C23", "C35-C25", "C35-C28",
         ),
     },
     "forward_oos": {
         "label": "Forward-OOS 策略比較",
-        "description": "2021+ frozen Forward-OOS策略Gate；核心比較固定為Full／Min baseline與Min MR-12B／MR-13A。",
+        "description": "2021+ frozen Forward-OOS策略Gate；核心比較固定為Full／Min baseline與Min MR-12B／MR-13A／MR-13E。",
         "display_alignment_group": "core_strategy_compare",
         "start_date": None,
         "end_date": None,
         "output_root": "outputs/strategy_compare/forward_oos",
         "reuse_output_roots": ("outputs/strategy_compare",),
-        "arm_ids": ("C1", "C3", "C20", "C29"),
+        "arm_ids": ("C1", "C3", "C20", "C29", "C36"),
         "contrast_ids": (
             "C1-C3",
             "C20-C3", "C29-C3", "C29-C20",
+            "C36-C3", "C36-C20", "C36-C29",
         ),
     },
 }
@@ -314,6 +317,18 @@ STRATEGY_DL_SOURCES = {
         ),
         "forward_scores_builder": None,
     },
+    "CONT13E": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_no_time_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "continuous_ranker_oos",
+        "description": (
+            "MR-13E Daily Universal full-list Delta-NDCG frozen Forward-OOS score；"
+            "盤前使用最新已完成交易日資訊，只供source-only strategy Gate"
+        ),
+        "forward_scores_builder": None,
+    },
     "CONT12B_PIT": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -342,6 +357,25 @@ STRATEGY_DL_SOURCES = {
         "description": (
             "MR-13A Daily Universal Selection point-in-time score；"
             "每個盤前決策只使用最新已完成交易日資訊，供2014～2020無前視策略經濟驗證"
+        ),
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {
+                "resume": True,
+                "allow_stale_source": False,
+            },
+        },
+    },
+    "CONT13E_PIT": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_no_time_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": (
+            "MR-13E Daily Universal full-list Delta-NDCG Selection PIT score；"
+            "盤前只使用最新已完成交易日資訊，只供2014～2020 source-only strategy Gate"
         ),
         "forward_scores_builder": {
             "enabled": True,
@@ -434,6 +468,19 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
         "robustness_role": "stochastic",
     },
+    "C35": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E,
+        "description": (
+            "與C25/C28使用完全相同historical P2 Min ROOS params、K/R0、"
+            "feasible-ascent selector與execution；唯一DL差異為MR-13E Selection PIT source"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+        "robustness_role": "off",
+    },
     "C29": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13A,
         "description": (
@@ -446,6 +493,19 @@ STRATEGY_COMPARE_ARMS = {
         "dl_id": "CONT13A",
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
         "robustness_role": "stochastic",
+    },
+    "C36": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E,
+        "description": (
+            "與C20/C29使用相同current Min ROOS、all-off rules與frozen feasible-ascent；"
+            "唯一DL source差異為MR-13E Daily Universal Forward-OOS score"
+        ),
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+        "robustness_role": "off",
     },
     "C32": {
         "name": STRATEGY_COMPARE_DISPLAY_FULL_ROOS,
@@ -471,6 +531,12 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C28-C23": {"left": "C28", "right": "C23", "description": "Selection PIT下MR-13A daily feasible-ascent相對DL-off historical Min ROOS baseline的策略經濟效果"},
     "C29-C3": {"left": "C29", "right": "C3", "description": "current Min ROOS下MR-13A daily feasible-ascent相對DL-off baseline的Forward-OOS策略效果"},
     "C29-C20": {"left": "C29", "right": "C20", "description": "固定current Min ROOS與feasible-ascent，MR-13A daily相對MR-12B event source的純DL Forward-OOS效果"},
+    "C35-C23": {"left": "C35", "right": "C23", "description": "Selection PIT下MR-13E daily feasible-ascent相對DL-off historical Min ROOS baseline的策略經濟效果"},
+    "C35-C25": {"left": "C35", "right": "C25", "description": "固定Selection Min ROOS與feasible-ascent，MR-13E相對MR-12B的純DL source效果"},
+    "C35-C28": {"left": "C35", "right": "C28", "description": "固定Selection Min ROOS與feasible-ascent，MR-13E相對MR-13A的純DL source效果"},
+    "C36-C3": {"left": "C36", "right": "C3", "description": "current Min ROOS下MR-13E daily feasible-ascent相對DL-off baseline的Forward-OOS策略效果"},
+    "C36-C20": {"left": "C36", "right": "C20", "description": "固定current Min ROOS與feasible-ascent，MR-13E相對MR-12B的純DL Forward-OOS效果"},
+    "C36-C29": {"left": "C36", "right": "C29", "description": "固定current Min ROOS與feasible-ascent，MR-13E相對MR-13A的純DL Forward-OOS效果"},
     "C1-C3": {"left": "C1", "right": "C3", "description": "Full ROOS相對current Min ROOS的完整策略體系差異；不是單一參數效果"},
     "C32-C23": {"left": "C32", "right": "C23", "description": "Selection Full ROOS相對Selection Min ROOS的完整策略體系差異；不是單一參數效果"},
 }

@@ -8663,3 +8663,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Cross-period：13E Forward all-stock daily rho=`0.2151`、Top-K Lift=`+0.9951R`，Selection PIT則為`0.1627`、`+0.4456R`；breakout daily rho由Selection `0.1019`到Forward `0.1721`，兩時段皆維持正方向。相較MR-13A過去Selection relative edge為負、Forward為正的方向反轉，13E在模型層沒有重現方向翻轉。這仍是Seed42 model-level evidence，不代表已通過multi-seed strategy robustness。
 - `drift=True`不是PIT Gate veto：canonical gate只要求primary global rho>0、daily rho>0、過半年度rho>0、過半年度Top-bottom spread>0；drift只是相鄰fold score mean shift的診斷warning。13E因8/8年度rho與spread皆正，Gate依正式contract為PASS。
 - 判定：`MR-13E = RESULT_AVAILABLE / FORWARD_OOS_MODEL_GATE_PASS / SELECTION_PIT_MODEL_GATE_PASS / CROSS_PERIOD_SINGLE_SEED_MODEL_STABILITY_SUPPORTED / STRATEGY_GATE_AUTHORIZED / NO_RUNTIME_DL_SOURCE`。MR-13C與MR-13D也通過絕對PIT Gate，但本輪不各自建立runtime source；下一步只對13E建立Selection PIT與Forward runtime source identity，與MR-12B在相同selector／策略參數下做source-only controlled strategy compare。策略結果前不得promotion，runtime anchor仍為`MR-12B / DL-CONT12B`。
+
+## 2026-08-13 — MR-13E strategy gate接線：MR-12B／MR-13A／MR-13E source-only compare
+
+- 程式基準：`test-branch-1_20260813_220829_33b42fd.zip`；SHA256 `20055d6f2ac0d6277fdc5872cb7ddcde36fde28efa7b0c357c129f4542b5a588`。基準已包含MR-13C/13D/13E shared Selection PIT結果與MR-13E `STRATEGY_GATE_AUTHORIZED`判定。
+- 使用者要求MR-13E進策略層時同時保留MR-13A作比較，因此本輪不是只做12B vs 13E，而是Selection與Forward各自固定為Min baseline + MR-12B + MR-13A + MR-13E；另保留Full ROOS獨立baseline。
+- 新增runtime source identity：`DL-CONT13E-PIT / CONT13E_PIT`對應`MR-13E / daily_universal_no_time_full_list_ndcg_pairwise` canonical Selection PIT scores；`DL-CONT13E / CONT13E`對應同profile frozen Forward-OOS daily scores。兩者沿用daily feature-history-only、盤前取最新已完成交易日score的runtime contract，不新增score cutoff、stale guard、fusion、sizing或execution變數。
+- 新增`SR-C35` Selection arm：完全沿用C25/C28 historical Min params、all-off rules、K/R0、feasible-ascent selector與execution，唯一差異為score source=`DL-CONT13E-PIT`。主要source-only contrasts=`C35-C25`（13E vs 12B）與`C35-C28`（13E vs 13A）；另保留`C35-C23`相對DL-off baseline。
+- 新增`SR-C36` Forward arm：完全沿用C20/C29 current Min params、all-off rules、K/R0、feasible-ascent selector與execution，唯一差異為score source=`DL-CONT13E`。主要source-only contrasts=`C36-C20`（13E vs 12B）與`C36-C29`（13E vs 13A）；另保留`C36-C3`相對DL-off baseline。
+- `C35/C36`本輪固定`robustness_role=off`。既有Selection 8-seed只解析C25/C28、Forward 8-seed只解析C20/C29，scientific fingerprint與已完成13A/12B robustness不因新增single-seed arm改變。只有MR-13E在Selection與Forward single-seed strategy gate都具支持證據，才另行授權把13E加入multi-seed robustness。
+- Current runtime anchor仍為`MR-12B / DL-CONT12B`。本輪建立的是strategy-gate research source identity，不代表13E promotion。

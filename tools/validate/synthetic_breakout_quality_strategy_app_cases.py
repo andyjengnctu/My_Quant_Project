@@ -4,6 +4,7 @@ from .synthetic_breakout_quality_support import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BUY_LIMIT_OVERAGE_SORT_METHOD,
     DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+    DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     Path,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
@@ -4317,4 +4318,114 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
     summary["profile"] = DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
     summary["stage"] = "selection_strategy_translation"
     summary["future_target_used_for_score_presence"] = False
+    return results, summary
+
+
+def validate_breakout_quality_mr13e_strategy_source_gate_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_MR13E_STRATEGY_SOURCE_GATE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config import strategy_compare as strategy_config
+
+    selection = strategy_config.get_strategy_comparison_settings("selection_pit")
+    forward = strategy_config.get_strategy_comparison_settings("forward_oos")
+    selection_ids = tuple(arm.arm_id for arm in selection.enabled_arms)
+    forward_ids = tuple(arm.arm_id for arm in forward.enabled_arms)
+
+    c25, c28, c35 = (selection.arms[key] for key in ("C25", "C28", "C35"))
+    c20, c29, c36 = (forward.arms[key] for key in ("C20", "C29", "C36"))
+    pit_source = selection.dl_sources["CONT13E_PIT"]
+    oos_source = forward.dl_sources["CONT13E"]
+
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "mr13e_strategy_gate_sources_bind_only_to_mr13e_daily_profile",
+        (
+            DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            "selection_point_in_time",
+            DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            "continuous_ranker_oos",
+        ),
+        (
+            pit_source.experiment_profile,
+            pit_source.score_source,
+            oos_source.experiment_profile,
+            oos_source.score_source,
+        ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "mr13e_selection_arm_is_source_only_against_mr12b_and_mr13a",
+        True,
+        (
+            (c35.param_source, c35.rule_policy, c35.dl_runtime_mode)
+            == (c25.param_source, c25.rule_policy, c25.dl_runtime_mode)
+            == (c28.param_source, c28.rule_policy, c28.dl_runtime_mode)
+            and (c25.dl_id, c28.dl_id, c35.dl_id)
+            == ("CONT12B_PIT", "CONT13A_PIT", "CONT13E_PIT")
+            and c35.robustness_role == "off"
+        ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "mr13e_forward_arm_is_source_only_against_mr12b_and_mr13a",
+        True,
+        (
+            (c36.param_source, c36.rule_policy, c36.dl_runtime_mode)
+            == (c20.param_source, c20.rule_policy, c20.dl_runtime_mode)
+            == (c29.param_source, c29.rule_policy, c29.dl_runtime_mode)
+            and (c20.dl_id, c29.dl_id, c36.dl_id)
+            == ("CONT12B", "CONT13A", "CONT13E")
+            and c36.robustness_role == "off"
+        ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "mr13e_single_seed_gate_is_enabled_in_both_profiles_with_direct_source_contrasts",
+        True,
+        (
+            selection_ids == ("C32", "C23", "C25", "C28", "C35")
+            and forward_ids == ("C1", "C3", "C20", "C29", "C36")
+            and {"C35-C25", "C35-C28"}.issubset(
+                {item.contrast_id for item in selection.enabled_contrasts}
+            )
+            and {"C36-C20", "C36-C29"}.issubset(
+                {item.contrast_id for item in forward.enabled_contrasts}
+            )
+        ),
+    )
+
+    selection_robust = strategy_config.get_strategy_multi_seed_robustness_settings(
+        "selection_pit"
+    )
+    forward_robust = strategy_config.get_strategy_multi_seed_robustness_settings(
+        "forward_oos"
+    )
+    selection_robust_profile = strategy_config.get_strategy_comparison_settings(
+        selection_robust.profile_id
+    )
+    forward_robust_profile = strategy_config.get_strategy_comparison_settings(
+        forward_robust.profile_id
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "mr13e_does_not_enter_multi_seed_before_single_seed_strategy_gate",
+        (("C25", "C28"), ("C20", "C29")),
+        (
+            tuple(
+                arm.arm_id for arm in selection_robust_profile.enabled_arms
+                if arm.robustness_role == "stochastic"
+            ),
+            tuple(
+                arm.arm_id for arm in forward_robust_profile.enabled_arms
+                if arm.robustness_role == "stochastic"
+            ),
+        ),
+    )
+
+    summary["selection_arm"] = "C35"
+    summary["forward_arm"] = "C36"
+    summary["runtime_source"] = "DL-CONT13E"
+    summary["pit_source"] = "DL-CONT13E-PIT"
     return results, summary
