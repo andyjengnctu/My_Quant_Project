@@ -134,6 +134,87 @@ def resolve_strategy_compare_run_selector(
     return run_dir, result
 
 
+
+def resolve_strategy_compare_profile_run_selector(
+    root: Path,
+    selector: dict[str, Any],
+    *,
+    audit_id: str,
+    required_arm_ids: tuple[str, ...] = (),
+) -> tuple[Path, dict[str, Any]]:
+    """Resolve a completed Strategy Compare run within a configured profile namespace."""
+
+    from config.strategy_compare import get_strategy_comparison_settings
+
+    root = Path(root).resolve()
+    profile_id = str(selector.get("profile_id") or "").strip()
+    if not profile_id:
+        raise ValueError(f"{audit_id}.source profile selector缺少profile_id")
+    settings = get_strategy_comparison_settings(profile_id)
+    run_setting = str(selector.get("run") or "").strip()
+    fingerprint = str(selector.get("config_fingerprint") or "").strip()
+    if bool(run_setting) == bool(fingerprint):
+        raise ValueError(
+            f"{audit_id}.strategy_compare profile run selector必須二選一設定run或config_fingerprint"
+        )
+
+    run_roots: list[Path] = []
+    for raw in (settings.output_root, *settings.reuse_output_roots):
+        candidate = (root / Path(str(raw)) / "runs").resolve()
+        if candidate not in run_roots:
+            run_roots.append(candidate)
+
+    if fingerprint:
+        matches: list[tuple[Path, dict[str, Any]]] = []
+        for runs_root in run_roots:
+            if not runs_root.is_dir():
+                continue
+            for candidate_dir in sorted(
+                (path for path in runs_root.iterdir() if path.is_dir()),
+                key=lambda path: path.name,
+                reverse=True,
+            ):
+                result_path = candidate_dir / "strategy_comparison.json"
+                if not result_path.is_file():
+                    continue
+                try:
+                    result = read_json(result_path, display_root=root)
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                    continue
+                if str(result.get("status") or "") != "COMPLETED":
+                    continue
+                if str(result.get("config_fingerprint") or "").strip() != fingerprint:
+                    continue
+                scenarios = dict(result.get("scenarios") or {})
+                arms = dict(dict(result.get("settings") or {}).get("arms") or {})
+                if any(arm_id not in scenarios or arm_id not in arms for arm_id in required_arm_ids):
+                    continue
+                matches.append((candidate_dir.resolve(), result))
+        if not matches:
+            raise FileNotFoundError(
+                f"找不到profile={profile_id}, config_fingerprint={fingerprint}的已完成strategy_compare run"
+            )
+        return _validated_completed_run(root, matches[0][0])
+
+    if run_setting == "latest":
+        latest_manifest = (root / Path(settings.output_root) / "latest" / "manifest.json").resolve()
+        manifest = read_json(latest_manifest, display_root=root)
+        run_value = str(manifest.get("run_dir") or "").strip()
+        if not run_value:
+            raise ValueError(f"strategy_compare profile={profile_id} latest manifest缺少run_dir")
+        run_dir = root / Path(run_value)
+    else:
+        run_dir = root / Path(run_setting)
+    run_dir, result = _validated_completed_run(root, run_dir)
+    scenarios = dict(result.get("scenarios") or {})
+    arms = dict(dict(result.get("settings") or {}).get("arms") or {})
+    missing = [arm_id for arm_id in required_arm_ids if arm_id not in scenarios or arm_id not in arms]
+    if missing:
+        raise ValueError(
+            f"strategy_compare profile={profile_id} run缺少arms: {','.join(missing)}"
+        )
+    return run_dir, result
+
 def resolve_strategy_compare_run(root: Path, definition: AuditDefinition) -> tuple[Path, dict[str, Any]]:
     if str(definition.source.get("kind") or "") != "strategy_compare":
         raise ValueError(f"{definition.audit_id}.source.kind必須是strategy_compare")
@@ -236,4 +317,5 @@ __all__ = [
     "resolve_arm_artifacts",
     "resolve_strategy_compare_run",
     "resolve_strategy_compare_run_selector",
+    "resolve_strategy_compare_profile_run_selector",
 ]

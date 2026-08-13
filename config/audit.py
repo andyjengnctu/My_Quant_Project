@@ -224,7 +224,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 "output_subdir": "breakout_quality/c23_c26_pit_portfolio_translation",
             },
             "cross-period-year-regime-attribution": {
-                "enabled": True,
+                "enabled": False,
                 "audit_type": "robustness_cross_period_attribution",
                 "description": "MR-13A相對MR-12B在Selection PIT與Forward-OOS的same-seed ranking／trade-set edge方向翻轉與逐年度集中度歸因",
                 "source": {
@@ -254,6 +254,43 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "all_seed_required": True,
                 },
                 "output_subdir": "breakout_quality/cross_period_year_regime_attribution",
+            },
+            "mr13e-orderable-feasible-alignment": {
+                "enabled": True,
+                "audit_type": "orderable_feasible_alignment",
+                "description": "MR-12B／MR-13A／MR-13E在Selection PIT與Forward-OOS實際orderable competition set中的ranking，以及resource repair／feasible-ascent到entry action的轉化歸因",
+                "source": {
+                    "kind": "strategy_compare_cross_phase",
+                    "phases": {
+                        "selection_pit": {
+                            "profile_id": "selection_pit",
+                            "run": "latest",
+                            "baseline_arm_id": "C23",
+                            "candidate_arm_ids": ["C25", "C28", "C35"],
+                            "reference_daily_arm_id": "C35",
+                        },
+                        "forward_oos": {
+                            "profile_id": "forward_oos",
+                            "run": "latest",
+                            "baseline_arm_id": "C3",
+                            "candidate_arm_ids": ["C20", "C29", "C36"],
+                            "reference_daily_arm_id": "C36",
+                        },
+                    },
+                },
+                "dimensions": {
+                    "dynamic_action_count": True,
+                    "direct_feasible_days": True,
+                    "repair_days": True,
+                    "feasible_ascent_days": True,
+                },
+                "outcomes": {
+                    "common_daily_target_post_replay": True,
+                    "orderable_ranking": True,
+                    "raw_score_to_action_translation": True,
+                    "no_fixed_k": True,
+                },
+                "output_subdir": "breakout_quality/mr13e_orderable_feasible_alignment",
             },
             "forward-robustness-portfolio-translation": {
                 "enabled": False,

@@ -2398,6 +2398,234 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
     summary["future_target_runtime"] = False
     return results, summary
 
+def validate_breakout_quality_orderable_feasible_alignment_audit_contract_case(_base_params):
+    from config.audit import get_audit_definitions
+    from tools.audit.breakout_quality import orderable_feasible_alignment as alignment_audit
+    from tools.audit.breakout_quality.orderable_feasible_alignment import (
+        _capacity_frame,
+        _daily_ranking_rows,
+        _execution_translation,
+        _information_date_map,
+        _load_common_daily_target,
+    )
+    from tools.audit.catalog import get_audit_entry
+    from tools.audit.sources.strategy_compare import resolve_strategy_compare_profile_run_selector
+
+    case_id = "BREAKOUT_QUALITY_ORDERABLE_FEASIBLE_ALIGNMENT_AUDIT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    definitions = get_audit_definitions("breakout_quality")
+    definition = next(
+        (item for item in definitions if item.audit_id == "mr13e-orderable-feasible-alignment"),
+        None,
+    )
+    cross_period = next(
+        (item for item in definitions if item.audit_id == "cross-period-year-regime-attribution"),
+        None,
+    )
+    entry = get_audit_entry("orderable_feasible_alignment")
+    phases = {} if definition is None else dict(dict(definition.source).get("phases") or {})
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "audit_config_is_current_cross_phase_source_only_topology_without_fixed_k",
+        True,
+        bool(
+            definition is not None
+            and definition.enabled
+            and definition.audit_type == "orderable_feasible_alignment"
+            and dict(definition.source).get("kind") == "strategy_compare_cross_phase"
+            and tuple(dict(phases.get("selection_pit") or {}).get("candidate_arm_ids") or ()) == ("C25", "C28", "C35")
+            and tuple(dict(phases.get("forward_oos") or {}).get("candidate_arm_ids") or ()) == ("C20", "C29", "C36")
+            and dict(phases.get("selection_pit") or {}).get("reference_daily_arm_id") == "C35"
+            and dict(phases.get("forward_oos") or {}).get("reference_daily_arm_id") == "C36"
+            and definition.dimensions.get("dynamic_action_count") is True
+            and definition.outcomes.get("no_fixed_k") is True
+            and cross_period is not None
+            and not cross_period.enabled
+        ),
+    )
+    status_handler = entry.load_status_handler()
+    run_handler = entry.load_run_handler()
+    with tempfile.TemporaryDirectory() as tmp:
+        blocked_status = status_handler(definition, project_root=Path(tmp))
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "audit_catalog_is_formal_read_only_importable_and_blocks_cleanly_without_source_artifacts",
+        True,
+        bool(
+            entry.formal
+            and entry.read_only
+            and entry.module == "tools.audit.breakout_quality.orderable_feasible_alignment"
+            and callable(status_handler)
+            and callable(run_handler)
+            and callable(resolve_strategy_compare_profile_run_selector)
+            and blocked_status.get("status") == "BLOCKED"
+        ),
+    )
+
+    from config.strategy_compare import get_strategy_comparison_settings
+    with tempfile.TemporaryDirectory() as tmp:
+        synthetic_root = Path(tmp).resolve()
+        compare_settings = get_strategy_comparison_settings("selection_pit")
+        synthetic_run = synthetic_root / compare_settings.output_root / "runs" / "synthetic_orderable_alignment"
+        synthetic_run.mkdir(parents=True, exist_ok=True)
+        synthetic_result = {
+            "status": "COMPLETED",
+            "config_fingerprint": "synthetic-alignment",
+            "settings": {
+                "arms": {arm_id: compare_settings.arms[arm_id].as_dict() for arm_id in ("C23", "C25", "C28", "C35")},
+            },
+            "scenarios": {arm_id: {} for arm_id in ("C23", "C25", "C28", "C35")},
+        }
+        (synthetic_run / "strategy_comparison.json").write_text(
+            json.dumps(synthetic_result), encoding="utf-8"
+        )
+        latest_dir = synthetic_root / compare_settings.output_root / "latest"
+        latest_dir.mkdir(parents=True, exist_ok=True)
+        (latest_dir / "manifest.json").write_text(
+            json.dumps({"run_dir": synthetic_run.relative_to(synthetic_root).as_posix()}),
+            encoding="utf-8",
+        )
+        resolved_run, _resolved_result = resolve_strategy_compare_profile_run_selector(
+            synthetic_root,
+            {"profile_id": "selection_pit", "run": "latest"},
+            audit_id="synthetic-orderable-alignment",
+            required_arm_ids=("C25", "C35"),
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "profile_run_resolver_uses_current_strategy_compare_output_namespace_and_latest_manifest",
+        True,
+        resolved_run.name == "synthetic_orderable_alignment",
+    )
+
+    orderable = pd.DataFrame([
+        {"ticker": "A", "trade_date": "2024-01-03", "signal_date": "2024-01-02", "model_score": 0.9, "common_target_raw_r": 3.0, "score_available": True, "target_available": True},
+        {"ticker": "B", "trade_date": "2024-01-03", "signal_date": "2024-01-02", "model_score": 0.8, "common_target_raw_r": 2.0, "score_available": True, "target_available": True},
+        {"ticker": "C", "trade_date": "2024-01-03", "signal_date": "2024-01-02", "model_score": 0.7, "common_target_raw_r": 0.0, "score_available": True, "target_available": True},
+        {"ticker": "A", "trade_date": "2024-01-04", "signal_date": "2024-01-03", "model_score": 0.9, "common_target_raw_r": 0.0, "score_available": True, "target_available": True},
+        {"ticker": "B", "trade_date": "2024-01-04", "signal_date": "2024-01-03", "model_score": 0.8, "common_target_raw_r": 3.0, "score_available": True, "target_available": True},
+        {"ticker": "C", "trade_date": "2024-01-04", "signal_date": "2024-01-03", "model_score": 0.7, "common_target_raw_r": 2.0, "score_available": True, "target_available": True},
+    ])
+    with tempfile.TemporaryDirectory() as tmp:
+        cap_path = Path(tmp) / "score_ranking_daily_capacity.csv"
+        pd.DataFrame([
+            {
+                "Date": "2024-01-03",
+                "Resource_Aware_Direct_Score_Order_Feasible": "TRUE",
+                "Resource_Aware_Max_DL_Repair_Steps": 0,
+                "Resource_Aware_Max_DL_Feasible_Ascent_Steps": 0,
+                "Resource_Aware_Pre_Market_Order_Limit": 2,
+                "Resource_Aware_Baseline_Selected": 2,
+            },
+            {
+                "Date": "2024-01-04",
+                "Resource_Aware_Direct_Score_Order_Feasible": "False",
+                "Resource_Aware_Max_DL_Repair_Steps": 1,
+                "Resource_Aware_Max_DL_Feasible_Ascent_Steps": 1,
+                "Resource_Aware_Pre_Market_Order_Limit": 2,
+                "Resource_Aware_Baseline_Selected": 2,
+            },
+        ]).to_csv(cap_path, index=False)
+        capacity = _capacity_frame(cap_path)
+
+    ranking = _daily_ranking_rows(orderable, capacity)
+    d1 = ranking.loc[ranking["trade_date"] == "2024-01-03"].iloc[0]
+    d2 = ranking.loc[ranking["trade_date"] == "2024-01-04"].iloc[0]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "capacity_boolean_and_stage_contract_parses_false_string_without_truthiness_bug",
+        True,
+        bool(
+            bool(d1["direct_feasible"])
+            and not bool(d2["direct_feasible"])
+            and bool(d2["repair"])
+            and bool(d2["ascent"])
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "orderable_ranking_uses_actual_daily_order_limit_as_dynamic_n_not_portfolio_magic_k",
+        True,
+        bool(
+            int(d1["k"]) == 2
+            and int(d2["k"]) == 2
+            and math.isclose(float(d1["daily_rho"]), 1.0, abs_tol=1e-12)
+            and math.isclose(float(d1["pair_accuracy"]), 1.0, abs_tol=1e-12)
+            and math.isclose(float(d1["top_target_lift_r"]), 5.0 / 6.0, abs_tol=1e-12)
+            and float(d2["top_target_lift_r"]) < 0.0
+        ),
+    )
+
+    execution = pd.DataFrame([
+        {"ticker": "A", "trade_date": "2024-01-03", "signal_date": "2024-01-02", "chosen_qty": 100},
+        {"ticker": "B", "trade_date": "2024-01-03", "signal_date": "2024-01-02", "chosen_qty": 100},
+        {"ticker": "B", "trade_date": "2024-01-04", "signal_date": "2024-01-03", "chosen_qty": 100},
+        {"ticker": "C", "trade_date": "2024-01-04", "signal_date": "2024-01-03", "chosen_qty": 100},
+    ])
+    translation = _execution_translation(orderable, execution, capacity)
+    t2 = translation.loc[translation["trade_date"] == "2024-01-04"].iloc[0]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "resource_translation_compares_raw_score_top_n_with_actual_chosen_actions_post_replay",
+        True,
+        bool(
+            int(t2["action_count"]) == 2
+            and math.isclose(float(t2["raw_action_overlap"]), 0.5, abs_tol=1e-12)
+            and math.isclose(float(t2["action_minus_raw_target_r"]), 1.0, abs_tol=1e-12)
+            and float(t2["action_minus_raw_score"]) < 0.0
+            and bool(t2["repair"])
+            and bool(t2["ascent"])
+        ),
+    )
+
+    fake_bundle = SimpleNamespace(
+        group_table=pd.DataFrame([
+            {"ticker": "A", "date": "2024-01-03", "group_index": 0},
+            {"ticker": "A", "date": "2024-01-04", "group_index": 1},
+        ]),
+        raw_target=np.array([1.5, np.nan], dtype=np.float64),
+        target_valid=np.array([True, False], dtype=bool),
+    )
+    with patch.object(alignment_audit, "load_profile_continuous_ranker_data", return_value=fake_bundle):
+        target_lookup, target_calendar = _load_common_daily_target(
+            root=Path("."),
+            filter_id="breakout_quality_v1",
+            architecture="inception_time_v1",
+            profile="daily_universal_no_time_full_list_ndcg_pairwise",
+        )
+    mapped = _information_date_map(pd.Series(["2024-01-05"]), target_calendar)
+    latest_row = target_lookup.loc[("A", "2024-01-04"), "common_target_raw_r"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "target_incomplete_latest_trading_day_is_not_silently_backfilled_to_older_valid_target",
+        True,
+        bool(
+            list(target_calendar) == ["2024-01-03", "2024-01-04"]
+            and mapped.iloc[0] == "2024-01-04"
+            and pd.isna(latest_row)
+        ),
+    )
+
+    summary["workflow"] = "mr13e_orderable_feasible_alignment_audit"
+    summary["fixed_k_used"] = False
+    return results, summary
+
 def validate_breakout_quality_audit_framework_contract_case(_base_params):
     from config.audit import (
         AUDIT_OUTPUT_ROOT,
@@ -2468,6 +2696,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     cross_period_definition = next(
         (item for item in all_definitions if item.audit_id == "cross-period-year-regime-attribution"), None
+    )
+    orderable_alignment_definition = next(
+        (item for item in all_definitions if item.audit_id == "mr13e-orderable-feasible-alignment"), None
     )
     validate_audit_catalog(all_definitions)
     project_root = Path(__file__).resolve().parents[2]
@@ -2652,7 +2883,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         bool(
             cross_period_definition is not None
             and cross_period_definition.audit_type == "robustness_cross_period_attribution"
-            and cross_period_definition.enabled
+            and not cross_period_definition.enabled
             and dict(cross_period_definition.source).get("kind") == "multi_seed_robustness_cross_period"
             and forward_robustness_translation_audit.resolve_two_arm_multi_seed_source
                 is multi_seed_audit_source.resolve_two_arm_multi_seed_source
@@ -2703,6 +2934,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and forward_robustness_translation_definition.outcomes.get("all_seed_required") is True
         and isinstance(forward_robustness_translation_definition.enabled, bool)
         and isinstance(portfolio_translation_definition.enabled, bool)
+        and orderable_alignment_definition is not None
+        and orderable_alignment_definition.enabled
+        and orderable_alignment_definition.audit_type == "orderable_feasible_alignment"
+        and orderable_alignment_definition.source.get("kind") == "strategy_compare_cross_phase"
+        and orderable_alignment_definition.outcomes.get("no_fixed_k") is True
         and "breakout_quality" in get_audit_module_ids(enabled_only=True)
         and bool(enabled_definitions)
         and all(bool(str(item.source.get("kind") or "").strip()) for item in all_definitions),

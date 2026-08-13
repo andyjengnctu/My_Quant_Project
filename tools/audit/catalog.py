@@ -98,6 +98,17 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         run_function="run_forward_robustness_portfolio_translation_audit",
     ),
 
+    "orderable_feasible_alignment": AuditCatalogEntry(
+        audit_type="orderable_feasible_alignment",
+        domain="breakout_quality",
+        module="tools.audit.breakout_quality.orderable_feasible_alignment",
+        mode="formal",
+        description="Completed Strategy Compare orderable ranking與resource/action translation跨phase歸因",
+        read_only=True,
+        status_function="collect_orderable_feasible_alignment_status",
+        run_function="run_orderable_feasible_alignment_audit",
+    ),
+
     "robustness_cross_period_attribution": AuditCatalogEntry(
         audit_type="robustness_cross_period_attribution",
         domain="breakout_quality",
