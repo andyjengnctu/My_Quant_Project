@@ -15,6 +15,10 @@ from .synthetic_breakout_quality_support import (
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
     CONTINUOUS_RANKER_TRAINER_EVENT,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+    DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+    DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE,
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
     get_continuous_ranker_research_spec,
     STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
@@ -2176,6 +2180,157 @@ def validate_breakout_quality_listwise_ranker_contract_case(_base_params):
     summary["training_performed"] = False
     return results, summary
 
+def validate_breakout_quality_daily_gap_weighted_ranker_contract_case(_base_params):
+    """Pin MR-13B as a single-variable Daily Universal loss-weighting experiment."""
+
+    case_id = "BREAKOUT_QUALITY_DAILY_GAP_WEIGHTED_RANKER"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from filters.breakout_quality.models.factory import require_torch
+    from tools.filters.breakout_quality.train_continuous_ranker import (
+        _pairwise_logistic_loss,
+        _training_semantics,
+        parse_args as parse_continuous_ranker_args,
+    )
+
+    profile_a = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+    )
+    profile_b = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE
+    )
+    spec_a = get_continuous_ranker_research_spec(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+    )
+    spec_b = get_continuous_ranker_research_spec(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE
+    )
+
+    fixed_fields = (
+        "optimizer_name",
+        "training_sampling_mode",
+        "training_objective",
+        "continuous_target_id",
+        "loss_name",
+        "epoch_selection_metric",
+        "training_label_scope",
+        "training_sample_scope",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13b_changes_only_pairwise_reduction_while_daily_profile_contract_stays_fixed",
+        tuple(getattr(profile_a, field) for field in fixed_fields),
+        tuple(getattr(profile_b, field) for field in fixed_fields),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13b_research_identity_and_reduction_are_explicit",
+        (
+            "MR-13A",
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+            "MR-13B",
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+            spec_a.trainer_family,
+            spec_a.score_semantic_id,
+        ),
+        (
+            spec_a.model_research_id,
+            spec_a.pairwise_reduction,
+            spec_b.model_research_id,
+            spec_b.pairwise_reduction,
+            spec_b.trainer_family,
+            spec_b.score_semantic_id,
+        ),
+    )
+
+    semantics_a = _training_semantics(profile_a)
+    semantics_b = _training_semantics(profile_b)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13a_and_mr13b_artifacts_disclose_distinct_pairwise_weighting",
+        (
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+        ),
+        (
+            semantics_a["pairwise_contract"]["pair_weighting"],
+            semantics_b["pairwise_contract"]["pair_weighting"],
+        ),
+    )
+
+    args = parse_continuous_ranker_args(
+        ["--experiment-profile", DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE]
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13b_is_available_through_existing_profile_driven_cli",
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE,
+        args.experiment_profile,
+    )
+
+    torch, _nn = require_torch()
+    targets = torch.tensor([0.0, 0.1, 1.0], dtype=torch.float32)
+    dates = np.asarray(["2024-01-02"] * 3)
+    # Pair (0.0, 0.1) is deliberately misordered while the two far-gap pairs are correct.
+    margins = torch.tensor([0.0, -0.5, 2.0], dtype=torch.float32, requires_grad=True)
+    equal_loss, equal_count = _pairwise_logistic_loss(
+        torch,
+        margins,
+        targets,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    )
+    gap_loss, gap_date_count = _pairwise_logistic_loss(
+        torch,
+        margins,
+        targets,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+    )
+    gap_loss.backward()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "target_gap_weighting_downweights_near_tie_pair_and_keeps_finite_gradient",
+        (True, 3, 1, True),
+        (
+            bool(float(gap_loss.detach().cpu().item()) < float(equal_loss.detach().cpu().item())),
+            int(equal_count),
+            int(gap_date_count),
+            bool(torch.isfinite(margins.grad).all().item()),
+        ),
+    )
+
+    equal_again, equal_again_count = _pairwise_logistic_loss(
+        torch,
+        margins.detach(),
+        targets,
+        dates,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "legacy_pairwise_default_remains_exact_equal_pair_path",
+        (round(float(equal_loss.detach().cpu().item()), 12), int(equal_count)),
+        (round(float(equal_again.detach().cpu().item()), 12), int(equal_again_count)),
+    )
+
+    summary["profile"] = DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE
+    summary["model_research_id"] = spec_b.model_research_id
+    return results, summary
+
+
 def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_params):
     """Pin the profile-driven continuous-ranker boundary before adding new Daily MR variants."""
 
@@ -2185,9 +2340,11 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
 
     from config.breakout_quality import (
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
         CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
         CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
         DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE,
         STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
         SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
         SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
@@ -2214,6 +2371,9 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
         STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
     )
     mr13a = get_continuous_ranker_research_spec(DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE)
+    mr13b = get_continuous_ranker_research_spec(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -2253,14 +2413,25 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
         results,
         "synthetic_breakout_quality",
         case_id,
-        "existing_pairwise_profiles_keep_equal_pair_reduction_until_new_mr_is_registered",
-        (CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,),
-        tuple(sorted({
-            str(get_continuous_ranker_research_spec(name).pairwise_reduction)
-            for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-            if get_breakout_quality_experiment_profile(name).training_objective
-            == "daily_pairwise_ranking"
-        })),
+        "new_pairwise_reduction_is_owned_only_by_new_mr_profile",
+        (
+            "MR-13B",
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+            (
+                CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+                CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+            ),
+        ),
+        (
+            mr13b.model_research_id,
+            mr13b.pairwise_reduction,
+            tuple(sorted({
+                str(get_continuous_ranker_research_spec(name).pairwise_reduction)
+                for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+                if get_breakout_quality_experiment_profile(name).training_objective
+                == "daily_pairwise_ranking"
+            })),
+        ),
     )
     return results, summary
 

@@ -8564,3 +8564,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Targeted direct regression：`validate_breakout_quality_continuous_ranker_contract_case` 18/18 PASS、`validate_breakout_quality_pass_conditional_ranker_contract_case` 8/8 PASS、`validate_breakout_quality_multi_dl_ranker_architecture_contract_case` 4/4 PASS。沒有為了過測試把profile-driven dispatcher退回舊MR-specific source branching；MR-12B／MR-13A scientific semantics與`equal_pair_weight`不變。
 - 狀態：架構修正已套用，Daily DL infrastructure仍為`PRE_MR13B_ARCHITECTURE_READY`，但正式狀態標記`AWAITING_FORMAL_RERUN`；下一步只需重新執行`apps/run_bundle.py`確認consistency/meta-quality閉環，尚未開始MR-13B scientific experiment。
 
+
+
+## 2026-08-13 — MR-13B實作：Daily Universal Target-gap-weighted Pairwise Ranker
+
+- 程式基準：`test-branch-1_20260813_162114_474a6e6.zip`；SHA256 `ed2e373a465262e0ba03894b27bcfdabf7d82f57110404e183cc6bc470f9fea9`。開始前已確認profile-driven multi-DL架構存在，MR-12B／MR-13A既有equal-pair code path不變。
+- 實作前重新檢查原候選「equal-date RankNet」：`_date_coherent_batches()`明確禁止拆分同一日期，若單日group數大於batch size即整日獨立成一個optimizer batch；MR-13A Daily Universal OOS歷史工件為`608,204` groups、平均每日數百支股票，遠高於batch size=128。因此單純把batch內pair mean改成date mean對大多數daily optimizer step接近no-op，不值得占用永久`MR-13B` identity。
+- `MR-13B`正式定義為`Daily Universal Target-gap-weighted Pairwise Ranker`，profile=`daily_universal_no_time_pairwise_gap_weighted`。固定MR-13A的sample universe=`daily_eligible_stock_days`、Target=`daily_opportunity_no_time_r_v1`、300×10 stock+0050 input、`ARCH-inception_time_v1`、optimizer/LR/weight decay、inner validation、selected-epoch final refit與`mean_daily_spearman`選epoch。
+- 唯一scientific change：同日RankNet non-tied pair的logistic loss以`abs(daily target percentile差)`作權重；每個日期內以pair-weight sum正規化，若同一logical batch含多個rankable dates則取其day loss mean。沒有固定target-gap threshold、沒有candidate/breakout membership、沒有strategy feature，因此仍保持strategy-agnostic Daily Score。
+- 舊`equal_pair_weight`為default且MR-12B／MR-13A顯式維持；新reduction identity=`target_gap_weighted_within_date`只由MR-13B research spec啟用。Artifact/report透過既有`pairwise_reduction`欄位明示，不新增architecture version。
+- 目前只建立model research profile，不建立`DL-CONT13B`／PIT source／`SR-C*`。先由正式`Research → 模型訓練`執行MR-13B單模型Gate；結果前狀態固定`IMPLEMENTED / AWAITING_MODEL_GATE / NO_RUNTIME_DL_SOURCE`。若模型Gate不支持，不進PIT／Strategy；若支持，再依既有MR-13A路徑建立PIT與跨period robustness。

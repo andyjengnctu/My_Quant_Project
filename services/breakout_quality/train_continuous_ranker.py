@@ -20,6 +20,7 @@ from config.breakout_quality import (
     STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
     CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
@@ -632,14 +633,35 @@ def _date_coherent_batches(
     return batches
 
 
-def _pairwise_logistic_loss(torch, margins, targets, dates) -> tuple[Any | None, int]:
-    """Return equal-weight RankNet logistic loss over comparable within-day pairs only."""
+def _pairwise_logistic_loss(
+    torch,
+    margins,
+    targets,
+    dates,
+    *,
+    reduction: str = CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+) -> tuple[Any | None, int]:
+    """Return the configured RankNet loss over comparable within-day pairs.
+
+    Existing equal-pair profiles preserve the original concatenated-pair mean exactly.
+    MR-13B uses the absolute same-date percentile-target gap as pair weight, normalizes
+    within each date, then gives each rankable date equal loss weight.  This emphasizes
+    clearly separated opportunities without introducing a fixed target-gap threshold.
+    """
 
     import torch.nn.functional as F
 
+    if reduction not in {
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+    }:
+        raise ValueError(f"不支援的pairwise reduction: {reduction!r}")
+
     date_values = pd.to_datetime(pd.Series(dates), errors="raise").dt.normalize().to_numpy()
-    losses = []
+    pair_losses = []
+    day_losses = []
     pair_count = 0
+    ranked_date_count = 0
     for date_value in pd.unique(date_values):
         positions = np.flatnonzero(date_values == date_value)
         if len(positions) < 2:
@@ -656,12 +678,28 @@ def _pairwise_logistic_loss(torch, margins, targets, dates) -> tuple[Any | None,
         count = int(comparable.sum().item())
         if count == 0:
             continue
-        signs = torch.sign(target_diff[comparable])
-        losses.append(F.softplus(-signs * margin_diff[comparable]))
+        selected_target_diff = target_diff[comparable]
+        signs = torch.sign(selected_target_diff)
+        losses = F.softplus(-signs * margin_diff[comparable])
         pair_count += count
-    if not losses:
+        ranked_date_count += 1
+        if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR:
+            pair_losses.append(losses)
+            continue
+
+        weights = torch.abs(selected_target_diff.detach())
+        weight_sum = weights.sum()
+        if not bool(torch.isfinite(weight_sum).item()) or float(weight_sum.detach().cpu().item()) <= 0.0:
+            raise FloatingPointError("target-gap pairwise weight sum必須為正有限值")
+        day_losses.append((losses * weights).sum() / weight_sum)
+
+    if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR:
+        if not pair_losses:
+            return None, 0
+        return torch.cat(pair_losses).mean(), int(pair_count)
+    if not day_losses:
         return None, 0
-    return torch.cat(losses).mean(), int(pair_count)
+    return torch.stack(day_losses).mean(), int(ranked_date_count)
 
 
 def _materialize_feature_batch(feature_bank, ids: np.ndarray) -> np.ndarray:
@@ -768,6 +806,7 @@ def _train_epoch(
     plan,
     grad_scaler,
     prefetch_batches: int = 0,
+    pairwise_reduction: str = CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
 ) -> float:
     model.train()
     ids_all = np.asarray(group_ids, dtype=np.int64)
@@ -817,15 +856,16 @@ def _train_epoch(
                 loss_weight = int(len(ids))
             elif training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
                 margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
-                loss, pair_count = _pairwise_logistic_loss(
+                loss, supervision_count = _pairwise_logistic_loss(
                     torch,
                     margins,
                     target,
                     group_dates_series.iloc[ids].to_numpy(),
+                    reduction=str(pairwise_reduction),
                 )
                 if loss is None:
                     continue
-                loss_weight = int(pair_count)
+                loss_weight = int(supervision_count)
             else:
                 margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
                 loss, ranked_date_count = _listnet_top_one_loss(
@@ -907,6 +947,7 @@ def select_epoch(
     epochs_without_improvement = 0
     history: list[dict[str, Any]] = []
     compact_console = compact_console_enabled()
+    research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
     if not compact_console:
         print("\nEpoch選擇（依Validation mean daily Spearman）")
     for epoch in range(1, int(args.epochs) + 1):
@@ -927,6 +968,10 @@ def select_epoch(
             plan=plan,
             grad_scaler=grad_scaler,
             prefetch_batches=int(args.train_prefetch_batches),
+            pairwise_reduction=(
+                research_spec.pairwise_reduction
+                or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
+            ),
         )
         validation_scores = predict_scores(
             torch, model, feature_bank, group_context, validation_ids,
@@ -1028,6 +1073,7 @@ def fit_final(
     grad_scaler = build_grad_scaler(torch, plan)
     history: list[dict[str, Any]] = []
     compact_console = compact_console_enabled()
+    research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
     if not compact_console:
         print(f"\n{str(phase_label)}（{int(epochs)} Epoch）")
     for epoch in range(1, int(epochs) + 1):
@@ -1048,6 +1094,10 @@ def fit_final(
             plan=plan,
             grad_scaler=grad_scaler,
             prefetch_batches=int(args.train_prefetch_batches),
+            pairwise_reduction=(
+                research_spec.pairwise_reduction
+                or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
+            ),
         )
         elapsed = time.perf_counter() - started
         history.append({"epoch": int(epoch), "batch_loss": float(loss), "elapsed_sec": round(float(elapsed), 3)})

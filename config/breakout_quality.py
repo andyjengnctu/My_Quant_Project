@@ -40,12 +40,13 @@ from config.execution_policy import (
 # - MR-12A all-event continuous MSE: "strategy_aligned_no_time_all_event_mse"
 # - MR-12B all-event pairwise ranker: "strategy_aligned_no_time_all_event_pairwise"
 # - MR-12C all-event ListNet top-one listwise ranker: "strategy_aligned_no_time_all_event_listwise"
-# - MR-13A daily-universal pairwise ranker: "daily_universal_no_time_pairwise"
+# - MR-13A daily-universal equal-pair ranker: "daily_universal_no_time_pairwise"
+# - MR-13B daily-universal target-gap-weighted pairwise ranker: "daily_universal_no_time_pairwise_gap_weighted"
 # Strategy workflow remains on the latest validated deployable/PIT-capable anchor.
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
-# Model-research menu may move ahead of strategy deployment. MR-13A model research
+# Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_pairwise_gap_weighted"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42
@@ -250,6 +251,7 @@ STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE = "strategy_aligned_no_time_all_e
 STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
 STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE = "strategy_aligned_no_time_all_event_listwise"
 DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE = "daily_universal_no_time_pairwise"
+DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE = "daily_universal_no_time_pairwise_gap_weighted"
 
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 
@@ -745,6 +747,17 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     ),
+    DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_opportunity_no_time_r_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    ),
 }
 
 SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES = tuple(_EXPERIMENT_PROFILES)
@@ -776,6 +789,11 @@ def get_breakout_quality_experiment_profile(
 CONTINUOUS_RANKER_TRAINER_EVENT = "event"
 CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL = "daily_universal"
 CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR = "equal_pair_weight"
+CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED = "target_gap_weighted_within_date"
+SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS = (
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+)
 
 
 @dataclass(frozen=True)
@@ -813,7 +831,7 @@ class ContinuousRankerResearchSpec:
                 f"profile={self.profile_name}, expected={expected_family}, actual={self.trainer_family}"
             )
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
-            if self.pairwise_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR:
+            if self.pairwise_reduction not in SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS:
                 raise ValueError(
                     f"pairwise profile必須指定合法pairwise reduction: {self.profile_name}"
                 )
@@ -918,6 +936,21 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days",
         score_semantic_id="daily_opportunity_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    ),
+    DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE,
+        model_research_id="MR-13B",
+        experiment_name="MR-13B Daily Universal Target-gap-weighted Pairwise Ranker",
+        phase="13B",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="same_date_all_stock_order_of_daily_opportunity_no_time_r_v1",
+        objective_description=(
+            "同日全部合法stock-day No-time target ordering的RankNet pairwise logistic loss；"
+            "pair依daily target percentile距離加權並於date內正規化"
+        ),
+        metric_scope="all_stock_days",
+        score_semantic_id="daily_opportunity_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
     ),
 }
 
@@ -1561,10 +1594,13 @@ __all__ = [
     'TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS',
     'SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLE_SCOPES',
     'DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE',
     'ContinuousRankerResearchSpec',
     'CONTINUOUS_RANKER_TRAINER_EVENT',
     'CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL',
     'CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR',
+    'CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED',
+    'SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS',
     'get_continuous_ranker_research_spec',
     'SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES',
     'TIME_WEIGHT_MODE_DATE_BALANCED',
