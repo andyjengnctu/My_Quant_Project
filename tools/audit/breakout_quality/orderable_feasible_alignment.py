@@ -1,7 +1,9 @@
 """Read-only orderable / feasible-selection alignment audit for continuous rankers.
 
 The audit consumes completed Strategy Compare replay artifacts only.  It never
-trains, scores, or replays a strategy.  A common daily opportunity target is
+trains, scores, or replays a strategy.  Formal score-ranking pairs must include
+the canonical pre-market execution sidecar so chosen actions are not inferred
+from post-fill selected-buys.  A common daily opportunity target is
 joined after replay from the canonical daily-universal target provider, so the
 future target cannot affect runtime ordering or execution.
 """

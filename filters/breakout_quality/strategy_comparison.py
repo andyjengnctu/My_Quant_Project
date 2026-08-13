@@ -251,6 +251,7 @@ def _pair_cache_required_files(
             pair_dir / "score_ranking_orderable_candidates.csv",
             pair_dir / "no_filter_selected_buys.csv",
             pair_dir / "score_ranking_selected_buys.csv",
+            pair_dir / "score_ranking_execution.csv",
         ])
     return tuple(required)
 
@@ -1870,6 +1871,9 @@ def run_strategy_comparison(
                 ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None
             ),
             baseline_reuse_dir=baseline_reuse_source,
+            capture_execution_diagnostics=(
+                runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
+            ),
         )
         pair_payloads[group_id] = {
             "arm_contract": (param_source, rule_policy, off_arm, on_arm),

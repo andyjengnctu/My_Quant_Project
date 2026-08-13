@@ -281,10 +281,44 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     from config import strategy_compare as strategy_config
     from config.compatibility import strategy_compare_history as strategy_history
+    from filters.breakout_quality.strategy_comparison import _pair_cache_required_files
     from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
     from core.strategy_comparison import strategy_comparison_fingerprint
 
     settings = strategy_config.get_strategy_comparison_settings()
+    score_ranking_arm = next(
+        arm
+        for arm in settings.enabled_arms
+        if arm.dl_enabled
+        and strategy_config.get_strategy_comparison_settings(settings.profile_id).arms[arm.arm_id].dl_runtime_mode
+        in {
+            "resource-aware-continuous",
+            "resource-aware-continuous-capital-preserving",
+            "resource-aware-continuous-max-dl",
+            "resource-aware-continuous-max-dl-feasible-ascent",
+            "resource-aware-continuous-max-dl-feasible-ascent-stale-score-guard",
+        }
+    )
+    score_ranking_cache_files = {
+        path.name
+        for path in _pair_cache_required_files(
+            Path("synthetic-pair"),
+            on_arm=score_ranking_arm,
+        )
+    }
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "formal_score_ranking_pairs_persist_pre_market_execution_sidecar_and_cache_requires_it",
+        True,
+        (
+            "score_ranking_execution.csv" in score_ranking_cache_files
+            and "capture_execution_diagnostics=(" in orchestration_source
+            and 'runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING' in orchestration_source
+            and 'output_dir / "score_ranking_execution.csv"' in strategy_compare_source
+        ),
+    )
     configured_roos_builders = [
         source.builder
         for source in settings.parameter_sources.values()
@@ -3021,6 +3055,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 "score_ranking_orderable_candidates.csv",
                 "no_filter_selected_buys.csv",
                 "score_ranking_selected_buys.csv",
+                "score_ranking_execution.csv",
             ):
                 (cached_pair_dir / filename).write_text("x\n", encoding="utf-8")
             (cached_run / "strategy_comparison.json").write_text(
