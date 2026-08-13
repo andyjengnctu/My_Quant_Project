@@ -14,6 +14,9 @@ from .synthetic_breakout_quality_support import (
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+    CONTINUOUS_RANKER_TRAINER_EVENT,
+    SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
+    get_continuous_ranker_research_spec,
     STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
     STRATEGY_ALIGNED_TARGET_ID,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
@@ -899,8 +902,12 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         "pass_conditional_ranker_is_cli_only_and_uses_existing_command",
         (True, True, True, True),
         (
-            "STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE" in ranker_source,
-            'choices=(' in ranker_source,
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+            in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
+            get_continuous_ranker_research_spec(
+                STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+            ).trainer_family
+            == CONTINUOUS_RANKER_TRAINER_EVENT,
             "11G" not in app_source[app_source.index("def _interactive_model_research"):app_source.index("def run_model_training_menu")],
             command_modules.get("train-continuous-ranker")
             == "services.breakout_quality.ranker_cli",
@@ -1072,7 +1079,12 @@ def validate_breakout_quality_pass_conditional_ranker_contract_case(_base_params
         (
             command_modules.get("train-continuous-ranker")
             == "services.breakout_quality.ranker_cli",
-            "STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE" in ranker_source,
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+            in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+            and get_continuous_ranker_research_spec(
+                STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+            ).trainer_family
+            == CONTINUOUS_RANKER_TRAINER_EVENT,
             "11G" not in menu_source,
             "strategy_aligned_no_time_pass_magnitude_mse" not in menu_source,
         ),
