@@ -2,14 +2,8 @@
 
 - imrove DL module
     - daily candidate score
-
-- restructure 
-    - 程式重構、移除無用legacy、不會再用到的臨時性測試程式
-    - audit 同源
-    - 設定值 同原
-    - 移出非必要放在config/下的設定
-    - 優化選單，常用以選單為主(避免去背指令)，不常用以CLI為主(避免選單太雜)
-    - 具備自動檢查與完成缺少的前置工作能力
+    - attention
+    - 三大法人籌碼資訊
 
 - stablity test
     - multi seeds test

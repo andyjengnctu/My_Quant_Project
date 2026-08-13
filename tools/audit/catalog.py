@@ -97,6 +97,17 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         status_function="collect_forward_robustness_portfolio_translation_status",
         run_function="run_forward_robustness_portfolio_translation_audit",
     ),
+
+    "robustness_cross_period_attribution": AuditCatalogEntry(
+        audit_type="robustness_cross_period_attribution",
+        domain="breakout_quality",
+        module="tools.audit.breakout_quality.cross_period_year_regime_attribution",
+        mode="formal",
+        description="Selection PIT與Forward-OOS multi-seed same-seed／逐年度relative edge方向翻轉歸因",
+        read_only=True,
+        status_function="collect_cross_period_year_regime_attribution_status",
+        run_function="run_cross_period_year_regime_attribution_audit",
+    ),
     "strategy_realization_capture": AuditCatalogEntry(
         audit_type="strategy_realization_capture",
         domain="breakout_quality",

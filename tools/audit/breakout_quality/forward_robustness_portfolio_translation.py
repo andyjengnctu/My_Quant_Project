@@ -8,7 +8,6 @@ matched seed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import math
 import shutil
@@ -19,7 +18,6 @@ import numpy as np
 import pandas as pd
 
 from config.audit import AUDIT_OUTPUT_ROOT, AuditDefinition
-from config.strategy_compare import get_strategy_multi_seed_robustness_settings
 from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
@@ -29,44 +27,17 @@ from core.console_report import (
     render_title,
 )
 from core.runtime_utils import get_taipei_now
-from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.trade_attribution import assign_canonical_trade_match_key
-from filters.breakout_quality.strategy_multi_seed_robustness import (
-    ATTRIBUTION_SOURCE_DIRNAME,
-    ATTRIBUTION_SOURCE_SCHEMA_VERSION,
-    LATEST_FILENAME,
-    MANIFEST_FILENAME,
-    SEED_RESULTS_FILENAME,
-)
 from tools.audit.breakout_quality.c15_strategy_attribution import (
     build_strategy_attribution_pair_payload,
+)
+from tools.audit.sources.multi_seed_robustness import (
+    compact_artifacts_from_unit,
+    resolve_two_arm_multi_seed_source,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 AUDIT_RESULT_SCHEMA_VERSION = 5
-
-
-@dataclass(frozen=True)
-class CompactArmArtifacts:
-    arm_id: str
-    summary: dict[str, Any]
-    trades_path: Path
-    equity_path: Path
-    capacity_path: Path
-    selected_path: Path
-    execution_path: Path
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    if not path.is_file():
-        raise FileNotFoundError(
-            "缺少JSON工件: "
-            + project_relative_display_path(path, project_root=PROJECT_ROOT)
-        )
-    payload = json.loads(path.read_text(encoding="utf-8-sig"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"JSON root必須是object: {path.name}")
-    return payload
 
 
 def _validate_definition(definition: AuditDefinition) -> tuple[str, str, str, int, int, int]:
@@ -93,160 +64,23 @@ def _validate_definition(definition: AuditDefinition) -> tuple[str, str, str, in
     return robustness_id, candidate, comparator, focus_year, top_month_count, top_trade_count
 
 
-def _resolve_run_root(root: Path, robustness_id: str) -> tuple[Path, dict[str, Any], dict[str, Any]]:
-    cfg = get_strategy_multi_seed_robustness_settings(robustness_id)
-    latest_path = (root / cfg.output_root / LATEST_FILENAME).resolve()
-    latest = _read_json(latest_path)
-    summary_rel = str(latest.get("summary_path") or "").strip()
-    if not summary_rel:
-        raise ValueError("robustness latest缺少summary_path")
-    summary_path = (root / summary_rel).resolve()
-    try:
-        summary_path.relative_to(root)
-    except ValueError as exc:
-        raise ValueError("robustness summary必須位於專案root內") from exc
-    summary = _read_json(summary_path)
-    run_root = summary_path.parent
-    manifest = _read_json(run_root / MANIFEST_FILENAME)
-    if str(manifest.get("status") or "") != "COMPLETED":
-        raise ValueError("robustness run尚未完成")
-    contract = dict(manifest.get("contract") or summary.get("contract") or {})
-    if str(contract.get("robustness_id") or "") != robustness_id:
-        raise ValueError("robustness latest identity與Audit config不一致")
-    return run_root, summary, contract
-
-
-def _load_seed_results(run_root: Path) -> pd.DataFrame:
-    path = run_root / SEED_RESULTS_FILENAME
-    if not path.is_file():
-        raise FileNotFoundError("robustness缺少seed_results.csv")
-    frame = pd.read_csv(path, encoding="utf-8-sig")
-    required = {
-        "arm_id", "name", "seed", "seed_order", "arm_order",
-        "total_return_pct", "max_drawdown_pct", "return_over_max_drawdown",
-        "expected_value_r", "direct_selection_r",
-    }
-    missing = sorted(required - set(frame.columns))
-    if missing:
-        raise ValueError("robustness seed_results缺少欄位: " + ", ".join(missing))
-    frame["arm_id"] = frame["arm_id"].astype(str)
-    frame["seed"] = pd.to_numeric(frame["seed"], errors="raise").astype(int)
-    frame["seed_order"] = pd.to_numeric(frame["seed_order"], errors="raise").astype(int)
-    if frame.duplicated(["arm_id", "seed"], keep=False).any():
-        raise ValueError("robustness seed_results存在重複arm/seed observation")
-    if frame.duplicated(["arm_id", "seed_order"], keep=False).any():
-        raise ValueError("robustness seed_results存在重複arm/seed_order observation")
-    return frame
-
-
-def _unit_manifest(
-    root: Path,
-    run_root: Path,
-    *,
-    arm_id: str,
-    seed: int,
-    fingerprint: str,
-) -> tuple[Path, dict[str, Any]]:
-    unit_dir = run_root / ATTRIBUTION_SOURCE_DIRNAME / f"{arm_id}__seed_{int(seed)}"
-    payload = _read_json(unit_dir / MANIFEST_FILENAME)
-    if int(payload.get("schema_version") or 0) != ATTRIBUTION_SOURCE_SCHEMA_VERSION:
-        raise ValueError(f"compact attribution schema不一致: {arm_id}/seed={seed}")
-    if str(payload.get("scientific_fingerprint") or "") != str(fingerprint):
-        raise ValueError(f"compact attribution fingerprint不一致: {arm_id}/seed={seed}")
-    if str(payload.get("arm_id") or "") != arm_id or int(payload.get("seed", -1)) != int(seed):
-        raise ValueError(f"compact attribution unit identity不一致: {arm_id}/seed={seed}")
-    validation = dict(payload.get("scientific_observation_validation") or {})
-    if str(validation.get("status") or "") != "VERIFIED":
-        raise ValueError(f"compact attribution尚未通過scientific observation驗證: {arm_id}/seed={seed}")
-    files = dict(payload.get("files") or {})
-    for role in ("trades", "equity", "daily_capacity", "selected_buys", "execution"):
-        item = dict(files.get(role) or {})
-        rel = str(item.get("path") or "")
-        if not rel:
-            raise ValueError(f"compact attribution缺少{role}: {arm_id}/seed={seed}")
-        path = (root / rel).resolve()
-        try:
-            path.relative_to(root)
-        except ValueError as exc:
-            raise ValueError("compact attribution path必須位於專案root內") from exc
-        if not path.is_file():
-            raise FileNotFoundError(
-                "compact attribution缺少檔案: "
-                + project_relative_display_path(path, project_root=root)
-            )
-        expected_sha = str(item.get("sha256") or "").lower()
-        if expected_sha and compute_file_sha256(path).lower() != expected_sha:
-            raise ValueError(f"compact attribution SHA256不一致: {arm_id}/seed={seed}/{role}")
-    return unit_dir, payload
-
-
-def _artifacts_from_unit(
-    root: Path,
-    unit_dir: Path,
-    manifest: dict[str, Any],
-    summary: dict[str, Any],
-) -> CompactArmArtifacts:
-    files = dict(manifest["files"])
-    def path_for(role: str) -> Path:
-        return (root / str(dict(files[role])["path"])).resolve()
-    return CompactArmArtifacts(
-        arm_id=str(manifest["arm_id"]),
-        summary=dict(summary),
-        trades_path=path_for("trades"),
-        equity_path=path_for("equity"),
-        capacity_path=path_for("daily_capacity"),
-        selected_path=path_for("selected_buys"),
-        execution_path=path_for("execution"),
-    )
-
-
 def _resolve_source(
     root: Path,
     definition: AuditDefinition,
 ) -> dict[str, Any]:
     robustness_id, candidate, comparator, focus_year, top_month_count, top_trade_count = _validate_definition(definition)
-    run_root, robustness_summary, contract = _resolve_run_root(root, robustness_id)
-    fingerprint = str(contract.get("fingerprint") or robustness_summary.get("fingerprint") or "")
-    if not fingerprint:
-        raise ValueError("robustness contract缺少scientific fingerprint")
-    seed_frame = _load_seed_results(run_root)
-    candidate_rows = seed_frame[seed_frame["arm_id"] == candidate].sort_values("seed_order")
-    comparator_rows = seed_frame[seed_frame["arm_id"] == comparator].sort_values("seed_order")
-    if candidate_rows.empty or comparator_rows.empty:
-        raise ValueError("robustness結果缺少Audit candidate/comparator arm")
-    candidate_seeds = list(zip(candidate_rows["seed_order"].astype(int), candidate_rows["seed"].astype(int)))
-    comparator_seeds = list(zip(comparator_rows["seed_order"].astype(int), comparator_rows["seed"].astype(int)))
-    if candidate_seeds != comparator_seeds:
-        raise ValueError("robustness candidate/comparator resolved seeds不一致")
-    expected_count = int(contract.get("seed_count") or 0)
-    if expected_count < 2 or len(candidate_seeds) != expected_count:
-        raise ValueError(
-            f"Audit要求完整all-seed source: expected={expected_count}, actual={len(candidate_seeds)}"
-        )
-    resolved_seeds = [int(value) for value in list(contract.get("resolved_seeds") or [])]
-    expected_seed_pairs = list(enumerate(resolved_seeds, start=1))
-    if len(resolved_seeds) != expected_count or candidate_seeds != expected_seed_pairs:
-        raise ValueError("robustness seed_results與scientific contract resolved_seeds不一致")
-    units: dict[tuple[str, int], tuple[Path, dict[str, Any]]] = {}
-    for _seed_order, seed in candidate_seeds:
-        for arm_id in (candidate, comparator):
-            units[(arm_id, seed)] = _unit_manifest(
-                root, run_root, arm_id=arm_id, seed=seed, fingerprint=fingerprint
-            )
+    source = resolve_two_arm_multi_seed_source(
+        root,
+        robustness_id=robustness_id,
+        candidate_arm_id=candidate,
+        comparator_arm_id=comparator,
+        require_all_seeds=True,
+    )
     return {
-        "robustness_id": robustness_id,
-        "candidate_arm_id": candidate,
-        "comparator_arm_id": comparator,
+        **source,
         "focus_year": focus_year,
         "top_month_count": top_month_count,
         "top_trade_count": top_trade_count,
-        "run_root": run_root,
-        "summary": robustness_summary,
-        "contract": contract,
-        "fingerprint": fingerprint,
-        "seed_frame": seed_frame,
-        "seed_pairs": candidate_seeds,
-        "units": units,
     }
 
 
@@ -783,8 +617,8 @@ def run_forward_robustness_portfolio_translation_audit(
         b_row = frame[(frame["arm_id"] == comparator) & (frame["seed"] == seed)].iloc[0].to_dict()
         c_dir, c_manifest = source["units"][(candidate, seed)]
         b_dir, b_manifest = source["units"][(comparator, seed)]
-        c_artifacts = _artifacts_from_unit(root, c_dir, c_manifest, c_row)
-        b_artifacts = _artifacts_from_unit(root, b_dir, b_manifest, b_row)
+        c_artifacts = compact_artifacts_from_unit(root, c_manifest, c_row)
+        b_artifacts = compact_artifacts_from_unit(root, b_manifest, b_row)
         pair = build_strategy_attribution_pair_payload(
             candidate_artifacts=c_artifacts,
             comparator_artifacts=b_artifacts,

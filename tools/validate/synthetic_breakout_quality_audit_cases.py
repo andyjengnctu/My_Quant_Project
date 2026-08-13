@@ -2466,6 +2466,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     forward_robustness_translation_definition = next(
         (item for item in all_definitions if item.audit_id == "forward-robustness-portfolio-translation"), None
     )
+    cross_period_definition = next(
+        (item for item in all_definitions if item.audit_id == "cross-period-year-regime-attribution"), None
+    )
     validate_audit_catalog(all_definitions)
     project_root = Path(__file__).resolve().parents[2]
     audit_app_source = (project_root / "apps" / "research.py").read_text(encoding="utf-8")
@@ -2526,6 +2529,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     from tools.audit.breakout_quality import pit_fold_runtime_attribution as pit_fold_audit
     from tools.audit.breakout_quality import c15_strategy_attribution as strategy_attribution_audit
     from tools.audit.breakout_quality import forward_robustness_portfolio_translation as forward_robustness_translation_audit
+    from tools.audit.breakout_quality import cross_period_year_regime_attribution as cross_period_audit
+    from tools.audit.sources import multi_seed_robustness as multi_seed_audit_source
 
     synthetic_execution_trade = pd.DataFrame([{
         "category": "candidate_only",
@@ -2610,6 +2615,58 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         True,
         forward_robustness_translation_audit.build_strategy_attribution_pair_payload
         is strategy_attribution_audit.build_strategy_attribution_pair_payload,
+    )
+
+    synthetic_cross_seed = {
+        "selection_pit": pd.DataFrame([
+            {"seed_order": 1, "seed": 101, "delta_direct_selection_r": -3.0, "delta_romd": -1.0, "direct_pair_exclusive_delta_r": -2.0, "selection_basis_gap_r": 1.0},
+            {"seed_order": 2, "seed": 202, "delta_direct_selection_r": -1.0, "delta_romd": -0.5, "direct_pair_exclusive_delta_r": -1.0, "selection_basis_gap_r": 0.0},
+        ]),
+        "forward_oos": pd.DataFrame([
+            {"seed_order": 1, "seed": 101, "delta_direct_selection_r": 4.0, "delta_romd": 2.0, "direct_pair_exclusive_delta_r": 3.0, "selection_basis_gap_r": -1.0},
+            {"seed_order": 2, "seed": 202, "delta_direct_selection_r": 2.0, "delta_romd": 1.0, "direct_pair_exclusive_delta_r": 2.0, "selection_basis_gap_r": 0.0},
+        ]),
+    }
+    synthetic_cross_yearly = pd.DataFrame([
+        {"phase_id": "selection_pit", "year": 2017, "direct_pair_exclusive_delta_r_mean": -5.0},
+        {"phase_id": "selection_pit", "year": 2018, "direct_pair_exclusive_delta_r_mean": 1.0},
+        {"phase_id": "forward_oos", "year": 2023, "direct_pair_exclusive_delta_r_mean": 4.0},
+        {"phase_id": "forward_oos", "year": 2024, "direct_pair_exclusive_delta_r_mean": 2.0},
+    ])
+    synthetic_cross_phase_aggregate = {
+        phase_id: cross_period_audit._phase_aggregate(
+            frame,
+            synthetic_cross_yearly[synthetic_cross_yearly["phase_id"] == phase_id],
+        )
+        for phase_id, frame in synthetic_cross_seed.items()
+    }
+    synthetic_cross_interpretation = cross_period_audit._interpretation(
+        synthetic_cross_phase_aggregate, synthetic_cross_yearly
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "cross_period_audit_is_config_driven_read_only_and_shares_one_multi_seed_source_resolver",
+        True,
+        bool(
+            cross_period_definition is not None
+            and cross_period_definition.audit_type == "robustness_cross_period_attribution"
+            and cross_period_definition.enabled
+            and dict(cross_period_definition.source).get("kind") == "multi_seed_robustness_cross_period"
+            and forward_robustness_translation_audit.resolve_two_arm_multi_seed_source
+                is multi_seed_audit_source.resolve_two_arm_multi_seed_source
+            and cross_period_audit.resolve_two_arm_multi_seed_source
+                is multi_seed_audit_source.resolve_two_arm_multi_seed_source
+            and forward_robustness_translation_audit.compact_artifacts_from_unit
+                is multi_seed_audit_source.compact_artifacts_from_unit
+            and cross_period_audit.compact_artifacts_from_unit
+                is multi_seed_audit_source.compact_artifacts_from_unit
+            and synthetic_cross_interpretation["classification"]
+                == "RANKING_EDGE_DIRECTION_REVERSAL"
+            and int(synthetic_cross_interpretation["selection_worst_year"]["year"]) == 2017
+            and synthetic_cross_interpretation["yearly_basis_note"].startswith("逐年度只使用")
+        ),
     )
     add_check(
         results,

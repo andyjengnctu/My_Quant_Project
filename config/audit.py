@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-AUDIT_SCHEMA_VERSION = 3
+AUDIT_SCHEMA_VERSION = 4
 AUDIT_OUTPUT_ROOT = "outputs/audit"
 AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
 
@@ -223,8 +223,40 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 },
                 "output_subdir": "breakout_quality/c23_c26_pit_portfolio_translation",
             },
-            "forward-robustness-portfolio-translation": {
+            "cross-period-year-regime-attribution": {
                 "enabled": True,
+                "audit_type": "robustness_cross_period_attribution",
+                "description": "MR-13A相對MR-12B在Selection PIT與Forward-OOS的same-seed ranking／trade-set edge方向翻轉與逐年度集中度歸因",
+                "source": {
+                    "kind": "multi_seed_robustness_cross_period",
+                    "phases": {
+                        "selection_pit": {
+                            "robustness_id": "selection_pit",
+                            "run": "latest",
+                            "candidate_arm_id": "C28",
+                            "comparator_arm_id": "C25",
+                        },
+                        "forward_oos": {
+                            "robustness_id": "forward_oos",
+                            "run": "latest",
+                            "candidate_arm_id": "C29",
+                            "comparator_arm_id": "C20",
+                        },
+                    },
+                },
+                "dimensions": {
+                    "year_bucket": True,
+                },
+                "outcomes": {
+                    "same_seed_cross_period_direction": True,
+                    "yearly_direct_pair_trade_set": True,
+                    "yearly_return_translation": True,
+                    "all_seed_required": True,
+                },
+                "output_subdir": "breakout_quality/cross_period_year_regime_attribution",
+            },
+            "forward-robustness-portfolio-translation": {
+                "enabled": False,
                 "audit_type": "robustness_portfolio_translation",
                 "description": "Forward-OOS multi-seed ranking edge到trade-set、risk-dollar sizing、slot occupancy與wealth path的全seed轉化歸因",
                 "source": {
