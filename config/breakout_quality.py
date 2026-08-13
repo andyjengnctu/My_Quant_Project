@@ -54,6 +54,14 @@ BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_fu
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 
+# Daily-universal model Gate：只在各profile已通過Forward Model Gate後加入。
+# 此清單只控制模型研究選單的batch Selection PIT驗證，不改Strategy workflow/runtime source。
+BREAKOUT_QUALITY_CONTINUOUS_RANKER_PIT_GATE_PROFILES = (
+    ("MR-13C", "daily_universal_no_time_percentile_mse"),
+    ("MR-13D", "daily_universal_no_time_upper_tail_pairwise"),
+    ("MR-13E", "daily_universal_no_time_full_list_ndcg_pairwise"),
+)
+
 
 # =============================================================================
 # 1. Active model identity and runtime decision defaults
@@ -1547,6 +1555,79 @@ def get_breakout_quality_workflow_settings(
     )
 
 
+@dataclass(frozen=True)
+class BreakoutQualityContinuousRankerPITGateSettings:
+    model_profiles: tuple[tuple[str, str], ...]
+    seed: int
+    point_in_time_score_start_date: str
+    point_in_time_score_end_date: str | None
+    point_in_time_fold_months: int
+    point_in_time_inner_validation_months: int
+
+    def __post_init__(self) -> None:
+        if len(self.model_profiles) < 2:
+            raise ValueError("PIT Gate batch至少需要兩個model profile")
+        seen_ids: set[str] = set()
+        seen_profiles: set[str] = set()
+        reference = None
+        for model_id, profile_name in self.model_profiles:
+            model_id = str(model_id).strip()
+            profile_name = normalize_breakout_quality_experiment_profile(profile_name)
+            if not model_id or model_id in seen_ids:
+                raise ValueError(f"PIT Gate model ID空白或重複: {model_id!r}")
+            if profile_name in seen_profiles:
+                raise ValueError(f"PIT Gate experiment profile重複: {profile_name}")
+            seen_ids.add(model_id)
+            seen_profiles.add(profile_name)
+            spec = get_continuous_ranker_research_spec(profile_name)
+            if spec.model_research_id != model_id:
+                raise ValueError(
+                    "PIT Gate model ID/profile research identity不一致: "
+                    f"{model_id} != {spec.model_research_id}"
+                )
+            workflow = get_breakout_quality_workflow_settings(experiment_profile=profile_name)
+            if not workflow.supports_point_in_time_scores:
+                raise ValueError(f"PIT Gate profile尚未啟用PIT: {profile_name}")
+            contract = (
+                workflow.filter_id,
+                workflow.model_architecture,
+                workflow.continuous_target_id,
+                workflow.training_sample_scope,
+                workflow.seed,
+                workflow.point_in_time_score_start_date,
+                workflow.point_in_time_score_end_date,
+                workflow.point_in_time_fold_months,
+                workflow.point_in_time_inner_validation_months,
+            )
+            if reference is None:
+                reference = contract
+            elif contract != reference:
+                raise ValueError(
+                    "PIT Gate profiles的Dataset/Target/Seed/period/fold contract不一致"
+                )
+
+
+def get_breakout_quality_continuous_ranker_pit_gate_settings(
+) -> BreakoutQualityContinuousRankerPITGateSettings:
+    return BreakoutQualityContinuousRankerPITGateSettings(
+        model_profiles=tuple(
+            (str(model_id), str(profile_name))
+            for model_id, profile_name in BREAKOUT_QUALITY_CONTINUOUS_RANKER_PIT_GATE_PROFILES
+        ),
+        seed=resolve_breakout_quality_random_seed(),
+        point_in_time_score_start_date=str(BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE),
+        point_in_time_score_end_date=(
+            None
+            if BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE is None
+            else str(BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE)
+        ),
+        point_in_time_fold_months=int(BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_MONTHS),
+        point_in_time_inner_validation_months=int(
+            BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS
+        ),
+    )
+
+
 def get_breakout_quality_model_research_settings() -> BreakoutQualityWorkflowSettings:
     """Return the active model-research identity without changing strategy defaults."""
 
@@ -1569,6 +1650,7 @@ __all__ = [
     'BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE',
     'BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM',
     'BREAKOUT_QUALITY_RANDOM_SEED',
+    'BREAKOUT_QUALITY_CONTINUOUS_RANKER_PIT_GATE_PROFILES',
     'BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD',
     'BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY',
     'BREAKOUT_QUALITY_FINAL_REFIT_MODE',
@@ -1725,5 +1807,7 @@ __all__ = [
     'WORKFLOW_STRATEGY_MODE_SCORE_RANKING',
     'get_breakout_quality_continuous_ranker_comparison_settings',
     'get_breakout_quality_workflow_settings',
+    'BreakoutQualityContinuousRankerPITGateSettings',
+    'get_breakout_quality_continuous_ranker_pit_gate_settings',
     'get_breakout_quality_model_research_settings',
 ]

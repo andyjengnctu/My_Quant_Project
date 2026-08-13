@@ -8641,3 +8641,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 實作重用既有profile-driven Daily trainer與`_pairwise_logistic_loss()`，新增research reduction identity=`full_list_delta_ndcg_weighted`，不新增architecture、Target或MR-specific trainer。
 - Model Research Active Profile切至`daily_universal_no_time_full_list_ndcg_pairwise`；Strategy workflow仍固定MR-12B runtime anchor。尚未建立`DL-CONT13E`、PIT source或任何`SR-C*`。
 - 狀態：`IMPLEMENTED / AWAITING_FORWARD_MODEL_GATE / NO_RUNTIME_DL_SOURCE`。下一步先跑Seed42 Forward Model Gate；若13E保有實質ranking signal，再把MR-13C／MR-13D／MR-13E放入完全相同的Selection PIT period/fold contract一次比較。13E若像13B明確失效，則不進PIT。
+
+## 2026-08-13 — MR-13E Forward Model Gate結果與13C/13D/13E Selection PIT batch
+
+- 本輪結果基準：`test-branch-1_20260813_200804_5faabbe.zip`；SHA256 `3f8072aacae27a4bbe17da286bb995aec67d61f99807551781c2b8ae830eac6a`
+- MR-13E Seed42完成Forward Model Gate：selected epoch=`1`；all-stock OOS daily/global rho=`0.2151/0.1042`、pair=`57.42%`、Top10%-Bottom10% target spread=`+0.8234R`、Top-K Lift=`+0.9951R`、Boundary gap=`+0.0376R`；breakout-candidate OOS daily/global rho=`0.1721/0.1535`、pair=`57.43%`、Top10%-Bottom10% target spread=`+1.4294R`、Top-K Lift=`+0.4489R`、Boundary gap=`+0.1961R`。
+- 相較MR-13C，13E all-stock daily rho `+0.0274`、Top-K Lift `+0.6081R`；相較MR-13D，daily rho `+0.0461`、Top-K Lift `+0.1965R`。相較MR-13A，daily rho `+0.0396`、pair `+1.30pp`、breakout daily rho `+0.0231`、breakout Top-K Lift `+0.0433R`，但all-stock global rho與Boundary gap仍較低。因此13E不是Forward全面dominance，但為目前13系列最均衡候選。
+- 判定：`RESULT_AVAILABLE / FORWARD_OOS_MODEL_GATE_PASS / SELECTION_PIT_MODEL_GATE_AUTHORIZED / NO_RUNTIME_DL_SOURCE`。不得因單一Seed42 Forward結果建立`DL-CONT13E`或策略arm；下一步與已通過Forward Gate的MR-13C、MR-13D一起做Selection PIT Model Gate，直接檢查MR-13A曾出現的Selection↔Forward方向反轉是否改善。
+- 新增config-driven PIT Gate batch：`MR-13C / MR-13D / MR-13E`必須使用同一filter、architecture、daily Target、sample scope、Seed、PIT start/end、fold months與inner-validation months。選單一次確認後依序呼叫canonical `build-point-in-time-scores`與`audit-point-in-time-scores`；三模型各自獨立model/PIT工件，不共享weights。
+- Batch結果只並列canonical audit的All Daily rho／Global rho／Pair／Top-K Lift／Boundary gap與breakout diagnostic；不建立人工加權總分、不依結果挑seed、不回流training semantics。PIT結果前runtime anchor仍為`MR-12B / DL-CONT12B`。
+

@@ -6,6 +6,7 @@ import argparse
 from contextlib import contextmanager
 import importlib
 import json
+import math
 import os
 import sys
 import time
@@ -22,6 +23,7 @@ from config.breakout_quality import (
     SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
     get_breakout_quality_continuous_ranker_comparison_settings,
     get_breakout_quality_experiment_profile,
+    get_continuous_ranker_research_spec,
 )
 from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
@@ -30,6 +32,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS,
 )
 from config.breakout_quality import (
+    get_breakout_quality_continuous_ranker_pit_gate_settings,
     get_breakout_quality_model_research_settings,
     get_breakout_quality_workflow_settings,
 )
@@ -83,6 +86,7 @@ from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+    derive_point_in_time_model_validation_gate,
     load_continuous_ranker_oos_contract,
     resolve_continuous_ranker_oos_score_path,
 )
@@ -2325,6 +2329,34 @@ def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
         True,
     ):
         return 0
+    spec = get_continuous_ranker_research_spec(settings.experiment_profile)
+    return _run_continuous_pit_profile(
+        program_name,
+        model_id=spec.model_research_id,
+        profile_name=settings.experiment_profile,
+    )
+
+
+
+def _continuous_pit_gate_batch_for_active(settings):
+    gate = get_breakout_quality_continuous_ranker_pit_gate_settings()
+    profiles = tuple(profile for _model_id, profile in gate.model_profiles)
+    return gate if settings.experiment_profile in profiles else None
+
+
+def _run_continuous_pit_profile(
+    program_name: str,
+    *,
+    model_id: str,
+    profile_name: str,
+) -> int:
+    settings = get_breakout_quality_workflow_settings(experiment_profile=profile_name)
+    print(
+        "\n"
+        + render_title(
+            f"Selection PIT Model Gate | {model_id} | {settings.experiment_profile}"
+        )
+    )
     code = _prepare_continuous_research_inputs(program_name, settings)
     if code != 0:
         return int(code)
@@ -2357,6 +2389,116 @@ def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
                 program_name=program_name,
             )
         )
+
+
+def _fmt_pit_metric(value, *, percent: bool = False) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if not math.isfinite(number):
+        return "-"
+    return f"{number * 100:.2f}%" if percent else f"{number:.4f}"
+
+
+def _render_continuous_pit_gate_comparison(model_profiles) -> None:
+    rows = []
+    for model_id, profile_name in model_profiles:
+        settings = get_breakout_quality_workflow_settings(
+            experiment_profile=profile_name
+        )
+        audit_path = resolve_selection_point_in_time_audit_json_path(
+            PROJECT_ROOT,
+            settings.filter_id,
+            settings.model_architecture,
+            settings.experiment_profile,
+        )
+        if not audit_path.is_file():
+            rows.append((model_id, "MISSING", "-", "-", "-", "-", "-", "-", "-"))
+            continue
+        payload = json.loads(audit_path.read_text(encoding="utf-8"))
+        gate = derive_point_in_time_model_validation_gate(payload)
+        metrics = dict(payload.get("metrics") or {})
+        primary_scope = str(gate.get("primary_metric_scope") or "all_valid_target")
+        primary = dict(metrics.get(primary_scope) or {})
+        breakout = dict(metrics.get("breakout_candidate_target") or {})
+        topk = dict(primary.get("top_k_quality") or {})
+        breakout_topk = dict(breakout.get("top_k_quality") or {})
+        rows.append(
+            (
+                model_id,
+                str(gate.get("status") or "-"),
+                _fmt_pit_metric(primary.get("mean_daily_spearman")),
+                _fmt_pit_metric(primary.get("global_spearman")),
+                _fmt_pit_metric(primary.get("pairwise_concordance"), percent=True),
+                _fmt_pit_metric(topk.get("top_k_raw_target_lift")),
+                _fmt_pit_metric(topk.get("boundary_raw_target_gap")),
+                _fmt_pit_metric(breakout.get("mean_daily_spearman")),
+                _fmt_pit_metric(breakout_topk.get("top_k_raw_target_lift")),
+            )
+        )
+    print("\n" + render_title("Selection PIT Model Gate Comparison"))
+    print(
+        render_table(
+            (
+                "Model",
+                "Gate",
+                "All Daily rho",
+                "All Global rho",
+                "All Pair",
+                "All Top-K Lift",
+                "All Boundary gap",
+                "Breakout Daily rho",
+                "Breakout Top-K Lift",
+            ),
+            rows,
+        )
+    )
+    print("比較表只並列canonical PIT audit原始指標；不建立加權總分、不挑seed。")
+
+
+def _interactive_continuous_pit_gate_batch(program_name: str, gate) -> int:
+    print("\n" + render_title("Selection PIT Model Gate Batch"))
+    reference = get_breakout_quality_workflow_settings(
+        experiment_profile=gate.model_profiles[0][1]
+    )
+    print(
+        render_key_values(
+            (
+                ("Models", ", ".join(model_id for model_id, _ in gate.model_profiles)),
+                ("Seed", gate.seed),
+                (
+                    "PIT period",
+                    f"{'auto（最早合法）' if str(gate.point_in_time_score_start_date).lower() == 'auto' else gate.point_in_time_score_start_date} ～ "
+                    f"{gate.point_in_time_score_end_date or 'Selection end'}",
+                ),
+                (
+                    "Fold／Validation",
+                    f"{gate.point_in_time_fold_months}／"
+                    f"{gate.point_in_time_inner_validation_months} months",
+                ),
+                ("Target", reference.continuous_target_id),
+                ("Sample scope", reference.training_sample_scope),
+                ("Architecture", reference.model_architecture),
+            )
+        )
+    )
+    print("三個profile各自獨立訓練／PIT工件；共用同一Dataset、Target、Seed、period與fold contract。")
+    if not _prompt_bool("確認依序執行全部PIT Model Gate", True):
+        return 0
+    total = len(gate.model_profiles)
+    for index, (model_id, profile_name) in enumerate(gate.model_profiles, start=1):
+        print(f"\n[{index}/{total}] {model_id}")
+        code = _run_continuous_pit_profile(
+            program_name,
+            model_id=model_id,
+            profile_name=profile_name,
+        )
+        if code != 0:
+            print(f"[FAILED] {model_id} PIT Model Gate停止；修正後可由同一入口resume。")
+            return int(code)
+    _render_continuous_pit_gate_comparison(gate.model_profiles)
+    return 0
 
 
 def _prepare_strategy_compare_model_upstream(
@@ -2661,8 +2803,18 @@ def _interactive_model_research(program_name: str) -> int:
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
         print(render_menu_item(1, "訓練目前模型 → forward-OOS模型報表", default=True))
+        pit_gate_batch = (
+            _continuous_pit_gate_batch_for_active(settings)
+            if settings.supports_point_in_time_scores
+            else None
+        )
         if settings.supports_point_in_time_scores:
-            print(render_menu_item(2, "建立／更新 Selection PIT Scores → PIT模型驗證"))
+            pit_label = (
+                "建立／更新設定中的 Selection PIT Scores → PIT模型比較"
+                if pit_gate_batch is not None
+                else "建立／更新 Selection PIT Scores → PIT模型驗證"
+            )
+            print(render_menu_item(2, pit_label))
         print(render_menu_item(3, "查看目前Workflow與工件狀態"))
         if comparison_settings.enabled:
             print(render_menu_item(4, comparison_settings.menu_label))
@@ -2681,6 +2833,10 @@ def _interactive_model_research(program_name: str) -> int:
         if choice == "1":
             return _interactive_continuous_full_train(program_name, settings)
         if choice == "2" and settings.supports_point_in_time_scores:
+            if pit_gate_batch is not None:
+                return _interactive_continuous_pit_gate_batch(
+                    program_name, pit_gate_batch
+                )
             return _interactive_continuous_pit_validation(program_name, settings)
         if choice == "3":
             _print_workflow_status(settings)
