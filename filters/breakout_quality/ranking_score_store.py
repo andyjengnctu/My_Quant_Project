@@ -442,11 +442,21 @@ def load_selection_point_in_time_ranking_contract(
     )
 
 
-def load_selection_point_in_time_score_table_from_path(
+def _selection_pit_file_cache_signature(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return int(stat.st_mtime_ns), int(stat.st_size)
+
+
+@lru_cache(maxsize=4)
+def _load_selection_point_in_time_score_table_from_path_cached(
     score_path: str,
-    *,
-    manifest_path: str | None = None,
+    manifest_path: str | None,
+    score_signature: tuple[int, int],
+    manifest_signature: tuple[int, int] | None,
 ) -> pd.DataFrame:
+    # Signatures are part of the cache key so an in-place rebuilt artifact cannot
+    # reuse a stale DataFrame.  The values themselves are intentionally unused.
+    del score_signature, manifest_signature
     path = Path(score_path).resolve()
     if not path.is_file():
         raise FileNotFoundError(f"找不到Selection PIT score: {path}")
@@ -499,6 +509,34 @@ def load_selection_point_in_time_score_table_from_path(
     indexed.attrs["available_from"] = available_from or str(table["date"].min())
     indexed.attrs["available_through"] = available_through or str(table["date"].max())
     return indexed
+
+
+def load_selection_point_in_time_score_table_from_path(
+    score_path: str,
+    *,
+    manifest_path: str | None = None,
+) -> pd.DataFrame:
+    """Load one PIT score table once per immutable file revision.
+
+    Isolated multi-seed replay supplies a score-path override and may perform
+    thousands of candidate lookups against the same table.  Keying the cache by
+    path *and* file stat signature keeps those lookups O(index lookup) instead of
+    reparsing the entire CSV for every candidate, while still invalidating a file
+    that is rebuilt in place during resume/recovery.
+    """
+
+    score = Path(score_path).resolve()
+    if not score.is_file():
+        raise FileNotFoundError(f"找不到Selection PIT score: {score}")
+    manifest = None if manifest_path in (None, "") else Path(str(manifest_path)).resolve()
+    if manifest is not None and not manifest.is_file():
+        raise FileNotFoundError(f"找不到Selection PIT manifest: {manifest}")
+    return _load_selection_point_in_time_score_table_from_path_cached(
+        str(score),
+        None if manifest is None else str(manifest),
+        _selection_pit_file_cache_signature(score),
+        None if manifest is None else _selection_pit_file_cache_signature(manifest),
+    )
 
 
 @lru_cache(maxsize=16)

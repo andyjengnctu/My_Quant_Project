@@ -1233,6 +1233,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     from tools.filters.breakout_quality import train_continuous_ranker as ranker_train_module
     from filters.breakout_quality.ranking_score_store import (
+        load_selection_point_in_time_score_table_from_path,
         lookup_continuous_ranker_oos_candidate_score,
     )
 
@@ -1274,6 +1275,49 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and math.isclose(float(isolated_lookup["score"]), 0.77)
         and isolated_lookup["available"]
         and isolated_lookup["continuous_target_id"] == "daily_opportunity_no_time_r_v1",
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pit_root = Path(tmp)
+        pit_score = pit_root / "selection_point_in_time_scores.csv"
+        pit_manifest = pit_root / "selection_point_in_time_manifest.json"
+
+        def _write_pit_score(score_value: float) -> None:
+            pd.DataFrame([{
+                "ticker": "2330",
+                "date": "2020-01-02",
+                "group_index": 1,
+                "breakout_quality_score": score_value,
+                "fold_id": "F1",
+                "model_information_cutoff": "2019-12-31",
+            }]).to_csv(pit_score, index=False)
+            pit_manifest.write_text(json.dumps({
+                "score_period": {"start": "2020-01-02", "end": "2020-01-02"},
+                "coverage": {"scored_group_count": 1},
+            }), encoding="utf-8")
+
+        _write_pit_score(0.70)
+        pit_first = load_selection_point_in_time_score_table_from_path(
+            str(pit_score), manifest_path=str(pit_manifest)
+        )
+        pit_second = load_selection_point_in_time_score_table_from_path(
+            str(pit_score), manifest_path=str(pit_manifest)
+        )
+        _write_pit_score(0.812345)
+        pit_rebuilt = load_selection_point_in_time_score_table_from_path(
+            str(pit_score), manifest_path=str(pit_manifest)
+        )
+
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "isolated_selection_pit_lookup_caches_same_file_revision_and_invalidates_rebuild",
+        True,
+        pit_first is pit_second
+        and pit_rebuilt is not pit_first
+        and math.isclose(
+            float(pit_rebuilt.loc[("2330", "2020-01-02"), "breakout_quality_score"]),
+            0.812345,
+        ),
     )
 
     from filters.breakout_quality.strategy_compare_engine import (
