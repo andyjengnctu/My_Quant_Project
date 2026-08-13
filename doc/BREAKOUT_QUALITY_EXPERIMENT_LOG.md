@@ -8574,3 +8574,25 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 唯一scientific change：同日RankNet non-tied pair的logistic loss以`abs(daily target percentile差)`作權重；每個日期內以pair-weight sum正規化，若同一logical batch含多個rankable dates則取其day loss mean。沒有固定target-gap threshold、沒有candidate/breakout membership、沒有strategy feature，因此仍保持strategy-agnostic Daily Score。
 - 舊`equal_pair_weight`為default且MR-12B／MR-13A顯式維持；新reduction identity=`target_gap_weighted_within_date`只由MR-13B research spec啟用。Artifact/report透過既有`pairwise_reduction`欄位明示，不新增architecture version。
 - 目前只建立model research profile，不建立`DL-CONT13B`／PIT source／`SR-C*`。先由正式`Research → 模型訓練`執行MR-13B單模型Gate；結果前狀態固定`IMPLEMENTED / AWAITING_MODEL_GATE / NO_RUNTIME_DL_SOURCE`。若模型Gate不支持，不進PIT／Strategy；若支持，再依既有MR-13A路徑建立PIT與跨period robustness。
+
+## 2026-08-13 — MR-13B Forward Model Gate：Target-gap weighting明確失敗，停止於模型層
+
+- 本機正式模型結果來源：`test-branch-1_20260813_170038_f694db6.zip`；SHA256 `ec3405bbe3ab896f90a0eb050446027ca9687223ab5aa75cd4571491588709b3`
+- Profile=`daily_universal_no_time_pairwise_gap_weighted`；MR=`MR-13B`；sample scope=`daily_eligible_stock_days`；Target=`daily_opportunity_no_time_r_v1`；Architecture=`inception_time_v1`；Seed=`42`。MR-13A的Dataset／Target／300×10 input／optimizer／inner-validation／selected-epoch final refit與`mean_daily_spearman`選模全部固定，唯一scientific change仍是同日RankNet pair依daily percentile target gap加權。
+- Epoch選擇：Validation daily rho由epoch1=`0.0744`升到epoch2=`0.0771`後，epoch3降到`0.0364`；selected epoch=`2`。完整Selection refit固定2 epochs。重訓後原Validation rho=`0.2840`因原Validation rows已進final refit，只作描述，不是獨立泛化證據。
+- Forward all-stock OOS：groups=`608,204`；daily rho=`0.0303`、global rho=`-0.0089`、pair=`51.02%`；Top10% Target=`1.0155R`、Bottom10%=`1.0074R`，spread只剩`+0.0081R`；NDCG@10=`0.5293`、Top-K Target=`1.0386R`、Lift=`+0.0368R`、Oracle overlap=`1.89%`、Boundary=`50.08%`、Boundary gap=`-0.0039R`。
+- Breakout-candidate OOS：groups=`17,346`；daily rho=`0.0091`、global rho=`-0.0160`、pair=`51.34%`；Top10% Target=`1.1692R`、Bottom10%=`1.2242R`，spread反轉為`-0.0550R`；NDCG@10=`0.6568`、Top-K Target=`1.2616R`、Lift=`+0.0474R`、Oracle overlap=`54.31%`、Boundary=`51.18%`、Boundary gap=`+0.0491R`。
+- 與MR-13A同口徑Forward模型結果比較：MR-13A all-stock daily/global rho=`0.1755/0.1761`、pair=`56.12%`、Top-bottom spread=`+1.3415R`、Top-K Lift=`+1.0357R`；breakout daily/global rho=`0.1490/0.1894`、pair=`56.91%`、Top-bottom spread=`+1.8052R`、Top-K Lift=`+0.4056R`。MR-13B在主要排序證據全面大幅退步，因此不是「略遜」而是Forward model Gate明確失敗。
+- 判定：`MR-13B = RESULT_AVAILABLE / REJECTED_AT_FORWARD_MODEL_GATE / NO_PIT / NO_RUNTIME_DL_SOURCE`。不得建立Selection PIT scores、`DL-CONT13B`或策略arms，也不做gap threshold／gap exponent／weight floor等同機制微調，避免沿已失敗的target-gap weighting方向追參數。
+- 機制解讀：weighted RankNet讓訓練loss快速下降，但沒有把跨期排序帶到Forward；這與「大量近似pair稀釋 supervision」假說不一致。更合理的是extreme target-distance pairs提高了period-specific／tail ordering的擬合，造成Validation弱、OOS接近隨機且candidate top-bottom反轉。
+- 下一個單一變更候選：保留Daily Universal sample、同一strategy-agnostic target與architecture，改為**直接回歸同日daily target percentile的MSE**，也就是Daily Universal Percentile Regression。此objective已存在continuous-ranker canonical training API，可避免O(n²) pair weighting與pair-gap設計，並讓model score直接逼近0～1 cross-sectional opportunity percentile。若正式開始，應建立新的獨立`MR-13C`；在使用者確認前不先建立profile或runtime source。
+
+
+## 2026-08-13 — MR-13C實作：Daily Universal Percentile Regression
+
+- 程式基準：`test-branch-1_20260813_170038_f694db6.zip`；SHA256 `ec3405bbe3ab896f90a0eb050446027ca9687223ab5aa75cd4571491588709b3`，並先同步上一輪MR-13B Forward Model Gate結果文件。MR-13B已明確淘汰於Forward model Gate，不進PIT／runtime；Daily Score仍維持長期strategy-agnostic共同模型主線。
+- 新增`MR-13C / PROFILE-daily_universal_no_time_percentile_mse`。固定MR-13A的sample universe=`daily_eligible_stock_days`、Target=`daily_opportunity_no_time_r_v1`、300×10 stock+0050 input、`ARCH-inception_time_v1`、Adam/LR/weight decay、inner validation、selected-epoch final refit與`mean_daily_spearman` epoch selection。
+- 唯一scientific change：training objective由MR-13A的same-date RankNet pairwise logistic改為**直接回歸同日daily target percentile的MSE**。模型runtime score仍為PASS softmax probability，範圍0～1，直接逼近cross-sectional opportunity percentile；沒有新增breakout candidate membership、strategy feature、target transform、gap threshold、architecture或runtime fusion。
+- 實作刻意重用既有continuous-ranker canonical `TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION`與MSE code path；`train_daily_ranker.py`仍為profile-driven daily-universal orchestrator，不新增MR-13C專用trainer／loss implementation。Research spec只新增MR identity、objective描述與同一`daily_opportunity_rank` score semantic，`pairwise_reduction=None`。
+- Model Research Active Profile切換為`daily_universal_no_time_percentile_mse`；Strategy workflow仍固定`strategy_aligned_no_time_all_event_pairwise / MR-12B`，因此本批不影響目前runtime anchor。尚未建立`DL-CONT13C`、PIT source或任何`SR-C*` strategy arm。
+- 狀態：`IMPLEMENTED / AWAITING_MODEL_GATE / NO_RUNTIME_DL_SOURCE`。下一步只由`Research → 模型訓練`執行MR-13C Forward Model Gate；若Forward model ranking不支持，直接停止於模型層；若支持，再建立Selection PIT與跨period證據，不提前跑strategy／multi-seed。

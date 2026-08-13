@@ -19,6 +19,7 @@ from .synthetic_breakout_quality_support import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
     DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE,
+    DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE,
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
     get_continuous_ranker_research_spec,
     STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
@@ -2331,6 +2332,119 @@ def validate_breakout_quality_daily_gap_weighted_ranker_contract_case(_base_para
     return results, summary
 
 
+def validate_breakout_quality_daily_percentile_regression_contract_case(_base_params):
+    """Pin MR-13C as the Daily Universal percentile-regression controlled experiment."""
+
+    case_id = "BREAKOUT_QUALITY_DAILY_PERCENTILE_REGRESSION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+    )
+    from tools.filters.breakout_quality.train_continuous_ranker import (
+        parse_args as parse_continuous_ranker_args,
+    )
+
+    profile_a = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+    )
+    profile_c = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE
+    )
+    spec_a = get_continuous_ranker_research_spec(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+    )
+    spec_c = get_continuous_ranker_research_spec(
+        DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE
+    )
+
+    fixed_fields = (
+        "optimizer_name",
+        "training_sampling_mode",
+        "continuous_target_id",
+        "epoch_selection_metric",
+        "training_label_scope",
+        "training_sample_scope",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13c_keeps_mr13a_daily_universe_target_optimizer_and_epoch_metric",
+        tuple(getattr(profile_a, field) for field in fixed_fields),
+        tuple(getattr(profile_c, field) for field in fixed_fields),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13c_changes_objective_from_pairwise_to_percentile_mse_only",
+        (
+            TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+            "pairwise_logistic",
+            TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+            "mse",
+        ),
+        (
+            profile_a.training_objective,
+            profile_a.loss_name,
+            profile_c.training_objective,
+            profile_c.loss_name,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13c_research_identity_uses_daily_trainer_and_same_score_semantic",
+        (
+            "MR-13C",
+            spec_a.trainer_family,
+            spec_a.score_semantic_id,
+            None,
+        ),
+        (
+            spec_c.model_research_id,
+            spec_c.trainer_family,
+            spec_c.score_semantic_id,
+            spec_c.pairwise_reduction,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13c_is_active_model_research_without_changing_strategy_workflow_anchor",
+        (
+            DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE,
+            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        ),
+    )
+
+    args = parse_continuous_ranker_args(
+        ["--experiment-profile", DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE]
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13c_uses_existing_profile_driven_continuous_ranker_cli",
+        DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE,
+        args.experiment_profile,
+    )
+
+    summary["profile"] = DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE
+    summary["model_research_id"] = spec_c.model_research_id
+    return results, summary
+
+
 def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_params):
     """Pin the profile-driven continuous-ranker boundary before adding new Daily MR variants."""
 
@@ -2345,6 +2459,7 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
         CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
         DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE,
+        DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE,
         STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
         SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
         SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,

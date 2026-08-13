@@ -42,11 +42,12 @@ from config.execution_policy import (
 # - MR-12C all-event ListNet top-one listwise ranker: "strategy_aligned_no_time_all_event_listwise"
 # - MR-13A daily-universal equal-pair ranker: "daily_universal_no_time_pairwise"
 # - MR-13B daily-universal target-gap-weighted pairwise ranker: "daily_universal_no_time_pairwise_gap_weighted"
+# - MR-13C daily-universal percentile regression: "daily_universal_no_time_percentile_mse"
 # Strategy workflow remains on the latest validated deployable/PIT-capable anchor.
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_pairwise_gap_weighted"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_percentile_mse"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42
@@ -252,6 +253,7 @@ STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE = "strategy_aligned_no_time_
 STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE = "strategy_aligned_no_time_all_event_listwise"
 DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE = "daily_universal_no_time_pairwise"
 DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE = "daily_universal_no_time_pairwise_gap_weighted"
+DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE = "daily_universal_no_time_percentile_mse"
 
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 
@@ -758,6 +760,17 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     ),
+    DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+        continuous_target_id="daily_opportunity_no_time_r_v1",
+        loss_name="mse",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    ),
 }
 
 SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES = tuple(_EXPERIMENT_PROFILES)
@@ -951,6 +964,17 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days",
         score_semantic_id="daily_opportunity_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+    ),
+    DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE,
+        model_research_id="MR-13C",
+        experiment_name="MR-13C Daily Universal Percentile Regression",
+        phase="13C",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="same_date_all_stock_percentile_of_daily_opportunity_no_time_r_v1",
+        objective_description="同日全部合法stock-day No-time opportunity target percentile的MSE",
+        metric_scope="all_stock_days",
+        score_semantic_id="daily_opportunity_rank",
     ),
 }
 
@@ -1595,6 +1619,7 @@ __all__ = [
     'SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLE_SCOPES',
     'DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE',
+    'DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE',
     'ContinuousRankerResearchSpec',
     'CONTINUOUS_RANKER_TRAINER_EVENT',
     'CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL',
