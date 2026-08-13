@@ -1096,6 +1096,8 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     model_dir = Path(job["model_dir"]).resolve()
     research_dir = Path(job["research_dir"]).resolve()
     train_log_path = research_dir / "train.log"
+    dl = settings.dl_sources[str(arm.dl_id)]
+    is_selection_pit = str(dl.score_source) == "selection_point_in_time"
     started = time.perf_counter()
     artifacts = None
     if bool(job.get("reuse_completed")) and model_dir.is_dir() and research_dir.is_dir():
@@ -1118,9 +1120,24 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
             "wall_elapsed_sec": round(time.perf_counter() - started, 3),
         }
 
-    shutil.rmtree(model_dir, ignore_errors=True)
+    if is_selection_pit:
+        # PIT builder本身具備fold-level resume；完整seed尚未完成時只清除top-level
+        # aggregate工件，保留已完成fold checkpoint/score，避免中斷後把合法partial
+        # folds全部刪掉而從fold 1重訓。
+        model_dir.mkdir(parents=True, exist_ok=True)
+        for filename in (
+            SELECTION_POINT_IN_TIME_SCORE_FILENAME,
+            SELECTION_POINT_IN_TIME_COVERAGE_FILENAME,
+            SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+        ):
+            try:
+                (model_dir / filename).unlink()
+            except FileNotFoundError:
+                pass
+    else:
+        shutil.rmtree(model_dir, ignore_errors=True)
+        model_dir.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(research_dir, ignore_errors=True)
-    model_dir.mkdir(parents=True, exist_ok=True)
     research_dir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["BREAKOUT_QUALITY_COMPACT_CONSOLE"] = "1"
@@ -1216,6 +1233,43 @@ def _format_elapsed(seconds: float) -> str:
     hours, rem = divmod(total, 3600)
     minutes, sec = divmod(rem, 60)
     return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+
+
+def _pit_saved_fold_progress(meta: dict[str, Any]) -> tuple[int, int] | None:
+    arm: StrategyComparisonArm = meta["arm"]
+    settings = meta["settings"]
+    dl = settings.dl_sources[str(arm.dl_id)]
+    if str(dl.score_source) != "selection_point_in_time":
+        return None
+    workflow = get_breakout_quality_workflow_settings(
+        experiment_profile=str(dl.experiment_profile)
+    )
+    expected = _pit_fold_count_for_period(
+        str(meta["comparison_start"]),
+        str(meta["comparison_end"]),
+        int(workflow.point_in_time_fold_months),
+    )
+    folds_root = Path(str(meta["model_dir"])).resolve() / "folds"
+    if not folds_root.is_dir():
+        return 0, expected
+    saved = sum(
+        1
+        for path in folds_root.iterdir()
+        if path.is_dir() and (path / MANIFEST_FILENAME).is_file()
+    )
+    return min(saved, expected), expected
+
+
+def _training_progress_label(meta: dict[str, Any], *, now: float, seed_count: int) -> str:
+    label = (
+        f"seed {meta['seed_order']}/{seed_count} {meta['arm'].name} "
+        f"{_format_elapsed(now-float(meta['submitted_at']))}"
+    )
+    pit_progress = _pit_saved_fold_progress(meta)
+    if pit_progress is not None:
+        saved, expected = pit_progress
+        label += f" [PIT saved folds={saved}/{expected}]"
+    return label
 
 
 def _normalize_yearly_rows(
@@ -1379,6 +1433,10 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         selection_pit_manifest_path_override=(str(job["score_manifest_path"]) if is_selection else None),
         selection_pit_expected_seed_override=(int(job["seed"]) if is_selection else None),
         capture_execution_diagnostics=bool(job.get("keep_attribution_source")),
+        # Multi-seed robustness只需要策略績效、trade-set與compact attribution。
+        # Selection future-target join是post-replay離線診斷；daily-universal profile
+        # 會重建完整daily stock-day target universe，不能在每個seed replay重做。
+        capture_selection_target_diagnostics=False,
     )
     metrics = dict(payload.get("score_ranking") or {})
     metrics["direct_selection_r"] = _load_direct_selection_r(
@@ -2157,16 +2215,21 @@ def _manifest_progress_payload(
         _unit_key(arm_id, seed) for arm_id, seed in completed
     )
     payload["current_training"] = current_training
-    payload["active_trainings"] = [
-        {
+    active_trainings = []
+    for meta in (training_futures or {}).values():
+        item = {
             "arm_id": str(meta["arm"].arm_id),
             "name": str(meta["arm"].name),
             "seed": int(meta["seed"]),
             "seed_order": int(meta["seed_order"]),
             "arm_order": int(meta["arm_order"]),
         }
-        for meta in (training_futures or {}).values()
-    ]
+        pit_progress = _pit_saved_fold_progress(meta)
+        if pit_progress is not None:
+            item["pit_saved_folds"] = int(pit_progress[0])
+            item["pit_expected_folds"] = int(pit_progress[1])
+        active_trainings.append(item)
+    payload["active_trainings"] = active_trainings
     payload["active_replays"] = [
         {
             "arm_id": str(meta["arm_id"]),
@@ -2514,6 +2577,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
     def submit_ready_replays() -> None:
         while ready_replays and len(replay_futures) < int(cfg.cpu_replay_workers):
             replay_job, meta = ready_replays.popleft()
+            meta["submitted_at"] = time.perf_counter()
             future = replay_executor.submit(_replay_one_unit, replay_job)
             replay_futures[future] = meta
             progress_update(
@@ -2614,17 +2678,30 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             submit_ready_replays()
             submit_trainings()
             now = time.perf_counter()
-            if now >= next_print and training_futures:
-                labels = ", ".join(
-                    f"seed {meta['seed_order']}/{len(seeds)} {meta['arm'].name} "
-                    f"{_format_elapsed(now-float(meta['submitted_at']))}"
+            if now >= next_print and (training_futures or replay_futures or ready_replays):
+                training_labels = ", ".join(
+                    _training_progress_label(meta, now=now, seed_count=len(seeds))
                     for meta in training_futures.values()
                 )
+                replay_labels = ", ".join(
+                    f"seed {meta['seed_order']}/{len(seeds)} {meta['name']} "
+                    f"{_format_elapsed(now-float(meta.get('submitted_at', now)))}"
+                    for meta in replay_futures.values()
+                )
+                tag = "[TRAIN]" if training_futures else "[REPLAY]"
+                details = []
+                if training_labels:
+                    details.append(training_labels)
+                if replay_labels:
+                    details.append("replay: " + replay_labels)
+                if ready_replays:
+                    details.append(f"replay queued={len(ready_replays)}")
                 progress_update(
-                    paint("[TRAIN]", "cyan", enabled=color_enabled, bold=True)
-                    + f" GPU running={len(training_futures)}/{cfg.gpu_train_workers} | {labels} "
-                    + f"| CPU replay={len(replay_futures)}/{cfg.cpu_replay_workers} "
-                    + f"| total={_format_elapsed(now-started_total)}"
+                    paint(tag, "cyan", enabled=color_enabled, bold=True)
+                    + f" GPU running={len(training_futures)}/{cfg.gpu_train_workers}"
+                    + (f" | {' | '.join(details)}" if details else "")
+                    + f" | CPU replay={len(replay_futures)}/{cfg.cpu_replay_workers}"
+                    + f" | total={_format_elapsed(now-started_total)}"
                 )
                 next_print = now + float(cfg.progress_interval_seconds)
             if pending_trainings or training_futures or ready_replays or replay_futures:

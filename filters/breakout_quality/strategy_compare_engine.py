@@ -449,6 +449,7 @@ def run_comparison(
     selection_pit_manifest_path_override=None,
     selection_pit_expected_seed_override=None,
     capture_execution_diagnostics=False,
+    capture_selection_target_diagnostics=True,
 ):
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
@@ -905,7 +906,10 @@ def run_comparison(
                 index=False,
                 encoding="utf-8-sig",
             )
-        if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+        if (
+            score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+            and bool(capture_selection_target_diagnostics)
+        ):
             lookup = _selection_target_lookup(
                 root=root, filter_id=filter_id, architecture=manifest_architecture,
                 profile=manifest_profile,
@@ -1229,6 +1233,7 @@ def run_comparison(
         ),
         "output_scope": output_scope,
         "execution_diagnostics_captured": bool(quality_execution_rows is not None),
+        "selection_target_diagnostics_captured": bool(strategy_diagnostics is not None),
         "baseline_reused": baseline_reuse_dir is not None,
         "baseline_reuse_source": (
             None

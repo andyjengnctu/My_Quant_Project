@@ -1216,6 +1216,20 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "gpu_train_workers" in config_source
         and "STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS" in config_source,
     )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_selection_pit_preserves_partial_folds_and_exposes_fold_progress",
+        True,
+        'is_selection_pit = str(dl.score_source) == "selection_point_in_time"' in robustness_source
+        and "PIT builder本身具備fold-level resume" in robustness_source
+        and 'shutil.rmtree(model_dir / "folds"' not in robustness_source.split("def _train_one_unit", 1)[1].split("def _training_units", 1)[0]
+        and "def _pit_saved_fold_progress" in robustness_source
+        and "PIT saved folds=" in robustness_source
+        and 'item["pit_saved_folds"]' in robustness_source
+        and 'item["pit_expected_folds"]' in robustness_source
+        and "if now >= next_print and (training_futures or replay_futures or ready_replays):" in robustness_source
+        and 'tag = "[TRAIN]" if training_futures else "[REPLAY]"' in robustness_source,
+    )
 
     from tools.filters.breakout_quality import train_continuous_ranker as ranker_train_module
     from filters.breakout_quality.ranking_score_store import (
@@ -1322,6 +1336,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "selection_pit_manifest_path_override" in engine_source
         and "get_strategy_multi_seed_robustness_profiles" in app_source
         and "_pit_fold_count_for_period" in robustness_source,
+    )
+
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "selection_pit_multi_seed_skips_non_runtime_future_target_join_during_per_seed_replay",
+        True,
+        "capture_selection_target_diagnostics=True" in engine_source
+        and "and bool(capture_selection_target_diagnostics)" in engine_source
+        and "capture_selection_target_diagnostics=False" in robustness_source
+        and "daily-universal profile" in robustness_source,
     )
 
     from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
