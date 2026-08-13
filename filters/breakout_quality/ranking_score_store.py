@@ -28,6 +28,7 @@ from config.breakout_quality import (
 
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
+from filters.breakout_quality.ranker_training_contract import training_semantics
 from filters.breakout_quality.continuous_target import (
     TARGET_MANIFEST_FILENAME,
     resolve_continuous_target_dir,
@@ -703,43 +704,41 @@ def load_continuous_ranker_oos_contract(
                 f"expected={profile.training_sample_scope}, actual={report_sample_scope!r}"
             )
 
+    expected_training_semantics = training_semantics(profile)
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
-        expected_pairwise = {
-            "pair_scope": "same_date_non_tied_target_pairs",
-            "pair_weighting": "equal_pair_weight",
-            "model_margin": "pass_logit_minus_reject_logit",
-            "batching": "whole_date_pack_no_date_split",
-            "runtime_score": "softmax_pass_probability",
-        }
+        expected_pairwise = dict(
+            expected_training_semantics.get("pairwise_contract") or {}
+        )
         report_pairwise = dict(report_training.get("pairwise_contract") or {})
         manifest_semantics = dict(manifest.get("training_semantics") or {})
+        # Historical MR-13A daily artifacts may predate the top-level manifest
+        # training_semantics field.  The report still carries the canonical
+        # contract, so preserve that compatibility while validating every
+        # newer manifest against the shared profile-driven contract.
         if not is_daily or manifest_semantics:
-            if str(manifest_semantics.get("batching") or "") != expected_pairwise["batching"]:
-                raise ValueError("Continuous pairwise ranker manifest batching contract不一致")
-            if dict(manifest_semantics.get("pairwise_contract") or {}) != expected_pairwise:
-                raise ValueError("Continuous pairwise ranker manifest pairwise contract不一致")
-        if str(report_training.get("batching") or "") != expected_pairwise["batching"]:
+            if manifest_semantics != expected_training_semantics:
+                raise ValueError(
+                    "Continuous pairwise ranker manifest training semantics不一致"
+                )
+        if str(report_training.get("batching") or "") != str(
+            expected_training_semantics.get("batching") or ""
+        ):
             raise ValueError("Continuous pairwise ranker report batching contract不一致")
         if report_pairwise != expected_pairwise:
             raise ValueError("Continuous pairwise ranker report pairwise contract不一致")
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING:
-        expected_listwise = {
-            "list_scope": "same_date_full_candidate_list",
-            "target_distribution": "softmax_daily_percentile",
-            "prediction_distribution": "softmax_pass_minus_reject_margin",
-            "tie_handling": "equal_target_equal_distribution_weight",
-            "date_weighting": "equal_rankable_date_weight",
-            "model_margin": "pass_logit_minus_reject_logit",
-            "batching": "whole_date_pack_no_date_split",
-            "runtime_score": "softmax_pass_probability",
-        }
+        expected_listwise = dict(
+            expected_training_semantics.get("listwise_contract") or {}
+        )
         manifest_semantics = dict(manifest.get("training_semantics") or {})
         report_listwise = dict(report_training.get("listwise_contract") or {})
-        if str(manifest_semantics.get("batching") or "") != expected_listwise["batching"]:
-            raise ValueError("Continuous listwise ranker manifest batching contract不一致")
-        if dict(manifest_semantics.get("listwise_contract") or {}) != expected_listwise:
-            raise ValueError("Continuous listwise ranker manifest listwise contract不一致")
-        if str(report_training.get("batching") or "") != expected_listwise["batching"]:
+        if manifest_semantics != expected_training_semantics:
+            raise ValueError(
+                "Continuous listwise ranker manifest training semantics不一致"
+            )
+        if str(report_training.get("batching") or "") != str(
+            expected_training_semantics.get("batching") or ""
+        ):
             raise ValueError("Continuous listwise ranker report batching contract不一致")
         if report_listwise != expected_listwise:
             raise ValueError("Continuous listwise ranker report listwise contract不一致")

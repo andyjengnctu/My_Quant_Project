@@ -8673,3 +8673,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 新增`SR-C36` Forward arm：完全沿用C20/C29 current Min params、all-off rules、K/R0、feasible-ascent selector與execution，唯一差異為score source=`DL-CONT13E`。主要source-only contrasts=`C36-C20`（13E vs 12B）與`C36-C29`（13E vs 13A）；另保留`C36-C3`相對DL-off baseline。
 - `C35/C36`本輪固定`robustness_role=off`。既有Selection 8-seed只解析C25/C28、Forward 8-seed只解析C20/C29，scientific fingerprint與已完成13A/12B robustness不因新增single-seed arm改變。只有MR-13E在Selection與Forward single-seed strategy gate都具支持證據，才另行授權把13E加入multi-seed robustness。
 - Current runtime anchor仍為`MR-12B / DL-CONT12B`。本輪建立的是strategy-gate research source identity，不代表13E promotion。
+
+
+## 2026-08-13 — MR-13E Strategy Compare runtime contract validator修正
+
+- 問題基準：`test-branch-1_20260813_222547_36c4865.zip`；SHA256 `42186a26c6a5c623a7dfd4b91f683ea20c58e778f40b09e768ea9b8707968079`。本機Forward-OOS Strategy Compare正確啟用`C36 / CONT13E`，但readiness把13E的`forward_scores / manifest / model / report`全部判為BLOCKED。
+- 根因不是13E模型或score工件缺失，而是`filters/breakout_quality/ranking_score_store.load_continuous_ranker_oos_contract()`對所有`daily_pairwise_ranking`硬編`pair_weighting=equal_pair_weight`。MR-13E trainer依ResearchSpec正確寫入`full_list_delta_ndcg_weighted`，因此producer與runtime validator contract分叉；同一缺陷也會使MR-13D的`upper_tail_relevance_weighted`正式OOS source被誤判。
+- 修正：新增lower-layer `filters/breakout_quality/ranker_training_contract.py`，集中pairwise/listwise artifact training semantics。trainer與runtime OOS loader現在都讀同一個`training_semantics(profile)`；pairwise weighting由`ContinuousRankerResearchSpec.pairwise_reduction`解析，不再由consumer hard-code。`services/breakout_quality/ranker_training.py`既有public API仍由trainer re-export相同object，無需改變外部caller。
+- 相容性：歷史MR-13A daily manifest若缺top-level`training_semantics`仍保留原compatibility allowance，但report必須符合profile-driven canonical contract；新manifest則必須完整匹配共用semantics。13A=`equal_pair_weight`、13D=`upper_tail_relevance_weighted`、13E=`full_list_delta_ndcg_weighted`均由同一ResearchSpec真理來源決定。
+- Direct synthetic在MR-13E既有contract中新增runtime loader E2E fixture：canonical 13E weighting必須被接受，將同一artifact偽造成`equal_pair_weight`必須被拒絕。這次修正不改13E模型權重、scores、strategy selector、sizing、execution或scientific結果，只修runtime artifact validation。
+- 修正後仍需使用模型工作類型正式入口`Research → [1] 模型訓練 → [5] 準備策略比較所需模型工件`做本機readiness revalidation／必要時只重建future-independent score universe；Strategy Compare本身仍不得訓練模型。

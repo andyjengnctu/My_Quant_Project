@@ -2664,6 +2664,150 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         training_semantics(profile_e)["pairwise_contract"]["pair_weighting"],
     )
+
+    from filters.breakout_quality import ranking_score_store as ranking_store
+
+    with tempfile.TemporaryDirectory() as td:
+        contract_root = Path(td)
+        model_path = contract_root / "model.pt"
+        manifest_path = contract_root / "manifest.json"
+        report_path = contract_root / ranking_store.CONTINUOUS_RANKER_REPORT_FILENAME
+        score_path = contract_root / ranking_store.DAILY_RANKER_OOS_SCORE_FILENAME
+        model_path.write_bytes(b"synthetic-model")
+        score_path.write_bytes(b"synthetic-score")
+
+        canonical_semantics = training_semantics(profile_e)
+        score_eligibility = ranking_store.build_score_eligibility_contract(profile_e)
+        coverage = {
+            "inference_eligible_groups": 1,
+            "target_evaluable_groups": 1,
+            "future_target_required_for_score": False,
+        }
+        manifest_payload = {
+            "filter_id": "synthetic",
+            "model_architecture": "synthetic_arch",
+            "experiment_profile": profile_e.name,
+            "training_objective": profile_e.training_objective,
+            "training_label_scope": profile_e.training_label_scope,
+            "training_sample_scope": profile_e.training_sample_scope,
+            "training_semantics": canonical_semantics,
+            "continuous_target_id": profile_e.continuous_target_id,
+            "score_eligibility_contract": score_eligibility,
+            "forward_score_coverage": coverage,
+            "model": {},
+            "research_outputs": {"oos_scores_gzip": {}},
+            "outer_oos_policy": {
+                "oos_start_date": "2021-01-01",
+                "configured_oos_end_date": "2021-12-31",
+            },
+            "model_information_cutoff": "2020-12-31",
+        }
+        report_payload = {
+            "filter_id": "synthetic",
+            "model_architecture": "synthetic_arch",
+            "experiment_profile": profile_e.name,
+            "training": {
+                "objective": profile_e.training_objective,
+                "loss": profile_e.loss_name,
+                "sample_scope": profile_e.training_sample_scope,
+                "training_label_scope": profile_e.training_label_scope,
+                "batching": canonical_semantics["batching"],
+                "pairwise_contract": canonical_semantics["pairwise_contract"],
+                "seed": 42,
+            },
+            "experiment_settings": profile_e.as_manifest_payload(),
+            "score_eligibility_contract": score_eligibility,
+            "forward_score_coverage": coverage,
+            "status": "RESULT_AVAILABLE",
+            "artifacts": {"oos_scores_gzip": {}},
+        }
+        manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+        report_path.write_text(json.dumps(report_payload), encoding="utf-8")
+
+        fake_score_table = pd.DataFrame(
+            [{
+                "ticker": "SYN",
+                "date": "2021-01-04",
+                "group_index": 0,
+                "model_score": 0.9,
+            }]
+        )
+        fake_score_table.attrs["available_from"] = "2021-01-04"
+        fake_score_table.attrs["available_through"] = "2021-01-04"
+
+        def _load_contract():
+            ranking_store.load_continuous_ranker_oos_contract.cache_clear()
+            with (
+                patch.object(
+                    ranking_store,
+                    "resolve_filter_artifact_paths",
+                    return_value=SimpleNamespace(
+                        manifest_path=manifest_path,
+                        model_path=model_path,
+                    ),
+                ),
+                patch.object(
+                    ranking_store,
+                    "resolve_filter_model_output_dir",
+                    return_value=contract_root,
+                ),
+                patch.object(
+                    ranking_store,
+                    "resolve_continuous_ranker_oos_score_path",
+                    return_value=score_path,
+                ),
+                patch.object(
+                    ranking_store,
+                    "_validate_file_record_simple",
+                    return_value=None,
+                ),
+                patch.object(
+                    ranking_store,
+                    "load_continuous_ranker_oos_score_table",
+                    return_value=fake_score_table,
+                ),
+            ):
+                return ranking_store.load_continuous_ranker_oos_contract(
+                    str(contract_root),
+                    "synthetic",
+                    "synthetic_arch",
+                    profile_e.name,
+                )
+
+        canonical_runtime_contract_passed = False
+        try:
+            loaded_contract = _load_contract()
+            canonical_runtime_contract_passed = (
+                loaded_contract.experiment_profile == profile_e.name
+                and loaded_contract.seed == 42
+            )
+        except Exception:
+            canonical_runtime_contract_passed = False
+
+        wrong_semantics = json.loads(json.dumps(canonical_semantics))
+        wrong_semantics["pairwise_contract"]["pair_weighting"] = (
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
+        )
+        manifest_payload["training_semantics"] = wrong_semantics
+        report_payload["training"]["pairwise_contract"] = wrong_semantics[
+            "pairwise_contract"
+        ]
+        manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+        report_path.write_text(json.dumps(report_payload), encoding="utf-8")
+        wrong_weighting_rejected = False
+        try:
+            _load_contract()
+        except ValueError:
+            wrong_weighting_rejected = True
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "runtime_oos_contract_uses_same_profile_driven_pairwise_semantics_as_trainer",
+        (True, True),
+        (canonical_runtime_contract_passed, wrong_weighting_rejected),
+    )
     args = parse_continuous_ranker_args(
         ["--experiment-profile", DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE]
     )

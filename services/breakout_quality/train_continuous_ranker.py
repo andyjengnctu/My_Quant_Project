@@ -102,6 +102,11 @@ from filters.breakout_quality.ranker_sample_contract import (
     build_score_eligibility_contract,
     resolve_forward_oos_score_group_ids,
 )
+from filters.breakout_quality.ranker_training_contract import (
+    LISTWISE_TRAINING_CONTRACT,
+    PAIRWISE_TRAINING_CONTRACT,
+    training_semantics,
+)
 from filters.breakout_quality.splits import (
     build_selection_oos_split_assignments,
     resolve_breakout_quality_outer_policy,
@@ -130,49 +135,6 @@ RANKER_SCORE_FILENAME = "continuous_ranker_scores.csv"
 RANKER_REPORT_JSON_FILENAME = "continuous_ranker_report.json"
 RANKER_REPORT_MARKDOWN_FILENAME = "continuous_ranker_report.md"
 RANKER_TARGET_FILENAME = "group_target_daily_percentile.npy"
-
-
-PAIRWISE_TRAINING_CONTRACT = {
-    "pair_scope": "same_date_non_tied_target_pairs",
-    "pair_weighting": CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
-    "model_margin": "pass_logit_minus_reject_logit",
-    "batching": "whole_date_pack_no_date_split",
-    "runtime_score": "softmax_pass_probability",
-}
-
-LISTWISE_TRAINING_CONTRACT = {
-    "list_scope": "same_date_full_candidate_list",
-    "target_distribution": "softmax_daily_percentile",
-    "prediction_distribution": "softmax_pass_minus_reject_margin",
-    "tie_handling": "equal_target_equal_distribution_weight",
-    "date_weighting": "equal_rankable_date_weight",
-    "model_margin": "pass_logit_minus_reject_logit",
-    "batching": "whole_date_pack_no_date_split",
-    "runtime_score": "softmax_pass_probability",
-}
-
-
-def training_semantics(profile) -> dict[str, Any]:
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
-        spec = get_continuous_ranker_research_spec(profile.name)
-        pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
-        pairwise_contract["pair_weighting"] = str(spec.pairwise_reduction)
-        return {
-            "batching": pairwise_contract["batching"],
-            "pairwise_contract": pairwise_contract,
-            "listwise_contract": None,
-        }
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING:
-        return {
-            "batching": LISTWISE_TRAINING_CONTRACT["batching"],
-            "pairwise_contract": None,
-            "listwise_contract": dict(LISTWISE_TRAINING_CONTRACT),
-        }
-    return {
-        "batching": "shuffled_unique_group_batches",
-        "pairwise_contract": None,
-        "listwise_contract": None,
-    }
 
 
 def parse_args(argv=None):
