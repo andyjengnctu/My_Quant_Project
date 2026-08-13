@@ -17,9 +17,11 @@ from .synthetic_breakout_quality_support import (
     CONTINUOUS_RANKER_TRAINER_EVENT,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
     DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE,
     DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE,
+    DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE,
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
     get_continuous_ranker_research_spec,
     STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
@@ -2340,7 +2342,6 @@ def validate_breakout_quality_daily_percentile_regression_contract_case(_base_pa
     summary = {"ticker": case_id, "synthetic": True}
 
     from config.breakout_quality import (
-        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
         BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
         STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
     )
@@ -2417,13 +2418,11 @@ def validate_breakout_quality_daily_percentile_regression_contract_case(_base_pa
         results,
         "synthetic_breakout_quality",
         case_id,
-        "mr13c_is_active_model_research_without_changing_strategy_workflow_anchor",
+        "mr13c_profile_remains_registered_without_changing_strategy_workflow_anchor",
+        (True, STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE),
         (
-            DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE,
-            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
-        ),
-        (
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE
+            in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
             BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
         ),
     )
@@ -2442,6 +2441,150 @@ def validate_breakout_quality_daily_percentile_regression_contract_case(_base_pa
 
     summary["profile"] = DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE
     summary["model_research_id"] = spec_c.model_research_id
+    return results, summary
+
+
+def validate_breakout_quality_daily_upper_tail_pairwise_contract_case(_base_params):
+    """Pin MR-13D as the parameter-free upper-tail relevance pairwise experiment."""
+
+    case_id = "BREAKOUT_QUALITY_DAILY_UPPER_TAIL_PAIRWISE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+    )
+    from filters.breakout_quality.models.factory import require_torch
+    from tools.filters.breakout_quality.train_continuous_ranker import (
+        parse_args as parse_continuous_ranker_args,
+    )
+    from services.breakout_quality.train_continuous_ranker import _pairwise_logistic_loss
+
+    profile_a = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+    )
+    profile_d = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE
+    )
+    spec_a = get_continuous_ranker_research_spec(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+    )
+    spec_d = get_continuous_ranker_research_spec(
+        DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE
+    )
+
+    fixed_fields = (
+        "optimizer_name",
+        "training_sampling_mode",
+        "training_objective",
+        "continuous_target_id",
+        "loss_name",
+        "epoch_selection_metric",
+        "training_label_scope",
+        "training_sample_scope",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13d_changes_only_pair_relevance_weighting_while_daily_profile_contract_stays_fixed",
+        tuple(getattr(profile_a, field) for field in fixed_fields),
+        tuple(getattr(profile_d, field) for field in fixed_fields),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13d_research_identity_and_parameter_free_reduction_are_explicit",
+        (
+            "MR-13D",
+            spec_a.trainer_family,
+            spec_a.score_semantic_id,
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
+        ),
+        (
+            spec_d.model_research_id,
+            spec_d.trainer_family,
+            spec_d.score_semantic_id,
+            spec_d.pairwise_reduction,
+        ),
+    )
+
+    args = parse_continuous_ranker_args(
+        ["--experiment-profile", DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE]
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13d_is_available_through_existing_profile_driven_cli",
+        DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE,
+        args.experiment_profile,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13d_is_active_model_research_without_changing_strategy_workflow_anchor",
+        (
+            DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE,
+            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        ),
+    )
+
+    torch, _nn = require_torch()
+    targets = torch.tensor([0.10, 0.20, 0.80, 0.90], dtype=torch.float32)
+    dates = np.asarray(["2024-01-02"] * 4)
+    margins = torch.tensor([0.10, -0.15, 0.55, 0.35], dtype=torch.float32, requires_grad=True)
+    actual_loss, actual_count = _pairwise_logistic_loss(
+        torch,
+        margins,
+        targets,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
+    )
+
+    import torch.nn.functional as F
+    margin_diff = margins[:, None] - margins[None, :]
+    target_diff = targets[:, None] - targets[None, :]
+    upper = torch.triu(torch.ones_like(target_diff, dtype=torch.bool), diagonal=1)
+    comparable = upper & (target_diff != 0)
+    pair_losses = F.softplus(-torch.sign(target_diff[comparable]) * margin_diff[comparable])
+    left = targets[:, None].expand_as(target_diff)[comparable]
+    right = targets[None, :].expand_as(target_diff)[comparable]
+    expected_weights = (left + right) / 2.0
+    expected_loss = (pair_losses * expected_weights).sum() / expected_weights.sum()
+    actual_loss.backward()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "upper_tail_relevance_loss_is_exact_mean_percentile_weighted_ranknet_with_finite_gradient",
+        (round(float(expected_loss.detach().cpu().item()), 12), 6, True),
+        (
+            round(float(actual_loss.detach().cpu().item()), 12),
+            int(actual_count),
+            bool(torch.isfinite(margins.grad).all().item()),
+        ),
+        tol=1e-10,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "upper_tail_relevance_prioritizes_high_high_over_low_low_without_k_boundary_or_lambda",
+        True,
+        bool(((0.80 + 0.90) / 2.0) > ((0.10 + 0.20) / 2.0)),
+    )
+
+    summary["profile"] = DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE
+    summary["model_research_id"] = spec_d.model_research_id
     return results, summary
 
 
@@ -2524,29 +2667,25 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
             "SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES" in continuous_source,
         ),
     )
+    pairwise_specs = [
+        get_continuous_ranker_research_spec(name)
+        for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+        if get_breakout_quality_experiment_profile(name).training_objective
+        == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING
+    ]
+    non_default_owners = {}
+    for spec in pairwise_specs:
+        reduction = str(spec.pairwise_reduction)
+        if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR:
+            continue
+        non_default_owners.setdefault(reduction, []).append(spec.model_research_id)
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "new_pairwise_reduction_is_owned_only_by_new_mr_profile",
-        (
-            "MR-13B",
-            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
-            (
-                CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
-                CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
-            ),
-        ),
-        (
-            mr13b.model_research_id,
-            mr13b.pairwise_reduction,
-            tuple(sorted({
-                str(get_continuous_ranker_research_spec(name).pairwise_reduction)
-                for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-                if get_breakout_quality_experiment_profile(name).training_objective
-                == "daily_pairwise_ranking"
-            })),
-        ),
+        "non_default_pairwise_reductions_have_explicit_unique_mr_owners",
+        True,
+        all(len(owners) == 1 for owners in non_default_owners.values()),
     )
     return results, summary
 

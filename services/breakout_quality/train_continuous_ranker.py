@@ -21,6 +21,7 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
@@ -645,8 +646,10 @@ def _pairwise_logistic_loss(
 
     Existing equal-pair profiles preserve the original concatenated-pair mean exactly.
     MR-13B uses the absolute same-date percentile-target gap as pair weight, normalizes
-    within each date, then gives each rankable date equal loss weight.  This emphasizes
-    clearly separated opportunities without introducing a fixed target-gap threshold.
+    within each date, then gives each rankable date equal loss weight.
+    MR-13D keeps the original pair aggregation but weights every comparable pair by the
+    arithmetic mean of its two daily target percentiles, emphasizing upper-tail local
+    ordering without any K, boundary, threshold, exponent, or mixing coefficient.
     """
 
     import torch.nn.functional as F
@@ -654,6 +657,7 @@ def _pairwise_logistic_loss(
     if reduction not in {
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
     }:
         raise ValueError(f"不支援的pairwise reduction: {reduction!r}")
 
@@ -687,16 +691,37 @@ def _pairwise_logistic_loss(
             pair_losses.append(losses)
             continue
 
-        weights = torch.abs(selected_target_diff.detach())
-        weight_sum = weights.sum()
-        if not bool(torch.isfinite(weight_sum).item()) or float(weight_sum.detach().cpu().item()) <= 0.0:
-            raise FloatingPointError("target-gap pairwise weight sum必須為正有限值")
-        day_losses.append((losses * weights).sum() / weight_sum)
+        if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED:
+            weights = torch.abs(selected_target_diff.detach())
+            weight_sum = weights.sum()
+            if not bool(torch.isfinite(weight_sum).item()) or float(weight_sum.detach().cpu().item()) <= 0.0:
+                raise FloatingPointError("target-gap pairwise weight sum必須為正有限值")
+            day_losses.append((losses * weights).sum() / weight_sum)
+            continue
+
+        selected_left_target = day_target[:, None].expand_as(target_diff)[comparable].detach()
+        selected_right_target = day_target[None, :].expand_as(target_diff)[comparable].detach()
+        weights = (selected_left_target + selected_right_target) / 2.0
+        if not bool(torch.isfinite(weights).all().item()):
+            raise FloatingPointError("upper-tail relevance pairwise weights必須為有限值")
+        if bool((weights < 0.0).any().item()) or bool((weights > 1.0).any().item()):
+            raise ValueError("upper-tail relevance只接受0～1 daily percentile target")
+        pair_losses.append(losses * weights)
+        day_losses.append(weights)
 
     if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR:
         if not pair_losses:
             return None, 0
         return torch.cat(pair_losses).mean(), int(pair_count)
+    if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE:
+        if not pair_losses or not day_losses:
+            return None, 0
+        all_losses = torch.cat(pair_losses)
+        all_weights = torch.cat(day_losses)
+        weight_sum = all_weights.sum()
+        if not bool(torch.isfinite(weight_sum).item()) or float(weight_sum.detach().cpu().item()) <= 0.0:
+            raise FloatingPointError("upper-tail relevance pairwise weight sum必須為正有限值")
+        return all_losses.sum() / weight_sum, int(pair_count)
     if not day_losses:
         return None, 0
     return torch.stack(day_losses).mean(), int(ranked_date_count)
