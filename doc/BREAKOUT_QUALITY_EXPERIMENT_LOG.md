@@ -8618,3 +8618,26 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 實作重用profile-driven Daily trainer；新增research reduction identity=`upper_tail_relevance_weighted`，不複製trainer或architecture。MR-12B／MR-13A既有`equal_pair_weight`、MR-13B歷史`target_gap_weighted_within_date`、MR-13C MSE code path保持原值。
 - 目前只建立model research profile/spec，不建立`DL-CONT13D`、PIT runtime source或`SR-C*`。Model Research Active Profile切至13D；Strategy workflow仍固定MR-12B anchor。
 - 下一步：先執行MR-13D Seed42 Forward Model Gate。若13D不像13B般失去實質排序訊號，再讓MR-13C與MR-13D使用相同Selection PIT period、fold calendar、seed、Dataset、Target與architecture各自訓練，直接比較跨期穩定性與Top-tail trade-off；13D Forward Gate前不先建立PIT工件。
+
+## 2026-08-13 — MR-13D Forward Model Gate：全市場Top-tail回升、整體rho略退，授權Selection PIT
+
+- 本機模型結果來源：`test-branch-1_20260813_190826_32aa156.zip`；SHA256 `dfced3322b0a1d41d315949e4562ba2be6bfad4ebf2e2451e3131f7501e98708`。本次Forward結果屬迭代研究OOS證據。
+- Profile=`daily_universal_no_time_upper_tail_pairwise`；MR=`MR-13D`；sample scope=`daily_eligible_stock_days`；Target=`daily_opportunity_no_time_r_v1`；Architecture=`inception_time_v1`；Seed=`42`。相較MR-13A唯一scientific change仍為同日RankNet pair以兩端daily target percentile算術平均作upper-tail relevance權重。
+- Epoch選擇：epoch1 Validation daily rho=`0.1184`為最佳；epoch2=`0.0877`，故selected epoch=`1`。完整Selection refit固定1 epoch。重訓後原Validation daily rho=`0.2805`只作描述，不是獨立泛化證據。
+- Forward all-stock OOS：groups=`608,204`；daily/global rho=`0.1690/0.1453`、pair=`55.81%`；Top10% Target=`1.6701R`、Bottom10%=`0.5016R`，spread=`+1.1685R`；NDCG@10=`0.5862`、Top-K Target=`1.8004R`、Lift=`+0.7986R`、Oracle overlap=`7.46%`、Boundary=`49.30%`、Boundary gap=`+0.0283R`。
+- Breakout-candidate OOS：groups=`17,346`；daily/global rho=`0.1529/0.1576`、pair=`55.69%`；Top10% Target=`1.8422R`、Bottom10%=`0.5372R`，spread=`+1.3050R`；NDCG@10=`0.7086`、Top-K Target=`1.5440R`、Lift=`+0.3298R`、Oracle overlap=`58.84%`、Boundary=`50.74%`、Boundary gap=`+0.0307R`。
+- 與MR-13C比較：all-stock daily rho `-0.0187`、global rho `+0.0214`、pair `-0.57pp`、Top-bottom spread `+0.4799R`、Top-K Lift `+0.4116R`、Boundary gap `+0.1029R`。Breakout daily rho `-0.0036`、global rho `+0.0067`、pair `-1.00pp`、Top-bottom spread `-0.1100R`、Top-K Lift `-0.0437R`、Boundary gap `-0.1865R`。
+- 判定：`MR-13D = RESULT_AVAILABLE / FORWARD_OOS_MODEL_GATE_PASS / SELECTION_PIT_MODEL_GATE_AUTHORIZED / NO_RUNTIME_DL_SOURCE`。13D沒有像13B失效，且明確修復MR-13C部分all-stock Top-tail弱點，但不是全面優於13C；兩者形成「整體daily ordering vs all-stock top-tail」互補trade-off，因此不在Forward先二選一。
+- 使用者進一步指出實際buy list只會使用榜首少數股票，整體rank好不代表前段rank好。故在進Selection PIT前再做最後一個MR-13E，直接研究**目前預測榜單位置對錯排重要性**，而不是再做target relevance或一般full-list平均排序。
+
+## 2026-08-13 — MR-13E實作：Daily Universal Full-list Delta-NDCG-weighted Pairwise Ranker
+
+- 程式基準：`test-branch-1_20260813_190826_32aa156.zip`；SHA256 `dfced3322b0a1d41d315949e4562ba2be6bfad4ebf2e2451e3131f7501e98708`，並在同輪同步MR-13D Forward Gate結果。
+- `MR-13E / PROFILE-daily_universal_no_time_full_list_ndcg_pairwise`固定MR-13A的sample universe=`daily_eligible_stock_days`、Target=`daily_opportunity_no_time_r_v1`、300×10 stock+0050 input、`ARCH-inception_time_v1`、Adam/LR/weight decay、inner validation、selected-epoch final refit、`mean_daily_spearman` epoch metric與原本pair aggregation。
+- 唯一scientific change：同日non-tied RankNet pair的logistic loss由等權改成**目前預測完整榜單交換此pair所造成的絕對Delta-NDCG**作權重。對每個日期，先依detached model margin取得目前預測rank，再使用`discount(rank)=1/log2(rank+1)`；DCG gain直接使用canonical 0～1 daily target percentile，不用`2^relevance-1`或任何額外gain exponent。pair weight=`abs((rel_i-rel_j)*(discount_i-discount_j))/IDCG`。
+- NDCG是**full-list**而非`NDCG@K`：所有rank位置都參與，越靠榜首的rank discount差越大，因此相同relevance差的pair在榜首交換會自然比榜尾交換得到更高權重；不把目前portfolio的`K=10`、boundary=3寫入training semantics。
+- 沒有`lambda` mixing coefficient、Top-K cutoff、boundary、percentile threshold、gain exponent、gap floor、breakout candidate membership或strategy feature。標準log discount中的常數只來自rank從1開始的DCG定義，不是可調hyperparameter。
+- 權重只由detached target與detached current predicted ranks產生，不反向微分rank operator；RankNet margin仍是唯一gradient path。prediction tie只在權重計算採deterministic stable order，target tie仍不形成pair supervision。
+- 實作重用既有profile-driven Daily trainer與`_pairwise_logistic_loss()`，新增research reduction identity=`full_list_delta_ndcg_weighted`，不新增architecture、Target或MR-specific trainer。
+- Model Research Active Profile切至`daily_universal_no_time_full_list_ndcg_pairwise`；Strategy workflow仍固定MR-12B runtime anchor。尚未建立`DL-CONT13E`、PIT source或任何`SR-C*`。
+- 狀態：`IMPLEMENTED / AWAITING_FORWARD_MODEL_GATE / NO_RUNTIME_DL_SOURCE`。下一步先跑Seed42 Forward Model Gate；若13E保有實質ranking signal，再把MR-13C／MR-13D／MR-13E放入完全相同的Selection PIT period/fold contract一次比較。13E若像13B明確失效，則不進PIT。

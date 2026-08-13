@@ -18,10 +18,12 @@ from .synthetic_breakout_quality_support import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
     DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE,
     DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE,
     DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE,
+    DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
     get_continuous_ranker_research_spec,
     STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
@@ -2527,13 +2529,11 @@ def validate_breakout_quality_daily_upper_tail_pairwise_contract_case(_base_para
         results,
         "synthetic_breakout_quality",
         case_id,
-        "mr13d_is_active_model_research_without_changing_strategy_workflow_anchor",
+        "mr13d_remains_registered_without_changing_strategy_workflow_anchor",
+        (True, STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE),
         (
-            DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE,
-            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
-        ),
-        (
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE
+            in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
             BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
         ),
     )
@@ -2585,6 +2585,183 @@ def validate_breakout_quality_daily_upper_tail_pairwise_contract_case(_base_para
 
     summary["profile"] = DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE
     summary["model_research_id"] = spec_d.model_research_id
+    return results, summary
+
+
+def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_params):
+    """Pin MR-13E as a full-list position-aware Delta-NDCG RankNet experiment."""
+
+    case_id = "BREAKOUT_QUALITY_DAILY_FULL_LIST_NDCG_PAIRWISE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+    )
+    from filters.breakout_quality.models.factory import require_torch
+    from services.breakout_quality.train_continuous_ranker import _pairwise_logistic_loss
+    from tools.filters.breakout_quality.train_continuous_ranker import (
+        parse_args as parse_continuous_ranker_args,
+    )
+
+    profile_a = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+    )
+    profile_e = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    spec_a = get_continuous_ranker_research_spec(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+    )
+    spec_e = get_continuous_ranker_research_spec(
+        DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+
+    fixed_fields = (
+        "optimizer_name",
+        "training_sampling_mode",
+        "training_objective",
+        "continuous_target_id",
+        "loss_name",
+        "epoch_selection_metric",
+        "training_label_scope",
+        "training_sample_scope",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13e_changes_only_pairwise_reduction_while_daily_profile_contract_stays_fixed",
+        tuple(getattr(profile_a, field) for field in fixed_fields),
+        tuple(getattr(profile_e, field) for field in fixed_fields),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13e_research_identity_and_full_list_delta_ndcg_reduction_are_explicit",
+        (
+            "MR-13E",
+            spec_a.trainer_family,
+            spec_a.score_semantic_id,
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        ),
+        (
+            spec_e.model_research_id,
+            spec_e.trainer_family,
+            spec_e.score_semantic_id,
+            spec_e.pairwise_reduction,
+        ),
+    )
+    from services.breakout_quality.train_continuous_ranker import training_semantics
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13e_artifact_semantics_disclose_full_list_delta_ndcg_weighting",
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        training_semantics(profile_e)["pairwise_contract"]["pair_weighting"],
+    )
+    args = parse_continuous_ranker_args(
+        ["--experiment-profile", DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE]
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13e_is_available_through_existing_profile_driven_cli",
+        DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        args.experiment_profile,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13e_is_active_model_research_without_changing_strategy_workflow_anchor",
+        (
+            DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        ),
+    )
+
+    torch, _nn = require_torch()
+    import torch.nn.functional as F
+
+    targets = torch.tensor([1.0, 0.8, 0.2, 0.0], dtype=torch.float32)
+    margins = torch.tensor([1.6, 0.4, 1.0, -0.2], dtype=torch.float32, requires_grad=True)
+    dates = np.asarray(["2024-01-02"] * 4)
+    actual_loss, actual_count = _pairwise_logistic_loss(
+        torch,
+        margins,
+        targets,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+
+    margin_diff = margins[:, None] - margins[None, :]
+    target_diff = targets[:, None] - targets[None, :]
+    upper = torch.triu(torch.ones_like(target_diff, dtype=torch.bool), diagonal=1)
+    comparable = upper & (target_diff != 0)
+    pair_losses = F.softplus(
+        -torch.sign(target_diff[comparable]) * margin_diff[comparable]
+    )
+    positions = torch.arange(1, 5, dtype=torch.float32)
+    discounts = 1.0 / torch.log2(positions + 1.0)
+    predicted_order = torch.argsort(margins.detach(), descending=True, stable=True)
+    discount_by_item = torch.empty_like(discounts)
+    discount_by_item[predicted_order] = discounts
+    ideal_order = torch.argsort(targets, descending=True, stable=True)
+    idcg = (targets[ideal_order] * discounts).sum()
+    weight_matrix = (
+        torch.abs(target_diff.detach())
+        * torch.abs(discount_by_item[:, None] - discount_by_item[None, :])
+        / idcg
+    )
+    expected_weights = weight_matrix[comparable]
+    expected_loss = (pair_losses * expected_weights).sum() / expected_weights.sum()
+    actual_loss.backward()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "full_list_delta_ndcg_loss_matches_raw_percentile_full_rank_swap_weighting",
+        (round(float(expected_loss.detach().cpu().item()), 12), 6, True),
+        (
+            round(float(actual_loss.detach().cpu().item()), 12),
+            int(actual_count),
+            bool(torch.isfinite(margins.grad).all().item()),
+        ),
+        tol=1e-10,
+    )
+
+    correct_margins = torch.tensor([4.0, 3.0, 2.0, 1.0], dtype=torch.float32)
+    predicted_order = torch.argsort(correct_margins, descending=True, stable=True)
+    discount_by_item = torch.empty_like(discounts)
+    discount_by_item[predicted_order] = discounts
+    correct_weight_matrix = (
+        torch.abs(targets[:, None] - targets[None, :])
+        * torch.abs(discount_by_item[:, None] - discount_by_item[None, :])
+        / idcg
+    )
+    top_adjacent_weight = float(correct_weight_matrix[0, 1].item())
+    bottom_adjacent_weight = float(correct_weight_matrix[2, 3].item())
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "full_list_delta_ndcg_naturally_prioritizes_top_positions_without_k_boundary_or_lambda",
+        True,
+        bool(top_adjacent_weight > bottom_adjacent_weight > 0.0),
+    )
+
+    summary["profile"] = DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    summary["model_research_id"] = spec_e.model_research_id
     return results, summary
 
 

@@ -22,6 +22,7 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
@@ -650,6 +651,10 @@ def _pairwise_logistic_loss(
     MR-13D keeps the original pair aggregation but weights every comparable pair by the
     arithmetic mean of its two daily target percentiles, emphasizing upper-tail local
     ordering without any K, boundary, threshold, exponent, or mixing coefficient.
+    MR-13E also keeps the original pair aggregation, but weights each pair by the absolute
+    full-list NDCG change caused by swapping the pair at the current predicted positions.
+    Raw 0～1 daily percentiles are the DCG gains and every rank position participates;
+    there is no @K cutoff, gain exponent, boundary, threshold, or mixing coefficient.
     """
 
     import torch.nn.functional as F
@@ -657,7 +662,8 @@ def _pairwise_logistic_loss(
     if reduction not in {
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
-    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
     }:
         raise ValueError(f"不支援的pairwise reduction: {reduction!r}")
 
@@ -699,13 +705,47 @@ def _pairwise_logistic_loss(
             day_losses.append((losses * weights).sum() / weight_sum)
             continue
 
-        selected_left_target = day_target[:, None].expand_as(target_diff)[comparable].detach()
-        selected_right_target = day_target[None, :].expand_as(target_diff)[comparable].detach()
-        weights = (selected_left_target + selected_right_target) / 2.0
+        if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE:
+            selected_left_target = day_target[:, None].expand_as(target_diff)[comparable].detach()
+            selected_right_target = day_target[None, :].expand_as(target_diff)[comparable].detach()
+            weights = (selected_left_target + selected_right_target) / 2.0
+            if not bool(torch.isfinite(weights).all().item()):
+                raise FloatingPointError("upper-tail relevance pairwise weights必須為有限值")
+            if bool((weights < 0.0).any().item()) or bool((weights > 1.0).any().item()):
+                raise ValueError("upper-tail relevance只接受0～1 daily percentile target")
+            pair_losses.append(losses * weights)
+            day_losses.append(weights)
+            continue
+
+        detached_target = day_target.detach().float()
+        detached_margin = day_margin.detach().float()
+        if not bool(torch.isfinite(detached_target).all().item()):
+            raise FloatingPointError("full-list Delta-NDCG target必須為有限值")
+        if bool((detached_target < 0.0).any().item()) or bool((detached_target > 1.0).any().item()):
+            raise ValueError("full-list Delta-NDCG只接受0～1 daily percentile target")
+        if not bool(torch.isfinite(detached_margin).all().item()):
+            raise FloatingPointError("full-list Delta-NDCG predicted margins必須為有限值")
+
+        item_count = int(detached_target.numel())
+        rank_positions = torch.arange(
+            1, item_count + 1, dtype=detached_margin.dtype, device=detached_margin.device
+        )
+        rank_discounts = 1.0 / torch.log2(rank_positions + 1.0)
+        predicted_order = torch.argsort(detached_margin, descending=True, stable=True)
+        discount_by_item = torch.empty_like(rank_discounts)
+        discount_by_item[predicted_order] = rank_discounts
+        ideal_order = torch.argsort(detached_target, descending=True, stable=True)
+        ideal_dcg = (detached_target.index_select(0, ideal_order) * rank_discounts).sum()
+        if not bool(torch.isfinite(ideal_dcg).item()) or float(ideal_dcg.cpu().item()) <= 0.0:
+            raise FloatingPointError("full-list Delta-NDCG ideal DCG必須為正有限值")
+
+        relevance_delta = torch.abs(target_diff.detach())
+        discount_delta = torch.abs(
+            discount_by_item[:, None] - discount_by_item[None, :]
+        )
+        weights = (relevance_delta * discount_delta / ideal_dcg)[comparable]
         if not bool(torch.isfinite(weights).all().item()):
-            raise FloatingPointError("upper-tail relevance pairwise weights必須為有限值")
-        if bool((weights < 0.0).any().item()) or bool((weights > 1.0).any().item()):
-            raise ValueError("upper-tail relevance只接受0～1 daily percentile target")
+            raise FloatingPointError("full-list Delta-NDCG pairwise weights必須為有限值")
         pair_losses.append(losses * weights)
         day_losses.append(weights)
 
@@ -713,14 +753,22 @@ def _pairwise_logistic_loss(
         if not pair_losses:
             return None, 0
         return torch.cat(pair_losses).mean(), int(pair_count)
-    if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE:
+    if reduction in {
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    }:
         if not pair_losses or not day_losses:
             return None, 0
         all_losses = torch.cat(pair_losses)
         all_weights = torch.cat(day_losses)
         weight_sum = all_weights.sum()
         if not bool(torch.isfinite(weight_sum).item()) or float(weight_sum.detach().cpu().item()) <= 0.0:
-            raise FloatingPointError("upper-tail relevance pairwise weight sum必須為正有限值")
+            label = (
+                "upper-tail relevance"
+                if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE
+                else "full-list Delta-NDCG"
+            )
+            raise FloatingPointError(f"{label} pairwise weight sum必須為正有限值")
         return all_losses.sum() / weight_sum, int(pair_count)
     if not day_losses:
         return None, 0
