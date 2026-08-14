@@ -720,6 +720,25 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest().lower()
 
 
+def _resolve_pair_pinned_score_path(
+    *,
+    root: Path,
+    raw_path: Any,
+) -> Path | None:
+    """Resolve an archived/current score path only when it remains inside project root."""
+
+    text = str(raw_path or "").strip()
+    if not text:
+        return None
+    candidate = Path(text)
+    resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        return None
+    return resolved
+
+
 def _completed_pair_pinned_continuous_score(
     *,
     root: Path,
@@ -727,16 +746,26 @@ def _completed_pair_pinned_continuous_score(
     status: dict[str, Any],
     replay_cache: dict[str, Any],
     dl_id: str,
+    diagnostics: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Resolve one frozen OOS score file pinned by a reusable completed pair.
 
     This is deliberately score-only.  It never rebuilds a model and never derives a
-    score universe from replay candidate/trade outputs.  The canonical score CSV must
-    still exist byte-for-byte and its SHA must match the completed pair provenance.
+    score universe from replay candidate/trade outputs.  The score CSV must still exist
+    byte-for-byte and its SHA must match the completed pair provenance.
+
+    Recovery checks the archived artifact-identity path first, then the current
+    canonical path.  This keeps a completed pair reusable when a later config/path
+    migration changes where the canonical loader looks, without weakening provenance.
     """
+
+    def note(message: str) -> None:
+        if diagnostics is not None:
+            diagnostics.append(str(message))
 
     source = settings.dl_sources.get(str(dl_id))
     if source is None or source.score_source != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+        note("SOURCE_NOT_CONTINUOUS_OOS")
         return None
     pairs = dict(replay_cache.get("pairs") or {})
     dependent_arms = tuple(
@@ -750,27 +779,28 @@ def _completed_pair_pinned_continuous_score(
         if isinstance(pairs.get(arm.arm_id), dict)
     ]
     if not cached_entries:
+        note("NO_COMPLETED_PAIR_PROVENANCE")
         return None
 
     source_row = dict((status.get("dl_sources") or {}).get(str(dl_id)) or {})
     score_row = dict((source_row.get("files") or {}).get("forward_scores") or {})
-    score_display_path = str(score_row.get("path") or "").strip()
-    if not score_display_path:
-        return None
-    score_path = _resolve_relative_path(root, score_display_path).resolve()
-    if not score_path.is_file():
-        return None
-    actual_sha = _file_sha256(score_path)
+    current_score_display_path = str(score_row.get("path") or "").strip()
 
     current_identity = source.as_dict()
+    current_period = dict(status.get("comparison_period") or {})
+    current_start = str(current_period.get("start") or "")
+    current_end = str(current_period.get("end") or "")
+
     for entry in cached_entries:
         run_dir = Path(str(entry.get("source_run_dir") or "")).resolve()
         payload = _read_json(run_dir / "strategy_comparison.json")
         if not isinstance(payload, dict) or str(payload.get("status") or "") != "COMPLETED":
+            note("COMPLETED_PAIR_REPORT_INVALID")
             continue
         stored_settings = dict(payload.get("settings") or {})
         stored_source = dict((stored_settings.get("dl_sources") or {}).get(str(dl_id)) or {})
         if not stored_source:
+            note("COMPLETED_PAIR_DL_SOURCE_MISSING")
             continue
         if any(
             stored_source.get(field) != current_identity.get(field)
@@ -782,7 +812,9 @@ def _completed_pair_pinned_continuous_score(
                 "score_source",
             )
         ):
+            note("COMPLETED_PAIR_DL_IDENTITY_MISMATCH")
             continue
+
         archived_identity = dict(
             (payload.get("artifact_identities") or {}).get(
                 f"dl:{dl_id}:forward_scores"
@@ -790,33 +822,81 @@ def _completed_pair_pinned_continuous_score(
             or {}
         )
         archived_sha = _artifact_identity_sha(archived_identity)
-        if not archived_sha or archived_sha != actual_sha:
+        if not archived_sha:
+            note("COMPLETED_PAIR_SCORE_SHA_MISSING")
             continue
-        try:
-            table = load_continuous_ranker_oos_score_table_from_path(
-                str(score_path),
-                str(source.experiment_profile),
+
+        candidate_specs = (
+            ("archived_artifact_identity", archived_identity.get("path")),
+            ("current_canonical_path", current_score_display_path),
+        )
+        candidate_paths: list[tuple[str, Path]] = []
+        seen_paths: set[Path] = set()
+        for path_source, raw_path in candidate_specs:
+            score_path = _resolve_pair_pinned_score_path(
+                root=root,
+                raw_path=raw_path,
             )
-        except (OSError, ValueError, KeyError, TypeError):
+            if score_path is None or score_path in seen_paths:
+                continue
+            seen_paths.add(score_path)
+            candidate_paths.append((path_source, score_path))
+        if not candidate_paths:
+            note("NO_PROJECT_SCOPED_SCORE_PATH")
             continue
-        available_from = str(table.attrs.get("available_from") or "")
-        available_through = str(table.attrs.get("available_through") or "")
+
         stored_period = dict(payload.get("comparison_period") or {})
         stored_start = str(stored_period.get("start") or "")
         stored_end = str(stored_period.get("end") or "")
-        if not available_from or not available_through or not stored_start or not stored_end:
+        if not stored_start or not stored_end:
+            note("COMPLETED_PAIR_PERIOD_MISSING")
             continue
-        if available_from > stored_start or available_through < stored_end:
-            continue
-        return {
-            "score_path": score_path,
-            "sha256": actual_sha,
-            "available_from": available_from,
-            "available_through": available_through,
-            "execution_start": available_from,
-            "provenance_run_dir": run_dir,
-            "provenance_pair_dir": Path(str(entry.get("source_pair_dir") or "")).resolve(),
-        }
+
+        required_start = current_start or stored_start
+        required_end = current_end or stored_end
+        for path_source, score_path in candidate_paths:
+            if not score_path.is_file():
+                note(f"SCORE_FILE_MISSING:{path_source}")
+                continue
+            actual_sha = _file_sha256(score_path)
+            if actual_sha != archived_sha:
+                note(f"SCORE_SHA_MISMATCH:{path_source}")
+                continue
+            try:
+                table = load_continuous_ranker_oos_score_table_from_path(
+                    str(score_path),
+                    str(source.experiment_profile),
+                )
+            except (OSError, ValueError, KeyError, TypeError):
+                note(f"SCORE_TABLE_INVALID:{path_source}")
+                continue
+            available_from = str(table.attrs.get("available_from") or "")
+            available_through = str(table.attrs.get("available_through") or "")
+            if not available_from or not available_through:
+                note(f"SCORE_PERIOD_METADATA_MISSING:{path_source}")
+                continue
+            if available_from > stored_start or available_through < stored_end:
+                note(f"SCORE_DOES_NOT_COVER_COMPLETED_PAIR:{path_source}")
+                continue
+            if required_start and available_from > required_start:
+                note(f"SCORE_START_AFTER_CURRENT_PERIOD:{path_source}")
+                continue
+            if required_end and available_through < required_end:
+                note(f"SCORE_END_BEFORE_CURRENT_PERIOD:{path_source}")
+                continue
+            note(f"REUSE_OK:{path_source}")
+            return {
+                "score_path": score_path,
+                "sha256": actual_sha,
+                "available_from": available_from,
+                "available_through": available_through,
+                "execution_start": available_from,
+                "provenance_run_dir": run_dir,
+                "provenance_pair_dir": Path(str(entry.get("source_pair_dir") or "")).resolve(),
+                "path_source": path_source,
+                "archived_path": str(archived_identity.get("path") or ""),
+                "current_canonical_path": current_score_display_path,
+            }
     return None
 
 
@@ -832,11 +912,13 @@ def _apply_completed_pair_frozen_score_reuse(
     A completed comparison can prove the exact SHA of the frozen score artifact even
     when the historical model/report files have since been retired.  This waiver is
     valid only when at least one arm with the same DL source is cached, at least one
-    arm still needs to RUN, and the canonical score CSV still exists byte-identically.
+    arm still needs to RUN, and either the archived artifact-identity path or current
+    canonical score path still exists byte-identically.
     """
 
     pairs = dict(replay_cache.get("pairs") or {})
     overrides: dict[str, Any] = {}
+    reuse_diagnostics: dict[str, list[str]] = {}
     for dl_id, source_row in dict(status.get("dl_sources") or {}).items():
         if bool(source_row.get("ready")):
             continue
@@ -854,17 +936,20 @@ def _apply_completed_pair_frozen_score_reuse(
             continue
         if not any(isinstance(pairs.get(arm.arm_id), dict) for arm in dependent_arms):
             continue
+        diagnostics: list[str] = []
         recovered = _completed_pair_pinned_continuous_score(
             root=root,
             settings=settings,
             status=status,
             replay_cache=replay_cache,
             dl_id=str(dl_id),
+            diagnostics=diagnostics,
         )
+        reuse_diagnostics[str(dl_id)] = diagnostics
         if recovered is not None:
             overrides[str(dl_id)] = recovered
 
-    if not overrides:
+    if not overrides and not reuse_diagnostics:
         return status
 
     plan: StrategyPreparationPlan = status["preparation_plan"]
@@ -899,13 +984,35 @@ def _apply_completed_pair_frozen_score_reuse(
                     action="REUSE",
                     builder_type=None,
                     description=(
-                        "重用既有completed pair SHA驗證的frozen OOS continuous scores"
+                        "重用既有completed pair以artifact identity path + SHA驗證的"
+                        f"frozen OOS continuous scores（{source_info['path_source']}）"
                     ),
                     path=project_relative_display_path(
                         Path(source_info["score_path"]), project_root=root
                     ),
                     dependencies=(),
                     producer_work_type="existing_artifact",
+                    execution_priority=item.execution_priority,
+                )
+            )
+        elif dl_id in reuse_diagnostics and item.action == "BLOCKED":
+            unique_codes = tuple(dict.fromkeys(reuse_diagnostics[dl_id]))
+            diagnostic_text = ",".join(unique_codes[:6]) or "UNKNOWN"
+            rewritten_actions.append(
+                StrategyPreparationAction(
+                    action_id=item.action_id,
+                    artifact_key=item.artifact_key,
+                    action=item.action,
+                    builder_type=item.builder_type,
+                    description=(
+                        "completed pair存在，但frozen-score provenance recovery未通過："
+                        f"{diagnostic_text}；"
+                        "Strategy Compare不重訓；若archived/current score皆不可驗證，"
+                        "請由模型訓練工作類型恢復正式frozen score"
+                    ),
+                    path=item.path,
+                    dependencies=item.dependencies,
+                    producer_work_type=item.producer_work_type,
                     execution_priority=item.execution_priority,
                 )
             )
@@ -917,6 +1024,12 @@ def _apply_completed_pair_frozen_score_reuse(
     updated["preparation_plan"] = rewritten_plan
     updated["overall_status"] = rewritten_plan.overall_status
     updated["comparison_ready"] = rewritten_plan.overall_status == "READY"
+    updated["continuous_score_reuse_diagnostics"] = {
+        dl_id: list(values) for dl_id, values in reuse_diagnostics.items()
+    }
+    if not overrides:
+        return updated
+
     updated["continuous_score_overrides"] = {
         dl_id: {
             "score_path": str(value["score_path"]),
@@ -926,6 +1039,9 @@ def _apply_completed_pair_frozen_score_reuse(
             "execution_start": value["execution_start"],
             "provenance_run_dir": str(value["provenance_run_dir"]),
             "provenance_pair_dir": str(value["provenance_pair_dir"]),
+            "path_source": value["path_source"],
+            "archived_path": value["archived_path"],
+            "current_canonical_path": value["current_canonical_path"],
         }
         for dl_id, value in overrides.items()
     }
@@ -947,6 +1063,7 @@ def _apply_completed_pair_frozen_score_reuse(
                         Path(value["score_path"]), project_root=root
                     ),
                     "required_for_current_execution": True,
+                    "path_source": value["path_source"],
                 })
             else:
                 file_updated.update({

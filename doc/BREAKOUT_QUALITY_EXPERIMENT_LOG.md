@@ -8906,3 +8906,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Runtime另補上Forward continuous-score whitelist對`resource-aware-continuous-score-constrained-optimal`的正式支援，並由orchestrator把pair-pinned score path/execution-start以explicit continuous-score override傳給C44。這只修prerequisite/runtime plumbing，不改C44 objective、K/R0、solver、sizing或execution。
 - Decision不變：先跑single-seed C44 Forward；主要Gate仍為`C44-C36`與`C44-C20`，結果支持前不跑multi-seed。
 
+## 2026-08-15 — SR-C44 Forward archived score-path provenance recovery fix
+
+- 使用者套用前一輪completed-pair frozen-score blocker fix後重跑Forward planning：`DL-CONT12B`已正確由completed C20 pair waiver為REUSE，但`DL-CONT13E`仍BLOCKED；C36仍可REUSE、C44仍為唯一RUN arm。此結果證明第一輪修正的cached-only source waiver有效，但CONT13E score-only pinning沒有命中；C44 scientific status仍`AWAITING_FORWARD_RESULT`，尚未產生任何Forward績效。
+- 第二根因：`_completed_pair_pinned_continuous_score()`仍先依「目前config推導出的canonical score path」找檔，若該path因後續profile/output path migration漂移或退役，即使C36 completed run的`artifact_identities["dl:CONT13E:forward_scores"]`保存了仍存在的歷史score path + SHA，也會在讀取archived provenance前提早return BLOCKED。
+- 修正後 recovery 順序固定為：① C36 completed pair保存的archived artifact identity path；② current canonical path fallback。兩者都只接受project-root scoped path，且score檔必須與completed pair保存SHA byte-identical、由`load_continuous_ranker_oos_score_table_from_path()`通過目前CONT13E profile schema，並完整涵蓋completed/current Forward comparison period；不得依filename、mtime或「看起來像同一份」放寬。
+- 若archived/current path都不存在、SHA不同、source identity不一致、table schema/profile無效或coverage不足，planner仍維持BLOCKED；錯誤描述會附`SCORE_FILE_MISSING:* / SCORE_SHA_MISMATCH:* / SCORE_*_COVERAGE`等diagnostic code，明確區分path drift與真正工件遺失。禁止從orderable candidate、trade、selector trace或其它pair sidecar重建不完整score universe。
+- 新增直接synthetic：current canonical path刻意不存在、completed C36 artifact identity指向另一個仍存在的CONT13E score CSV；只有archived path SHA/profile/coverage全通過時才必須回傳`path_source=archived_artifact_identity`與`REUSE_OK:archived_artifact_identity`。這補上前一輪只有source-token檢查而未覆蓋的實際path-migration情境。
+- Decision不變：先完成C44 single-seed Forward；只有C44-C36與C44-C20支持後才進multi-seed robustness。
+

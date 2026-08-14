@@ -1758,7 +1758,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         all(token in orchestration_source for token in (
             "_completed_pair_pinned_continuous_score",
             "_apply_completed_pair_frozen_score_reuse",
-            "archived_sha != actual_sha",
+            "archived_artifact_identity",
+            "current_canonical_path",
+            "SCORE_FILE_MISSING",
             "COMPLETED_PAIR_PINNED_FROZEN_SCORE",
             "continuous_score_overrides",
             "continuous_score_path_override",
@@ -1767,6 +1769,136 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ))
         and "BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL" in engine_source,
     )
+    from filters.breakout_quality import strategy_comparison as score_reuse_module
+    forward_score_reuse_settings = strategy_config.get_strategy_comparison_settings("forward_oos")
+    with tempfile.TemporaryDirectory() as archived_score_temp:
+        archived_root = Path(archived_score_temp).resolve()
+        archived_score_path = archived_root / "archive" / "cont13e_scores.csv"
+        archived_score_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            [
+                {
+                    "ticker": "2330",
+                    "date": "2021-01-01",
+                    "group_index": 0,
+                    "model_score": 0.80,
+                },
+                {
+                    "ticker": "2317",
+                    "date": "2021-01-02",
+                    "group_index": 0,
+                    "model_score": 0.70,
+                },
+            ]
+        ).to_csv(archived_score_path, index=False)
+        archived_score_sha = score_reuse_module._file_sha256(archived_score_path)
+        archived_run_dir = archived_root / "outputs" / "strategy_compare" / "forward_oos" / "runs" / "archived"
+        archived_run_dir.mkdir(parents=True, exist_ok=True)
+        archived_run_payload = {
+            "status": "COMPLETED",
+            "settings": forward_score_reuse_settings.as_dict(),
+            "artifact_identities": {
+                "dl:CONT13E:forward_scores": {
+                    "path": "archive/cont13e_scores.csv",
+                    "sha256": archived_score_sha,
+                }
+            },
+            "comparison_period": {
+                "start": "2021-01-01",
+                "end": "2021-01-02",
+            },
+        }
+        (archived_run_dir / "strategy_comparison.json").write_text(
+            json.dumps(archived_run_payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        archived_score_status = {
+            "comparison_period": {
+                "start": "2021-01-01",
+                "end": "2021-01-02",
+            },
+            "dl_sources": {
+                "CONT13E": {
+                    "files": {
+                        "forward_scores": {
+                            "path": "current/canonical/missing_scores.csv",
+                        }
+                    }
+                }
+            },
+        }
+        archived_score_replay_cache = {
+            "pairs": {
+                "C36": {
+                    "source_run_dir": str(archived_run_dir),
+                    "source_pair_dir": str(archived_run_dir / "pairs" / "c36"),
+                },
+                "C44": None,
+            }
+        }
+        archived_score_diagnostics = []
+        archived_score_recovered = score_reuse_module._completed_pair_pinned_continuous_score(
+            root=archived_root,
+            settings=forward_score_reuse_settings,
+            status=archived_score_status,
+            replay_cache=archived_score_replay_cache,
+            dl_id="CONT13E",
+            diagnostics=archived_score_diagnostics,
+        )
+        archived_plan_actions = [
+            score_reuse_module.StrategyPreparationAction(
+                action_id=f"dl:CONT13E:{artifact_name}",
+                artifact_key=f"dl:CONT13E:{artifact_name}",
+                action="BLOCKED",
+                builder_type=None,
+                description="synthetic blocked source",
+                path=(
+                    "current/canonical/missing_scores.csv"
+                    if artifact_name == "forward_scores"
+                    else f"current/canonical/{artifact_name}"
+                ),
+                dependencies=(),
+                producer_work_type="model_training",
+            )
+            for artifact_name in ("model", "manifest", "report", "forward_scores")
+        ]
+        archived_score_status["preparation_plan"] = (
+            score_reuse_module.StrategyPreparationPlan.from_actions(
+                archived_plan_actions
+            )
+        )
+        archived_score_status["overall_status"] = "BLOCKED"
+        archived_score_status["comparison_ready"] = False
+        archived_score_applied = score_reuse_module._apply_completed_pair_frozen_score_reuse(
+            root=archived_root,
+            settings=forward_score_reuse_settings,
+            status=archived_score_status,
+            replay_cache=archived_score_replay_cache,
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "completed_pair_frozen_score_reuse_prefers_archived_identity_path_when_current_canonical_path_moved",
+        True,
+        isinstance(archived_score_recovered, dict)
+        and archived_score_recovered.get("path_source") == "archived_artifact_identity"
+        and archived_score_recovered.get("sha256") == archived_score_sha
+        and "REUSE_OK:archived_artifact_identity" in archived_score_diagnostics
+        and archived_score_applied.get("overall_status") == "READY"
+        and archived_score_applied.get("comparison_ready") is True
+        and archived_score_applied.get("continuous_score_overrides", {})
+            .get("CONT13E", {})
+            .get("path_source") == "archived_artifact_identity"
+        and {
+            action.artifact_key: action.action
+            for action in archived_score_applied["preparation_plan"].actions
+        } == {
+            "dl:CONT13E:model": "NOT_REQUIRED",
+            "dl:CONT13E:manifest": "NOT_REQUIRED",
+            "dl:CONT13E:report": "NOT_REQUIRED",
+            "dl:CONT13E:forward_scores": "REUSE",
+        },
+    )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "preparation_builds_parameter_identity_first_and_replans_before_historical_pit_rebuild",
