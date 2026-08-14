@@ -2668,7 +2668,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "frozen_mr13e_expected_pnl_arms_keep_same_ranker_identity_and_pit_fit_source_contract",
         True,
-        c37.enabled and c38.enabled
+        (not c37.enabled) and (not c38.enabled)
+        and "C37" in strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS
+        and "C38" in strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS
         and c37.dl_id == "CONT13E_PIT"
         and c38.dl_id == "CONT13E"
         and c37.dl_runtime_mode == c38.dl_runtime_mode

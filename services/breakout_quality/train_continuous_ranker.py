@@ -29,6 +29,7 @@ from config.breakout_quality import (
     TRAINING_LABEL_SCOPE_ALL,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+    TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
@@ -480,6 +481,46 @@ def _coverage_precision(labels: np.ndarray, scores: np.ndarray, coverage: float)
     return float((y[order] == LABEL_PASS).mean())
 
 
+def raw_r_regression_metrics(
+    scores: np.ndarray,
+    raw_target: np.ndarray,
+    *,
+    huber_delta_r: float,
+) -> dict[str, Any]:
+    predicted = np.asarray(scores, dtype=np.float64)
+    actual = np.asarray(raw_target, dtype=np.float64)
+    finite = np.isfinite(predicted) & np.isfinite(actual)
+    predicted = predicted[finite]
+    actual = actual[finite]
+    if len(actual) == 0:
+        return {
+            "count": 0,
+            "huber_loss_raw_r": None,
+            "mae_raw_r": None,
+            "rmse_raw_r": None,
+            "bias_raw_r": None,
+            "predicted_r_mean": None,
+            "target_r_mean": None,
+        }
+    delta = float(huber_delta_r)
+    if not math.isfinite(delta) or delta <= 0.0:
+        raise ValueError("raw R regression Huber delta必須為正有限值")
+    error = predicted - actual
+    abs_error = np.abs(error)
+    quadratic = np.minimum(abs_error, delta)
+    linear = abs_error - quadratic
+    huber = 0.5 * quadratic * quadratic + delta * linear
+    return {
+        "count": int(len(actual)),
+        "huber_loss_raw_r": float(np.mean(huber)),
+        "mae_raw_r": float(np.mean(abs_error)),
+        "rmse_raw_r": float(np.sqrt(np.mean(error * error))),
+        "bias_raw_r": float(np.mean(error)),
+        "predicted_r_mean": float(np.mean(predicted)),
+        "target_r_mean": float(np.mean(actual)),
+    }
+
+
 def split_metrics(
     group_ids: np.ndarray,
     group_table: pd.DataFrame,
@@ -488,6 +529,7 @@ def split_metrics(
     scores: np.ndarray,
     *,
     include_top_k_quality: bool = False,
+    raw_r_huber_delta_r: float | None = None,
 ) -> dict[str, Any]:
     ids = np.asarray(group_ids, dtype=np.int64)
     score_values = np.asarray(scores, dtype=np.float64)
@@ -538,6 +580,13 @@ def split_metrics(
         "p_at_50pct": _coverage_precision(labels, score_values, 0.50),
         "p_at_60pct": _coverage_precision(labels, score_values, 0.60),
         "p_at_70pct": _coverage_precision(labels, score_values, 0.70),
+        "raw_r_regression": (
+            raw_r_regression_metrics(
+                score_values, raw_values, huber_delta_r=float(raw_r_huber_delta_r)
+            )
+            if raw_r_huber_delta_r is not None
+            else None
+        ),
     }
 
 
@@ -842,11 +891,15 @@ def _train_epoch(
     grad_scaler,
     prefetch_batches: int = 0,
     pairwise_reduction: str = CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    raw_r_huber_delta_r: float | None = None,
 ) -> float:
     model.train()
     ids_all = np.asarray(group_ids, dtype=np.int64)
     rng = np.random.default_rng(int(seed))
-    if training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
+    if training_objective in {
+        TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+        TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
+    }:
         order = ids_all.copy()
         rng.shuffle(order)
         batches = [
@@ -888,6 +941,15 @@ def _train_epoch(
             if training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
                 score = torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]
                 loss = F.mse_loss(score, target, reduction="mean")
+                loss_weight = int(len(ids))
+            elif training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+                predicted_r = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
+                if raw_r_huber_delta_r is None:
+                    raise ValueError("direct R regression缺少Huber delta")
+                delta_r = float(raw_r_huber_delta_r)
+                loss = F.huber_loss(
+                    predicted_r, target, reduction="mean", delta=delta_r
+                )
                 loss_weight = int(len(ids))
             elif training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
                 margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
@@ -932,12 +994,25 @@ def _train_epoch(
         weighted_loss_count += int(loss_weight)
     if not losses or weighted_loss_count < 1:
         raise ValueError("continuous ranker training沒有任何有效batch／ranking supervision")
-    if training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
-        # Preserve MR-12A historical reporting semantics exactly.
+    if training_objective in {
+        TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+        TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
+    }:
+        # Preserve historical scalar-regression reporting semantics exactly.
         return float(np.mean(losses))
     return float(weighted_loss_sum / float(weighted_loss_count))
 
-def predict_scores(torch, model, feature_bank: np.ndarray, group_context: np.ndarray, group_ids: np.ndarray, *, batch_size: int, plan) -> np.ndarray:
+def predict_scores(
+    torch,
+    model,
+    feature_bank: np.ndarray,
+    group_context: np.ndarray,
+    group_ids: np.ndarray,
+    *,
+    batch_size: int,
+    plan,
+    training_objective: str,
+) -> np.ndarray:
     ids = np.asarray(group_ids, dtype=np.int64)
     logits = strict_parallel_batched_logits(
         torch,
@@ -949,9 +1024,17 @@ def predict_scores(torch, model, feature_bank: np.ndarray, group_context: np.nda
         workers=1,
         execution_plan=plan,
     )
+    if training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+        return (logits[:, LABEL_PASS] - logits[:, LABEL_REJECT]).astype(np.float32)
     shifted = logits.astype(np.float64) - logits.max(axis=1, keepdims=True)
     exp = np.exp(shifted)
     return (exp[:, LABEL_PASS] / exp.sum(axis=1)).astype(np.float32)
+
+
+def _training_target_for_profile(profile, raw_target: np.ndarray, percentile_target: np.ndarray) -> np.ndarray:
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+        return np.asarray(raw_target, dtype=np.float32)
+    return np.asarray(percentile_target, dtype=np.float32)
 
 
 def select_epoch(
@@ -968,6 +1051,14 @@ def select_epoch(
     plan,
     evaluate_train_metrics: bool = True,
 ) -> dict[str, Any]:
+    profile = get_breakout_quality_experiment_profile(args.experiment_profile)
+    research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
+    training_target = _training_target_for_profile(profile, raw_target, percentile_target)
+    raw_r_delta = (
+        float(profile.raw_r_huber_delta_r)
+        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        else None
+    )
     model, optimizer = _new_model_and_optimizer(
         torch,
         feature_count=int(feature_bank.shape[2]),
@@ -977,14 +1068,20 @@ def select_epoch(
     )
     grad_scaler = build_grad_scaler(torch, plan)
     best_epoch = 0
-    best_metric = -math.inf
+    best_daily_spearman = -math.inf
     best_validation_mse = math.inf
+    best_validation_huber = math.inf
+    best_validation_mae = math.inf
     epochs_without_improvement = 0
     history: list[dict[str, Any]] = []
     compact_console = compact_console_enabled()
-    research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
     if not compact_console:
-        print("\nEpoch選擇（依Validation mean daily Spearman）")
+        label = (
+            "Validation Huber raw R"
+            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+            else "Validation mean daily Spearman"
+        )
+        print(f"\nEpoch選擇（依{label}）")
     for epoch in range(1, int(args.epochs) + 1):
         started = time.perf_counter()
         batch_loss = _train_epoch(
@@ -994,9 +1091,9 @@ def select_epoch(
             feature_bank,
             group_context,
             train_ids,
-            percentile_target,
+            training_target,
             group_table["date"],
-            training_objective=get_breakout_quality_experiment_profile(args.experiment_profile).training_objective,
+            training_objective=profile.training_objective,
             batch_size=int(args.batch_size),
             seed=int(args.seed) + epoch,
             gradient_clip_norm=float(args.gradient_clip_norm),
@@ -1007,45 +1104,91 @@ def select_epoch(
                 research_spec.pairwise_reduction
                 or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
             ),
+            raw_r_huber_delta_r=raw_r_delta,
         )
         validation_scores = predict_scores(
-            torch, model, feature_bank, group_context, validation_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
+            torch,
+            model,
+            feature_bank,
+            group_context,
+            validation_ids,
+            batch_size=int(args.evaluation_batch_size),
+            plan=plan,
+            training_objective=profile.training_objective,
         )
         if bool(evaluate_train_metrics):
             train_scores = predict_scores(
-                torch, model, feature_bank, group_context, train_ids,
-                batch_size=int(args.evaluation_batch_size), plan=plan,
+                torch,
+                model,
+                feature_bank,
+                group_context,
+                train_ids,
+                batch_size=int(args.evaluation_batch_size),
+                plan=plan,
+                training_objective=profile.training_objective,
             )
             train_metrics = split_metrics(
-                train_ids, group_table, raw_target, percentile_target, train_scores,
+                train_ids,
+                group_table,
+                raw_target,
+                percentile_target,
+                train_scores,
+                raw_r_huber_delta_r=raw_r_delta,
             )
         else:
             train_metrics = {
                 "group_count": int(len(train_ids)),
                 "not_evaluated_reason": (
                     "daily-universal sample universe略過每epoch完整train inference；"
-                    "epoch selection仍只依完整validation mean daily Spearman"
+                    "epoch selection仍只依完整validation metric"
                 ),
             }
         validation_metrics = split_metrics(
-            validation_ids, group_table, raw_target, percentile_target, validation_scores,
+            validation_ids,
+            group_table,
+            raw_target,
+            percentile_target,
+            validation_scores,
+            raw_r_huber_delta_r=raw_r_delta,
         )
-        metric = validation_metrics.get("mean_daily_spearman")
-        if metric is None or not math.isfinite(float(metric)):
-            raise ValueError("continuous ranker validation mean daily Spearman不可用")
+        daily_spearman = validation_metrics.get("mean_daily_spearman")
+        if daily_spearman is None or not math.isfinite(float(daily_spearman)):
+            raise ValueError("continuous model validation mean daily Spearman不可用")
         validation_mse = float(validation_metrics["mse_vs_daily_percentile"])
-        improved = (
-            float(metric) > best_metric + float(args.early_stopping_min_delta)
-            or (
-                math.isclose(float(metric), best_metric, rel_tol=0.0, abs_tol=1e-12)
-                and validation_mse < best_validation_mse
+
+        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+            regression = dict(validation_metrics.get("raw_r_regression") or {})
+            validation_huber = regression.get("huber_loss_raw_r")
+            validation_mae = regression.get("mae_raw_r")
+            if validation_huber is None or not math.isfinite(float(validation_huber)):
+                raise ValueError("direct R validation Huber loss不可用")
+            if validation_mae is None or not math.isfinite(float(validation_mae)):
+                raise ValueError("direct R validation MAE不可用")
+            improved = (
+                float(validation_huber) < best_validation_huber - float(args.early_stopping_min_delta)
+                or (
+                    math.isclose(float(validation_huber), best_validation_huber, rel_tol=0.0, abs_tol=1e-12)
+                    and float(daily_spearman) > best_daily_spearman
+                )
             )
-        )
+        else:
+            validation_huber = None
+            validation_mae = None
+            improved = (
+                float(daily_spearman) > best_daily_spearman + float(args.early_stopping_min_delta)
+                or (
+                    math.isclose(float(daily_spearman), best_daily_spearman, rel_tol=0.0, abs_tol=1e-12)
+                    and validation_mse < best_validation_mse
+                )
+            )
+
         if improved:
             best_epoch = int(epoch)
-            best_metric = float(metric)
+            best_daily_spearman = float(daily_spearman)
             best_validation_mse = validation_mse
+            if validation_huber is not None:
+                best_validation_huber = float(validation_huber)
+                best_validation_mae = float(validation_mae)
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
@@ -1060,26 +1203,38 @@ def select_epoch(
         })
         if not compact_console:
             marker = " ★新最佳" if improved else ""
-            if bool(evaluate_train_metrics):
+            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+                print(
+                    f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Huber {batch_loss:.6f} "
+                    f"| Val Huber {float(validation_huber):.6f} | Val MAE {float(validation_mae):.4f}R "
+                    f"| Val Daily Spearman {float(daily_spearman):.4f} | {elapsed:.1f}s{marker}"
+                )
+            elif bool(evaluate_train_metrics):
                 print(
                     f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} | Train MSE {train_metrics['mse_vs_daily_percentile']:.6f} "
-                    f"| Val MSE {validation_mse:.6f} | Val Daily Spearman {float(metric):.4f} "
+                    f"| Val MSE {validation_mse:.6f} | Val Daily Spearman {float(daily_spearman):.4f} "
                     f"| {elapsed:.1f}s{marker}"
                 )
             else:
                 print(
                     f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
-                    f"| Val MSE {validation_mse:.6f} | Val Daily Spearman {float(metric):.4f} "
+                    f"| Val MSE {validation_mse:.6f} | Val Daily Spearman {float(daily_spearman):.4f} "
                     f"| {elapsed:.1f}s{marker}"
                 )
         if int(args.early_stopping_patience) > 0 and epochs_without_improvement >= int(args.early_stopping_patience):
             break
     if best_epoch < 1:
-        raise ValueError("continuous ranker無法選出best epoch")
+        raise ValueError("continuous model無法選出best epoch")
     return {
         "best_epoch": int(best_epoch),
-        "best_validation_mean_daily_spearman": float(best_metric),
+        "best_validation_mean_daily_spearman": float(best_daily_spearman),
         "best_validation_mse": float(best_validation_mse),
+        "best_validation_huber_raw_r": (
+            None if not math.isfinite(best_validation_huber) else float(best_validation_huber)
+        ),
+        "best_validation_mae_raw_r": (
+            None if not math.isfinite(best_validation_mae) else float(best_validation_mae)
+        ),
         "completed_epochs": int(len(history)),
         "history": history,
     }
@@ -1089,6 +1244,7 @@ def fit_final(
     torch,
     feature_bank: np.ndarray,
     group_context: np.ndarray,
+    raw_target: np.ndarray,
     percentile_target: np.ndarray,
     group_table: pd.DataFrame,
     final_ids: np.ndarray,
@@ -1098,6 +1254,14 @@ def fit_final(
     plan,
     phase_label: str = "完整Selection重訓",
 ):
+    profile = get_breakout_quality_experiment_profile(args.experiment_profile)
+    research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
+    training_target = _training_target_for_profile(profile, raw_target, percentile_target)
+    raw_r_delta = (
+        float(profile.raw_r_huber_delta_r)
+        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        else None
+    )
     model, optimizer = _new_model_and_optimizer(
         torch,
         feature_count=int(feature_bank.shape[2]),
@@ -1108,7 +1272,6 @@ def fit_final(
     grad_scaler = build_grad_scaler(torch, plan)
     history: list[dict[str, Any]] = []
     compact_console = compact_console_enabled()
-    research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
     if not compact_console:
         print(f"\n{str(phase_label)}（{int(epochs)} Epoch）")
     for epoch in range(1, int(epochs) + 1):
@@ -1120,9 +1283,9 @@ def fit_final(
             feature_bank,
             group_context,
             final_ids,
-            percentile_target,
+            training_target,
             group_table["date"],
-            training_objective=get_breakout_quality_experiment_profile(args.experiment_profile).training_objective,
+            training_objective=profile.training_objective,
             batch_size=int(args.batch_size),
             seed=int(args.seed) + epoch,
             gradient_clip_norm=float(args.gradient_clip_norm),
@@ -1133,6 +1296,7 @@ def fit_final(
                 research_spec.pairwise_reduction
                 or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
             ),
+            raw_r_huber_delta_r=raw_r_delta,
         )
         elapsed = time.perf_counter() - started
         history.append({"epoch": int(epoch), "batch_loss": float(loss), "elapsed_sec": round(float(elapsed), 3)})
@@ -1501,6 +1665,7 @@ def run(args) -> int:
         torch,
         feature_bank,
         group_context,
+        raw_target,
         percentile_target,
         group_table,
         scoped_split_ids["selection"],
@@ -1559,6 +1724,7 @@ def run(args) -> int:
             ids,
             batch_size=int(args.evaluation_batch_size),
             plan=plan,
+            training_objective=profile.training_objective,
         )
         score_by_group[ids] = scores
         all_group_split_metrics[name] = split_metrics(
@@ -1568,6 +1734,11 @@ def run(args) -> int:
             percentile_target,
             scores,
             include_top_k_quality=True,
+            raw_r_huber_delta_r=(
+                float(profile.raw_r_huber_delta_r)
+                if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                else None
+            ),
         )
         scoped_ids = scoped_split_ids[name]
         split_metrics_by_split[name] = split_metrics(
@@ -1577,6 +1748,11 @@ def run(args) -> int:
             percentile_target,
             score_by_group[scoped_ids],
             include_top_k_quality=True,
+            raw_r_huber_delta_r=(
+                float(profile.raw_r_huber_delta_r)
+                if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                else None
+            ),
         )
 
     # Forward runtime score availability must depend only on prediction-time
@@ -1593,6 +1769,7 @@ def run(args) -> int:
             missing_forward_ids,
             batch_size=int(args.evaluation_batch_size),
             plan=plan,
+            training_objective=profile.training_objective,
         )
 
     role_by_group = np.full((group_count,), "selection_other", dtype=object)
@@ -1666,10 +1843,15 @@ def run(args) -> int:
             "objective": profile.training_objective,
             "objective_description": contract["objective_description"],
             "loss": profile.loss_name,
-            "model_score": "softmax_pass_probability",
+            "model_score": (
+                "predicted_r_two_logit_margin"
+                if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                else "softmax_pass_probability"
+            ),
             "batching": training_semantics(profile)["batching"],
             "pairwise_contract": training_semantics(profile)["pairwise_contract"],
             "listwise_contract": training_semantics(profile)["listwise_contract"],
+            "raw_r_regression_contract": training_semantics(profile).get("raw_r_regression_contract"),
             "target": contract["target_description"],
             "training_label_scope": profile.training_label_scope,
             "training_group_counts": training_group_counts,

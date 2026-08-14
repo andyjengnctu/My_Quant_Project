@@ -207,6 +207,7 @@ def fit_final(
         torch,
         bundle.feature_bank,
         bundle.group_context,
+        bundle.raw_target,
         percentile_target,
         bundle.group_table,
         np.asarray(final_ids, dtype=np.int64),
@@ -234,6 +235,7 @@ def predict_scores(
         np.asarray(group_ids, dtype=np.int64),
         batch_size=int(batch_size),
         plan=plan,
+        training_objective=bundle.profile.training_objective,
     )
 
 

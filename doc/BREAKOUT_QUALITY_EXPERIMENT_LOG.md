@@ -8788,3 +8788,23 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Controlled conditions全部固定：`K = same-param Min ROOS baseline selected_count`、`R0 = same-param Min ROOS baseline exact reserved capital`、historical/current Min params、cash、position/sizing、orderability、execution priority與其他entry rules均不變。即使calibrated Expected R為負也不因此減少K或取消R0；是否允許留現金是後續獨立實驗，不在本輪。
 - Strategy Compare新增deterministic runtime artifact `outputs/strategy_compare/runtime_artifacts/expected_r_calibration/...`，包含gzip lookup、manifest與report；artifact identity綁runtime score SHA與Selection PIT fit score SHA，pair cache fingerprint同步綁calibration manifest。Strategy Compare可由已存在的frozen score＋canonical target deterministic建立calibration，但不得train model。
 - `SR-C37`狀態=`IMPLEMENTED / AWAITING_SELECTION_STRATEGY_RESULT / robustness_role=off`；`SR-C38`程式契約同步完成，但研究動作=`FORWARD_EXECUTION_CONDITIONAL_ON_C37_SELECTION_DECISION`。下一步只先執行Selection PIT Strategy Compare，重點比較C37 vs C35（唯一差異Expected-PnL vs score-sum objective）、C37 vs C23與C37 vs C25；C37結果未判定前不執行C38。
+
+## 2026-08-14 — SR-C37 Selection result：Frozen MR-13E Expected-PnL REJECTED
+
+- 程式／結果基準：`test-branch-1_20260814_211750_56bfa5a.zip`；SHA256 `dee7951c9d1d6e539834f92dd65febd662b19c79154ace8de04ce53eb90fa5d1`。Selection Strategy Compare period=`2014-01-01～2020-12-31`，同一MR-13E PIT source、historical Min params、K/R0、sizing、cash、orderability與execution固定；C37唯一portfolio變更仍為`Σ(Expected R × canonical planned initial risk)`取代C35 score-sum objective。
+- C37結果：Return=`84.06%`、MDD=`21.87%`、RoMD=`3.84`、annual=`9.11%`、EV=`0.65R`、Payoff=`2.56`、exposure=`88.03%`、trades=`424`、同參數DL選擇R=`77.35R`。
+- 對C35 frozen MR-13E score-sum：Return `-69.90pp`、MDD `+1.98pp`、RoMD `-3.90`、annual `-5.14pp`；雖EV `+0.11R`、DL選擇R `+41.39R`，但portfolio economics與wealth path顯著惡化。對C23 Min ROOS亦Return `-23.92pp`、RoMD `-1.41`。
+- 年度：2014/2015/2016/2019/2020低於C23，只有2017/2018改善；不是單一年份outlier。選中候選Target mean仍高於baseline（`0.6507R vs 0.4769R`），但未能轉成整體報酬與RoMD。
+- 判定：`SR-C37 REJECTED`。依事前Gate，`SR-C38` Forward **不執行**，避免在Selection已明顯失敗後再查看Forward；不以C37結果回頭調calibration、Expected-R負值門檻、K或R0。
+- 下一步：依使用者已確認順序進入新的直接預測R模型研究；此時才建立新`MR-*` identity。
+
+## 2026-08-14 — MR-13F Daily Universal Direct-R Huber Regression
+
+- 狀態：`IMPLEMENTED / AWAITING_FORWARD_MODEL_RESULT`；尚無Selection PIT、runtime DL source或strategy arm。
+- 程式基準：`test-branch-1_20260814_211750_56bfa5a.zip` + 本輪patch（SHA於交付時記錄）。
+- 唯一scientific change：相對MR-13E，固定`daily_eligible_stock_days`、`daily_opportunity_no_time_r_v1`、`inception_time_v1`、optimizer/LR/weight decay、Seed42、Selection/OOS split與feature semantics；learning objective由full-list Delta-NDCG weighted RankNet改成**direct raw-R robust regression**。
+- Prediction semantics：沿用同一two-logit head但不改architecture；`Predicted R = PASS logit - REJECT logit`，因此輸出無界且單位為R。Loss=`Huber(raw predicted R, daily_opportunity_no_time_r_v1)`，delta固定=`1.0R`；不clip target、不改target identity、不做OOS normalization。
+- Epoch selection：只用Selection內Validation，最小化Validation Huber raw-R；同值時以Validation mean daily Spearman tie-break。OOS仍在完整Selection refit checkpoint寫入後才推論，絕不參與loss／gradient／epoch selection。
+- Forward Model Gate報表同時看兩類證據：(1) regression：Huber、MAE、RMSE、bias、Predicted-R mean vs Target-R mean；(2) ranking：Daily Spearman、global Spearman、pair concordance、Top/Bottom decile與既有Top-K quality。Breakout candidate slice仍只作post-checkpoint diagnostic，不進training sample selection。
+- Dataset／Target重建：**不需要**；重用canonical daily-universal Dataset/OHLCV source與`daily_opportunity_no_time_r_v1`。
+- 下一步：先由模型研究選單執行MR-13F Seed42 Forward model gate。若模型層raw-R calibration／ranking明顯不足即REJECT，不建立PIT；若Forward model gate成立，再另輪決定是否進Selection PIT Model Gate。

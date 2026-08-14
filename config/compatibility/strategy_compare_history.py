@@ -421,6 +421,46 @@ HISTORICAL_STRATEGY_COMPARE_ARMS = {
         "dl_id": "CONT13A_PIT",
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
     },
+    "C37": {
+        "name": "Min MR-13E Expected-PnL",
+        "description": (
+            "MR-13E權重/PIT score frozen；以Selection expanding/PIT daily percentile校準Expected R，"
+            "在與C35完全相同K/R0、sizing、cash、execution下，basket objective唯一改為"
+            "Σ(Expected R × canonical planned initial risk)"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-expected-pnl-feasible-ascent",
+        "dl_runtime_options": {
+            "expected_r_fit_dl_id": "CONT13E_PIT",
+            "expected_r_calibration_method": "daily_score_percentile_nonnegative_affine_v1",
+            "negative_expected_r_allowed": True,
+            "preserve_k_r0": True,
+        },
+        "robustness_role": "off",
+    },
+    "C38": {
+        "name": "Min MR-13E Expected-PnL",
+        "description": (
+            "MR-13E Forward score frozen；Expected-R mapping只用2021-01-01前成熟Selection PIT target fit，"
+            "與C36完全相同K/R0、sizing、cash、execution，basket objective唯一改為"
+            "Σ(Expected R × canonical planned initial risk)；不得讀Forward target fit calibration"
+        ),
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E",
+        "dl_runtime_mode": "resource-aware-continuous-expected-pnl-feasible-ascent",
+        "dl_runtime_options": {
+            "expected_r_fit_dl_id": "CONT13E_PIT",
+            "expected_r_calibration_method": "daily_score_percentile_nonnegative_affine_v1",
+            "negative_expected_r_allowed": True,
+            "preserve_k_r0": True,
+        },
+        "robustness_role": "off",
+    },
 }
 
 HISTORICAL_STRATEGY_COMPARE_CONTRASTS = {
@@ -475,6 +515,12 @@ HISTORICAL_STRATEGY_COMPARE_CONTRASTS = {
     "C34-C32": {"left": "C34", "right": "C32", "description": "Selection Full ROOS下MR-13A daily feasible-ascent相對DL-off baseline的策略效果"},
     "C34-C33": {"left": "C34", "right": "C33", "description": "固定Selection Full ROOS與feasible-ascent，MR-13A daily相對MR-12B event PIT的純DL source效果"},
     "C34-C28": {"left": "C34", "right": "C28", "description": "固定MR-13A daily PIT與feasible-ascent下，Selection Full相對Min的完整策略體系interaction"},
+    "C37-C23": {"left": "C37", "right": "C23", "description": "Selection PIT下frozen MR-13E Expected-PnL相對DL-off Min ROOS的策略經濟效果"},
+    "C37-C35": {"left": "C37", "right": "C35", "description": "同一MR-13E PIT source與同K/R0；只比較Expected-Dollar-PnL objective相對score-sum objective"},
+    "C37-C25": {"left": "C37", "right": "C25", "description": "Selection PIT frozen MR-13E Expected-PnL相對MR-12B runtime anchor"},
+    "C38-C3": {"left": "C38", "right": "C3", "description": "Forward-OOS frozen MR-13E Expected-PnL相對DL-off Min ROOS的策略經濟效果"},
+    "C38-C36": {"left": "C38", "right": "C36", "description": "同一frozen MR-13E Forward source與同K/R0；只比較Expected-Dollar-PnL objective相對score-sum objective"},
+    "C38-C20": {"left": "C38", "right": "C20", "description": "Forward-OOS frozen MR-13E Expected-PnL相對MR-12B runtime anchor"},
 }
 
 __all__ = [

@@ -14,6 +14,7 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     get_continuous_ranker_research_spec,
 )
 
@@ -24,6 +25,17 @@ PAIRWISE_TRAINING_CONTRACT = {
     "model_margin": "pass_logit_minus_reject_logit",
     "batching": "whole_date_pack_no_date_split",
     "runtime_score": "softmax_pass_probability",
+}
+
+
+RAW_R_REGRESSION_TRAINING_CONTRACT = {
+    "sample_scope": "daily_eligible_stock_days",
+    "target": "daily_opportunity_no_time_r_v1_raw_r",
+    "prediction": "pass_logit_minus_reject_logit_margin_in_r_units",
+    "loss": "huber_raw_r",
+    "huber_delta_r": 1.0,
+    "batching": "shuffled_unique_group_batches",
+    "runtime_score": "predicted_r",
 }
 
 LISTWISE_TRAINING_CONTRACT = {
@@ -49,22 +61,35 @@ def training_semantics(profile) -> dict[str, Any]:
             "batching": pairwise_contract["batching"],
             "pairwise_contract": pairwise_contract,
             "listwise_contract": None,
+            "raw_r_regression_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING:
         return {
             "batching": LISTWISE_TRAINING_CONTRACT["batching"],
             "pairwise_contract": None,
             "listwise_contract": dict(LISTWISE_TRAINING_CONTRACT),
+            "raw_r_regression_contract": None,
+        }
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+        contract = dict(RAW_R_REGRESSION_TRAINING_CONTRACT)
+        contract["huber_delta_r"] = float(profile.raw_r_huber_delta_r)
+        return {
+            "batching": contract["batching"],
+            "pairwise_contract": None,
+            "listwise_contract": None,
+            "raw_r_regression_contract": contract,
         }
     return {
         "batching": "shuffled_unique_group_batches",
         "pairwise_contract": None,
         "listwise_contract": None,
+        "raw_r_regression_contract": None,
     }
 
 
 __all__ = [
     "LISTWISE_TRAINING_CONTRACT",
     "PAIRWISE_TRAINING_CONTRACT",
+    "RAW_R_REGRESSION_TRAINING_CONTRACT",
     "training_semantics",
 ]

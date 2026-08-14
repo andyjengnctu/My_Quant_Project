@@ -15,6 +15,7 @@ import pandas as pd
 
 from config.breakout_quality import (
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+    TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     get_continuous_ranker_research_spec,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
@@ -67,6 +68,7 @@ def _empty_split_metrics(group_count: int, reason: str) -> dict:
         "p_at_50pct": None,
         "p_at_60pct": None,
         "p_at_70pct": None,
+        "raw_r_regression": None,
     }
 
 
@@ -104,22 +106,45 @@ def _render_markdown(payload: dict) -> str:
     def fmt(value, digits=4):
         return "-" if value is None else f"{float(value):.{digits}f}"
 
+    objective = str(payload["training"].get("objective") or "")
+    direct_r = objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
     lines = [
-        "# Daily Universal Ranker Report",
+        "# Daily Universal Continuous Model Report",
         "",
         f"- Experiment：`{payload['experiment']}`",
         f"- Profile：`{payload['experiment_profile']}`",
         f"- Sample scope：`{payload['training']['sample_scope']}`",
         f"- Target：`{payload['training']['target']}`",
+        f"- Score semantic：`{payload.get('score_semantic_id')}`",
         f"- Selected epoch：`{payload['training']['selected_epoch']}`",
         "- Feature storage：`lazy canonical OHLCV windows`；未建立 expanded daily 300×10 feature bank。",
         "- OOS 在 checkpoint 寫入後才推論，不參與 loss／gradient／epoch selection。",
+    ]
+    if direct_r:
+        regression_contract = dict(payload["training"].get("raw_r_regression_contract") or {})
+        lines.extend([
+            f"- Direct-R objective：two-logit margin直接解讀為Predicted R；Huber delta=`{fmt(regression_contract.get('huber_delta_r'))}R`。",
+            "",
+            "## Direct-R Regression",
+            "",
+            "| Scope | Groups | Huber | MAE | RMSE | Bias | Pred R Mean | Target R Mean |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
+        ])
+        for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
+            row = payload["split_metrics"].get(key) or {}
+            reg = dict(row.get("raw_r_regression") or {})
+            lines.append(
+                f"| {label} | {int(row.get('group_count', 0) or 0):,} | {fmt(reg.get('huber_loss_raw_r'))} "
+                f"| {fmt(reg.get('mae_raw_r'))} | {fmt(reg.get('rmse_raw_r'))} | {fmt(reg.get('bias_raw_r'))} "
+                f"| {fmt(reg.get('predicted_r_mean'))} | {fmt(reg.get('target_r_mean'))} |"
+            )
+    lines.extend([
         "",
-        "## Forward OOS",
+        "## Ranking Diagnostics",
         "",
         "| Scope | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target |",
         "|---|---:|---:|---:|---:|---:|---:|",
-    ]
+    ])
     for label, key in (("All eligible stock-days", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
         row = payload["split_metrics"].get(key) or {}
         pair = row.get("pairwise_concordance")
@@ -158,6 +183,11 @@ def run(args) -> int:
     target_id = str(bundle.profile.continuous_target_id or "").strip()
     if not target_id:
         raise ValueError("daily-universal continuous ranker缺少target identity")
+    raw_r_huber_delta = (
+        float(bundle.profile.raw_r_huber_delta_r)
+        if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        else None
+    )
     split = build_daily_ranker_split(bundle, inner_validation_months=int(args.inner_validation_months))
     forward_score_ids = resolve_forward_oos_score_group_ids(bundle)
 
@@ -198,6 +228,7 @@ def run(args) -> int:
         torch,
         bundle.feature_bank,
         bundle.group_context,
+        bundle.raw_target,
         percentile_target,
         bundle.group_table,
         split.selection_ids,
@@ -242,10 +273,12 @@ def run(args) -> int:
     validation_scores = ranker_api.predict_scores(
         torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
         batch_size=int(args.evaluation_batch_size), plan=plan,
+        training_objective=bundle.profile.training_objective,
     )
     forward_scores = ranker_api.predict_scores(
         torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
         batch_size=int(args.evaluation_batch_size), plan=plan,
+        training_objective=bundle.profile.training_objective,
     )
     score_by_group = np.full(len(bundle.group_table), np.nan, dtype=np.float32)
     score_by_group[forward_score_ids] = forward_scores
@@ -253,10 +286,12 @@ def run(args) -> int:
     validation_metrics = ranker_api.split_metrics(
         split.validation_ids, bundle.group_table, bundle.raw_target, percentile_target,
         validation_scores, include_top_k_quality=True,
+        raw_r_huber_delta_r=raw_r_huber_delta,
     )
     oos_metrics = ranker_api.split_metrics(
         split.oos_ids, bundle.group_table, bundle.raw_target, percentile_target,
         oos_scores, include_top_k_quality=True,
+        raw_r_huber_delta_r=raw_r_huber_delta,
     )
     candidate_ids = select_breakout_candidate_group_ids(
         bundle, split.oos_ids, allow_stale_source=bool(args.allow_stale_source)
@@ -269,6 +304,7 @@ def run(args) -> int:
             percentile_target,
             score_by_group[candidate_ids],
             include_top_k_quality=True,
+            raw_r_huber_delta_r=raw_r_huber_delta,
         )
         if len(candidate_ids) >= 2
         else _empty_split_metrics(
@@ -293,6 +329,8 @@ def run(args) -> int:
         forward_score_ids[evaluable_forward_mask]
     ]
     oos_frame["model_score"] = forward_scores
+    if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+        oos_frame["predicted_r"] = forward_scores
     oos_frame.to_csv(score_path, index=False, encoding="utf-8-sig", compression="gzip")
     _date_split_frame(bundle, split, forward_score_ids=forward_score_ids).to_csv(
         split_path, index=False, encoding="utf-8-sig"
@@ -324,9 +362,14 @@ def run(args) -> int:
             "sample_scope": bundle.profile.training_sample_scope,
             "training_label_scope": bundle.profile.training_label_scope,
             "target": target_id,
-            "model_score": "softmax_pass_probability_monotonic_to_two_logit_margin",
+            "model_score": (
+                "predicted_r_two_logit_margin"
+                if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                else "softmax_pass_probability_monotonic_to_two_logit_margin"
+            ),
             "batching": ranker_api.training_semantics(bundle.profile)["batching"],
             "pairwise_contract": ranker_api.training_semantics(bundle.profile)["pairwise_contract"],
+            "raw_r_regression_contract": ranker_api.training_semantics(bundle.profile).get("raw_r_regression_contract"),
             "pairwise_reduction": research_spec.pairwise_reduction,
             "selected_epoch": selected_epoch,
             "epoch_selection_metric": bundle.profile.epoch_selection_metric,
@@ -410,9 +453,15 @@ def run(args) -> int:
     def _fmt_metric(value) -> str:
         return "-" if value is None else f"{float(value):.4f}"
 
-    print(f"\nDaily Universal Ranker完成｜{research_spec.model_research_id}")
+    print(f"\nDaily Universal Continuous Model完成｜{research_spec.model_research_id}")
+    if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+        regression = dict(oos_metrics.get("raw_r_regression") or {})
+        print(
+            f"selected_epoch={selected_epoch} | OOS Huber={_fmt_metric(regression.get('huber_loss_raw_r'))} "
+            f"| MAE={_fmt_metric(regression.get('mae_raw_r'))}R | bias={_fmt_metric(regression.get('bias_raw_r'))}R"
+        )
     print(
-        f"selected_epoch={selected_epoch} | OOS daily rho={_fmt_metric(oos_metrics.get('mean_daily_spearman'))} | "
+        f"OOS daily rho={_fmt_metric(oos_metrics.get('mean_daily_spearman'))} | "
         f"pair={_fmt_metric(oos_metrics.get('pairwise_concordance'))}"
     )
     print(
