@@ -2080,6 +2080,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
     from core.portfolio_entry_selection_max_dl import (
         build_max_dl_repair_mechanism_diagnostic,
+        _excess_alpha_basket_quality_key,
+        _max_dl_execution_order,
     )
     from core.strategy_params import V16StrategyParams
     from core.trade_plans import build_normal_candidate_plan
@@ -2791,9 +2793,165 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and no_r0_selected["reserved_cost_milli"] < int(no_r0_diag["baseline_reserved_cost_milli"]),
     )
 
+    constrained_seed = (
+        ("CO_H1", 100.0, 1400, 0.20, 0.03),
+        ("CO_H2", 100.0, 1350, 0.19, 0.02),
+        ("CO_A", 100.0, 700, 0.99, 0.45),
+        ("CO_B", 100.0, 750, 0.98, 0.40),
+        ("CO_C", 100.0, 900, 0.97, 0.28),
+    )
+    constrained_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-excess-alpha-constrained-optimal",
+            expected_excess_r=expected_excess_r,
+        )
+        for ticker, price, qty, score, expected_excess_r in constrained_seed
+    ]
+    constrained_order, constrained_diag = reorder_candidates_for_resource_aware_quality(
+        constrained_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=resource_params,
+    )
+    constrained_action = select_resource_aware_action_candidates(
+        constrained_order, constrained_diag
+    )
+    constrained_result = _simulate_reserved_candidate_order(
+        constrained_action,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=2,
+        params=resource_params,
+    )
+    constrained_baseline = _simulate_reserved_candidate_order(
+        constrained_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=2,
+        params=resource_params,
+    )
+    constrained_base_rank = {id(row): idx for idx, row in enumerate(constrained_rows)}
+    brute_best = None
+    brute_best_key = None
+    for combo in itertools.combinations(constrained_rows, 2):
+        combo_order = _max_dl_execution_order(combo, base_rank=constrained_base_rank)
+        combo_result = _simulate_reserved_candidate_order(
+            combo_order,
+            available_cash=350_000.0,
+            sizing_equity=2_000_000.0,
+            free_slots=2,
+            params=resource_params,
+        )
+        if (
+            combo_result["selected_count"] != 2
+            or combo_result["reserved_cost_milli"] < constrained_baseline["reserved_cost_milli"]
+        ):
+            continue
+        combo_key = _excess_alpha_basket_quality_key(
+            combo_result, base_rank=constrained_base_rank
+        )
+        if brute_best_key is None or combo_key > brute_best_key:
+            brute_best_key = combo_key
+            brute_best = combo_result
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "excess_alpha_constrained_solver_matches_exhaustive_canonical_k_r0_oracle_and_certifies_global_optimum",
+        True,
+        constrained_diag.get("basket_objective") == "excess_alpha"
+        and constrained_diag.get("resource_preservation_required") is True
+        and constrained_diag.get("constrained_solver_optimality_certified") is True
+        and int(constrained_diag.get("max_dl_repair_steps", -1)) == 0
+        and int(constrained_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
+        and constrained_result["selected_count"] == 2
+        and constrained_result["reserved_cost_milli"] >= constrained_baseline["reserved_cost_milli"]
+        and brute_best is not None
+        and [row["ticker"] for row in constrained_result["selected_rows"]]
+        == [row["ticker"] for row in brute_best["selected_rows"]],
+    )
+
+    multi_swap_seed = (
+        ("MS0", 100.0, 771, 1.0, -0.2293296791117404),
+        ("MS1", 30.0, 1447, 0.9166666666666666, -0.10787340892209005),
+        ("MS2", 100.0, 1243, 0.8333333333333334, -0.18915965847725308),
+        ("MS3", 200.0, 384, 0.75, -0.04889139026396111),
+        ("MS4", 50.0, 311, 0.6666666666666667, 0.3911970257315725),
+        ("MS5", 30.0, 1671, 0.5833333333333333, 0.17800552639028372),
+        ("MS6", 30.0, 1475, 0.5, 0.29724525296689247),
+        ("MS7", 100.0, 1775, 0.41666666666666663, -0.12516494788049282),
+        ("MS8", 50.0, 1811, 0.33333333333333337, 0.7644628747665172),
+        ("MS9", 150.0, 700, 0.25, 0.6021816948230445),
+    )
+    c39_multi_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-excess-alpha-feasible-ascent",
+            expected_excess_r=expected_excess_r,
+        )
+        for ticker, price, qty, score, expected_excess_r in multi_swap_seed
+    ]
+    c41_multi_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-excess-alpha-constrained-optimal",
+            expected_excess_r=expected_excess_r,
+        )
+        for ticker, price, qty, score, expected_excess_r in multi_swap_seed
+    ]
+    c39_multi_order, c39_multi_diag = reorder_candidates_for_resource_aware_quality(
+        c39_multi_rows, available_cash=350_000.0, sizing_equity=2_000_000.0,
+        pre_market_occupied=6, max_positions=10, params=resource_params,
+    )
+    c41_multi_order, c41_multi_diag = reorder_candidates_for_resource_aware_quality(
+        c41_multi_rows, available_cash=350_000.0, sizing_equity=2_000_000.0,
+        pre_market_occupied=6, max_positions=10, params=resource_params,
+    )
+    c39_multi_action = select_resource_aware_action_candidates(
+        c39_multi_order, c39_multi_diag
+    )
+    c41_multi_action = select_resource_aware_action_candidates(
+        c41_multi_order, c41_multi_diag
+    )
+    c39_multi_result = _simulate_reserved_candidate_order(
+        c39_multi_action, available_cash=350_000.0, sizing_equity=2_000_000.0,
+        free_slots=4, params=resource_params,
+    )
+    c41_multi_result = _simulate_reserved_candidate_order(
+        c41_multi_action, available_cash=350_000.0, sizing_equity=2_000_000.0,
+        free_slots=4, params=resource_params,
+    )
+    c39_multi_rank = {id(row): idx for idx, row in enumerate(c39_multi_rows)}
+    c41_multi_rank = {id(row): idx for idx, row in enumerate(c41_multi_rows)}
+    c39_multi_key = _excess_alpha_basket_quality_key(
+        c39_multi_result, base_rank=c39_multi_rank
+    )
+    c41_multi_key = _excess_alpha_basket_quality_key(
+        c41_multi_result, base_rank=c41_multi_rank
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "excess_alpha_exact_solver_escapes_c39_one_swap_local_optimum_with_strictly_better_multi_swap_feasible_basket",
+        True,
+        [row["ticker"] for row in c39_multi_result["selected_rows"]]
+        == ["MS2", "MS5", "MS8", "MS9"]
+        and [row["ticker"] for row in c41_multi_result["selected_rows"]]
+        == ["MS0", "MS3", "MS8", "MS9"]
+        and len(
+            set(row["ticker"] for row in c39_multi_result["selected_rows"])
+            ^ set(row["ticker"] for row in c41_multi_result["selected_rows"])
+        ) == 4
+        and c41_multi_key > c39_multi_key
+        and c41_multi_diag.get("constrained_solver_optimality_certified") is True
+        and int(c41_multi_diag.get("max_dl_repair_steps", -1)) == 0
+        and int(c41_multi_diag.get("max_dl_feasible_ascent_steps", -1)) == 0,
+    )
+
     selection_excess_settings = strategy_config.get_strategy_comparison_settings("selection_pit")
     c39 = selection_excess_settings.arms["C39"]
     c40 = selection_excess_settings.arms["C40"]
+    c41 = selection_excess_settings.arms["C41"]
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "sr_c39_is_selection_only_frozen_mr13e_excess_alpha_with_same_k_r0_and_direct_c35_contrast",
@@ -2826,6 +2984,23 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "C40-C39" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
         and "C40-C35" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
         and "C40" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "sr_c41_is_selection_only_exact_constrained_solver_ablation_with_same_c39_objective_k_r0_and_calibration",
+        True,
+        c41.enabled
+        and c41.dl_id == c39.dl_id == "CONT13E_PIT"
+        and c41.dl_runtime_mode == "resource-aware-continuous-excess-alpha-constrained-optimal"
+        and dict(c41.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") == "CONT13E_PIT"
+        and dict(c41.dl_runtime_options or {}).get("preserve_k_r0") is True
+        and dict(c41.dl_runtime_options or {}).get("constrained_solver") == "exact_branch_and_bound_v1"
+        and dict(c41.dl_runtime_options or {}).get("negative_expected_excess_r_allowed") is True
+        and dict(c41.dl_runtime_options or {}).get("selection_only") is True
+        and c41.robustness_role == "off"
+        and "C41-C39" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        and "C41-C35" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        and "C41" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
     )
 
     from filters.breakout_quality.rank_calibration import (

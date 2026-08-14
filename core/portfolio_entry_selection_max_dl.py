@@ -863,6 +863,306 @@ def _candidate_has_stale_scored_signal(row, *, max_age_days):
     return int((trade_date - score_date).days) > int(max_age_days)
 
 
+def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    """Exactly maximize frozen Excess-Alpha under the existing K/R0 resource contract.
+
+    C39's repair/ascent path is used only to obtain a strong feasible incumbent.  It
+    never limits the search space.  Branch-and-bound then visits the complete
+    candidate membership decision tree in the canonical baseline execution order.
+    Every included state is rebuilt by the canonical cash-capped reservation
+    simulator, so planned risk and reserved capital keep the production sizing/cash
+    semantics.  Pruning uses only admissible optimistic bounds: remaining candidate
+    count, standalone maximum reserve, and standalone positive Excess-Alpha value.
+    There is no candidate truncation, beam width, time budget, lambda, or tuned
+    tolerance.  Returning from this function therefore means the final feasible
+    basket is globally optimal under the exact lexicographic C39 Excess-Alpha key.
+    """
+
+    candidates = list(rows or [])
+    target_count = int(baseline['selected_count'])
+    reserve_floor_milli = int(baseline['reserved_cost_milli'])
+    base_rank = {id(row): idx for idx, row in enumerate(candidates)}
+
+    seed_order, seed_diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
+        candidates,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=free_slots,
+        params=params,
+        baseline=baseline,
+        default_diag=default_diag,
+        objective_mode='excess_alpha',
+    )
+    if not bool(seed_diag.get('max_dl_eligible', False)):
+        out = dict(seed_diag)
+        out.update({
+            'selector': 'continuous-excess-alpha-constrained-optimal',
+            'constrained_solver_optimality_certified': True,
+            'constrained_solver_search_states': 0,
+            'constrained_solver_pruned_states': 0,
+            'constrained_solver_feasible_baskets': 0,
+            'constrained_solver_seed_source': 'c39-feasible-ascent',
+            'max_dl_repair_steps': 0,
+            'max_dl_repair_evaluations': 0,
+            'max_dl_feasible_ascent_steps': 0,
+            'max_dl_feasible_ascent_evaluations': 0,
+            'max_dl_feasible_ascent_local_optimum': False,
+        })
+        return seed_order, out
+
+    def evaluate_basket(basket):
+        ordered = _max_dl_execution_order(basket, base_rank=base_rank)
+        result = _simulate_reserved_candidate_order(
+            ordered,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=target_count,
+            params=params,
+        )
+        return ordered, result
+
+    seed_basket = list(seed_order[:target_count])
+    incumbent_order, incumbent_result = evaluate_basket(seed_basket)
+    if not _max_dl_basket_is_feasible(
+        incumbent_result,
+        target_count=target_count,
+        reserve_floor_milli=reserve_floor_milli,
+    ):
+        raise RuntimeError('C41 constrained solver無法取得C39可行incumbent')
+    best_basket = list(incumbent_order)
+    best_result = incumbent_result
+    best_key = _excess_alpha_basket_quality_key(best_result, base_rank=base_rank)
+
+    standalone = []
+    for row in candidates:
+        single_order, single_result = evaluate_basket([row])
+        if int(single_result['selected_count']) != 1:
+            standalone.append({
+                'orderable': False,
+                'reserve_upper_milli': 0,
+                'coverage_upper': 0,
+                'alpha_upper': 0.0,
+            })
+            continue
+        plan = single_result['selected_plans'][0]
+        expected_excess_r = _candidate_expected_excess_r(row)
+        risk_milli = _planned_initial_risk_milli(row=row, plan=plan)
+        coverage = int(expected_excess_r is not None and risk_milli is not None)
+        raw_value = (
+            0.0
+            if not coverage
+            else float(expected_excess_r) * float(risk_milli)
+        )
+        standalone.append({
+            'orderable': True,
+            'reserve_upper_milli': int(single_result['reserved_cost_milli']),
+            'coverage_upper': coverage,
+            # With less remaining cash, planned risk cannot exceed the standalone
+            # full-cash plan.  For negative excess-R, zero is the admissible upper
+            # bound because cash-capping can only shrink the negative magnitude.
+            'alpha_upper': max(0.0, float(raw_value)),
+        })
+
+    n = len(candidates)
+    suffix_orderable = [0] * (n + 1)
+    suffix_coverage = [0] * (n + 1)
+    for idx in range(n - 1, -1, -1):
+        suffix_orderable[idx] = suffix_orderable[idx + 1] + int(
+            standalone[idx]['orderable']
+        )
+        suffix_coverage[idx] = suffix_coverage[idx + 1] + int(
+            standalone[idx]['coverage_upper']
+        )
+
+    search_states = 0
+    pruned_states = 0
+    feasible_baskets = 1
+
+    def current_objective_summary(result):
+        coverage = 0
+        total = 0.0
+        for row, plan in zip(
+            list(result.get('selected_rows') or []),
+            list(result.get('selected_plans') or []),
+        ):
+            expected_excess_r = _candidate_expected_excess_r(row)
+            if expected_excess_r is None:
+                continue
+            risk_milli = _planned_initial_risk_milli(row=row, plan=plan)
+            if risk_milli is None:
+                continue
+            coverage += 1
+            total += float(expected_excess_r) * float(risk_milli)
+        return int(coverage), float(total)
+
+    def optimistic_reserve_upper(idx, need, current_reserved):
+        if need <= 0:
+            return int(current_reserved)
+        values = sorted(
+            (
+                int(standalone[pos]['reserve_upper_milli'])
+                for pos in range(idx, n)
+                if standalone[pos]['orderable']
+            ),
+            reverse=True,
+        )
+        return int(current_reserved) + int(sum(values[:need]))
+
+    def optimistic_alpha_upper(idx, need, current_total):
+        if need <= 0:
+            return float(current_total)
+        values = sorted(
+            (
+                float(standalone[pos]['alpha_upper'])
+                for pos in range(idx, n)
+                if standalone[pos]['orderable']
+            ),
+            reverse=True,
+        )
+        return float(current_total) + float(sum(values[:need]))
+
+    empty_result = _simulate_reserved_candidate_order(
+        [],
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=target_count,
+        params=params,
+    )
+
+    def visit(idx, basket, result, coverage, alpha_total):
+        nonlocal best_basket, best_result, best_key
+        nonlocal search_states, pruned_states, feasible_baskets
+        search_states += 1
+        selected_count = int(result['selected_count'])
+        need = int(target_count - selected_count)
+
+        if need == 0:
+            if int(result['reserved_cost_milli']) < reserve_floor_milli:
+                pruned_states += 1
+                return
+            feasible_baskets += 1
+            quality = _excess_alpha_basket_quality_key(result, base_rank=base_rank)
+            if quality > best_key:
+                best_key = quality
+                best_basket = list(basket)
+                best_result = result
+            return
+
+        if idx >= n or suffix_orderable[idx] < need:
+            pruned_states += 1
+            return
+        if optimistic_reserve_upper(idx, need, result['reserved_cost_milli']) < reserve_floor_milli:
+            pruned_states += 1
+            return
+
+        max_coverage = int(coverage) + min(int(need), int(suffix_coverage[idx]))
+        if max_coverage < int(best_key[0]):
+            pruned_states += 1
+            return
+        if max_coverage == int(best_key[0]):
+            alpha_upper = optimistic_alpha_upper(idx, need, alpha_total)
+            if alpha_upper < float(best_key[1]):
+                pruned_states += 1
+                return
+
+        row = candidates[idx]
+
+        if standalone[idx]['orderable']:
+            include_basket = list(basket) + [row]
+            include_order, include_result = evaluate_basket(include_basket)
+            if int(include_result['selected_count']) == selected_count + 1:
+                new_coverage, new_total = current_objective_summary(include_result)
+                visit(
+                    idx + 1,
+                    include_order,
+                    include_result,
+                    new_coverage,
+                    new_total,
+                )
+
+        # Excluding a row is always part of the complete membership decision tree.
+        visit(idx + 1, basket, result, coverage, alpha_total)
+
+    visit(0, [], empty_result, 0, 0.0)
+
+    if not _max_dl_basket_is_feasible(
+        best_result,
+        target_count=target_count,
+        reserve_floor_milli=reserve_floor_milli,
+    ):
+        raise RuntimeError('C41 constrained solver結束後沒有合法K/R0 basket')
+
+    final_order = _max_dl_execution_order(best_basket, base_rank=base_rank)
+    final_ids = {id(row) for row in final_order}
+    final_order.extend(row for row in candidates if id(row) not in final_ids)
+    baseline_ids = {id(row) for row in baseline['selected_rows']}
+    selected_ids = {id(row) for row in best_result['selected_rows']}
+    promoted_count = sum(
+        1 for row in best_result['selected_rows'] if id(row) not in baseline_ids
+    )
+    seed_trace = dict(seed_diag.get('_selector_trace_baskets') or {})
+    out = _resource_aware_diag_from_result(
+        default_diag,
+        baseline,
+        best_result,
+        changed=bool(selected_ids != baseline_ids),
+        promoted_pass_count=0,
+        selector='continuous-excess-alpha-constrained-optimal',
+    )
+    out.update({
+        'mode': 'dl-selection',
+        'promoted_score_orders': int(promoted_count),
+        'direct_score_order_feasible': bool(seed_diag.get('direct_score_order_feasible', False)),
+        'basket_search_states': int(search_states),
+        'basket_search_pruned': int(pruned_states),
+        'basket_feasible_count': int(feasible_baskets),
+        'resource_preservation_required': True,
+        'pre_market_order_limit': int(target_count),
+        'max_dl_eligible': True,
+        # C39 repair/ascent is only an incumbent producer, not C41's selection path.
+        'max_dl_repair_steps': 0,
+        'max_dl_repair_evaluations': 0,
+        'max_dl_seed_fallback': False,
+        'max_dl_fallback_to_baseline': False,
+        'max_dl_feasible_ascent_steps': 0,
+        'max_dl_feasible_ascent_evaluations': 0,
+        'max_dl_feasible_ascent_local_optimum': False,
+        'basket_objective': 'excess_alpha',
+        'constrained_solver_optimality_certified': True,
+        'constrained_solver_search_states': int(search_states),
+        'constrained_solver_pruned_states': int(pruned_states),
+        'constrained_solver_feasible_baskets': int(feasible_baskets),
+        'constrained_solver_seed_source': 'c39-feasible-ascent',
+        'constrained_solver_seed_repair_evaluations': int(
+            seed_diag.get('max_dl_repair_evaluations', 0) or 0
+        ),
+        'constrained_solver_seed_ascent_evaluations': int(
+            seed_diag.get('max_dl_feasible_ascent_evaluations', 0) or 0
+        ),
+        '_selector_trace_baskets': {
+            'raw_top_n': list(seed_trace.get('raw_top_n') or []),
+            'minimum_repair_seed': [],
+            'feasible_ascent_final': [],
+            'constrained_optimal_final': list(best_result.get('selected_rows') or []),
+        },
+        '_selector_repair_steps': [],
+    })
+    if int(best_result['selected_count']) != target_count:
+        raise RuntimeError('C41 constrained solver未維持同參數baseline K')
+    if int(best_result['reserved_cost_milli']) < reserve_floor_milli:
+        raise RuntimeError('C41 constrained solver輸出低於同參數baseline R0')
+    return final_order, out
+
+
 def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     rows,
     *,

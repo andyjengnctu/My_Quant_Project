@@ -172,6 +172,21 @@ def _capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
             frame.get("Resource_Aware_Selector_Elapsed_Ns", pd.Series(0, index=frame.index)),
             errors="coerce",
         ).fillna(0).clip(lower=0)
+        constrained_certified = frame.get(
+            "Resource_Aware_Constrained_Optimality_Certified", pd.Series(False, index=frame.index)
+        ).fillna(False).astype(bool)
+        constrained_states = pd.to_numeric(
+            frame.get("Resource_Aware_Constrained_Search_States", pd.Series(0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0)
+        constrained_pruned = pd.to_numeric(
+            frame.get("Resource_Aware_Constrained_Pruned_States", pd.Series(0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0)
+        constrained_feasible = pd.to_numeric(
+            frame.get("Resource_Aware_Constrained_Feasible_Baskets", pd.Series(0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0)
         selection_mask = mode == "dl-selection"
         summary.update({
             "resource_aware_dl_selection_days": int(selection_mask.sum()),
@@ -222,6 +237,10 @@ def _capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
             "resource_aware_selector_timing_median_ms": float(selector_elapsed_ns[selector_elapsed_ns > 0].median() / 1_000_000.0) if bool((selector_elapsed_ns > 0).any()) else 0.0,
             "resource_aware_selector_timing_p95_ms": float(selector_elapsed_ns[selector_elapsed_ns > 0].quantile(0.95) / 1_000_000.0) if bool((selector_elapsed_ns > 0).any()) else 0.0,
             "resource_aware_selector_timing_max_ms": float(selector_elapsed_ns.max() / 1_000_000.0),
+            "resource_aware_constrained_optimality_certified_days": int(constrained_certified.sum()),
+            "resource_aware_constrained_search_states": int(constrained_states.sum()),
+            "resource_aware_constrained_pruned_states": int(constrained_pruned.sum()),
+            "resource_aware_constrained_feasible_baskets": int(constrained_feasible.sum()),
         })
     return summary
 

@@ -13,6 +13,7 @@ from core.active_param_ensemble import get_active_param_ensemble_date_range
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
     StrategyComparisonSettings,
     StrategyPreparationAction,
@@ -361,6 +362,7 @@ def collect_artifact_status(
         if arm.dl_runtime_mode in {
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
         }:
             fit_dl_id = str(
                 dict(arm.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") or ""
@@ -986,6 +988,7 @@ def collect_artifact_status(
         if arm.dl_runtime_mode not in {
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
         }:
             continue
         if settings.profile_id != "selection_pit":
@@ -998,9 +1001,17 @@ def collect_artifact_status(
                 f"Excess-Alpha arm calibration method不支援: {arm.arm_id}/"
                 f"{options.get('expected_excess_r_calibration_method')!r}"
             )
-        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT:
+        if arm.dl_runtime_mode in {
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
+        }:
             if options.get("preserve_k_r0") is not True or options.get("selection_only") is not True:
                 raise ValueError(f"Excess-Alpha第一階段必須preserve_k_r0/selection_only: {arm.arm_id}")
+            if (
+                arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL
+                and options.get("constrained_solver") != "exact_branch_and_bound_v1"
+            ):
+                raise ValueError(f"Excess-Alpha constrained solver contract不符: {arm.arm_id}")
         else:
             if (
                 options.get("preserve_k") is not True
