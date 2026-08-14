@@ -47,15 +47,15 @@ class AuditCatalogEntry:
 
 AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
     # Only decision-relevant formal Audit handlers stay registered here.
-    "minimum_repair_mechanism": AuditCatalogEntry(
-        audit_type="minimum_repair_mechanism",
+    "direct_r_calibration": AuditCatalogEntry(
+        audit_type="direct_r_calibration",
         domain="breakout_quality",
-        module="tools.audit.breakout_quality.minimum_repair_mechanism",
+        module="tools.audit.breakout_quality.direct_r_calibration",
         mode="formal",
-        description="Completed Strategy Compare minimum-repair production exhaustive single-swap certificate與resource/multi-step unresolved歸因",
+        description="MR-13F frozen Forward Predicted-R magnitude與calibration structure read-only Audit",
         read_only=True,
-        status_function="collect_minimum_repair_mechanism_status",
-        run_function="run_minimum_repair_mechanism_audit",
+        status_function="collect_direct_r_calibration_status",
+        run_function="run_direct_r_calibration_audit",
     ),
 
     # Only genuinely supported diagnostic commands belong here.  Canonical

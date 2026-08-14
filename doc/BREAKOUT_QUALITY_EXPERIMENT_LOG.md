@@ -8808,3 +8808,14 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Forward Model Gate報表同時看兩類證據：(1) regression：Huber、MAE、RMSE、bias、Predicted-R mean vs Target-R mean；(2) ranking：Daily Spearman、global Spearman、pair concordance、Top/Bottom decile與既有Top-K quality。Breakout candidate slice仍只作post-checkpoint diagnostic，不進training sample selection。
 - Dataset／Target重建：**不需要**；重用canonical daily-universal Dataset/OHLCV source與`daily_opportunity_no_time_r_v1`。
 - 下一步：先由模型研究選單執行MR-13F Seed42 Forward model gate。若模型層raw-R calibration／ranking明顯不足即REJECT，不建立PIT；若Forward model gate成立，再另輪決定是否進Selection PIT Model Gate。
+
+## 2026-08-14 — MR-13F Forward Model Gate result + Direct-R Calibration Audit
+
+- 結果基準：`test-branch-1_20260814_223551_df27d70.zip`；SHA256 `3ba0ee2d93997c7a012ccca4fbc1e517bea6a01b7b8c2770fe35166a3015df0b`。MR-13F Seed42 Forward training已完成；沒有建立Selection PIT、runtime DL source或Strategy arm。
+- Forward結果：selected epoch=`2`；OOS Huber=`0.7888`、MAE=`1.1547R`、bias=`-0.6505R`；Daily Spearman=`0.1611`、Global Spearman=`0.1310`、Pair=`55.52%`；Top 10% Target=`1.2593R`、Bottom 10%=`0.6711R`，Top-K Lift=`+0.7392R`。Breakout candidate slice Daily rho=`0.0919`、Pair=`54.80%`、Top-K Lift=`+0.2472R`、boundary gap=`-0.0258R`。
+- 判讀：MR-13F不是無訊號模型，但pure ranking弱於MR-13E；更重要的是direct-R用途需要輸出數值本身具有R magnitude語意，而目前`-0.6505R` bias與`1.1547R` MAE尚不足以證明。研究狀態因此為`HOLD_FOR_DIRECT_R_CALIBRATION_AUDIT`，不是PASS/REJECT；不先建PIT。
+- 新`AUD-mr13f-direct-r-calibration`是最小必要read-only證據。Source固定讀canonical MR-13F Forward `continuous_ranker_report.json`與`daily_ranker_oos_scores.csv.gz`，驗證report/profile/research ID、OOS-unused-for-training及score artifact SHA；不train、不rescore、不建PIT、不replay。
+- Baseline不偷看OOS：使用report已保存的Selection-inner Validation `target_r_mean`作frozen constant R prediction；OOS只post-hoc比較MR-13F與constant的Huber/MAE/RMSE。另輸出`Actual R = intercept + slope × Predicted R`的descriptive OLS、Predicted-R equal-count quantile buckets的Actual mean／positive rate與bucket Spearman、以及`Predicted R > 0`/`<= 0`兩組的Actual mean R／positive rate。
+- Audit不設定`abs(slope-1)<X`、bucket lift門檻或其他magic threshold；classification只依model vs frozen constant的Huber/MAE方向與slope/bucket Spearman正負提供描述性方向。OOS fitted intercept/slope明確標為`posthoc_fitted_calibration_runtime_eligible=false`，不得直接用作後續策略calibration；若Audit支持再另做Selection/PIT-only calibration controlled experiment。
+- 舊`AUD-mr13e-minimum-repair-mechanism`在結果取得前已被C37 controlled decision supersede。C37 Selection明確REJECT後，repair mechanism attribution不再會改變current MR-13F下一步，依最小必要證據與disposable lifecycle標記`NOT_EXECUTED / SUPERSEDED_BY_C37_DECISION`並退役formal handler/dedicated synthetic；production minimum-repair、repair-search certificate sidecar與generic Strategy Compare contracts不刪。
+

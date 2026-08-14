@@ -3311,7 +3311,7 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         "filters/breakout_quality/strategy_param_training.py",
         "tools/filters/breakout_quality/build_trade_path_labels.py",
         "services/breakout_quality/train.py",
-        "tools/audit/breakout_quality/minimum_repair_mechanism.py",
+        "tools/audit/breakout_quality/direct_r_calibration.py",
         "tools/validate/transient_code_maintenance.py",
     )
     add_check(
