@@ -788,8 +788,17 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                     raise ValueError(f"arm {key} Score constrained必須preserve_k_r0=True")
                 if options.get("constrained_solver") != "exact_branch_and_bound_v1":
                     raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
-                if options.get("selection_only") is not True:
-                    raise ValueError(f"arm {key} Score constrained必須selection_only=True")
+                selection_only = options.get("selection_only")
+                if not isinstance(selection_only, bool):
+                    raise ValueError(f"arm {key} Score constrained selection_only必須為bool")
+                source_is_selection_pit = (
+                    settings.dl_sources[arm.dl_id].score_source == "selection_point_in_time"
+                )
+                if selection_only is not source_is_selection_pit:
+                    raise ValueError(
+                        f"arm {key} Score constrained selection_only必須與DL source stage一致: "
+                        f"score_source={settings.dl_sources[arm.dl_id].score_source!r}"
+                    )
                 if any(
                     str(options.get(name) or '').strip()
                     for name in (

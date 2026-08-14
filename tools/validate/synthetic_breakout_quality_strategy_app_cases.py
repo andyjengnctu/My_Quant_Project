@@ -3023,6 +3023,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     selection_excess_settings = strategy_config.get_strategy_comparison_settings("selection_pit")
+    c28 = selection_excess_settings.arms["C28"]
     c39 = selection_excess_settings.arms["C39"]
     c40 = selection_excess_settings.arms["C40"]
     c41 = selection_excess_settings.arms["C41"]
@@ -3102,6 +3103,73 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "C42-C35" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
         and "C42-C41" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
         and "C42" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
+    )
+
+    c43 = selection_excess_settings.arms["C43"]
+    c43_options = dict(c43.dl_runtime_options or {})
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "sr_c43_is_selection_only_mr13a_score_exact_constrained_solver_ablation_using_same_generic_solver_as_c42",
+        True,
+        c43.enabled
+        and c43.dl_id == c28.dl_id == "CONT13A_PIT"
+        and c43.param_source == c28.param_source == c42.param_source == "selection_min_roos"
+        and c43.rule_policy == c28.rule_policy == c42.rule_policy == "all_off"
+        and c43.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+        and c43_options == c42_options
+        and c43_options.get("preserve_k_r0") is True
+        and c43_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+        and c43_options.get("selection_only") is True
+        and not any(
+            key in c43_options
+            for key in (
+                "expected_excess_r_fit_dl_id",
+                "expected_excess_r_calibration_method",
+                "expected_r_fit_dl_id",
+                "expected_r_calibration_method",
+            )
+        )
+        and c43.robustness_role == "off"
+        and "C43-C28" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        and "C42-C43" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        and "C43" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
+    )
+
+    forward_exact_settings = strategy_config.get_strategy_comparison_settings("forward_oos")
+    c20_forward = forward_exact_settings.arms["C20"]
+    c36_forward = forward_exact_settings.arms["C36"]
+    c44 = forward_exact_settings.arms["C44"]
+    c44_options = dict(c44.dl_runtime_options or {})
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "sr_c44_is_forward_mr13e_score_exact_constrained_solver_ablation_using_same_generic_solver_as_c42_and_retains_mr12b_anchor",
+        True,
+        c44.enabled
+        and c44.dl_id == c36_forward.dl_id == "CONT13E"
+        and c44.param_source == c36_forward.param_source == c20_forward.param_source == "min_roos"
+        and c44.rule_policy == c36_forward.rule_policy == c20_forward.rule_policy == "all_off"
+        and c44.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+        and c44_options.get("preserve_k_r0") is True
+        and c44_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+        and c44_options.get("selection_only") is False
+        and {k: v for k, v in c44_options.items() if k != "selection_only"}
+            == {k: v for k, v in c42_options.items() if k != "selection_only"}
+        and not any(
+            key in c44_options
+            for key in (
+                "expected_excess_r_fit_dl_id",
+                "expected_excess_r_calibration_method",
+                "expected_r_fit_dl_id",
+                "expected_r_calibration_method",
+            )
+        )
+        and c44.robustness_role == "off"
+        and c20_forward.enabled
+        and c20_forward.dl_id == "CONT12B"
+        and {"C44-C3", "C44-C20", "C44-C36"}.issubset(
+            {contrast.contrast_id for contrast in forward_exact_settings.enabled_contrasts}
+        )
+        and "C43" not in {arm.arm_id for arm in forward_exact_settings.enabled_arms},
     )
 
     from filters.breakout_quality.rank_calibration import (
