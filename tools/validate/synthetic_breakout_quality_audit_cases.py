@@ -2429,6 +2429,10 @@ def validate_breakout_quality_orderable_feasible_alignment_audit_contract_case(_
         (item for item in definitions if item.audit_id == "mr13e-selector-stage-translation"),
         None,
     )
+    minimum_repair = next(
+        (item for item in definitions if item.audit_id == "mr13e-minimum-repair-mechanism"),
+        None,
+    )
     entry = get_audit_entry("orderable_feasible_alignment")
     phases = {} if definition is None else dict(dict(definition.source).get("phases") or {})
     add_check(
@@ -2451,7 +2455,9 @@ def validate_breakout_quality_orderable_feasible_alignment_audit_contract_case(_
             and cross_period is not None
             and not cross_period.enabled
             and selector_stage is not None
-            and selector_stage.enabled
+            and not selector_stage.enabled
+            and minimum_repair is not None
+            and minimum_repair.enabled
         ),
     )
     status_handler = entry.load_status_handler()
