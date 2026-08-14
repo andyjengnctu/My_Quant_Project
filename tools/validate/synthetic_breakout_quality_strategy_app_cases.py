@@ -1779,13 +1779,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             [
                 {
                     "ticker": "2330",
-                    "date": "2021-01-01",
+                    "date": "2021-01-04",
                     "group_index": 0,
                     "model_score": 0.80,
                 },
                 {
                     "ticker": "2317",
-                    "date": "2021-01-02",
+                    "date": "2021-01-05",
                     "group_index": 0,
                     "model_score": 0.70,
                 },
@@ -1794,6 +1794,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         archived_score_sha = score_reuse_module._file_sha256(archived_score_path)
         archived_run_dir = archived_root / "outputs" / "strategy_compare" / "forward_oos" / "runs" / "archived"
         archived_run_dir.mkdir(parents=True, exist_ok=True)
+        archived_c36 = forward_score_reuse_settings.arms["C36"]
+        archived_group_id = score_reuse_module._pair_group_id(
+            param_source=archived_c36.param_source,
+            rule_policy=archived_c36.rule_policy,
+            dl_id=str(archived_c36.dl_id or ""),
+            dl_runtime_mode=str(archived_c36.dl_runtime_mode or ""),
+        )
         archived_run_payload = {
             "status": "COMPLETED",
             "settings": forward_score_reuse_settings.as_dict(),
@@ -1805,7 +1812,22 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             },
             "comparison_period": {
                 "start": "2021-01-01",
-                "end": "2021-01-02",
+                "end": "2021-01-05",
+            },
+            "pairs": {
+                archived_group_id: {
+                    "metadata": {
+                        "comparison_period": {
+                            "start": "2021-01-01",
+                            "end": "2021-01-05",
+                        },
+                        "score_signal_coverage": {
+                            "required_start": "2021-01-01",
+                            "first_scored_event": "2021-01-04",
+                            "available_through": "2021-01-05",
+                        },
+                    }
+                }
             },
         }
         (archived_run_dir / "strategy_comparison.json").write_text(
@@ -1815,7 +1837,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         archived_score_status = {
             "comparison_period": {
                 "start": "2021-01-01",
-                "end": "2021-01-02",
+                "end": "2021-01-05",
             },
             "dl_sources": {
                 "CONT13E": {
@@ -1831,7 +1853,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "pairs": {
                 "C36": {
                     "source_run_dir": str(archived_run_dir),
-                    "source_pair_dir": str(archived_run_dir / "pairs" / "c36"),
+                    "source_pair_dir": str(archived_run_dir / "pairs" / archived_group_id),
+                    "source_group_id": archived_group_id,
                 },
                 "C44": None,
             }
@@ -1882,6 +1905,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         isinstance(archived_score_recovered, dict)
         and archived_score_recovered.get("path_source") == "archived_artifact_identity"
         and archived_score_recovered.get("sha256") == archived_score_sha
+        and archived_score_recovered.get("execution_start") == "2021-01-01"
+        and archived_score_recovered.get("available_from") == "2021-01-04"
+        and archived_score_recovered.get("available_through") == "2021-01-05"
         and "REUSE_OK:archived_artifact_identity" in archived_score_diagnostics
         and archived_score_applied.get("overall_status") == "READY"
         and archived_score_applied.get("comparison_ready") is True

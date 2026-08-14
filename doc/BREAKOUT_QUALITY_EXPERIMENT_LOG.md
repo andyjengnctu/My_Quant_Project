@@ -8915,3 +8915,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 新增直接synthetic：current canonical path刻意不存在、completed C36 artifact identity指向另一個仍存在的CONT13E score CSV；只有archived path SHA/profile/coverage全通過時才必須回傳`path_source=archived_artifact_identity`與`REUSE_OK:archived_artifact_identity`。這補上前一輪只有source-token檢查而未覆蓋的實際path-migration情境。
 - Decision不變：先完成C44 single-seed Forward；只有C44-C36與C44-C20支持後才進multi-seed robustness。
 
+## 2026-08-15 — SR-C44 Forward score coverage semantics recovery fix
+
+- 使用者套用archived score-path recovery後重跑Forward planning，`DL-CONT12B`仍正確REUSE，`DL-CONT13E` archived score path/SHA已命中，但planner回報`SCORE_DOES_NOT_COVER_COMPLETED_PAIR:archived_artifact_identity`。C36仍可REUSE、C44仍為唯一RUN arm；C44 scientific status維持`AWAITING_FORWARD_RESULT`，尚無Forward績效。
+- 根因：completed-pair recovery把run-level calendar `comparison_period.start/end`錯當成score CSV必須逐日涵蓋的範圍，並在成功後把`execution_start=available_from`。但正式continuous runtime本來就分離`score_signal_coverage.required_start`與`first_scored_event`：前者是策略可開始執行的OOS日曆起點，後者才是score table第一個真正有分數的事件/交易日；兩者在假日/非交易日開頭可合法不同。
+- 修正後不再自行用score min/max對calendar period做`available_from <= comparison_start`判定。recovery直接讀取completed C36 pair封存的`pairs[<group>].metadata.score_signal_coverage`與pair `comparison_period`；要求archived `required_start <= first_scored_event <= available_through`、pair/run/current comparison period與archived execution coverage一致，且candidate score檔仍必須project-root scoped、SHA byte-identical、profile schema合法。載入後table的`available_from/through`必須精確重現archived `first_scored_event/available_through`；C44 override的`execution_start`使用archived `required_start`，不得偷改成第一個score日。
+- 新增直接synthetic：comparison period/required_start=`2021-01-01`，score table第一個事件日=`2021-01-04`；current canonical path不存在但archived path存在且SHA一致時，planner必須READY，override固定`execution_start=2021-01-01`、`available_from=2021-01-04`。此案例釘死非交易日開頭不造成假性coverage blocker，同時保留SHA/profile/period identity與禁止sidecar重建。
+- Decision不變：完成C44 single-seed Forward後只看`C44-C36`與`C44-C20`；結果支持前不跑multi-seed robustness。
+

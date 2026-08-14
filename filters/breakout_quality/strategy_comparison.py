@@ -852,8 +852,44 @@ def _completed_pair_pinned_continuous_score(
             note("COMPLETED_PAIR_PERIOD_MISSING")
             continue
 
-        required_start = current_start or stored_start
-        required_end = current_end or stored_end
+        source_group_id = str(entry.get("source_group_id") or "").strip()
+        pair_payload = dict((payload.get("pairs") or {}).get(source_group_id) or {})
+        pair_metadata = dict(pair_payload.get("metadata") or {})
+        pair_period = dict(pair_metadata.get("comparison_period") or {})
+        archived_coverage = dict(pair_metadata.get("score_signal_coverage") or {})
+        archived_required_start = str(archived_coverage.get("required_start") or "").strip()
+        archived_first_scored_event = str(archived_coverage.get("first_scored_event") or "").strip()
+        archived_available_through = str(archived_coverage.get("available_through") or "").strip()
+        if not (
+            source_group_id
+            and pair_payload
+            and archived_required_start
+            and archived_first_scored_event
+            and archived_available_through
+        ):
+            note("COMPLETED_PAIR_SCORE_COVERAGE_MISSING")
+            continue
+        if not (
+            archived_required_start <= archived_first_scored_event <= archived_available_through
+        ):
+            note("COMPLETED_PAIR_SCORE_COVERAGE_INVALID")
+            continue
+        if pair_period and (
+            str(pair_period.get("start") or "") != archived_required_start
+            or str(pair_period.get("end") or "") != archived_available_through
+        ):
+            note("COMPLETED_PAIR_SCORE_COVERAGE_PERIOD_MISMATCH")
+            continue
+        if stored_start != archived_required_start or stored_end != archived_available_through:
+            note("COMPLETED_RUN_SCORE_COVERAGE_PERIOD_MISMATCH")
+            continue
+        if current_start and current_start != archived_required_start:
+            note("CURRENT_PERIOD_START_DIFFERS_FROM_COMPLETED_PAIR")
+            continue
+        if current_end and current_end != archived_available_through:
+            note("CURRENT_PERIOD_END_DIFFERS_FROM_COMPLETED_PAIR")
+            continue
+
         for path_source, score_path in candidate_paths:
             if not score_path.is_file():
                 note(f"SCORE_FILE_MISSING:{path_source}")
@@ -875,14 +911,11 @@ def _completed_pair_pinned_continuous_score(
             if not available_from or not available_through:
                 note(f"SCORE_PERIOD_METADATA_MISSING:{path_source}")
                 continue
-            if available_from > stored_start or available_through < stored_end:
-                note(f"SCORE_DOES_NOT_COVER_COMPLETED_PAIR:{path_source}")
-                continue
-            if required_start and available_from > required_start:
-                note(f"SCORE_START_AFTER_CURRENT_PERIOD:{path_source}")
-                continue
-            if required_end and available_through < required_end:
-                note(f"SCORE_END_BEFORE_CURRENT_PERIOD:{path_source}")
+            if (
+                available_from != archived_first_scored_event
+                or available_through != archived_available_through
+            ):
+                note(f"SCORE_SIGNAL_COVERAGE_MISMATCH:{path_source}")
                 continue
             note(f"REUSE_OK:{path_source}")
             return {
@@ -890,7 +923,7 @@ def _completed_pair_pinned_continuous_score(
                 "sha256": actual_sha,
                 "available_from": available_from,
                 "available_through": available_through,
-                "execution_start": available_from,
+                "execution_start": archived_required_start,
                 "provenance_run_dir": run_dir,
                 "provenance_pair_dir": Path(str(entry.get("source_pair_dir") or "")).resolve(),
                 "path_source": path_source,
