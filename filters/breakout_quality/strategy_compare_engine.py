@@ -78,6 +78,7 @@ from filters.breakout_quality.strategy_compare_replay import (
 from filters.breakout_quality.strategy_compare_diagnostics import (
     _flatten_candidate_replay_rows,
     _flatten_entry_execution_rows,
+    _flatten_repair_mechanism_rows,
     _flatten_selector_trace_rows,
     _flatten_selected_buy_rows,
     _load_isolated_selection_pit_contract,
@@ -914,6 +915,11 @@ def run_comparison(
         if quality_selector_trace_rows is not None:
             _flatten_selector_trace_rows(quality_selector_trace_rows).to_csv(
                 output_dir / "score_ranking_selector_trace.csv",
+                index=False,
+                encoding="utf-8-sig",
+            )
+            _flatten_repair_mechanism_rows(quality_selector_trace_rows).to_csv(
+                output_dir / "score_ranking_repair_mechanism.csv",
                 index=False,
                 encoding="utf-8-sig",
             )

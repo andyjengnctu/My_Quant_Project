@@ -310,15 +310,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "formal_score_ranking_pairs_persist_pre_market_execution_and_selector_trace_sidecars_and_cache_requires_them",
+        "formal_score_ranking_pairs_persist_execution_selector_trace_and_exact_repair_mechanism_sidecars_and_cache_requires_them",
         True,
         (
             "score_ranking_execution.csv" in score_ranking_cache_files
             and "score_ranking_selector_trace.csv" in score_ranking_cache_files
+            and "score_ranking_repair_mechanism.csv" in score_ranking_cache_files
             and "capture_execution_diagnostics=(" in orchestration_source
             and 'runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING' in orchestration_source
             and 'output_dir / "score_ranking_execution.csv"' in strategy_compare_source
             and 'output_dir / "score_ranking_selector_trace.csv"' in strategy_compare_source
+            and 'output_dir / "score_ranking_repair_mechanism.csv"' in strategy_compare_source
         ),
     )
     configured_roos_builders = [
@@ -2097,6 +2099,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         reorder_candidates_for_resource_aware_quality,
         select_resource_aware_action_candidates,
     )
+    from core.portfolio_entry_selection_max_dl import (
+        build_max_dl_repair_mechanism_diagnostic,
+    )
     from core.strategy_params import V16StrategyParams
     from core.trade_plans import build_normal_candidate_plan
 
@@ -2536,6 +2541,29 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         >= max_dl_baseline["reserved_cost_milli"]
         and [row["ticker"] for row in max_dl_action_rows] == max_dl_oracle[1]
         and [row["ticker"] for row in max_dl_action_rows] == ["T0", "T2", "T6"],
+    )
+    max_dl_mechanism = build_max_dl_repair_mechanism_diagnostic(
+        max_dl_rows,
+        available_cash=500_000.0,
+        sizing_equity=2_000_000.0,
+        params=resource_params,
+        resource_selection_diag=max_dl_diag,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "max_dl_exact_repair_oracle_matches_independent_bruteforce_feasible_optimum_without_future_target",
+        True,
+        bool(
+            max_dl_mechanism is not None
+            and max_dl_mechanism.get("status") == "AVAILABLE"
+            and math.isclose(
+                float(max_dl_mechanism.get("global_best_score_sum")),
+                float(max_dl_oracle[0][0]),
+                abs_tol=1e-12,
+            )
+            and max_dl_mechanism.get("exact_minimum_replacement_distance") == 1
+            and max_dl_mechanism.get("classification") == "RESOURCE_CONSTRAINT_EXACT_OPTIMUM"
+        ),
     )
 
     max_dl_direct_rows = [
@@ -3072,6 +3100,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 "score_ranking_selected_buys.csv",
                 "score_ranking_execution.csv",
                 "score_ranking_selector_trace.csv",
+                "score_ranking_repair_mechanism.csv",
             ):
                 (cached_pair_dir / filename).write_text("x\n", encoding="utf-8")
             (cached_run / "strategy_comparison.json").write_text(

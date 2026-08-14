@@ -118,6 +118,16 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         status_function="collect_selector_stage_translation_status",
         run_function="run_selector_stage_translation_audit",
     ),
+    "minimum_repair_mechanism": AuditCatalogEntry(
+        audit_type="minimum_repair_mechanism",
+        domain="breakout_quality",
+        module="tools.audit.breakout_quality.minimum_repair_mechanism",
+        mode="formal",
+        description="Completed Strategy Compare minimum-repair exact K/R0 oracle與resource/search-gap歸因",
+        read_only=True,
+        status_function="collect_minimum_repair_mechanism_status",
+        run_function="run_minimum_repair_mechanism_audit",
+    ),
 
     "robustness_cross_period_attribution": AuditCatalogEntry(
         audit_type="robustness_cross_period_attribution",

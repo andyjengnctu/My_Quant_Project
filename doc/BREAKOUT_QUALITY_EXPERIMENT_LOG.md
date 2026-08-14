@@ -8724,3 +8724,23 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 每個stage只在replay結束後join共同`daily_opportunity_no_time_r_v1`，逐日計算stage target mean／score mean及membership，transition固定為`raw_to_repair / repair_to_ascent / ascent_to_action / action_to_fill`；輸出target delta、score delta與membership overlap，另單獨彙總repair days。沒有固定K，membership大小沿用實際策略當日basket/action。
 - Forward classification不用加權總分、lambda或threshold：以MR-13E相對MR-12B在repair-day各transition的`target_delta_r`差值逐項比較，若皆非負則`NO_FORWARD_EXTRA_TRANSLATION_LOSS`；否則最負的stage直接標為`DOMINANT_EXTRA_LOSS_AT_<TRANSITION>`。這是診斷分類，不修改selector或promotion policy。
 - 共用orderable source resolver／daily target join從舊Audit抽成`tools/audit/breakout_quality/orderable_alignment_common.py` public shared primitive，避免兩個Audit互相import private helper形成第二套來源邏輯。
+
+## 2026-08-14 — MR-13E selector-stage Audit結果：主要額外損失精確定位Raw→minimum-repair
+
+- 使用者完成Selection／Forward Strategy Compare replay refresh並執行`AUD-mr13e-selector-stage-translation`。本次結果對照的策略績效與既有C25/C28/C35、C20/C29/C36完全一致，確認新增trace沒有改變selector／sizing／execution決策。
+- Selection repair days：C25/MR-12B Raw→Repair=`-0.9358R`、Repair→Ascent=`+0.0230R`；C28/MR-13A=`-0.6188R/+0.0093R`；C35/MR-13E=`-0.6420R/+0.0316R`。13E Selection Raw→Repair反而比12B少損失`+0.2938R`，因此不能把minimum-repair一般化判定為對13E永久不利。
+- Forward repair days：C20/MR-12B Raw→Repair=`-0.9292R`、Repair→Ascent=`+0.0250R`、Ascent→Action=`0`、Action→Fill=`+0.0103R`；C29/MR-13A=`-1.4038R/+0.0206R/0/-0.0022R`；C36/MR-13E=`-1.3763R/+0.0073R/0/+0.0085R`。
+- 13E−12B Forward stage差：Raw→Repair=`-0.4471R`、Repair→Ascent=`-0.0177R`、Ascent→Action=`0`、Action→Fill=`-0.0018R`，正式classification=`DOMINANT_EXTRA_LOSS_AT_RAW_TO_REPAIR`。主要extra translation loss在minimum-repair之前／之中完成；feasible-ascent、entry action與actual fill不是主要斷點。
+- Membership亦支持同一判讀：Forward Raw/Repair overlap C20/C29/C36=`3.36%/2.40%/2.46%`，Repair/Ascent overlap=`94.84%/95.72%/96.20%`，Ascent/Action=`100%`。Raw Top-N會被minimum-repair大幅重組，而其後ascent只微調、entry action不再改membership。
+- Research policy：不直接拿掉feasible-ascent，也不因Forward結果立刻改minimum-repair。Selection同stage方向相反，下一步必須先回答13E Forward `-1.3763R` Raw→Repair損失是K/R0 resource constraints不可避免，還是greedy repair path／one-swap local optimum未找到更高frozen-score合法basket。
+
+## 2026-08-14 — Minimum-repair mechanism exact oracle Audit實作
+
+- 程式基準：`test-branch-1_20260814_081617_8e45916.zip`；SHA256 `ebf2c8a5850e717b976e3ba700b46a9cac911c4940ac57aad0c81ec4b2a1f1d1`。本輪只新增research-only diagnostic oracle、canonical sidecar、read-only Audit與synthetic／registry同步；production selector的basket、K/R0、reservation simulator、feasible-ascent、sizing與execution semantics不變。
+- 新增`AUD-mr13e-minimum-repair-mechanism`。Exact oracle只在Strategy Compare顯式selector diagnostic sink存在且production selector已完成後執行；使用與正式selector完全相同的`_simulate_reserved_candidate_order()`、同一當日available cash／sizing equity／params、同一`K=pre_market_order_limit`與`R0=baseline_reserved_cost_milli`。Future Target不參與oracle。
+- Oracle做兩個無state cap的best-first exact search。`minimum_replacement_best`先以Raw Top-K replacement distance排序，再以canonical frozen DL basket quality排序，因此第一個合法state就是**最少替換數下的最高quality合法basket**；`global_best`只依canonical frozen DL quality排序，因此第一個合法state就是**全域最高quality合法K-basket**。候選依既有DL score deterministic order編號，combination index只往後移，canonical quality單調不增，支援exact early stop。
+- Production minimum-repair另以transient diagnostics保存每個accepted swap的out/in candidate、swap前後selected count／reserved cost、count deficit／reserve deficit及frozen score/quality；不改原repair move選擇。Strategy Compare序列化為canonical `score_ranking_repair_mechanism.csv`，pair cache同步要求該sidecar。舊C25/C28/C35及C20/C29/C36缺此sidecar時只需一次replay refresh，models／PIT scores／Forward scores／params皆可REUSE。
+- Audit以exact oracle直接分類每個repair day：若production repair比exact minimum replacement多換股票=`GREEDY_REPAIR_EXTRA_REPLACEMENTS`；replacement distance相同但repair seed frozen score較差=`GREEDY_REPAIR_SCORE_GAP_AT_MIN_DISTANCE`；repair seed已達minimum-distance optimum但feasible-ascent final仍低於global optimum=`MULTI_SWAP_LOCAL_SEARCH_GAP`；若production final已達global frozen-score optimum=`RESOURCE_CONSTRAINT_EXACT_OPTIMUM`。不使用Future Target、lambda、人工threshold或target-guided basket selection。
+- Future Target `daily_opportunity_no_time_r_v1`只在read-only Audit post-replay join，用來量化上述mechanism class對實際Target loss的歸因；若Forward 13E全部為exact optimum則結論`RESOURCE_INCOMPATIBILITY_EXACT_ORACLE`，全部為heuristic gap則`SEARCH_HEURISTIC_DEFICIENCY`，混合時只比較exact-optimum days與heuristic-gap days實際Raw→Repair負Target loss總量，不建立加權score或threshold。
+- Direct synthetic以獨立brute-force feasible enumeration核對exact oracle，並驗證Audit formal topology／缺sidecar BLOCKED／post-replay conclusion contract；Strategy Compare config-driven direct contract同步驗證repair mechanism sidecar persistence與cache completeness。
+

@@ -76,6 +76,9 @@ from core.portfolio_replay_support import (
     _print_slow_ensemble_phase_heartbeat,
     _run_portfolio_replay_phase,
 )
+from core.portfolio_entry_selection_max_dl import (
+    build_max_dl_repair_mechanism_diagnostic,
+)
 
 
 def run_portfolio_timeline(
@@ -465,6 +468,7 @@ def run_portfolio_timeline(
                 if profile_timing_enabled:
                     candidate_scan_sec += time.perf_counter() - t0
 
+                resource_selection_input_rows = list(orderable_candidates_today)
                 orderable_candidates_today, resource_selection_diag = _run_portfolio_replay_phase(
                     today,
                     "resource_aware_binary_order",
@@ -482,6 +486,101 @@ def run_portfolio_timeline(
                 )
 
                 if replay_selector_trace_rows is not None:
+                    repair_mechanism = build_max_dl_repair_mechanism_diagnostic(
+                        resource_selection_input_rows,
+                        available_cash=available_cash,
+                        sizing_equity=sizing_equity,
+                        params=day_params,
+                        resource_selection_diag=resource_selection_diag,
+                    )
+                    if repair_mechanism is not None:
+                        summary = {
+                            'trace_kind': 'repair_summary',
+                            'stage': '',
+                            'stage_rank': 0,
+                            'ticker': '',
+                            'trade_date': today.strftime('%Y-%m-%d') if hasattr(today, 'strftime') else str(today),
+                            'candidate_date': '',
+                            'signal_date': '',
+                            'candidate_type': '',
+                            'entry_source': '',
+                            'breakout_quality_score': None,
+                            'breakout_quality_score_date': '',
+                            'breakout_quality_score_available': False,
+                            'pre_market_order_limit': resource_selection_diag.get('pre_market_order_limit'),
+                            'direct_score_order_feasible': bool(resource_selection_diag.get('direct_score_order_feasible', False)),
+                            'repair_steps': int(resource_selection_diag.get('max_dl_repair_steps', 0) or 0),
+                            'ascent_steps': int(resource_selection_diag.get('max_dl_feasible_ascent_steps', 0) or 0),
+                            **{
+                                key: value
+                                for key, value in dict(repair_mechanism).items()
+                                if key not in {
+                                    'minimum_replacement_best_rows',
+                                    'global_best_rows',
+                                    'repair_steps_trace',
+                                    'repair_seed_quality_key',
+                                    'minimum_replacement_best_quality_key',
+                                    'final_quality_key',
+                                    'global_best_quality_key',
+                                }
+                            },
+                        }
+                        replay_selector_trace_rows.append(summary)
+
+                        for oracle_stage, oracle_rows in (
+                            ('minimum_replacement_best', repair_mechanism.get('minimum_replacement_best_rows')),
+                            ('global_best', repair_mechanism.get('global_best_rows')),
+                        ):
+                            for oracle_rank, candidate in enumerate(list(oracle_rows or []), start=1):
+                                snapshot = _candidate_replay_snapshot(
+                                    candidate,
+                                    fallback_trade_date=today,
+                                    is_orderable=True,
+                                )
+                                snapshot.update({
+                                    'trace_kind': 'repair_oracle_basket',
+                                    'oracle_stage': oracle_stage,
+                                    'stage': '',
+                                    'stage_rank': int(oracle_rank),
+                                    'pre_market_order_limit': resource_selection_diag.get('pre_market_order_limit'),
+                                    'direct_score_order_feasible': bool(resource_selection_diag.get('direct_score_order_feasible', False)),
+                                    'repair_steps': int(resource_selection_diag.get('max_dl_repair_steps', 0) or 0),
+                                    'ascent_steps': int(resource_selection_diag.get('max_dl_feasible_ascent_steps', 0) or 0),
+                                })
+                                replay_selector_trace_rows.append(snapshot)
+
+                        for step in list(repair_mechanism.get('repair_steps_trace') or []):
+                            for role, candidate_key in (('out', 'out_row'), ('in', 'in_row')):
+                                candidate = step.get(candidate_key)
+                                if candidate is None:
+                                    continue
+                                snapshot = _candidate_replay_snapshot(
+                                    candidate,
+                                    fallback_trade_date=today,
+                                    is_orderable=True,
+                                )
+                                snapshot.update({
+                                    'trace_kind': 'repair_swap',
+                                    'repair_role': role,
+                                    'repair_step': int(step.get('step', 0) or 0),
+                                    'stage': '',
+                                    'stage_rank': 0,
+                                    'pre_market_order_limit': resource_selection_diag.get('pre_market_order_limit'),
+                                    'direct_score_order_feasible': bool(resource_selection_diag.get('direct_score_order_feasible', False)),
+                                    'repair_steps': int(resource_selection_diag.get('max_dl_repair_steps', 0) or 0),
+                                    'ascent_steps': int(resource_selection_diag.get('max_dl_feasible_ascent_steps', 0) or 0),
+                                    'before_selected_count': step.get('before_selected_count'),
+                                    'after_selected_count': step.get('after_selected_count'),
+                                    'before_reserved_cost_milli': step.get('before_reserved_cost_milli'),
+                                    'after_reserved_cost_milli': step.get('after_reserved_cost_milli'),
+                                    'before_count_deficit': step.get('before_count_deficit'),
+                                    'after_count_deficit': step.get('after_count_deficit'),
+                                    'before_reserve_deficit_milli': step.get('before_reserve_deficit_milli'),
+                                    'after_reserve_deficit_milli': step.get('after_reserve_deficit_milli'),
+                                    'after_feasible': bool(step.get('after_feasible', False)),
+                                })
+                                replay_selector_trace_rows.append(snapshot)
+
                     trace_baskets = dict(resource_selection_diag.get('_selector_trace_baskets') or {})
                     for stage_name in ('raw_top_n', 'minimum_repair_seed', 'feasible_ascent_final'):
                         stage_rows = list(trace_baskets.get(stage_name) or [])
@@ -492,6 +591,7 @@ def run_portfolio_timeline(
                                 is_orderable=True,
                             )
                             snapshot.update({
+                                'trace_kind': 'basket_stage',
                                 'stage': stage_name,
                                 'stage_rank': int(stage_rank),
                                 'pre_market_order_limit': resource_selection_diag.get('pre_market_order_limit'),

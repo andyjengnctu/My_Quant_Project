@@ -293,7 +293,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 "output_subdir": "breakout_quality/mr13e_orderable_feasible_alignment",
             },
             "mr13e-selector-stage-translation": {
-                "enabled": True,
+                "enabled": False,
                 "audit_type": "selector_stage_translation",
                 "description": "MR-12B／MR-13A／MR-13E把raw Top-N依序經minimum-repair、feasible-ascent、entry action與actual fill時的逐層Future Target轉化歸因",
                 "source": {
@@ -330,6 +330,44 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "no_fixed_k": True,
                 },
                 "output_subdir": "breakout_quality/mr13e_selector_stage_translation",
+            },
+            "mr13e-minimum-repair-mechanism": {
+                "enabled": True,
+                "audit_type": "minimum_repair_mechanism",
+                "description": "MR-12B／MR-13A／MR-13E在Raw Top-N不符K/R0時，以canonical reservation exact oracle區分minimum-repair／multi-swap search gap與不可避免resource incompatibility",
+                "source": {
+                    "kind": "strategy_compare_cross_phase",
+                    "phases": {
+                        "selection_pit": {
+                            "profile_id": "selection_pit",
+                            "run": "latest",
+                            "baseline_arm_id": "C23",
+                            "candidate_arm_ids": ["C25", "C28", "C35"],
+                            "reference_daily_arm_id": "C35",
+                        },
+                        "forward_oos": {
+                            "profile_id": "forward_oos",
+                            "run": "latest",
+                            "baseline_arm_id": "C3",
+                            "candidate_arm_ids": ["C20", "C29", "C36"],
+                            "reference_daily_arm_id": "C36",
+                        },
+                    },
+                },
+                "dimensions": {
+                    "raw_resource_deficit": True,
+                    "accepted_repair_swaps": True,
+                    "exact_minimum_replacement_oracle": True,
+                    "exact_global_feasible_oracle": True,
+                    "repair_days": True,
+                },
+                "outcomes": {
+                    "frozen_score_only_oracle": True,
+                    "common_daily_target_post_replay": True,
+                    "resource_incompatibility_vs_search_gap": True,
+                    "no_numeric_threshold": True,
+                },
+                "output_subdir": "breakout_quality/mr13e_minimum_repair_mechanism",
             },
             "forward-robustness-portfolio-translation": {
                 "enabled": False,

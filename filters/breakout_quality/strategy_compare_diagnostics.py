@@ -278,6 +278,8 @@ def _flatten_selector_trace_rows(replay_selector_trace_rows: list[dict[str, Any]
     rows: list[dict[str, Any]] = []
     for raw in list(replay_selector_trace_rows or []):
         item = dict(raw or {})
+        if str(item.get("trace_kind") or "basket_stage") != "basket_stage":
+            continue
         rows.append({
             "stage": str(item.get("stage") or ""),
             "stage_rank": int(item.get("stage_rank", 0) or 0),
@@ -303,6 +305,85 @@ def _flatten_selector_trace_rows(replay_selector_trace_rows: list[dict[str, Any]
     frame = pd.DataFrame(rows)
     return frame[columns].sort_values(
         ["trade_date", "stage", "stage_rank", "ticker"], kind="mergesort"
+    ).reset_index(drop=True)
+
+
+def _flatten_repair_mechanism_rows(
+    replay_selector_trace_rows: list[dict[str, Any]] | None,
+) -> pd.DataFrame:
+    """Serialize repair-resource/oracle diagnostics from the same production selector path."""
+
+    summary_columns = [
+        "trace_kind", "trade_date", "status", "classification",
+        "target_count", "candidate_count", "reserve_floor_milli",
+        "raw_selected_count", "raw_reserved_cost_milli", "raw_count_deficit",
+        "raw_reserve_deficit_milli", "actual_repair_steps",
+        "actual_repair_replacement_distance", "exact_minimum_replacement_distance",
+        "repair_seed_score_sum", "minimum_replacement_best_score_sum",
+        "final_score_sum", "global_best_score_sum",
+        "repair_seed_score_gap_to_minimum_best", "final_score_gap_to_global_best",
+        "exact_oracle_evaluated_states", "exact_oracle_ranked_states",
+    ]
+    candidate_columns = [
+        "oracle_stage", "repair_role", "repair_step", "ticker", "candidate_date",
+        "signal_date", "candidate_type", "entry_source", "breakout_quality_score",
+        "breakout_quality_score_date", "before_selected_count", "after_selected_count",
+        "before_reserved_cost_milli", "after_reserved_cost_milli",
+        "before_count_deficit", "after_count_deficit",
+        "before_reserve_deficit_milli", "after_reserve_deficit_milli", "after_feasible",
+    ]
+    columns = summary_columns + candidate_columns
+    rows = []
+    for raw in list(replay_selector_trace_rows or []):
+        item = dict(raw or {})
+        trace_kind = str(item.get("trace_kind") or "")
+        if trace_kind not in {"repair_summary", "repair_oracle_basket", "repair_swap"}:
+            continue
+        row = {column: None for column in columns}
+        row.update({
+            "trace_kind": trace_kind,
+            "trade_date": str(item.get("trade_date") or ""),
+            "status": str(item.get("status") or ""),
+            "classification": str(item.get("classification") or ""),
+            "oracle_stage": str(item.get("oracle_stage") or ""),
+            "repair_role": str(item.get("repair_role") or ""),
+            "ticker": str(item.get("ticker") or ""),
+            "candidate_date": str(item.get("candidate_date") or ""),
+            "signal_date": str(item.get("signal_date") or ""),
+            "candidate_type": str(item.get("candidate_type") or ""),
+            "entry_source": str(item.get("entry_source") or ""),
+            "breakout_quality_score": _finite_float(item.get("breakout_quality_score")),
+            "breakout_quality_score_date": str(item.get("breakout_quality_score_date") or ""),
+        })
+        int_columns = (
+            "target_count", "candidate_count", "reserve_floor_milli", "raw_selected_count",
+            "raw_reserved_cost_milli", "raw_count_deficit", "raw_reserve_deficit_milli",
+            "actual_repair_steps", "actual_repair_replacement_distance",
+            "exact_minimum_replacement_distance", "exact_oracle_evaluated_states",
+            "exact_oracle_ranked_states", "repair_step", "before_selected_count",
+            "after_selected_count", "before_reserved_cost_milli", "after_reserved_cost_milli",
+            "before_count_deficit", "after_count_deficit", "before_reserve_deficit_milli",
+            "after_reserve_deficit_milli",
+        )
+        for column in int_columns:
+            value = item.get(column)
+            row[column] = None if value in (None, "") else int(value)
+        for column in (
+            "repair_seed_score_sum", "minimum_replacement_best_score_sum",
+            "final_score_sum", "global_best_score_sum",
+            "repair_seed_score_gap_to_minimum_best", "final_score_gap_to_global_best",
+        ):
+            row[column] = _finite_float(item.get(column))
+        if trace_kind == "repair_swap":
+            row["after_feasible"] = bool(item.get("after_feasible", False))
+        rows.append(row)
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    frame = pd.DataFrame(rows)
+    return frame[columns].sort_values(
+        ["trade_date", "trace_kind", "repair_step", "oracle_stage", "repair_role", "ticker"],
+        kind="mergesort",
+        na_position="last",
     ).reset_index(drop=True)
 
 def _flatten_selected_buy_rows(trade_history: pd.DataFrame) -> pd.DataFrame:

@@ -2652,16 +2652,18 @@ def validate_breakout_quality_selector_stage_translation_audit_contract_case(_ba
     definitions = {item.audit_id: item for item in get_audit_definitions("breakout_quality")}
     definition = definitions["mr13e-selector-stage-translation"]
     previous = definitions["mr13e-orderable-feasible-alignment"]
+    next_definition = definitions["mr13e-minimum-repair-mechanism"]
     entry = get_audit_entry("selector_stage_translation")
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "selector_stage_audit_is_config_driven_read_only_and_replaces_completed_alignment_audit_as_active_step",
+        "selector_stage_audit_is_config_driven_read_only_and_is_now_completed_before_minimum_repair_mechanism_step",
         True,
         bool(
-            definition.enabled
+            not definition.enabled
             and not previous.enabled
+            and next_definition.enabled
             and definition.audit_type == "selector_stage_translation"
             and definition.dimensions.get("minimum_repair_seed") is True
             and definition.dimensions.get("feasible_ascent_final") is True
@@ -2771,6 +2773,102 @@ def validate_breakout_quality_selector_stage_translation_audit_contract_case(_ba
     summary["workflow"] = "mr13e_selector_stage_translation_audit"
     return results, summary
 
+
+def validate_breakout_quality_minimum_repair_mechanism_audit_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_MINIMUM_REPAIR_MECHANISM_AUDIT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config.audit import get_audit_definitions
+    from tools.audit.catalog import get_audit_entry
+    from tools.audit.breakout_quality.minimum_repair_mechanism import (
+        _conclusion,
+        collect_minimum_repair_mechanism_status,
+    )
+
+    definitions = {item.audit_id: item for item in get_audit_definitions("breakout_quality")}
+    definition = definitions["mr13e-minimum-repair-mechanism"]
+    previous = definitions["mr13e-selector-stage-translation"]
+    entry = get_audit_entry("minimum_repair_mechanism")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "minimum_repair_mechanism_audit_is_active_config_driven_read_only_exact_oracle_step",
+        True,
+        bool(
+            definition.enabled
+            and not previous.enabled
+            and definition.audit_type == "minimum_repair_mechanism"
+            and definition.dimensions.get("exact_minimum_replacement_oracle") is True
+            and definition.dimensions.get("exact_global_feasible_oracle") is True
+            and definition.outcomes.get("frozen_score_only_oracle") is True
+            and definition.outcomes.get("no_numeric_threshold") is True
+            and entry.formal
+            and entry.read_only
+            and entry.module == "tools.audit.breakout_quality.minimum_repair_mechanism"
+        ),
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        blocked = collect_minimum_repair_mechanism_status(definition, project_root=Path(tmp))
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "minimum_repair_mechanism_audit_blocks_cleanly_without_exact_oracle_sidecars",
+        True,
+        blocked.get("status") == "BLOCKED",
+    )
+
+    def arm(*, exact_days, heuristic_days, exact_loss, heuristic_loss):
+        return {
+            "status": "AVAILABLE",
+            "classification_counts": {
+                "RESOURCE_CONSTRAINT_EXACT_OPTIMUM": int(exact_days),
+                "GREEDY_REPAIR_EXTRA_REPLACEMENTS": int(heuristic_days),
+                "GREEDY_REPAIR_SCORE_GAP_AT_MIN_DISTANCE": 0,
+                "MULTI_SWAP_LOCAL_SEARCH_GAP": 0,
+            },
+            "target_loss_attribution": {
+                "heuristic_gap_days_negative_raw_to_repair_sum_r": float(heuristic_loss),
+                "exact_optimum_days_negative_raw_to_repair_sum_r": float(exact_loss),
+            },
+        }
+
+    payload = {
+        "phases": {
+            "forward_oos": {
+                "arms": {
+                    "C20": arm(exact_days=3, heuristic_days=0, exact_loss=-1.0, heuristic_loss=0.0),
+                    "C29": arm(exact_days=1, heuristic_days=2, exact_loss=-0.3, heuristic_loss=-0.7),
+                    "C36": arm(exact_days=5, heuristic_days=2, exact_loss=-4.0, heuristic_loss=-1.0),
+                }
+            }
+        }
+    }
+    conclusion = _conclusion(payload)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "minimum_repair_conclusion_uses_exact_oracle_day_classes_and_post_replay_loss_without_threshold",
+        True,
+        bool(
+            conclusion.get("classification")
+            == "RESOURCE_INCOMPATIBILITY_DOMINATES_WITH_HEURISTIC_GAPS"
+            and conclusion.get("mr13e_exact_optimum_days") == 5
+            and conclusion.get("mr13e_heuristic_gap_days") == 2
+            and math.isclose(
+                float(conclusion.get("mr13e_exact_optimum_negative_target_loss_sum_r")),
+                -4.0,
+                abs_tol=1e-12,
+            )
+        ),
+    )
+
+    summary["workflow"] = "mr13e_minimum_repair_mechanism_audit"
+    return results, summary
+
 def validate_breakout_quality_audit_framework_contract_case(_base_params):
     from config.audit import (
         AUDIT_OUTPUT_ROOT,
@@ -2847,6 +2945,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     selector_stage_definition = next(
         (item for item in all_definitions if item.audit_id == "mr13e-selector-stage-translation"), None
+    )
+    minimum_repair_definition = next(
+        (item for item in all_definitions if item.audit_id == "mr13e-minimum-repair-mechanism"), None
     )
     validate_audit_catalog(all_definitions)
     project_root = Path(__file__).resolve().parents[2]
@@ -3088,9 +3189,15 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and orderable_alignment_definition.source.get("kind") == "strategy_compare_cross_phase"
         and orderable_alignment_definition.outcomes.get("no_fixed_k") is True
         and selector_stage_definition is not None
-        and selector_stage_definition.enabled
+        and not selector_stage_definition.enabled
         and selector_stage_definition.audit_type == "selector_stage_translation"
         and selector_stage_definition.source.get("kind") == "strategy_compare_cross_phase"
+        and minimum_repair_definition is not None
+        and minimum_repair_definition.enabled
+        and minimum_repair_definition.audit_type == "minimum_repair_mechanism"
+        and minimum_repair_definition.source.get("kind") == "strategy_compare_cross_phase"
+        and minimum_repair_definition.outcomes.get("frozen_score_only_oracle") is True
+        and minimum_repair_definition.outcomes.get("no_numeric_threshold") is True
         and "breakout_quality" in get_audit_module_ids(enabled_only=True)
         and bool(enabled_definitions)
         and all(bool(str(item.source.get("kind") or "").strip()) for item in all_definitions),
