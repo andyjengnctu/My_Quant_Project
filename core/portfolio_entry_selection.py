@@ -11,6 +11,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
 )
 from core.portfolio_entry_selection_common import (
     _candidate_binary_pass,
@@ -41,6 +42,7 @@ from core.portfolio_entry_selection_max_dl import (
     _candidate_has_stale_scored_signal,
     _reorder_resource_aware_continuous_max_dl_feasible_ascent,
     _reorder_resource_aware_continuous_excess_alpha_constrained_optimal,
+    _reorder_resource_aware_continuous_score_constrained_optimal,
 )
 
 
@@ -78,7 +80,8 @@ def reorder_candidates_for_resource_aware_quality(
     maximizes calibrated Expected R times canonical planned initial risk; the frozen Excess-Alpha
     variant maximizes PIT Expected Excess-R times canonical planned initial risk.  The no-R0
     Excess-Alpha ablation keeps the same baseline K and true cash/sizing feasibility but removes
-    the baseline reserved-capital floor and its minimum-repair path.
+    the baseline reserved-capital floor and its minimum-repair path. Exact constrained modes reuse
+    one branch-and-bound owner and differ only by frozen score vs Excess-Alpha objective.
     """
 
     started_ns = time.perf_counter_ns()
@@ -98,6 +101,8 @@ def reorder_candidates_for_resource_aware_quality(
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT
         else 'continuous-excess-alpha-constrained-optimal'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL
+        else 'continuous-score-constrained-optimal'
+        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL
         else 'continuous-score-max-dl-feasible-ascent'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
         else 'continuous-score-max-dl'
@@ -182,6 +187,17 @@ def reorder_candidates_for_resource_aware_quality(
         return finish(order, diag)
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL:
         order, diag = _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
+            rows,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=free_slots,
+            params=params,
+            baseline=baseline,
+            default_diag=default_diag,
+        )
+        return finish(order, diag)
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL:
+        order, diag = _reorder_resource_aware_continuous_score_constrained_optimal(
             rows,
             available_cash=available_cash,
             sizing_equity=sizing_equity,

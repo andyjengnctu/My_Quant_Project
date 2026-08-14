@@ -35,7 +35,7 @@ from core.strategy_comparison import (
     validate_strategy_multi_seed_robustness_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 25
+STRATEGY_COMPARE_SCHEMA_VERSION = 26
 
 # =============================================================================
 # 1. 常用設定
@@ -69,20 +69,21 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13E = "Min MR-13E"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_EXCESS_ALPHA = "Min MR-13E Excess-Alpha"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_EXCESS_ALPHA_NO_R0 = "Min MR-13E Excess-Alpha No-R0"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_EXCESS_ALPHA_CONSTRAINED = "Min MR-13E Excess-Alpha Constrained"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED = "Min MR-13E Constrained"
 
 # Strategy Compare以研究階段profile隔離設定與輸出；App只顯示泛化階段名稱，
 # arms／contrasts／period／output namespace全部由本檔驅動。
 STRATEGY_COMPARE_PROFILES = {
     "selection_pit": {
         "label": "Selection PIT 策略比較",
-        "description": "2014～2020 point-in-time策略轉化Gate；比較Full／Min baseline、MR-12B／MR-13A／MR-13E與frozen MR-13E Excess-Alpha resource ablation。",
+        "description": "2014～2020 point-in-time策略轉化Gate；比較Full／Min baseline、MR-12B／MR-13A／MR-13E及目前controlled selector／objective ablations。",
         "display_alignment_group": "core_strategy_compare",
         "display_alignment_arm_ids": ("C32", "C23", "C25", "C28", "C35"),
         "start_date": "2014-01-01",
         "end_date": "2020-12-31",
         "output_root": "outputs/strategy_compare/selection_pit",
         "reuse_output_roots": ("outputs/strategy_compare",),
-        "arm_ids": ("C32", "C23", "C25", "C28", "C35", "C39", "C40", "C41"),
+        "arm_ids": ("C32", "C23", "C25", "C28", "C35", "C39", "C40", "C41", "C42"),
         "contrast_ids": (
             "C32-C23",
             "C25-C23", "C28-C23", "C28-C25",
@@ -90,6 +91,7 @@ STRATEGY_COMPARE_PROFILES = {
             "C39-C23", "C39-C25", "C39-C35",
             "C40-C23", "C40-C35", "C40-C39",
             "C41-C23", "C41-C35", "C41-C39", "C41-C40",
+            "C42-C23", "C42-C35", "C42-C41",
         ),
     },
     "forward_oos": {
@@ -558,6 +560,26 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C42": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED,
+        "description": (
+            "C35的Selection-only solver ablation：完全重用同一MR-13E PIT score、historical Min params、"
+            "K/R0、sizing、cash、orderability與execution；objective仍為原始ΣMR-13E score，只把"
+            "Top-K→R0 minimum repair→1-swap ascent替換為deterministic exact branch-and-bound，"
+            "在完整候選universe直接求K/R0/canonical-cash feasible score-sum global optimum"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
     "C29": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13A,
         "description": (
@@ -621,6 +643,9 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C41-C35": {"left": "C41", "right": "C35", "description": "同一MR-13E PIT與同K/R0；比較exact constrained Excess-Alpha objective相對原C35 score-sum selector"},
     "C41-C39": {"left": "C41", "right": "C39", "description": "同一MR-13E PIT、Expected Excess-R objective、K/R0與execution；唯一把repair+1-swap heuristic改為完整候選exact constrained optimization"},
     "C41-C40": {"left": "C41", "right": "C40", "description": "同一MR-13E Excess-Alpha objective與K；比較恢復R0且直接exact constrained optimization相對No-R0 ablation"},
+    "C42-C23": {"left": "C42", "right": "C23", "description": "Selection PIT frozen MR-13E score exact constrained optimum相對DL-off Min ROOS的策略經濟效果"},
+    "C42-C35": {"left": "C42", "right": "C35", "description": "同一MR-13E PIT、score objective、K/R0與execution；唯一把repair+1-swap heuristic改為完整候選exact constrained optimization"},
+    "C42-C41": {"left": "C42", "right": "C41", "description": "同一MR-13E PIT、K/R0、exact constrained solver與execution；唯一objective由Expected Excess-R×Risk改回原始MR-13E score"},
     "C36-C3": {"left": "C36", "right": "C3", "description": "current Min ROOS下MR-13E daily feasible-ascent相對DL-off baseline的Forward-OOS策略效果"},
     "C36-C20": {"left": "C36", "right": "C20", "description": "固定current Min ROOS與feasible-ascent，MR-13E相對MR-12B的純DL Forward-OOS效果"},
     "C36-C29": {"left": "C36", "right": "C29", "description": "固定current Min ROOS與feasible-ascent，MR-13E相對MR-13A的純DL Forward-OOS效果"},

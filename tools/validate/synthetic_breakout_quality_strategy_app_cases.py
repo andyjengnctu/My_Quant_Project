@@ -2081,6 +2081,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     from core.portfolio_entry_selection_max_dl import (
         build_max_dl_repair_mechanism_diagnostic,
         _excess_alpha_basket_quality_key,
+        _max_dl_basket_quality_key,
         _max_dl_execution_order,
     )
     from core.strategy_params import V16StrategyParams
@@ -2872,6 +2873,79 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == [row["ticker"] for row in brute_best["selected_rows"]],
     )
 
+    score_constrained_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-score-constrained-optimal",
+            expected_excess_r=expected_excess_r,
+        )
+        for ticker, price, qty, score, expected_excess_r in constrained_seed
+    ]
+    score_constrained_order, score_constrained_diag = reorder_candidates_for_resource_aware_quality(
+        score_constrained_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=resource_params,
+    )
+    score_constrained_action = select_resource_aware_action_candidates(
+        score_constrained_order, score_constrained_diag
+    )
+    score_constrained_result = _simulate_reserved_candidate_order(
+        score_constrained_action,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=2,
+        params=resource_params,
+    )
+    score_constrained_baseline = _simulate_reserved_candidate_order(
+        score_constrained_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=2,
+        params=resource_params,
+    )
+    score_base_rank = {id(row): idx for idx, row in enumerate(score_constrained_rows)}
+    score_brute_best = None
+    score_brute_best_key = None
+    for combo in itertools.combinations(score_constrained_rows, 2):
+        combo_order = _max_dl_execution_order(combo, base_rank=score_base_rank)
+        combo_result = _simulate_reserved_candidate_order(
+            combo_order,
+            available_cash=350_000.0,
+            sizing_equity=2_000_000.0,
+            free_slots=2,
+            params=resource_params,
+        )
+        if (
+            combo_result["selected_count"] != 2
+            or combo_result["reserved_cost_milli"] < score_constrained_baseline["reserved_cost_milli"]
+        ):
+            continue
+        combo_key = _max_dl_basket_quality_key(
+            combo_result["selected_rows"], base_rank=score_base_rank
+        )
+        if score_brute_best_key is None or combo_key > score_brute_best_key:
+            score_brute_best_key = combo_key
+            score_brute_best = combo_result
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "mr13e_score_constrained_solver_matches_exhaustive_canonical_k_r0_oracle_and_reuses_exact_solver_without_calibration",
+        True,
+        score_constrained_diag.get("basket_objective") == "score"
+        and score_constrained_diag.get("resource_preservation_required") is True
+        and score_constrained_diag.get("constrained_solver_optimality_certified") is True
+        and score_constrained_diag.get("constrained_solver_seed_source") == "c35-feasible-ascent"
+        and int(score_constrained_diag.get("max_dl_repair_steps", -1)) == 0
+        and int(score_constrained_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
+        and score_constrained_result["selected_count"] == 2
+        and score_constrained_result["reserved_cost_milli"] >= score_constrained_baseline["reserved_cost_milli"]
+        and score_brute_best is not None
+        and [row["ticker"] for row in score_constrained_result["selected_rows"]]
+        == [row["ticker"] for row in score_brute_best["selected_rows"]],
+    )
+
     multi_swap_seed = (
         ("MS0", 100.0, 771, 1.0, -0.2293296791117404),
         ("MS1", 30.0, 1447, 0.9166666666666666, -0.10787340892209005),
@@ -3001,6 +3075,33 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "C41-C39" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
         and "C41-C35" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
         and "C41" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
+    )
+
+    c42 = selection_excess_settings.arms["C42"]
+    c42_options = dict(c42.dl_runtime_options or {})
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "sr_c42_is_selection_only_mr13e_score_exact_constrained_solver_ablation_without_expected_r_calibration",
+        True,
+        c42.enabled
+        and c42.dl_id == c41.dl_id == c39.dl_id == "CONT13E_PIT"
+        and c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+        and c42_options.get("preserve_k_r0") is True
+        and c42_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+        and c42_options.get("selection_only") is True
+        and not any(
+            key in c42_options
+            for key in (
+                "expected_excess_r_fit_dl_id",
+                "expected_excess_r_calibration_method",
+                "expected_r_fit_dl_id",
+                "expected_r_calibration_method",
+            )
+        )
+        and c42.robustness_role == "off"
+        and "C42-C35" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        and "C42-C41" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        and "C42" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
     )
 
     from filters.breakout_quality.rank_calibration import (

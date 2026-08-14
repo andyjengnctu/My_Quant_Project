@@ -863,7 +863,7 @@ def _candidate_has_stale_scored_signal(row, *, max_age_days):
     return int((trade_date - score_date).days) > int(max_age_days)
 
 
-def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
+def _reorder_resource_aware_continuous_constrained_optimal(
     rows,
     *,
     available_cash,
@@ -872,25 +872,35 @@ def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
     params,
     baseline,
     default_diag,
+    objective_mode,
 ):
-    """Exactly maximize frozen Excess-Alpha under the existing K/R0 resource contract.
+    """Exactly maximize one frozen DL objective under the existing K/R0 contract.
 
-    C39's repair/ascent path is used only to obtain a strong feasible incumbent.  It
-    never limits the search space.  Branch-and-bound then visits the complete
-    candidate membership decision tree in the canonical baseline execution order.
-    Every included state is rebuilt by the canonical cash-capped reservation
-    simulator, so planned risk and reserved capital keep the production sizing/cash
-    semantics.  Pruning uses only admissible optimistic bounds: remaining candidate
-    count, standalone maximum reserve, and standalone positive Excess-Alpha value.
-    There is no candidate truncation, beam width, time budget, lambda, or tuned
-    tolerance.  Returning from this function therefore means the final feasible
-    basket is globally optimal under the exact lexicographic C39 Excess-Alpha key.
+    The matching feasible-ascent selector is used only to obtain a feasible incumbent
+    lower bound; it never restricts membership. Branch-and-bound then visits the full
+    candidate include/exclude tree in canonical baseline execution order. Every
+    included state is rebuilt through canonical cash-capped reservation, preserving
+    production sizing/cash semantics. Pruning uses only admissible optimistic bounds:
+    remaining candidate count, standalone maximum reserve, objective coverage, and
+    objective sum. There is no candidate truncation, beam width, time budget, lambda,
+    or tuned tolerance. A normal return therefore certifies the exact lexicographic
+    optimum for the selected objective under K/R0/canonical-cash feasibility.
     """
+
+    if objective_mode not in {'score', 'excess_alpha'}:
+        raise ValueError(f'constrained optimal不支援objective_mode={objective_mode!r}')
 
     candidates = list(rows or [])
     target_count = int(baseline['selected_count'])
     reserve_floor_milli = int(baseline['reserved_cost_milli'])
     base_rank = {id(row): idx for idx, row in enumerate(candidates)}
+    seed_source = (
+        'c35-feasible-ascent' if objective_mode == 'score' else 'c39-feasible-ascent'
+    )
+    selector_name = _objective_selector_name(
+        objective_mode,
+        suffix='constrained-optimal',
+    )
 
     seed_order, seed_diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         candidates,
@@ -900,17 +910,18 @@ def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
         params=params,
         baseline=baseline,
         default_diag=default_diag,
-        objective_mode='excess_alpha',
+        objective_mode=objective_mode,
     )
     if not bool(seed_diag.get('max_dl_eligible', False)):
         out = dict(seed_diag)
         out.update({
-            'selector': 'continuous-excess-alpha-constrained-optimal',
+            'selector': selector_name,
+            'basket_objective': str(objective_mode),
             'constrained_solver_optimality_certified': True,
             'constrained_solver_search_states': 0,
             'constrained_solver_pruned_states': 0,
             'constrained_solver_feasible_baskets': 0,
-            'constrained_solver_seed_source': 'c39-feasible-ascent',
+            'constrained_solver_seed_source': seed_source,
             'max_dl_repair_steps': 0,
             'max_dl_repair_evaluations': 0,
             'max_dl_feasible_ascent_steps': 0,
@@ -930,6 +941,14 @@ def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
         )
         return ordered, result
 
+    def basket_quality_key(result):
+        if objective_mode == 'score':
+            return _max_dl_basket_quality_key(
+                result.get('selected_rows') or [],
+                base_rank=base_rank,
+            )
+        return _excess_alpha_basket_quality_key(result, base_rank=base_rank)
+
     seed_basket = list(seed_order[:target_count])
     incumbent_order, incumbent_result = evaluate_basket(seed_basket)
     if not _max_dl_basket_is_feasible(
@@ -937,39 +956,46 @@ def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
         target_count=target_count,
         reserve_floor_milli=reserve_floor_milli,
     ):
-        raise RuntimeError('C41 constrained solver無法取得C39可行incumbent')
+        raise RuntimeError('constrained solver無法取得同objective可行incumbent')
     best_basket = list(incumbent_order)
     best_result = incumbent_result
-    best_key = _excess_alpha_basket_quality_key(best_result, base_rank=base_rank)
+    best_key = basket_quality_key(best_result)
 
     standalone = []
     for row in candidates:
         single_order, single_result = evaluate_basket([row])
+        del single_order
         if int(single_result['selected_count']) != 1:
             standalone.append({
                 'orderable': False,
                 'reserve_upper_milli': 0,
                 'coverage_upper': 0,
-                'alpha_upper': 0.0,
+                'objective_upper': 0.0,
             })
             continue
-        plan = single_result['selected_plans'][0]
-        expected_excess_r = _candidate_expected_excess_r(row)
-        risk_milli = _planned_initial_risk_milli(row=row, plan=plan)
-        coverage = int(expected_excess_r is not None and risk_milli is not None)
-        raw_value = (
-            0.0
-            if not coverage
-            else float(expected_excess_r) * float(risk_milli)
-        )
+
+        if objective_mode == 'score':
+            score = _candidate_continuous_score(row)
+            coverage = int(score is not None)
+            raw_value = 0.0 if score is None else float(score)
+        else:
+            plan = single_result['selected_plans'][0]
+            expected_excess_r = _candidate_expected_excess_r(row)
+            risk_milli = _planned_initial_risk_milli(row=row, plan=plan)
+            coverage = int(expected_excess_r is not None and risk_milli is not None)
+            raw_value = (
+                0.0
+                if not coverage
+                else float(expected_excess_r) * float(risk_milli)
+            )
+
         standalone.append({
             'orderable': True,
             'reserve_upper_milli': int(single_result['reserved_cost_milli']),
             'coverage_upper': coverage,
-            # With less remaining cash, planned risk cannot exceed the standalone
-            # full-cash plan.  For negative excess-R, zero is the admissible upper
-            # bound because cash-capping can only shrink the negative magnitude.
-            'alpha_upper': max(0.0, float(raw_value)),
+            # Zero is a valid optimistic replacement for a negative contribution:
+            # exact K may force negatives, so ignoring them only loosens the bound.
+            'objective_upper': max(0.0, float(raw_value)),
         })
 
     n = len(candidates)
@@ -988,6 +1014,14 @@ def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
     feasible_baskets = 1
 
     def current_objective_summary(result):
+        if objective_mode == 'score':
+            values = [
+                float(score)
+                for row in list(result.get('selected_rows') or [])
+                if (score := _candidate_continuous_score(row)) is not None
+            ]
+            return int(len(values)), float(sum(values))
+
         coverage = 0
         total = 0.0
         for row, plan in zip(
@@ -1017,12 +1051,12 @@ def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
         )
         return int(current_reserved) + int(sum(values[:need]))
 
-    def optimistic_alpha_upper(idx, need, current_total):
+    def optimistic_objective_upper(idx, need, current_total):
         if need <= 0:
             return float(current_total)
         values = sorted(
             (
-                float(standalone[pos]['alpha_upper'])
+                float(standalone[pos]['objective_upper'])
                 for pos in range(idx, n)
                 if standalone[pos]['orderable']
             ),
@@ -1038,7 +1072,7 @@ def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
         params=params,
     )
 
-    def visit(idx, basket, result, coverage, alpha_total):
+    def visit(idx, basket, result, coverage, objective_total):
         nonlocal best_basket, best_result, best_key
         nonlocal search_states, pruned_states, feasible_baskets
         search_states += 1
@@ -1050,7 +1084,7 @@ def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
                 pruned_states += 1
                 return
             feasible_baskets += 1
-            quality = _excess_alpha_basket_quality_key(result, base_rank=base_rank)
+            quality = basket_quality_key(result)
             if quality > best_key:
                 best_key = quality
                 best_basket = list(basket)
@@ -1060,7 +1094,9 @@ def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
         if idx >= n or suffix_orderable[idx] < need:
             pruned_states += 1
             return
-        if optimistic_reserve_upper(idx, need, result['reserved_cost_milli']) < reserve_floor_milli:
+        if optimistic_reserve_upper(
+            idx, need, result['reserved_cost_milli']
+        ) < reserve_floor_milli:
             pruned_states += 1
             return
 
@@ -1069,8 +1105,8 @@ def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
             pruned_states += 1
             return
         if max_coverage == int(best_key[0]):
-            alpha_upper = optimistic_alpha_upper(idx, need, alpha_total)
-            if alpha_upper < float(best_key[1]):
+            objective_upper = optimistic_objective_upper(idx, need, objective_total)
+            if objective_upper < float(best_key[1]):
                 pruned_states += 1
                 return
 
@@ -1089,21 +1125,33 @@ def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
                     new_total,
                 )
 
-        # Excluding a row is always part of the complete membership decision tree.
-        visit(idx + 1, basket, result, coverage, alpha_total)
+        visit(idx + 1, basket, result, coverage, objective_total)
 
-    visit(0, [], empty_result, 0, 0.0)
+    empty_coverage, empty_total = current_objective_summary(empty_result)
+    visit(0, [], empty_result, empty_coverage, empty_total)
 
     if not _max_dl_basket_is_feasible(
         best_result,
         target_count=target_count,
         reserve_floor_milli=reserve_floor_milli,
     ):
-        raise RuntimeError('C41 constrained solver結束後沒有合法K/R0 basket')
+        raise RuntimeError('constrained solver結束後沒有合法K/R0 basket')
 
-    final_order = _max_dl_execution_order(best_basket, base_rank=base_rank)
-    final_ids = {id(row) for row in final_order}
-    final_order.extend(row for row in candidates if id(row) not in final_ids)
+    basket_order = _max_dl_execution_order(best_basket, base_rank=base_rank)
+    basket_ids = {id(row) for row in basket_order}
+    final_result = _simulate_reserved_candidate_order(
+        basket_order,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=target_count,
+        params=params,
+    )
+    if basket_quality_key(final_result) != best_key:
+        raise RuntimeError('constrained solver final execution order改變objective optimum')
+    final_order = basket_order + [
+        row for row in candidates if id(row) not in basket_ids
+    ]
+
     baseline_ids = {id(row) for row in baseline['selected_rows']}
     selected_ids = {id(row) for row in best_result['selected_rows']}
     promoted_count = sum(
@@ -1116,19 +1164,20 @@ def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
         best_result,
         changed=bool(selected_ids != baseline_ids),
         promoted_pass_count=0,
-        selector='continuous-excess-alpha-constrained-optimal',
+        selector=selector_name,
     )
     out.update({
         'mode': 'dl-selection',
         'promoted_score_orders': int(promoted_count),
-        'direct_score_order_feasible': bool(seed_diag.get('direct_score_order_feasible', False)),
+        'direct_score_order_feasible': bool(
+            seed_diag.get('direct_score_order_feasible', False)
+        ),
         'basket_search_states': int(search_states),
         'basket_search_pruned': int(pruned_states),
         'basket_feasible_count': int(feasible_baskets),
         'resource_preservation_required': True,
         'pre_market_order_limit': int(target_count),
         'max_dl_eligible': True,
-        # C39 repair/ascent is only an incumbent producer, not C41's selection path.
         'max_dl_repair_steps': 0,
         'max_dl_repair_evaluations': 0,
         'max_dl_seed_fallback': False,
@@ -1136,12 +1185,12 @@ def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
         'max_dl_feasible_ascent_steps': 0,
         'max_dl_feasible_ascent_evaluations': 0,
         'max_dl_feasible_ascent_local_optimum': False,
-        'basket_objective': 'excess_alpha',
+        'basket_objective': str(objective_mode),
         'constrained_solver_optimality_certified': True,
         'constrained_solver_search_states': int(search_states),
         'constrained_solver_pruned_states': int(pruned_states),
         'constrained_solver_feasible_baskets': int(feasible_baskets),
-        'constrained_solver_seed_source': 'c39-feasible-ascent',
+        'constrained_solver_seed_source': seed_source,
         'constrained_solver_seed_repair_evaluations': int(
             seed_diag.get('max_dl_repair_evaluations', 0) or 0
         ),
@@ -1157,11 +1206,54 @@ def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
         '_selector_repair_steps': [],
     })
     if int(best_result['selected_count']) != target_count:
-        raise RuntimeError('C41 constrained solver未維持同參數baseline K')
+        raise RuntimeError('constrained solver未維持同參數baseline K')
     if int(best_result['reserved_cost_milli']) < reserve_floor_milli:
-        raise RuntimeError('C41 constrained solver輸出低於同參數baseline R0')
+        raise RuntimeError('constrained solver輸出低於同參數baseline R0')
     return final_order, out
 
+
+def _reorder_resource_aware_continuous_excess_alpha_constrained_optimal(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    return _reorder_resource_aware_continuous_constrained_optimal(
+        rows,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=free_slots,
+        params=params,
+        baseline=baseline,
+        default_diag=default_diag,
+        objective_mode='excess_alpha',
+    )
+
+
+def _reorder_resource_aware_continuous_score_constrained_optimal(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    return _reorder_resource_aware_continuous_constrained_optimal(
+        rows,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=free_slots,
+        params=params,
+        baseline=baseline,
+        default_diag=default_diag,
+        objective_mode='score',
+    )
 
 def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     rows,
