@@ -17,6 +17,7 @@ python tools/validate/preflight_env.py
 - `apps/test_suite.py`是`run_bundle.py`內部formal test runner；只有在針對正式測試器本身除錯時才直接執行。
 - 只有正式入口已指出失敗步驟時，才用 `python tools/local_regression/run_all.py --only ...` 重跑指定步驟。
 - `python tools/validate/preflight_env.py` 只檢查環境，不自動安裝依賴。
+- `outputs/local_regression/_staging/`：formal / validate 暫存 staging；屬 `local_regression` 內部子目錄，會由 retention 自動清理。
 
 ## 打包
 
