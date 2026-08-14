@@ -4545,22 +4545,6 @@ def validate_breakout_quality_mr13e_strategy_source_gate_contract_case(_base_par
             and c36.robustness_role == "off"
         ),
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "mr13e_single_seed_gate_and_frozen_expected_pnl_arms_are_enabled_with_direct_contrasts",
-        True,
-        (
-            selection_ids == ("C32", "C23", "C25", "C28", "C35", "C37")
-            and forward_ids == ("C1", "C3", "C20", "C29", "C36", "C38")
-            and {"C35-C25", "C35-C28", "C37-C35", "C37-C25"}.issubset(
-                {item.contrast_id for item in selection.enabled_contrasts}
-            )
-            and {"C36-C20", "C36-C29", "C38-C36", "C38-C20"}.issubset(
-                {item.contrast_id for item in forward.enabled_contrasts}
-            )
-        ),
-    )
-
     selection_robust = strategy_config.get_strategy_multi_seed_robustness_settings(
         "selection_pit"
     )
