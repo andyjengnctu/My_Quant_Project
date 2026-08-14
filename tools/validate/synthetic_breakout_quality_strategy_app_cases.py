@@ -2729,8 +2729,71 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and excess_score_selected["reserved_cost_milli"] >= excess_score_diag["baseline_reserved_cost_milli"],
     )
 
+    no_r0_seed = (
+        ("NR_H1", 100.0, 1500, 0.30, 0.02),
+        ("NR_H2", 100.0, 1500, 0.20, 0.01),
+        ("NR_A", 100.0, 600, 0.99, 0.50),
+        ("NR_B", 100.0, 600, 0.98, 0.40),
+    )
+    with_r0_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-excess-alpha-feasible-ascent",
+            expected_excess_r=expected_excess_r,
+        )
+        for ticker, price, qty, score, expected_excess_r in no_r0_seed
+    ]
+    no_r0_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-excess-alpha-no-r0-feasible-ascent",
+            expected_excess_r=expected_excess_r,
+        )
+        for ticker, price, qty, score, expected_excess_r in no_r0_seed
+    ]
+    with_r0_order, with_r0_diag = reorder_candidates_for_resource_aware_quality(
+        with_r0_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=resource_params,
+    )
+    no_r0_order, no_r0_diag = reorder_candidates_for_resource_aware_quality(
+        no_r0_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=resource_params,
+    )
+    with_r0_action = select_resource_aware_action_candidates(with_r0_order, with_r0_diag)
+    no_r0_action = select_resource_aware_action_candidates(no_r0_order, no_r0_diag)
+    no_r0_selected = _simulate_reserved_candidate_order(
+        no_r0_action,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=2,
+        params=resource_params,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "excess_alpha_no_r0_keeps_k_and_true_cash_feasibility_but_removes_r0_floor_and_r0_minimum_repair",
+        True,
+        [row["ticker"] for row in no_r0_action] == ["NR_A", "NR_B"]
+        and [row["ticker"] for row in with_r0_action] != ["NR_A", "NR_B"]
+        and no_r0_diag.get("basket_objective") == "excess_alpha"
+        and no_r0_diag.get("resource_preservation_required") is False
+        and int(no_r0_diag.get("max_dl_repair_steps", -1)) == 0
+        and int(no_r0_diag.get("max_dl_repair_evaluations", -1)) == 0
+        and no_r0_diag.get("pre_market_order_limit") == 2
+        and no_r0_selected["selected_count"] == 2
+        and no_r0_selected["reserved_cost_milli"] < int(no_r0_diag["baseline_reserved_cost_milli"]),
+    )
+
     selection_excess_settings = strategy_config.get_strategy_comparison_settings("selection_pit")
     c39 = selection_excess_settings.arms["C39"]
+    c40 = selection_excess_settings.arms["C40"]
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "sr_c39_is_selection_only_frozen_mr13e_excess_alpha_with_same_k_r0_and_direct_c35_contrast",
@@ -2745,6 +2808,24 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and c39.robustness_role == "off"
         and "C39-C35" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
         and "C39" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "sr_c40_is_selection_only_c39_no_r0_ablation_with_same_expected_excess_alpha_objective_and_k",
+        True,
+        c40.enabled
+        and c40.dl_id == c39.dl_id == "CONT13E_PIT"
+        and c40.dl_runtime_mode == "resource-aware-continuous-excess-alpha-no-r0-feasible-ascent"
+        and dict(c40.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") == "CONT13E_PIT"
+        and dict(c40.dl_runtime_options or {}).get("preserve_k") is True
+        and dict(c40.dl_runtime_options or {}).get("preserve_r0") is False
+        and dict(c40.dl_runtime_options or {}).get("r0_minimum_repair") is False
+        and dict(c40.dl_runtime_options or {}).get("negative_expected_excess_r_allowed") is True
+        and dict(c40.dl_runtime_options or {}).get("selection_only") is True
+        and c40.robustness_role == "off"
+        and "C40-C39" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        and "C40-C35" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        and "C40" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
     )
 
     from filters.breakout_quality.rank_calibration import (

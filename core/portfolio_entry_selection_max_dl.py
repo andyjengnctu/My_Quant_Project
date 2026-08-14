@@ -219,12 +219,16 @@ def _excess_alpha_basket_quality_key(result, *, base_rank):
     )
 
 
-def _objective_selector_name(objective_mode, *, suffix):
+def _objective_selector_name(objective_mode, *, suffix, no_r0=False):
     if objective_mode == 'expected_pnl':
-        return f'continuous-expected-pnl-{suffix}'
-    if objective_mode == 'excess_alpha':
-        return f'continuous-excess-alpha-{suffix}'
-    return f'continuous-score-max-dl-{suffix}'
+        prefix = 'continuous-expected-pnl'
+    elif objective_mode == 'excess_alpha':
+        prefix = 'continuous-excess-alpha'
+    else:
+        prefix = 'continuous-score-max-dl'
+    if no_r0:
+        return f'{prefix}-no-r0-{suffix}'
+    return f'{prefix}-{suffix}'
 
 def _max_dl_execution_order(rows, *, base_rank):
     """Keep the same-parameter DL-off baseline priority inside an already chosen DL basket."""
@@ -380,6 +384,8 @@ def _reorder_resource_aware_continuous_max_dl(
     baseline,
     default_diag,
     objective_mode='score',
+    preserve_reserve_floor=True,
+    minimum_repair_enabled=True,
 ):
     """Let a frozen continuous objective own stock choice; the same-parameter DL-off baseline supplies exact pre-market resource floors.
 
@@ -398,7 +404,9 @@ def _reorder_resource_aware_continuous_max_dl(
         raise ValueError(f'不支援的max-DL objective_mode: {objective_mode!r}')
 
     target_count = int(baseline['selected_count'])
-    reserve_floor_milli = int(baseline['reserved_cost_milli'])
+    reserve_floor_milli = (
+        int(baseline['reserved_cost_milli']) if preserve_reserve_floor else 0
+    )
     diag = _resource_aware_diag_from_result(
         default_diag,
         baseline,
@@ -414,7 +422,7 @@ def _reorder_resource_aware_continuous_max_dl(
         ),
     )
     diag.update({
-        'resource_preservation_required': True,
+        'resource_preservation_required': bool(preserve_reserve_floor),
         'pre_market_order_limit': int(target_count),
         'max_dl_eligible': False,
         'max_dl_repair_steps': 0,
@@ -515,7 +523,7 @@ def _reorder_resource_aware_continuous_max_dl(
             'direct_score_order_feasible': bool(direct_feasible),
             'basket_search_states': int(evaluated),
             'basket_feasible_count': int(feasible_count),
-            'resource_preservation_required': True,
+            'resource_preservation_required': bool(preserve_reserve_floor),
             'pre_market_order_limit': int(target_count),
             'max_dl_eligible': True,
             'max_dl_repair_steps': int(repair_steps),
@@ -532,7 +540,7 @@ def _reorder_resource_aware_continuous_max_dl(
         })
         if int(result['selected_count']) != target_count:
             raise RuntimeError('max-DL Continuous輸出未維持同參數DL-off baseline預留單數')
-        if int(result['reserved_cost_milli']) < reserve_floor_milli:
+        if preserve_reserve_floor and int(result['reserved_cost_milli']) < reserve_floor_milli:
             raise RuntimeError('max-DL Continuous輸出低於同參數DL-off baseline reserved-capital floor')
         return final_order, out
 
@@ -540,9 +548,44 @@ def _reorder_resource_aware_continuous_max_dl(
         return finalize(
             pure_ordered,
             pure_result,
-            selector=_objective_selector_name(objective_mode, suffix='direct'),
+            selector=_objective_selector_name(
+                objective_mode,
+                suffix='direct',
+                no_r0=not preserve_reserve_floor,
+            ),
             repair_steps=0,
             fallback=False,
+            repair_trace_steps=[],
+        )
+
+    if not minimum_repair_enabled:
+        baseline_basket = list(baseline['selected_rows'])
+        baseline_ordered = list(baseline_basket)
+        baseline_result = _simulate_reserved_candidate_order(
+            baseline_ordered,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=target_count,
+            params=params,
+        )
+        if not _max_dl_basket_is_feasible(
+            baseline_result,
+            target_count=target_count,
+            reserve_floor_milli=0,
+        ):
+            raise RuntimeError('max-DL no-R0無法重建同參數DL-off K-only cash-feasible seed')
+        feasible_count += 1
+        return finalize(
+            baseline_ordered,
+            baseline_result,
+            selector=_objective_selector_name(
+                objective_mode,
+                suffix='cash-feasible-seed',
+                no_r0=True,
+            ),
+            repair_steps=0,
+            fallback=True,
+            preserve_basket_order=True,
             repair_trace_steps=[],
         )
 
@@ -703,7 +746,11 @@ def _reorder_resource_aware_continuous_max_dl(
             return finalize(
                 trial_ordered,
                 trial_result,
-                selector=_objective_selector_name(objective_mode, suffix='minimum-repair'),
+                selector=_objective_selector_name(
+                    objective_mode,
+                    suffix='minimum-repair',
+                    no_r0=not preserve_reserve_floor,
+                ),
                 repair_steps=repair_step,
                 fallback=False,
                 repair_trace_steps=repair_trace_steps,
@@ -745,7 +792,11 @@ def _reorder_resource_aware_continuous_max_dl(
     return finalize(
         baseline_ordered,
         baseline_result,
-        selector=_objective_selector_name(objective_mode, suffix='baseline-fallback'),
+        selector=_objective_selector_name(
+            objective_mode,
+            suffix='baseline-fallback',
+            no_r0=not preserve_reserve_floor,
+        ),
         repair_steps=len(repaired_out_ids),
         fallback=True,
         preserve_basket_order=True,
@@ -823,6 +874,8 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     default_diag,
     stale_score_membership_guard_max_age_days=None,
     objective_mode='score',
+    preserve_reserve_floor=True,
+    minimum_repair_enabled=True,
 ):
     """Strengthen one feasible seed with feasible best-improvement swaps, without exact combinatorial search.
 
@@ -835,7 +888,9 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     """
 
     target_count = int(baseline['selected_count'])
-    reserve_floor_milli = int(baseline['reserved_cost_milli'])
+    reserve_floor_milli = (
+        int(baseline['reserved_cost_milli']) if preserve_reserve_floor else 0
+    )
     base_rank = {id(row): idx for idx, row in enumerate(rows)}
     guard_enabled = stale_score_membership_guard_max_age_days is not None
     guard_max_age = (
@@ -858,6 +913,8 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         baseline=baseline,
         default_diag=default_diag,
         objective_mode=objective_mode,
+        preserve_reserve_floor=preserve_reserve_floor,
+        minimum_repair_enabled=minimum_repair_enabled,
     )
     if not bool(seed_diag.get('max_dl_eligible', False)):
         out = dict(seed_diag)
@@ -865,7 +922,11 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
             'selector': (
                 'continuous-score-max-dl-feasible-ascent-stale-score-guard'
                 if guard_enabled and objective_mode == 'score'
-                else _objective_selector_name(objective_mode, suffix='feasible-ascent')
+                else _objective_selector_name(
+                    objective_mode,
+                    suffix='feasible-ascent',
+                    no_r0=not preserve_reserve_floor,
+                )
             ),
             'stale_score_membership_guard_enabled': bool(guard_enabled),
             'stale_score_membership_guard_max_age_days': guard_max_age,
@@ -985,7 +1046,11 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         selector=(
             'continuous-score-max-dl-feasible-ascent-stale-score-guard'
             if guard_enabled and objective_mode == 'score'
-            else _objective_selector_name(objective_mode, suffix='feasible-ascent')
+            else _objective_selector_name(
+                objective_mode,
+                suffix='feasible-ascent',
+                no_r0=not preserve_reserve_floor,
+            )
         ),
     )
     seed_trace = dict(seed_diag.get('_selector_trace_baskets') or {})
@@ -996,7 +1061,7 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         'basket_search_states': int(seed_diag.get('basket_search_states', 0) or 0) + int(evaluations),
         'basket_search_pruned': 0,
         'basket_feasible_count': int(seed_diag.get('basket_feasible_count', 0) or 0),
-        'resource_preservation_required': True,
+        'resource_preservation_required': bool(preserve_reserve_floor),
         'pre_market_order_limit': int(target_count),
         'max_dl_eligible': True,
         'max_dl_repair_steps': int(seed_diag.get('max_dl_repair_steps', 0) or 0),
@@ -1022,7 +1087,7 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     })
     if int(current_result['selected_count']) != target_count:
         raise RuntimeError('max-DL feasible-ascent輸出未維持同參數DL-off baseline預留單數')
-    if int(current_result['reserved_cost_milli']) < reserve_floor_milli:
+    if preserve_reserve_floor and int(current_result['reserved_cost_milli']) < reserve_floor_milli:
         raise RuntimeError('max-DL feasible-ascent輸出低於同參數DL-off baseline reserved-capital floor')
     return final_order, out
 

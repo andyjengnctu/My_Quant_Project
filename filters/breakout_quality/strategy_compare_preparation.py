@@ -12,6 +12,7 @@ import pandas as pd
 from core.active_param_ensemble import get_active_param_ensemble_date_range
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
     StrategyComparisonSettings,
     StrategyPreparationAction,
@@ -357,7 +358,10 @@ def collect_artifact_status(
             if not fit_dl_id or fit_dl_id not in settings.dl_sources:
                 raise ValueError(f"Expected-PnL arm缺少合法expected_r_fit_dl_id: {arm.arm_id}")
             required_dl_sources.add(fit_dl_id)
-        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT:
+        if arm.dl_runtime_mode in {
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
+        }:
             fit_dl_id = str(
                 dict(arm.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") or ""
             ).strip()
@@ -979,7 +983,10 @@ def collect_artifact_status(
 
     expected_excess_r_rows: dict[str, Any] = {}
     for arm in settings.enabled_arms:
-        if arm.dl_runtime_mode != STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT:
+        if arm.dl_runtime_mode not in {
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
+        }:
             continue
         if settings.profile_id != "selection_pit":
             raise ValueError(f"Excess-Alpha第一階段只允許Selection PIT: {arm.arm_id}")
@@ -991,8 +998,20 @@ def collect_artifact_status(
                 f"Excess-Alpha arm calibration method不支援: {arm.arm_id}/"
                 f"{options.get('expected_excess_r_calibration_method')!r}"
             )
-        if options.get("preserve_k_r0") is not True or options.get("selection_only") is not True:
-            raise ValueError(f"Excess-Alpha第一階段必須preserve_k_r0/selection_only: {arm.arm_id}")
+        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT:
+            if options.get("preserve_k_r0") is not True or options.get("selection_only") is not True:
+                raise ValueError(f"Excess-Alpha第一階段必須preserve_k_r0/selection_only: {arm.arm_id}")
+        else:
+            if (
+                options.get("preserve_k") is not True
+                or options.get("preserve_r0") is not False
+                or options.get("r0_minimum_repair") is not False
+                or options.get("selection_only") is not True
+            ):
+                raise ValueError(
+                    f"Excess-Alpha no-R0必須preserve_k=True/preserve_r0=False/"
+                    f"r0_minimum_repair=False/selection_only=True: {arm.arm_id}"
+                )
         if options.get("negative_expected_excess_r_allowed") is not True:
             raise ValueError(
                 f"Excess-Alpha第一階段不得以負Expected Excess-R改變K/R0: {arm.arm_id}"

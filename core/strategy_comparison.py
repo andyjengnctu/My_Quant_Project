@@ -31,6 +31,9 @@ STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT 
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT = (
     'resource-aware-continuous-excess-alpha-feasible-ascent'
 )
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT = (
+    'resource-aware-continuous-excess-alpha-no-r0-feasible-ascent'
+)
 SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_HARD_FILTER,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
@@ -42,6 +45,7 @@ SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
 )
 
 
@@ -737,6 +741,24 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                     )
                 if options.get("selection_only") is not True:
                     raise ValueError(f"arm {key} 第一階段Excess-Alpha必須selection_only=True")
+            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT:
+                fit_dl_id = str(options.get("expected_excess_r_fit_dl_id") or "").strip()
+                if not fit_dl_id or fit_dl_id not in settings.dl_sources:
+                    raise ValueError(f"arm {key} Excess-Alpha no-R0必須指定合法expected_excess_r_fit_dl_id")
+                if not str(options.get("expected_excess_r_calibration_method") or "").strip():
+                    raise ValueError(f"arm {key} Excess-Alpha no-R0 calibration method不可空白")
+                if options.get("preserve_k") is not True:
+                    raise ValueError(f"arm {key} Excess-Alpha no-R0必須preserve_k=True")
+                if options.get("preserve_r0") is not False:
+                    raise ValueError(f"arm {key} Excess-Alpha no-R0必須preserve_r0=False")
+                if options.get("r0_minimum_repair") is not False:
+                    raise ValueError(f"arm {key} Excess-Alpha no-R0必須r0_minimum_repair=False")
+                if options.get("negative_expected_excess_r_allowed") is not True:
+                    raise ValueError(
+                        f"arm {key} Excess-Alpha no-R0不得以負Expected Excess-R改變K"
+                    )
+                if options.get("selection_only") is not True:
+                    raise ValueError(f"arm {key} Excess-Alpha no-R0必須selection_only=True")
             trained_with = parameter_source.trained_with_dl_id
             if trained_with is not None and arm.dl_id != trained_with:
                 raise ValueError(
