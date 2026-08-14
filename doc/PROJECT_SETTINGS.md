@@ -55,6 +55,7 @@
 12. `meta quality`必須執行輕量瘦身掃描，主動列出：(a) disabled formal Audit、(b) 無法由目前正式runtime或active formal Audit import-reachability到達的`tools/audit`／compatibility模組、(c) 明顯過大的Audit-specific synthetic test。此掃描預設只提供`CLEAN／REVIEW`維護訊號與候選清單，不得單獨造成formal FAIL，避免維護建議反過來形成第二套阻擋型Audit。
 13. 自動瘦身判定只能提出候選，不得因檔名、年齡或行數直接刪除；若歷史compatibility仍被目前正式runtime用於舊工件解讀／重現，或模組仍是目前target／PIT／strategy compare的必要依賴，就必須保留。實際刪除前須確認引用鏈，並優先移除已完成的一次性研究程式與其專屬測試。
 14. 當臨時研究結果已被採納為current workflow時，不得讓正式流程永久依賴原Audit／experiment module或其歷史approval report；必須把仍有效的數學定義、builder／service與artifact identity抽到正式domain／service層，再退役舊CLI、research gate、compatibility wrapper與專屬測試。此類遷移必須behavior-preserving，除非另有明確新實驗決策。
+15. 對已結案且狀態為`REJECTED`、`NOT_SELECTED`、`HISTORICAL_ONLY`或等價非current決策的研究，若主程式仍因歷史重現／compatibility需要保留，應優先退役只驗該單一實驗ID、門檻或結果的dedicated synthetic；不得因此刪除production implementation。仍須保留generic compatibility、artifact reconstruction、SSOT、runtime boundary與current workflow contracts。
 
 
 ## D. 交易與策略原則
