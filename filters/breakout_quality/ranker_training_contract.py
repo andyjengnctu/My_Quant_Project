@@ -32,8 +32,6 @@ RAW_R_REGRESSION_TRAINING_CONTRACT = {
     "sample_scope": "daily_eligible_stock_days",
     "target": "daily_opportunity_no_time_r_v1_raw_r",
     "prediction": "pass_logit_minus_reject_logit_margin_in_r_units",
-    "loss": "huber_raw_r",
-    "huber_delta_r": 1.0,
     "batching": "shuffled_unique_group_batches",
     "runtime_score": "predicted_r",
 }
@@ -72,7 +70,12 @@ def training_semantics(profile) -> dict[str, Any]:
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
         contract = dict(RAW_R_REGRESSION_TRAINING_CONTRACT)
-        contract["huber_delta_r"] = float(profile.raw_r_huber_delta_r)
+        contract["loss"] = str(profile.loss_name)
+        contract["huber_delta_r"] = (
+            None
+            if profile.raw_r_huber_delta_r is None
+            else float(profile.raw_r_huber_delta_r)
+        )
         return {
             "batching": contract["batching"],
             "pairwise_contract": None,

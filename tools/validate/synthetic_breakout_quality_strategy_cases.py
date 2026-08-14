@@ -3290,6 +3290,7 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         "tools/audit/breakout_quality/portfolio_selection_pressure.py",
         "tools/audit/breakout_quality/orderable_feasible_alignment.py",
         "tools/audit/breakout_quality/selector_stage_translation.py",
+        "tools/audit/breakout_quality/direct_r_calibration.py",
         "tools/audit/portfolio/score_ranking_capture.py",
         "doc/result_tmp.md",
     )
@@ -3311,14 +3312,14 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         "filters/breakout_quality/strategy_param_training.py",
         "tools/filters/breakout_quality/build_trade_path_labels.py",
         "services/breakout_quality/train.py",
-        "tools/audit/breakout_quality/direct_r_calibration.py",
+        "tools/audit/catalog.py",
         "tools/validate/transient_code_maintenance.py",
     )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "current_strategy_model_and_active_audit_workflows_remain_available",
+        "current_strategy_model_and_generic_audit_framework_remain_available",
         tuple(True for _ in current_paths),
         tuple((project_root / relative_path).exists() for relative_path in current_paths),
     )

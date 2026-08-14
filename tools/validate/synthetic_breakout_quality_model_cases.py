@@ -25,6 +25,7 @@ from .synthetic_breakout_quality_support import (
     DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE,
+    DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE,
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
     get_continuous_ranker_research_spec,
     STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
@@ -1770,10 +1771,10 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
     return results, summary
 
 
-def validate_breakout_quality_direct_r_huber_contract_case(_base_params):
-    """Pin MR-13F as direct raw-R regression without changing data/architecture semantics."""
+def validate_breakout_quality_direct_r_mse_contract_case(_base_params):
+    """Pin MR-13G as the single-loss change from MR-13F Huber to raw-R MSE."""
 
-    case_id = "BREAKOUT_QUALITY_DIRECT_R_HUBER"
+    case_id = "BREAKOUT_QUALITY_DIRECT_R_MSE"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
@@ -1790,19 +1791,24 @@ def validate_breakout_quality_direct_r_huber_contract_case(_base_params):
         parse_args as parse_continuous_ranker_args,
     )
 
-    profile_e = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
     profile_f = get_breakout_quality_experiment_profile(
         DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE
     )
-    spec_f = get_continuous_ranker_research_spec(
-        DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE
+    profile_g = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE
+    )
+    spec_g = get_continuous_ranker_research_spec(
+        DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE
     )
 
     fixed_fields = (
         "optimizer_name",
+        "lr_schedule_name",
+        "augmentation_name",
         "training_sampling_mode",
+        "time_weight_mode",
+        "training_weight_reduction",
+        "training_objective",
         "continuous_target_id",
         "training_label_scope",
         "training_sample_scope",
@@ -1811,49 +1817,68 @@ def validate_breakout_quality_direct_r_huber_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "mr13f_keeps_mr13e_daily_universal_data_target_and_optimizer_contract",
-        tuple(getattr(profile_e, field) for field in fixed_fields),
+        "mr13g_keeps_mr13f_data_target_optimizer_and_training_scope_contract",
         tuple(getattr(profile_f, field) for field in fixed_fields),
+        tuple(getattr(profile_g, field) for field in fixed_fields),
     )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "mr13f_identity_objective_and_score_semantics_are_direct_expected_r",
+        "mr13g_only_changes_direct_r_loss_and_epoch_selection_from_mr13f",
         (
-            "MR-13F",
-            TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
             "huber_raw_r",
             "validation_huber_raw_r",
             1.0,
-            "daily_predicted_r",
+            "mse_raw_r",
+            "validation_mse_raw_r",
+            None,
         ),
         (
-            spec_f.model_research_id,
-            profile_f.training_objective,
             profile_f.loss_name,
             profile_f.epoch_selection_metric,
             float(profile_f.raw_r_huber_delta_r),
-            spec_f.score_semantic_id,
+            profile_g.loss_name,
+            profile_g.epoch_selection_metric,
+            profile_g.raw_r_huber_delta_r,
         ),
     )
-    semantics = training_semantics(profile_f)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13g_identity_and_score_semantics_are_direct_conditional_mean_r_research",
+        (
+            "MR-13G",
+            TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
+            "daily_predicted_r",
+        ),
+        (
+            spec_g.model_research_id,
+            profile_g.training_objective,
+            spec_g.score_semantic_id,
+        ),
+    )
+
+    semantics = training_semantics(profile_g)
     regression_contract = dict(semantics.get("raw_r_regression_contract") or {})
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "mr13f_artifact_contract_uses_unbounded_two_logit_margin_in_r_units",
+        "mr13g_artifact_contract_uses_unbounded_two_logit_margin_and_raw_r_mse",
         (
             "pass_logit_minus_reject_logit_margin_in_r_units",
             "predicted_r",
-            1.0,
+            "mse_raw_r",
+            None,
             None,
             None,
         ),
         (
             regression_contract.get("prediction"),
             regression_contract.get("runtime_score"),
+            regression_contract.get("loss"),
             regression_contract.get("huber_delta_r"),
             semantics.get("pairwise_contract"),
             semantics.get("listwise_contract"),
@@ -1888,7 +1913,7 @@ def validate_breakout_quality_direct_r_huber_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "direct_r_prediction_uses_margin_while_existing_rankers_keep_softmax_score",
+        "direct_r_prediction_margin_and_legacy_ranker_softmax_semantics_remain_unchanged",
         True,
         bool(
             np.allclose(predicted_r.astype(float), np.asarray([-1.5, 2.5]), atol=1e-7)
@@ -1899,19 +1924,19 @@ def validate_breakout_quality_direct_r_huber_contract_case(_base_params):
     regression = ranker_train.raw_r_regression_metrics(
         np.asarray([0.0, 2.0, 4.0], dtype=np.float32),
         np.asarray([0.0, 1.0, 6.0], dtype=np.float32),
-        huber_delta_r=1.0,
     )
-    # Errors are 0,+1,-2 => Huber losses 0,0.5,1.5; MAE=1; bias=-1/3.
+    # Errors are 0,+1,-2 => MSE=(0+1+4)/3, MAE=1, bias=-1/3.
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "direct_r_regression_metrics_follow_one_r_huber_semantics",
-        (2.0 / 3.0, 1.0, -1.0 / 3.0),
+        "direct_r_regression_metrics_expose_raw_r_mse_without_requiring_huber_delta",
+        (5.0 / 3.0, 1.0, -1.0 / 3.0, None),
         (
-            regression["huber_loss_raw_r"],
+            regression["mse_raw_r"],
             regression["mae_raw_r"],
             regression["bias_raw_r"],
+            regression["huber_loss_raw_r"],
         ),
         tol=1e-9,
     )
@@ -1955,20 +1980,21 @@ def validate_breakout_quality_direct_r_huber_contract_case(_base_params):
         gradient_clip_norm=0.0,
         plan=cpu_plan,
         grad_scaler=None,
-        raw_r_huber_delta_r=1.0,
+        raw_r_loss_name="mse_raw_r",
+        raw_r_huber_delta_r=None,
     )
     after_weight = tiny_model.linear.weight.detach().clone()
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "direct_r_huber_training_branch_backpropagates_and_updates_weights",
+        "direct_r_mse_training_branch_backpropagates_and_updates_weights",
         True,
         bool(np.isfinite(train_loss) and not torch.equal(before_weight, after_weight)),
     )
 
     selection_args = SimpleNamespace(
-        experiment_profile=DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE,
+        experiment_profile=DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE,
         epochs=2,
         batch_size=2,
         seed=42,
@@ -1982,12 +2008,12 @@ def validate_breakout_quality_direct_r_huber_contract_case(_base_params):
         {
             "mse_vs_daily_percentile": 0.01,
             "mean_daily_spearman": 0.90,
-            "raw_r_regression": {"huber_loss_raw_r": 2.0, "mae_raw_r": 2.5},
+            "raw_r_regression": {"mse_raw_r": 2.0, "huber_loss_raw_r": None, "mae_raw_r": 1.0},
         },
         {
             "mse_vs_daily_percentile": 0.50,
             "mean_daily_spearman": 0.10,
-            "raw_r_regression": {"huber_loss_raw_r": 1.0, "mae_raw_r": 1.5},
+            "raw_r_regression": {"mse_raw_r": 1.0, "huber_loss_raw_r": None, "mae_raw_r": 0.8},
         },
     ]
     with (
@@ -2017,27 +2043,27 @@ def validate_breakout_quality_direct_r_huber_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "direct_r_epoch_selection_minimizes_validation_huber_not_ranking_metric",
+        "direct_r_epoch_selection_minimizes_validation_raw_r_mse_not_ranking_metric",
         (2, 1.0, 0.10),
         (
             epoch_choice["best_epoch"],
-            epoch_choice["best_validation_huber_raw_r"],
+            epoch_choice["best_validation_mse_raw_r"],
             epoch_choice["best_validation_mean_daily_spearman"],
         ),
         tol=1e-12,
     )
 
     args = parse_continuous_ranker_args(
-        ["--experiment-profile", DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE]
+        ["--experiment-profile", DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE]
     )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "mr13f_is_active_research_profile_but_strategy_anchor_remains_mr12b",
+        "mr13g_is_active_research_profile_but_strategy_anchor_remains_mr12b",
         (
-            DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE,
-            DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE,
+            DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE,
+            DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE,
             STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
         ),
         (
@@ -2047,11 +2073,10 @@ def validate_breakout_quality_direct_r_huber_contract_case(_base_params):
         ),
     )
 
-    summary["profile"] = profile_f.name
-    summary["model_research_id"] = spec_f.model_research_id
+    summary["profile"] = profile_g.name
+    summary["model_research_id"] = spec_g.model_research_id
     summary["training_performed"] = False
     return results, summary
-
 
 def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_params):
     """Pin the profile-driven continuous-ranker boundary before adding new Daily MR variants."""

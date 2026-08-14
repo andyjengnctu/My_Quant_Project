@@ -19,34 +19,7 @@ AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
 AUDIT_MODULES: dict[str, dict[str, Any]] = {
     "breakout_quality": {
         "enabled": True,
-        "audits": {
-            "mr13f-direct-r-calibration": {
-                "enabled": True,
-                "audit_type": "direct_r_calibration",
-                "description": "MR-13F frozen Forward Predicted-R相對Selection-inner Validation target-mean constant baseline的magnitude error、post-hoc calibration slope、bucket單調性與正負R經濟語意",
-                "source": {
-                    "kind": "continuous_ranker_forward_report",
-                    "filter_id": "breakout_quality_v1",
-                    "model_architecture": "inception_time_v1",
-                    "experiment_profile": "daily_universal_no_time_r_huber",
-                    "model_research_id": "MR-13F",
-                },
-                "dimensions": {
-                    "frozen_constant_baseline": "selection_inner_validation_target_mean",
-                    "magnitude_error": True,
-                    "posthoc_affine_calibration": True,
-                    "predicted_r_quantile_buckets": 10,
-                    "predicted_r_sign_economics": True,
-                },
-                "outcomes": {
-                    "oos_target_posthoc_only": True,
-                    "posthoc_fit_runtime_eligible": False,
-                    "no_numeric_gate_threshold": True,
-                    "decision": "GO_PIT_OR_REJECT_DIRECT_R_MAGNITUDE",
-                },
-                "output_subdir": "breakout_quality/mr13f_direct_r_calibration",
-            },
-        },
+        "audits": {},
     },
 }
 

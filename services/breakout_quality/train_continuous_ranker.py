@@ -485,7 +485,7 @@ def raw_r_regression_metrics(
     scores: np.ndarray,
     raw_target: np.ndarray,
     *,
-    huber_delta_r: float,
+    huber_delta_r: float | None = None,
 ) -> dict[str, Any]:
     predicted = np.asarray(scores, dtype=np.float64)
     actual = np.asarray(raw_target, dtype=np.float64)
@@ -495,6 +495,7 @@ def raw_r_regression_metrics(
     if len(actual) == 0:
         return {
             "count": 0,
+            "mse_raw_r": None,
             "huber_loss_raw_r": None,
             "mae_raw_r": None,
             "rmse_raw_r": None,
@@ -502,19 +503,24 @@ def raw_r_regression_metrics(
             "predicted_r_mean": None,
             "target_r_mean": None,
         }
-    delta = float(huber_delta_r)
-    if not math.isfinite(delta) or delta <= 0.0:
-        raise ValueError("raw R regression Huber delta必須為正有限值")
     error = predicted - actual
+    squared_error = error * error
     abs_error = np.abs(error)
-    quadratic = np.minimum(abs_error, delta)
-    linear = abs_error - quadratic
-    huber = 0.5 * quadratic * quadratic + delta * linear
+    huber_loss = None
+    if huber_delta_r is not None:
+        delta = float(huber_delta_r)
+        if not math.isfinite(delta) or delta <= 0.0:
+            raise ValueError("raw R regression Huber delta必須為正有限值")
+        quadratic = np.minimum(abs_error, delta)
+        linear = abs_error - quadratic
+        huber = 0.5 * quadratic * quadratic + delta * linear
+        huber_loss = float(np.mean(huber))
     return {
         "count": int(len(actual)),
-        "huber_loss_raw_r": float(np.mean(huber)),
+        "mse_raw_r": float(np.mean(squared_error)),
+        "huber_loss_raw_r": huber_loss,
         "mae_raw_r": float(np.mean(abs_error)),
-        "rmse_raw_r": float(np.sqrt(np.mean(error * error))),
+        "rmse_raw_r": float(np.sqrt(np.mean(squared_error))),
         "bias_raw_r": float(np.mean(error)),
         "predicted_r_mean": float(np.mean(predicted)),
         "target_r_mean": float(np.mean(actual)),
@@ -529,6 +535,7 @@ def split_metrics(
     scores: np.ndarray,
     *,
     include_top_k_quality: bool = False,
+    raw_r_regression_loss_name: str | None = None,
     raw_r_huber_delta_r: float | None = None,
 ) -> dict[str, Any]:
     ids = np.asarray(group_ids, dtype=np.int64)
@@ -582,9 +589,9 @@ def split_metrics(
         "p_at_70pct": _coverage_precision(labels, score_values, 0.70),
         "raw_r_regression": (
             raw_r_regression_metrics(
-                score_values, raw_values, huber_delta_r=float(raw_r_huber_delta_r)
+                score_values, raw_values, huber_delta_r=raw_r_huber_delta_r
             )
-            if raw_r_huber_delta_r is not None
+            if raw_r_regression_loss_name is not None or raw_r_huber_delta_r is not None
             else None
         ),
     }
@@ -891,6 +898,7 @@ def _train_epoch(
     grad_scaler,
     prefetch_batches: int = 0,
     pairwise_reduction: str = CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    raw_r_loss_name: str | None = None,
     raw_r_huber_delta_r: float | None = None,
 ) -> float:
     model.train()
@@ -944,12 +952,17 @@ def _train_epoch(
                 loss_weight = int(len(ids))
             elif training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
                 predicted_r = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
-                if raw_r_huber_delta_r is None:
-                    raise ValueError("direct R regression缺少Huber delta")
-                delta_r = float(raw_r_huber_delta_r)
-                loss = F.huber_loss(
-                    predicted_r, target, reduction="mean", delta=delta_r
-                )
+                loss_name = str(raw_r_loss_name or ("huber_raw_r" if raw_r_huber_delta_r is not None else "")).strip()
+                if loss_name == "mse_raw_r":
+                    loss = F.mse_loss(predicted_r, target, reduction="mean")
+                elif loss_name == "huber_raw_r":
+                    if raw_r_huber_delta_r is None:
+                        raise ValueError("Huber direct R regression缺少Huber delta")
+                    loss = F.huber_loss(
+                        predicted_r, target, reduction="mean", delta=float(raw_r_huber_delta_r)
+                    )
+                else:
+                    raise ValueError(f"不支援的direct R regression loss: {loss_name!r}")
                 loss_weight = int(len(ids))
             elif training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
                 margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
@@ -1054,9 +1067,15 @@ def select_epoch(
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
     training_target = _training_target_for_profile(profile, raw_target, percentile_target)
+    raw_r_loss_name = (
+        str(profile.loss_name)
+        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        else None
+    )
     raw_r_delta = (
         float(profile.raw_r_huber_delta_r)
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        and profile.raw_r_huber_delta_r is not None
         else None
     )
     model, optimizer = _new_model_and_optimizer(
@@ -1071,6 +1090,7 @@ def select_epoch(
     best_daily_spearman = -math.inf
     best_validation_mse = math.inf
     best_validation_huber = math.inf
+    best_validation_mse_raw_r = math.inf
     best_validation_mae = math.inf
     epochs_without_improvement = 0
     history: list[dict[str, Any]] = []
@@ -1078,7 +1098,9 @@ def select_epoch(
     if not compact_console:
         label = (
             "Validation Huber raw R"
-            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+            if raw_r_loss_name == "huber_raw_r"
+            else "Validation MSE raw R"
+            if raw_r_loss_name == "mse_raw_r"
             else "Validation mean daily Spearman"
         )
         print(f"\nEpoch選擇（依{label}）")
@@ -1104,6 +1126,7 @@ def select_epoch(
                 research_spec.pairwise_reduction
                 or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
             ),
+            raw_r_loss_name=raw_r_loss_name,
             raw_r_huber_delta_r=raw_r_delta,
         )
         validation_scores = predict_scores(
@@ -1133,6 +1156,7 @@ def select_epoch(
                 raw_target,
                 percentile_target,
                 train_scores,
+                raw_r_regression_loss_name=raw_r_loss_name,
                 raw_r_huber_delta_r=raw_r_delta,
             )
         else:
@@ -1149,6 +1173,7 @@ def select_epoch(
             raw_target,
             percentile_target,
             validation_scores,
+            raw_r_regression_loss_name=raw_r_loss_name,
             raw_r_huber_delta_r=raw_r_delta,
         )
         daily_spearman = validation_metrics.get("mean_daily_spearman")
@@ -1159,20 +1184,32 @@ def select_epoch(
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
             regression = dict(validation_metrics.get("raw_r_regression") or {})
             validation_huber = regression.get("huber_loss_raw_r")
+            validation_mse_raw_r = regression.get("mse_raw_r")
             validation_mae = regression.get("mae_raw_r")
-            if validation_huber is None or not math.isfinite(float(validation_huber)):
-                raise ValueError("direct R validation Huber loss不可用")
+            if validation_mse_raw_r is None or not math.isfinite(float(validation_mse_raw_r)):
+                raise ValueError("direct R validation MSE不可用")
             if validation_mae is None or not math.isfinite(float(validation_mae)):
                 raise ValueError("direct R validation MAE不可用")
+            if raw_r_loss_name == "huber_raw_r":
+                if validation_huber is None or not math.isfinite(float(validation_huber)):
+                    raise ValueError("direct R validation Huber loss不可用")
+                primary_metric = float(validation_huber)
+                best_primary_metric = best_validation_huber
+            elif raw_r_loss_name == "mse_raw_r":
+                primary_metric = float(validation_mse_raw_r)
+                best_primary_metric = best_validation_mse_raw_r
+            else:
+                raise ValueError(f"不支援的direct R epoch-selection loss: {raw_r_loss_name!r}")
             improved = (
-                float(validation_huber) < best_validation_huber - float(args.early_stopping_min_delta)
+                primary_metric < best_primary_metric - float(args.early_stopping_min_delta)
                 or (
-                    math.isclose(float(validation_huber), best_validation_huber, rel_tol=0.0, abs_tol=1e-12)
+                    math.isclose(primary_metric, best_primary_metric, rel_tol=0.0, abs_tol=1e-12)
                     and float(daily_spearman) > best_daily_spearman
                 )
             )
         else:
             validation_huber = None
+            validation_mse_raw_r = None
             validation_mae = None
             improved = (
                 float(daily_spearman) > best_daily_spearman + float(args.early_stopping_min_delta)
@@ -1186,9 +1223,11 @@ def select_epoch(
             best_epoch = int(epoch)
             best_daily_spearman = float(daily_spearman)
             best_validation_mse = validation_mse
+            if validation_mse_raw_r is not None:
+                best_validation_mse_raw_r = float(validation_mse_raw_r)
+                best_validation_mae = float(validation_mae)
             if validation_huber is not None:
                 best_validation_huber = float(validation_huber)
-                best_validation_mae = float(validation_mae)
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
@@ -1204,9 +1243,12 @@ def select_epoch(
         if not compact_console:
             marker = " ★新最佳" if improved else ""
             if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+                if raw_r_loss_name == "huber_raw_r":
+                    loss_text = f"Train Huber {batch_loss:.6f} | Val Huber {float(validation_huber):.6f}"
+                else:
+                    loss_text = f"Train MSE {batch_loss:.6f} | Val MSE {float(validation_mse_raw_r):.6f}"
                 print(
-                    f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Huber {batch_loss:.6f} "
-                    f"| Val Huber {float(validation_huber):.6f} | Val MAE {float(validation_mae):.4f}R "
+                    f"  Epoch {epoch:>3}/{int(args.epochs)} | {loss_text} | Val MAE {float(validation_mae):.4f}R "
                     f"| Val Daily Spearman {float(daily_spearman):.4f} | {elapsed:.1f}s{marker}"
                 )
             elif bool(evaluate_train_metrics):
@@ -1231,6 +1273,9 @@ def select_epoch(
         "best_validation_mse": float(best_validation_mse),
         "best_validation_huber_raw_r": (
             None if not math.isfinite(best_validation_huber) else float(best_validation_huber)
+        ),
+        "best_validation_mse_raw_r": (
+            None if not math.isfinite(best_validation_mse_raw_r) else float(best_validation_mse_raw_r)
         ),
         "best_validation_mae_raw_r": (
             None if not math.isfinite(best_validation_mae) else float(best_validation_mae)
@@ -1257,9 +1302,15 @@ def fit_final(
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
     training_target = _training_target_for_profile(profile, raw_target, percentile_target)
+    raw_r_loss_name = (
+        str(profile.loss_name)
+        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        else None
+    )
     raw_r_delta = (
         float(profile.raw_r_huber_delta_r)
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        and profile.raw_r_huber_delta_r is not None
         else None
     )
     model, optimizer = _new_model_and_optimizer(
@@ -1296,6 +1347,7 @@ def fit_final(
                 research_spec.pairwise_reduction
                 or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
             ),
+            raw_r_loss_name=raw_r_loss_name,
             raw_r_huber_delta_r=raw_r_delta,
         )
         elapsed = time.perf_counter() - started
@@ -1734,9 +1786,15 @@ def run(args) -> int:
             percentile_target,
             scores,
             include_top_k_quality=True,
+            raw_r_regression_loss_name=(
+                str(profile.loss_name)
+                if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                else None
+            ),
             raw_r_huber_delta_r=(
                 float(profile.raw_r_huber_delta_r)
                 if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                and profile.raw_r_huber_delta_r is not None
                 else None
             ),
         )
@@ -1748,9 +1806,15 @@ def run(args) -> int:
             percentile_target,
             score_by_group[scoped_ids],
             include_top_k_quality=True,
+            raw_r_regression_loss_name=(
+                str(profile.loss_name)
+                if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                else None
+            ),
             raw_r_huber_delta_r=(
                 float(profile.raw_r_huber_delta_r)
                 if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                and profile.raw_r_huber_delta_r is not None
                 else None
             ),
         )

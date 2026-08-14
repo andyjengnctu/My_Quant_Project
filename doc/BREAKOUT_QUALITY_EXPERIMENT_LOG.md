@@ -8819,3 +8819,16 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Audit不設定`abs(slope-1)<X`、bucket lift門檻或其他magic threshold；classification只依model vs frozen constant的Huber/MAE方向與slope/bucket Spearman正負提供描述性方向。OOS fitted intercept/slope明確標為`posthoc_fitted_calibration_runtime_eligible=false`，不得直接用作後續策略calibration；若Audit支持再另做Selection/PIT-only calibration controlled experiment。
 - 舊`AUD-mr13e-minimum-repair-mechanism`在結果取得前已被C37 controlled decision supersede。C37 Selection明確REJECT後，repair mechanism attribution不再會改變current MR-13F下一步，依最小必要證據與disposable lifecycle標記`NOT_EXECUTED / SUPERSEDED_BY_C37_DECISION`並退役formal handler/dedicated synthetic；production minimum-repair、repair-search certificate sidecar與generic Strategy Compare contracts不刪。
 
+
+## 2026-08-15 — MR-13F Calibration Audit result → MR-13G Direct-R Mean Regression
+
+- 決策證據：`AUD-mr13f-direct-r-calibration`已由使用者正式執行；OOS evaluable rows=`608,204`。MR-13F Predicted/Actual mean=`0.3548/1.0052R`，pre-OOS frozen constant為Selection-inner Validation target mean=`1.0314R`。
+- Magnitude comparison：MR-13F Huber/MAE/RMSE=`0.7888/1.1547/2.0039R`，frozen constant=`0.6901/1.1005/1.7956R`；Model全部較差。MR-13F bias=`-0.6505R`，constant bias=`+0.0261R`。
+- Post-hoc calibration structure：`Actual R = 0.9304R + 0.2110 × Predicted R`，R²=`0.0088`；Predicted-R bucket Actual-mean Spearman=`0.9879`，相鄰bucket上升=`8/9`。Predicted R `>0`組Actual mean=`1.1563R`，`<=0`組=`0.7430R`。正式classification=`RANKING_STRUCTURE_WITHOUT_MAGNITUDE_ERROR_GAIN`、Magnitude=`FROZEN_CONSTANT_DOMINATES_MODEL`、Calibration structure=`POSITIVE_CALIBRATION_STRUCTURE`。
+- MR-13F判定：`REJECTED_AT_DIRECT_R_MAGNITUDE_GATE / NO_PIT / NO_RUNTIME_DL_SOURCE`。模型仍有relative ranking structure，但Huber輸出沒有打贏最簡單的pre-OOS constant magnitude baseline，因此不值得建立Selection PIT，也不把OOS fitted intercept/slope回灌runtime。
+- Audit lifecycle：`AUD-mr13f-direct-r-calibration`待決策問題已結案；formal config/catalog/implementation與dedicated synthetic依disposable lifecycle退役，結果只保留於Registry／Log與既有`outputs/audit`工件。
+- 新實驗：`MR-13G / daily_universal_no_time_r_mse`，狀態=`IMPLEMENTED / AWAITING_FORWARD_MODEL_RESULT`。程式基準=`test-branch-1_20260815_000304_0e651bc.zip`，SHA256=`38c28940b90ca9a5a9d8fc08b0fa8fe37a5059499aff5937d0e6c569c73901c4` + 本輪patch。
+- 唯一scientific change：固定MR-13F的`daily_eligible_stock_days`、`daily_opportunity_no_time_r_v1`、`ARCH-inception_time_v1`、Adam/LR/weight decay、Seed42、Selection-inner Validation／Forward split、two-logit `PASS−REJECT` Predicted-R output、無target clipping、無sample weighting；只把loss由`huber_raw_r(delta=1R)`改為`mse_raw_r`。Epoch selection同步由Validation Huber最小值改成Validation raw-R MSE最小值，同值仍用Validation Daily Spearman tie-break。
+- 研究理由：MSE的population optimum對應conditional mean `E[R|X]`，與後續可能的`Predicted/Expected R × planned initial risk` portfolio objective在數學上更直接一致；本輪不加入planned risk、K/R0、breakout membership或任何portfolio資訊進模型。
+- Dataset／Target重建：不需要；沿用canonical daily-universal source與既有raw-R target。
+- 下一步：只執行MR-13G Seed42 Forward Model Gate。第一優先比較raw-R MSE/RMSE、MAE、bias與pre-OOS frozen constant的magnitude error；ranking Daily Spearman／Pair／Top-K作必要secondary signal。若magnitude仍無gain則直接REJECT，不建PIT；若成立才另輪進Selection PIT。

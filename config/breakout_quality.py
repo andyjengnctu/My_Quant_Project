@@ -46,11 +46,12 @@ from config.execution_policy import (
 # - MR-13D daily-universal upper-tail relevance pairwise ranker: "daily_universal_no_time_upper_tail_pairwise"
 # - MR-13E daily-universal full-list delta-NDCG pairwise ranker: "daily_universal_no_time_full_list_ndcg_pairwise"
 # - MR-13F daily-universal direct-R Huber regression: "daily_universal_no_time_r_huber"
+# - MR-13G daily-universal direct-R mean/MSE regression: "daily_universal_no_time_r_mse"
 # Strategy workflow remains on the latest validated deployable/PIT-capable anchor.
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_r_huber"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_r_mse"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42
@@ -268,6 +269,7 @@ DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE = "daily_universal_no_time_percen
 DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE = "daily_universal_no_time_upper_tail_pairwise"
 DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE = "daily_universal_no_time_r_huber"
+DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE = "daily_universal_no_time_r_mse"
 
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 
@@ -406,30 +408,41 @@ class BreakoutQualityExperimentProfile:
         elif self.training_objective in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
             if not str(self.continuous_target_id or "").strip():
                 raise ValueError("continuous ranker profile 必須指定 continuous_target_id")
-            expected_loss = {
-                TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION: "mse",
-                TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION: "huber_raw_r",
-                TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING: "pairwise_logistic",
-                TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: "listnet_top_one_cross_entropy",
-            }[self.training_objective]
-            if self.loss_name != expected_loss:
-                raise ValueError(
-                    "continuous ranker loss與training objective不一致: "
-                    f"objective={self.training_objective}, expected={expected_loss}, actual={self.loss_name}"
+            if self.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+                allowed_losses = {"huber_raw_r", "mse_raw_r"}
+                if self.loss_name not in allowed_losses:
+                    raise ValueError(
+                        "direct R regression loss不支援: "
+                        f"expected one of {sorted(allowed_losses)}, actual={self.loss_name}"
+                    )
+                expected_epoch_metric = (
+                    "validation_huber_raw_r"
+                    if self.loss_name == "huber_raw_r"
+                    else "validation_mse_raw_r"
                 )
-            expected_epoch_metric = (
-                "validation_huber_raw_r"
-                if self.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
-                else "mean_daily_spearman"
-            )
+            else:
+                expected_loss = {
+                    TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION: "mse",
+                    TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING: "pairwise_logistic",
+                    TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: "listnet_top_one_cross_entropy",
+                }[self.training_objective]
+                if self.loss_name != expected_loss:
+                    raise ValueError(
+                        "continuous ranker loss與training objective不一致: "
+                        f"objective={self.training_objective}, expected={expected_loss}, actual={self.loss_name}"
+                    )
+                expected_epoch_metric = "mean_daily_spearman"
             if self.epoch_selection_metric != expected_epoch_metric:
                 raise ValueError(
                     "continuous ranker epoch selection與training objective不一致: "
                     f"objective={self.training_objective}, expected={expected_epoch_metric}, actual={self.epoch_selection_metric}"
                 )
             if self.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
-                if self.raw_r_huber_delta_r is None or not math.isfinite(float(self.raw_r_huber_delta_r)) or float(self.raw_r_huber_delta_r) <= 0.0:
-                    raise ValueError("direct R regression 必須指定正有限 raw_r_huber_delta_r")
+                if self.loss_name == "huber_raw_r":
+                    if self.raw_r_huber_delta_r is None or not math.isfinite(float(self.raw_r_huber_delta_r)) or float(self.raw_r_huber_delta_r) <= 0.0:
+                        raise ValueError("Huber direct R regression必須指定正有限 raw_r_huber_delta_r")
+                elif self.raw_r_huber_delta_r is not None:
+                    raise ValueError("MSE direct R regression不得指定 raw_r_huber_delta_r")
             elif self.raw_r_huber_delta_r is not None:
                 raise ValueError("非direct R regression profile不得指定 raw_r_huber_delta_r")
             if self.training_sampling_mode != TRAINING_SAMPLING_UNIQUE_TICKER_DATE:
@@ -838,6 +851,17 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         raw_r_huber_delta_r=1.0,
     ),
+    DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
+        continuous_target_id="daily_opportunity_no_time_r_v1",
+        loss_name="mse_raw_r",
+        epoch_selection_metric="validation_mse_raw_r",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    ),
 }
 
 SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES = tuple(_EXPERIMENT_PROFILES)
@@ -1087,6 +1111,20 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         objective_description=(
             "同日全部合法stock-day直接預測daily_opportunity_no_time_r_v1 raw R；"
             "使用Huber loss且delta固定為1R，two-logit margin直接解讀為Predicted R"
+        ),
+        metric_scope="all_stock_days",
+        score_semantic_id="daily_predicted_r",
+    ),
+    DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE,
+        model_research_id="MR-13G",
+        experiment_name="MR-13G Daily Universal Direct-R Mean Regression",
+        phase="13G",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="raw_daily_opportunity_no_time_r_v1_in_R_units",
+        objective_description=(
+            "同日全部合法stock-day直接預測daily_opportunity_no_time_r_v1 raw R；"
+            "使用MSE以population optimum對齊conditional mean E[R|X]，two-logit margin直接解讀為Predicted R"
         ),
         metric_scope="all_stock_days",
         score_semantic_id="daily_predicted_r",
@@ -1813,6 +1851,7 @@ __all__ = [
     'DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE',
+    'DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE',
     'ContinuousRankerResearchSpec',
     'CONTINUOUS_RANKER_TRAINER_EVENT',
     'CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL',

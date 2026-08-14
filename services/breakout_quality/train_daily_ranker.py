@@ -122,19 +122,25 @@ def _render_markdown(payload: dict) -> str:
     ]
     if direct_r:
         regression_contract = dict(payload["training"].get("raw_r_regression_contract") or {})
+        loss_name = str(regression_contract.get("loss") or payload["training"].get("loss") or "")
+        loss_detail = (
+            f"Huber delta={fmt(regression_contract.get('huber_delta_r'))}R"
+            if loss_name == "huber_raw_r"
+            else "raw-R MSE / conditional-mean objective"
+        )
         lines.extend([
-            f"- Direct-R objective：two-logit margin直接解讀為Predicted R；Huber delta=`{fmt(regression_contract.get('huber_delta_r'))}R`。",
+            f"- Direct-R objective：two-logit margin直接解讀為Predicted R；loss=`{loss_name}`（{loss_detail}）。",
             "",
             "## Direct-R Regression",
             "",
-            "| Scope | Groups | Huber | MAE | RMSE | Bias | Pred R Mean | Target R Mean |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|",
+            "| Scope | Groups | MSE | Huber | MAE | RMSE | Bias | Pred R Mean | Target R Mean |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
         ])
         for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
             row = payload["split_metrics"].get(key) or {}
             reg = dict(row.get("raw_r_regression") or {})
             lines.append(
-                f"| {label} | {int(row.get('group_count', 0) or 0):,} | {fmt(reg.get('huber_loss_raw_r'))} "
+                f"| {label} | {int(row.get('group_count', 0) or 0):,} | {fmt(reg.get('mse_raw_r'))} | {fmt(reg.get('huber_loss_raw_r'))} "
                 f"| {fmt(reg.get('mae_raw_r'))} | {fmt(reg.get('rmse_raw_r'))} | {fmt(reg.get('bias_raw_r'))} "
                 f"| {fmt(reg.get('predicted_r_mean'))} | {fmt(reg.get('target_r_mean'))} |"
             )
@@ -183,9 +189,15 @@ def run(args) -> int:
     target_id = str(bundle.profile.continuous_target_id or "").strip()
     if not target_id:
         raise ValueError("daily-universal continuous ranker缺少target identity")
+    raw_r_loss_name = (
+        str(bundle.profile.loss_name)
+        if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        else None
+    )
     raw_r_huber_delta = (
         float(bundle.profile.raw_r_huber_delta_r)
         if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        and bundle.profile.raw_r_huber_delta_r is not None
         else None
     )
     split = build_daily_ranker_split(bundle, inner_validation_months=int(args.inner_validation_months))
@@ -286,11 +298,13 @@ def run(args) -> int:
     validation_metrics = ranker_api.split_metrics(
         split.validation_ids, bundle.group_table, bundle.raw_target, percentile_target,
         validation_scores, include_top_k_quality=True,
+        raw_r_regression_loss_name=raw_r_loss_name,
         raw_r_huber_delta_r=raw_r_huber_delta,
     )
     oos_metrics = ranker_api.split_metrics(
         split.oos_ids, bundle.group_table, bundle.raw_target, percentile_target,
         oos_scores, include_top_k_quality=True,
+        raw_r_regression_loss_name=raw_r_loss_name,
         raw_r_huber_delta_r=raw_r_huber_delta,
     )
     candidate_ids = select_breakout_candidate_group_ids(
@@ -304,6 +318,7 @@ def run(args) -> int:
             percentile_target,
             score_by_group[candidate_ids],
             include_top_k_quality=True,
+            raw_r_regression_loss_name=raw_r_loss_name,
             raw_r_huber_delta_r=raw_r_huber_delta,
         )
         if len(candidate_ids) >= 2
@@ -456,8 +471,12 @@ def run(args) -> int:
     print(f"\nDaily Universal Continuous Model完成｜{research_spec.model_research_id}")
     if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
         regression = dict(oos_metrics.get("raw_r_regression") or {})
+        if raw_r_loss_name == "huber_raw_r":
+            primary = f"OOS Huber={_fmt_metric(regression.get('huber_loss_raw_r'))}"
+        else:
+            primary = f"OOS MSE={_fmt_metric(regression.get('mse_raw_r'))} | RMSE={_fmt_metric(regression.get('rmse_raw_r'))}R"
         print(
-            f"selected_epoch={selected_epoch} | OOS Huber={_fmt_metric(regression.get('huber_loss_raw_r'))} "
+            f"selected_epoch={selected_epoch} | {primary} "
             f"| MAE={_fmt_metric(regression.get('mae_raw_r'))}R | bias={_fmt_metric(regression.get('bias_raw_r'))}R"
         )
     print(
