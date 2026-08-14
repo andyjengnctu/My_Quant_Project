@@ -310,17 +310,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "formal_score_ranking_pairs_persist_execution_selector_trace_and_exact_repair_mechanism_sidecars_and_cache_requires_them",
+        "formal_score_ranking_pairs_persist_execution_selector_trace_and_repair_search_certificate_sidecars_and_cache_requires_them",
         True,
         (
             "score_ranking_execution.csv" in score_ranking_cache_files
             and "score_ranking_selector_trace.csv" in score_ranking_cache_files
-            and "score_ranking_repair_mechanism.csv" in score_ranking_cache_files
+            and "score_ranking_repair_search_certificate.csv" in score_ranking_cache_files
             and "capture_execution_diagnostics=(" in orchestration_source
             and 'runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING' in orchestration_source
             and 'output_dir / "score_ranking_execution.csv"' in strategy_compare_source
             and 'output_dir / "score_ranking_selector_trace.csv"' in strategy_compare_source
-            and 'output_dir / "score_ranking_repair_mechanism.csv"' in strategy_compare_source
+            and 'output_dir / "score_ranking_repair_search_certificate.csv"' in strategy_compare_source
         ),
     )
     configured_roos_builders = [
@@ -2525,7 +2525,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "max_dl_constrained_basket_uses_fixed_min_roos_k_and_exact_reserve_floor_with_oracle_matched_minimum_repair",
+        "max_dl_constrained_basket_uses_fixed_min_roos_k_and_exact_reserve_floor_with_independent_bruteforce_matched_one_step_repair",
         True,
         max_dl_oracle is not None
         and max_dl_diag["mode"] == "dl-selection"
@@ -2549,20 +2549,28 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         params=resource_params,
         resource_selection_diag=max_dl_diag,
     )
+    repair_trace = list((max_dl_mechanism or {}).get("repair_steps_trace") or [])
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "max_dl_exact_repair_oracle_matches_independent_bruteforce_feasible_optimum_without_future_target",
+        "max_dl_one_step_repair_certificate_reuses_exhaustive_production_single_swap_search_without_global_combinatorial_oracle",
         True,
         bool(
             max_dl_mechanism is not None
             and max_dl_mechanism.get("status") == "AVAILABLE"
+            and max_dl_mechanism.get("actual_repair_steps") == 1
+            and max_dl_mechanism.get("actual_repair_replacement_distance") == 1
+            and max_dl_mechanism.get("classification") == "EXACT_ONE_SWAP_RESOURCE_CONSTRAINT"
+            and len(repair_trace) == 1
+            and int(repair_trace[0].get("evaluated_swap_count", 0)) > 0
+            and int(repair_trace[0].get("feasible_swap_count", 0)) > 0
+            and bool(repair_trace[0].get("after_feasible", False))
+            and "global_best_score_sum" not in max_dl_mechanism
+            and "exact_oracle_evaluated_states" not in max_dl_mechanism
             and math.isclose(
-                float(max_dl_mechanism.get("global_best_score_sum")),
+                float(max_dl_mechanism.get("repair_seed_score_sum")),
                 float(max_dl_oracle[0][0]),
                 abs_tol=1e-12,
             )
-            and max_dl_mechanism.get("exact_minimum_replacement_distance") == 1
-            and max_dl_mechanism.get("classification") == "RESOURCE_CONSTRAINT_EXACT_OPTIMUM"
         ),
     )
 
@@ -3100,7 +3108,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 "score_ranking_selected_buys.csv",
                 "score_ranking_execution.csv",
                 "score_ranking_selector_trace.csv",
-                "score_ranking_repair_mechanism.csv",
+                "score_ranking_repair_search_certificate.csv",
             ):
                 (cached_pair_dir / filename).write_text("x\n", encoding="utf-8")
             (cached_run / "strategy_comparison.json").write_text(

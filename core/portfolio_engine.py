@@ -514,40 +514,10 @@ def run_portfolio_timeline(
                             **{
                                 key: value
                                 for key, value in dict(repair_mechanism).items()
-                                if key not in {
-                                    'minimum_replacement_best_rows',
-                                    'global_best_rows',
-                                    'repair_steps_trace',
-                                    'repair_seed_quality_key',
-                                    'minimum_replacement_best_quality_key',
-                                    'final_quality_key',
-                                    'global_best_quality_key',
-                                }
+                                if key != 'repair_steps_trace'
                             },
                         }
                         replay_selector_trace_rows.append(summary)
-
-                        for oracle_stage, oracle_rows in (
-                            ('minimum_replacement_best', repair_mechanism.get('minimum_replacement_best_rows')),
-                            ('global_best', repair_mechanism.get('global_best_rows')),
-                        ):
-                            for oracle_rank, candidate in enumerate(list(oracle_rows or []), start=1):
-                                snapshot = _candidate_replay_snapshot(
-                                    candidate,
-                                    fallback_trade_date=today,
-                                    is_orderable=True,
-                                )
-                                snapshot.update({
-                                    'trace_kind': 'repair_oracle_basket',
-                                    'oracle_stage': oracle_stage,
-                                    'stage': '',
-                                    'stage_rank': int(oracle_rank),
-                                    'pre_market_order_limit': resource_selection_diag.get('pre_market_order_limit'),
-                                    'direct_score_order_feasible': bool(resource_selection_diag.get('direct_score_order_feasible', False)),
-                                    'repair_steps': int(resource_selection_diag.get('max_dl_repair_steps', 0) or 0),
-                                    'ascent_steps': int(resource_selection_diag.get('max_dl_feasible_ascent_steps', 0) or 0),
-                                })
-                                replay_selector_trace_rows.append(snapshot)
 
                         for step in list(repair_mechanism.get('repair_steps_trace') or []):
                             for role, candidate_key in (('out', 'out_row'), ('in', 'in_row')):
@@ -578,6 +548,9 @@ def run_portfolio_timeline(
                                     'before_reserve_deficit_milli': step.get('before_reserve_deficit_milli'),
                                     'after_reserve_deficit_milli': step.get('after_reserve_deficit_milli'),
                                     'after_feasible': bool(step.get('after_feasible', False)),
+                                    'evaluated_swap_count': step.get('evaluated_swap_count'),
+                                    'progress_swap_count': step.get('progress_swap_count'),
+                                    'feasible_swap_count': step.get('feasible_swap_count'),
                                 })
                                 replay_selector_trace_rows.append(snapshot)
 

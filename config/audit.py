@@ -334,7 +334,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
             "mr13e-minimum-repair-mechanism": {
                 "enabled": True,
                 "audit_type": "minimum_repair_mechanism",
-                "description": "MR-12B／MR-13A／MR-13E在Raw Top-N不符K/R0時，以canonical reservation exact oracle區分minimum-repair／multi-swap search gap與不可避免resource incompatibility",
+                "description": "MR-12B／MR-13A／MR-13E在Raw Top-N不符K/R0時，以production exhaustive single-swap repair trace區分exact one-swap resource constraint與multi-step greedy path未解區段",
                 "source": {
                     "kind": "strategy_compare_cross_phase",
                     "phases": {
@@ -357,12 +357,12 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 "dimensions": {
                     "raw_resource_deficit": True,
                     "accepted_repair_swaps": True,
-                    "exact_minimum_replacement_oracle": True,
-                    "exact_global_feasible_oracle": True,
+                    "exact_one_swap_certificate": True,
+                    "multi_step_path_unresolved": True,
                     "repair_days": True,
                 },
                 "outcomes": {
-                    "frozen_score_only_oracle": True,
+                    "frozen_score_only_search_certificate": True,
                     "common_daily_target_post_replay": True,
                     "resource_incompatibility_vs_search_gap": True,
                     "no_numeric_threshold": True,

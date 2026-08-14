@@ -2800,15 +2800,15 @@ def validate_breakout_quality_minimum_repair_mechanism_audit_contract_case(_base
         results,
         "synthetic_breakout_quality",
         case_id,
-        "minimum_repair_mechanism_audit_is_active_config_driven_read_only_exact_oracle_step",
+        "minimum_repair_mechanism_audit_is_active_config_driven_read_only_scalable_search_certificate_step",
         True,
         bool(
             definition.enabled
             and not previous.enabled
             and definition.audit_type == "minimum_repair_mechanism"
-            and definition.dimensions.get("exact_minimum_replacement_oracle") is True
-            and definition.dimensions.get("exact_global_feasible_oracle") is True
-            and definition.outcomes.get("frozen_score_only_oracle") is True
+            and definition.dimensions.get("exact_one_swap_certificate") is True
+            and definition.dimensions.get("multi_step_path_unresolved") is True
+            and definition.outcomes.get("frozen_score_only_search_certificate") is True
             and definition.outcomes.get("no_numeric_threshold") is True
             and entry.formal
             and entry.read_only
@@ -2821,23 +2821,23 @@ def validate_breakout_quality_minimum_repair_mechanism_audit_contract_case(_base
         results,
         "synthetic_breakout_quality",
         case_id,
-        "minimum_repair_mechanism_audit_blocks_cleanly_without_exact_oracle_sidecars",
+        "minimum_repair_mechanism_audit_blocks_cleanly_without_search_certificate_sidecars",
         True,
         blocked.get("status") == "BLOCKED",
     )
 
-    def arm(*, exact_days, heuristic_days, exact_loss, heuristic_loss):
+    def arm(*, one_step, multi_step, fallback, one_contrib, multi_contrib, fallback_contrib):
         return {
             "status": "AVAILABLE",
             "classification_counts": {
-                "RESOURCE_CONSTRAINT_EXACT_OPTIMUM": int(exact_days),
-                "GREEDY_REPAIR_EXTRA_REPLACEMENTS": int(heuristic_days),
-                "GREEDY_REPAIR_SCORE_GAP_AT_MIN_DISTANCE": 0,
-                "MULTI_SWAP_LOCAL_SEARCH_GAP": 0,
+                "EXACT_ONE_SWAP_RESOURCE_CONSTRAINT": int(one_step),
+                "MULTI_STEP_GREEDY_PATH_UNRESOLVED": int(multi_step),
+                "BASELINE_FALLBACK_AFTER_GREEDY_REPAIR": int(fallback),
             },
-            "target_loss_attribution": {
-                "heuristic_gap_days_negative_raw_to_repair_sum_r": float(heuristic_loss),
-                "exact_optimum_days_negative_raw_to_repair_sum_r": float(exact_loss),
+            "class_target_delta_contribution": {
+                "EXACT_ONE_SWAP_RESOURCE_CONSTRAINT": float(one_contrib),
+                "MULTI_STEP_GREEDY_PATH_UNRESOLVED": float(multi_contrib),
+                "BASELINE_FALLBACK_AFTER_GREEDY_REPAIR": float(fallback_contrib),
             },
         }
 
@@ -2845,28 +2845,32 @@ def validate_breakout_quality_minimum_repair_mechanism_audit_contract_case(_base
         "phases": {
             "forward_oos": {
                 "arms": {
-                    "C20": arm(exact_days=3, heuristic_days=0, exact_loss=-1.0, heuristic_loss=0.0),
-                    "C29": arm(exact_days=1, heuristic_days=2, exact_loss=-0.3, heuristic_loss=-0.7),
-                    "C36": arm(exact_days=5, heuristic_days=2, exact_loss=-4.0, heuristic_loss=-1.0),
+                    "C20": arm(one_step=4, multi_step=2, fallback=0, one_contrib=-0.10, multi_contrib=-0.05, fallback_contrib=0.0),
+                    "C29": arm(one_step=3, multi_step=3, fallback=0, one_contrib=-0.15, multi_contrib=-0.20, fallback_contrib=0.0),
+                    "C36": arm(one_step=5, multi_step=2, fallback=0, one_contrib=-0.40, multi_contrib=-0.10, fallback_contrib=0.0),
                 }
             }
         }
     }
     conclusion = _conclusion(payload)
+    extra = dict(conclusion.get("mr13e_minus_mr12b_class_contribution_r") or {})
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "minimum_repair_conclusion_uses_exact_oracle_day_classes_and_post_replay_loss_without_threshold",
+        "minimum_repair_conclusion_separates_exact_one_swap_resource_days_from_multi_step_unresolved_contribution_without_threshold",
         True,
         bool(
-            conclusion.get("classification")
-            == "RESOURCE_INCOMPATIBILITY_DOMINATES_WITH_HEURISTIC_GAPS"
-            and conclusion.get("mr13e_exact_optimum_days") == 5
-            and conclusion.get("mr13e_heuristic_gap_days") == 2
+            conclusion.get("classification") == "EXACT_ONE_SWAP_RESOURCE_CONSTRAINT_DOMINATES"
+            and conclusion.get("dominant_class") == "EXACT_ONE_SWAP_RESOURCE_CONSTRAINT"
             and math.isclose(
-                float(conclusion.get("mr13e_exact_optimum_negative_target_loss_sum_r")),
-                -4.0,
+                float(extra.get("EXACT_ONE_SWAP_RESOURCE_CONSTRAINT")),
+                -0.30,
+                abs_tol=1e-12,
+            )
+            and math.isclose(
+                float(extra.get("MULTI_STEP_GREEDY_PATH_UNRESOLVED")),
+                -0.05,
                 abs_tol=1e-12,
             )
         ),
@@ -3202,7 +3206,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and minimum_repair_definition.enabled
         and minimum_repair_definition.audit_type == "minimum_repair_mechanism"
         and minimum_repair_definition.source.get("kind") == "strategy_compare_cross_phase"
-        and minimum_repair_definition.outcomes.get("frozen_score_only_oracle") is True
+        and minimum_repair_definition.outcomes.get("frozen_score_only_search_certificate") is True
         and minimum_repair_definition.outcomes.get("no_numeric_threshold") is True
         and "breakout_quality" in get_audit_module_ids(enabled_only=True)
         and bool(enabled_definitions)

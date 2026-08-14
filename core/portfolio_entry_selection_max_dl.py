@@ -1,5 +1,4 @@
 from datetime import date, datetime
-import heapq
 
 from core.portfolio_entry_selection_common import (
     _candidate_continuous_score,
@@ -69,170 +68,6 @@ def _max_dl_basket_is_feasible(result, *, target_count, reserve_floor_milli):
     )
 
 
-def _max_dl_quality_heap_key(quality_key):
-    """Convert the canonical max-DL quality key into an ascending heap key."""
-
-    coverage, score_sum, sorted_scores, stable_base_ranks = quality_key
-    return (
-        -int(coverage),
-        -float(score_sum),
-        tuple(-float(value) for value in sorted_scores),
-        tuple(-int(value) for value in stable_base_ranks),
-    )
-
-
-def _max_dl_combination_neighbors(indices, *, candidate_count):
-    """Yield each lexicographically adjacent K-combination exactly one index step away."""
-
-    combo = tuple(int(value) for value in indices)
-    size = len(combo)
-    for pos in range(size - 1, -1, -1):
-        limit = int(candidate_count) - 1 if pos == size - 1 else combo[pos + 1] - 1
-        if combo[pos] >= limit:
-            continue
-        updated = list(combo)
-        updated[pos] += 1
-        yield tuple(updated)
-
-
-def _max_dl_replacement_distance(indices, *, target_count):
-    """Replacement count relative to the unconstrained Top-K membership 0..K-1."""
-
-    return int(sum(1 for value in indices if int(value) >= int(target_count)))
-
-
-def _max_dl_exact_feasible_oracle(
-    rows,
-    *,
-    available_cash,
-    sizing_equity,
-    params,
-    target_count,
-    reserve_floor_milli,
-):
-    """Find exact feasible baskets under the frozen max-DL objective.
-
-    Two best-first searches use the exact same cash-capped reservation simulator as
-    production selection.  The first search orders all K-combinations by canonical
-    DL basket quality and therefore returns the global score-optimal feasible basket.
-    The second orders first by replacement distance from raw Top-K, then by the same
-    quality key; it returns the best feasible basket at the minimum number of
-    replacements.  No target/outcome information participates in either search.
-
-    Candidate indices follow ``_max_dl_score_order``.  Incrementing any combination
-    index cannot improve the canonical quality key, so the combination graph has the
-    monotonicity required for exact best-first early stopping at the first feasible
-    state.
-    """
-
-    candidates = list(rows or [])
-    k = int(target_count)
-    if k <= 0 or len(candidates) < k:
-        return None
-
-    base_rank = {id(row): idx for idx, row in enumerate(candidates)}
-    dl_order = _max_dl_score_order(candidates, base_rank=base_rank)
-    raw_indices = tuple(range(k))
-    evaluation_cache = {}
-    quality_cache = {}
-
-    def quality_for(indices):
-        key = tuple(indices)
-        cached = quality_cache.get(key)
-        if cached is not None:
-            return cached
-        basket = [dl_order[idx] for idx in key]
-        ordered = _max_dl_execution_order(basket, base_rank=base_rank)
-        quality = _max_dl_basket_quality_key(ordered, base_rank=base_rank)
-        quality_cache[key] = quality
-        return quality
-
-    def evaluate(indices):
-        key = tuple(indices)
-        cached = evaluation_cache.get(key)
-        if cached is not None:
-            return cached
-        basket = [dl_order[idx] for idx in key]
-        ordered = _max_dl_execution_order(basket, base_rank=base_rank)
-        result = _simulate_reserved_candidate_order(
-            ordered,
-            available_cash=available_cash,
-            sizing_equity=sizing_equity,
-            free_slots=k,
-            params=params,
-        )
-        quality = quality_for(key)
-        payload = (ordered, result, quality)
-        evaluation_cache[key] = payload
-        return payload
-
-    def search(*, minimum_replacements_first):
-        seen = {raw_indices}
-        raw_ordered, _raw_result, raw_quality = evaluate(raw_indices)
-        raw_heap_quality = _max_dl_quality_heap_key(raw_quality)
-        first_key = (
-            (_max_dl_replacement_distance(raw_indices, target_count=k), raw_heap_quality, raw_indices)
-            if minimum_replacements_first
-            else (raw_heap_quality, raw_indices)
-        )
-        heap = [first_key]
-        popped = 0
-        while heap:
-            item = heapq.heappop(heap)
-            indices = item[-1]
-            ordered, result, quality = evaluate(indices)
-            popped += 1
-            if _max_dl_basket_is_feasible(
-                result,
-                target_count=k,
-                reserve_floor_milli=reserve_floor_milli,
-            ):
-                return {
-                    'indices': tuple(indices),
-                    'rows': list(result.get('selected_rows') or ordered),
-                    'result': result,
-                    'quality_key': quality,
-                    'replacement_distance': _max_dl_replacement_distance(
-                        indices, target_count=k
-                    ),
-                    'states_popped': int(popped),
-                }
-            for neighbor in _max_dl_combination_neighbors(
-                indices, candidate_count=len(dl_order)
-            ):
-                if neighbor in seen:
-                    continue
-                seen.add(neighbor)
-                neighbor_quality = quality_for(neighbor)
-                heap_quality = _max_dl_quality_heap_key(neighbor_quality)
-                heap_key = (
-                    (
-                        _max_dl_replacement_distance(neighbor, target_count=k),
-                        heap_quality,
-                        neighbor,
-                    )
-                    if minimum_replacements_first
-                    else (heap_quality, neighbor)
-                )
-                heapq.heappush(heap, heap_key)
-        return None
-
-    raw_ordered, raw_result, raw_quality = evaluate(raw_indices)
-    minimum = search(minimum_replacements_first=True)
-    global_best = search(minimum_replacements_first=False)
-    if minimum is None or global_best is None:
-        raise RuntimeError('max-DL exact oracle找不到符合既有K/R0資源契約的basket')
-    return {
-        'raw_rows': list(raw_ordered),
-        'raw_result': raw_result,
-        'raw_quality_key': raw_quality,
-        'minimum_replacement_best': minimum,
-        'global_best': global_best,
-        'unique_evaluated_states': int(len(evaluation_cache)),
-        'unique_ranked_states': int(len(quality_cache)),
-    }
-
-
 def build_max_dl_repair_mechanism_diagnostic(
     rows,
     *,
@@ -241,25 +76,24 @@ def build_max_dl_repair_mechanism_diagnostic(
     params,
     resource_selection_diag,
 ):
-    """Build a research-only exact repair/search attribution payload.
+    """Build a scalable research-only minimum-repair search certificate.
 
-    This function never changes candidate order or portfolio state.  It is called
-    only by an explicit replay diagnostic sink after the production selector has
-    already chosen its basket.
+    Production minimum-repair already exhaustively evaluates every single swap at
+    each accepted step.  Reuse that exact local-search trace instead of performing
+    a combinatorial all-K-basket oracle.  A one-step repair is therefore an exact
+    certificate for minimum replacement distance=1 and the best frozen-score
+    feasible one-swap basket.  Multi-step paths remain explicitly unresolved beyond
+    the production greedy path; feasible-ascent separately certifies a one-swap
+    local optimum.  No target/outcome information participates in this diagnostic.
     """
 
+    del available_cash, sizing_equity, params  # diagnostic uses already-completed production trace only
     diag = dict(resource_selection_diag or {})
     if not bool(diag.get('max_dl_eligible', False)):
         return None
-    if int(diag.get('max_dl_repair_steps', 0) or 0) <= 0:
+    repair_steps = int(diag.get('max_dl_repair_steps', 0) or 0)
+    if repair_steps <= 0:
         return None
-    if bool(diag.get('stale_score_membership_guard_enabled', False)):
-        # The exact oracle below models only the canonical K/R0 hard resource
-        # contract.  Do not silently ignore the additional stale-membership rule.
-        return {
-            'status': 'UNAVAILABLE_STALE_MEMBERSHIP_GUARD',
-            'reason': 'exact oracle目前只適用無stale membership guard的K/R0 selector',
-        }
 
     candidates = list(rows or [])
     target_count = int(diag.get('pre_market_order_limit', 0) or 0)
@@ -268,6 +102,7 @@ def build_max_dl_repair_mechanism_diagnostic(
     raw_rows = list(trace.get('raw_top_n') or [])
     repair_rows = list(trace.get('minimum_repair_seed') or [])
     final_rows = list(trace.get('feasible_ascent_final') or repair_rows)
+    repair_trace = list(diag.get('_selector_repair_steps') or [])
     if target_count <= 0 or len(raw_rows) != target_count:
         return {
             'status': 'UNAVAILABLE_TRACE_CONTRACT',
@@ -285,42 +120,27 @@ def build_max_dl_repair_mechanism_diagnostic(
         candidate_ids = {id(row) for row in list(rows_ or [])}
         return int(len(raw_ids - candidate_ids))
 
-    oracle = _max_dl_exact_feasible_oracle(
-        candidates,
-        available_cash=available_cash,
-        sizing_equity=sizing_equity,
-        params=params,
-        target_count=target_count,
-        reserve_floor_milli=reserve_floor_milli,
-    )
-    if oracle is None:
-        return {
-            'status': 'UNAVAILABLE_ORACLE',
-            'reason': 'exact oracle輸入不足',
-        }
-
-    minimum = dict(oracle['minimum_replacement_best'])
-    global_best = dict(oracle['global_best'])
-    raw_result = dict(oracle['raw_result'])
-    raw_deficit = _max_dl_resource_deficit(
-        raw_result,
-        target_count=target_count,
-        reserve_floor_milli=reserve_floor_milli,
-    )
+    raw_quality = quality(raw_rows)
     repair_quality = quality(repair_rows)
     final_quality = quality(final_rows)
-    minimum_quality = minimum['quality_key']
-    global_quality = global_best['quality_key']
-    actual_repair_distance = replacement_distance(repair_rows)
+    raw_selected_count = None
+    raw_reserved_cost_milli = None
+    raw_count_deficit = None
+    raw_reserve_deficit_milli = None
+    if repair_trace:
+        first = dict(repair_trace[0])
+        raw_selected_count = int(first.get('before_selected_count', 0) or 0)
+        raw_reserved_cost_milli = int(first.get('before_reserved_cost_milli', 0) or 0)
+        raw_count_deficit = int(first.get('before_count_deficit', 0) or 0)
+        raw_reserve_deficit_milli = int(first.get('before_reserve_deficit_milli', 0) or 0)
 
-    if actual_repair_distance > int(minimum['replacement_distance']):
-        classification = 'GREEDY_REPAIR_EXTRA_REPLACEMENTS'
-    elif repair_quality < minimum_quality:
-        classification = 'GREEDY_REPAIR_SCORE_GAP_AT_MIN_DISTANCE'
-    elif final_quality < global_quality:
-        classification = 'MULTI_SWAP_LOCAL_SEARCH_GAP'
+    fallback = bool(diag.get('max_dl_seed_fallback', False) or diag.get('max_dl_fallback_to_baseline', False))
+    if fallback:
+        classification = 'BASELINE_FALLBACK_AFTER_GREEDY_REPAIR'
+    elif repair_steps == 1:
+        classification = 'EXACT_ONE_SWAP_RESOURCE_CONSTRAINT'
     else:
-        classification = 'RESOURCE_CONSTRAINT_EXACT_OPTIMUM'
+        classification = 'MULTI_STEP_GREEDY_PATH_UNRESOLVED'
 
     return {
         'status': 'AVAILABLE',
@@ -328,28 +148,21 @@ def build_max_dl_repair_mechanism_diagnostic(
         'target_count': int(target_count),
         'candidate_count': int(len(candidates)),
         'reserve_floor_milli': int(reserve_floor_milli),
-        'raw_selected_count': int(raw_result['selected_count']),
-        'raw_reserved_cost_milli': int(raw_result['reserved_cost_milli']),
-        'raw_count_deficit': int(raw_deficit[0]),
-        'raw_reserve_deficit_milli': int(raw_deficit[1]),
-        'actual_repair_steps': int(diag.get('max_dl_repair_steps', 0) or 0),
-        'actual_repair_replacement_distance': int(actual_repair_distance),
-        'exact_minimum_replacement_distance': int(minimum['replacement_distance']),
-        'repair_seed_quality_key': repair_quality,
-        'minimum_replacement_best_quality_key': minimum_quality,
-        'final_quality_key': final_quality,
-        'global_best_quality_key': global_quality,
+        'raw_selected_count': raw_selected_count,
+        'raw_reserved_cost_milli': raw_reserved_cost_milli,
+        'raw_count_deficit': raw_count_deficit,
+        'raw_reserve_deficit_milli': raw_reserve_deficit_milli,
+        'actual_repair_steps': int(repair_steps),
+        'actual_repair_replacement_distance': int(replacement_distance(repair_rows)),
         'repair_seed_score_sum': float(repair_quality[1]),
-        'minimum_replacement_best_score_sum': float(minimum_quality[1]),
+        'raw_score_sum': float(raw_quality[1]),
         'final_score_sum': float(final_quality[1]),
-        'global_best_score_sum': float(global_quality[1]),
-        'repair_seed_score_gap_to_minimum_best': float(minimum_quality[1] - repair_quality[1]),
-        'final_score_gap_to_global_best': float(global_quality[1] - final_quality[1]),
-        'minimum_replacement_best_rows': list(minimum['rows']),
-        'global_best_rows': list(global_best['rows']),
-        'exact_oracle_evaluated_states': int(oracle['unique_evaluated_states']),
-        'exact_oracle_ranked_states': int(oracle['unique_ranked_states']),
-        'repair_steps_trace': list(diag.get('_selector_repair_steps') or []),
+        'repair_seed_score_loss_from_raw': float(repair_quality[1] - raw_quality[1]),
+        'final_score_change_from_repair': float(final_quality[1] - repair_quality[1]),
+        'repair_search_evaluations': int(diag.get('max_dl_repair_evaluations', 0) or 0),
+        'ascent_search_evaluations': int(diag.get('max_dl_feasible_ascent_evaluations', 0) or 0),
+        'ascent_local_optimum': bool(diag.get('max_dl_feasible_ascent_local_optimum', False)),
+        'repair_steps_trace': repair_trace,
     }
 
 
@@ -516,7 +329,10 @@ def _reorder_resource_aware_continuous_max_dl(
     repaired_in_ids = set()
     repair_trace_steps = []
 
-    def repair_step_payload(*, step, out_row, in_row, before_result, after_result):
+    def repair_step_payload(
+        *, step, out_row, in_row, before_result, after_result,
+        evaluated_swap_count, progress_swap_count, feasible_swap_count,
+    ):
         before_deficit = _max_dl_resource_deficit(
             before_result,
             target_count=target_count,
@@ -552,6 +368,9 @@ def _reorder_resource_aware_continuous_max_dl(
                     reserve_floor_milli=reserve_floor_milli,
                 )
             ),
+            'evaluated_swap_count': int(evaluated_swap_count),
+            'progress_swap_count': int(progress_swap_count),
+            'feasible_swap_count': int(feasible_swap_count),
         }
 
     for repair_step in range(1, target_count + 1):
@@ -575,9 +394,13 @@ def _reorder_resource_aware_continuous_max_dl(
         best_feasible = None
         best_feasible_quality = None
         best_feasible_tie = None
+        step_evaluated = 0
+        step_progress = 0
+        step_feasible = 0
 
         for out_row in out_rows:
             for in_row in in_rows:
+                step_evaluated += 1
                 trial_basket = [
                     row for row in current_basket if id(row) != id(out_row)
                 ] + [in_row]
@@ -590,6 +413,7 @@ def _reorder_resource_aware_continuous_max_dl(
                 )
                 if trial_deficit >= current_deficit:
                     continue
+                step_progress += 1
 
                 quality_key = _max_dl_basket_quality_key(
                     trial_ordered, base_rank=base_rank
@@ -604,6 +428,7 @@ def _reorder_resource_aware_continuous_max_dl(
                     reserve_floor_milli=reserve_floor_milli,
                 ):
                     feasible_count += 1
+                    step_feasible += 1
                     if (
                         best_feasible_quality is None
                         or quality_key > best_feasible_quality
@@ -647,6 +472,9 @@ def _reorder_resource_aware_continuous_max_dl(
                 in_row=in_row,
                 before_result=current_result,
                 after_result=trial_result,
+                evaluated_swap_count=step_evaluated,
+                progress_swap_count=step_progress,
+                feasible_swap_count=step_feasible,
             ))
             repaired_out_ids.add(id(out_row))
             repaired_in_ids.add(id(in_row))
@@ -669,6 +497,9 @@ def _reorder_resource_aware_continuous_max_dl(
             in_row=in_row,
             before_result=current_result,
             after_result=next_result,
+            evaluated_swap_count=step_evaluated,
+            progress_swap_count=step_progress,
+            feasible_swap_count=step_feasible,
         ))
         current_basket, current_result, current_deficit = next_basket, next_result, next_deficit
         repaired_out_ids.add(id(out_row))
@@ -955,6 +786,7 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
             'minimum_repair_seed': list(seed_trace.get('minimum_repair_seed') or seed_basket),
             'feasible_ascent_final': list(current_result.get('selected_rows') or []),
         },
+        '_selector_repair_steps': list(seed_diag.get('_selector_repair_steps') or []),
     })
     if int(current_result['selected_count']) != target_count:
         raise RuntimeError('max-DL feasible-ascent輸出未維持同參數DL-off baseline預留單數')

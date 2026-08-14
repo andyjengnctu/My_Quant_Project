@@ -919,7 +919,7 @@ def run_comparison(
                 encoding="utf-8-sig",
             )
             _flatten_repair_mechanism_rows(quality_selector_trace_rows).to_csv(
-                output_dir / "score_ranking_repair_mechanism.csv",
+                output_dir / "score_ranking_repair_search_certificate.csv",
                 index=False,
                 encoding="utf-8-sig",
             )

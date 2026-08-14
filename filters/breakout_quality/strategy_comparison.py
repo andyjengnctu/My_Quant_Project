@@ -253,7 +253,7 @@ def _pair_cache_required_files(
             pair_dir / "score_ranking_selected_buys.csv",
             pair_dir / "score_ranking_execution.csv",
             pair_dir / "score_ranking_selector_trace.csv",
-            pair_dir / "score_ranking_repair_mechanism.csv",
+            pair_dir / "score_ranking_repair_search_certificate.csv",
         ])
     return tuple(required)
 
