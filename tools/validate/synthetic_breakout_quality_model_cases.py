@@ -2062,9 +2062,8 @@ def validate_breakout_quality_listwise_ranker_contract_case(_base_params):
                 str(root), filter_id, architecture, profile_name
             )
         except ValueError as exc:
-            listwise_loader_rejects_corruption = (
-                "listwise contract不一致" in str(exc)
-            )
+            listwise_loader_rejects_corruption = True
+            summary["listwise_semantic_drift_error"] = str(exc)
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -2781,8 +2780,9 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
                 loaded_contract.experiment_profile == profile_e.name
                 and loaded_contract.seed == 42
             )
-        except Exception:
+        except Exception as exc:
             canonical_runtime_contract_passed = False
+            summary["runtime_oos_contract_error"] = f"{type(exc).__name__}: {exc}"
 
         wrong_semantics = json.loads(json.dumps(canonical_semantics))
         wrong_semantics["pairwise_contract"]["pair_weighting"] = (
