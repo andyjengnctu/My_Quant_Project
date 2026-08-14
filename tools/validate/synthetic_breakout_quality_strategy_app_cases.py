@@ -2164,8 +2164,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
 
-    def _resource_candidate_fixed(ticker, price, qty, score, policy):
+    def _resource_candidate_fixed(ticker, price, qty, score, policy, expected_r=None):
         cost_milli = build_buy_ledger_from_price(price, qty, resource_params)["net_buy_total_milli"]
+        rank_payload = {"available": True, "score": score}
+        if expected_r is not None:
+            rank_payload.update({
+                "expected_r_available": True,
+                "expected_r": float(expected_r),
+                "daily_score_percentile": float(score),
+            })
         return {
             "ticker": ticker,
             "type": "normal",
@@ -2184,7 +2191,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "use_breakout_quality_ranking": True,
             "breakout_quality_ranking_policy": policy,
             "breakout_quality_score": score,
-            "breakout_quality_rank": {"available": True, "score": score},
+            "breakout_quality_rank": rank_payload,
         }
 
     basket_seed = (
@@ -2592,6 +2599,260 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
 
+    expected_pnl_seed = (
+        ("EP_A", 100.0, 600, 0.99, 1.80),
+        ("EP_B", 100.0, 1500, 0.95, 1.60),
+        ("EP_C", 100.0, 1600, 0.90, 1.40),
+    )
+    expected_pnl_score_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-max-dl-feasible-ascent",
+            expected_r,
+        )
+        for ticker, price, qty, score, expected_r in expected_pnl_seed
+    ]
+    expected_pnl_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-expected-pnl-feasible-ascent",
+            expected_r,
+        )
+        for ticker, price, qty, score, expected_r in expected_pnl_seed
+    ]
+    score_order, score_diag = reorder_candidates_for_resource_aware_quality(
+        expected_pnl_score_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=resource_params,
+    )
+    pnl_order, pnl_diag = reorder_candidates_for_resource_aware_quality(
+        expected_pnl_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=resource_params,
+    )
+    score_action = select_resource_aware_action_candidates(score_order, score_diag)
+    pnl_action = select_resource_aware_action_candidates(pnl_order, pnl_diag)
+    score_selected = _simulate_reserved_candidate_order(
+        score_action, available_cash=350_000.0, sizing_equity=2_000_000.0,
+        free_slots=2, params=resource_params,
+    )
+    pnl_selected = _simulate_reserved_candidate_order(
+        pnl_action, available_cash=350_000.0, sizing_equity=2_000_000.0,
+        free_slots=2, params=resource_params,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "expected_pnl_selector_changes_only_basket_objective_while_preserving_same_k_r0_and_prefers_larger_deployable_expected_profit",
+        True,
+        [row["ticker"] for row in score_action] == ["EP_A", "EP_B"]
+        and [row["ticker"] for row in pnl_action] == ["EP_B", "EP_C"]
+        and pnl_diag.get("basket_objective") == "expected_pnl"
+        and score_diag.get("basket_objective") == "score"
+        and pnl_diag["pre_market_order_limit"] == score_diag["pre_market_order_limit"] == 2
+        and pnl_selected["selected_count"] == score_selected["selected_count"] == 2
+        and pnl_selected["reserved_cost_milli"] >= score_diag["baseline_reserved_cost_milli"]
+        and score_selected["reserved_cost_milli"] >= score_diag["baseline_reserved_cost_milli"],
+    )
+
+    selection_expected_settings = strategy_config.get_strategy_comparison_settings("selection_pit")
+    forward_expected_settings = strategy_config.get_strategy_comparison_settings("forward_oos")
+    c37 = selection_expected_settings.arms["C37"]
+    c38 = forward_expected_settings.arms["C38"]
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "frozen_mr13e_expected_pnl_arms_keep_same_ranker_identity_and_pit_fit_source_contract",
+        True,
+        c37.enabled and c38.enabled
+        and c37.dl_id == "CONT13E_PIT"
+        and c38.dl_id == "CONT13E"
+        and c37.dl_runtime_mode == c38.dl_runtime_mode
+        == "resource-aware-continuous-expected-pnl-feasible-ascent"
+        and dict(c37.dl_runtime_options or {}).get("expected_r_fit_dl_id") == "CONT13E_PIT"
+        and dict(c38.dl_runtime_options or {}).get("expected_r_fit_dl_id") == "CONT13E_PIT"
+        and dict(c37.dl_runtime_options or {}).get("preserve_k_r0") is True
+        and dict(c38.dl_runtime_options or {}).get("preserve_k_r0") is True
+        and c37.robustness_role == c38.robustness_role == "off",
+    )
+
+    from services.breakout_quality import expected_r_calibration as expected_r_calibration_service
+    from filters.breakout_quality.expected_r_calibration import (
+        validate_expected_r_calibration_artifact,
+    )
+    with tempfile.TemporaryDirectory() as calibration_tmp:
+        calibration_root = Path(calibration_tmp)
+        fit_score_path = calibration_root / "fit_scores.csv"
+        runtime_score_path = calibration_root / "runtime_scores.csv"
+        fit_score_path.write_text("fit", encoding="utf-8")
+        runtime_score_path.write_text("runtime", encoding="utf-8")
+        fit_scores = pd.DataFrame({
+            "ticker": ["A", "B", "A", "B"],
+            "date": ["2020-01-02", "2020-01-02", "2020-01-03", "2020-01-03"],
+            "group_index": [1, 2, 3, 4],
+            "breakout_quality_score": [0.1, 0.9, 0.2, 0.8],
+        })
+        runtime_scores = pd.DataFrame({
+            "ticker": ["A", "B"],
+            "date": ["2021-01-04", "2021-01-04"],
+            "group_index": [101, 102],
+            "breakout_quality_score": [0.3, 0.7],
+        })
+        fake_contract_fit = SimpleNamespace(score_path=fit_score_path)
+        fake_contract_runtime = SimpleNamespace(
+            score_path=runtime_score_path,
+            execution_start="2021-01-01",
+        )
+        fake_bundle = SimpleNamespace(
+            group_table=pd.DataFrame({
+                "ticker": ["A", "B", "A", "B"],
+                "date": ["2020-01-02", "2020-01-02", "2020-01-03", "2020-01-03"],
+                "group_index": [1, 2, 3, 4],
+                "label_eval_end_date": ["2020-02-15"] * 4,
+            }),
+            raw_target=np.asarray([0.0, 2.0, 0.2, 1.8], dtype=np.float64),
+            target_valid=np.asarray([True, True, True, True], dtype=bool),
+            target_manifest={"target_id": "daily_opportunity_no_time_r_v1"},
+        )
+        with patch.object(
+            expected_r_calibration_service, "_selection_score_frame",
+            return_value=(fit_scores, fake_contract_fit),
+        ), patch.object(
+            expected_r_calibration_service, "_runtime_score_frame",
+            return_value=(runtime_scores, fake_contract_runtime, "continuous_ranker_oos"),
+        ), patch.object(
+            expected_r_calibration_service, "load_profile_continuous_ranker_data",
+            return_value=fake_bundle,
+        ):
+            calibration_payload = expected_r_calibration_service.build_expected_r_calibration_artifact(
+                project_root=calibration_root,
+                filter_id="breakout_quality_v1",
+                model_architecture="inception_time_v1",
+                experiment_profile="daily_universal_no_time_full_list_ndcg_pairwise",
+                phase_id="forward_oos",
+            )
+        calibration_manifest = dict(calibration_payload["manifest"])
+        calibration_lookup = pd.read_csv(calibration_payload["paths"]["lookup"])
+        forward_cutoff_ready, _forward_cutoff_status, _ = validate_expected_r_calibration_artifact(
+            calibration_root,
+            filter_id="breakout_quality_v1",
+            model_architecture="inception_time_v1",
+            experiment_profile="daily_universal_no_time_full_list_ndcg_pairwise",
+            phase_id="forward_oos",
+            expected_forward_frozen_cutoff_exclusive="2021-01-01",
+        )
+        forward_wrong_cutoff_ready, _forward_wrong_cutoff_status, _ = validate_expected_r_calibration_artifact(
+            calibration_root,
+            filter_id="breakout_quality_v1",
+            model_architecture="inception_time_v1",
+            experiment_profile="daily_universal_no_time_full_list_ndcg_pairwise",
+            phase_id="forward_oos",
+            expected_forward_frozen_cutoff_exclusive="2022-01-01",
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "forward_expected_r_calibration_fits_only_mature_selection_pit_target_and_never_requires_forward_target",
+        True,
+        calibration_manifest.get("fit_contract", {}).get("forward_target_used_for_fit") is False
+        and calibration_manifest.get("fit_contract", {}).get("forward_frozen_cutoff_exclusive") == "2021-01-01"
+        and calibration_manifest.get("source_artifacts", {}).get("fit_score_source") == "selection_point_in_time"
+        and calibration_manifest.get("fit_rows", [{}])[0].get("sample_count") == 4
+        and set(calibration_lookup["group_index"].astype(int)) == {101, 102}
+        and calibration_lookup["calibration_cutoff_exclusive"].astype(str).eq("2021-01-01").all()
+        and forward_cutoff_ready
+        and not forward_wrong_cutoff_ready,
+    )
+
+    with tempfile.TemporaryDirectory() as selection_calibration_tmp:
+        selection_calibration_root = Path(selection_calibration_tmp)
+        selection_score_path = selection_calibration_root / "selection_scores.csv"
+        selection_score_path.write_text("selection", encoding="utf-8")
+        selection_scores = pd.DataFrame({
+            "ticker": ["A", "B", "A", "B", "A", "B"],
+            "date": [
+                "2013-01-02", "2013-01-02",
+                "2014-07-02", "2014-07-02",
+                "2015-01-05", "2015-01-05",
+            ],
+            "group_index": [1, 2, 3, 4, 5, 6],
+            "breakout_quality_score": [0.1, 0.9, 0.2, 0.8, 0.3, 0.7],
+        })
+        selection_contract = SimpleNamespace(score_path=selection_score_path)
+        selection_bundle = SimpleNamespace(
+            group_table=pd.DataFrame({
+                "ticker": ["A", "B", "A", "B", "A", "B"],
+                "date": [
+                    "2013-01-02", "2013-01-02",
+                    "2014-07-02", "2014-07-02",
+                    "2015-01-05", "2015-01-05",
+                ],
+                "group_index": [1, 2, 3, 4, 5, 6],
+                "label_eval_end_date": [
+                    "2013-02-15", "2013-02-15",
+                    "2014-08-15", "2014-08-15",
+                    "2015-02-15", "2015-02-15",
+                ],
+            }),
+            raw_target=np.asarray([0.0, 2.0, 0.2, 1.8, 0.4, 1.6], dtype=np.float64),
+            target_valid=np.asarray([True] * 6, dtype=bool),
+            target_manifest={"target_id": "daily_opportunity_no_time_r_v1"},
+        )
+        with patch.object(
+            expected_r_calibration_service, "_selection_score_frame",
+            return_value=(selection_scores, selection_contract),
+        ), patch.object(
+            expected_r_calibration_service, "_runtime_score_frame",
+            return_value=(selection_scores, selection_contract, "selection_point_in_time"),
+        ), patch.object(
+            expected_r_calibration_service, "load_profile_continuous_ranker_data",
+            return_value=selection_bundle,
+        ):
+            selection_calibration_payload = (
+                expected_r_calibration_service.build_expected_r_calibration_artifact(
+                    project_root=selection_calibration_root,
+                    filter_id="breakout_quality_v1",
+                    model_architecture="inception_time_v1",
+                    experiment_profile="daily_universal_no_time_full_list_ndcg_pairwise",
+                    phase_id="selection_pit",
+                    selection_runtime_start_date="2014-07-01",
+                )
+            )
+        selection_calibration_manifest = dict(selection_calibration_payload["manifest"])
+        selection_calibration_lookup = pd.read_csv(selection_calibration_payload["paths"]["lookup"])
+        selection_start_ready, _selection_start_status, _ = validate_expected_r_calibration_artifact(
+            selection_calibration_root,
+            filter_id="breakout_quality_v1",
+            model_architecture="inception_time_v1",
+            experiment_profile="daily_universal_no_time_full_list_ndcg_pairwise",
+            phase_id="selection_pit",
+            expected_selection_runtime_start_date="2014-07-01",
+        )
+        selection_wrong_start_ready, _selection_wrong_start_status, _ = validate_expected_r_calibration_artifact(
+            selection_calibration_root,
+            filter_id="breakout_quality_v1",
+            model_architecture="inception_time_v1",
+            experiment_profile="daily_universal_no_time_full_list_ndcg_pairwise",
+            phase_id="selection_pit",
+            expected_selection_runtime_start_date="2014-01-01",
+        )
+    selection_fit_rows = selection_calibration_manifest.get("fit_rows", [])
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "selection_expected_r_calibration_uses_configured_strategy_start_and_expanding_mature_target_only",
+        True,
+        selection_calibration_manifest.get("fit_contract", {}).get("selection_runtime_start_date") == "2014-07-01"
+        and [row.get("cutoff_exclusive") for row in selection_fit_rows] == ["2014-07-01", "2015-01-01"]
+        and [row.get("sample_count") for row in selection_fit_rows] == [2, 4]
+        and selection_calibration_lookup["date"].astype(str).min() == "2014-07-02"
+        and set(selection_calibration_lookup["group_index"].astype(int)) == {3, 4, 5, 6}
+        and selection_start_ready
+        and not selection_wrong_start_ready,
+    )
+
     ascent_gap_seed = (
         ("X0", 300.0, 119, 0.027),
         ("X1", 200.0, 304, 0.206),
@@ -2943,6 +3204,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "preparation_plan": ready_plan,
         "comparison_period": {"start": "2021-01-01", "end": "2021-12-31"},
         "comparison_period_source": "dl_runtime_common_overlap",
+        "expected_r_calibrations": {
+            arm.arm_id: {
+                "lookup_path": f"outputs/strategy_compare/runtime_artifacts/{arm.arm_id}/expected_r_lookup.csv.gz"
+            }
+            for arm in settings.enabled_arms
+            if arm.dl_runtime_mode
+            == "resource-aware-continuous-expected-pnl-feasible-ascent"
+        },
     }
     with tempfile.TemporaryDirectory() as tmpdir, patch.object(
         strategy_comparison_module,
@@ -4276,15 +4545,15 @@ def validate_breakout_quality_mr13e_strategy_source_gate_contract_case(_base_par
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "mr13e_single_seed_gate_is_enabled_in_both_profiles_with_direct_source_contrasts",
+        "mr13e_single_seed_gate_and_frozen_expected_pnl_arms_are_enabled_with_direct_contrasts",
         True,
         (
-            selection_ids == ("C32", "C23", "C25", "C28", "C35")
-            and forward_ids == ("C1", "C3", "C20", "C29", "C36")
-            and {"C35-C25", "C35-C28"}.issubset(
+            selection_ids == ("C32", "C23", "C25", "C28", "C35", "C37")
+            and forward_ids == ("C1", "C3", "C20", "C29", "C36", "C38")
+            and {"C35-C25", "C35-C28", "C37-C35", "C37-C25"}.issubset(
                 {item.contrast_id for item in selection.enabled_contrasts}
             )
-            and {"C36-C20", "C36-C29"}.issubset(
+            and {"C36-C20", "C36-C29", "C38-C36", "C38-C20"}.issubset(
                 {item.contrast_id for item in forward.enabled_contrasts}
             )
         ),

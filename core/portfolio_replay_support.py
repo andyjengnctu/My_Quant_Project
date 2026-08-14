@@ -64,6 +64,7 @@ def _candidate_replay_snapshot(candidate, *, fallback_trade_date, is_orderable):
 
     trade_date = row.get("trade_date") or row.get("candidate_date") or fallback_trade_date
     signal_date = row.get("signal_date")
+    rank_payload = row.get("breakout_quality_rank") if isinstance(row.get("breakout_quality_rank"), dict) else {}
     return {
         "ticker": str(row.get("ticker") or ""),
         "trade_date": _date_text(trade_date),
@@ -95,12 +96,15 @@ def _candidate_replay_snapshot(candidate, *, fallback_trade_date, is_orderable):
             row.get("projected_capital_deployment_rate")
         ),
         "max_position_cap_pct": _optional_float(row.get("max_position_cap_pct")),
-        "breakout_quality_score_available": bool(
-            isinstance(row.get("breakout_quality_rank"), dict)
-            and row["breakout_quality_rank"].get("available", False)
+        "breakout_quality_score_available": bool(rank_payload.get("available", False)),
+        "breakout_quality_score_unavailable_reason": str(rank_payload.get("unavailable_reason") or ""),
+        "breakout_quality_expected_r_available": bool(rank_payload.get("expected_r_available", False)),
+        "breakout_quality_expected_r": _optional_float(rank_payload.get("expected_r")),
+        "breakout_quality_daily_score_percentile": _optional_float(
+            rank_payload.get("daily_score_percentile")
         ),
-        "breakout_quality_score_unavailable_reason": str(
-            (row.get("breakout_quality_rank") or {}).get("unavailable_reason") or ""
+        "breakout_quality_expected_r_calibration_cutoff": str(
+            rank_payload.get("expected_r_calibration_cutoff") or ""
         ),
     }
 

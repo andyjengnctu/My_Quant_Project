@@ -8776,3 +8776,15 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 專案治理新增規則：當臨時研究結果被採納為current workflow時，必須先把穩定formula／builder／service抽到正式domain/service，再退役歷史Audit module、approval report gate、compatibility wrapper與專屬test；不得讓研究編號永久成為production dependency。
 - 本輪不改`strategy_aligned_opportunity_r_v1`／`strategy_aligned_opportunity_no_time_r_v1`數學定義，不改Dataset fingerprint、PIT fold semantics、Seed、loss、epoch、sampling、selector、sizing、cash或portfolio replay。
 
+
+
+## 2026-08-14 — SR-C37/C38 Frozen MR-13E Expected-PnL controlled strategy experiment
+
+- 程式基準：`test-branch-1_20260814_195705_88a8f6f.zip`；SHA256 `04aaffeeacf957b70c9920819307dc5be85cddebc9e838ce558a708dd23475e5`。本輪不是新模型實驗；MR-13E權重、`daily_universal_no_time_full_list_ndcg_pairwise` profile、Dataset、Target、architecture與既有PIT/Forward score全部frozen。
+- 決策背景：selector-stage evidence已把MR-13E Forward額外translation loss主要定位在Raw Top-N→minimum-repair；使用者提出「預測較好但可投入部位小」與「可投入部位大但品質普通」應由預期總獲利共同衡量。為先以最小變更驗證此portfolio假說，本輪先不直接訓練Expected-R model；直接預測R保留為frozen版本之後的下一模型研究方向，尚未建立新`MR-*`。
+- 新`SR-C37`（Selection）與條件式`SR-C38`（Forward）只改basket objective。候選MR-13E score先在每個交易日轉成daily percentile，再以`daily_opportunity_no_time_r_v1`做`daily_score_percentile_nonnegative_affine_v1` calibration；非負slope避免calibration反轉frozen MR-13E ranking，且不引入percentile bin、lambda、人工score threshold。
+- Selection calibration採expanding/PIT：從Strategy Compare config `start_date`起，每個策略年segment只使用該segment cutoff前且`label_eval_end_date < cutoff`的Selection PIT成熟rows；首年cutoff直接取config start_date，後續年度取當年起點。Forward calibration以frozen OOS contract的`execution_start`為cutoff，只由該cutoff前Selection PIT成熟target fit一次（目前Forward contract為`2021-01-01`），之後套用frozen Forward score；Forward rows/labels/targets不得進fit。Runtime score與lookup score逐ticker/date精確綁定，不相符即拒絕。
+- Portfolio經濟值固定為`ExpectedDollarPnL_i = ExpectedR_i × canonical planned initial risk_i`；planned initial risk由exact accounting的entry/stop ledger與原策略`fixed_risk`同源計算，不使用股數×raw score的無單位近似。Basket search沿用現有minimum-repair seed＋best feasible one-swap ascent，但quality objective改為Expected-Dollar-PnL。
+- Controlled conditions全部固定：`K = same-param Min ROOS baseline selected_count`、`R0 = same-param Min ROOS baseline exact reserved capital`、historical/current Min params、cash、position/sizing、orderability、execution priority與其他entry rules均不變。即使calibrated Expected R為負也不因此減少K或取消R0；是否允許留現金是後續獨立實驗，不在本輪。
+- Strategy Compare新增deterministic runtime artifact `outputs/strategy_compare/runtime_artifacts/expected_r_calibration/...`，包含gzip lookup、manifest與report；artifact identity綁runtime score SHA與Selection PIT fit score SHA，pair cache fingerprint同步綁calibration manifest。Strategy Compare可由已存在的frozen score＋canonical target deterministic建立calibration，但不得train model。
+- `SR-C37`狀態=`IMPLEMENTED / AWAITING_SELECTION_STRATEGY_RESULT / robustness_role=off`；`SR-C38`程式契約同步完成，但研究動作=`FORWARD_EXECUTION_CONDITIONAL_ON_C37_SELECTION_DECISION`。下一步只先執行Selection PIT Strategy Compare，重點比較C37 vs C35（唯一差異Expected-PnL vs score-sum objective）、C37 vs C23與C37 vs C25；C37結果未判定前不執行C38。

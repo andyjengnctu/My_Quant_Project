@@ -1,4 +1,7 @@
 from datetime import date, datetime
+import math
+
+from core.exact_accounting import calc_planned_initial_risk_from_prices_milli
 
 from core.portfolio_entry_selection_common import (
     _candidate_continuous_score,
@@ -23,6 +26,116 @@ def _max_dl_score_order(rows, *, base_rank):
         ),
     )
 
+
+
+
+def _candidate_expected_r(candidate_row):
+    rank_payload = candidate_row.get('breakout_quality_rank')
+    if not isinstance(rank_payload, dict):
+        return None
+    if not bool(rank_payload.get('expected_r_available', False)):
+        return None
+    try:
+        value = float(rank_payload.get('expected_r'))
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _planned_initial_risk_milli(*, row, plan):
+    expected_r = _candidate_expected_r(row)
+    if expected_r is None:
+        return None
+    qty = int(plan.get('qty', 0) or 0)
+    if qty <= 0:
+        return 0
+    params = row.get('params_obj')
+    if params is None:
+        raise ValueError('Expected-PnL selector候選缺少params_obj')
+    limit_price = plan.get('limit_price')
+    stop_price = plan.get('init_sl')
+    if limit_price is None or stop_price is None:
+        return None
+    return calc_planned_initial_risk_from_prices_milli(
+        float(limit_price),
+        float(stop_price),
+        qty,
+        params,
+        ticker=row.get('ticker'),
+        security_profile=row.get('security_profile'),
+        trade_date=row.get('trade_date'),
+    )
+
+
+def _candidate_standalone_expected_pnl_milli(row):
+    expected_r = _candidate_expected_r(row)
+    if expected_r is None:
+        return None
+    plan = {
+        'qty': int(row.get('qty', 0) or 0),
+        'limit_price': row.get('limit_px'),
+        'init_sl': row.get('init_sl'),
+    }
+    try:
+        risk_milli = _planned_initial_risk_milli(row=row, plan=plan)
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return None
+    if risk_milli is None:
+        return None
+    return float(expected_r * float(risk_milli))
+
+
+def _expected_pnl_order(rows, *, base_rank):
+    """Rank raw membership by frozen Expected-R times canonical standalone planned risk."""
+
+    return sorted(
+        list(rows or []),
+        key=lambda row: (
+            0 if _candidate_standalone_expected_pnl_milli(row) is not None else 1,
+            -(
+                float(_candidate_standalone_expected_pnl_milli(row))
+                if _candidate_standalone_expected_pnl_milli(row) is not None
+                else 0.0
+            ),
+            -(
+                float(_candidate_expected_r(row))
+                if _candidate_expected_r(row) is not None
+                else 0.0
+            ),
+            base_rank[id(row)],
+        ),
+    )
+
+
+def _expected_pnl_basket_quality_key(result, *, base_rank):
+    """Higher is better: calibration coverage, total Expected $PnL, deterministic ties."""
+
+    rows = list(result.get('selected_rows') or [])
+    plans = list(result.get('selected_plans') or [])
+    if len(rows) != len(plans):
+        raise ValueError('Expected-PnL selector selected_rows/plans長度不一致')
+    values = []
+    expected_rs = []
+    for row, plan in zip(rows, plans):
+        expected_r = _candidate_expected_r(row)
+        if expected_r is None:
+            continue
+        risk_milli = _planned_initial_risk_milli(row=row, plan=plan)
+        if risk_milli is None:
+            continue
+        values.append(float(expected_r * float(risk_milli)))
+        expected_rs.append(float(expected_r))
+    stable_base_ranks = tuple(
+        -base_rank[id(row)]
+        for row in sorted(rows, key=lambda item: base_rank[id(item)])
+    )
+    return (
+        int(len(values)),
+        float(sum(values)),
+        tuple(sorted(values, reverse=True)),
+        float(sum(expected_rs)),
+        stable_base_ranks,
+    )
 
 def _max_dl_execution_order(rows, *, base_rank):
     """Keep the same-parameter DL-off baseline priority inside an already chosen DL basket."""
@@ -90,6 +203,8 @@ def build_max_dl_repair_mechanism_diagnostic(
     del available_cash, sizing_equity, params  # diagnostic uses already-completed production trace only
     diag = dict(resource_selection_diag or {})
     if not bool(diag.get('max_dl_eligible', False)):
+        return None
+    if str(diag.get('basket_objective') or 'score') != 'score':
         return None
     repair_steps = int(diag.get('max_dl_repair_steps', 0) or 0)
     if repair_steps <= 0:
@@ -175,8 +290,9 @@ def _reorder_resource_aware_continuous_max_dl(
     params,
     baseline,
     default_diag,
+    objective_mode='score',
 ):
-    """Let frozen DL own stock choice; the same-parameter DL-off baseline supplies exact pre-market resource floors.
+    """Let a frozen continuous objective own stock choice; the same-parameter DL-off baseline supplies exact pre-market resource floors.
 
     The baseline fixes K (planned order count) and R0 (exact reserved capital).  The
     unconstrained DL Top-K basket is tried first.  Basket membership is owned by DL,
@@ -189,6 +305,9 @@ def _reorder_resource_aware_continuous_max_dl(
     introduced.
     """
 
+    if objective_mode not in {'score', 'expected_pnl'}:
+        raise ValueError(f'不支援的max-DL objective_mode: {objective_mode!r}')
+
     target_count = int(baseline['selected_count'])
     reserve_floor_milli = int(baseline['reserved_cost_milli'])
     diag = _resource_aware_diag_from_result(
@@ -197,7 +316,7 @@ def _reorder_resource_aware_continuous_max_dl(
         baseline,
         changed=False,
         promoted_pass_count=0,
-        selector='continuous-score-max-dl',
+        selector=('continuous-expected-pnl' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl'),
     )
     diag.update({
         'resource_preservation_required': True,
@@ -220,7 +339,7 @@ def _reorder_resource_aware_continuous_max_dl(
     diag['mode'] = 'dl-selection'
     diag['max_dl_eligible'] = True
     base_rank = {id(row): idx for idx, row in enumerate(rows)}
-    dl_order = _max_dl_score_order(rows, base_rank=base_rank)
+    dl_order = (_expected_pnl_order(rows, base_rank=base_rank) if objective_mode == 'expected_pnl' else _max_dl_score_order(rows, base_rank=base_rank))
     pure_basket = list(dl_order[:target_count])
     pure_ids = {id(row) for row in pure_basket}
 
@@ -234,6 +353,11 @@ def _reorder_resource_aware_continuous_max_dl(
             params=params,
         )
         return ordered_basket, result
+
+    def quality_key(rows_, result_):
+        if objective_mode == 'expected_pnl':
+            return _expected_pnl_basket_quality_key(result_, base_rank=base_rank)
+        return _max_dl_basket_quality_key(rows_, base_rank=base_rank)
 
     pure_ordered, pure_result = evaluate_basket(pure_basket)
     evaluated = 1
@@ -294,6 +418,7 @@ def _reorder_resource_aware_continuous_max_dl(
             'max_dl_repair_steps': int(repair_steps),
             'max_dl_repair_evaluations': int(max(0, evaluated - 1)),
             'max_dl_fallback_to_baseline': bool(fallback),
+            'basket_objective': str(objective_mode),
             # Transient research-only membership trace.  Candidate objects remain
             # in-memory and are serialized only by an explicit replay trace sink.
             '_selector_trace_baskets': {
@@ -312,7 +437,7 @@ def _reorder_resource_aware_continuous_max_dl(
         return finalize(
             pure_ordered,
             pure_result,
-            selector='continuous-score-max-dl-direct',
+            selector=('continuous-expected-pnl-direct' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl-direct'),
             repair_steps=0,
             fallback=False,
             repair_trace_steps=[],
@@ -355,12 +480,8 @@ def _reorder_resource_aware_continuous_max_dl(
             'after_count_deficit': int(after_deficit[0]),
             'before_reserve_deficit_milli': int(before_deficit[1]),
             'after_reserve_deficit_milli': int(after_deficit[1]),
-            'before_quality_key': _max_dl_basket_quality_key(
-                before_result.get('selected_rows') or [], base_rank=base_rank
-            ),
-            'after_quality_key': _max_dl_basket_quality_key(
-                after_result.get('selected_rows') or [], base_rank=base_rank
-            ),
+            'before_quality_key': quality_key(before_result.get('selected_rows') or [], before_result),
+            'after_quality_key': quality_key(after_result.get('selected_rows') or [], after_result),
             'after_feasible': bool(
                 _max_dl_basket_is_feasible(
                     after_result,
@@ -415,9 +536,7 @@ def _reorder_resource_aware_continuous_max_dl(
                     continue
                 step_progress += 1
 
-                quality_key = _max_dl_basket_quality_key(
-                    trial_ordered, base_rank=base_rank
-                )
+                quality_key_value = quality_key(trial_ordered, trial_result)
                 tie_key = (
                     -base_rank[id(out_row)],
                     -base_rank[id(in_row)],
@@ -431,13 +550,13 @@ def _reorder_resource_aware_continuous_max_dl(
                     step_feasible += 1
                     if (
                         best_feasible_quality is None
-                        or quality_key > best_feasible_quality
+                        or quality_key_value > best_feasible_quality
                         or (
-                            quality_key == best_feasible_quality
+                            quality_key_value == best_feasible_quality
                             and tie_key > best_feasible_tie
                         )
                     ):
-                        best_feasible_quality = quality_key
+                        best_feasible_quality = quality_key_value
                         best_feasible_tie = tie_key
                         best_feasible = (
                             out_row,
@@ -448,13 +567,13 @@ def _reorder_resource_aware_continuous_max_dl(
 
                 if (
                     best_progress_quality is None
-                    or quality_key > best_progress_quality
+                    or quality_key_value > best_progress_quality
                     or (
-                        quality_key == best_progress_quality
+                        quality_key_value == best_progress_quality
                         and tie_key > best_progress_tie
                     )
                 ):
-                    best_progress_quality = quality_key
+                    best_progress_quality = quality_key_value
                     best_progress_tie = tie_key
                     best_progress = (
                         out_row,
@@ -481,7 +600,7 @@ def _reorder_resource_aware_continuous_max_dl(
             return finalize(
                 trial_ordered,
                 trial_result,
-                selector='continuous-score-max-dl-minimum-repair',
+                selector=('continuous-expected-pnl-minimum-repair' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl-minimum-repair'),
                 repair_steps=repair_step,
                 fallback=False,
                 repair_trace_steps=repair_trace_steps,
@@ -523,7 +642,7 @@ def _reorder_resource_aware_continuous_max_dl(
     return finalize(
         baseline_ordered,
         baseline_result,
-        selector='continuous-score-max-dl-baseline-fallback',
+        selector=('continuous-expected-pnl-baseline-fallback' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl-baseline-fallback'),
         repair_steps=len(repaired_out_ids),
         fallback=True,
         preserve_basket_order=True,
@@ -600,8 +719,9 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     baseline,
     default_diag,
     stale_score_membership_guard_max_age_days=None,
+    objective_mode='score',
 ):
-    """Strengthen C17 with feasible best-improvement swaps, without exact combinatorial search.
+    """Strengthen one feasible seed with feasible best-improvement swaps, without exact combinatorial search.
 
     C17 first supplies a guaranteed-feasible K-basket.  If its Top-K repair had to
     fall back to the same-parameter DL-off baseline, that basket is still a valid seed rather than a terminal
@@ -634,13 +754,14 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         params=params,
         baseline=baseline,
         default_diag=default_diag,
+        objective_mode=objective_mode,
     )
     if not bool(seed_diag.get('max_dl_eligible', False)):
         out = dict(seed_diag)
         out.update({
             'selector': (
-                'continuous-score-max-dl-feasible-ascent-stale-score-guard'
-                if guard_enabled else 'continuous-score-max-dl-feasible-ascent'
+                ('continuous-expected-pnl-feasible-ascent' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl-feasible-ascent-stale-score-guard')
+                if guard_enabled else ('continuous-expected-pnl-feasible-ascent' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl-feasible-ascent')
             ),
             'stale_score_membership_guard_enabled': bool(guard_enabled),
             'stale_score_membership_guard_max_age_days': guard_max_age,
@@ -665,6 +786,11 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         )
         return ordered, result
 
+    def quality_key(rows_, result_):
+        if objective_mode == 'expected_pnl':
+            return _expected_pnl_basket_quality_key(result_, base_rank=base_rank)
+        return _max_dl_basket_quality_key(rows_, base_rank=base_rank)
+
     baseline_ids = {id(row) for row in baseline['selected_rows']}
     seed_basket = list(seed_order[:target_count])
     seed_ids = {id(row) for row in seed_basket}
@@ -682,7 +808,7 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         reserve_floor_milli=reserve_floor_milli,
     ):
         raise RuntimeError('max-DL feasible-ascent seed不符合同參數DL-off baseline資源契約')
-    current_key = _max_dl_basket_quality_key(current_order, base_rank=base_rank)
+    current_key = quality_key(current_order, current_result)
     evaluations = 0
     blocked_swaps = 0
     ascent_steps = 0
@@ -707,10 +833,8 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
                     reserve_floor_milli=reserve_floor_milli,
                 ):
                     continue
-                quality_key = _max_dl_basket_quality_key(
-                    trial_order, base_rank=base_rank
-                )
-                if quality_key <= current_key:
+                quality_key_value = quality_key(trial_order, trial_result)
+                if quality_key_value <= current_key:
                     continue
                 if guard_enabled and (id(out_row) in stale_ids or id(in_row) in stale_ids):
                     # 只計數C25本來會接受的hard-feasible score改善；
@@ -723,11 +847,11 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
                 )
                 if (
                     best is None
-                    or quality_key > best_key
-                    or (quality_key == best_key and tie_key > best_tie)
+                    or quality_key_value > best_key
+                    or (quality_key_value == best_key and tie_key > best_tie)
                 ):
                     best = (trial_basket, trial_order, trial_result)
-                    best_key = quality_key
+                    best_key = quality_key_value
                     best_tie = tie_key
         if best is None:
             local_optimum = True
@@ -753,8 +877,8 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         changed=bool(selected_ids != baseline_selected_ids),
         promoted_pass_count=0,
         selector=(
-            'continuous-score-max-dl-feasible-ascent-stale-score-guard'
-            if guard_enabled else 'continuous-score-max-dl-feasible-ascent'
+            ('continuous-expected-pnl-feasible-ascent' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl-feasible-ascent-stale-score-guard')
+            if guard_enabled else ('continuous-expected-pnl-feasible-ascent' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl-feasible-ascent')
         ),
     )
     seed_trace = dict(seed_diag.get('_selector_trace_baskets') or {})
@@ -775,6 +899,7 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         'max_dl_feasible_ascent_steps': int(ascent_steps),
         'max_dl_feasible_ascent_evaluations': int(evaluations),
         'max_dl_feasible_ascent_local_optimum': bool(local_optimum),
+        'basket_objective': str(objective_mode),
         'stale_score_membership_guard_enabled': bool(guard_enabled),
         'stale_score_membership_guard_max_age_days': guard_max_age,
         'stale_score_candidate_count': int(len(stale_ids)),

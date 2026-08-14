@@ -1,8 +1,10 @@
 ## Going
 
 - imrove DL module
-    - daily candidate score
+    - predict R
+    - use risk parameter to predict R
     - attention
+    - non breakout strategy
     - 三大法人籌碼資訊
 
 - stablity test
@@ -10,13 +12,6 @@
     - finalist_agree * multiple_seeds_best as baseline
 
 
-- system
-- trading
-    - strategy
-    - selectors
-    - filters
-    - rangers 
-- tools
 
 ## To do
 - 如何讓你依據投組結果，包含分析K線交易過程，提供我策略升級建議

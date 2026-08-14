@@ -21,6 +21,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
     SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES,
 )
+from filters.breakout_quality.expected_r_calibration import lookup_expected_r
 from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CANONICAL_RUNTIME,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
@@ -292,7 +293,7 @@ def resolve_breakout_quality_candidate_rank(
                 )
             lookup_date = information_date
         if context.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-            return lookup_selection_point_in_time_candidate_score(
+            payload = lookup_selection_point_in_time_candidate_score(
                 project_root=root,
                 ticker=str(ticker),
                 signal_date=lookup_date,
@@ -302,15 +303,37 @@ def resolve_breakout_quality_candidate_rank(
                 score_path_override=context.score_path_override,
                 manifest_path_override=context.score_manifest_path_override,
             )
-        return lookup_continuous_ranker_oos_candidate_score(
-            project_root=root,
-            ticker=str(ticker),
-            signal_date=lookup_date,
-            filter_id=str(filter_id),
-            model_architecture=str(context.model_architecture),
-            experiment_profile=str(context.experiment_profile),
-            score_path_override=context.score_path_override,
-        )
+        else:
+            payload = lookup_continuous_ranker_oos_candidate_score(
+                project_root=root,
+                ticker=str(ticker),
+                signal_date=lookup_date,
+                filter_id=str(filter_id),
+                model_architecture=str(context.model_architecture),
+                experiment_profile=str(context.experiment_profile),
+                score_path_override=context.score_path_override,
+            )
+        options = dict(context.ranking_options or {})
+        calibration_path = str(options.get("expected_r_calibration_path") or "").strip()
+        if calibration_path:
+            enriched = dict(payload)
+            if bool(enriched.get("available", False)):
+                calibration_lookup_path = Path(calibration_path)
+                if not calibration_lookup_path.is_absolute():
+                    calibration_lookup_path = Path(root).resolve() / calibration_lookup_path
+                enriched.update(lookup_expected_r(
+                    lookup_path=calibration_lookup_path,
+                    ticker=str(ticker),
+                    score_date=lookup_date,
+                    expected_score=enriched.get("score"),
+                ))
+            else:
+                enriched.update({
+                    "expected_r_available": False,
+                    "expected_r_unavailable_reason": "ranking_score_unavailable",
+                })
+            return enriched
+        return payload
     raise ValueError(f"不支援的breakout-quality ranking score source: {context.score_source!r}")
 
 

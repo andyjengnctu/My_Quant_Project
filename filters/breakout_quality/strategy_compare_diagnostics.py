@@ -12,11 +12,8 @@ from typing import Any
 import pandas as pd
 
 from core.exact_accounting import (
-    build_buy_ledger_from_price,
-    build_sell_ledger_from_price,
-    calc_initial_risk_total_milli,
+    calc_planned_initial_risk_from_prices_milli,
     milli_to_money,
-    rate_to_ppm,
 )
 from core.order_lot_policy import apply_board_lot_preferred_qty
 from core.price_utils import calc_position_size
@@ -50,19 +47,14 @@ def _exact_planned_initial_risk(
     if qty <= 0:
         return 0.0
     try:
-        buy = build_buy_ledger_from_price(limit_price, int(qty), params)
-        stop = build_sell_ledger_from_price(
+        risk_milli = calc_planned_initial_risk_from_prices_milli(
+            limit_price,
             stop_price,
             int(qty),
             params,
             ticker=ticker,
             security_profile=security_profile,
             trade_date=trade_date,
-        )
-        risk_milli = calc_initial_risk_total_milli(
-            int(buy["net_buy_total_milli"]),
-            int(stop["net_sell_total_milli"]),
-            rate_to_ppm(float(params.fixed_risk)),
         )
     except (TypeError, ValueError, KeyError, AttributeError):
         return None
@@ -273,6 +265,8 @@ def _flatten_selector_trace_rows(replay_selector_trace_rows: list[dict[str, Any]
         "stage", "stage_rank", "ticker", "trade_date", "candidate_date", "signal_date",
         "candidate_type", "entry_source", "breakout_quality_score",
         "breakout_quality_score_date", "breakout_quality_score_available",
+        "breakout_quality_expected_r_available", "breakout_quality_expected_r",
+        "breakout_quality_daily_score_percentile", "breakout_quality_expected_r_calibration_cutoff",
         "pre_market_order_limit", "direct_score_order_feasible", "repair_steps", "ascent_steps",
     ]
     rows: list[dict[str, Any]] = []
@@ -292,6 +286,16 @@ def _flatten_selector_trace_rows(replay_selector_trace_rows: list[dict[str, Any]
             "breakout_quality_score": _finite_float(item.get("breakout_quality_score")),
             "breakout_quality_score_date": str(item.get("breakout_quality_score_date") or ""),
             "breakout_quality_score_available": bool(item.get("breakout_quality_score_available", False)),
+            "breakout_quality_expected_r_available": bool(
+                item.get("breakout_quality_expected_r_available", False)
+            ),
+            "breakout_quality_expected_r": _finite_float(item.get("breakout_quality_expected_r")),
+            "breakout_quality_daily_score_percentile": _finite_float(
+                item.get("breakout_quality_daily_score_percentile")
+            ),
+            "breakout_quality_expected_r_calibration_cutoff": str(
+                item.get("breakout_quality_expected_r_calibration_cutoff") or ""
+            ),
             "pre_market_order_limit": (
                 None if item.get("pre_market_order_limit") in (None, "")
                 else int(item.get("pre_market_order_limit"))

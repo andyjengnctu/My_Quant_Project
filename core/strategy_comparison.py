@@ -25,6 +25,9 @@ STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT = (
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD = (
     'resource-aware-continuous-max-dl-feasible-ascent-stale-score-guard'
 )
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT = (
+    'resource-aware-continuous-expected-pnl-feasible-ascent'
+)
 SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_HARD_FILTER,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
@@ -34,6 +37,7 @@ SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
 )
 
 
@@ -702,6 +706,18 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 if isinstance(raw_max_age, bool) or not isinstance(raw_max_age, int) or raw_max_age < 0:
                     raise ValueError(
                         f"arm {key} stale-score guard必須指定非負整數 stale_score_membership_guard_max_age_days"
+                    )
+            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT:
+                fit_dl_id = str(options.get("expected_r_fit_dl_id") or "").strip()
+                if not fit_dl_id or fit_dl_id not in settings.dl_sources:
+                    raise ValueError(f"arm {key} Expected-PnL必須指定合法expected_r_fit_dl_id")
+                if not str(options.get("expected_r_calibration_method") or "").strip():
+                    raise ValueError(f"arm {key} Expected-PnL calibration method不可空白")
+                if options.get("preserve_k_r0") is not True:
+                    raise ValueError(f"arm {key} 第一階段Expected-PnL必須preserve_k_r0=True")
+                if options.get("negative_expected_r_allowed") is not True:
+                    raise ValueError(
+                        f"arm {key} 第一階段Expected-PnL不得以Expected R負值改變K/R0"
                     )
             trained_with = parameter_source.trained_with_dl_id
             if trained_with is not None and arm.dl_id != trained_with:

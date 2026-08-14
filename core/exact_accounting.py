@@ -564,6 +564,37 @@ def build_sell_ledger_from_price(exec_price, qty: int, params, *, ticker=None, s
     )
 
 
+def calc_planned_initial_risk_from_prices_milli(
+    entry_price,
+    stop_price,
+    qty: int,
+    params,
+    *,
+    ticker=None,
+    security_profile=None,
+    trade_date=None,
+) -> int:
+    """Return canonical planned initial risk from exact buy/stop accounting."""
+
+    qty = int(qty)
+    if qty <= 0:
+        return 0
+    buy = build_buy_ledger_from_price(entry_price, qty, params)
+    stop = build_sell_ledger_from_price(
+        stop_price,
+        qty,
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+    )
+    return int(calc_initial_risk_total_milli(
+        int(buy["net_buy_total_milli"]),
+        int(stop["net_sell_total_milli"]),
+        rate_to_ppm(float(params.fixed_risk)),
+    ))
+
+
 def calc_entry_total_cost(fill_price, qty: int, params) -> float:
     return milli_to_money(build_buy_ledger_from_price(fill_price, qty, params)["net_buy_total_milli"])
 

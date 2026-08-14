@@ -7,6 +7,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
 )
 from core.portfolio_entry_selection_common import (
     _candidate_binary_pass,
@@ -68,9 +69,10 @@ def reorder_candidates_for_resource_aware_quality(
     continuous variant uses frozen event-level quality scores on those same days.
     The capital-preserving continuous variant may also act on slot-binding days,
     but it must preserve the same-parameter DL-off selected-count and exact reserved capital.
-    The max-DL variant fixes the same-parameter DL-off planned-order count and reserved-capital
-    floor, then lets frozen DL score own stock choice subject only to those hard
-    resource constraints.  No selector introduces a numeric utilization threshold.
+    The max-DL variants fix the same-parameter DL-off planned-order count and reserved-capital
+    floor.  The score variant maximizes frozen DL score; the frozen Expected-PnL variant
+    maximizes calibrated Expected R times canonical planned initial risk.  Both remain subject
+    to the same hard K/R0 resource constraints and introduce no utilization threshold.
     """
 
     started_ns = time.perf_counter_ns()
@@ -82,6 +84,8 @@ def reorder_candidates_for_resource_aware_quality(
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
         else 'continuous-score-max-dl-feasible-ascent-stale-score-guard'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD
+        else 'continuous-expected-pnl-feasible-ascent'
+        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT
         else 'continuous-score-max-dl-feasible-ascent'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
         else 'continuous-score-max-dl'
@@ -124,6 +128,18 @@ def reorder_candidates_for_resource_aware_quality(
             baseline=baseline,
             default_diag=default_diag,
             stale_score_membership_guard_max_age_days=max_age_days,
+        )
+        return finish(order, diag)
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT:
+        order, diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
+            rows,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=free_slots,
+            params=params,
+            baseline=baseline,
+            default_diag=default_diag,
+            objective_mode='expected_pnl',
         )
         return finish(order, diag)
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT:
