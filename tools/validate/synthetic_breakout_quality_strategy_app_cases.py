@@ -1741,17 +1741,31 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "completed_pair_cache_can_replace_vanished_historical_pit_only_for_reuse",
+        "completed_pair_cache_waives_source_only_when_no_arm_needs_runtime_source",
         True,
         all(token in orchestration_source for token in (
             "archived_completed_pair",
             "_find_reusable_pair_with_archived_source",
-            "stored_param_sha != current_param_sha",
-            "_archived_pair_source_is_self_contained",
-            "settings.dl_sources[dl_id].score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME",
-            "dependent_arms = tuple(",
+            "_apply_completed_pair_dependency_waivers",
+            "all(isinstance(pairs.get(arm.arm_id), dict) for arm in dependent_arms)",
             "本次使用此DL的arms全部重用identity一致的completed pair",
         )),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "new_forward_arm_can_reuse_byte_identical_pair_pinned_frozen_score_without_model_rebuild",
+        True,
+        all(token in orchestration_source for token in (
+            "_completed_pair_pinned_continuous_score",
+            "_apply_completed_pair_frozen_score_reuse",
+            "archived_sha != actual_sha",
+            "COMPLETED_PAIR_PINNED_FROZEN_SCORE",
+            "continuous_score_overrides",
+            "continuous_score_path_override",
+            "continuous_score_execution_start_override",
+            "never derives a",
+        ))
+        and "BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL" in engine_source,
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,

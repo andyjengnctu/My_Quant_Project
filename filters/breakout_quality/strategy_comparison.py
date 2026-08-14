@@ -75,7 +75,9 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
 )
 from filters.breakout_quality.ranking_score_store import (
+    SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+    load_continuous_ranker_oos_score_table_from_path,
 )
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 from filters.breakout_quality.strategy_rule_policies import (
@@ -637,13 +639,13 @@ def _collect_replay_cache_status(
 
 
 
-def _apply_archived_pair_dependency_waivers(
+def _apply_completed_pair_dependency_waivers(
     *,
     settings: StrategyComparisonSettings,
     status: dict[str, Any],
     replay_cache: dict[str, Any],
 ) -> dict[str, Any]:
-    """Do not require vanished model artifacts for arms that will only reuse completed pairs."""
+    """Do not require DL source artifacts when every dependent arm reuses a completed pair."""
 
     pairs = dict(replay_cache.get("pairs") or {})
     waived_dl_ids: set[str] = set()
@@ -657,11 +659,7 @@ def _apply_archived_pair_dependency_waivers(
         )
         if not dependent_arms:
             continue
-        if all(
-            isinstance(pairs.get(arm.arm_id), dict)
-            and pairs[arm.arm_id].get("source_artifact_mode") == "archived_completed_pair"
-            for arm in dependent_arms
-        ):
+        if all(isinstance(pairs.get(arm.arm_id), dict) for arm in dependent_arms):
             waived_dl_ids.add(str(dl_id))
     if not waived_dl_ids:
         status["replay_cache"] = replay_cache
@@ -681,7 +679,7 @@ def _apply_archived_pair_dependency_waivers(
                     builder_type=None,
                     description=(
                         "本次使用此DL的arms全部重用identity一致的completed pair；"
-                        "不重建已缺少的歷史模型／PIT工件"
+                        "目前執行不需要模型／manifest／report／score source"
                     ),
                     path=item.path,
                     dependencies=item.dependencies,
@@ -698,10 +696,10 @@ def _apply_archived_pair_dependency_waivers(
     status["overall_status"] = rewritten_plan.overall_status
     status["comparison_ready"] = rewritten_plan.overall_status == "READY"
     status["replay_cache"] = replay_cache
-    status["archived_pair_dependency_waivers"] = sorted(waived_dl_ids)
+    status["completed_pair_dependency_waivers"] = sorted(waived_dl_ids)
     for dl_id in waived_dl_ids:
         row = dict(status["dl_sources"][dl_id])
-        row["status"] = "ARCHIVED_PAIR_REUSE"
+        row["status"] = "COMPLETED_PAIR_REUSE"
         row["required_for_current_execution"] = False
         files = {}
         for key, file_row in dict(row.get("files") or {}).items():
@@ -712,6 +710,253 @@ def _apply_archived_pair_dependency_waivers(
         row["files"] = files
         status["dl_sources"][dl_id] = row
     return status
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest().lower()
+
+
+def _completed_pair_pinned_continuous_score(
+    *,
+    root: Path,
+    settings: StrategyComparisonSettings,
+    status: dict[str, Any],
+    replay_cache: dict[str, Any],
+    dl_id: str,
+) -> dict[str, Any] | None:
+    """Resolve one frozen OOS score file pinned by a reusable completed pair.
+
+    This is deliberately score-only.  It never rebuilds a model and never derives a
+    score universe from replay candidate/trade outputs.  The canonical score CSV must
+    still exist byte-for-byte and its SHA must match the completed pair provenance.
+    """
+
+    source = settings.dl_sources.get(str(dl_id))
+    if source is None or source.score_source != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+        return None
+    pairs = dict(replay_cache.get("pairs") or {})
+    dependent_arms = tuple(
+        arm
+        for arm in settings.enabled_arms
+        if arm.dl_enabled and str(arm.dl_id or "") == str(dl_id)
+    )
+    cached_entries = [
+        pairs.get(arm.arm_id)
+        for arm in dependent_arms
+        if isinstance(pairs.get(arm.arm_id), dict)
+    ]
+    if not cached_entries:
+        return None
+
+    source_row = dict((status.get("dl_sources") or {}).get(str(dl_id)) or {})
+    score_row = dict((source_row.get("files") or {}).get("forward_scores") or {})
+    score_display_path = str(score_row.get("path") or "").strip()
+    if not score_display_path:
+        return None
+    score_path = _resolve_relative_path(root, score_display_path).resolve()
+    if not score_path.is_file():
+        return None
+    actual_sha = _file_sha256(score_path)
+
+    current_identity = source.as_dict()
+    for entry in cached_entries:
+        run_dir = Path(str(entry.get("source_run_dir") or "")).resolve()
+        payload = _read_json(run_dir / "strategy_comparison.json")
+        if not isinstance(payload, dict) or str(payload.get("status") or "") != "COMPLETED":
+            continue
+        stored_settings = dict(payload.get("settings") or {})
+        stored_source = dict((stored_settings.get("dl_sources") or {}).get(str(dl_id)) or {})
+        if not stored_source:
+            continue
+        if any(
+            stored_source.get(field) != current_identity.get(field)
+            for field in (
+                "filter_id",
+                "model_architecture",
+                "experiment_profile",
+                "threshold",
+                "score_source",
+            )
+        ):
+            continue
+        archived_identity = dict(
+            (payload.get("artifact_identities") or {}).get(
+                f"dl:{dl_id}:forward_scores"
+            )
+            or {}
+        )
+        archived_sha = _artifact_identity_sha(archived_identity)
+        if not archived_sha or archived_sha != actual_sha:
+            continue
+        try:
+            table = load_continuous_ranker_oos_score_table_from_path(
+                str(score_path),
+                str(source.experiment_profile),
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        available_from = str(table.attrs.get("available_from") or "")
+        available_through = str(table.attrs.get("available_through") or "")
+        stored_period = dict(payload.get("comparison_period") or {})
+        stored_start = str(stored_period.get("start") or "")
+        stored_end = str(stored_period.get("end") or "")
+        if not available_from or not available_through or not stored_start or not stored_end:
+            continue
+        if available_from > stored_start or available_through < stored_end:
+            continue
+        return {
+            "score_path": score_path,
+            "sha256": actual_sha,
+            "available_from": available_from,
+            "available_through": available_through,
+            "execution_start": available_from,
+            "provenance_run_dir": run_dir,
+            "provenance_pair_dir": Path(str(entry.get("source_pair_dir") or "")).resolve(),
+        }
+    return None
+
+
+def _apply_completed_pair_frozen_score_reuse(
+    *,
+    root: Path,
+    settings: StrategyComparisonSettings,
+    status: dict[str, Any],
+    replay_cache: dict[str, Any],
+) -> dict[str, Any]:
+    """Allow a new continuous-score arm to reuse pair-pinned frozen scores.
+
+    A completed comparison can prove the exact SHA of the frozen score artifact even
+    when the historical model/report files have since been retired.  This waiver is
+    valid only when at least one arm with the same DL source is cached, at least one
+    arm still needs to RUN, and the canonical score CSV still exists byte-identically.
+    """
+
+    pairs = dict(replay_cache.get("pairs") or {})
+    overrides: dict[str, Any] = {}
+    for dl_id, source_row in dict(status.get("dl_sources") or {}).items():
+        if bool(source_row.get("ready")):
+            continue
+        source = settings.dl_sources.get(str(dl_id))
+        if source is None or source.score_source != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+            continue
+        dependent_arms = tuple(
+            arm
+            for arm in settings.enabled_arms
+            if arm.dl_enabled and str(arm.dl_id or "") == str(dl_id)
+        )
+        if not dependent_arms:
+            continue
+        if all(isinstance(pairs.get(arm.arm_id), dict) for arm in dependent_arms):
+            continue
+        if not any(isinstance(pairs.get(arm.arm_id), dict) for arm in dependent_arms):
+            continue
+        recovered = _completed_pair_pinned_continuous_score(
+            root=root,
+            settings=settings,
+            status=status,
+            replay_cache=replay_cache,
+            dl_id=str(dl_id),
+        )
+        if recovered is not None:
+            overrides[str(dl_id)] = recovered
+
+    if not overrides:
+        return status
+
+    plan: StrategyPreparationPlan = status["preparation_plan"]
+    rewritten_actions: list[StrategyPreparationAction] = []
+    for item in plan.actions:
+        parts = item.artifact_key.split(":")
+        dl_id = parts[1] if len(parts) >= 3 and parts[0] == "dl" else None
+        artifact_name = parts[2] if len(parts) >= 3 and parts[0] == "dl" else None
+        if dl_id in overrides and artifact_name in {"model", "manifest", "report"}:
+            rewritten_actions.append(
+                StrategyPreparationAction(
+                    action_id=item.action_id,
+                    artifact_key=item.artifact_key,
+                    action="NOT_REQUIRED",
+                    builder_type=None,
+                    description=(
+                        "新arm直接重用completed pair以SHA釘住的frozen Forward score；"
+                        "目前策略執行不需要歷史模型／manifest／report"
+                    ),
+                    path=item.path,
+                    dependencies=item.dependencies,
+                    producer_work_type="existing_artifact",
+                    execution_priority=item.execution_priority,
+                )
+            )
+        elif dl_id in overrides and artifact_name == "forward_scores":
+            source_info = overrides[dl_id]
+            rewritten_actions.append(
+                StrategyPreparationAction(
+                    action_id=item.action_id,
+                    artifact_key=item.artifact_key,
+                    action="REUSE",
+                    builder_type=None,
+                    description=(
+                        "重用既有completed pair SHA驗證的frozen OOS continuous scores"
+                    ),
+                    path=project_relative_display_path(
+                        Path(source_info["score_path"]), project_root=root
+                    ),
+                    dependencies=(),
+                    producer_work_type="existing_artifact",
+                    execution_priority=item.execution_priority,
+                )
+            )
+        else:
+            rewritten_actions.append(item)
+
+    rewritten_plan = StrategyPreparationPlan.from_actions(rewritten_actions)
+    updated = dict(status)
+    updated["preparation_plan"] = rewritten_plan
+    updated["overall_status"] = rewritten_plan.overall_status
+    updated["comparison_ready"] = rewritten_plan.overall_status == "READY"
+    updated["continuous_score_overrides"] = {
+        dl_id: {
+            "score_path": str(value["score_path"]),
+            "sha256": value["sha256"],
+            "available_from": value["available_from"],
+            "available_through": value["available_through"],
+            "execution_start": value["execution_start"],
+            "provenance_run_dir": str(value["provenance_run_dir"]),
+            "provenance_pair_dir": str(value["provenance_pair_dir"]),
+        }
+        for dl_id, value in overrides.items()
+    }
+    for dl_id, value in overrides.items():
+        row = dict(updated["dl_sources"][dl_id])
+        row["ready"] = True
+        row["status"] = "COMPLETED_PAIR_PINNED_FROZEN_SCORE"
+        row["required_for_current_execution"] = True
+        files = {}
+        for key, file_row in dict(row.get("files") or {}).items():
+            file_updated = dict(file_row)
+            if key == "forward_scores":
+                file_updated.update({
+                    "ready": True,
+                    "status": "READY_BY_COMPLETED_PAIR_SHA",
+                    "action": "REUSE",
+                    "sha256": value["sha256"],
+                    "path": project_relative_display_path(
+                        Path(value["score_path"]), project_root=root
+                    ),
+                    "required_for_current_execution": True,
+                })
+            else:
+                file_updated.update({
+                    "action": "NOT_REQUIRED",
+                    "required_for_current_execution": False,
+                })
+            files[key] = file_updated
+        row["files"] = files
+        updated["dl_sources"][dl_id] = row
+    return updated
 
 
 def collect_artifact_status(
@@ -733,7 +978,13 @@ def collect_artifact_status(
         settings=current,
         status=status,
     )
-    return _apply_archived_pair_dependency_waivers(
+    status = _apply_completed_pair_dependency_waivers(
+        settings=current,
+        status=status,
+        replay_cache=replay_cache,
+    )
+    return _apply_completed_pair_frozen_score_reuse(
+        root=Path(project_root).resolve(),
         settings=current,
         status=status,
         replay_cache=replay_cache,
@@ -1950,6 +2201,30 @@ def run_strategy_comparison(
                 ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None
             ),
             baseline_reuse_dir=baseline_reuse_source,
+            continuous_score_path_override=(
+                str(
+                    (status.get("continuous_score_overrides") or {})[on_arm.dl_id][
+                        "score_path"
+                    ]
+                )
+                if (
+                    dl.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS
+                    and on_arm.dl_id in (status.get("continuous_score_overrides") or {})
+                )
+                else None
+            ),
+            continuous_score_execution_start_override=(
+                str(
+                    (status.get("continuous_score_overrides") or {})[on_arm.dl_id][
+                        "execution_start"
+                    ]
+                )
+                if (
+                    dl.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS
+                    and on_arm.dl_id in (status.get("continuous_score_overrides") or {})
+                )
+                else None
+            ),
             capture_execution_diagnostics=(
                 runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
             ),

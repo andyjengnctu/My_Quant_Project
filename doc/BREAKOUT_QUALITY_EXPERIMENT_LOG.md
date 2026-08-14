@@ -8897,3 +8897,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - C44與C36固定相同：`DL-CONT13E` frozen Forward-OOS score、current Min ROOS params、K/R0、原始MR-13E continuous score objective、canonical sizing/cash/orderability/execution。唯一controlled change：C36的`score Top-K → R0 minimum repair → best feasible 1-swap ascent`改為C42/C43同源generic exact branch-and-bound，`objective_mode=score`，完整candidate universe直接求K/R0/canonical-cash feasible global optimum。
 - Stage contract：C42/C43的`selection_only=True`因source為`selection_point_in_time`；C44的`selection_only=False`因source為`continuous_ranker_oos`。Score-constrained validator改為要求此bool與DL source stage一致，而非硬編Selection-only；C44不依賴Expected-R／Expected Excess-R calibration、不重訓MR-13E、不重建Forward score。
 - Forward Gate只新增C44，保留C1/C3/C20/C29/C36全部既有control。必要contrasts=`C44-C36`純MR-13E solver effect、`C44-C20`相對MR-12B current runtime anchor、`C44-C3`相對DL-off Min baseline。先跑single-seed frozen Forward；結果支持前不建立multi-seed robustness，也不新增MR-13A/12B constrained Forward。
+
+## 2026-08-15 — SR-C44 Forward preparation completed-pair frozen-score blocker fix
+
+- 使用者實跑Forward-OOS planning時，C1/C3/C20/C29/C36皆可REUSE且C44為唯一RUN arm，但planner仍因`DL-CONT12B`與`DL-CONT13E` continuous model/manifest/report/forward_scores composite contract非READY而整體BLOCKED。這不是新的scientific result；C44仍`AWAITING_FORWARD_RESULT`。
+- 根因一：preparation只對historical Selection PIT的`archived_completed_pair`做source dependency waiver，沒有泛化「若某DL source的所有dependent arms都已命中identity一致completed pair，該source本輪根本不參與runtime」；因此C20雖整體REUSE仍被CONT12B model source假性阻擋。
+- 根因二：continuous OOS readiness以model+manifest+report+score composite contract綁成單一READY；C44只需要frozen Forward score，但當歷史model/report退役時，即使canonical score CSV仍存在也會被連帶標成BLOCKED。修正後只在同DL source已有reusable completed pair、仍有新arm需要RUN、canonical score CSV存在且其SHA與completed pair當時記錄的`dl:<id>:forward_scores` identity byte-identical時，才允許`COMPLETED_PAIR_PINNED_FROZEN_SCORE` score-only reuse；model/manifest/report明示`NOT_REQUIRED`。若score CSV本身缺少、SHA不符、identity/profile不符、coverage不足，仍BLOCKED並導向正式模型工作類型；禁止從`score_ranking_orderable_candidates.csv`、成交或selector sidecar拼回不完整score universe。
+- Runtime另補上Forward continuous-score whitelist對`resource-aware-continuous-score-constrained-optimal`的正式支援，並由orchestrator把pair-pinned score path/execution-start以explicit continuous-score override傳給C44。這只修prerequisite/runtime plumbing，不改C44 objective、K/R0、solver、sizing或execution。
+- Decision不變：先跑single-seed C44 Forward；主要Gate仍為`C44-C36`與`C44-C20`，結果支持前不跑multi-seed。
+
