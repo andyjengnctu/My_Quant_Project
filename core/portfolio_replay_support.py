@@ -106,6 +106,15 @@ def _candidate_replay_snapshot(candidate, *, fallback_trade_date, is_orderable):
         "breakout_quality_expected_r_calibration_cutoff": str(
             rank_payload.get("expected_r_calibration_cutoff") or ""
         ),
+        "breakout_quality_expected_excess_r_available": bool(
+            rank_payload.get("expected_excess_r_available", False)
+        ),
+        "breakout_quality_expected_excess_r": _optional_float(
+            rank_payload.get("expected_excess_r")
+        ),
+        "breakout_quality_expected_excess_r_calibration_cutoff": str(
+            rank_payload.get("expected_excess_r_calibration_cutoff") or ""
+        ),
     }
 
 

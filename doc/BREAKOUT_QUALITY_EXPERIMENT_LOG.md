@@ -8832,3 +8832,15 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 研究理由：MSE的population optimum對應conditional mean `E[R|X]`，與後續可能的`Predicted/Expected R × planned initial risk` portfolio objective在數學上更直接一致；本輪不加入planned risk、K/R0、breakout membership或任何portfolio資訊進模型。
 - Dataset／Target重建：不需要；沿用canonical daily-universal source與既有raw-R target。
 - 下一步：只執行MR-13G Seed42 Forward Model Gate。第一優先比較raw-R MSE/RMSE、MAE、bias與pre-OOS frozen constant的magnitude error；ranking Daily Spearman／Pair／Top-K作必要secondary signal。若magnitude仍無gain則直接REJECT，不建PIT；若成立才另輪進Selection PIT。
+
+## 2026-08-15 — MR-13G Forward REJECT → SR-C39 Relative Excess-Alpha Selection experiment
+
+- MR-13G正式Forward結果：`daily_universal_no_time_r_mse`，Seed42，selected epoch=`1`。Epoch1 Train/Val MSE=`1.275490/4.578933`；Epoch2 Train/Val MSE=`0.751347/6.958489`，故依Validation MSE正確停在epoch1，第二epoch已明顯overfit。
+- Forward OOS：MSE=`4.5923`、RMSE=`2.1430R`、MAE=`1.4311R`、bias=`+0.3390R`；Daily/Global rho=`0.1259/0.0569`、Pair=`54.25%`、Top10/Bottom10 Target=`1.0709/0.9719R`、spread=`+0.0990R`、Top-K Lift=`+0.5117R`、boundary gap=`-0.0065R`。Breakout slice Daily/Global rho=`0.1079/0.0206`、Pair=`53.90%`、Top-K Lift=`+0.1842R`。
+- 判定：`MR-13G REJECTED_AT_DIRECT_R_MAGNITUDE_GATE / NO_PIT / NO_RUNTIME_DL_SOURCE`。相對MR-13F，MSE雖把bias由`-0.6505R`改善為`+0.3390R`，但RMSE=`2.1430R`與MAE=`1.4311R`更差，且仍輸給MR-13F Calibration Audit事前固定的pre-OOS constant RMSE=`1.7956R`；ranking亦退化。故「13F只是Huber壓縮magnitude」假說被否定，direct raw-R regression路線在13G停止，不再以另一個regression loss延伸。
+- Current model-research entry回到frozen `MR-13E / daily_universal_no_time_full_list_ndcg_pairwise`作relative-ranking reference；這不是runtime promotion，current runtime anchor仍`MR-12B`。
+- 新策略實驗：`SR-C39 / Min MR-13E Excess-Alpha`，程式基準=`test-branch-1_20260815_003742_8db650c.zip`，SHA256=`7ba87eb72c49ca7537136664d1f5370fa55bad48b5c1e6b578995edc4ad55628` + 本輪patch。
+- Controlled change：C39完全重用C35的`DL-CONT13E-PIT`、historical Min params、K/R0、sizing、cash、orderability與execution；唯一portfolio objective由`Σ frozen score`改為`Σ(Expected Excess-R × canonical planned initial risk)`。不重訓MR-13E、不改target、不改K/R0、不以negative excess減少order count。
+- Relative target：先在完整canonical `daily_eligible_target_valid` universe按日計算`daily mean raw R`，再定義`target_excess_r = raw R - same-day mean raw R`；共同absolute-R market baseline因此不會被planned risk放大。MR-13E score只用來取得同日daily percentile，不參與target mean。
+- Calibration：Selection逐calendar strategy year expanding fit；每個cutoff只能用`date < cutoff`且`label_eval_end_date < cutoff`的成熟rows。Mapping=`daily percentile -> Expected Excess-R`的nondecreasing weighted PAVA isotonic curve；無人工Top-X bucket、slope/intercept、lambda、Forward target或OOS fit。
+- Strategy Gate：只新增C39 Selection arm與C39-C35／C39-C23／C39-C25 contrasts，robustness=`off`。本輪**不建立C40**；只有C39 Selection結果支持relative alpha×capacity假說後，才另輪占新的Forward SR-C ID。

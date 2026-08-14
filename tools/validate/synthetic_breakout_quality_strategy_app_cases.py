@@ -702,11 +702,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         group = str(raw_profile.get("display_alignment_group") or "").strip()
         if not group:
             continue
+        settings_for_alignment = strategy_config.get_strategy_comparison_settings(profile_id)
+        alignment_ids = tuple(raw_profile.get("display_alignment_arm_ids") or raw_profile["arm_ids"])
         display_alignment_groups.setdefault(group, []).append(
-            tuple(
-                arm.name
-                for arm in strategy_config.get_strategy_comparison_settings(profile_id).enabled_arms
-            )
+            tuple(settings_for_alignment.arms[arm_id].name for arm_id in alignment_ids)
         )
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -2164,13 +2163,21 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
 
-    def _resource_candidate_fixed(ticker, price, qty, score, policy, expected_r=None):
+    def _resource_candidate_fixed(
+        ticker, price, qty, score, policy, expected_r=None, expected_excess_r=None
+    ):
         cost_milli = build_buy_ledger_from_price(price, qty, resource_params)["net_buy_total_milli"]
         rank_payload = {"available": True, "score": score}
         if expected_r is not None:
             rank_payload.update({
                 "expected_r_available": True,
                 "expected_r": float(expected_r),
+                "daily_score_percentile": float(score),
+            })
+        if expected_excess_r is not None:
+            rank_payload.update({
+                "expected_excess_r_available": True,
+                "expected_excess_r": float(expected_excess_r),
                 "daily_score_percentile": float(score),
             })
         return {
@@ -2658,6 +2665,114 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and pnl_selected["selected_count"] == score_selected["selected_count"] == 2
         and pnl_selected["reserved_cost_milli"] >= score_diag["baseline_reserved_cost_milli"]
         and score_selected["reserved_cost_milli"] >= score_diag["baseline_reserved_cost_milli"],
+    )
+
+    excess_alpha_seed = (
+        ("EA_A", 100.0, 600, 0.99, 0.30),
+        ("EA_B", 100.0, 1500, 0.95, 0.20),
+        ("EA_C", 100.0, 1600, 0.90, 0.19),
+    )
+    excess_score_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-max-dl-feasible-ascent",
+        )
+        for ticker, price, qty, score, _expected_excess_r in excess_alpha_seed
+    ]
+    excess_alpha_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-excess-alpha-feasible-ascent",
+            expected_excess_r=expected_excess_r,
+        )
+        for ticker, price, qty, score, expected_excess_r in excess_alpha_seed
+    ]
+    excess_score_order, excess_score_diag = reorder_candidates_for_resource_aware_quality(
+        excess_score_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=resource_params,
+    )
+    excess_order, excess_diag = reorder_candidates_for_resource_aware_quality(
+        excess_alpha_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=resource_params,
+    )
+    excess_score_action = select_resource_aware_action_candidates(
+        excess_score_order, excess_score_diag
+    )
+    excess_action = select_resource_aware_action_candidates(excess_order, excess_diag)
+    excess_score_selected = _simulate_reserved_candidate_order(
+        excess_score_action, available_cash=350_000.0, sizing_equity=2_000_000.0,
+        free_slots=2, params=resource_params,
+    )
+    excess_selected = _simulate_reserved_candidate_order(
+        excess_action, available_cash=350_000.0, sizing_equity=2_000_000.0,
+        free_slots=2, params=resource_params,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "excess_alpha_selector_changes_only_basket_objective_while_preserving_same_k_r0_and_balances_relative_quality_with_deployable_risk",
+        True,
+        [row["ticker"] for row in excess_score_action] == ["EA_A", "EA_B"]
+        and [row["ticker"] for row in excess_action] == ["EA_B", "EA_C"]
+        and excess_diag.get("basket_objective") == "excess_alpha"
+        and excess_score_diag.get("basket_objective") == "score"
+        and excess_diag["pre_market_order_limit"] == excess_score_diag["pre_market_order_limit"] == 2
+        and excess_selected["selected_count"] == excess_score_selected["selected_count"] == 2
+        and excess_selected["reserved_cost_milli"] >= excess_score_diag["baseline_reserved_cost_milli"]
+        and excess_score_selected["reserved_cost_milli"] >= excess_score_diag["baseline_reserved_cost_milli"],
+    )
+
+    selection_excess_settings = strategy_config.get_strategy_comparison_settings("selection_pit")
+    c39 = selection_excess_settings.arms["C39"]
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "sr_c39_is_selection_only_frozen_mr13e_excess_alpha_with_same_k_r0_and_direct_c35_contrast",
+        True,
+        c39.enabled
+        and c39.dl_id == "CONT13E_PIT"
+        and c39.dl_runtime_mode == "resource-aware-continuous-excess-alpha-feasible-ascent"
+        and dict(c39.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") == "CONT13E_PIT"
+        and dict(c39.dl_runtime_options or {}).get("preserve_k_r0") is True
+        and dict(c39.dl_runtime_options or {}).get("negative_expected_excess_r_allowed") is True
+        and dict(c39.dl_runtime_options or {}).get("selection_only") is True
+        and c39.robustness_role == "off"
+        and "C39-C35" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        and "C39" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
+    )
+
+    from filters.breakout_quality.rank_calibration import (
+        add_daily_excess_r,
+        fit_weighted_increasing_isotonic,
+    )
+    canonical_excess = add_daily_excess_r(pd.DataFrame({
+        "date": ["2020-01-02", "2020-01-02", "2020-01-02"],
+        "target_raw_r": [0.0, 1.0, 5.0],
+        "target_valid": [True, True, True],
+    }))
+    curve, curve_summary = fit_weighted_increasing_isotonic(
+        np.asarray([0.2, 0.5, 0.8, 1.0], dtype=np.float64),
+        np.asarray([-0.8, -0.1, 0.4, 0.2], dtype=np.float64),
+    )
+    curve_predictions = curve.predict(np.asarray([0.2, 0.5, 0.8, 1.0], dtype=np.float64))
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "excess_r_calibration_uses_full_daily_eligible_mean_and_monotonic_pava_without_absolute_r_baseline",
+        True,
+        math.isclose(float(canonical_excess["daily_target_mean_r"].iloc[0]), 2.0, abs_tol=1e-12)
+        and np.allclose(
+            canonical_excess["target_excess_r"].to_numpy(dtype=np.float64),
+            np.asarray([-2.0, -1.0, 3.0], dtype=np.float64),
+        )
+        and math.isclose(float(canonical_excess["target_excess_r"].sum()), 0.0, abs_tol=1e-12)
+        and bool((np.diff(curve_predictions) >= -1e-12).all())
+        and int(curve_summary["isotonic_block_count"]) < 4,
     )
 
     selection_expected_settings = strategy_config.get_strategy_comparison_settings("selection_pit")

@@ -18,6 +18,11 @@ from filters.breakout_quality.expected_r_calibration import (
     resolve_expected_r_calibration_paths,
 )
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
+from filters.breakout_quality.rank_calibration import (
+    add_daily_score_percentile,
+    build_canonical_target_frame,
+    mature_target_rows,
+)
 from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
@@ -43,36 +48,9 @@ def _json_native(value: Any) -> Any:
     return str(value)
 
 
-def _daily_percentile(score_rows: pd.DataFrame) -> pd.DataFrame:
-    frame = score_rows.copy()
-    frame["date"] = pd.to_datetime(frame["date"], errors="raise").dt.strftime("%Y-%m-%d")
-    frame["breakout_quality_score"] = pd.to_numeric(frame["breakout_quality_score"], errors="raise").astype(float)
-    frame["daily_score_percentile"] = frame.groupby("date", sort=False)["breakout_quality_score"].rank(
-        method="average", pct=True, ascending=True
-    )
-    values = frame["daily_score_percentile"].to_numpy(dtype=np.float64, copy=False)
-    if not np.isfinite(values).all() or bool(((values < 0.0) | (values > 1.0)).any()):
-        raise ValueError("daily score percentile建立失敗")
-    return frame
-
-
-def _target_frame(bundle) -> pd.DataFrame:
-    groups = bundle.group_table[["ticker", "date", "group_index", "label_eval_end_date"]].copy()
-    groups["ticker"] = groups["ticker"].fillna("").astype(str).str.strip()
-    groups["date"] = pd.to_datetime(groups["date"], errors="raise").dt.strftime("%Y-%m-%d")
-    groups["label_eval_end_date"] = pd.to_datetime(groups["label_eval_end_date"], errors="coerce")
-    groups["target_raw_r"] = np.asarray(bundle.raw_target, dtype=np.float64)
-    groups["target_valid"] = np.asarray(bundle.target_valid, dtype=bool) & np.isfinite(groups["target_raw_r"].to_numpy(dtype=np.float64))
-    return groups
-
-
 def _fit_nonnegative_affine(frame: pd.DataFrame, *, cutoff_exclusive: str) -> dict[str, Any]:
     cutoff = pd.Timestamp(cutoff_exclusive).normalize()
-    eligible = frame[
-        frame["target_valid"].astype(bool)
-        & (pd.to_datetime(frame["date"], errors="raise") < cutoff)
-        & (pd.to_datetime(frame["label_eval_end_date"], errors="coerce") < cutoff)
-    ].copy()
+    eligible = mature_target_rows(frame, cutoff_exclusive=cutoff.strftime("%Y-%m-%d"))
     eligible = eligible[np.isfinite(eligible["daily_score_percentile"]) & np.isfinite(eligible["target_raw_r"])]
     if len(eligible) < 2:
         raise ValueError(
@@ -205,8 +183,8 @@ def build_expected_r_calibration_artifact(
         experiment_profile=experiment_profile,
         phase_id=phase,
     )
-    fit_scores = _daily_percentile(fit_scores)
-    runtime_scores = _daily_percentile(runtime_scores)
+    fit_scores = add_daily_score_percentile(fit_scores)
+    runtime_scores = add_daily_score_percentile(runtime_scores)
 
     bundle = load_profile_continuous_ranker_data(
         filter_id=filter_id,
@@ -216,7 +194,7 @@ def build_expected_r_calibration_artifact(
         allow_stale_source=False,
         project_root=root,
     )
-    targets = _target_frame(bundle)
+    targets = build_canonical_target_frame(bundle)
     fit_frame = fit_scores.merge(
         targets[["group_index", "label_eval_end_date", "target_raw_r", "target_valid"]],
         on="group_index",

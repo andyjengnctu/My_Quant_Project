@@ -22,6 +22,7 @@ from core.buy_sort import (
     SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES,
 )
 from filters.breakout_quality.expected_r_calibration import lookup_expected_r
+from filters.breakout_quality.excess_r_calibration import lookup_expected_excess_r
 from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CANONICAL_RUNTIME,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
@@ -315,6 +316,11 @@ def resolve_breakout_quality_candidate_rank(
             )
         options = dict(context.ranking_options or {})
         calibration_path = str(options.get("expected_r_calibration_path") or "").strip()
+        excess_calibration_path = str(
+            options.get("expected_excess_r_calibration_path") or ""
+        ).strip()
+        if calibration_path and excess_calibration_path:
+            raise ValueError("ranking options不得同時指定Expected-R與Expected Excess-R calibration")
         if calibration_path:
             enriched = dict(payload)
             if bool(enriched.get("available", False)):
@@ -331,6 +337,24 @@ def resolve_breakout_quality_candidate_rank(
                 enriched.update({
                     "expected_r_available": False,
                     "expected_r_unavailable_reason": "ranking_score_unavailable",
+                })
+            return enriched
+        if excess_calibration_path:
+            enriched = dict(payload)
+            if bool(enriched.get("available", False)):
+                calibration_lookup_path = Path(excess_calibration_path)
+                if not calibration_lookup_path.is_absolute():
+                    calibration_lookup_path = Path(root).resolve() / calibration_lookup_path
+                enriched.update(lookup_expected_excess_r(
+                    lookup_path=calibration_lookup_path,
+                    ticker=str(ticker),
+                    score_date=lookup_date,
+                    expected_score=enriched.get("score"),
+                ))
+            else:
+                enriched.update({
+                    "expected_excess_r_available": False,
+                    "expected_excess_r_unavailable_reason": "ranking_score_unavailable",
                 })
             return enriched
         return payload

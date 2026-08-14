@@ -42,16 +42,26 @@ def _candidate_expected_r(candidate_row):
     return value if math.isfinite(value) else None
 
 
-def _planned_initial_risk_milli(*, row, plan):
-    expected_r = _candidate_expected_r(row)
-    if expected_r is None:
+def _candidate_expected_excess_r(candidate_row):
+    rank_payload = candidate_row.get('breakout_quality_rank')
+    if not isinstance(rank_payload, dict):
         return None
+    if not bool(rank_payload.get('expected_excess_r_available', False)):
+        return None
+    try:
+        value = float(rank_payload.get('expected_excess_r'))
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _planned_initial_risk_milli(*, row, plan):
     qty = int(plan.get('qty', 0) or 0)
     if qty <= 0:
         return 0
     params = row.get('params_obj')
     if params is None:
-        raise ValueError('Expected-PnL selector候選缺少params_obj')
+        raise ValueError('resource-aware economic objective候選缺少params_obj')
     limit_price = plan.get('limit_price')
     stop_price = plan.get('init_sl')
     if limit_price is None or stop_price is None:
@@ -136,6 +146,85 @@ def _expected_pnl_basket_quality_key(result, *, base_rank):
         float(sum(expected_rs)),
         stable_base_ranks,
     )
+
+
+def _candidate_standalone_excess_alpha_milli(row):
+    expected_excess_r = _candidate_expected_excess_r(row)
+    if expected_excess_r is None:
+        return None
+    plan = {
+        'qty': int(row.get('qty', 0) or 0),
+        'limit_price': row.get('limit_px'),
+        'init_sl': row.get('init_sl'),
+    }
+    try:
+        risk_milli = _planned_initial_risk_milli(row=row, plan=plan)
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return None
+    if risk_milli is None:
+        return None
+    return float(expected_excess_r * float(risk_milli))
+
+
+def _excess_alpha_order(rows, *, base_rank):
+    """Rank raw membership by Expected Excess-R times canonical standalone planned risk."""
+
+    return sorted(
+        list(rows or []),
+        key=lambda row: (
+            0 if _candidate_standalone_excess_alpha_milli(row) is not None else 1,
+            -(
+                float(_candidate_standalone_excess_alpha_milli(row))
+                if _candidate_standalone_excess_alpha_milli(row) is not None
+                else 0.0
+            ),
+            -(
+                float(_candidate_expected_excess_r(row))
+                if _candidate_expected_excess_r(row) is not None
+                else 0.0
+            ),
+            base_rank[id(row)],
+        ),
+    )
+
+
+def _excess_alpha_basket_quality_key(result, *, base_rank):
+    """Higher is better: calibration coverage, total expected alpha dollars, deterministic ties."""
+
+    rows = list(result.get('selected_rows') or [])
+    plans = list(result.get('selected_plans') or [])
+    if len(rows) != len(plans):
+        raise ValueError('Excess-Alpha selector selected_rows/plans長度不一致')
+    values = []
+    expected_excess_rs = []
+    for row, plan in zip(rows, plans):
+        expected_excess_r = _candidate_expected_excess_r(row)
+        if expected_excess_r is None:
+            continue
+        risk_milli = _planned_initial_risk_milli(row=row, plan=plan)
+        if risk_milli is None:
+            continue
+        values.append(float(expected_excess_r * float(risk_milli)))
+        expected_excess_rs.append(float(expected_excess_r))
+    stable_base_ranks = tuple(
+        -base_rank[id(row)]
+        for row in sorted(rows, key=lambda item: base_rank[id(item)])
+    )
+    return (
+        int(len(values)),
+        float(sum(values)),
+        tuple(sorted(values, reverse=True)),
+        float(sum(expected_excess_rs)),
+        stable_base_ranks,
+    )
+
+
+def _objective_selector_name(objective_mode, *, suffix):
+    if objective_mode == 'expected_pnl':
+        return f'continuous-expected-pnl-{suffix}'
+    if objective_mode == 'excess_alpha':
+        return f'continuous-excess-alpha-{suffix}'
+    return f'continuous-score-max-dl-{suffix}'
 
 def _max_dl_execution_order(rows, *, base_rank):
     """Keep the same-parameter DL-off baseline priority inside an already chosen DL basket."""
@@ -305,7 +394,7 @@ def _reorder_resource_aware_continuous_max_dl(
     introduced.
     """
 
-    if objective_mode not in {'score', 'expected_pnl'}:
+    if objective_mode not in {'score', 'expected_pnl', 'excess_alpha'}:
         raise ValueError(f'不支援的max-DL objective_mode: {objective_mode!r}')
 
     target_count = int(baseline['selected_count'])
@@ -316,7 +405,13 @@ def _reorder_resource_aware_continuous_max_dl(
         baseline,
         changed=False,
         promoted_pass_count=0,
-        selector=('continuous-expected-pnl' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl'),
+        selector=(
+            'continuous-expected-pnl'
+            if objective_mode == 'expected_pnl'
+            else 'continuous-excess-alpha'
+            if objective_mode == 'excess_alpha'
+            else 'continuous-score-max-dl'
+        ),
     )
     diag.update({
         'resource_preservation_required': True,
@@ -339,7 +434,13 @@ def _reorder_resource_aware_continuous_max_dl(
     diag['mode'] = 'dl-selection'
     diag['max_dl_eligible'] = True
     base_rank = {id(row): idx for idx, row in enumerate(rows)}
-    dl_order = (_expected_pnl_order(rows, base_rank=base_rank) if objective_mode == 'expected_pnl' else _max_dl_score_order(rows, base_rank=base_rank))
+    dl_order = (
+        _expected_pnl_order(rows, base_rank=base_rank)
+        if objective_mode == 'expected_pnl'
+        else _excess_alpha_order(rows, base_rank=base_rank)
+        if objective_mode == 'excess_alpha'
+        else _max_dl_score_order(rows, base_rank=base_rank)
+    )
     pure_basket = list(dl_order[:target_count])
     pure_ids = {id(row) for row in pure_basket}
 
@@ -357,6 +458,8 @@ def _reorder_resource_aware_continuous_max_dl(
     def quality_key(rows_, result_):
         if objective_mode == 'expected_pnl':
             return _expected_pnl_basket_quality_key(result_, base_rank=base_rank)
+        if objective_mode == 'excess_alpha':
+            return _excess_alpha_basket_quality_key(result_, base_rank=base_rank)
         return _max_dl_basket_quality_key(rows_, base_rank=base_rank)
 
     pure_ordered, pure_result = evaluate_basket(pure_basket)
@@ -437,7 +540,7 @@ def _reorder_resource_aware_continuous_max_dl(
         return finalize(
             pure_ordered,
             pure_result,
-            selector=('continuous-expected-pnl-direct' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl-direct'),
+            selector=_objective_selector_name(objective_mode, suffix='direct'),
             repair_steps=0,
             fallback=False,
             repair_trace_steps=[],
@@ -600,7 +703,7 @@ def _reorder_resource_aware_continuous_max_dl(
             return finalize(
                 trial_ordered,
                 trial_result,
-                selector=('continuous-expected-pnl-minimum-repair' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl-minimum-repair'),
+                selector=_objective_selector_name(objective_mode, suffix='minimum-repair'),
                 repair_steps=repair_step,
                 fallback=False,
                 repair_trace_steps=repair_trace_steps,
@@ -642,7 +745,7 @@ def _reorder_resource_aware_continuous_max_dl(
     return finalize(
         baseline_ordered,
         baseline_result,
-        selector=('continuous-expected-pnl-baseline-fallback' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl-baseline-fallback'),
+        selector=_objective_selector_name(objective_mode, suffix='baseline-fallback'),
         repair_steps=len(repaired_out_ids),
         fallback=True,
         preserve_basket_order=True,
@@ -760,8 +863,9 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         out = dict(seed_diag)
         out.update({
             'selector': (
-                ('continuous-expected-pnl-feasible-ascent' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl-feasible-ascent-stale-score-guard')
-                if guard_enabled else ('continuous-expected-pnl-feasible-ascent' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl-feasible-ascent')
+                'continuous-score-max-dl-feasible-ascent-stale-score-guard'
+                if guard_enabled and objective_mode == 'score'
+                else _objective_selector_name(objective_mode, suffix='feasible-ascent')
             ),
             'stale_score_membership_guard_enabled': bool(guard_enabled),
             'stale_score_membership_guard_max_age_days': guard_max_age,
@@ -789,6 +893,8 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     def quality_key(rows_, result_):
         if objective_mode == 'expected_pnl':
             return _expected_pnl_basket_quality_key(result_, base_rank=base_rank)
+        if objective_mode == 'excess_alpha':
+            return _excess_alpha_basket_quality_key(result_, base_rank=base_rank)
         return _max_dl_basket_quality_key(rows_, base_rank=base_rank)
 
     baseline_ids = {id(row) for row in baseline['selected_rows']}
@@ -877,8 +983,9 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         changed=bool(selected_ids != baseline_selected_ids),
         promoted_pass_count=0,
         selector=(
-            ('continuous-expected-pnl-feasible-ascent' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl-feasible-ascent-stale-score-guard')
-            if guard_enabled else ('continuous-expected-pnl-feasible-ascent' if objective_mode == 'expected_pnl' else 'continuous-score-max-dl-feasible-ascent')
+            'continuous-score-max-dl-feasible-ascent-stale-score-guard'
+            if guard_enabled and objective_mode == 'score'
+            else _objective_selector_name(objective_mode, suffix='feasible-ascent')
         ),
     )
     seed_trace = dict(seed_diag.get('_selector_trace_baskets') or {})

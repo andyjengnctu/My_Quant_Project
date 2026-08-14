@@ -267,6 +267,8 @@ def _flatten_selector_trace_rows(replay_selector_trace_rows: list[dict[str, Any]
         "breakout_quality_score_date", "breakout_quality_score_available",
         "breakout_quality_expected_r_available", "breakout_quality_expected_r",
         "breakout_quality_daily_score_percentile", "breakout_quality_expected_r_calibration_cutoff",
+        "breakout_quality_expected_excess_r_available", "breakout_quality_expected_excess_r",
+        "breakout_quality_expected_excess_r_calibration_cutoff",
         "pre_market_order_limit", "direct_score_order_feasible", "repair_steps", "ascent_steps",
     ]
     rows: list[dict[str, Any]] = []
@@ -295,6 +297,15 @@ def _flatten_selector_trace_rows(replay_selector_trace_rows: list[dict[str, Any]
             ),
             "breakout_quality_expected_r_calibration_cutoff": str(
                 item.get("breakout_quality_expected_r_calibration_cutoff") or ""
+            ),
+            "breakout_quality_expected_excess_r_available": bool(
+                item.get("breakout_quality_expected_excess_r_available", False)
+            ),
+            "breakout_quality_expected_excess_r": _finite_float(
+                item.get("breakout_quality_expected_excess_r")
+            ),
+            "breakout_quality_expected_excess_r_calibration_cutoff": str(
+                item.get("breakout_quality_expected_excess_r_calibration_cutoff") or ""
             ),
             "pre_market_order_limit": (
                 None if item.get("pre_market_order_limit") in (None, "")

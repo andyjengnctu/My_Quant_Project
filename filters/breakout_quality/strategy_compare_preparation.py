@@ -11,6 +11,7 @@ import pandas as pd
 
 from core.active_param_ensemble import get_active_param_ensemble_date_range
 from core.strategy_comparison import (
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
     StrategyComparisonSettings,
     StrategyPreparationAction,
@@ -32,6 +33,11 @@ from filters.breakout_quality.expected_r_calibration import (
     EXPECTED_R_CALIBRATION_METHOD,
     resolve_expected_r_calibration_paths,
     validate_expected_r_calibration_artifact,
+)
+from filters.breakout_quality.excess_r_calibration import (
+    EXPECTED_EXCESS_R_CALIBRATION_METHOD,
+    resolve_expected_excess_r_calibration_paths,
+    validate_expected_excess_r_calibration_artifact,
 )
 from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
@@ -350,6 +356,13 @@ def collect_artifact_status(
             fit_dl_id = str(dict(arm.dl_runtime_options or {}).get("expected_r_fit_dl_id") or "").strip()
             if not fit_dl_id or fit_dl_id not in settings.dl_sources:
                 raise ValueError(f"Expected-PnL arm缺少合法expected_r_fit_dl_id: {arm.arm_id}")
+            required_dl_sources.add(fit_dl_id)
+        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT:
+            fit_dl_id = str(
+                dict(arm.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") or ""
+            ).strip()
+            if not fit_dl_id or fit_dl_id not in settings.dl_sources:
+                raise ValueError(f"Excess-Alpha arm缺少合法expected_excess_r_fit_dl_id: {arm.arm_id}")
             required_dl_sources.add(fit_dl_id)
     for source_id in required_param_sources:
         trained_with = settings.parameter_sources[source_id].trained_with_dl_id
@@ -964,6 +977,122 @@ def collect_artifact_status(
             "status": calibration_status,
         }
 
+    expected_excess_r_rows: dict[str, Any] = {}
+    for arm in settings.enabled_arms:
+        if arm.dl_runtime_mode != STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT:
+            continue
+        if settings.profile_id != "selection_pit":
+            raise ValueError(f"Excess-Alpha第一階段只允許Selection PIT: {arm.arm_id}")
+        if not arm.dl_id:
+            raise ValueError(f"Excess-Alpha arm缺少runtime dl_id: {arm.arm_id}")
+        options = dict(arm.dl_runtime_options or {})
+        if str(options.get("expected_excess_r_calibration_method") or "") != EXPECTED_EXCESS_R_CALIBRATION_METHOD:
+            raise ValueError(
+                f"Excess-Alpha arm calibration method不支援: {arm.arm_id}/"
+                f"{options.get('expected_excess_r_calibration_method')!r}"
+            )
+        if options.get("preserve_k_r0") is not True or options.get("selection_only") is not True:
+            raise ValueError(f"Excess-Alpha第一階段必須preserve_k_r0/selection_only: {arm.arm_id}")
+        if options.get("negative_expected_excess_r_allowed") is not True:
+            raise ValueError(
+                f"Excess-Alpha第一階段不得以負Expected Excess-R改變K/R0: {arm.arm_id}"
+            )
+        fit_dl_id = str(options.get("expected_excess_r_fit_dl_id") or "").strip()
+        if not fit_dl_id or fit_dl_id not in settings.dl_sources:
+            raise ValueError(f"Excess-Alpha arm缺少合法fit source: {arm.arm_id}")
+        runtime_dl = settings.dl_sources[arm.dl_id]
+        fit_dl = settings.dl_sources[fit_dl_id]
+        if runtime_dl.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME or fit_dl.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            raise ValueError(f"Selection Excess-Alpha runtime/fit都必須使用Selection PIT score: {arm.arm_id}")
+        if (
+            fit_dl.filter_id,
+            fit_dl.model_architecture,
+            fit_dl.experiment_profile,
+        ) != (
+            runtime_dl.filter_id,
+            runtime_dl.model_architecture,
+            runtime_dl.experiment_profile,
+        ):
+            raise ValueError(
+                f"Excess-Alpha calibration要求runtime/fit為同一frozen ranker identity: "
+                f"{arm.arm_id}/{arm.dl_id}/{fit_dl_id}"
+            )
+        runtime_score_key = f"dl:{arm.dl_id}:forward_scores"
+        fit_score_key = f"dl:{fit_dl_id}:forward_scores"
+        runtime_sha = str((artifact_identities.get(runtime_score_key) or {}).get("sha256") or "")
+        fit_sha = str((artifact_identities.get(fit_score_key) or {}).get("sha256") or "")
+        paths = resolve_expected_excess_r_calibration_paths(
+            root,
+            filter_id=runtime_dl.filter_id,
+            model_architecture=runtime_dl.model_architecture,
+            experiment_profile=runtime_dl.experiment_profile,
+            phase_id=settings.profile_id,
+        )
+        ready, calibration_status, manifest = validate_expected_excess_r_calibration_artifact(
+            root,
+            filter_id=runtime_dl.filter_id,
+            model_architecture=runtime_dl.model_architecture,
+            experiment_profile=runtime_dl.experiment_profile,
+            phase_id=settings.profile_id,
+            expected_source_score_sha256=(runtime_sha or None),
+            expected_fit_score_sha256=(fit_sha or None),
+            expected_selection_runtime_start_date=settings.start_date,
+        )
+        upstream_ready = bool((dl_rows.get(arm.dl_id) or {}).get("ready")) and bool(
+            (dl_rows.get(fit_dl_id) or {}).get("ready")
+        )
+        if ready and settings.preparation.reuse_ready_artifacts:
+            action = "REUSE"
+            description = "重用frozen MR-13E PIT Expected Excess-R calibration工件"
+            builder_type = None
+        elif upstream_ready and settings.preparation.auto_prepare:
+            action = "REBUILD" if paths["manifest"].exists() or paths["lookup"].exists() else "BUILD"
+            if action == "REBUILD" and not settings.preparation.rebuild_stale_artifacts:
+                action = "BLOCKED"
+                builder_type = None
+                description = "Expected Excess-R calibration過期且config禁止自動重建"
+            else:
+                builder_type = "expected_excess_r_calibration"
+                description = (
+                    "只用Selection PIT成熟target建立daily percentile→Expected Excess-R單調isotonic mapping；"
+                    "target先扣同日daily-eligible成熟樣本平均R，不建立absolute Expected-R"
+                )
+        else:
+            action = "BLOCKED"
+            builder_type = None
+            description = "Expected Excess-R calibration上游score未就緒"
+        artifact_key = f"runtime:{arm.arm_id}:expected_excess_r_calibration"
+        display_path = project_relative_display_path(paths["manifest"], project_root=root)
+        actions.append(_preparation_action(
+            action_id=artifact_key,
+            artifact_key=artifact_key,
+            action=action,
+            builder_type=builder_type,
+            description=description,
+            path=display_path,
+            dependencies=(runtime_score_key, fit_score_key) if runtime_score_key != fit_score_key else (runtime_score_key,),
+            producer_work_type=(
+                "existing_artifact" if action == "REUSE"
+                else "strategy_compare_deterministic_rebuild" if action in {"BUILD", "REBUILD"}
+                else None
+            ),
+            execution_priority=30,
+        ))
+        expected_excess_r_rows[arm.arm_id] = {
+            "ready": ready,
+            "status": calibration_status,
+            "action": action,
+            "path": display_path,
+            "lookup_path": project_relative_display_path(paths["lookup"], project_root=root),
+            "fit_dl_id": fit_dl_id,
+            "manifest": manifest,
+        }
+        artifact_identities[artifact_key] = {
+            "path": display_path,
+            "sha256": compute_file_sha256(paths["manifest"]) if ready and paths["manifest"].is_file() else None,
+            "status": calibration_status,
+        }
+
     comparison_start, comparison_end, comparison_period_source = _resolve_comparison_period(
         settings=settings,
         runtime_periods=runtime_periods,
@@ -1116,6 +1245,7 @@ def collect_artifact_status(
         "parameters": parameter_rows,
         "dl_sources": dl_rows,
         "expected_r_calibrations": expected_r_rows,
+        "expected_excess_r_calibrations": expected_excess_r_rows,
         "artifact_identities": artifact_identities,
         "resolved_parameter_paths": resolved_parameter_paths,
         "comparison_period": (
@@ -1265,6 +1395,24 @@ def _execute_preparation_action(
             selection_runtime_start_date=(
                 settings.start_date if settings.profile_id == "selection_pit" else None
             ),
+        )
+        return
+    if action.builder_type == "expected_excess_r_calibration":
+        _runtime, arm_id, _artifact = action.artifact_key.split(":", 2)
+        arm = settings.arms[arm_id]
+        if not arm.dl_id:
+            raise RuntimeError(f"Expected Excess-R calibration arm缺少dl_id: {arm_id}")
+        source = settings.dl_sources[arm.dl_id]
+        from services.breakout_quality.excess_r_calibration import (
+            build_expected_excess_r_calibration_artifact,
+        )
+        build_expected_excess_r_calibration_artifact(
+            project_root=root,
+            filter_id=source.filter_id,
+            model_architecture=source.model_architecture,
+            experiment_profile=source.experiment_profile,
+            phase_id=settings.profile_id,
+            selection_runtime_start_date=settings.start_date,
         )
         return
     if action.builder_type == "binary_dl_min_roos_rolling":
