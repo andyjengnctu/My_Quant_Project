@@ -115,7 +115,7 @@ MANIFEST_FILENAME = "manifest.json"
 LATEST_FILENAME = "latest.json"
 ATTRIBUTION_SOURCE_DIRNAME = "attribution_source"
 ATTRIBUTION_SOURCE_SCHEMA_VERSION = 2
-ROBUSTNESS_SCHEMA_VERSION = 7
+ROBUSTNESS_SCHEMA_VERSION = 8
 ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 1
 TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
@@ -164,13 +164,17 @@ def resolve_multi_seed_values(*, seed_count: int, generator_seed: int) -> tuple[
     return tuple(values)
 
 
-def _robustness_arms(settings) -> tuple[tuple[StrategyComparisonArm, ...], tuple[StrategyComparisonArm, ...]]:
-    fixed = tuple(
-        arm for arm in settings.enabled_arms if arm.robustness_role == "fixed_baseline"
-    )
-    stochastic = tuple(
-        arm for arm in settings.enabled_arms if arm.robustness_role == "stochastic"
-    )
+def _robustness_arms(
+    settings, robustness=None,
+) -> tuple[tuple[StrategyComparisonArm, ...], tuple[StrategyComparisonArm, ...]]:
+    if robustness is None:
+        robustness = get_strategy_multi_seed_robustness_settings(settings.profile_id)
+    enabled_by_id = {arm.arm_id: arm for arm in settings.enabled_arms}
+    try:
+        fixed = tuple(enabled_by_id[arm_id] for arm_id in robustness.fixed_arm_ids)
+        stochastic = tuple(enabled_by_id[arm_id] for arm_id in robustness.stochastic_arm_ids)
+    except KeyError as exc:
+        raise ValueError(f"multi-seed robustness引用未啟用或不存在的arm: {exc.args[0]}") from exc
     if not fixed or not stochastic:
         raise ValueError("multi-seed robustness需要fixed baseline與stochastic arms")
     return fixed, stochastic
@@ -181,6 +185,69 @@ def _required_parameter_sources(
     stochastic_arms: tuple[StrategyComparisonArm, ...],
 ) -> tuple[str, ...]:
     return tuple(sorted({arm.param_source for arm in (*fixed_arms, *stochastic_arms)}))
+
+
+def _training_source_groups(
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+) -> tuple[tuple[str, tuple[tuple[int, StrategyComparisonArm], ...]], ...]:
+    groups: dict[str, list[tuple[int, StrategyComparisonArm]]] = {}
+    order: list[str] = []
+    for arm_order, arm in enumerate(stochastic_arms, start=1):
+        dl_id = str(arm.dl_id or "").strip()
+        if not dl_id:
+            raise ValueError(f"stochastic arm缺少dl_id: {arm.arm_id}")
+        if dl_id not in groups:
+            groups[dl_id] = []
+            order.append(dl_id)
+        groups[dl_id].append((arm_order, arm))
+    return tuple((dl_id, tuple(groups[dl_id])) for dl_id in order)
+
+
+def _contract_stochastic_arms(
+    contract: dict[str, Any], settings,
+) -> tuple[StrategyComparisonArm, ...]:
+    arm_ids = [str(dict(item or {}).get("arm_id") or "").strip() for item in contract.get("stochastic_arms") or ()]
+    arms: list[StrategyComparisonArm] = []
+    for arm_id in arm_ids:
+        arm = settings.arms.get(arm_id)
+        if arm is None:
+            raise ValueError(f"robustness contract引用不存在的stochastic arm: {arm_id}")
+        arms.append(arm)
+    return tuple(arms)
+
+
+def _contract_paired_contrasts(
+    contract: dict[str, Any], settings, stochastic_arms: tuple[StrategyComparisonArm, ...],
+) -> tuple[dict[str, Any], ...]:
+    stochastic_by_id = {arm.arm_id: arm for arm in stochastic_arms}
+    raw_specs = tuple(contract.get("paired_contrasts") or ())
+    if not raw_specs and len(stochastic_arms) == 2:
+        left, right = stochastic_arms
+        raw_specs = ({
+            "contrast_id": "legacy_default",
+            "left": left.arm_id,
+            "right": right.arm_id,
+            "description": "歷史兩arm robustness預設同seed比較",
+        },)
+    resolved: list[dict[str, Any]] = []
+    for raw in raw_specs:
+        spec = dict(raw or {})
+        left_id = str(spec.get("left") or "").strip()
+        right_id = str(spec.get("right") or "").strip()
+        left = stochastic_by_id.get(left_id)
+        right = stochastic_by_id.get(right_id)
+        if left is None or right is None:
+            raise ValueError(
+                "robustness contract paired contrast不屬於其stochastic arms: "
+                f"left={left_id}, right={right_id}"
+            )
+        resolved.append({
+            "contrast_id": str(spec.get("contrast_id") or f"{left_id}_vs_{right_id}"),
+            "description": str(spec.get("description") or ""),
+            "left": left,
+            "right": right,
+        })
+    return tuple(resolved)
 
 
 def _model_upstream_rows(settings, stochastic_arms) -> tuple[list[tuple[str, str, str]], list[str]]:
@@ -348,16 +415,27 @@ def _render_robustness_execution_plan(
             arm.name,
             f"{cfg.seed_count}個deterministic generated seeds；isolated canonical trainer + same strategy replay；若scientific observation已完成但compact attribution缺少，僅重建同一observation的歸因工件",
         ))
-    pit_workload_lines: list[str] = []
+    training_sources = _training_source_groups(tuple(stochastic_arms))
+    pit_workload_lines: list[str] = [
+        f"模型訓練單元       ：{cfg.seed_count * len(training_sources)}（{len(training_sources)} unique DL sources × {cfg.seed_count} seeds）",
+        f"策略Replay單元     ：{cfg.seed_count * len(stochastic_arms)}（{len(stochastic_arms)} stochastic arms × {cfg.seed_count} seeds）",
+    ]
     if settings.profile_id == "selection_pit" and start is not None and end is not None:
-        first_dl = settings.dl_sources[str(stochastic_arms[0].dl_id)]
-        workflow = get_breakout_quality_workflow_settings(
-            experiment_profile=str(first_dl.experiment_profile)
-        )
-        fold_count = _pit_fold_count_for_period(start, end, int(workflow.point_in_time_fold_months))
-        pit_workload_lines = [
-            f"PIT folds          ：{fold_count} folds / model / seed（只建策略比較期間所需fold）",
-            f"預計fold trainings ：{fold_count * cfg.seed_count * len(stochastic_arms)}",
+        fold_counts = []
+        for dl_id, _arm_entries in training_sources:
+            dl = settings.dl_sources[str(dl_id)]
+            workflow = get_breakout_quality_workflow_settings(
+                experiment_profile=str(dl.experiment_profile)
+            )
+            fold_counts.append(
+                _pit_fold_count_for_period(start, end, int(workflow.point_in_time_fold_months))
+            )
+        unique_fold_counts = sorted(set(fold_counts))
+        fold_text = str(unique_fold_counts[0]) if len(unique_fold_counts) == 1 else "/".join(map(str, unique_fold_counts))
+        total_fold_trainings = cfg.seed_count * sum(fold_counts)
+        pit_workload_lines += [
+            f"PIT folds          ：{fold_text} folds / DL source / seed（只建策略比較期間所需fold）",
+            f"預計fold trainings ：{total_fold_trainings}",
         ]
     color_enabled = console_color_enabled()
     action_colors = {
@@ -457,7 +535,7 @@ def build_multi_seed_robustness_contract(
 ) -> dict[str, Any]:
     robustness = get_strategy_multi_seed_robustness_settings(robustness_id)
     settings = get_strategy_comparison_settings(robustness.profile_id)
-    fixed, stochastic = _robustness_arms(settings)
+    fixed, stochastic = _robustness_arms(settings, robustness)
     seeds = resolve_multi_seed_values(
         seed_count=robustness.seed_count,
         generator_seed=robustness.seed_generator_seed,
@@ -549,6 +627,7 @@ def build_multi_seed_robustness_contract(
     contract = {
         **scientific,
         "romd_reference_baselines": reference_baselines,
+        "paired_contrasts": [dict(item) for item in robustness.paired_contrasts],
         "report_schema_version": ROBUSTNESS_SCHEMA_VERSION,
         "label": robustness.label,
         "execution_options": {
@@ -1208,19 +1287,29 @@ def _training_units(
     reuse_completed: bool,
 ) -> deque[dict[str, Any]]:
     units: deque[dict[str, Any]] = deque()
+    source_groups = _training_source_groups(stochastic_arms)
     for seed_order, seed in enumerate(seeds, start=1):
-        for arm_order, arm in enumerate(stochastic_arms, start=1):
-            if (arm.arm_id, int(seed)) in completed:
+        for source_order, (dl_id, arm_entries) in enumerate(source_groups, start=1):
+            replay_entries = tuple(
+                (arm_order, arm)
+                for arm_order, arm in arm_entries
+                if (arm.arm_id, int(seed)) not in completed
+            )
+            if not replay_entries:
                 continue
-            unit = _unit_key(arm.arm_id, int(seed))
+            representative_arm = arm_entries[0][1]
+            source_unit = _unit_key(dl_id, int(seed))
             units.append({
-                "arm": arm,
+                "arm": representative_arm,
+                "replay_arms": replay_entries,
+                "dl_id": dl_id,
+                "source_order": int(source_order),
+                "source_count": int(len(source_groups)),
                 "settings": settings,
                 "seed": int(seed),
                 "seed_order": int(seed_order),
-                "arm_order": int(arm_order),
-                "model_dir": str(model_root / unit / "model"),
-                "research_dir": str(run_root / "work" / "training" / unit),
+                "model_dir": str(model_root / source_unit / "model"),
+                "research_dir": str(run_root / "work" / "training" / source_unit),
                 "comparison_start": str(comparison_start),
                 "comparison_end": str(comparison_end),
                 "reuse_completed": bool(reuse_completed),
@@ -1262,7 +1351,8 @@ def _pit_saved_fold_progress(meta: dict[str, Any]) -> tuple[int, int] | None:
 
 def _training_progress_label(meta: dict[str, Any], *, now: float, seed_count: int) -> str:
     label = (
-        f"seed {meta['seed_order']}/{seed_count} {meta['arm'].name} "
+        f"seed {meta['seed_order']}/{seed_count} {meta['dl_id']} "
+        f"targets={len(meta['replay_arms'])} "
         f"{_format_elapsed(now-float(meta['submitted_at']))}"
     )
     pit_progress = _pit_saved_fold_progress(meta)
@@ -1500,13 +1590,13 @@ def _distribution_stats(values: np.ndarray) -> dict[str, Any]:
 def _same_seed_metric_comparison(
     *,
     seed_frame: pd.DataFrame,
-    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    left: StrategyComparisonArm,
+    right: StrategyComparisonArm,
     metric_key: str,
     require_same_parameter_runtime_universe: bool = False,
 ) -> dict[str, Any] | None:
-    if len(stochastic_arms) != 2 or metric_key not in seed_frame.columns:
+    if metric_key not in seed_frame.columns:
         return None
-    left, right = stochastic_arms
     if require_same_parameter_runtime_universe and (
         left.param_source != right.param_source
         or left.rule_policy != right.rule_policy
@@ -1523,14 +1613,13 @@ def _same_seed_metric_comparison(
     pivot = pivot[[left.arm_id, right.arm_id]].dropna()
     if pivot.empty:
         return None
-    delta = (
-        pivot[right.arm_id].to_numpy(dtype=float)
-        - pivot[left.arm_id].to_numpy(dtype=float)
-    )
+    delta = pivot[right.arm_id].to_numpy(dtype=float) - pivot[left.arm_id].to_numpy(dtype=float)
     stats = _distribution_stats(delta)
     tie = np.isclose(delta, 0.0, rtol=0.0, atol=1e-12)
     return {
         "metric_key": metric_key,
+        "left_arm_id": left.arm_id,
+        "right_arm_id": right.arm_id,
         "left": left.name,
         "right": right.name,
         "n": int(len(delta)),
@@ -1541,22 +1630,39 @@ def _same_seed_metric_comparison(
     }
 
 
+def _pairwise_distribution_comparison(
+    *, seed_frame: pd.DataFrame, left: StrategyComparisonArm, right: StrategyComparisonArm,
+) -> dict[str, Any] | None:
+    left_values = pd.to_numeric(
+        seed_frame.loc[seed_frame["arm_id"] == left.arm_id, "return_over_max_drawdown"],
+        errors="coerce",
+    ).dropna().to_numpy(dtype=float)
+    right_values = pd.to_numeric(
+        seed_frame.loc[seed_frame["arm_id"] == right.arm_id, "return_over_max_drawdown"],
+        errors="coerce",
+    ).dropna().to_numpy(dtype=float)
+    if not len(left_values) or not len(right_values):
+        return None
+    return {
+        "left_arm_id": left.arm_id,
+        "right_arm_id": right.arm_id,
+        "left": left.name,
+        "right": right.name,
+        "pairwise_left_gt_right_probability": float(
+            np.mean(left_values[:, None] > right_values[None, :])
+        ),
+        "pair_count": int(len(left_values) * len(right_values)),
+    }
 
 
 def _paired_seed_translation_diagnostic(
     *,
     seed_frame: pd.DataFrame,
-    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    left: StrategyComparisonArm,
+    right: StrategyComparisonArm,
     resolved_seeds: tuple[int, ...] = (),
 ) -> dict[str, Any] | None:
-    """Describe whether same-seed selection-R improvements translate to strategy gains.
-
-    This is a read-only derived diagnostic over the persisted per-seed aggregate
-    table. It does not select seeds or change any scientific condition.
-    """
-    if len(stochastic_arms) != 2:
-        return None
-    left, right = stochastic_arms
+    """Describe whether same-seed selection-R improvements translate to strategy gains."""
     if left.param_source != right.param_source or left.rule_policy != right.rule_policy:
         return None
 
@@ -1633,18 +1739,16 @@ def _paired_seed_translation_diagnostic(
         if int(row["selection_r_sign"]) != 0 and int(row["romd_sign"]) != 0
     ]
     selection_up = [row for row in rows if int(row["selection_r_sign"]) > 0]
-    selection_up_romd_up = [
-        row for row in selection_up if int(row["romd_sign"]) > 0
-    ]
+    selection_up_romd_up = [row for row in selection_up if int(row["romd_sign"]) > 0]
     return {
+        "left_arm_id": left.arm_id,
+        "right_arm_id": right.arm_id,
         "left": left.name,
         "right": right.name,
         "n": int(len(rows)),
         "selection_r_positive_count": int(len(selection_up)),
         "selection_r_positive_romd_positive_count": int(len(selection_up_romd_up)),
-        "selection_r_positive_romd_nonpositive_count": int(
-            len(selection_up) - len(selection_up_romd_up)
-        ),
+        "selection_r_positive_romd_nonpositive_count": int(len(selection_up) - len(selection_up_romd_up)),
         "sign_concordant_count": int(sum(
             int(row["selection_r_sign"]) == int(row["romd_sign"])
             for row in non_tie_rows
@@ -1666,45 +1770,110 @@ def _paired_seed_translation_diagnostic(
     }
 
 
+def _yearly_same_seed_comparison(
+    *, seed_yearly_frame: pd.DataFrame, left: StrategyComparisonArm, right: StrategyComparisonArm,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if seed_yearly_frame.empty:
+        return rows
+    paired = seed_yearly_frame[
+        seed_yearly_frame["arm_id"].isin((left.arm_id, right.arm_id))
+    ].copy()
+    for year, group in paired.groupby("year", sort=True):
+        pivot = group.pivot(index="seed", columns="arm_id", values="return_pct")
+        if left.arm_id not in pivot.columns or right.arm_id not in pivot.columns:
+            continue
+        pivot = pivot[[left.arm_id, right.arm_id]].dropna()
+        if pivot.empty:
+            continue
+        delta = pivot[right.arm_id].to_numpy(dtype=float) - pivot[left.arm_id].to_numpy(dtype=float)
+        stats = _distribution_stats(delta)
+        tie = np.isclose(delta, 0.0, rtol=0.0, atol=1e-12)
+        rows.append({
+            "year": int(year),
+            "left_arm_id": left.arm_id,
+            "right_arm_id": right.arm_id,
+            "left": left.name,
+            "right": right.name,
+            "n": int(len(delta)),
+            "left_gt_right_count": int(np.sum((delta < 0) & ~tie)),
+            "right_gt_left_count": int(np.sum((delta > 0) & ~tie)),
+            "tie_count": int(np.sum(tie)),
+            **{f"right_minus_left_{key}": value for key, value in stats.items()},
+        })
+    return rows
+
+
+def _paired_comparison_summaries(
+    *, contract: dict[str, Any], settings, seed_frame: pd.DataFrame, seed_yearly_frame: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    stochastic = _contract_stochastic_arms(contract, settings)
+    resolved_seeds = tuple(int(value) for value in contract.get("resolved_seeds") or ())
+    summaries: list[dict[str, Any]] = []
+    for spec in _contract_paired_contrasts(contract, settings, stochastic):
+        left = spec["left"]
+        right = spec["right"]
+        summaries.append({
+            "contrast_id": spec["contrast_id"],
+            "description": spec["description"],
+            "left_arm_id": left.arm_id,
+            "right_arm_id": right.arm_id,
+            "left": left.name,
+            "right": right.name,
+            "romd_same_seed": _same_seed_metric_comparison(
+                seed_frame=seed_frame, left=left, right=right,
+                metric_key="return_over_max_drawdown",
+            ),
+            "direct_selection_r_same_seed": _same_seed_metric_comparison(
+                seed_frame=seed_frame, left=left, right=right,
+                metric_key="direct_selection_r",
+                require_same_parameter_runtime_universe=True,
+            ),
+            "selection_r_to_strategy": _paired_seed_translation_diagnostic(
+                seed_frame=seed_frame, left=left, right=right,
+                resolved_seeds=resolved_seeds,
+            ),
+            "romd_distribution": _pairwise_distribution_comparison(
+                seed_frame=seed_frame, left=left, right=right,
+            ),
+            "yearly_same_seed": _yearly_same_seed_comparison(
+                seed_yearly_frame=seed_yearly_frame, left=left, right=right,
+            ),
+        })
+    return summaries
+
+
 def _upgrade_derived_report_summary(
     summary: dict[str, Any],
     *,
     seed_frame: pd.DataFrame,
+    seed_yearly_frame: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     contract = dict(summary.get("contract") or {})
     profile_id = str(contract.get("profile_id") or "").strip()
     if not profile_id:
         return summary
     settings = get_strategy_comparison_settings(profile_id)
-    _fixed, stochastic = _robustness_arms(settings)
+    stochastic = _contract_stochastic_arms(contract, settings)
     resolved_seeds = tuple(int(value) for value in contract.get("resolved_seeds") or ())
     if resolved_seeds:
-        _validate_seed_results_frame(
-            seed_frame,
-            stochastic_arms=stochastic,
-            seeds=resolved_seeds,
-        )
+        _validate_seed_results_frame(seed_frame, stochastic_arms=stochastic, seeds=resolved_seeds)
     upgraded = dict(summary)
     contract["report_schema_version"] = ROBUSTNESS_SCHEMA_VERSION
     upgraded["contract"] = contract
-    upgraded["romd_same_seed_comparison"] = _same_seed_metric_comparison(
+    # Historical summaries may not have persisted the yearly frame here; preserve their existing annual section.
+    paired = _paired_comparison_summaries(
+        contract=contract,
+        settings=settings,
         seed_frame=seed_frame,
-        stochastic_arms=stochastic,
-        metric_key="return_over_max_drawdown",
+        seed_yearly_frame=(pd.DataFrame() if seed_yearly_frame is None else seed_yearly_frame),
     )
-    upgraded["direct_selection_r_same_seed_comparison"] = _same_seed_metric_comparison(
-        seed_frame=seed_frame,
-        stochastic_arms=stochastic,
-        metric_key="direct_selection_r",
-        require_same_parameter_runtime_universe=True,
-    )
-    upgraded["selection_r_to_strategy_same_seed_translation"] = (
-        _paired_seed_translation_diagnostic(
-            seed_frame=seed_frame,
-            stochastic_arms=stochastic,
-            resolved_seeds=resolved_seeds,
-        )
-    )
+    upgraded["paired_comparisons"] = paired
+    legacy = paired[0] if len(paired) == 1 else None
+    upgraded["romd_distribution_comparison"] = None if legacy is None else legacy.get("romd_distribution")
+    upgraded["romd_same_seed_comparison"] = None if legacy is None else legacy.get("romd_same_seed")
+    upgraded["direct_selection_r_same_seed_comparison"] = None if legacy is None else legacy.get("direct_selection_r_same_seed")
+    upgraded["selection_r_to_strategy_same_seed_translation"] = None if legacy is None else legacy.get("selection_r_to_strategy")
     upgraded["schema_version"] = ROBUSTNESS_SCHEMA_VERSION
     upgraded["report_refreshed_at_utc"] = datetime.now(timezone.utc).isoformat()
     return upgraded
@@ -1715,7 +1884,15 @@ def _robustness_summary(
     seed_frame: pd.DataFrame, seed_yearly_frame: pd.DataFrame,
 ) -> dict[str, Any]:
     settings = get_strategy_comparison_settings(str(contract["profile_id"]))
-    fixed, stochastic = _robustness_arms(settings)
+    current_robustness = get_strategy_multi_seed_robustness_settings(str(contract.get("robustness_id") or contract["profile_id"]))
+    fixed, current_stochastic = _robustness_arms(settings, current_robustness)
+    stochastic = _contract_stochastic_arms(contract, settings)
+    # Current execution uses current roles; historical report refresh uses contract-pinned arms.
+    if {arm.arm_id for arm in current_stochastic} != {arm.arm_id for arm in stochastic}:
+        fixed = tuple(
+            settings.arms[str(dict(item).get("arm_id"))]
+            for item in contract.get("fixed_arms") or ()
+        )
     mean_rows: list[dict[str, Any]] = []
     for arm in fixed:
         metrics = dict(fixed_results[arm.arm_id]["metrics"])
@@ -1763,39 +1940,9 @@ def _robustness_summary(
             "beats_full_count": int(np.sum(values > float(full_baseline["return_over_max_drawdown"]))),
         })
 
-    stochastic_rows = [row for row in romd_rows if int(row["n"]) > 1]
-    distribution_compare = None
-    if len(stochastic_rows) == 2:
-        a, b = stochastic_rows
-        av = pd.to_numeric(seed_frame.loc[seed_frame["arm_id"] == a["arm_id"], "return_over_max_drawdown"], errors="coerce").dropna().to_numpy(dtype=float)
-        bv = pd.to_numeric(seed_frame.loc[seed_frame["arm_id"] == b["arm_id"], "return_over_max_drawdown"], errors="coerce").dropna().to_numpy(dtype=float)
-        if len(av) and len(bv):
-            distribution_compare = {
-                "left": a["name"], "right": b["name"],
-                "pairwise_left_gt_right_probability": float(np.mean(av[:, None] > bv[None, :])),
-                "pair_count": int(len(av) * len(bv)),
-            }
-    same_seed_compare = _same_seed_metric_comparison(
-        seed_frame=seed_frame,
-        stochastic_arms=stochastic,
-        metric_key="return_over_max_drawdown",
-    )
-    direct_selection_r_same_seed_compare = _same_seed_metric_comparison(
-        seed_frame=seed_frame,
-        stochastic_arms=stochastic,
-        metric_key="direct_selection_r",
-        require_same_parameter_runtime_universe=True,
-    )
-    translation_diagnostic = _paired_seed_translation_diagnostic(
-        seed_frame=seed_frame,
-        stochastic_arms=stochastic,
-        resolved_seeds=tuple(int(value) for value in contract.get("resolved_seeds") or ()),
-    )
-
     yearly_statistics: list[dict[str, Any]] = []
-    yearly_same_seed: list[dict[str, Any]] = []
     if bool(dict(contract.get("execution_options") or {}).get("yearly_report", True)):
-        for arm_order, arm in enumerate(fixed, start=1):
+        for arm in fixed:
             for item in fixed_results[arm.arm_id].get("yearly", []):
                 yearly_statistics.append({
                     "arm_id": arm.arm_id, "name": arm.name, "type": "Fixed", "n": 1,
@@ -1813,36 +1960,32 @@ def _robustness_summary(
                     "year": int(year), "is_complete_year": bool(group["is_complete_year"].astype(bool).all()),
                     **stats,
                 })
-        if len(stochastic) == 2 and not seed_yearly_frame.empty:
-            left, right = stochastic
-            p = seed_yearly_frame[seed_yearly_frame["arm_id"].isin((left.arm_id, right.arm_id))].copy()
-            for year, group in p.groupby("year", sort=True):
-                pivot = group.pivot(index="seed", columns="arm_id", values="return_pct")
-                if left.arm_id not in pivot.columns or right.arm_id not in pivot.columns:
-                    continue
-                pivot = pivot[[left.arm_id, right.arm_id]].dropna()
-                if pivot.empty:
-                    continue
-                delta = pivot[right.arm_id].to_numpy(dtype=float) - pivot[left.arm_id].to_numpy(dtype=float)
-                stats = _distribution_stats(delta); tie = np.isclose(delta, 0.0, rtol=0.0, atol=1e-12)
-                yearly_same_seed.append({
-                    "year": int(year), "left": left.name, "right": right.name, "n": int(len(delta)),
-                    "left_gt_right_count": int(np.sum((delta < 0) & ~tie)),
-                    "right_gt_left_count": int(np.sum((delta > 0) & ~tie)),
-                    "tie_count": int(np.sum(tie)),
-                    **{f"right_minus_left_{key}": value for key, value in stats.items()},
-                })
 
+    paired = _paired_comparison_summaries(
+        contract=contract,
+        settings=settings,
+        seed_frame=seed_frame,
+        seed_yearly_frame=seed_yearly_frame,
+    )
+    legacy = paired[0] if len(paired) == 1 else None
+    flattened_yearly = [
+        {"contrast_id": item["contrast_id"], **row}
+        for item in paired for row in item.get("yearly_same_seed") or []
+    ]
     return {
         "schema_version": ROBUSTNESS_SCHEMA_VERSION,
         "status": "RESULT_AVAILABLE", "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "contract": contract, "mean_strategy_metrics": mean_rows,
-        "romd_statistics": romd_rows, "romd_distribution_comparison": distribution_compare,
-        "romd_same_seed_comparison": same_seed_compare,
-        "direct_selection_r_same_seed_comparison": direct_selection_r_same_seed_compare,
-        "selection_r_to_strategy_same_seed_translation": translation_diagnostic,
-        "yearly_statistics": yearly_statistics, "yearly_same_seed_comparison": yearly_same_seed,
+        "romd_statistics": romd_rows,
+        "paired_comparisons": paired,
+        "romd_distribution_comparison": None if legacy is None else legacy.get("romd_distribution"),
+        "romd_same_seed_comparison": None if legacy is None else legacy.get("romd_same_seed"),
+        "direct_selection_r_same_seed_comparison": None if legacy is None else legacy.get("direct_selection_r_same_seed"),
+        "selection_r_to_strategy_same_seed_translation": None if legacy is None else legacy.get("selection_r_to_strategy"),
+        "yearly_statistics": yearly_statistics,
+        "yearly_same_seed_comparison": flattened_yearly,
     }
+
 
 def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
     def esc(value: Any) -> str:
@@ -1894,92 +2037,110 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
         "## 1. 平均策略績效", "", _markdown_table(mean_headers, mean_rows), "",
         "## 2. RoMD完整統計", "", _markdown_table(romd_headers, romd_rows),
     ]
-    same = summary.get("romd_same_seed_comparison")
-    if isinstance(same, dict):
-        n = int(same["n"])
-        lines += ["", "### RoMD同seed配對比較", "",
-            f"- {same['right']} > {same['left']}：{same['right_gt_left_count']}/{n}；"
-            f"{same['left']} > {same['right']}：{same['left_gt_right_count']}/{n}；平手：{same['tie_count']}/{n}。",
-            f"- ΔRoMD（{same['right']} − {same['left']}）：Mean {_fmt(same['right_minus_left_mean'])}；"
-            f"Median {_fmt(same['right_minus_left_median'])}；Std {_fmt(same['right_minus_left_std'])}；"
-            f"Min {_fmt(same['right_minus_left_min'])}；P25 {_fmt(same['right_minus_left_p25'])}；"
-            f"P75 {_fmt(same['right_minus_left_p75'])}；Max {_fmt(same['right_minus_left_max'])}。"]
-    direct_same = summary.get("direct_selection_r_same_seed_comparison")
-    if isinstance(direct_same, dict):
-        n = int(direct_same["n"])
-        lines += ["", "### DL選擇R同seed配對比較", "",
-            f"- {direct_same['right']} > {direct_same['left']}：{direct_same['right_gt_left_count']}/{n}；"
-            f"{direct_same['left']} > {direct_same['right']}：{direct_same['left_gt_right_count']}/{n}；平手：{direct_same['tie_count']}/{n}。",
-            f"- ΔDL選擇R（{direct_same['right']} − {direct_same['left']}）："
-            f"Mean {_fmt(direct_same['right_minus_left_mean'], suffix=' R')}；"
-            f"Median {_fmt(direct_same['right_minus_left_median'], suffix=' R')}；"
-            f"Std {_fmt(direct_same['right_minus_left_std'], suffix=' R')}；"
-            f"Min {_fmt(direct_same['right_minus_left_min'], suffix=' R')}；"
-            f"P25 {_fmt(direct_same['right_minus_left_p25'], suffix=' R')}；"
-            f"P75 {_fmt(direct_same['right_minus_left_p75'], suffix=' R')}；"
-            f"Max {_fmt(direct_same['right_minus_left_max'], suffix=' R')}。"]
 
-    translation = summary.get("selection_r_to_strategy_same_seed_translation")
-    if isinstance(translation, dict):
-        n = int(translation["n"])
-        positive_n = int(translation["selection_r_positive_count"])
-        translated_n = int(translation["selection_r_positive_romd_positive_count"])
-        pair_rows = []
-        for row in translation.get("seed_rows") or []:
-            selection_delta = float(row["right_minus_left_direct_selection_r"])
-            romd_delta = float(row["right_minus_left_return_over_max_drawdown"])
-            if selection_delta > 0 and romd_delta > 0:
-                verdict = "ranking↑／RoMD↑"
-            elif selection_delta > 0:
-                verdict = "ranking↑／RoMD↓"
-            elif romd_delta > 0:
-                verdict = "ranking↓／RoMD↑"
-            else:
-                verdict = "ranking↓／RoMD↓"
-            pair_rows.append([
-                f"S{int(row['seed_index'])}",
-                _fmt(selection_delta, suffix=" R"),
-                _fmt(row["right_minus_left_total_return_pct"], suffix="%"),
-                _fmt(row["right_minus_left_max_drawdown_pct"], suffix="%"),
-                _fmt(romd_delta),
-                _fmt(row["right_minus_left_expected_value_r"], suffix=" R"),
-                verdict,
-            ])
-        lines += ["", "### DL選擇R → 策略績效同seed轉化", ""]
-        if pair_rows:
-            lines += [_markdown_table(
-                ["Seed", "ΔDL選擇R", "ΔReturn", "ΔMDD", "ΔRoMD", "ΔEV", "方向"],
-                pair_rows,
-            ), ""]
-        translated_rate = None if positive_n == 0 else translated_n / positive_n
-        lines += [
-            f"- ΔDL選擇R > 0：{positive_n}/{n}；其中ΔRoMD > 0："
-            f"{translated_n}/{positive_n if positive_n else 0}"
-            + (
-                ""
-                if translated_rate is None
-                else f"（{translated_rate * 100:.1f}%）"
-            )
-            + "。",
-            f"- ΔDL選擇R與ΔRoMD方向一致：{translation['sign_concordant_count']}/"
-            f"{translation['sign_non_tie_n']}；方向相反：{translation['sign_discordant_count']}/"
-            f"{translation['sign_non_tie_n']}。",
-            f"- Spearman(ΔDL選擇R, ΔRoMD) = "
-            f"{_fmt(translation.get('selection_r_delta_vs_romd_spearman'), digits=3)}；"
-            f"Spearman(ΔDL選擇R, ΔReturn) = "
-            f"{_fmt(translation.get('selection_r_delta_vs_return_spearman'), digits=3)}。",
-            "- 此段只描述同seed ranking→portfolio轉化，不作best-seed選擇，也不是新的promotion gate。",
-        ]
+    paired = list(summary.get("paired_comparisons") or [])
+    if not paired:
+        legacy_same = summary.get("romd_same_seed_comparison")
+        if isinstance(legacy_same, dict):
+            paired = [{
+                "contrast_id": "legacy_default",
+                "description": "歷史兩arm robustness同seed比較",
+                "left": legacy_same.get("left"),
+                "right": legacy_same.get("right"),
+                "romd_same_seed": legacy_same,
+                "direct_selection_r_same_seed": summary.get("direct_selection_r_same_seed_comparison"),
+                "selection_r_to_strategy": summary.get("selection_r_to_strategy_same_seed_translation"),
+                "romd_distribution": summary.get("romd_distribution_comparison"),
+                "yearly_same_seed": summary.get("yearly_same_seed_comparison") or [],
+            }]
 
-    compare = summary.get("romd_distribution_comparison")
-    if isinstance(compare, dict):
-        lines += ["", "### RoMD任意seed分布交叉比較", "",
-            f"- P({compare['left']} > {compare['right']}) = {float(compare['pairwise_left_gt_right_probability'])*100:.2f}% "
-            f"（{compare['pair_count']}組cross-seed pairs；與同seed配對問題不同）。"]
+    next_section = 3
+    if paired:
+        lines += ["", f"## {next_section}. 設定中的同seed contrasts", ""]
+        for item in paired:
+            left = str(item.get("left") or "Left")
+            right = str(item.get("right") or "Right")
+            lines += [f"### {right} − {left}", ""]
+            description = str(item.get("description") or "").strip()
+            if description:
+                lines += [f"- 用途：{description}"]
+            same = item.get("romd_same_seed")
+            if isinstance(same, dict):
+                n = int(same["n"])
+                lines += [
+                    f"- RoMD：{same['right']} > {same['left']} {same['right_gt_left_count']}/{n}；"
+                    f"{same['left']} > {same['right']} {same['left_gt_right_count']}/{n}；Tie {same['tie_count']}/{n}。",
+                    f"- ΔRoMD Mean {_fmt(same['right_minus_left_mean'])}；Median {_fmt(same['right_minus_left_median'])}；"
+                    f"Std {_fmt(same['right_minus_left_std'])}；Min {_fmt(same['right_minus_left_min'])}；"
+                    f"P25 {_fmt(same['right_minus_left_p25'])}；P75 {_fmt(same['right_minus_left_p75'])}；Max {_fmt(same['right_minus_left_max'])}。",
+                ]
+            direct_same = item.get("direct_selection_r_same_seed")
+            if isinstance(direct_same, dict):
+                n = int(direct_same["n"])
+                lines += [
+                    f"- DL選擇R：{direct_same['right']} > {direct_same['left']} {direct_same['right_gt_left_count']}/{n}；"
+                    f"{direct_same['left']} > {direct_same['right']} {direct_same['left_gt_right_count']}/{n}；Tie {direct_same['tie_count']}/{n}。",
+                    f"- ΔDL選擇R Mean {_fmt(direct_same['right_minus_left_mean'], suffix=' R')}；"
+                    f"Median {_fmt(direct_same['right_minus_left_median'], suffix=' R')}；Std {_fmt(direct_same['right_minus_left_std'], suffix=' R')}。",
+                ]
+            translation = item.get("selection_r_to_strategy")
+            if isinstance(translation, dict):
+                pair_rows = []
+                for row in translation.get("seed_rows") or []:
+                    selection_delta = float(row["right_minus_left_direct_selection_r"])
+                    romd_delta = float(row["right_minus_left_return_over_max_drawdown"])
+                    if selection_delta > 0 and romd_delta > 0:
+                        verdict = "ranking↑／RoMD↑"
+                    elif selection_delta > 0:
+                        verdict = "ranking↑／RoMD↓"
+                    elif romd_delta > 0:
+                        verdict = "ranking↓／RoMD↑"
+                    else:
+                        verdict = "ranking↓／RoMD↓"
+                    pair_rows.append([
+                        f"S{int(row['seed_index'])}",
+                        _fmt(selection_delta, suffix=" R"),
+                        _fmt(row["right_minus_left_total_return_pct"], suffix="%"),
+                        _fmt(row["right_minus_left_max_drawdown_pct"], suffix="%"),
+                        _fmt(romd_delta),
+                        _fmt(row["right_minus_left_expected_value_r"], suffix=" R"),
+                        verdict,
+                    ])
+                if pair_rows:
+                    lines += ["", _markdown_table(
+                        ["Seed", "ΔDL選擇R", "ΔReturn", "ΔMDD", "ΔRoMD", "ΔEV", "方向"], pair_rows
+                    )]
+                positive_n = int(translation["selection_r_positive_count"])
+                translated_n = int(translation["selection_r_positive_romd_positive_count"])
+                lines += [
+                    f"- ΔDL選擇R>0：{positive_n}/{translation['n']}；其中ΔRoMD>0：{translated_n}/{positive_n if positive_n else 0}。",
+                    f"- 方向一致：{translation['sign_concordant_count']}/{translation['sign_non_tie_n']}；"
+                    f"方向相反：{translation['sign_discordant_count']}/{translation['sign_non_tie_n']}。",
+                    f"- Spearman(ΔDL選擇R, ΔRoMD)={_fmt(translation.get('selection_r_delta_vs_romd_spearman'), digits=3)}；"
+                    f"Spearman(ΔDL選擇R, ΔReturn)={_fmt(translation.get('selection_r_delta_vs_return_spearman'), digits=3)}。",
+                ]
+            compare = item.get("romd_distribution")
+            if isinstance(compare, dict):
+                lines += [
+                    f"- Cross-seed P({compare['left']} > {compare['right']})="
+                    f"{float(compare['pairwise_left_gt_right_probability'])*100:.2f}%（{compare['pair_count']} pairs）。"
+                ]
+            annual_pair = list(item.get("yearly_same_seed") or [])
+            if annual_pair:
+                pair_rows = [[
+                    str(row["year"]), str(row["n"]), _fmt(row["right_minus_left_mean"], suffix="%"),
+                    _fmt(row["right_minus_left_median"], suffix="%"), _fmt(row["right_minus_left_std"], suffix="%"),
+                    f"{row['right_gt_left_count']}/{row['n']}", f"{row['left_gt_right_count']}/{row['n']}", f"{row['tie_count']}/{row['n']}",
+                ] for row in annual_pair]
+                lines += ["", _markdown_table(
+                    ["年度", "N", "Δ右-左 Mean", "Median", "Std", "右勝", "左勝", "Tie"], pair_rows
+                )]
+            lines += [""]
+        next_section += 1
 
     yearly = list(summary.get("yearly_statistics") or [])
     if yearly:
-        lines += ["", "## 3. 歷年報酬完整統計", ""]
+        lines += ["", f"## {next_section}. 歷年報酬完整統計", ""]
         rows = []
         for row in sorted(yearly, key=lambda x: (int(x["year"]), str(x["type"]), str(x["name"]))):
             rows.append([
@@ -1987,27 +2148,16 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
                 _fmt(row["mean"], suffix="%"), _fmt(row["median"], suffix="%"), _fmt(row["std"], suffix="%"),
                 _fmt(row["min"], suffix="%"), _fmt(row["p25"], suffix="%"), _fmt(row["p75"], suffix="%"), _fmt(row["max"], suffix="%"),
             ])
-        lines += [_markdown_table(["年度", "比較對象", "類型", "N", "Mean", "Median", "Std", "Min", "P25", "P75", "Max"], rows)]
-        annual_pair = list(summary.get("yearly_same_seed_comparison") or [])
-        if annual_pair:
-            lines += ["", "### 年度同seed配對比較", ""]
-            pair_rows = []
-            for row in annual_pair:
-                pair_rows.append([
-                    str(row["year"]), str(row["n"]), _fmt(row["right_minus_left_mean"], suffix="%"),
-                    _fmt(row["right_minus_left_median"], suffix="%"), _fmt(row["right_minus_left_std"], suffix="%"),
-                    f"{row['right_gt_left_count']}/{row['n']}", f"{row['left_gt_right_count']}/{row['n']}", f"{row['tie_count']}/{row['n']}",
-                ])
-            lines += [_markdown_table(["年度", "N", "Δ右-左 Mean", "Median", "Std", "右勝", "左勝", "Tie"], pair_rows)]
-        lines += ["", "* 非完整年度。"]
+        lines += [_markdown_table(["年度", "比較對象", "類型", "N", "Mean", "Median", "Std", "Min", "P25", "P75", "Max"], rows), "", "* 非完整年度。"]
+        next_section += 1
 
     references = dict(contract.get("romd_reference_baselines") or {})
     min_name = str(dict(references.get("min") or {}).get("name") or "Min baseline")
     full_name = str(dict(references.get("full") or {}).get("name") or "Full baseline")
-    section_no = 4 if yearly else 3
-    lines += ["", f"## {section_no}. 限制", "",
+    lines += ["", f"## {next_section}. 限制", "",
         "- resolved seeds只用於重現；不得挑best seed或依本報表組seed ensemble。",
         f"- {full_name}／{min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一表。",
+        "- 同一DL source／seed只訓練一次，允許fan-out到不同runtime selector replay；此reuse不改變模型scientific condition。",
         "- Selection PIT與Forward-OOS robustness均只評估既定scientific condition；不得依結果回頭調整training semantics。", ""]
     return "\n".join(lines)
 
@@ -2017,86 +2167,103 @@ def _color_delta(text: str, value: Any, *, preference: str = "higher") -> str:
 
 
 def _print_report_tables(summary: dict[str, Any]) -> None:
-    print("\n" + render_title(str(summary["contract"].get("label") or "Multiple-seed Robustness")))
-    headers = ["比較對象", "類型", "N"] + [f"{label} Mean" for label, _key, _unit in MEAN_METRICS]
-    rows = []
+    color_enabled = console_color_enabled()
+    print("\n" + render_title(str(dict(summary.get("contract") or {}).get("label") or "Multiple-seed robustness")))
+    mean_rows = []
     for row in summary["mean_strategy_metrics"]:
-        cells = [row["name"], row["type"], row["n"]]
-        for _label, key, unit in MEAN_METRICS:
-            digits = 1 if key == "trade_count" else 4 if key == "log_r_squared" else 2
-            cells.append(_fmt(row.get(key), digits=digits, suffix=unit))
-        rows.append(cells)
-    print(render_table(headers, rows))
-    print("\nRoMD完整統計")
-    rows = []
+        mean_rows.append([
+            row["name"], row["type"], row["n"],
+            _fmt(row.get("total_return_pct"), suffix="%"),
+            _fmt(row.get("max_drawdown_pct"), suffix="%"),
+            _fmt(row.get("return_over_max_drawdown")),
+            _fmt(row.get("annual_return_pct"), suffix="%"),
+            _fmt(row.get("expected_value_r"), suffix=" R"),
+            _fmt(row.get("avg_exposure_pct"), suffix="%"),
+            _fmt(row.get("direct_selection_r"), suffix=" R"),
+        ])
+    print("\n1. 平均策略績效")
+    print(render_table(
+        ["比較對象", "類型", "N", "Return", "MDD", "RoMD", "Annual", "EV", "Exposure", "DL選擇R"],
+        mean_rows,
+    ))
+
+    romd_rows = []
     for row in summary["romd_statistics"]:
         n = int(row["n"])
-        rows.append([row["name"], n, _fmt(row["mean"]), _fmt(row["median"]), _fmt(row["std"]), _fmt(row["cv"]),
-            _fmt(row["min"]), _fmt(row["p25"]), _fmt(row["p75"]), _fmt(row["max"]),
+        romd_rows.append([
+            row["name"], n, _fmt(row["mean"]), _fmt(row["median"]), _fmt(row["std"]),
+            _fmt(row["cv"]), _fmt(row["min"]), _fmt(row["p25"]), _fmt(row["p75"]), _fmt(row["max"]),
             "-" if row["beats_min_count"] is None else f"{row['beats_min_count']}/{n}",
-            "-" if row["beats_full_count"] is None else f"{row['beats_full_count']}/{n}"])
-    print(render_table(["比較對象", "N", "Mean", "Median", "Std", "CV", "Min", "P25", "P75", "Max", "勝Min", "勝Full"], rows))
-    same = summary.get("romd_same_seed_comparison")
-    if isinstance(same, dict):
-        n = int(same["n"]); delta = same["right_minus_left_mean"]
-        print("\nRoMD同seed配對比較")
-        print(f"{same['right']} > {same['left']}：{same['right_gt_left_count']}/{n} | {same['left']} > {same['right']}：{same['left_gt_right_count']}/{n} | 平手：{same['tie_count']}/{n}")
-        print("ΔRoMD Mean：" + _color_delta(_fmt(delta), delta) + f" | Median {_fmt(same['right_minus_left_median'])} | Std {_fmt(same['right_minus_left_std'])}")
-    direct_same = summary.get("direct_selection_r_same_seed_comparison")
-    if isinstance(direct_same, dict):
-        n = int(direct_same["n"])
-        delta = direct_same["right_minus_left_mean"]
-        print("\nDL選擇R同seed配對比較")
-        print(f"{direct_same['right']} > {direct_same['left']}：{direct_same['right_gt_left_count']}/{n} | {direct_same['left']} > {direct_same['right']}：{direct_same['left_gt_right_count']}/{n} | 平手：{direct_same['tie_count']}/{n}")
-        print("ΔDL選擇R Mean：" + _color_delta(_fmt(delta, suffix=" R"), delta) + f" | Median {_fmt(direct_same['right_minus_left_median'], suffix=' R')} | Std {_fmt(direct_same['right_minus_left_std'], suffix=' R')}")
+            "-" if row["beats_full_count"] is None else f"{row['beats_full_count']}/{n}",
+        ])
+    print("\n2. RoMD完整統計")
+    print(render_table(["比較對象", "N", "Mean", "Median", "Std", "CV", "Min", "P25", "P75", "Max", "勝Min", "勝Full"], romd_rows))
 
-    translation = summary.get("selection_r_to_strategy_same_seed_translation")
-    if isinstance(translation, dict):
-        positive_n = int(translation["selection_r_positive_count"])
-        translated_n = int(translation["selection_r_positive_romd_positive_count"])
-        print("\nDL選擇R → 策略績效同seed轉化")
-        print(
-            f"ΔDL選擇R>0：{positive_n}/{translation['n']} | "
-            f"其中ΔRoMD>0：{translated_n}/{positive_n if positive_n else 0} | "
-            f"方向一致：{translation['sign_concordant_count']}/{translation['sign_non_tie_n']}"
-        )
-        print(
-            "Spearman ΔDL選擇R↔ΔRoMD："
-            + _fmt(translation.get("selection_r_delta_vs_romd_spearman"), digits=3)
-            + " | ΔDL選擇R↔ΔReturn："
-            + _fmt(translation.get("selection_r_delta_vs_return_spearman"), digits=3)
-        )
+    paired = list(summary.get("paired_comparisons") or [])
+    if not paired:
+        same = summary.get("romd_same_seed_comparison")
+        if isinstance(same, dict):
+            paired = [{
+                "contrast_id": "legacy_default",
+                "left": same.get("left"), "right": same.get("right"),
+                "romd_same_seed": same,
+                "direct_selection_r_same_seed": summary.get("direct_selection_r_same_seed_comparison"),
+                "selection_r_to_strategy": summary.get("selection_r_to_strategy_same_seed_translation"),
+            }]
+    if paired:
+        print("\n3. 設定中的同seed contrasts")
+        for item in paired:
+            same = item.get("romd_same_seed")
+            if not isinstance(same, dict):
+                continue
+            n = int(same["n"])
+            delta = same["right_minus_left_mean"]
+            print(f"\n{same['right']} − {same['left']}")
+            print(
+                f"RoMD右勝左={same['right_gt_left_count']}/{n} | 左勝右={same['left_gt_right_count']}/{n} | "
+                f"Tie={same['tie_count']}/{n} | ΔRoMD Mean="
+                + _color_delta(_fmt(delta), delta)
+                + f" | Median {_fmt(same['right_minus_left_median'])} | Std {_fmt(same['right_minus_left_std'])}"
+            )
+            direct = item.get("direct_selection_r_same_seed")
+            if isinstance(direct, dict):
+                d = direct["right_minus_left_mean"]
+                print(
+                    f"DL選擇R右勝左={direct['right_gt_left_count']}/{direct['n']} | ΔMean="
+                    + _color_delta(_fmt(d, suffix=" R"), d)
+                )
+            translation = item.get("selection_r_to_strategy")
+            if isinstance(translation, dict):
+                positive_n = int(translation["selection_r_positive_count"])
+                translated_n = int(translation["selection_r_positive_romd_positive_count"])
+                print(
+                    f"ΔDL選擇R>0={positive_n}/{translation['n']} | 其中ΔRoMD>0="
+                    f"{translated_n}/{positive_n if positive_n else 0} | 方向一致="
+                    f"{translation['sign_concordant_count']}/{translation['sign_non_tie_n']}"
+                )
 
     yearly = list(summary.get("yearly_statistics") or [])
-    annual_pair = list(summary.get("yearly_same_seed_comparison") or [])
     if yearly:
-        print("\n歷年報酬")
-        fixed = [row for row in summary["mean_strategy_metrics"] if row["type"] == "Fixed"]
-        stochastic = [row for row in summary["mean_strategy_metrics"] if row["type"] == "Multi-seed"]
-        names = [row["name"] for row in (*fixed, *stochastic)]
+        print("\n歷年報酬 Mean")
+        names = [row["name"] for row in summary["mean_strategy_metrics"]]
         by_key = {(int(row["year"]), str(row["name"])): row for row in yearly}
-        annual_by_year = {int(row["year"]): row for row in annual_pair}
         table_rows = []
         for year in sorted({int(row["year"]) for row in yearly}):
             sample = next(row for row in yearly if int(row["year"]) == year)
             cells = [str(year) + ("" if sample.get("is_complete_year") else "*")]
             for name in names:
-                record = by_key.get((year, name)); cells.append("-" if record is None else _fmt(record["mean"], suffix="%"))
-            pair = annual_by_year.get(year)
-            if pair:
-                delta = pair["right_minus_left_mean"]
-                cells += [_color_delta(_fmt(delta, suffix="%"), delta), f"{pair['right_gt_left_count']}/{pair['n']}"]
-            else:
-                cells += ["-", "-"]
+                record = by_key.get((year, name))
+                cells.append("-" if record is None else _fmt(record["mean"], suffix="%"))
             table_rows.append(cells)
-        print(render_table(["年度", *names, "Δ右-左", "右勝左"], table_rows))
+        print(render_table(["年度", *names], table_rows))
         print("* 非完整年度")
+
 
 def show_multi_seed_robustness_status(*, robustness_id: str | None = None) -> None:
     cfg = get_strategy_multi_seed_robustness_settings(robustness_id)
     settings = get_strategy_comparison_settings(cfg.profile_id)
     status = collect_artifact_status(settings=settings)
-    fixed, stochastic = _robustness_arms(settings)
+    fixed, stochastic = _robustness_arms(settings, cfg)
     plan_text, plan = _render_robustness_execution_plan(
         cfg=cfg, settings=settings, status=status, fixed_arms=fixed, stochastic_arms=stochastic
     )
@@ -2143,11 +2310,14 @@ def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None
         summary = _read_json(summary_path)
         needs_upgrade = (
             int(summary.get("schema_version") or 0) < ROBUSTNESS_SCHEMA_VERSION
+            or "paired_comparisons" not in summary
             or "direct_selection_r_same_seed_comparison" not in summary
             or "selection_r_to_strategy_same_seed_translation" not in summary
         )
         seed_results_path = summary_path.parent / SEED_RESULTS_FILENAME
+        seed_yearly_results_path = summary_path.parent / SEED_YEARLY_RESULTS_FILENAME
         seed_frame = _load_seed_results(seed_results_path)
+        seed_yearly_frame = _load_seed_yearly_results(seed_yearly_results_path)
         if (
             needs_upgrade
             and not seed_frame.empty
@@ -2156,6 +2326,7 @@ def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None
             upgraded = _upgrade_derived_report_summary(
                 summary,
                 seed_frame=seed_frame,
+                seed_yearly_frame=seed_yearly_frame,
             )
             _write_json(summary_path, upgraded)
             report.write_text(
@@ -2218,11 +2389,13 @@ def _manifest_progress_payload(
     active_trainings = []
     for meta in (training_futures or {}).values():
         item = {
-            "arm_id": str(meta["arm"].arm_id),
+            "dl_id": str(meta["dl_id"]),
             "name": str(meta["arm"].name),
             "seed": int(meta["seed"]),
             "seed_order": int(meta["seed_order"]),
-            "arm_order": int(meta["arm_order"]),
+            "source_order": int(meta["source_order"]),
+            "source_count": int(meta["source_count"]),
+            "replay_arm_ids": [arm.arm_id for _arm_order, arm in meta["replay_arms"]],
         }
         pit_progress = _pit_saved_fold_progress(meta)
         if pit_progress is not None:
@@ -2249,7 +2422,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
     if not cfg.enabled:
         raise RuntimeError("Multiple-seed robustness目前由config關閉")
     settings = get_strategy_comparison_settings(cfg.profile_id)
-    fixed_arms, stochastic_arms = _robustness_arms(settings)
+    fixed_arms, stochastic_arms = _robustness_arms(settings, cfg)
     status = collect_artifact_status(settings=settings)
     plan_text, plan = _render_robustness_execution_plan(
         cfg=cfg, settings=settings, status=status, fixed_arms=fixed_arms, stochastic_arms=stochastic_arms
@@ -2390,9 +2563,14 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         for row in rows
     }
     total_units = len(stochastic_arms) * len(seeds)
+    training_sources = _training_source_groups(stochastic_arms)
+    training_unit_count = len(training_sources) * len(seeds)
     done_units = len(completed)
     print("\n" + render_title("Multiple-seed robustness 執行"))
-    print(f"Seeds={len(seeds)} | stochastic arms={len(stochastic_arms)} | work units={total_units}")
+    print(
+        f"Seeds={len(seeds)} | stochastic arms={len(stochastic_arms)} | replay units={total_units} | "
+        f"unique DL sources={len(training_sources)} | train units={training_unit_count}"
+    )
     print(f"GPU train workers={cfg.gpu_train_workers} | CPU replay workers={cfg.cpu_replay_workers}")
     if cfg.keep_attribution_source:
         missing_attr = scientific_completed - attribution_ready
@@ -2436,10 +2614,16 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         comparison_end=comparison_end,
         reuse_completed=cfg.reuse_completed,
     )
+    training_cleanup_targets = []
     for meta in pending_trainings:
         meta["trainer_registry"] = active_trainers
         meta["trainer_registry_lock"] = active_trainers_lock
-        meta["trainer_key"] = _unit_key(meta["arm"].arm_id, int(meta["seed"]))
+        meta["trainer_key"] = _unit_key(str(meta["dl_id"]), int(meta["seed"]))
+        training_cleanup_targets.append({
+            "model_dir": Path(str(meta["model_dir"])),
+            "research_dir": Path(str(meta["research_dir"])),
+            "score_source": str(settings.dl_sources[str(meta["dl_id"])].score_source),
+        })
 
     for seed_order, seed in enumerate(seeds, start=1):
         for arm_order, arm in enumerate(stochastic_arms, start=1):
@@ -2460,11 +2644,13 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             return None
         meta = next(iter(training_futures.values()))
         return {
-            "arm_id": meta["arm"].arm_id,
+            "dl_id": str(meta["dl_id"]),
             "name": meta["arm"].name,
             "seed": int(meta["seed"]),
             "seed_order": int(meta["seed_order"]),
-            "arm_order": int(meta["arm_order"]),
+            "source_order": int(meta["source_order"]),
+            "source_count": int(meta["source_count"]),
+            "replay_arm_ids": [arm.arm_id for _arm_order, arm in meta["replay_arms"]],
             "state": "TRAINING",
         }
 
@@ -2560,17 +2746,6 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
                 f"replay={_format_elapsed(result.get('replay_elapsed_sec', 0))} | "
                 f"total={_format_elapsed(time.perf_counter()-started_total)}"
             )
-            arm_cfg = next(
-                arm for arm in stochastic_arms if arm.arm_id == str(result["arm_id"])
-            )
-            score_source = str(settings.dl_sources[str(arm_cfg.dl_id)].score_source)
-            _cleanup_unit_artifacts(
-                model_dir=Path(meta["model_dir"]),
-                research_dir=Path(meta["research_dir"]),
-                keep_checkpoints=cfg.keep_checkpoints,
-                keep_scores=cfg.keep_scores,
-                score_source=score_source,
-            )
         if finished:
             write_progress_manifest()
 
@@ -2599,57 +2774,56 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             progress.print_line(
                 paint(tag, "green", enabled=color_enabled, bold=True)
                 + f" seed {meta['seed_order']}/{len(seeds)} | "
-                f"對象 {meta['arm_order']}/{len(stochastic_arms)} {meta['arm'].name} "
+                f"模型來源 {meta['source_order']}/{meta['source_count']} {meta['dl_id']} "
+                + f"| replay targets={len(meta['replay_arms'])} "
                 + f"| epoch={artifacts['selected_epoch']} "
                 + f"| elapsed={_format_elapsed(artifacts.get('training_elapsed_sec', trained['wall_elapsed_sec']))}"
             )
-            arm = meta["arm"]
-            baseline_dir = baseline_by_group.get((arm.param_source, arm.rule_policy))
-            if not baseline_dir:
-                raise RuntimeError(
-                    f"stochastic arm找不到同參數fixed baseline: {arm.param_source}/{arm.rule_policy}"
-                )
-            unit = _unit_key(arm.arm_id, int(meta["seed"]))
-            pair_dir = run_root / "work" / "replay" / unit
-            result_path = run_root / "work" / "results" / f"{unit}.json"
-            replay_job = {
-                "profile_id": settings.profile_id,
-                "arm_id": arm.arm_id,
-                "arm_order": int(meta["arm_order"]),
-                "seed": int(meta["seed"]),
-                "seed_order": int(meta["seed_order"]),
-                "params_path": str(resolved_params[arm.param_source]),
-                "comparison_start": comparison_start,
-                "comparison_end": comparison_end,
-                "baseline_dir": baseline_dir,
-                "score_path": artifacts["score"],
-                "score_manifest_path": artifacts.get("manifest"),
-                "score_execution_start": artifacts["score_execution_start"],
-                "selected_epoch": artifacts["selected_epoch"],
-                "fold_count": artifacts.get("fold_count"),
-                "training_elapsed_sec": artifacts["training_elapsed_sec"],
-                "model_sha256": artifacts.get("model_sha256"),
-                "score_sha256": artifacts.get("score_sha256"),
-                "pair_dir": str(pair_dir),
-                "result_path": str(result_path),
-                "scientific_fingerprint": str(contract["fingerprint"]),
-                "robustness_id": cfg.robustness_id,
-                "keep_replay_details": cfg.keep_replay_details,
-                "keep_attribution_source": cfg.keep_attribution_source,
-                "attribution_dir": str(_attribution_unit_dir(run_root, arm.arm_id, int(meta["seed"]))),
-            }
-            ready_replays.append((
-                replay_job,
-                {
+            for arm_order, arm in meta["replay_arms"]:
+                baseline_dir = baseline_by_group.get((arm.param_source, arm.rule_policy))
+                if not baseline_dir:
+                    raise RuntimeError(
+                        f"stochastic arm找不到同參數fixed baseline: {arm.param_source}/{arm.rule_policy}"
+                    )
+                unit = _unit_key(arm.arm_id, int(meta["seed"]))
+                pair_dir = run_root / "work" / "replay" / unit
+                result_path = run_root / "work" / "results" / f"{unit}.json"
+                replay_job = {
+                    "profile_id": settings.profile_id,
                     "arm_id": arm.arm_id,
-                    "name": arm.name,
+                    "arm_order": int(arm_order),
                     "seed": int(meta["seed"]),
                     "seed_order": int(meta["seed_order"]),
-                    "arm_order": int(meta["arm_order"]),
-                    "model_dir": str(meta["model_dir"]),
-                    "research_dir": str(meta["research_dir"]),
-                },
-            ))
+                    "params_path": str(resolved_params[arm.param_source]),
+                    "comparison_start": comparison_start,
+                    "comparison_end": comparison_end,
+                    "baseline_dir": baseline_dir,
+                    "score_path": artifacts["score"],
+                    "score_manifest_path": artifacts.get("manifest"),
+                    "score_execution_start": artifacts["score_execution_start"],
+                    "selected_epoch": artifacts["selected_epoch"],
+                    "fold_count": artifacts.get("fold_count"),
+                    "training_elapsed_sec": artifacts["training_elapsed_sec"],
+                    "model_sha256": artifacts.get("model_sha256"),
+                    "score_sha256": artifacts.get("score_sha256"),
+                    "pair_dir": str(pair_dir),
+                    "result_path": str(result_path),
+                    "scientific_fingerprint": str(contract["fingerprint"]),
+                    "robustness_id": cfg.robustness_id,
+                    "keep_replay_details": cfg.keep_replay_details,
+                    "keep_attribution_source": cfg.keep_attribution_source,
+                    "attribution_dir": str(_attribution_unit_dir(run_root, arm.arm_id, int(meta["seed"]))),
+                }
+                ready_replays.append((
+                    replay_job,
+                    {
+                        "arm_id": arm.arm_id,
+                        "name": arm.name,
+                        "seed": int(meta["seed"]),
+                        "seed_order": int(meta["seed_order"]),
+                        "arm_order": int(arm_order),
+                    },
+                ))
         if finished:
             write_progress_manifest()
 
@@ -2662,7 +2836,8 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             progress_update(
                 paint("[TRAIN]", "cyan", enabled=color_enabled, bold=True)
                 + f" seed {meta['seed_order']}/{len(seeds)} | "
-                f"對象 {meta['arm_order']}/{len(stochastic_arms)} {meta['arm'].name} "
+                f"模型來源 {meta['source_order']}/{meta['source_count']} {meta['dl_id']} "
+                + f"| replay targets={len(meta['replay_arms'])} "
                 + f"| GPU running={len(training_futures)}/{cfg.gpu_train_workers} "
                 + f"| completed={done_units}/{total_units}"
             )
@@ -2728,6 +2903,17 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
     finally:
         training_executor.shutdown(wait=True, cancel_futures=True)
         replay_executor.shutdown(wait=True, cancel_futures=False)
+
+    # 同一DL source/seed可fan-out多個selector replay；必須等所有replay完成後才清除
+    # 共用的isolated model/score，避免第一個arm完成就刪掉第二個arm仍需讀取的工件。
+    for target in training_cleanup_targets:
+        _cleanup_unit_artifacts(
+            model_dir=target["model_dir"],
+            research_dir=target["research_dir"],
+            keep_checkpoints=cfg.keep_checkpoints,
+            keep_scores=cfg.keep_scores,
+            score_source=target["score_source"],
+        )
 
     try:
         seed_frame = _load_seed_results(seed_results_path)

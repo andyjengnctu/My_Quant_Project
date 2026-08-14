@@ -731,12 +731,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         robustness_settings.profile_id
     )
     robustness_fixed = tuple(
-        arm for arm in robustness_profile.enabled_arms
-        if arm.robustness_role == "fixed_baseline"
+        robustness_profile.arms[arm_id] for arm_id in robustness_settings.fixed_arm_ids
     )
     robustness_stochastic = tuple(
-        arm for arm in robustness_profile.enabled_arms
-        if arm.robustness_role == "stochastic"
+        robustness_profile.arms[arm_id] for arm_id in robustness_settings.stochastic_arm_ids
     )
     reference_specs = dict(robustness_settings.romd_reference_baselines)
     reference_matches = {
@@ -749,7 +747,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     }
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "multi_seed_robustness_is_strategy_compare_config_driven_without_second_arm_id_list",
+        "multi_seed_robustness_matrix_is_profile_config_driven_without_mutating_single_seed_arm_identity",
         True,
         robustness_path.is_file()
         and {item["robustness_id"] for item in robustness_profiles} >= {"forward_oos", "selection_pit"}
@@ -770,7 +768,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and set(reference_matches) == {"min", "full"}
         and all(len(matches) == 1 for matches in reference_matches.values())
         and "romd_reference_baselines" in config_source
-        and "robustness_role" in config_source
+        and "fixed_arm_ids" in config_source
+        and "stochastic_arm_ids" in config_source
         and "MULTI_SEED_ROBUSTNESS_ARM_IDS" not in config_source
         and all(token not in robustness_source for token in ("\"C20\"", "\"C29\"", "\"MR-12B\"", "\"MR-13A\"", "\"Min ROOS\"", "\"Full ROOS\"")),
     )
@@ -798,6 +797,109 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and all(seed > 0 for seed in seeds_a)
         and "best_seed =" not in robustness_source.lower()
         and "selected_best_seed" not in robustness_source.lower(),
+    )
+
+    source_groups = robustness_module._training_source_groups(robustness_stochastic)
+    dedupe_seeds = (101, 202)
+    dedupe_units = list(robustness_module._training_units(
+        seeds=dedupe_seeds,
+        stochastic_arms=robustness_stochastic,
+        settings=robustness_profile,
+        completed=set(),
+        model_root=Path("/tmp/synthetic_multi_seed_models"),
+        run_root=Path("/tmp/synthetic_multi_seed_run"),
+        comparison_start="2021-01-01",
+        comparison_end="2025-12-31",
+        reuse_completed=True,
+    ))
+    group_arms = {
+        dl_id: tuple(arm.arm_id for _arm_order, arm in entries)
+        for dl_id, entries in source_groups
+    }
+    dedupe_unit_replays = {
+        (str(unit["dl_id"]), int(unit["seed"])):
+            tuple(arm.arm_id for _arm_order, arm in unit["replay_arms"])
+        for unit in dedupe_units
+    }
+    shared_source_groups = {
+        dl_id: arm_ids for dl_id, arm_ids in group_arms.items() if len(arm_ids) > 1
+    }
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_training_deduplicates_same_dl_source_per_seed_then_fans_out_to_multiple_runtime_arms",
+        True,
+        bool(shared_source_groups)
+        and len(dedupe_units) == len(source_groups) * len(dedupe_seeds)
+        and sum(len(unit["replay_arms"]) for unit in dedupe_units)
+            == len(robustness_stochastic) * len(dedupe_seeds)
+        and all(
+            dedupe_unit_replays[(dl_id, seed)] == arm_ids
+            for dl_id, arm_ids in group_arms.items()
+            for seed in dedupe_seeds
+        )
+        and all(
+            sum(1 for unit in dedupe_units if str(unit["dl_id"]) == dl_id and int(unit["seed"]) == seed) == 1
+            for dl_id in group_arms
+            for seed in dedupe_seeds
+        )
+        and "replay_arms" in robustness_source
+        and "training_cleanup_targets" in robustness_source,
+    )
+
+    stage_robustness_contracts = {}
+    for robustness_id, expected_stochastic, expected_pairs in (
+        (
+            "selection_pit",
+            ("C25", "C35", "C42"),
+            (("C25", "C42"), ("C35", "C42")),
+        ),
+        (
+            "forward_oos",
+            ("C20", "C36", "C44"),
+            (("C20", "C44"), ("C36", "C44")),
+        ),
+    ):
+        stage_cfg = strategy_config.get_strategy_multi_seed_robustness_settings(robustness_id)
+        stage_profile = strategy_config.get_strategy_comparison_settings(stage_cfg.profile_id)
+        stage_stochastic = tuple(
+            stage_profile.arms[arm_id] for arm_id in stage_cfg.stochastic_arm_ids
+        )
+        stage_groups = robustness_module._training_source_groups(stage_stochastic)
+        stage_units = list(robustness_module._training_units(
+            seeds=dedupe_seeds, stochastic_arms=stage_stochastic, settings=stage_profile,
+            completed=set(), model_root=Path(f"/tmp/{robustness_id}_models"),
+            run_root=Path(f"/tmp/{robustness_id}_run"),
+            comparison_start="2021-01-01", comparison_end="2025-12-31", reuse_completed=True,
+        ))
+        stage_robustness_contracts[robustness_id] = (
+            tuple(arm.arm_id for arm in stage_stochastic),
+            tuple((str(item["left"]), str(item["right"])) for item in stage_cfg.paired_contrasts),
+            len(stage_groups),
+            len(stage_units),
+            sum(len(unit["replay_arms"]) for unit in stage_units),
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_selection_and_forward_use_minimal_mr12b_mr13e_heuristic_exact_matrices_with_two_source_trainings",
+        {
+            "selection_pit": (("C25", "C35", "C42"), (("C25", "C42"), ("C35", "C42")), 2, 4, 6),
+            "forward_oos": (("C20", "C36", "C44"), (("C20", "C44"), ("C36", "C44")), 2, 4, 6),
+        },
+        stage_robustness_contracts,
+    )
+    selection_single = strategy_config.get_strategy_comparison_settings("selection_pit")
+    forward_single = strategy_config.get_strategy_comparison_settings("forward_oos")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_activation_is_decoupled_from_single_seed_arm_role_and_schema_identity",
+        True,
+        strategy_config.STRATEGY_COMPARE_SCHEMA_VERSION == 27
+        and selection_single.arms["C35"].robustness_role == "off"
+        and selection_single.arms["C42"].robustness_role == "off"
+        and forward_single.arms["C36"].robustness_role == "off"
+        and forward_single.arms["C44"].robustness_role == "off"
+        and tuple(selection_robustness.stochastic_arm_ids) == ("C25", "C35", "C42")
+        and tuple(robustness_settings.stochastic_arm_ids) == ("C20", "C36", "C44"),
     )
 
     synthetic_period = {"start": "2001-01-01", "end": "2001-12-31"}
@@ -944,64 +1046,69 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )
         for arm in robustness_stochastic
     )
-    distribution_compare = synthetic_summary["romd_distribution_comparison"]
-    distribution_compare_ok = (
-        distribution_compare is None
-        if len(robustness_stochastic) != 2
-        else isinstance(distribution_compare, dict)
+    configured_pairs = tuple(robustness_settings.paired_contrasts)
+    paired_by_id = {
+        str(item["contrast_id"]): item
+        for item in synthetic_summary.get("paired_comparisons") or []
+    }
+    arm_order_by_id = {
+        arm.arm_id: arm_order
+        for arm_order, arm in enumerate(robustness_stochastic, start=1)
+    }
+    paired_comparisons_ok = (
+        set(paired_by_id) == {str(item["contrast_id"]) for item in configured_pairs}
+        and len(paired_by_id) == len(configured_pairs)
     )
-    same_seed_compare = synthetic_summary["romd_same_seed_comparison"]
-    same_seed_compare_ok = (
-        same_seed_compare is None
-        if len(robustness_stochastic) != 2
-        else (
-            isinstance(same_seed_compare, dict)
-            and same_seed_compare["n"] == 2
-            and same_seed_compare["right_gt_left_count"] == 2
-            and same_seed_compare["left_gt_right_count"] == 0
-            and same_seed_compare["tie_count"] == 0
-            and math.isclose(same_seed_compare["right_minus_left_mean"], 3.0)
-            and math.isclose(same_seed_compare["right_minus_left_median"], 3.0)
+    for spec in configured_pairs:
+        contrast_id = str(spec["contrast_id"])
+        left_id = str(spec["left"])
+        right_id = str(spec["right"])
+        item = paired_by_id.get(contrast_id)
+        if item is None:
+            paired_comparisons_ok = False
+            continue
+        expected_romd_delta = 3.0 * (
+            arm_order_by_id[right_id] - arm_order_by_id[left_id]
         )
-    )
-    direct_same_seed_compare = synthetic_summary[
-        "direct_selection_r_same_seed_comparison"
-    ]
-    direct_same_seed_compare_ok = (
-        direct_same_seed_compare is None
-        if len(robustness_stochastic) != 2
-        else (
-            isinstance(direct_same_seed_compare, dict)
-            and direct_same_seed_compare["n"] == 2
-            and direct_same_seed_compare["right_gt_left_count"] == 2
-            and direct_same_seed_compare["left_gt_right_count"] == 0
-            and direct_same_seed_compare["tie_count"] == 0
-            and math.isclose(
-                direct_same_seed_compare["right_minus_left_mean"], 6.0
-            )
-            and math.isclose(
-                direct_same_seed_compare["right_minus_left_median"], 6.0
-            )
+        expected_direct_delta = expected_romd_delta * 2.0
+        romd_same = item.get("romd_same_seed")
+        direct_same = item.get("direct_selection_r_same_seed")
+        translation = item.get("selection_r_to_strategy")
+        distribution = item.get("romd_distribution")
+        yearly_pair = list(item.get("yearly_same_seed") or [])
+        expected_right_wins = 2 if expected_romd_delta > 0 else 0
+        expected_left_wins = 2 if expected_romd_delta < 0 else 0
+        paired_comparisons_ok = paired_comparisons_ok and (
+            item.get("left_arm_id") == left_id
+            and item.get("right_arm_id") == right_id
+            and isinstance(romd_same, dict)
+            and romd_same.get("n") == 2
+            and romd_same.get("right_gt_left_count") == expected_right_wins
+            and romd_same.get("left_gt_right_count") == expected_left_wins
+            and romd_same.get("tie_count") == (2 if math.isclose(expected_romd_delta, 0.0) else 0)
+            and math.isclose(float(romd_same.get("right_minus_left_mean")), expected_romd_delta)
+            and math.isclose(float(romd_same.get("right_minus_left_median")), expected_romd_delta)
+            and isinstance(direct_same, dict)
+            and direct_same.get("n") == 2
+            and math.isclose(float(direct_same.get("right_minus_left_mean")), expected_direct_delta)
+            and isinstance(translation, dict)
+            and translation.get("n") == 2
+            and len(translation.get("seed_rows") or []) == 2
+            and [row["seed_index"] for row in translation.get("seed_rows") or []] == [1, 2]
+            and isinstance(distribution, dict)
+            and distribution.get("pair_count") == 4
+            and len(yearly_pair) == 2
+            and all(row.get("n") == 2 for row in yearly_pair)
         )
-    )
-    translation_diagnostic = synthetic_summary[
-        "selection_r_to_strategy_same_seed_translation"
-    ]
-    translation_diagnostic_ok = (
-        translation_diagnostic is None
-        if len(robustness_stochastic) != 2
-        else (
-            isinstance(translation_diagnostic, dict)
-            and translation_diagnostic["n"] == 2
-            and translation_diagnostic["selection_r_positive_count"] == 2
-            and translation_diagnostic["selection_r_positive_romd_positive_count"] == 2
-            and translation_diagnostic["selection_r_positive_romd_nonpositive_count"] == 0
-            and translation_diagnostic["sign_concordant_count"] == 2
-            and translation_diagnostic["sign_discordant_count"] == 0
-            and len(translation_diagnostic["seed_rows"]) == 2
-            and [row["seed_index"] for row in translation_diagnostic["seed_rows"]] == [1, 2]
+    legacy_pair_fields_ok = all(
+        synthetic_summary.get(key) is None
+        for key in (
+            "romd_distribution_comparison",
+            "romd_same_seed_comparison",
+            "direct_selection_r_same_seed_comparison",
+            "selection_r_to_strategy_same_seed_translation",
         )
-    )
+    ) if len(configured_pairs) != 1 else True
 
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -1035,12 +1142,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == min_reference_arm.arm_id
         and synthetic_summary["contract"]["romd_reference_baselines"]["full"]["arm_id"]
         == full_reference_arm.arm_id
-        and distribution_compare_ok
-        and same_seed_compare_ok
-        and direct_same_seed_compare_ok
-        and translation_diagnostic_ok
+        and paired_comparisons_ok
+        and legacy_pair_fields_ok
         and len(synthetic_summary["yearly_statistics"]) >= len(robustness_fixed) * 2 + len(robustness_stochastic) * 2
-        and len(synthetic_summary["yearly_same_seed_comparison"]) == (2 if len(robustness_stochastic) == 2 else 0)
+        and len(synthetic_summary["yearly_same_seed_comparison"]) == len(configured_pairs) * 2
         and math.isclose(fixed_yearly_side[0]["return_pct"], 1.25)
         and math.isclose(stochastic_yearly_side[0]["return_pct"], 9.75)
         and robustness_source.count('result_side="no_filter"') >= 2
@@ -5271,17 +5376,11 @@ def validate_breakout_quality_mr13e_strategy_source_gate_contract_case(_base_par
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "mr13e_does_not_enter_multi_seed_before_single_seed_strategy_gate",
-        (("C25", "C28"), ("C20", "C29")),
+        "mr13e_multi_seed_profiles_activate_exact_and_heuristic_after_single_seed_gates_without_mutating_single_seed_roles",
+        (("C25", "C35", "C42"), ("C20", "C36", "C44")),
         (
-            tuple(
-                arm.arm_id for arm in selection_robust_profile.enabled_arms
-                if arm.robustness_role == "stochastic"
-            ),
-            tuple(
-                arm.arm_id for arm in forward_robust_profile.enabled_arms
-                if arm.robustness_role == "stochastic"
-            ),
+            tuple(selection_robust.stochastic_arm_ids),
+            tuple(forward_robust.stochastic_arm_ids),
         ),
     )
 

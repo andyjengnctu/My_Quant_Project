@@ -117,8 +117,8 @@ STRATEGY_COMPARE_PROFILES = {
 }
 
 # Multiple-seed robustness各研究階段以獨立config profile呈現於正式選單。
-# stochastic/fixed比較對象不在此重列arm ID，而由對應Strategy Compare profile的
-# enabled arms + robustness_role動態解析。
+# stochastic/fixed比較對象由robustness profile顯式指定；
+# robustness orchestration不得改動單次Strategy Compare arm identity/fingerprint。
 STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
     "selection_pit": {
         "label": "Selection PIT Multi-seed robustness",
@@ -140,6 +140,12 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
             "min": {"param_source": "selection_min_roos", "rule_policy": "all_off"},
             "full": {"param_source": "selection_full_roos", "rule_policy": "formal"},
         },
+        "fixed_arm_ids": ("C32", "C23"),
+        "stochastic_arm_ids": ("C25", "C35", "C42"),
+        "paired_contrasts": (
+            {"contrast_id": "mr13e_exact_vs_mr12b", "left": "C25", "right": "C42", "description": "MR-13E exact constrained相對MR-12B anchor的同seed robustness"},
+            {"contrast_id": "mr13e_exact_vs_heuristic", "left": "C35", "right": "C42", "description": "同MR-13E source下exact constrained相對heuristic selector的純solver同seed robustness"},
+        ),
         "output_root": "outputs/strategy_compare/robustness/selection_pit",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/selection_pit",
     },
@@ -163,6 +169,12 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
             "min": {"param_source": "min_roos", "rule_policy": "all_off"},
             "full": {"param_source": "full_roos", "rule_policy": "formal"},
         },
+        "fixed_arm_ids": ("C1", "C3"),
+        "stochastic_arm_ids": ("C20", "C36", "C44"),
+        "paired_contrasts": (
+            {"contrast_id": "mr13e_exact_vs_mr12b", "left": "C20", "right": "C44", "description": "MR-13E exact constrained相對MR-12B Forward anchor的同seed robustness"},
+            {"contrast_id": "mr13e_exact_vs_heuristic", "left": "C36", "right": "C44", "description": "同MR-13E source下exact constrained相對heuristic selector的純solver同seed robustness"},
+        ),
         "output_root": "outputs/strategy_compare/robustness",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness",
     }
@@ -799,6 +811,17 @@ def get_strategy_multi_seed_robustness_settings(
             }
             for key, value in dict(raw.get("romd_reference_baselines") or {}).items()
         },
+        fixed_arm_ids=tuple(str(value).strip() for value in tuple(raw.get("fixed_arm_ids") or ()) if str(value).strip()),
+        stochastic_arm_ids=tuple(str(value).strip() for value in tuple(raw.get("stochastic_arm_ids") or ()) if str(value).strip()),
+        paired_contrasts=tuple(
+            {
+                "contrast_id": str(dict(item or {}).get("contrast_id") or "").strip(),
+                "left": str(dict(item or {}).get("left") or "").strip(),
+                "right": str(dict(item or {}).get("right") or "").strip(),
+                "description": str(dict(item or {}).get("description") or "").strip(),
+            }
+            for item in tuple(raw.get("paired_contrasts") or ())
+        ),
         output_root=str(raw.get("output_root") or "").strip(),
         model_work_root=str(raw.get("model_work_root") or "").strip(),
     )
@@ -808,12 +831,26 @@ def get_strategy_multi_seed_robustness_settings(
             f"multi-seed robustness引用不存在的Strategy Compare profile: {settings.profile_id}"
         )
     profile_settings = get_strategy_comparison_settings(settings.profile_id)
-    fixed = [arm for arm in profile_settings.enabled_arms if arm.robustness_role == "fixed_baseline"]
-    stochastic = [arm for arm in profile_settings.enabled_arms if arm.robustness_role == "stochastic"]
-    if not fixed:
-        raise ValueError("multi-seed robustness至少需要一個fixed_baseline arm")
-    if not stochastic:
-        raise ValueError("multi-seed robustness至少需要一個stochastic arm")
+    enabled_by_id = {arm.arm_id: arm for arm in profile_settings.enabled_arms}
+    missing_fixed = [arm_id for arm_id in settings.fixed_arm_ids if arm_id not in enabled_by_id]
+    missing_stochastic = [arm_id for arm_id in settings.stochastic_arm_ids if arm_id not in enabled_by_id]
+    if missing_fixed or missing_stochastic:
+        raise ValueError(
+            "multi-seed robustness引用未啟用或不存在的arm: "
+            f"fixed={missing_fixed}, stochastic={missing_stochastic}"
+        )
+    fixed = [enabled_by_id[arm_id] for arm_id in settings.fixed_arm_ids]
+    stochastic = [enabled_by_id[arm_id] for arm_id in settings.stochastic_arm_ids]
+    stochastic_ids = {arm.arm_id for arm in stochastic}
+    for spec in settings.paired_contrasts:
+        left = str(dict(spec).get("left") or "")
+        right = str(dict(spec).get("right") or "")
+        if left not in stochastic_ids or right not in stochastic_ids:
+            raise ValueError(
+                "multi-seed paired contrast只能引用目前stochastic arms: "
+                f"contrast={dict(spec).get('contrast_id')}, left={left}, right={right}, "
+                f"stochastic={sorted(stochastic_ids)}"
+            )
     score_sources = {
         profile_settings.dl_sources[str(arm.dl_id)].score_source
         for arm in stochastic if arm.dl_id

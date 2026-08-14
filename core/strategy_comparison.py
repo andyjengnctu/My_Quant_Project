@@ -200,6 +200,9 @@ class StrategyMultiSeedRobustnessSettings:
     keep_replay_details: bool
     keep_attribution_source: bool
     romd_reference_baselines: Mapping[str, Mapping[str, str]]
+    fixed_arm_ids: tuple[str, ...]
+    stochastic_arm_ids: tuple[str, ...]
+    paired_contrasts: tuple[Mapping[str, str], ...]
     output_root: str
     model_work_root: str
 
@@ -225,6 +228,9 @@ class StrategyMultiSeedRobustnessSettings:
                 str(key): dict(value)
                 for key, value in self.romd_reference_baselines.items()
             },
+            "fixed_arm_ids": list(self.fixed_arm_ids),
+            "stochastic_arm_ids": list(self.stochastic_arm_ids),
+            "paired_contrasts": [dict(item) for item in self.paired_contrasts],
             "output_root": self.output_root,
             "model_work_root": self.model_work_root,
         }
@@ -273,6 +279,32 @@ def validate_strategy_multi_seed_robustness_settings(
             raise ValueError(f"multi-seed robustness {key} reference缺少param_source")
         if not str(spec.get("rule_policy") or "").strip():
             raise ValueError(f"multi-seed robustness {key} reference缺少rule_policy")
+    fixed_ids = tuple(str(value).strip() for value in settings.fixed_arm_ids if str(value).strip())
+    stochastic_ids = tuple(str(value).strip() for value in settings.stochastic_arm_ids if str(value).strip())
+    if not fixed_ids:
+        raise ValueError("multi-seed robustness至少需要一個fixed arm ID")
+    if not stochastic_ids:
+        raise ValueError("multi-seed robustness至少需要一個stochastic arm ID")
+    if len(set(fixed_ids)) != len(fixed_ids):
+        raise ValueError("multi-seed robustness fixed_arm_ids不得重複")
+    if len(set(stochastic_ids)) != len(stochastic_ids):
+        raise ValueError("multi-seed robustness stochastic_arm_ids不得重複")
+    overlap = sorted(set(fixed_ids) & set(stochastic_ids))
+    if overlap:
+        raise ValueError(f"multi-seed robustness fixed/stochastic arms不得重疊: {overlap}")
+    contrast_ids: set[str] = set()
+    for raw in settings.paired_contrasts:
+        spec = dict(raw or {})
+        contrast_id = str(spec.get("contrast_id") or "").strip()
+        left = str(spec.get("left") or "").strip()
+        right = str(spec.get("right") or "").strip()
+        if not contrast_id or not left or not right:
+            raise ValueError("multi-seed robustness paired_contrasts必須提供contrast_id/left/right")
+        if contrast_id in contrast_ids:
+            raise ValueError(f"multi-seed robustness paired contrast ID重複: {contrast_id}")
+        if left == right:
+            raise ValueError(f"multi-seed robustness paired contrast不得自比: {contrast_id}")
+        contrast_ids.add(contrast_id)
     _validate_relative_path(settings.output_root, field_name="multi_seed.output_root")
     _validate_relative_path(settings.model_work_root, field_name="multi_seed.model_work_root")
 
