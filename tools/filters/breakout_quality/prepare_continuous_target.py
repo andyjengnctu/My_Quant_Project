@@ -15,9 +15,9 @@ from filters.breakout_quality.continuous_target import (
     resolve_continuous_target_dir,
 )
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID, DEFAULT_LABEL_POLICY
-from tools.audit.breakout_quality.continuous_target import main as build_base_target
-from tools.audit.breakout_quality.no_time_continuous_target import (
-    main as build_no_time_target,
+from services.breakout_quality.continuous_target_builder import (
+    build_strategy_aligned_no_time_target_artifacts,
+    build_strategy_aligned_target_artifacts,
 )
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, load_validated_dataset_bundle
 from core.console_report import (
@@ -105,12 +105,11 @@ def _build_target(
     target_id: str,
     allow_stale_source: bool,
 ) -> int:
-    common_args = ["--filter-id", str(filter_id)]
-    if allow_stale_source:
-        common_args.append("--allow-stale-source")
-
     if target_id == STRATEGY_ALIGNED_TARGET_ID:
-        return int(build_base_target(common_args) or 0)
+        return int(build_strategy_aligned_target_artifacts(
+            filter_id=str(filter_id),
+            allow_stale_source=bool(allow_stale_source),
+        ) or 0)
     if target_id != STRATEGY_ALIGNED_NO_TIME_TARGET_ID:
         raise ValueError(f"不支援的continuous target: {target_id}")
 
@@ -128,12 +127,17 @@ def _build_target(
         if not compact_console_enabled():
             print("[Continuous Target] 基礎component target缺少或過期，先重建：")
             print(f"- {source_reason}")
-        code = int(build_base_target(common_args) or 0)
+        code = int(build_strategy_aligned_target_artifacts(
+            filter_id=str(filter_id),
+            allow_stale_source=bool(allow_stale_source),
+        ) or 0)
         if code != 0:
             return code
 
-    no_time_args = [*common_args, "--approved-workflow-rebuild"]
-    return int(build_no_time_target(no_time_args) or 0)
+    return int(build_strategy_aligned_no_time_target_artifacts(
+        filter_id=str(filter_id),
+        allow_stale_source=bool(allow_stale_source),
+    ) or 0)
 
 
 def main(argv=None) -> int:

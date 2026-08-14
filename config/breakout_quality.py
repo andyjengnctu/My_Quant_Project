@@ -938,7 +938,7 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         phase="11G",
         trainer_family=CONTINUOUS_RANKER_TRAINER_EVENT,
         target_description="same_date_pass_only_rank_percentile_of_strategy_aligned_opportunity_no_time_r_v1",
-        objective_description="同日PASS-only 11F No-time target percentile的MSE",
+        objective_description="同日PASS-only No-time target percentile的MSE",
         metric_scope="pass_only",
         score_semantic_id="opportunity_rank",
     ),

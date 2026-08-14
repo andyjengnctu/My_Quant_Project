@@ -58,8 +58,8 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         run_function="run_minimum_repair_mechanism_audit",
     ),
 
-    # Still-supported utility/research commands. Historical one-off diagnostics
-    # should be removed after their decision is recorded in Registry/Log.
+    # Only genuinely supported diagnostic commands belong here.  Canonical
+    # Dataset/Target/PIT builders live in services/ and are not research Audits.
     "regime": AuditCatalogEntry(
         audit_type="regime",
         domain="breakout_quality",
@@ -69,60 +69,16 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         read_only=True,
         cli_command="regime-audit",
     ),
-    "continuous_target": AuditCatalogEntry(
-        audit_type="continuous_target",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.continuous_target",
-        mode="research",
-        description="建立11A連續target arrays並稽核分布、同日排序與實際R方向",
-        read_only=False,
-        cli_command="audit-continuous-target",
-    ),
-    "qualified_candidate_set": AuditCatalogEntry(
-        audit_type="qualified_candidate_set",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.qualified_candidate_set",
-        mode="research",
-        description="執行11C策略qualified candidate-set失敗歸因；research-only",
-        read_only=True,
-        cli_command="audit-qualified-candidate-set",
-    ),
-    "target_component_attribution": AuditCatalogEntry(
-        audit_type="target_component_attribution",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.target_component_attribution",
-        mode="research",
-        description="執行11D Target成分與Label條件失敗歸因；research-only",
-        read_only=True,
-        cli_command="audit-target-attribution",
-    ),
-    "target_time_penalty_ablation": AuditCatalogEntry(
-        audit_type="target_time_penalty_ablation",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.target_time_penalty_ablation",
-        mode="research",
-        description="執行11E固定移除time penalty的Target稽核；research-only",
-        read_only=True,
-        cli_command="audit-target-time-ablation",
-    ),
-    "no_time_continuous_target": AuditCatalogEntry(
-        audit_type="no_time_continuous_target",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.no_time_continuous_target",
-        mode="research",
-        description="建立11F No-time Target arrays並做Selection-only可學性稽核；research-only",
-        read_only=False,
-        cli_command="audit-no-time-target",
-    ),
     "point_in_time_scores": AuditCatalogEntry(
         audit_type="point_in_time_scores",
         domain="breakout_quality",
-        module="tools.audit.breakout_quality.point_in_time_scores",
+        module="services.breakout_quality.point_in_time_audit",
         mode="research",
         description="驗證point-in-time Score的Target排序能力與fold穩定性",
         read_only=True,
         cli_command="audit-point-in-time-scores",
     ),
+
 }
 
 

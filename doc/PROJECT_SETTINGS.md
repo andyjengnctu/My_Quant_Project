@@ -54,6 +54,7 @@
 11. 臨時性研究／Audit／診斷／synthetic test 程式屬可拋棄工程資產；一旦其待決策問題已有結論、對應實驗已記錄於Registry／Log，且目前正式runtime、active Audit或必要compatibility不再依賴，就必須刪除implementation、config／catalog registration與只服務該程式的tests／helpers，不得以永久`enabled=False`、historical CLI或只為coverage保留的方式累積。
 12. `meta quality`必須執行輕量瘦身掃描，主動列出：(a) disabled formal Audit、(b) 無法由目前正式runtime或active formal Audit import-reachability到達的`tools/audit`／compatibility模組、(c) 明顯過大的Audit-specific synthetic test。此掃描預設只提供`CLEAN／REVIEW`維護訊號與候選清單，不得單獨造成formal FAIL，避免維護建議反過來形成第二套阻擋型Audit。
 13. 自動瘦身判定只能提出候選，不得因檔名、年齡或行數直接刪除；若歷史compatibility仍被目前正式runtime用於舊工件解讀／重現，或模組仍是目前target／PIT／strategy compare的必要依賴，就必須保留。實際刪除前須確認引用鏈，並優先移除已完成的一次性研究程式與其專屬測試。
+14. 當臨時研究結果已被採納為current workflow時，不得讓正式流程永久依賴原Audit／experiment module或其歷史approval report；必須把仍有效的數學定義、builder／service與artifact identity抽到正式domain／service層，再退役舊CLI、research gate、compatibility wrapper與專屬測試。此類遷移必須behavior-preserving，除非另有明確新實驗決策。
 
 
 ## D. 交易與策略原則

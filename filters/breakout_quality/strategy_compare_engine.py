@@ -72,7 +72,6 @@ from filters.breakout_quality.strategy_compare_replay import (
     _run_scenario_inside_source_context,
     _standalone_baseline_report,
     _unpack_result,
-    run_no_filter_candidate_replay_from_metadata,
     run_standalone_baseline,
 )
 from filters.breakout_quality.strategy_compare_diagnostics import (
@@ -1387,7 +1386,6 @@ __all__ = [
     "render_strategy_pair_markdown",
     "materialize_strategy_pair_readable_report",
     "main", "run_comparison", "run_standalone_baseline", "run_existing_attribution",
-    "run_no_filter_candidate_replay_from_metadata",
     "canonical_strategy_compare_output_dir_names", "_first_existing_comparison_dir",
     "_assert_controlled_param_pair", "_assert_controlled_ensemble_pair",
     "_assert_controlled_payload_pair", "_build_controlled_param_source_pair",

@@ -38,7 +38,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
 
     from config import breakout_quality as workflow_config
     from config.breakout_quality import get_breakout_quality_workflow_settings
-    from tools.audit.breakout_quality.point_in_time_scores import (
+    from services.breakout_quality.point_in_time_audit import (
         _direction_summary,
         _orderable_coverage,
         _render_markdown as render_point_in_time_markdown,
@@ -1091,11 +1091,11 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         and isinstance(node.func, ast.Name)
         and node.func.id in {"_load_reusable_fold", "_migrate_compatible_legacy_fold"}
     }
-    base_target_audit_source = (
-        project_root / "tools" / "audit" / "breakout_quality" / "continuous_target.py"
+    continuous_target_builder_source = (
+        project_root / "services" / "breakout_quality" / "continuous_target_builder.py"
     ).read_text(encoding="utf-8")
-    no_time_target_source = (
-        project_root / "tools" / "audit" / "breakout_quality" / "no_time_continuous_target.py"
+    continuous_target_prepare_source = (
+        project_root / "tools" / "filters" / "breakout_quality" / "prepare_continuous_target.py"
     ).read_text(encoding="utf-8")
     add_check(
         results,
@@ -1125,12 +1125,14 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         results,
         "synthetic_breakout_quality",
         case_id,
-        "point_in_time_compact_target_output_hides_base_audit_and_summarizes_final_target",
+        "point_in_time_continuous_target_compact_output_is_owned_by_canonical_service",
         True,
-        "if compact_console_enabled():" in base_target_audit_source
-        and "Continuous Target 完成" in no_time_target_source
-        and "Selection mean=" in no_time_target_source
-        and "OOS未評估" in no_time_target_source,
+        "if compact_console_enabled():" in continuous_target_builder_source
+        and "Continuous Target 完成" in continuous_target_builder_source
+        and "Selection mean=" in continuous_target_builder_source
+        and '"oos_evaluated": False' in continuous_target_builder_source
+        and "services.breakout_quality.continuous_target_builder" in continuous_target_prepare_source
+        and "tools.audit.breakout_quality.continuous_target" not in continuous_target_prepare_source,
     )
     add_check(
         results,

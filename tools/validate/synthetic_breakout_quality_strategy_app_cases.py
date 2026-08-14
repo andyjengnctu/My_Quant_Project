@@ -223,32 +223,21 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         (legacy_ranker_imports, private_strategy_compare_engine_imports),
     )
 
-    from tools.audit import primitives as audit_primitives
-    from tools.audit.breakout_quality import artifact_primitives, target_statistics
-    from tools.audit.breakout_quality import continuous_target as continuous_target_audit
-    from tools.audit.breakout_quality import no_time_continuous_target as no_time_target_audit
-    from tools.audit.breakout_quality import target_component_attribution as target_component_audit
+    from services.breakout_quality import continuous_target_builder, continuous_target_metrics
 
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "continuous_target_audits_share_one_statistics_implementation",
-        (True, True, True),
-        (
-            continuous_target_audit._distribution_metrics is target_statistics.distribution_metrics,
-            no_time_target_audit._distribution_metrics is target_statistics.distribution_metrics,
-            continuous_target_audit._daily_rankability is no_time_target_audit._daily_rankability,
-        ),
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "audit_artifact_hash_primitive_remains_single_source",
+        "continuous_target_build_logic_is_owned_by_service_layer_not_audit_namespace",
         True,
-        target_component_audit._sha256_file is audit_primitives.sha256_file
-        and artifact_primitives.sha256_file is audit_primitives.sha256_file,
+        bool(
+            callable(continuous_target_builder.build_strategy_aligned_target_artifacts)
+            and callable(continuous_target_builder.build_strategy_aligned_no_time_target_artifacts)
+            and callable(continuous_target_metrics.distribution_metrics)
+            and not (project_root / "tools" / "audit" / "breakout_quality" / "continuous_target.py").exists()
+            and not (project_root / "tools" / "audit" / "breakout_quality" / "no_time_continuous_target.py").exists()
+        ),
     )
 
     config_source = config_path.read_text(encoding="utf-8")

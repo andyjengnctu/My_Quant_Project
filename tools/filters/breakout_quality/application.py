@@ -2732,7 +2732,7 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
         from tools.filters.breakout_quality.build_point_in_time_scores import (
             build_selection_point_in_time_scores,
         )
-        from tools.audit.breakout_quality.point_in_time_scores import (
+        from services.breakout_quality.point_in_time_audit import (
             audit_selection_point_in_time_scores,
         )
 

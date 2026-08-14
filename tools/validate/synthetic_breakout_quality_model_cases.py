@@ -41,16 +41,11 @@ from .synthetic_breakout_quality_support import (
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
-    _load_round_trip_source,
-    _registered_breakout_quality_audit_module,
-    _resolve_round_trip_path,
     add_check,
     ast,
-    build_continuous_target_audit,
     build_daily_percentile_targets,
     build_file_manifest,
     build_strategy_aligned_group_targets,
-    canonical_strategy_compare_output_dir_names,
     continuous_ranker_scope_group_ids,
     continuous_ranker_trade_alignment_metrics,
     get_breakout_quality_experiment_profile,
@@ -60,7 +55,6 @@ from .synthetic_breakout_quality_support import (
     np,
     patch,
     pd,
-    render_continuous_target_audit_markdown,
     resolve_continuous_target_dir,
     resolve_filter_artifact_paths,
     resolve_filter_model_output_dir,
@@ -261,282 +255,78 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
         ),
     )
 
-    dates = pd.to_datetime(
-        [
-            "2018-01-02", "2018-01-02", "2019-01-02", "2019-01-02",
-            "2020-01-02", "2020-01-02", "2021-01-04", "2021-01-04",
-        ]
+    project_root = Path(__file__).resolve().parents[2]
+    builder_source = read_source_text(
+        project_root / "services" / "breakout_quality" / "continuous_target_builder.py"
     )
-    synthetic_groups = pd.DataFrame(
-        {
-            "ticker": ["A", "B", "C", "D", "E", "F", "G", "H"],
-            "date": dates,
-            "label": [LABEL_PASS, LABEL_REJECT] * 4,
-            "target_raw_r": [1.5, -0.8, 1.2, -0.6, 1.0, -0.4, 0.8, -0.2],
-            "valid_mask": [True] * 8,
-            "max_upside_return": [0.20, 0.01, 0.16, 0.02, 0.13, 0.03, 0.10, 0.04],
-            "decision_mfe_return": [0.20, 0.01, 0.16, 0.02, 0.13, 0.03, 0.10, 0.04],
-            "decision_mae_return": [-0.02, -0.08, -0.02, -0.07, -0.03, -0.06, -0.03, -0.05],
-            "is_inner_train": [True, True, True, True, False, False, False, False],
-            "is_validation": [False, False, False, False, True, True, False, False],
-            "is_selection": [True, True, True, True, True, True, False, False],
-            "is_oos": [False, False, False, False, False, False, True, True],
-        }
+    prepare_source = read_source_text(
+        project_root / "tools" / "filters" / "breakout_quality" / "prepare_continuous_target.py"
     )
-    audit_payload, daily = build_continuous_target_audit(
-        synthetic_groups,
-        target_contract=contract,
-        split_report={"policy": "synthetic_fixed_split"},
-        dataset_summary={
-            "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
-            "dataset": "synthetic",
-            "event_count": len(synthetic_groups),
-            "feature_group_count": len(synthetic_groups),
-        },
-        trade_alignment={
-            "available": False,
-            "reason": "synthetic_no_round_trip_file",
-            "formula_tuned_from_trade_r": False,
-            "diagnostic_only": True,
-        },
-    )
-    markdown = render_continuous_target_audit_markdown(audit_payload)
-    strict_json_ok = True
-    try:
-        json.dumps(audit_payload, ensure_ascii=False, allow_nan=False)
-    except (TypeError, ValueError):
-        strict_json_ok = False
+    catalog_source = read_source_text(project_root / "tools" / "audit" / "catalog.py")
+    retired_paths = [
+        project_root / "tools" / "audit" / "breakout_quality" / name
+        for name in (
+            "continuous_target.py",
+            "no_time_continuous_target.py",
+            "qualified_candidate_set.py",
+            "target_component_attribution.py",
+            "target_time_penalty_ablation.py",
+            "target_statistics.py",
+            "artifact_primitives.py",
+            "point_in_time_scores.py",
+        )
+    ]
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "continuous_target_audit_is_rankable_strict_json_and_audit_only",
-        ("IMPLEMENTED_AUDIT_ONLY", False, 1.0, 1.0, 7, True, True),
-        (
-            audit_payload["status"],
-            audit_payload["training_performed"],
-            audit_payload["split_metrics"]["oos"]["same_day_rankability"]["rankable_date_rate"],
-            audit_payload["split_metrics"]["selection"]["same_day_binary_concordance"]["pair_weighted_concordance"],
-            len(daily),
-            strict_json_ok,
-            "本輪沒有訓練模型" in markdown,
+        "continuous_target_builder_is_canonical_service_without_historical_audit_or_strategy_compare_dependency",
+        True,
+        bool(
+            "build_strategy_aligned_target_artifacts" in builder_source
+            and "build_strategy_aligned_no_time_target_artifacts" in builder_source
+            and "historical_research_gate_required" in builder_source
+            and "from tools.audit" not in builder_source
+            and "import tools.audit" not in builder_source
+            and "from filters.breakout_quality.strategy_compare" not in builder_source
+            and "import filters.breakout_quality.strategy_compare" not in builder_source
+            and "target_time_penalty_ablation" not in builder_source
         ),
-        tol=1e-12,
     )
-    with tempfile.TemporaryDirectory() as temp_dir:
-        preferred_hard_filter_dir = canonical_strategy_compare_output_dir_names(
-            COMPARISON_MODE_HARD_FILTER
-        )[0]
-        expected_round_trip_path = (
-            resolve_filter_model_output_dir(
-                temp_dir,
-                BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
-                BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-                BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-            )
-            / preferred_hard_filter_dir
-            / "no_filter_round_trips.csv"
-        )
-        expected_round_trip_path.parent.mkdir(parents=True, exist_ok=True)
-        expected_round_trip_path.write_text(
-            "ticker,r_multiple\n2330,1.0\n",
-            encoding="utf-8",
-        )
-        with patch(
-            "tools.audit.breakout_quality.continuous_target.PROJECT_ROOT",
-            Path(temp_dir),
-        ):
-            resolved_round_trip_path, resolved_path_source = _resolve_round_trip_path(
-                BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
-                None,
-            )
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
-            "continuous_target_round_trip_auto_path_uses_output_tree",
-            (str(expected_round_trip_path), "active_9a_standard_path"),
-            (str(resolved_round_trip_path), str(resolved_path_source)),
-        )
-
-        expected_round_trip_path.unlink()
-        trade_history_path = expected_round_trip_path.parent / "no_filter_trades.csv"
-        trade_history_frame = pd.DataFrame(
-            [
-                {
-                    "Date": "2021-01-05",
-                    "Ticker": "2330",
-                    "Type": "買進 (突破)",
-                    "進場類型": "normal",
-                    "候選類型": "normal",
-                    "買訊日": "2021-01-04",
-                    "候選日": "2021-01-04",
-                    "成交價": 100.0,
-                    "該筆總損益": np.nan,
-                    "R_Multiple": np.nan,
-                },
-                {
-                    "Date": "2021-01-15",
-                    "Ticker": "2330",
-                    "Type": "全倉結算",
-                    "進場類型": "",
-                    "候選類型": "",
-                    "買訊日": "",
-                    "候選日": "",
-                    "成交價": 110.0,
-                    "該筆總損益": 1000.0,
-                    "R_Multiple": 1.5,
-                },
-            ]
-        )
-        trade_history_frame.to_csv(trade_history_path, index=False, encoding="utf-8-sig")
-        with patch(
-            "tools.audit.breakout_quality.continuous_target.PROJECT_ROOT",
-            Path(temp_dir),
-        ):
-            rebuilt_round_trips, rebuilt_source = _load_round_trip_source(
-                BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
-                None,
-            )
-        rebuilt_record = rebuilt_round_trips.iloc[0]
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
-            "continuous_target_round_trip_falls_back_to_canonical_trade_history",
-            (
-                1,
-                "2330",
-                "2021-01-04",
-                1.5,
-                "reconstructed_from_no_filter_trades",
-                True,
-                str(trade_history_path),
-            ),
-            (
-                len(rebuilt_round_trips),
-                str(rebuilt_record["ticker"]),
-                str(rebuilt_record["signal_date"]),
-                float(rebuilt_record["r_multiple"]),
-                str(rebuilt_source["source_kind"]),
-                bool(rebuilt_source["round_trips_reconstructed"]),
-                str(rebuilt_source["path"]),
-            ),
-            tol=1e-12,
-        )
-
-
-        trade_history_path.unlink()
-        active_output_root = expected_round_trip_path.parents[1]
-        skipped_static_dir = active_output_root / "strategy_compare_score_ranking_base_finalists_agree"
-        skipped_static_dir.mkdir(parents=True, exist_ok=True)
-        (skipped_static_dir / "strategy_comparison.json").write_text(
-            json.dumps(
-                {
-                    "metadata": {
-                        "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
-                        "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-                        "experiment_profile": BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-                        "comparison_design": "static_param_diagnostic",
-                    }
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        trade_history_frame.to_csv(
-            skipped_static_dir / "no_filter_trades.csv",
-            index=False,
-            encoding="utf-8-sig",
-        )
-        discovered_dir = active_output_root / "strategy_compare_score_ranking_base_finalist_best"
-        discovered_dir.mkdir(parents=True, exist_ok=True)
-        (discovered_dir / "strategy_comparison.json").write_text(
-            json.dumps(
-                {
-                    "metadata": {
-                        "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
-                        "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-                        "experiment_profile": BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-                        "comparison_design": "historical_active_param_oos",
-                    }
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        discovered_trade_history_path = discovered_dir / "no_filter_trades.csv"
-        trade_history_frame.to_csv(
-            discovered_trade_history_path,
-            index=False,
-            encoding="utf-8-sig",
-        )
-        with patch(
-            "tools.audit.breakout_quality.continuous_target.PROJECT_ROOT",
-            Path(temp_dir),
-        ):
-            discovered_round_trips, discovered_source = _load_round_trip_source(
-                BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
-                None,
-            )
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
-            "continuous_target_discovers_official_score_ranking_trade_history_and_skips_static",
-            (
-                1,
-                "active_9a_strategy_compare_trade_history_discovery",
-                str(discovered_trade_history_path),
-                "historical_active_param_oos",
-            ),
-            (
-                len(discovered_round_trips),
-                str(discovered_source["path_source"]),
-                str(discovered_source["path"]),
-                str((discovered_source.get("strategy_compare_metadata") or {}).get("comparison_design")),
-            ),
-        )
-
-        explicit_trade_history_path = Path(temp_dir) / "explicit_no_filter_trades.csv"
-        trade_history_frame.to_csv(
-            explicit_trade_history_path,
-            index=False,
-            encoding="utf-8-sig",
-        )
-        with patch(
-            "tools.audit.breakout_quality.continuous_target.PROJECT_ROOT",
-            Path(temp_dir),
-        ):
-            explicit_round_trips, explicit_source = _load_round_trip_source(
-                BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
-                None,
-                str(explicit_trade_history_path),
-            )
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
-            "continuous_target_accepts_explicit_trade_history_override",
-            (1, "explicit_trade_history", str(explicit_trade_history_path), True),
-            (
-                len(explicit_round_trips),
-                str(explicit_source["path_source"]),
-                str(explicit_source["path"]),
-                bool(explicit_source["round_trips_reconstructed"]),
-            ),
-        )
-
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "continuous_target_output_path_is_target_version_scoped",
-        (
-            "breakout_quality_v1",
-            "continuous_targets",
-            STRATEGY_ALIGNED_TARGET_ID,
+        "prepare_continuous_target_routes_only_to_canonical_service_builder",
+        True,
+        bool(
+            "services.breakout_quality.continuous_target_builder" in prepare_source
+            and "tools.audit.breakout_quality.continuous_target" not in prepare_source
+            and "approved-workflow-rebuild" not in prepare_source
         ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "retired_11c_to_11f_target_audit_implementations_are_not_runtime_or_catalog_commands",
+        True,
+        bool(
+            all(not path.exists() for path in retired_paths)
+            and "audit-continuous-target" not in catalog_source
+            and "audit-qualified-candidate-set" not in catalog_source
+            and "audit-target-attribution" not in catalog_source
+            and "audit-target-time-ablation" not in catalog_source
+            and "audit-no-time-target" not in catalog_source
+            and 'module="services.breakout_quality.point_in_time_audit"' in catalog_source
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_output_path_remains_target_version_scoped",
+        ("breakout_quality_v1", "continuous_targets", STRATEGY_ALIGNED_TARGET_ID),
         tuple(
             resolve_continuous_target_dir(
                 Path("/tmp/project"),
@@ -545,34 +335,8 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
         ),
     )
 
-    breakout_quality_app_path = Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py"
-    breakout_quality_app_tree = ast.parse(
-        breakout_quality_app_path.read_text(encoding="utf-8"),
-        filename=str(breakout_quality_app_path),
-    )
-    command_modules = {}
-    for node in breakout_quality_app_tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        if not any(
-            isinstance(target, ast.Name) and target.id == "COMMAND_MODULES"
-            for target in node.targets
-        ):
-            continue
-        command_modules = ast.literal_eval(node.value)
-        break
-
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "continuous_target_audit_command_is_registered",
-        "tools.audit.breakout_quality.continuous_target",
-        _registered_breakout_quality_audit_module("audit-continuous-target"),
-    )
-
     summary["target_id"] = STRATEGY_ALIGNED_TARGET_ID
-    summary["training_performed"] = False
+    summary["builder"] = "services.breakout_quality.continuous_target_builder"
     return results, summary
 
 def validate_breakout_quality_continuous_ranker_contract_case(_base_params):

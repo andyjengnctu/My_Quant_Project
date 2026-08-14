@@ -104,12 +104,12 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 
 | ID | 名稱 | 歷史狀態 |
 |---|---|---|
-| `MR-11A` | Strategy-aligned Continuous Outcome Target audit | RESULT_AVAILABLE |
+| `MR-11A` | Strategy-aligned Continuous Outcome Target audit | RESULT_AVAILABLE／AUDIT_IMPLEMENTATION_RETIRED_2026-08-14／TARGET_FORMULA_MIGRATED_TO_CANONICAL_SERVICE |
 | `MR-11B` | Daily Percentile Regression | REJECTED |
-| `MR-11C` | Candidate-set Coverage Audit | RESULT_AVAILABLE |
-| `MR-11D` | Label-conditional Target Attribution | RESULT_AVAILABLE |
-| `MR-11E` | Time-penalty Ablation | PASSED audit gate |
-| `MR-11F` | No-time Target Learnability | PASSED Selection learnability gate |
+| `MR-11C` | Candidate-set Coverage Audit | RESULT_AVAILABLE／IMPLEMENTATION_RETIRED_2026-08-14 |
+| `MR-11D` | Label-conditional Target Attribution | RESULT_AVAILABLE／IMPLEMENTATION_RETIRED_2026-08-14 |
+| `MR-11E` | Time-penalty Ablation | PASSED historical audit gate／IMPLEMENTATION_RETIRED_2026-08-14 |
+| `MR-11F` | No-time Target Learnability | PASSED historical Selection gate／AUDIT_IMPLEMENTATION_RETIRED_2026-08-14／FIXED_TARGET_MIGRATED_TO_CANONICAL_SERVICE |
 | `MR-11G` | PASS-conditional Magnitude Ranker | REJECTED |
 | `MR-11H` | Realization-gap Attribution | RESULT_AVAILABLE |
 | `MR-11I` | Nested Selection Coverage Audit | RESULT_AVAILABLE |

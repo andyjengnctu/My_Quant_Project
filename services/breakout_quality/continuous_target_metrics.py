@@ -1,4 +1,4 @@
-"""Shared continuous-target Audit statistics; not model-training metrics."""
+"""Descriptive metrics used by canonical continuous-target artifact builders."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def collapse_group_frame(
     )
     for column in checked_columns:
         if column not in frame.columns:
-            raise ValueError(f"continuous target audit events.csv 缺少欄位: {column}")
+            raise ValueError(f"continuous target events.csv 缺少欄位: {column}")
         nonunique = frame.groupby("group_index", sort=False)[column].nunique(dropna=False)
         if bool((nonunique > 1).any()):
             sample = nonunique[nonunique > 1].index[:5].tolist()

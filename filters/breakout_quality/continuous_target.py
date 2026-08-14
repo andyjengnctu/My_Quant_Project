@@ -402,14 +402,14 @@ def build_strategy_aligned_no_time_group_targets(
 def build_strategy_aligned_no_time_contract(
     source_contract: dict[str, object],
 ) -> dict[str, object]:
-    """Build the fixed 11F target contract from the completed 11A contract."""
+    """Build the fixed no-time target contract from the strategy-aligned source contract."""
 
     if str(source_contract.get("target_id") or "") != STRATEGY_ALIGNED_TARGET_ID:
-        raise ValueError("11F source target contract必須是11A strategy-aligned v1")
+        raise ValueError("no-time source target contract必須是strategy-aligned v1")
     risk_budget = float(source_contract.get("risk_budget_return", math.nan))
     horizon = int(source_contract.get("horizon_bars", -1))
     if not math.isfinite(risk_budget) or risk_budget <= 0.0 or horizon < 2:
-        raise ValueError("11F source target contract的risk budget或horizon不合法")
+        raise ValueError("no-time source target contract的risk budget或horizon不合法")
     return {
         "schema_version": CONTINUOUS_TARGET_SCHEMA_VERSION,
         "target_id": STRATEGY_ALIGNED_NO_TIME_TARGET_ID,

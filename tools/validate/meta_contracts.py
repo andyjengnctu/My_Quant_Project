@@ -72,9 +72,6 @@ CRITICAL_HELPER_SINGLE_SOURCE_SPECS: Dict[str, Tuple[str, ...]] = {
     "services/optimizer/outer_rolling_oos.py": (
         "_build_seed_ensemble_policy_payload",
     ),
-    "tools/audit/primitives.py": (
-        "finite_or_none",
-    ),
 }
 
 

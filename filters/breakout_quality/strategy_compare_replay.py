@@ -158,52 +158,6 @@ def _run_scenario_inside_source_context(
         raise ValueError(f"不支援的參數來源類型: {param_source_kind}")
     return _unpack_result(result)
 
-def run_no_filter_candidate_replay_from_metadata(
-    metadata: dict[str, Any],
-    *,
-    quiet: bool = False,
-) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
-    """Replay the exact no-filter historical OOS scenario and capture qualified candidates."""
-
-    payload = dict(metadata or {})
-    if str(payload.get("comparison_mode") or "") != COMPARISON_MODE_HARD_FILTER:
-        raise ValueError("11C只接受hard-filter controlled comparison metadata")
-    if str(payload.get("comparison_design") or "") != "historical_active_param_oos":
-        raise ValueError("11C只接受historical_active_param_oos策略比較")
-    if not bool(payload.get("lookahead_safe_active_param_schedule")):
-        raise ValueError("11C策略比較metadata未證明lookahead-safe active params")
-    param_source_kind = str(payload.get("param_source_kind") or "")
-    if param_source_kind not in {"rolling_active_param_ensemble", "rolling_oos_param_schedule"}:
-        raise ValueError(f"11C不支援的正式參數來源: {param_source_kind}")
-    no_filter_params = payload.get("no_filter_params")
-    if not isinstance(no_filter_params, dict) or not no_filter_params:
-        raise ValueError("11C metadata缺少no_filter_params")
-    period = dict(payload.get("comparison_period") or {})
-    start_date = str(period.get("start") or "")
-    end_date = str(period.get("end") or "")
-    if not start_date or not end_date:
-        raise ValueError("11C metadata缺少comparison period")
-    data_dir = Path(str(payload.get("data_dir") or "")).resolve()
-    if not data_dir.is_dir():
-        raise FileNotFoundError(f"11C找不到strategy compare data_dir: {data_dir}")
-
-    replay_counts: dict[str, dict[str, Any]] = {}
-    scenario = _run_scenario(
-        name="11C_no_filter_candidate_audit",
-        data_dir=data_dir,
-        param_source_kind=param_source_kind,
-        params=no_filter_params,
-        start_date=start_date,
-        end_date=end_date,
-        max_positions=int(payload.get("max_positions", DEFAULT_PORTFOLIO_MAX_POSITIONS) or DEFAULT_PORTFOLIO_MAX_POSITIONS),
-        enable_rotation=bool(payload.get("enable_rotation", False)),
-        quiet=bool(quiet),
-        replay_counts=replay_counts,
-    )
-    qualified = _flatten_candidate_replay_rows(replay_counts, "candidate_rows")
-    orderable = _flatten_candidate_replay_rows(replay_counts, "orderable_rows")
-    return scenario, qualified, orderable
-
 def _resolve_comparison_period(contract) -> tuple[str, str]:
     start = contract.execution_start
     end = contract.available_through

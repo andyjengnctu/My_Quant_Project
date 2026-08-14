@@ -351,12 +351,6 @@ from filters.breakout_quality import workflow_io as breakout_quality_common
 from tools.filters.breakout_quality import evaluate as breakout_quality_evaluate
 from filters.breakout_quality import export_scores as breakout_quality_export_scores
 from tools.filters.breakout_quality import train as breakout_quality_train
-from tools.audit.breakout_quality.continuous_target import (
-    _load_round_trip_source,
-    _resolve_round_trip_path,
-    build_continuous_target_audit,
-    render_continuous_target_audit_markdown,
-)
 from tools.filters.breakout_quality.report import (
     build_report_payload,
     render_console_summary,
@@ -367,32 +361,6 @@ from tools.audit.breakout_quality.regime import (
     build_regime_audit_payload,
     derive_benchmark_regime_features,
     render_regime_audit_markdown,
-)
-from tools.audit.breakout_quality.target_component_attribution import (
-    attach_target_components as target_attribution_attach_components,
-    attribution_metrics as target_attribution_metrics,
-    render_markdown as render_target_attribution_markdown,
-)
-from tools.audit.breakout_quality.target_time_penalty_ablation import (
-    _validated_source_csv as time_ablation_validated_source_csv,
-    attach_time_penalty_ablation,
-    render_markdown as render_time_penalty_ablation_markdown,
-    time_penalty_ablation_metrics,
-)
-from tools.audit.breakout_quality.no_time_continuous_target import (
-    _approved_workflow_rebuild_gate as approved_no_time_workflow_rebuild_gate,
-    _selection_metrics as no_time_target_selection_metrics,
-    _validated_11e_report as validated_11e_report_for_no_time_target,
-    render_markdown as render_no_time_target_markdown,
-)
-from tools.audit.breakout_quality.qualified_candidate_set import (
-    _actual_trade_metrics as qualified_audit_actual_trade_metrics,
-    _assert_replay_matches_strategy_summary as assert_qualified_replay_matches_summary,
-    _attach_ranker_scores as qualified_audit_attach_ranker_scores,
-    _daily_coverage as qualified_audit_daily_coverage,
-    _layer_metrics as qualified_audit_layer_metrics,
-    _unique_groups as qualified_audit_unique_groups,
-    _validate_strategy_metadata as validate_qualified_audit_strategy_metadata,
 )
 from filters.breakout_quality.strategy_compare_engine import (
     COMPARISON_MODE_HARD_FILTER,

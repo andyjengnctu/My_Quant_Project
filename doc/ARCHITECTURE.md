@@ -147,21 +147,17 @@ project/
 
 Breakout Quality synthetic validators依測試責任拆成policy、artifact、model、audit、PIT、strategy與strategy-app七個case modules；`synthetic_breakout_quality_support.py`只提供共享fixture imports／helpers。舊`synthetic_breakout_quality_cases.py` compatibility façade已因無current consumer而移除；正式synthetic registry `synthetic_cases.py`直接import各domain owner，meta registry contract驗證每個Breakout Quality validator只有一個domain owner、retired façade不得復活，並將support與所有domain implementation modules納入key coverage targets。 Source-level contracts透過`tools/validate/source_index.py`共用process-local source text／AST cache；cache以檔案mtime_ns＋size失效，僅消除同一輪synthetic suite重複I/O／parse，不快取validator結果、不跳過contract，也不跨process持久化。
 
-### 11A Strategy-aligned Continuous Target audit
+### Continuous Target canonical build service
 
-11A第一階段是獨立research-target子系統，不是新的model architecture。`filters/breakout_quality/continuous_target.py`以既有canonical event anchor與future high／low path cache建立group-level `strategy_aligned_opportunity_r_v1`；`tools/audit/breakout_quality/continuous_target.py`負責固定split分布、同日排序可學性及可選Round-trip R方向診斷，正式入口為：
+Continuous Target已由一次性研究Audit升級為正式continuous workflow的canonical資料建置層。Target數學與strict component loader由`filters/breakout_quality/continuous_target.py`單一承接；versioned artifact建置由`services/breakout_quality/continuous_target_builder.py`承接；描述性分布／rankability metrics由`services/breakout_quality/continuous_target_metrics.py`提供。正式模型流程只經`tools/filters/breakout_quality/prepare_continuous_target.py`呼叫service，不得反向依賴`tools/audit/`、Strategy Compare或歷史研究report。
 
-```bash
-python apps/research.py model audit-continuous-target
-```
+目前支援`strategy_aligned_opportunity_r_v1`與`strategy_aligned_opportunity_no_time_r_v1`。兩者都沿用canonical event anchor、future high／low path cache、valid mask、adverse-first與固定risk-budget語意；No-time版本固定移除time-penalty項，不以Selection／Validation／OOS、actual trade R或舊Audit結論擬合係數。Target工件仍使用既有version-scoped路徑與artifact filenames以維持consumer相容，但其角色是build diagnostics，不是需要永久保留的research Audit gate。
 
-target固定使用40-bar horizon與10% risk budget：首次風險觸發前最大有利漲幅R，扣除到達高點前最大不利跌幅R及最多0.5R的時間懲罰。同日High／Low歧義採adverse-first，風險觸發日High不計；首日觸發輸出−1R。公式不讀取split統計、OOS、模型score或actual trade R，不做normalization／clipping。實際R診斷在active 9A正式模型輸出樹依語意優先序搜尋hard-filter與score-ranking的`strategy_compare*`工件；有metadata時只接受目前filter／architecture／profile及`historical_active_param_oos`結果。每個目錄優先讀`no_filter_round_trips.csv`，若只有交易歷史則重用`trade_attribution.reconstruct_round_trips`從`no_filter_trades.csv`在記憶體重建；亦可用`--round-trips`或`--trade-history`明確指定，禁止另寫第二套Round-trip口徑。
-
-工件位於`outputs/filters/breakout_quality/<filter_id>/continuous_targets/strategy_aligned_opportunity_r_v1/`，與architecture／experiment profile工件隔離；只沿用feature-group index及future-path cache，不改Dataset fingerprint、不重建feature bank、不relabel。manifest明確保存`training_performed=false`與`runtime_eligible=false`。此階段只產生arrays與audit，不授權regression training、score export或scanner runtime。
+歷史11A～11F的一次性歸因／消融CLI與專屬synthetic contracts已在研究結論寫入Experiment Registry／Log後退役；若未來Target研究結果成為正式workflow，必須同樣抽出穩定formula/service後刪除歷史gate與臨時implementation。
 
 ### 11B Strategy-aligned Daily Percentile Ranker
 
-11B是獨立experiment profile `strategy_aligned_daily_percentile_mse`，不是新model architecture。它保留active 9A `inception_time_v1`的300×10輸入、RF229與原2-logit head，將`softmax(logits)[:, PASS]`視為0～1排序分數，對Selection內每個日期的11A raw target percentile使用MSE。日期內採average rank，轉換為`(rank−1)/(n−1)`；同值共享平均rank，singleton固定0.5。不同日期互不共享位置、尺度或統計量，因此不建立跨年度normalization。
+11B是獨立experiment profile `strategy_aligned_daily_percentile_mse`，不是新model architecture。它保留active 9A `inception_time_v1`的300×10輸入、RF229與原2-logit head，將`softmax(logits)[:, PASS]`視為0～1排序分數，對Selection內每個日期的`strategy_aligned_opportunity_r_v1` raw target percentile使用MSE。日期內採average rank，轉換為`(rank−1)/(n−1)`；同值共享平均rank，singleton固定0.5。不同日期互不共享位置、尺度或統計量，因此不建立跨年度normalization。
 
 正式入口為：
 
@@ -171,42 +167,9 @@ python apps/research.py model train-continuous-ranker --filter-id breakout_quali
 
 Inner Train只負責gradient更新，Validation以mean daily Spearman最大化選epoch、相同Spearman時才比較較低MSE；完整Selection依`selected_epochs`重新初始化重訓。checkpoint寫入前只建立Selection percentile target，OOS percentile、OOS metrics與actual-R診斷均在模型凍結後執行。11B工件寫入`inception_time_v1/strategy_aligned_daily_percentile_mse/`獨立profile路徑，research scores每個group只保留唯一一列並以`selection_role`標示Inner Train／Validation；manifest固定`runtime_eligible=false`；binary runtime loader、classification workflow與forward-OOS score export均拒絕此profile，不覆蓋9A `unique_group_sampling`正式模型。11B是已淘汰的research-only實驗，只保留`train-continuous-ranker` CLI子命令供歷史重現；臨時研究不加入互動選單，也不另行複製訓練邏輯。
 
-### 11C Qualified Candidate-set Coverage Audit
+### Historical Target attribution diagnostics（retired）
 
-11C是11B淘汰後的research-only失敗歸因，不是模型architecture、training profile或runtime功能。`core.portfolio_engine.run_portfolio_timeline`只在呼叫端明確傳入`replay_counts`時保存candidate diagnostic snapshot；正常scanner、optimizer與portfolio replay不建立此資料。`filters/breakout_quality/strategy_compare_replay.py`的`run_no_filter_candidate_replay_from_metadata`重用既有hard-filter `historical_active_param_oos` no-filter metadata與canonical portfolio runner，取得qualified及資金／持股限制後的orderable候選，不另寫active-param、ensemble、history filter或buy-sort規則。開啟candidate capture後，重播的報酬、MDD、RoMD、曝險、PnL與trade counts必須和既有no-filter strategy summary一致，否則fail-fast。
-
-正式入口為：
-
-```bash
-python apps/research.py model audit-qualified-candidate-set --filter-id breakout_quality_v1
-```
-
-11C只提供`audit-qualified-candidate-set` CLI入口，不加入互動選單。Audit以原始`signal_date`對齊11A target及11B research score，保留candidate occurrence並另建立ticker／signal-date唯一group口徑；固定比較全部OOS breakouts、qualified candidates、orderable candidates與actual round trips。輸出包含qualified／orderable occurrence與ticker-signal-date unique-group工件、每日coverage、Score↔Target排序，以及actual signals對qualified／orderable的membership與Target／Score↔R診斷，寫入11B profile下的`qualified_candidate_set_audit/`。它不建立optimizer、loss、epoch、normalization、threshold或部署工件，也不授權qualified-candidate training；是否建立新sampling profile必須等正式audit結果後另行決定。
-
-### 11D Label-conditional Target Component Attribution Audit
-
-11C結果顯示qualified／orderable層的Score↔Target沒有崩落，因此11D不新增sampling profile，而是直接分解既有11A target。正式CLI為：
-
-```bash
-python apps/research.py model audit-target-attribution --filter-id breakout_quality_v1
-```
-
-`filters.breakout_quality.continuous_target.load_validated_continuous_target_component_arrays`以11A manifest的filename、size與SHA256 strict載入raw target、valid mask、favorable return、adverse return、opportunity bar與first risk breach bar。11D以11B OOS score的唯一group index對齊qualified unique groups與actual trades，固定推導favorable R、adverse R與time penalty R，逐筆驗證三成分可重建11A target；再輸出整體及PASS／REJECT條件下的Score↔Target成分與各成分↔realized R。
-
-11D只寫入11B profile下的`target_component_attribution_audit/`，不建立optimizer、checkpoint、sampling、normalization、threshold、runtime score或策略回測；CLI-only，不加入互動選單。
-
-### 11E Fixed Time-penalty Ablation Audit
-
-11D顯示time penalty與actual R方向相反，因此11E只做單一固定消融：
-
-```bash
-python apps/research.py model audit-target-time-ablation --filter-id breakout_quality_v1
-```
-
-11E strict讀取11D報表及兩份attribution CSV的SHA256，固定推導`target_no_time_r=favorable_r-adverse_r`，並逐筆驗證`target_raw_r=target_no_time_r-time_penalty_r`。Audit比較qualified與actual trades的原Target／No-time Target，另輸出PASS／REJECT條件Spearman與top-bottom decile realized R差距。
-
-11E只寫入11B profile下的`target_time_penalty_ablation_audit/`；不反向加分time penalty、不搜尋係數、不建立target version、optimizer、checkpoint、threshold或runtime score。CLI-only，不加入互動選單。
-
+原11C～11E的candidate coverage、Target component attribution與time-penalty ablation均屬已完成的一次性研究診斷；研究證據只讀保留於Experiment Registry／Log與既有outputs，不再保留runtime CLI、replay helper或專屬synthetic contract。正式Strategy Compare不得為重現這些歷史診斷保留第二套candidate replay。
 
 - `tools/validate/`：正式 invariant、contract、schema 與 real-case 驗證子系統；正式細目與狀態以 `doc/TEST_SUITE_CHECKLIST.md` 為準。
 
@@ -288,30 +251,20 @@ python apps/research.py model audit-target-time-ablation --filter-id breakout_qu
 
 ### Continuous Target preparation boundary
 
-`tools/filters/breakout_quality/prepare_continuous_target.py`是continuous workflow的泛用前置層。它不定義Target公式，只依active profile的`continuous_target_id`驗證或轉呼叫既有Target builder。Target manifest除Dataset policy與group count外，必須綁定產生它的Dataset artifact SHA256；衍生Target另綁定來源Target manifest SHA256。`tools/filters/breakout_quality/application.py`的continuous完整流程固定為Dataset preparation → Continuous Target preparation → PIT Score build → PIT model audit；低階research audit仍維持CLI-only。
+`tools/filters/breakout_quality/prepare_continuous_target.py`是continuous workflow的泛用前置層。它不定義Target公式，只依active profile的`continuous_target_id`驗證或呼叫`services/breakout_quality/continuous_target_builder.py`。Target manifest除Dataset policy與group count外，必須綁定產生它的Dataset artifact SHA256；衍生Target另綁定來源Target manifest SHA256。`tools/filters/breakout_quality/application.py`的continuous完整流程固定為Dataset preparation → Continuous Target preparation → PIT Score build → PIT model audit。
 
-### 11F No-time Target Arrays＋Selection-only Learnability Audit
-
-11F將11E通過的固定消融升級為獨立versioned target：
+No-time Target固定為：
 
 ```text
 strategy_aligned_opportunity_no_time_r_v1
 target_raw_r = favorable_return / risk_budget - adverse_return_to_peak / risk_budget
 ```
 
-入口：
-
-```bash
-python apps/research.py model audit-no-time-target --filter-id breakout_quality_v1
-```
-
-`filters.breakout_quality.continuous_target`重用11A strict component arrays，保留valid mask、opportunity bar、risk-breach bar與adverse-first語意。11F先驗證11E overall、PASS與decile spread均改善及來源artifact SHA256，再寫入獨立`continuous_targets/strategy_aligned_opportunity_no_time_r_v1/`。
-
-Audit只建立Inner Train／Validation／Selection分布、同日rankability及與11A Target的比較；不計算OOS指標、不讀actual R或11B score、不建立experiment profile、optimizer、checkpoint、threshold或runtime score。公式假設明確標記為先前迭代OOS研究形成，但沒有OOS fitted coefficient。CLI-only，不加入互動選單。
+它重用base Target的strict component arrays、valid mask、opportunity bar、risk-breach bar與adverse-first語意；不得要求歷史11E report、approval flag或其他一次性Audit artifact才允許build，也不得以OOS fitted coefficient改寫公式。PIT Audit則直接由`services/breakout_quality/point_in_time_audit.py`承接，不再經`tools/audit/` compatibility wrapper。
 
 ### 11G PASS-conditional No-time Magnitude Ranker
 
-11F顯示No-time Target在Selection內可排序，但Binary AUC約0.99，因此11G不得再以全Label objective重跑11B。11G新增experiment profile：
+既有No-time Target研究顯示Selection內可排序，但Binary AUC約0.99，因此此歷史PASS-conditional實驗不得再以全Label objective重跑11B。其experiment profile為：
 
 ```text
 strategy_aligned_no_time_pass_magnitude_mse

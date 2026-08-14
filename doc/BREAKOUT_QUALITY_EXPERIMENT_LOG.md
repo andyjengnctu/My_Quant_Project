@@ -8764,3 +8764,15 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 新增`tools/validate/transient_code_maintenance.py`並接入`tools/local_regression/run_meta_quality.py`。掃描主動列出disabled formal Audit、無current runtime／active formal Audit reachability的`tools/audit`／compatibility模組，以及過大的Audit-specific synthetic tests；只輸出`CLEAN／REVIEW`與候選，不單獨造成formal FAIL，也不得依檔名／年齡／LOC自動刪除。當前基準掃描=`CLEAN`、candidates=`0`。
 - 保留必要compatibility：`config/compatibility/strategy_compare_history.py`仍被current Strategy Compare用於舊工件／歷史arm重現；`continuous_target.py`、`no_time_continuous_target.py`、`point_in_time_scores.py`等雖位於Audit/research namespace，仍屬目前target／PIT／CLI依賴，因此本輪不刪。Strategy Compare正式replay、Selection PIT、Forward-OOS與multi-seed robustness主引擎均未改語意。
 - GPT端非formal targeted self-check：全Python `compileall` PASS；current Audit status route正常且因缺Strategy Compare local artifacts合理顯示BLOCKED；retired CLI不可路由、仍支援research CLI保持可見；Audit/minimum-repair/legacy-cleanup/Strategy Compare config contract與checklist registry／ordering／transition targeted contracts皆0 FAIL。正式本機double check仍由`apps/run_bundle.py`執行。
+
+## 2026-08-14 — Round 2 Target／PIT Active-Legacy Cleanup
+
+- 程式基準：`test-branch-1_20260814_183623_2d9212c.zip`；SHA256 `a25d39c273b5c00d268b8b53fc6e4a313bedcca28a8a3cd82a5b3af5b25f027d`。本輪是behavior-preserving架構瘦身，不建立新模型／Target假說，不重訓，不改PIT日期語意、Strategy Compare或交易規則。
+- Continuous Target正式ownership收斂：數學／strict component contract留在`filters/breakout_quality/continuous_target.py`；versioned artifact builder移至`services/breakout_quality/continuous_target_builder.py`；描述性build metrics移至`services/breakout_quality/continuous_target_metrics.py`。`prepare-continuous-target`只呼叫canonical service，不再import歷史Audit implementation。
+- `strategy_aligned_opportunity_no_time_r_v1`仍固定為`favorable_r-adverse_r`，沿用base Target的valid mask／risk-breach／adverse-first語意；移除11E report SHA、11F approval gate與`--approved-workflow-rebuild`歷史例外。歷史11E／11F研究採用理由留Registry／Log，但不再是current runtime prerequisite，也不允許以OOS fitted coefficient改公式。
+- PIT正式service原已存在；移除`tools/audit/breakout_quality/point_in_time_scores.py`13行compatibility wrapper，Audit catalog與Strategy Compare preparation直接指向`services/breakout_quality/point_in_time_audit.py`。
+- 11C／11D／11E／11F一次性Audit implementation、CLI registration與dedicated synthetic contracts退役；11C唯一consumer的`run_no_filter_candidate_replay_from_metadata`亦移除，避免Strategy Compare為歷史diagnostic永久背第二套candidate replay。11A舊builder／audit implementation及其target-statistics／artifact helper同時退役；仍有效的Target公式與artifact identity已由canonical service承接。
+- Formal contract responsibility重新分配：B171改為current Continuous Target canonical build契約；B173～B176與T270～T273由DONE轉N/A，歷史收斂紀錄保留。`synthetic_breakout_quality_audit_cases.py`只保留current formal minimum-repair Audit與minimal Audit framework contract。
+- 專案治理新增規則：當臨時研究結果被採納為current workflow時，必須先把穩定formula／builder／service抽到正式domain/service，再退役歷史Audit module、approval report gate、compatibility wrapper與專屬test；不得讓研究編號永久成為production dependency。
+- 本輪不改`strategy_aligned_opportunity_r_v1`／`strategy_aligned_opportunity_no_time_r_v1`數學定義，不改Dataset fingerprint、PIT fold semantics、Seed、loss、epoch、sampling、selector、sizing、cash或portfolio replay。
+
