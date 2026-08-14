@@ -47,6 +47,7 @@ from tools.local_regression.meta_quality_targets import (
     TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS,
 )
 from tools.local_regression.meta_quality_coverage import build_coverage_summary as _shared_build_coverage_summary
+from tools.validate.transient_code_maintenance import summarize_transient_code_maintenance
 from tools.local_regression.meta_quality_performance import (
     DEFAULT_PERFORMANCE_MANIFEST_KEYS,
     DEFAULT_PERFORMANCE_STEP_FILES,
@@ -699,6 +700,7 @@ def main(argv=None) -> int:
         coverage_summary = _build_coverage_summary(run_dir, manifest)
         checklist_summary = _summarize_checklist_consistency()
         formal_entry_summary = _summarize_formal_entry_consistency()
+        maintenance_summary = summarize_transient_code_maintenance(PROJECT_ROOT)
         current_meta_quality_duration_sec = round(os.times().elapsed - started, 3)
         current_meta_quality_peak_traced_memory_mb = tracker.snapshot_peak_mb()
         performance_summary = _build_performance_summary(
@@ -748,8 +750,9 @@ def main(argv=None) -> int:
                 "run_all_steps": formal_entry_summary["run_all_steps"],
                 "preflight_steps": formal_entry_summary["preflight_steps"],
                 "test_suite_steps": formal_entry_summary["test_suite_steps"],
-        },
-        "performance": {
+            },
+            "maintenance": maintenance_summary,
+            "performance": {
             "ok": performance_summary["ok"],
             "skipped": performance_summary["skipped"],
             "step_durations": performance_summary["step_durations"],
@@ -770,6 +773,15 @@ def main(argv=None) -> int:
         f"coverage_ok   : {coverage_summary['ok']}",
         f"checklist_ok  : {checklist_summary['ok']}",
         f"formal_entry_ok: {formal_entry_summary['ok']}",
+        f"slimming_scan : {maintenance_summary['status']} | candidates={maintenance_summary['candidate_count']} | advisory-only",
+        "slimming_items: " + (
+            ", ".join(
+                [item["path"] for item in maintenance_summary["stale_modules"]]
+                + [item["path"] for item in maintenance_summary["oversized_transient_tests"]]
+                + [f"{item['module_id']}/{item['audit_id']}" for item in maintenance_summary["disabled_audits"]]
+            )
+            or "(none)"
+        ),
         (
             f"coverage      : line {coverage_summary['totals']['covered_lines']}/"
             f"{coverage_summary['totals']['num_statements']} ({coverage_summary['totals']['line_percent_covered']:.2f}%)"
@@ -803,6 +815,8 @@ def main(argv=None) -> int:
         "performance_total_duration_sec": performance_summary["total_duration_sec"],
         "performance_peak_traced_memory_mb": performance_summary["max_step_peak_traced_memory_mb"],
         "optimizer_trial_avg_objective_wall_sec": performance_summary["optimizer_trial_avg_objective_wall_sec"],
+        "slimming_status": maintenance_summary["status"],
+        "slimming_candidate_count": maintenance_summary["candidate_count"],
     }, ensure_ascii=False))
     return 0 if overall_status == "PASS" else 1
 

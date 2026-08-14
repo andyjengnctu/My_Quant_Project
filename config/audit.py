@@ -1,9 +1,9 @@
 """Project-wide Audit policy.
 
-Audit implementation inventory lives in ``tools/audit/catalog.py``.  This file only
-selects which read-only audits are active and provides user-adjustable source,
-dimension, outcome, and output policy.  Audit code must never mutate strategy,
-labels, models, parameters, or runtime state.
+Only currently decision-relevant formal Audits belong in this config. Completed
+or rejected research Audits must be removed from the runtime catalog/config and
+kept as results in the experiment registry/log instead of remaining disabled
+forever.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-AUDIT_SCHEMA_VERSION = 4
+AUDIT_SCHEMA_VERSION = 5
 AUDIT_OUTPUT_ROOT = "outputs/audit"
 AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
 
@@ -20,317 +20,6 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
     "breakout_quality": {
         "enabled": True,
         "audits": {
-            "a9-pass-quality": {
-                "enabled": False,
-                "audit_type": "pass_quality",
-                "description": "A9 PASS 內部品質：Score、candidate age、candidate type 與 Label／Realized R",
-                "source": {
-                    "kind": "strategy_compare",
-                    "run": "latest",
-                    "arm_id": "C12",
-                },
-                "dimensions": {
-                    "score_quantile_groups": 5,
-                    "candidate_age_quantile_groups": 5,
-                    "candidate_type": True,
-                },
-                "outcomes": {
-                    "label_quality": True,
-                    "realized_r": True,
-                },
-                "output_subdir": "breakout_quality/a9_pass_quality",
-            },
-            "a9-pass-persistence": {
-                "enabled": False,
-                "audit_type": "pass_persistence",
-                "description": "A9 PASS persistence：unique event、candidate-day與selected false-positive放大",
-                "source": {
-                    "kind": "strategy_compare",
-                    "run": "latest",
-                    "arm_id": "C12",
-                },
-                "dimensions": {
-                    "selected_amplification": True,
-                },
-                "outcomes": {
-                    "label_quality": True,
-                    "realized_r": True,
-                },
-                "output_subdir": "breakout_quality/a9_pass_persistence",
-            },
-            "a9-selection-confidence": {
-                "enabled": False,
-                "audit_type": "selection_confidence",
-                "description": "A9 confidence在DL Selection Mode多PASS競爭時對Event Label／Realized R的排序力",
-                "source": {
-                    "kind": "strategy_compare",
-                    "run": "latest",
-                    "arm_id": "C12",
-                },
-                "dimensions": {
-                    "minimum_competing_pass_candidates": 2,
-                    "score_quantile_groups": 5,
-                },
-                "outcomes": {
-                    "label_quality": True,
-                    "realized_r": True,
-                },
-                "output_subdir": "breakout_quality/a9_selection_confidence",
-            },
-            "c15-strategy-attribution": {
-                "enabled": False,
-                "audit_type": "strategy_attribution",
-                "description": "C15相對C3／C12的wealth-path、selection、capital geometry、slot occupancy與trade contribution歸因",
-                "source": {
-                    "kind": "strategy_compare",
-                    "run": "latest",
-                    "candidate_arm_id": "C15",
-                    "comparator_arm_ids": ["C3", "C12"],
-                },
-                "dimensions": {
-                    "focus_year": 2024,
-                    "top_month_count": 5,
-                    "top_trade_count": 20,
-                },
-                "outcomes": {
-                    "log_wealth_path": True,
-                    "selection_changes": True,
-                    "capital_geometry": True,
-                    "slot_occupancy": True,
-                    "trade_contribution": True,
-                },
-                "output_subdir": "breakout_quality/c15_strategy_attribution",
-            },
-            "c15-source-attribution": {
-                "enabled": False,
-                "audit_type": "strategy_attribution",
-                "description": "C15相對C14的跨run同runtime source attribution；隔離MR-12A all-label與MR-11G pass-only score source差異",
-                "source": {
-                    "kind": "strategy_compare",
-                    "candidate_arm_id": "C15",
-                    "comparator_arm_ids": ["C14"],
-                    "arm_runs": {
-                        "C15": {"config_fingerprint": "4da3217c83bd"},
-                        "C14": {"config_fingerprint": "902c90b40dc2"},
-                    },
-                },
-                "dimensions": {
-                    "focus_year": 2024,
-                    "top_month_count": 5,
-                    "top_trade_count": 20,
-                },
-                "outcomes": {
-                    "log_wealth_path": True,
-                    "selection_changes": True,
-                    "capital_geometry": True,
-                    "slot_occupancy": True,
-                    "trade_contribution": True,
-                },
-                "output_subdir": "breakout_quality/c15_source_attribution",
-            },
-            "c23-c25-pit-realization": {
-                "enabled": False,
-                "audit_type": "strategy_realization_capture",
-                "description": "Selection PIT直接部署失敗歸因：比較baseline與設定中的PIT ranking arms之exclusive trades、fill、sizing、holding、slot occupancy與Target→Realized capture",
-                "source": {
-                    "kind": "strategy_compare",
-                    "run": "latest",
-                    "baseline_arm_id": "C23",
-                    "candidate_arm_ids": ["C24", "C25"],
-                },
-                "dimensions": {
-                    "focus_year": 2020,
-                    "top_month_count": 5,
-                    "top_trade_count": 20,
-                },
-                "outcomes": {
-                    "selection_changes": True,
-                    "exclusive_trade_realization": True,
-                    "capital_geometry": True,
-                    "slot_occupancy": True,
-                    "target_capture": True,
-                },
-                "output_subdir": "breakout_quality/c23_c25_pit_realization_capture",
-            },
-            "c23-c25-pit-fold-runtime": {
-                "enabled": False,
-                "audit_type": "pit_fold_runtime_attribution",
-                "description": "Selection PIT fold drift／mixed-fold runtime歸因：檢查orderable pool跨fold score混合與winner capture損失是否集中於fold transition",
-                "source": {
-                    "kind": "strategy_compare",
-                    "run": "latest",
-                    "baseline_arm_id": "C23",
-                    "candidate_arm_ids": ["C24", "C25"],
-                },
-                "dimensions": {
-                    "fold_boundary_window_days": 30,
-                    "focus_year": 2020,
-                    "top_month_count": 5,
-                    "top_trade_count": 20,
-                },
-                "outcomes": {
-                    "runtime_fold_mixing": True,
-                    "exclusive_winner_capture": True,
-                    "fold_boundary_attribution": True,
-                },
-                "output_subdir": "breakout_quality/c23_c25_pit_fold_runtime",
-            },
-            "c23-c25-pit-target-realization": {
-                "enabled": False,
-                "audit_type": "pit_target_realization_attribution",
-                "description": "Selection PIT Target→realized R／score-age歸因：檢查exclusive winner capture損失是否集中於較舊signal→entry age，區分event Target老化與Target公式本身失配",
-                "source": {
-                    "kind": "strategy_compare",
-                    "run": "latest",
-                    "baseline_arm_id": "C23",
-                    "candidate_arm_ids": ["C24", "C25"],
-                },
-                "dimensions": {
-                    "score_age_quantile_groups": 4,
-                    "focus_year": 2020,
-                    "top_month_count": 5,
-                    "top_trade_count": 20,
-                },
-                "outcomes": {
-                    "actual_exclusive_trade_alignment": True,
-                    "target_realization_gap": True,
-                    "score_age_attribution": True,
-                },
-                "output_subdir": "breakout_quality/c23_c25_pit_target_realization",
-            },
-            "c23-c26-pit-portfolio-translation": {
-                "enabled": False,
-                "audit_type": "strategy_attribution",
-                "description": "SR-C26在Selection內已修復same-param selection R但仍落後baseline的portfolio translation歸因：拆exclusive/common trade PnL、capital geometry、slot occupancy與wealth path",
-                "source": {
-                    "kind": "strategy_compare",
-                    "run": "latest",
-                    "candidate_arm_id": "C26",
-                    "comparator_arm_ids": ["C23", "C25"],
-                },
-                "dimensions": {
-                    "focus_year": 2020,
-                    "top_month_count": 5,
-                    "top_trade_count": 20,
-                },
-                "outcomes": {
-                    "log_wealth_path": True,
-                    "selection_changes": True,
-                    "capital_geometry": True,
-                    "slot_occupancy": True,
-                    "trade_contribution": True,
-                    "risk_dollar_translation": True,
-                },
-                "output_subdir": "breakout_quality/c23_c26_pit_portfolio_translation",
-            },
-            "cross-period-year-regime-attribution": {
-                "enabled": False,
-                "audit_type": "robustness_cross_period_attribution",
-                "description": "MR-13A相對MR-12B在Selection PIT與Forward-OOS的same-seed ranking／trade-set edge方向翻轉與逐年度集中度歸因",
-                "source": {
-                    "kind": "multi_seed_robustness_cross_period",
-                    "phases": {
-                        "selection_pit": {
-                            "robustness_id": "selection_pit",
-                            "run": "latest",
-                            "candidate_arm_id": "C28",
-                            "comparator_arm_id": "C25",
-                        },
-                        "forward_oos": {
-                            "robustness_id": "forward_oos",
-                            "run": "latest",
-                            "candidate_arm_id": "C29",
-                            "comparator_arm_id": "C20",
-                        },
-                    },
-                },
-                "dimensions": {
-                    "year_bucket": True,
-                },
-                "outcomes": {
-                    "same_seed_cross_period_direction": True,
-                    "yearly_direct_pair_trade_set": True,
-                    "yearly_return_translation": True,
-                    "all_seed_required": True,
-                },
-                "output_subdir": "breakout_quality/cross_period_year_regime_attribution",
-            },
-            "mr13e-orderable-feasible-alignment": {
-                "enabled": False,
-                "audit_type": "orderable_feasible_alignment",
-                "description": "MR-12B／MR-13A／MR-13E在Selection PIT與Forward-OOS實際orderable competition set中的ranking，以及resource repair／feasible-ascent到entry action的轉化歸因",
-                "source": {
-                    "kind": "strategy_compare_cross_phase",
-                    "phases": {
-                        "selection_pit": {
-                            "profile_id": "selection_pit",
-                            "run": "latest",
-                            "baseline_arm_id": "C23",
-                            "candidate_arm_ids": ["C25", "C28", "C35"],
-                            "reference_daily_arm_id": "C35",
-                        },
-                        "forward_oos": {
-                            "profile_id": "forward_oos",
-                            "run": "latest",
-                            "baseline_arm_id": "C3",
-                            "candidate_arm_ids": ["C20", "C29", "C36"],
-                            "reference_daily_arm_id": "C36",
-                        },
-                    },
-                },
-                "dimensions": {
-                    "dynamic_action_count": True,
-                    "direct_feasible_days": True,
-                    "repair_days": True,
-                    "feasible_ascent_days": True,
-                },
-                "outcomes": {
-                    "common_daily_target_post_replay": True,
-                    "orderable_ranking": True,
-                    "raw_score_to_action_translation": True,
-                    "no_fixed_k": True,
-                },
-                "output_subdir": "breakout_quality/mr13e_orderable_feasible_alignment",
-            },
-            "mr13e-selector-stage-translation": {
-                "enabled": False,
-                "audit_type": "selector_stage_translation",
-                "description": "MR-12B／MR-13A／MR-13E把raw Top-N依序經minimum-repair、feasible-ascent、entry action與actual fill時的逐層Future Target轉化歸因",
-                "source": {
-                    "kind": "strategy_compare_cross_phase",
-                    "phases": {
-                        "selection_pit": {
-                            "profile_id": "selection_pit",
-                            "run": "latest",
-                            "baseline_arm_id": "C23",
-                            "candidate_arm_ids": ["C25", "C28", "C35"],
-                            "reference_daily_arm_id": "C35",
-                        },
-                        "forward_oos": {
-                            "profile_id": "forward_oos",
-                            "run": "latest",
-                            "baseline_arm_id": "C3",
-                            "candidate_arm_ids": ["C20", "C29", "C36"],
-                            "reference_daily_arm_id": "C36",
-                        },
-                    },
-                },
-                "dimensions": {
-                    "raw_top_n": True,
-                    "minimum_repair_seed": True,
-                    "feasible_ascent_final": True,
-                    "entry_action": True,
-                    "actual_fill": True,
-                    "repair_days": True,
-                },
-                "outcomes": {
-                    "common_daily_target_post_replay": True,
-                    "stage_membership_overlap": True,
-                    "stage_target_delta_r": True,
-                    "no_fixed_k": True,
-                },
-                "output_subdir": "breakout_quality/mr13e_selector_stage_translation",
-            },
             "mr13e-minimum-repair-mechanism": {
                 "enabled": True,
                 "audit_type": "minimum_repair_mechanism",
@@ -368,31 +57,6 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "no_numeric_threshold": True,
                 },
                 "output_subdir": "breakout_quality/mr13e_minimum_repair_mechanism",
-            },
-            "forward-robustness-portfolio-translation": {
-                "enabled": False,
-                "audit_type": "robustness_portfolio_translation",
-                "description": "Forward-OOS multi-seed ranking edge到trade-set、risk-dollar sizing、slot occupancy與wealth path的全seed轉化歸因",
-                "source": {
-                    "kind": "multi_seed_robustness",
-                    "robustness_id": "forward_oos",
-                    "run": "latest",
-                    "candidate_arm_id": "C29",
-                    "comparator_arm_id": "C20",
-                },
-                "dimensions": {
-                    "focus_year": 2023,
-                    "top_month_count": 5,
-                    "top_trade_count": 20,
-                },
-                "outcomes": {
-                    "trade_set_translation": True,
-                    "risk_dollar_translation": True,
-                    "slot_occupancy": True,
-                    "wealth_path": True,
-                    "all_seed_required": True,
-                },
-                "output_subdir": "breakout_quality/forward_robustness_portfolio_translation",
             },
         },
     },
@@ -450,8 +114,6 @@ def _validate_definition(definition: AuditDefinition) -> None:
     )
 
 
-
-
 def get_active_audit_module_id() -> str:
     module_id = str(AUDIT_ACTIVE_MODULE_ID).strip()
     if not module_id:
@@ -462,6 +124,7 @@ def get_active_audit_module_id() -> str:
     if not bool(raw.get("enabled", False)):
         raise ValueError(f"AUDIT_ACTIVE_MODULE_ID目前未啟用: {module_id}")
     return module_id
+
 
 def get_audit_module_ids(*, enabled_only: bool = True) -> tuple[str, ...]:
     module_ids: list[str] = []

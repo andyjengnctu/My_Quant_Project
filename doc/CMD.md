@@ -100,8 +100,7 @@ python apps/research.py compare robustness latest
 [0]  返回
 ```
 
-全專案Audit inventory與dispatch的單一真理位於`tools/audit/catalog.py`；`config/audit.py`只保存目前反覆執行的正式active policy，不再承擔所有歷史Audit命令的inventory。正式入口可直接執行`python apps/research.py audit`；`apps/research.py`的Audit子選單呼叫`tools/audit/runner.py`，App本身不硬編碼A9／C15或個別Audit module。`tools/audit/`可跨filter、portfolio、optimizer、data與其他domain；正式`core/`／`filters/`不得反向依賴Audit。Formal Audit只能使用catalog中`mode=formal`且`read_only=true`的handler，只讀既有正式工件；缺件顯示`BLOCKED`，不得自行重跑策略、建立Label、訓練模型或修改runtime。`forward-robustness-portfolio-translation`只讀上述compact attribution source與既有`seed_results.csv`，固定分析完整matched 8-seed集合，逐seed重用canonical strategy attribution primitive分解exclusive/common trade、risk-dollar sizing、slot occupancy與wealth/MDD path，並以execution sidecar診斷actual risk utilization與risk/position/capital/MaxQty/lot/cash binding；Audit本身不負責重建來源工件。歷史research audit仍由catalog統一登記，但可明確標示`research`／`historical`與`read_only=false`，不會被formal runner誤執行。Candidate validity仍維持Strategy owns validity / DL owns quality / Portfolio selector owns allocation。
-
+全專案Audit inventory與dispatch的單一真理位於`tools/audit/catalog.py`；`config/audit.py`只保存目前active formal policy。正式入口為Research主選單的`[4] Audit／診斷`或`python apps/research.py audit`，由`tools/audit/runner.py`派送。Formal Audit只能使用catalog中`mode=formal`且`read_only=true`的handler，缺件顯示`BLOCKED`，不得自行重跑策略、建立Label、訓練模型或修改runtime。一次性Audit／research diagnostic在決策完成、Registry／Log已留證且current runtime／active Audit／必要compatibility無依賴後即退役，不以`enabled=False`或historical CLI永久累積。`meta quality`會執行advisory slimming scan並在summary列出`CLEAN／REVIEW`與候選數；該訊號不單獨造成formal FAIL。Candidate validity仍維持Strategy owns validity / DL owns quality / Portfolio selector owns allocation。
 
 Audit也可直接由Research CLI子命令執行：
 
@@ -109,7 +108,7 @@ Audit也可直接由Research CLI子命令執行：
 python apps/research.py audit
 ```
 
-目前`config/audit.py`的active module為`breakout_quality`，其中啟用Audit由各audit的`enabled`設定決定；目前啟用`c15-source-attribution`。它只讀既有Strategy Compare正式工件，比較`C15 vs C14`，以跨run同runtime source attribution隔離MR-12A all-label與MR-11G pass-only score source差異；`focus_year=2024`。它不重新replay、不重建score、不訓練模型。輸出位於`outputs/audit/breakout_quality/c15_source_attribution/`的`runs/<timestamp>/`與`latest/`。
+目前`config/audit.py`只保留仍待決策的`mr13e-minimum-repair-mechanism` formal Audit；它只讀既有Strategy Compare selector trace／repair-search certificate與共同daily target工件，用來區分minimum-repair loss的mechanism，不改selector、不train、不score、不replay。完成本次決策後，該Audit也應依臨時研究程式生命週期退役。
 
 模型訓練與策略比較維持不同工作類型與service責任。正式策略組合比較可由主選單 `[3]` 進入，或執行：
 
@@ -651,10 +650,7 @@ python apps/research.py model build-binary-point-in-time-scores `
 
 - `--param-policy` 與參數檔內 `selector` 不一致時直接拒絕；`base-finalist-best` 另要求每期 `1 member / min_agree=1`。
 - 可正常評分但低 Score 的候選仍保留，只是順位靠後。Hard-filter模式的正式不可評分事件仍保守REJECT；Score-ranking模式的缺分候選不得排除或填0，必須保存`available=false`與原始Score來源，排在有效Score後並完整回退既有buy-sort。Continuation與STOP後Re-entry沿用原始breakout Score及原始Score事件日期。
-- Score-ranking capture attribution已從正式strategy compare runtime拆離。`filters/breakout_quality/strategy_compare_engine.py`只產生canonical策略比較工件，不import `tools/audit/`、不在replay流程內自動產生Audit，也不提供`--capture-audit-only`。
-- 通用capture實作位於`tools/audit/portfolio/score_ranking_capture.py`，只能從**已完成的pair工件**物化read-only報表；歷史pair若需診斷可直接由Audit materializer讀取，不需要已退役的Gate／Adapt CLI orchestration，也不因此重跑portfolio。Future Target仍只可在replay後join，不進候選排序、資金配置、成交或optimizer。
-- 原策略比較主要工件維持`strategy_comparison.md`、`strategy_comparison.json`及canonical equity／trades／daily-capacity／selected diagnostics；capture audit如被研究工具要求，另輸出`score_ranking_capture_audit.md`、`score_ranking_capture_audit.json`與lifecycle／年度／scenario CSV。兩份報表彼此獨立，strategy comparison JSON不再內嵌Audit payload。
-- Capture audit可分解平均實際投入、預留／投入比例、stop distance、保留買單成交率、持有期、首次半倉時間、尾倉slot-days、entry-date／月份集中度、可用時的產業集中度、exit reason、Realized R、Target R、Target capture ratio、realization gap與年度差異；若交易列沒有canonical產業欄位則顯示N/A，不自行推測類股。
+- 已完成的Score-ranking capture與舊portfolio attribution Audit已從current source tree退役；Strategy Compare只保存canonical策略比較工件與目前runtime仍需要的execution／selector-trace／repair-certificate diagnostics。歷史研究結論與舊輸出工件仍可作證據，但不再提供capture Audit CLI或專屬materializer。
 - 一般Optimizer search space固定ranking=`False`，不得把ranking開關設成trial維度；已退役的Selection ranking×parameter adaptation CLI不得被重新引入正式optimizer或互動選單。
 - 歷史Selection ranking×parameter adaptation研究已完成並於Legacy Cleanup Batch 7退役；其coverage、2×2 replay與R3研究證據保留於Experiment Log，不再提供`strategy_adapt` CLI。現行參數工件由`filters/breakout_quality/strategy_param_training.py`及Strategy Compare preparation管理；任何新ranking研究必須建立新的config／registry identity，不得復活舊臨時入口。
 - 此研究是在已查看既有OOS後進行的迭代證據；任何候選改法仍須凍結契約後再做無前視驗證，不能由Selection結果直接部署。
@@ -742,83 +738,6 @@ models/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_a
 outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_aligned_no_time_pass_magnitude_mse/
 ```
 
-### 11H PASS-only Realization-gap Attribution Audit
+### 11H～11K 歷史診斷（已完成並退役）
 
-11G已能排序PASS-only No-time Target，但actual PASS trades的Score↔R為負，因此11H只做凍結工件歸因；CLI-only，不加入互動選單：
-
-```bash
-python apps/research.py model audit-pass-realization-gap --filter-id breakout_quality_v1
-```
-
-固定輸入：
-
-- 11G `continuous_ranker_report.json`與`continuous_ranker_scores.csv`。
-- 11F No-time Target component arrays。
-- 11A canonical `continuous_target_trade_matches.csv`。
-
-Audit聚焦原始Label=PASS，固定計算`realization_gap_r=target_raw_r-r_multiple`與`favorable_capture_ratio=r_multiple/favorable_r`，並輸出Score↔Favorable／Adverse、Score↔gap／capture、控制Target後partial Score↔R，以及Score／Target top-bottom decile成分。來源SHA256、逐筆`target=favorable-adverse`與actual PASS配對數均須一致。
-
-輸出位於：
-
-```text
-outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_aligned_no_time_pass_magnitude_mse/pass_realization_gap_audit/
-```
-
-本命令不訓練、不建立新profile／checkpoint、不調Target、loss、epoch、sampling、threshold或runtime score。
-
-
-### 11I Nested Selection Strategy-realization Coverage Audit
-
-11H確認11G高Score對應更大的未實現機會落差；11I先建立Selection內nested rolling OOS參數鏈，再以canonical no-filter portfolio replay量化strategy-realization coverage。CLI-only，不加入互動選單。
-
-先輸出準備腳本：
-
-```powershell
-python apps/research.py model audit-selection-strategy-realization --filter-id breakout_quality_v1 --prepare-only
-```
-
-未指定`--optimizer-trials`時，trial數直接讀取`config/training_policy.py`的`OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`；不再維護11I專屬硬編碼預設。需要單次覆蓋時可明確加上`--optimizer-trials 100`。每次修改config或CLI值後都必須重新執行`--prepare-only`，因為既有`.ps1`是已生成的靜態腳本。
-
-執行產生的`prepare_selection_nested_roos.ps1`後，再執行：
-
-```powershell
-python apps/research.py model audit-selection-strategy-realization --filter-id breakout_quality_v1 --quiet
-```
-
-預設以2014-01-01～2020-12-31、120個月固定訓練窗、12個月OOS建立research-only nested參數鏈；策略replay固定只跑2014-01-01～2020-11-05，並由11F manifest的`final_refit_date_range`再次驗證，避免年底事件Target跨入2021。`V16_MODELS_DIR`隔離到`models/research/breakout_quality/selection_strategy_realization`，不得覆蓋正式2021～2026 rolling params。11I不訓練、不建立Target arrays，且不得把未交易候選標成0R。
-
-### 11J Canonical Per-candidate Counterfactual Execution Audit（已停止）
-
-11I確認Selection nested-OOS No-time Target方向成立、但actual portfolio trade coverage不足後，使用同一nested params與canonical candidate replay，對每個qualified訊號建立獨立counterfactual execution：
-
-```bash
-python apps/research.py model audit-candidate-counterfactual --filter-id breakout_quality_v1 --quiet
-```
-
-11J採plain replay-counts＋execution sidecar：只以11I相同的2014-01-01～2020-11-05執行一次canonical replay，`replay_counts`固定使用普通dict，再用相同flatten／target-date／unique流程精確核對2,003筆。Orderable成交資料由獨立`replay_execution_rows` sidecar保存；不得把observer、自訂dict或counterfactual狀態機傳入canonical replay。Sidecar不遞迴複製`signal_state`或`params_obj`，只保留成交必要欄位、params reference、cloned shadow與單一ticker market array參照。通過2,003 guard後才離線執行counterfactual；每日只推進open positions，2020-11-06～2020-12-31由sidecar market calendars延伸，不重跑portfolio。
-
-此audit忽略portfolio capacity與cash competition，但保留正式限價成交、locked-limit、shadow inheritance、半倉停利、停損、指標出場、賣出受阻、費稅與R口徑。輸出位於：
-
-```text
-outputs/filters/breakout_quality/breakout_quality_v1/continuous_targets/strategy_aligned_opportunity_no_time_r_v1/selection_strategy_realization_audit/candidate_counterfactual_execution_audit/
-```
-
-未成交訊號保持`r_multiple`空值，不填0R。11J不建立Target arrays、不訓練、不加入互動選單。
-
-11J已於2026-08-01停止：plain dict＋execution sidecar仍只重現1,969／2,003，不再要求執行，也不得再修改core以追求重現。
-
-### 11K Portfolio Selection-pressure Attribution Audit
-
-直接讀取11I既有orderable candidates與actual trade matches，不重播市場：
-
-```bash
-python apps/research.py model audit-selection-pressure --filter-id breakout_quality_v1
-```
-
-輸出位於：
-
-```text
-outputs/filters/breakout_quality/breakout_quality_v1/continuous_targets/strategy_aligned_opportunity_no_time_r_v1/selection_strategy_realization_audit/portfolio_selection_pressure_audit/
-```
-
-固定輸出同日Target percentile、actual top-half／top-quartile比例、依每日實際買入數k的Target top-k retention、Target opportunity gap與候選壓力分桶。未選候選沒有realized R，維持缺值，不填0R、不推估反事實績效。11K為read-only、CLI-only，不訓練、不修改runtime。
+11H PASS realization-gap、11I Selection strategy-realization、11J per-candidate counterfactual、11K portfolio selection-pressure已完成研究決策並退出current CLI。對應implementation、catalog registration與專屬synthetic tests不再隨正式程式維護；歷史結論請查`doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`與`doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`。若未來需要重新回答相似問題，應建立新的最小Audit，而不是復活舊命令。

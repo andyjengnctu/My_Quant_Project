@@ -224,14 +224,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     from tools.audit import primitives as audit_primitives
-    from tools.audit.breakout_quality import artifact_primitives, pit_primitives
-    from tools.audit.breakout_quality import selection_replay_primitives, target_statistics
+    from tools.audit.breakout_quality import artifact_primitives, target_statistics
     from tools.audit.breakout_quality import continuous_target as continuous_target_audit
     from tools.audit.breakout_quality import no_time_continuous_target as no_time_target_audit
-    from tools.audit.breakout_quality import selection_strategy_realization as selection_realization_audit
-    from tools.audit.breakout_quality import candidate_counterfactual_execution as counterfactual_audit
     from tools.audit.breakout_quality import target_component_attribution as target_component_audit
-    from tools.audit.breakout_quality import pit_fold_runtime_attribution as pit_fold_audit
 
     add_check(
         results,
@@ -249,15 +245,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "selection_and_pit_audits_share_identity_and_artifact_primitives",
-        (True, True, True, True),
-        (
-            selection_realization_audit._attach_targets is selection_replay_primitives.attach_targets,
-            counterfactual_audit._attach_targets is selection_replay_primitives.attach_targets,
-            pit_fold_audit._candidate_pit_identity is pit_primitives.candidate_pit_identity,
-            target_component_audit._sha256_file is audit_primitives.sha256_file
-            and artifact_primitives.sha256_file is audit_primitives.sha256_file,
-        ),
+        "audit_artifact_hash_primitive_remains_single_source",
+        True,
+        target_component_audit._sha256_file is audit_primitives.sha256_file
+        and artifact_primitives.sha256_file is audit_primitives.sha256_file,
     )
 
     config_source = config_path.read_text(encoding="utf-8")

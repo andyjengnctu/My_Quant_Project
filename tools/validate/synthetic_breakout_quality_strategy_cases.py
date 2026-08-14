@@ -3284,6 +3284,13 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         "tools/filters/breakout_quality/strategy_filter_gate.py",
         "tools/filters/breakout_quality/strategy_dl_filter_gate.py",
         "tools/filters/breakout_quality/strategy_trade_path_label_gate.py",
+        "tools/audit/breakout_quality/pass_realization_gap.py",
+        "tools/audit/breakout_quality/selection_strategy_realization.py",
+        "tools/audit/breakout_quality/candidate_counterfactual_execution.py",
+        "tools/audit/breakout_quality/portfolio_selection_pressure.py",
+        "tools/audit/breakout_quality/orderable_feasible_alignment.py",
+        "tools/audit/breakout_quality/selector_stage_translation.py",
+        "tools/audit/portfolio/score_ranking_capture.py",
         "doc/result_tmp.md",
     )
     retired_absent = tuple(
@@ -3294,7 +3301,7 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         results,
         "synthetic_breakout_quality",
         case_id,
-        "retired_research_cli_and_temp_output_are_absent",
+        "retired_research_cli_audit_and_temp_output_are_absent",
         tuple(True for _ in retired_paths),
         retired_absent,
     )
@@ -3304,12 +3311,14 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         "filters/breakout_quality/strategy_param_training.py",
         "tools/filters/breakout_quality/build_trade_path_labels.py",
         "services/breakout_quality/train.py",
+        "tools/audit/breakout_quality/minimum_repair_mechanism.py",
+        "tools/validate/transient_code_maintenance.py",
     )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "current_strategy_and_trade_path_workflows_remain_available",
+        "current_strategy_model_and_active_audit_workflows_remain_available",
         tuple(True for _ in current_paths),
         tuple((project_root / relative_path).exists() for relative_path in current_paths),
     )
@@ -3320,12 +3329,13 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         "filters/breakout_quality/models/ts2vec.py",
         "filters/breakout_quality/models/mantis_v2.py",
         "filters/breakout_quality/models/moment.py",
+        "config/compatibility/strategy_compare_history.py",
     )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "historical_checkpoint_reconstruction_compatibility_is_preserved",
+        "required_historical_reconstruction_compatibility_is_preserved",
         tuple(True for _ in compatibility_paths),
         tuple((project_root / relative_path).exists() for relative_path in compatibility_paths),
     )
@@ -3342,6 +3352,10 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         "python -m tools.filters.breakout_quality.strategy_filter_gate",
         "python -m tools.filters.breakout_quality.strategy_dl_filter_gate",
         "python -m tools.filters.breakout_quality.strategy_trade_path_label_gate",
+        "audit-pass-realization-gap",
+        "audit-selection-strategy-realization",
+        "audit-candidate-counterfactual",
+        "audit-selection-pressure",
     )
     add_check(
         results,
@@ -3355,9 +3369,41 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         ),
     )
 
+    from tools.validate.transient_code_maintenance import summarize_transient_code_maintenance
+
+    maintenance = summarize_transient_code_maintenance(project_root)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "transient_code_maintenance_scan_is_clean_after_retirement",
+        ("CLEAN", False, 0, True),
+        (
+            maintenance.get("status"),
+            maintenance.get("needs_slimming"),
+            maintenance.get("candidate_count"),
+            maintenance.get("advisory_only"),
+        ),
+    )
+
+    project_settings = (project_root / "doc/PROJECT_SETTINGS.md").read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "project_settings_define_disposable_transient_code_and_advisory_slimming_scan",
+        (True, True, True),
+        (
+            "臨時性研究／Audit／診斷／synthetic test 程式屬可拋棄工程資產" in project_settings,
+            "輕量瘦身掃描" in project_settings,
+            "不得因檔名、年齡或行數直接刪除" in project_settings,
+        ),
+    )
+
     summary["retired_paths"] = list(retired_paths)
     summary["current_replacements"] = list(current_paths)
     summary["compatibility_preserved"] = list(compatibility_paths)
+    summary["maintenance"] = maintenance
     return results, summary
 
 def validate_breakout_quality_strategy_readable_report_contract_case(_base_params):

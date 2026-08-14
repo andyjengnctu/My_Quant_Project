@@ -51,6 +51,9 @@
 8. `config/` 下的正式參數均屬使用者可自行調整的設定；GPT、validator 與 formal suite 不得把任何目前值、預設值或特定值硬編碼成唯一合法答案，也不得為了讓測試通過而擅自修改、覆寫、還原或限制使用者設定。測試僅可驗證欄位存在、型別、合法範圍、跨欄一致性、衍生結果與 runtime 是否忠實採用當前設定；若測試需要固定案例，必須在測試內使用隔離 override，不得限制實際 `config/`。此規則包含但不限於 `training_policy`、`search_space` 與 `display_policy`。
 9. 研究工作可由單一`apps/research.py`作為使用者正式入口，但模型訓練、策略參數最佳化與策略組合比較必須維持獨立工作類型與application/service責任分離；一般策略組合比較不得自行建立Label、選擇模型或訓練模型權重，但可依config透過正式共用服務匯出既有模型的推論工件，以及建立比較所需的策略參數工件。唯一明確例外為`Multiple-seed robustness`：因其scientific variable本身就是模型訓練seed、最終判讀對象是策略績效，可在`[3] 策略組合比較`下作獨立robustness orchestrator，且只能呼叫canonical model-training service建立隔離、暫存的per-seed權重／score後立即進同一策略replay；不得建立新Label、改target／architecture／loss／hyperparameter、覆寫canonical模型、挑best seed、做seed ensemble或把seed工件升級成正式模型。各工作類型不得複製核心訓練邏輯；特定model、實驗標的、比較arm與Audit module不得由選單選擇，必須由`config/`指定。
 10. 前置工件自動建立必須先顯示可稽核計畫並只確認一次；任一步驟失敗時立即停止後續回放、保留可接續工件、回報失敗步驟與相對路徑，不得產生不完整的正式比較報表。
+11. 臨時性研究／Audit／診斷／synthetic test 程式屬可拋棄工程資產；一旦其待決策問題已有結論、對應實驗已記錄於Registry／Log，且目前正式runtime、active Audit或必要compatibility不再依賴，就必須刪除implementation、config／catalog registration與只服務該程式的tests／helpers，不得以永久`enabled=False`、historical CLI或只為coverage保留的方式累積。
+12. `meta quality`必須執行輕量瘦身掃描，主動列出：(a) disabled formal Audit、(b) 無法由目前正式runtime或active formal Audit import-reachability到達的`tools/audit`／compatibility模組、(c) 明顯過大的Audit-specific synthetic test。此掃描預設只提供`CLEAN／REVIEW`維護訊號與候選清單，不得單獨造成formal FAIL，避免維護建議反過來形成第二套阻擋型Audit。
+13. 自動瘦身判定只能提出候選，不得因檔名、年齡或行數直接刪除；若歷史compatibility仍被目前正式runtime用於舊工件解讀／重現，或模組仍是目前target／PIT／strategy compare的必要依賴，就必須保留。實際刪除前須確認引用鏈，並優先移除已完成的一次性研究程式與其專屬測試。
 
 
 ## D. 交易與策略原則

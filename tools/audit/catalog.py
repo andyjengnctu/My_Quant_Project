@@ -46,78 +46,7 @@ class AuditCatalogEntry:
 
 
 AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
-    # Config-driven formal Audit handlers.
-    "pass_quality": AuditCatalogEntry(
-        audit_type="pass_quality",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.pass_quality",
-        mode="formal",
-        description="A9 PASS內部品質與實際Realized R診斷",
-        read_only=True,
-        status_function="collect_pass_quality_status",
-        run_function="run_pass_quality_audit",
-    ),
-    "pass_persistence": AuditCatalogEntry(
-        audit_type="pass_persistence",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.pass_persistence",
-        mode="formal",
-        description="A9 PASS persistence與false-positive重複權重診斷",
-        read_only=True,
-        status_function="collect_pass_persistence_status",
-        run_function="run_pass_persistence_audit",
-    ),
-    "selection_confidence": AuditCatalogEntry(
-        audit_type="selection_confidence",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.selection_confidence",
-        mode="formal",
-        description="A9多PASS競爭日confidence排序力診斷",
-        read_only=True,
-        status_function="collect_selection_confidence_status",
-        run_function="run_selection_confidence_audit",
-    ),
-    "strategy_attribution": AuditCatalogEntry(
-        audit_type="strategy_attribution",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.c15_strategy_attribution",
-        mode="formal",
-        description="跨arm wealth-path、selection、capital geometry與slot occupancy歸因",
-        read_only=True,
-        status_function="collect_strategy_attribution_status",
-        run_function="run_strategy_attribution_audit",
-    ),
-    "robustness_portfolio_translation": AuditCatalogEntry(
-        audit_type="robustness_portfolio_translation",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.forward_robustness_portfolio_translation",
-        mode="formal",
-        description="Multi-seed robustness既有compact replay工件的全seed portfolio translation歸因",
-        read_only=True,
-        status_function="collect_forward_robustness_portfolio_translation_status",
-        run_function="run_forward_robustness_portfolio_translation_audit",
-    ),
-
-    "orderable_feasible_alignment": AuditCatalogEntry(
-        audit_type="orderable_feasible_alignment",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.orderable_feasible_alignment",
-        mode="formal",
-        description="Completed Strategy Compare orderable ranking與resource/action translation跨phase歸因",
-        read_only=True,
-        status_function="collect_orderable_feasible_alignment_status",
-        run_function="run_orderable_feasible_alignment_audit",
-    ),
-    "selector_stage_translation": AuditCatalogEntry(
-        audit_type="selector_stage_translation",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.selector_stage_translation",
-        mode="formal",
-        description="Completed Strategy Compare的Raw→Repair→Ascent→Action→Fill逐層membership／Future Target轉化歸因",
-        read_only=True,
-        status_function="collect_selector_stage_translation_status",
-        run_function="run_selector_stage_translation_audit",
-    ),
+    # Only decision-relevant formal Audit handlers stay registered here.
     "minimum_repair_mechanism": AuditCatalogEntry(
         audit_type="minimum_repair_mechanism",
         domain="breakout_quality",
@@ -129,48 +58,8 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         run_function="run_minimum_repair_mechanism_audit",
     ),
 
-    "robustness_cross_period_attribution": AuditCatalogEntry(
-        audit_type="robustness_cross_period_attribution",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.cross_period_year_regime_attribution",
-        mode="formal",
-        description="Selection PIT與Forward-OOS multi-seed same-seed／逐年度relative edge方向翻轉歸因",
-        read_only=True,
-        status_function="collect_cross_period_year_regime_attribution_status",
-        run_function="run_cross_period_year_regime_attribution_audit",
-    ),
-    "strategy_realization_capture": AuditCatalogEntry(
-        audit_type="strategy_realization_capture",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.strategy_realization_capture",
-        mode="formal",
-        description="既有score-ranking replay的exclusive trade、資金幾何、slot occupancy與Target→Realized capture整合歸因",
-        read_only=True,
-        status_function="collect_strategy_realization_capture_status",
-        run_function="run_strategy_realization_capture_audit",
-    ),
-    "pit_fold_runtime_attribution": AuditCatalogEntry(
-        audit_type="pit_fold_runtime_attribution",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.pit_fold_runtime_attribution",
-        mode="formal",
-        description="Selection PIT orderable pool的cross-fold score mixing、fold transition與exclusive winner capture歸因",
-        read_only=True,
-        status_function="collect_pit_fold_runtime_attribution_status",
-        run_function="run_pit_fold_runtime_attribution_audit",
-    ),
-    "pit_target_realization_attribution": AuditCatalogEntry(
-        audit_type="pit_target_realization_attribution",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.pit_target_realization_attribution",
-        mode="formal",
-        description="Selection PIT exclusive trades的Target／Score對realized R與signal→entry age歸因",
-        read_only=True,
-        status_function="collect_pit_target_realization_attribution_status",
-        run_function="run_pit_target_realization_attribution_audit",
-    ),
-    # Research / historical Audit commands. They share this inventory but are not
-    # eligible for the formal config runner unless promoted to mode=formal later.
+    # Still-supported utility/research commands. Historical one-off diagnostics
+    # should be removed after their decision is recorded in Registry/Log.
     "regime": AuditCatalogEntry(
         audit_type="regime",
         domain="breakout_quality",
@@ -225,42 +114,6 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         read_only=False,
         cli_command="audit-no-time-target",
     ),
-    "pass_realization_gap": AuditCatalogEntry(
-        audit_type="pass_realization_gap",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.pass_realization_gap",
-        mode="research",
-        description="執行11H PASS-only實現落差歸因；research-only、CLI-only",
-        read_only=True,
-        cli_command="audit-pass-realization-gap",
-    ),
-    "selection_strategy_realization": AuditCatalogEntry(
-        audit_type="selection_strategy_realization",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.selection_strategy_realization",
-        mode="research",
-        description="執行11I Selection nested-OOS策略實現覆蓋稽核；research-only、CLI-only",
-        read_only=False,
-        cli_command="audit-selection-strategy-realization",
-    ),
-    "candidate_counterfactual_execution": AuditCatalogEntry(
-        audit_type="candidate_counterfactual_execution",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.candidate_counterfactual_execution",
-        mode="historical",
-        description="執行11J per-candidate counterfactual execution稽核；已停止、僅供歷史追溯",
-        read_only=False,
-        cli_command="audit-candidate-counterfactual",
-    ),
-    "portfolio_selection_pressure": AuditCatalogEntry(
-        audit_type="portfolio_selection_pressure",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.portfolio_selection_pressure",
-        mode="research",
-        description="執行11K portfolio selection-pressure歸因；read-only、CLI-only",
-        read_only=True,
-        cli_command="audit-selection-pressure",
-    ),
     "point_in_time_scores": AuditCatalogEntry(
         audit_type="point_in_time_scores",
         domain="breakout_quality",
@@ -270,15 +123,8 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         read_only=True,
         cli_command="audit-point-in-time-scores",
     ),
-    "score_ranking_capture": AuditCatalogEntry(
-        audit_type="score_ranking_capture",
-        domain="portfolio",
-        module="tools.audit.portfolio.score_ranking_capture",
-        mode="library",
-        description="既有score-ranking replay的資本效率與Target capture attribution primitives",
-        read_only=True,
-    ),
 }
+
 
 
 def get_audit_entry(audit_type: str) -> AuditCatalogEntry:
