@@ -99,6 +99,7 @@ def run_portfolio_timeline(
     active_param_ensemble_resolver=None,
     active_context_ensemble_resolver=None,
     ensemble_min_agree=None,
+    replay_selector_trace_rows=None,
 ):
     profile_timing_enabled = bool(profile_stats.get("_timing_enabled", True)) if profile_stats is not None else False
     capture_equity_curve = bool(profile_stats.get("capture_equity_curve", False)) if profile_stats is not None else False
@@ -479,6 +480,26 @@ def run_portfolio_timeline(
                     orderable_candidates_today,
                     resource_selection_diag,
                 )
+
+                if replay_selector_trace_rows is not None:
+                    trace_baskets = dict(resource_selection_diag.get('_selector_trace_baskets') or {})
+                    for stage_name in ('raw_top_n', 'minimum_repair_seed', 'feasible_ascent_final'):
+                        stage_rows = list(trace_baskets.get(stage_name) or [])
+                        for stage_rank, candidate in enumerate(stage_rows, start=1):
+                            snapshot = _candidate_replay_snapshot(
+                                candidate,
+                                fallback_trade_date=today,
+                                is_orderable=True,
+                            )
+                            snapshot.update({
+                                'stage': stage_name,
+                                'stage_rank': int(stage_rank),
+                                'pre_market_order_limit': resource_selection_diag.get('pre_market_order_limit'),
+                                'direct_score_order_feasible': bool(resource_selection_diag.get('direct_score_order_feasible', False)),
+                                'repair_steps': int(resource_selection_diag.get('max_dl_repair_steps', 0) or 0),
+                                'ascent_steps': int(resource_selection_diag.get('max_dl_feasible_ascent_steps', 0) or 0),
+                            })
+                            replay_selector_trace_rows.append(snapshot)
 
                 qualified_candidate_snapshots_today = []
                 orderable_candidate_snapshots_today = []

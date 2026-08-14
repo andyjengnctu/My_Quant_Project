@@ -78,6 +78,7 @@ from filters.breakout_quality.strategy_compare_replay import (
 from filters.breakout_quality.strategy_compare_diagnostics import (
     _flatten_candidate_replay_rows,
     _flatten_entry_execution_rows,
+    _flatten_selector_trace_rows,
     _flatten_selected_buy_rows,
     _load_isolated_selection_pit_contract,
     _selection_target_lookup,
@@ -819,12 +820,16 @@ def run_comparison(
         and comparison_mode == COMPARISON_MODE_SCORE_RANKING
         else None
     )
+    quality_selector_trace_rows = (
+        [] if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
+    )
     quality_payload = _run_scenario(
         name=labels["active_name"], data_dir=data_dir,
         param_source_kind=param_source_kind, params=quality_params,
         start_date=start_date, end_date=end_date, max_positions=max_positions,
         enable_rotation=enable_rotation, quiet=quiet,
         replay_counts=quality_replay_counts, replay_execution_rows=quality_execution_rows,
+        replay_selector_trace_rows=quality_selector_trace_rows,
         ranking_source=ranking_source, filter_source=filter_source,
     )
     _assert_shared_benchmark(baseline_payload, quality_payload)
@@ -903,6 +908,12 @@ def run_comparison(
         if quality_execution_rows is not None:
             _flatten_entry_execution_rows(quality_execution_rows).to_csv(
                 output_dir / "score_ranking_execution.csv",
+                index=False,
+                encoding="utf-8-sig",
+            )
+        if quality_selector_trace_rows is not None:
+            _flatten_selector_trace_rows(quality_selector_trace_rows).to_csv(
+                output_dir / "score_ranking_selector_trace.csv",
                 index=False,
                 encoding="utf-8-sig",
             )

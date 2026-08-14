@@ -2401,6 +2401,7 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
 def validate_breakout_quality_orderable_feasible_alignment_audit_contract_case(_base_params):
     from config.audit import get_audit_definitions
     from tools.audit.breakout_quality import orderable_feasible_alignment as alignment_audit
+    from tools.audit.breakout_quality import orderable_alignment_common as alignment_common
     from tools.audit.breakout_quality.orderable_feasible_alignment import (
         _capacity_frame,
         _daily_ranking_rows,
@@ -2424,6 +2425,10 @@ def validate_breakout_quality_orderable_feasible_alignment_audit_contract_case(_
         (item for item in definitions if item.audit_id == "cross-period-year-regime-attribution"),
         None,
     )
+    selector_stage = next(
+        (item for item in definitions if item.audit_id == "mr13e-selector-stage-translation"),
+        None,
+    )
     entry = get_audit_entry("orderable_feasible_alignment")
     phases = {} if definition is None else dict(dict(definition.source).get("phases") or {})
     add_check(
@@ -2434,7 +2439,7 @@ def validate_breakout_quality_orderable_feasible_alignment_audit_contract_case(_
         True,
         bool(
             definition is not None
-            and definition.enabled
+            and not definition.enabled
             and definition.audit_type == "orderable_feasible_alignment"
             and dict(definition.source).get("kind") == "strategy_compare_cross_phase"
             and tuple(dict(phases.get("selection_pit") or {}).get("candidate_arm_ids") or ()) == ("C25", "C28", "C35")
@@ -2445,6 +2450,8 @@ def validate_breakout_quality_orderable_feasible_alignment_audit_contract_case(_
             and definition.outcomes.get("no_fixed_k") is True
             and cross_period is not None
             and not cross_period.enabled
+            and selector_stage is not None
+            and selector_stage.enabled
         ),
     )
     status_handler = entry.load_status_handler()
@@ -2600,7 +2607,7 @@ def validate_breakout_quality_orderable_feasible_alignment_audit_contract_case(_
         raw_target=np.array([1.5, np.nan], dtype=np.float64),
         target_valid=np.array([True, False], dtype=bool),
     )
-    with patch.object(alignment_audit, "load_profile_continuous_ranker_data", return_value=fake_bundle):
+    with patch.object(alignment_common, "load_profile_continuous_ranker_data", return_value=fake_bundle):
         target_lookup, target_calendar = _load_common_daily_target(
             root=Path("."),
             filter_id="breakout_quality_v1",
@@ -2624,6 +2631,144 @@ def validate_breakout_quality_orderable_feasible_alignment_audit_contract_case(_
 
     summary["workflow"] = "mr13e_orderable_feasible_alignment_audit"
     summary["fixed_k_used"] = False
+    return results, summary
+
+
+def validate_breakout_quality_selector_stage_translation_audit_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_SELECTOR_STAGE_TRANSLATION_AUDIT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config.audit import get_audit_definitions
+    from tools.audit.catalog import get_audit_entry
+    from tools.audit.breakout_quality.selector_stage_translation import (
+        _directional_conclusion,
+        _execution_stage_rows,
+        _stage_daily_summary,
+        _transition_rows,
+        collect_selector_stage_translation_status,
+    )
+
+    definitions = {item.audit_id: item for item in get_audit_definitions("breakout_quality")}
+    definition = definitions["mr13e-selector-stage-translation"]
+    previous = definitions["mr13e-orderable-feasible-alignment"]
+    entry = get_audit_entry("selector_stage_translation")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selector_stage_audit_is_config_driven_read_only_and_replaces_completed_alignment_audit_as_active_step",
+        True,
+        bool(
+            definition.enabled
+            and not previous.enabled
+            and definition.audit_type == "selector_stage_translation"
+            and definition.dimensions.get("minimum_repair_seed") is True
+            and definition.dimensions.get("feasible_ascent_final") is True
+            and definition.outcomes.get("stage_target_delta_r") is True
+            and entry.formal
+            and entry.read_only
+            and entry.module == "tools.audit.breakout_quality.selector_stage_translation"
+        ),
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        blocked = collect_selector_stage_translation_status(definition, project_root=Path(tmp))
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selector_stage_audit_blocks_cleanly_without_completed_trace_sidecars",
+        True,
+        blocked.get("status") == "BLOCKED",
+    )
+
+    stage_rows = pd.DataFrame([
+        {"trade_date": "2024-01-03", "stage": "raw_top_n", "ticker": "A", "signal_date": "2024-01-02", "target_available": True, "common_target_raw_r": 3.0, "model_score": 0.9},
+        {"trade_date": "2024-01-03", "stage": "raw_top_n", "ticker": "B", "signal_date": "2024-01-02", "target_available": True, "common_target_raw_r": 1.0, "model_score": 0.8},
+        {"trade_date": "2024-01-03", "stage": "minimum_repair_seed", "ticker": "A", "signal_date": "2024-01-02", "target_available": True, "common_target_raw_r": 3.0, "model_score": 0.9},
+        {"trade_date": "2024-01-03", "stage": "minimum_repair_seed", "ticker": "C", "signal_date": "2024-01-02", "target_available": True, "common_target_raw_r": 0.0, "model_score": 0.6},
+        {"trade_date": "2024-01-03", "stage": "feasible_ascent_final", "ticker": "A", "signal_date": "2024-01-02", "target_available": True, "common_target_raw_r": 3.0, "model_score": 0.9},
+        {"trade_date": "2024-01-03", "stage": "feasible_ascent_final", "ticker": "D", "signal_date": "2024-01-02", "target_available": True, "common_target_raw_r": 2.0, "model_score": 0.7},
+        {"trade_date": "2024-01-03", "stage": "entry_action", "ticker": "A", "signal_date": "2024-01-02", "target_available": True, "common_target_raw_r": 3.0, "model_score": 0.9},
+        {"trade_date": "2024-01-03", "stage": "entry_action", "ticker": "D", "signal_date": "2024-01-02", "target_available": True, "common_target_raw_r": 2.0, "model_score": 0.7},
+        {"trade_date": "2024-01-03", "stage": "actual_fill", "ticker": "D", "signal_date": "2024-01-02", "target_available": True, "common_target_raw_r": 2.0, "model_score": 0.7},
+    ])
+    daily = _stage_daily_summary(stage_rows)
+    transitions = _transition_rows(daily).set_index("transition")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selector_stage_target_attribution_separates_repair_ascent_action_and_fill_without_fixed_k",
+        True,
+        bool(
+            math.isclose(float(transitions.loc["raw_to_repair", "target_delta_r"]), -0.5, abs_tol=1e-12)
+            and math.isclose(float(transitions.loc["repair_to_ascent", "target_delta_r"]), 1.0, abs_tol=1e-12)
+            and math.isclose(float(transitions.loc["ascent_to_action", "target_delta_r"]), 0.0, abs_tol=1e-12)
+            and math.isclose(float(transitions.loc["action_to_fill", "target_delta_r"]), -0.5, abs_tol=1e-12)
+            and math.isclose(float(transitions.loc["raw_to_repair", "membership_overlap"]), 0.5, abs_tol=1e-12)
+        ),
+    )
+
+    execution_orderable = pd.DataFrame([
+        {"ticker": "A", "trade_date": "2024-01-03", "signal_date": "2024-01-02", "model_score": 0.9, "common_target_raw_r": 3.0, "score_available": True, "target_available": True},
+        {"ticker": "B", "trade_date": "2024-01-03", "signal_date": "2024-01-02", "model_score": 0.8, "common_target_raw_r": 1.0, "score_available": True, "target_available": True},
+    ])
+    execution_sidecar = pd.DataFrame([
+        {"ticker": "A", "trade_date": "2024-01-03", "signal_date": "2024-01-02", "chosen_qty": 100, "filled_qty": 100, "entry_filled": "True"},
+        {"ticker": "B", "trade_date": "2024-01-03", "signal_date": "2024-01-02", "chosen_qty": 100, "filled_qty": 0, "entry_filled": "False"},
+    ])
+    execution_stages = _execution_stage_rows(execution_orderable, execution_sidecar)
+    fill_tickers = set(execution_stages.loc[execution_stages["stage"] == "actual_fill", "ticker"].astype(str))
+    action_tickers = set(execution_stages.loc[execution_stages["stage"] == "entry_action", "ticker"].astype(str))
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "actual_fill_stage_uses_positive_filled_qty_and_does_not_treat_false_csv_string_as_true",
+        True,
+        action_tickers == {"A", "B"} and fill_tickers == {"A"},
+    )
+
+    def arm(trans):
+        return {
+            "repair_days_only": {
+                "transitions": {
+                    key: {"target_delta_r": value}
+                    for key, value in trans.items()
+                }
+            }
+        }
+    payload = {
+        "phases": {
+            "forward_oos": {
+                "arms": {
+                    "C20": arm({"raw_to_repair": -0.2, "repair_to_ascent": 0.3, "ascent_to_action": -0.1, "action_to_fill": -0.1}),
+                    "C29": arm({"raw_to_repair": -0.3, "repair_to_ascent": 0.1, "ascent_to_action": -0.4, "action_to_fill": -0.2}),
+                    "C36": arm({"raw_to_repair": -0.25, "repair_to_ascent": -0.2, "ascent_to_action": -0.15, "action_to_fill": -0.1}),
+                }
+            }
+        }
+    }
+    conclusion = _directional_conclusion(payload)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selector_stage_classification_uses_most_negative_forward_repair_stage_delta_without_weighted_score_or_threshold",
+        True,
+        bool(
+            conclusion.get("classification") == "DOMINANT_EXTRA_LOSS_AT_REPAIR_TO_ASCENT"
+            and conclusion.get("dominant_forward_extra_loss_transition") == "repair_to_ascent"
+            and math.isclose(
+                float(conclusion["mr13e_minus_mr12b_forward_repair_transition_target_delta_r"]["repair_to_ascent"]),
+                -0.5,
+                abs_tol=1e-12,
+            )
+        ),
+    )
+
+    summary["workflow"] = "mr13e_selector_stage_translation_audit"
     return results, summary
 
 def validate_breakout_quality_audit_framework_contract_case(_base_params):
@@ -2699,6 +2844,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     orderable_alignment_definition = next(
         (item for item in all_definitions if item.audit_id == "mr13e-orderable-feasible-alignment"), None
+    )
+    selector_stage_definition = next(
+        (item for item in all_definitions if item.audit_id == "mr13e-selector-stage-translation"), None
     )
     validate_audit_catalog(all_definitions)
     project_root = Path(__file__).resolve().parents[2]
@@ -2935,10 +3083,14 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and isinstance(forward_robustness_translation_definition.enabled, bool)
         and isinstance(portfolio_translation_definition.enabled, bool)
         and orderable_alignment_definition is not None
-        and orderable_alignment_definition.enabled
+        and not orderable_alignment_definition.enabled
         and orderable_alignment_definition.audit_type == "orderable_feasible_alignment"
         and orderable_alignment_definition.source.get("kind") == "strategy_compare_cross_phase"
         and orderable_alignment_definition.outcomes.get("no_fixed_k") is True
+        and selector_stage_definition is not None
+        and selector_stage_definition.enabled
+        and selector_stage_definition.audit_type == "selector_stage_translation"
+        and selector_stage_definition.source.get("kind") == "strategy_compare_cross_phase"
         and "breakout_quality" in get_audit_module_ids(enabled_only=True)
         and bool(enabled_definitions)
         and all(bool(str(item.source.get("kind") or "").strip()) for item in all_definitions),

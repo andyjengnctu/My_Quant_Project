@@ -94,7 +94,7 @@ def _unpack_result(result) -> dict[str, Any]:
 def _run_scenario(
     *, name, data_dir, param_source_kind, params, start_date, end_date,
     max_positions, enable_rotation, quiet, replay_counts=None,
-    replay_execution_rows=None, ranking_source=None, filter_source=None,
+    replay_execution_rows=None, replay_selector_trace_rows=None, ranking_source=None, filter_source=None,
 ):
     if not quiet:
         print(f"\n[{name}] 建立市場與訊號快取")
@@ -108,12 +108,13 @@ def _run_scenario(
             params=params, start_date=start_date, end_date=end_date,
             max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet,
             replay_counts=replay_counts, replay_execution_rows=replay_execution_rows,
+            replay_selector_trace_rows=replay_selector_trace_rows,
         )
 
 def _run_scenario_inside_source_context(
     *, name, data_dir, param_source_kind, params, start_date, end_date,
     max_positions, enable_rotation, quiet, replay_counts=None,
-    replay_execution_rows=None,
+    replay_execution_rows=None, replay_selector_trace_rows=None,
 ):
     if param_source_kind == "single_param":
         context = load_portfolio_market_context(str(data_dir), params, verbose=not quiet)
@@ -127,6 +128,7 @@ def _run_scenario_inside_source_context(
             pit_stats_index=context.get("all_pit_stats_index"),
             replay_counts=replay_counts,
             replay_execution_rows=replay_execution_rows,
+            replay_selector_trace_rows=replay_selector_trace_rows,
         )
     elif param_source_kind in {"static_active_param_ensemble", "rolling_active_param_ensemble"}:
         if not quiet:
@@ -138,6 +140,7 @@ def _run_scenario_inside_source_context(
             benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
             fixed_risk=None, verbose=not quiet, replay_counts=replay_counts,
             replay_execution_rows=replay_execution_rows,
+            replay_selector_trace_rows=replay_selector_trace_rows,
         )
     elif param_source_kind == "rolling_oos_param_schedule":
         if not quiet:
@@ -149,6 +152,7 @@ def _run_scenario_inside_source_context(
             benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
             fixed_risk=None, verbose=not quiet, replay_counts=replay_counts,
             replay_execution_rows=replay_execution_rows,
+            replay_selector_trace_rows=replay_selector_trace_rows,
         )
     else:
         raise ValueError(f"不支援的參數來源類型: {param_source_kind}")

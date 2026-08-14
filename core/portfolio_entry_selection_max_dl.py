@@ -195,6 +195,12 @@ def _reorder_resource_aware_continuous_max_dl(
             'max_dl_repair_steps': int(repair_steps),
             'max_dl_repair_evaluations': int(max(0, evaluated - 1)),
             'max_dl_fallback_to_baseline': bool(fallback),
+            # Transient research-only membership trace.  Candidate objects remain
+            # in-memory and are serialized only by an explicit replay trace sink.
+            '_selector_trace_baskets': {
+                'raw_top_n': list(pure_basket),
+                'minimum_repair_seed': list(result.get('selected_rows') or []),
+            },
         })
         if int(result['selected_count']) != target_count:
             raise RuntimeError('max-DL Continuous輸出未維持同參數DL-off baseline預留單數')
@@ -576,6 +582,7 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
             if guard_enabled else 'continuous-score-max-dl-feasible-ascent'
         ),
     )
+    seed_trace = dict(seed_diag.get('_selector_trace_baskets') or {})
     out.update({
         'mode': 'dl-selection',
         'promoted_score_orders': int(promoted_count),
@@ -599,6 +606,11 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         'stale_score_guard_triggered': bool(seed_guard_blocked or blocked_swaps > 0),
         'stale_score_guard_seed_blocked': bool(seed_guard_blocked),
         'stale_score_guard_blocked_swaps': int(blocked_swaps),
+        '_selector_trace_baskets': {
+            'raw_top_n': list(seed_trace.get('raw_top_n') or []),
+            'minimum_repair_seed': list(seed_trace.get('minimum_repair_seed') or seed_basket),
+            'feasible_ascent_final': list(current_result.get('selected_rows') or []),
+        },
     })
     if int(current_result['selected_count']) != target_count:
         raise RuntimeError('max-DL feasible-ascent輸出未維持同參數DL-off baseline預留單數')

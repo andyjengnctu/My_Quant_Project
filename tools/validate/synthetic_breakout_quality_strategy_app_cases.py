@@ -310,13 +310,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "formal_score_ranking_pairs_persist_pre_market_execution_sidecar_and_cache_requires_it",
+        "formal_score_ranking_pairs_persist_pre_market_execution_and_selector_trace_sidecars_and_cache_requires_them",
         True,
         (
             "score_ranking_execution.csv" in score_ranking_cache_files
+            and "score_ranking_selector_trace.csv" in score_ranking_cache_files
             and "capture_execution_diagnostics=(" in orchestration_source
             and 'runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING' in orchestration_source
             and 'output_dir / "score_ranking_execution.csv"' in strategy_compare_source
+            and 'output_dir / "score_ranking_selector_trace.csv"' in strategy_compare_source
         ),
     )
     configured_roos_builders = [
@@ -2614,6 +2616,19 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and ascent_gap_diag["selected_count"] == ascent_gap_diag["baseline_selected_count"]
         and ascent_gap_diag["reserved_cost_milli"] >= ascent_gap_diag["baseline_reserved_cost_milli"],
     )
+    trace_baskets = dict(ascent_gap_diag.get("_selector_trace_baskets") or {})
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "max_dl_selector_exposes_transient_raw_repair_and_ascent_membership_without_changing_final_action",
+        True,
+        bool(
+            [row["ticker"] for row in trace_baskets.get("raw_top_n", [])]
+            and len(trace_baskets.get("raw_top_n", [])) == ascent_gap_diag["pre_market_order_limit"]
+            and len(trace_baskets.get("minimum_repair_seed", [])) == ascent_gap_diag["pre_market_order_limit"]
+            and [row["ticker"] for row in trace_baskets.get("feasible_ascent_final", [])]
+            == [row["ticker"] for row in ascent_gap_action]
+        ),
+    )
 
     fallback_ascent_seed = (
         ("F0", 200.0, 153, 0.899),
@@ -3056,6 +3071,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 "no_filter_selected_buys.csv",
                 "score_ranking_selected_buys.csv",
                 "score_ranking_execution.csv",
+                "score_ranking_selector_trace.csv",
             ):
                 (cached_pair_dir / filename).write_text("x\n", encoding="utf-8")
             (cached_run / "strategy_comparison.json").write_text(

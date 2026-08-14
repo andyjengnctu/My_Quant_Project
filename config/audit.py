@@ -256,7 +256,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 "output_subdir": "breakout_quality/cross_period_year_regime_attribution",
             },
             "mr13e-orderable-feasible-alignment": {
-                "enabled": True,
+                "enabled": False,
                 "audit_type": "orderable_feasible_alignment",
                 "description": "MR-12B／MR-13A／MR-13E在Selection PIT與Forward-OOS實際orderable competition set中的ranking，以及resource repair／feasible-ascent到entry action的轉化歸因",
                 "source": {
@@ -291,6 +291,45 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "no_fixed_k": True,
                 },
                 "output_subdir": "breakout_quality/mr13e_orderable_feasible_alignment",
+            },
+            "mr13e-selector-stage-translation": {
+                "enabled": True,
+                "audit_type": "selector_stage_translation",
+                "description": "MR-12B／MR-13A／MR-13E把raw Top-N依序經minimum-repair、feasible-ascent、entry action與actual fill時的逐層Future Target轉化歸因",
+                "source": {
+                    "kind": "strategy_compare_cross_phase",
+                    "phases": {
+                        "selection_pit": {
+                            "profile_id": "selection_pit",
+                            "run": "latest",
+                            "baseline_arm_id": "C23",
+                            "candidate_arm_ids": ["C25", "C28", "C35"],
+                            "reference_daily_arm_id": "C35",
+                        },
+                        "forward_oos": {
+                            "profile_id": "forward_oos",
+                            "run": "latest",
+                            "baseline_arm_id": "C3",
+                            "candidate_arm_ids": ["C20", "C29", "C36"],
+                            "reference_daily_arm_id": "C36",
+                        },
+                    },
+                },
+                "dimensions": {
+                    "raw_top_n": True,
+                    "minimum_repair_seed": True,
+                    "feasible_ascent_final": True,
+                    "entry_action": True,
+                    "actual_fill": True,
+                    "repair_days": True,
+                },
+                "outcomes": {
+                    "common_daily_target_post_replay": True,
+                    "stage_membership_overlap": True,
+                    "stage_target_delta_r": True,
+                    "no_fixed_k": True,
+                },
+                "output_subdir": "breakout_quality/mr13e_selector_stage_translation",
             },
             "forward-robustness-portfolio-translation": {
                 "enabled": False,

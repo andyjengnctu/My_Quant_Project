@@ -846,7 +846,7 @@ def load_portfolio_market_context(
     return context
 
 
-def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates, params, max_positions=5, enable_rotation=False, start_year=None, end_year=None, start_date=None, end_date=None, benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=True, pit_stats_index=None, replay_counts=None, replay_execution_rows=None):
+def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates, params, max_positions=5, enable_rotation=False, start_year=None, end_year=None, start_date=None, end_date=None, benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=True, pit_stats_index=None, replay_counts=None, replay_execution_rows=None, replay_selector_trace_rows=None):
     resolved_start_year = resolve_default_portfolio_start_year() if start_year is None else int(start_year)
     if start_date is not None or end_date is not None:
         resolved_sorted_dates = _filter_market_dates_by_date_range(sorted_dates, start_date=start_date, end_date=end_date)
@@ -873,6 +873,7 @@ def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates
         pit_stats_index=pit_stats_index,
         replay_counts=replay_counts,
         replay_execution_rows=replay_execution_rows,
+        replay_selector_trace_rows=replay_selector_trace_rows,
     )
     return (*result, pf_profile)
 
@@ -895,6 +896,7 @@ def run_portfolio_simulation_with_param_schedule(
     write_prepared_cache=None,
     replay_counts=None,
     replay_execution_rows=None,
+    replay_selector_trace_rows=None,
 ):
     schedule_records = build_active_param_objects_from_payload(rolling_payload, fixed_risk=fixed_risk)
     raw_universe_required_min_rows = resolve_raw_universe_required_min_rows(rolling_payload)
@@ -994,6 +996,7 @@ def run_portfolio_simulation_with_param_schedule(
         active_context_resolver=active_context_resolver,
         replay_counts=replay_counts,
         replay_execution_rows=replay_execution_rows,
+        replay_selector_trace_rows=replay_selector_trace_rows,
     )
     prep_wall_sec = sum(float(ctx.get("prep_wall_sec", 0.0)) for ctx in contexts_by_effective_date.values())
     pf_profile.update({
@@ -1034,6 +1037,7 @@ def run_portfolio_simulation_with_param_ensemble(
     write_prepared_cache=None,
     replay_counts=None,
     replay_execution_rows=None,
+    replay_selector_trace_rows=None,
 ):
     schedule_records = build_active_param_ensemble_objects_from_payload(ensemble_payload, fixed_risk=fixed_risk)
     raw_universe_required_min_rows = resolve_raw_universe_required_min_rows(ensemble_payload)
@@ -1162,6 +1166,7 @@ def run_portfolio_simulation_with_param_ensemble(
         ensemble_min_agree=int(policy["min_agree"]),
         replay_counts=replay_counts,
         replay_execution_rows=replay_execution_rows,
+        replay_selector_trace_rows=replay_selector_trace_rows,
     )
     prep_wall_sec = sum(float(ctx.get("prep_wall_sec", 0.0)) for contexts in contexts_by_effective_date.values() for ctx in contexts)
     pf_profile.update({

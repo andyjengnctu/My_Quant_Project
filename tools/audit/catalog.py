@@ -108,6 +108,16 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         status_function="collect_orderable_feasible_alignment_status",
         run_function="run_orderable_feasible_alignment_audit",
     ),
+    "selector_stage_translation": AuditCatalogEntry(
+        audit_type="selector_stage_translation",
+        domain="breakout_quality",
+        module="tools.audit.breakout_quality.selector_stage_translation",
+        mode="formal",
+        description="Completed Strategy Compare的Raw→Repair→Ascent→Action→Fill逐層membership／Future Target轉化歸因",
+        read_only=True,
+        status_function="collect_selector_stage_translation_status",
+        run_function="run_selector_stage_translation_audit",
+    ),
 
     "robustness_cross_period_attribution": AuditCatalogEntry(
         audit_type="robustness_cross_period_attribution",

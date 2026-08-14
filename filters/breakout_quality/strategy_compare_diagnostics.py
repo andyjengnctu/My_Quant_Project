@@ -266,6 +266,45 @@ def _flatten_candidate_replay_rows(replay_counts: dict[str, dict[str, Any]], fie
         kind="mergesort",
     ).reset_index(drop=True)
 
+def _flatten_selector_trace_rows(replay_selector_trace_rows: list[dict[str, Any]] | None) -> pd.DataFrame:
+    """Serialize transient max-DL selector stage membership without runtime objects."""
+
+    columns = [
+        "stage", "stage_rank", "ticker", "trade_date", "candidate_date", "signal_date",
+        "candidate_type", "entry_source", "breakout_quality_score",
+        "breakout_quality_score_date", "breakout_quality_score_available",
+        "pre_market_order_limit", "direct_score_order_feasible", "repair_steps", "ascent_steps",
+    ]
+    rows: list[dict[str, Any]] = []
+    for raw in list(replay_selector_trace_rows or []):
+        item = dict(raw or {})
+        rows.append({
+            "stage": str(item.get("stage") or ""),
+            "stage_rank": int(item.get("stage_rank", 0) or 0),
+            "ticker": str(item.get("ticker") or ""),
+            "trade_date": str(item.get("trade_date") or ""),
+            "candidate_date": str(item.get("candidate_date") or ""),
+            "signal_date": str(item.get("signal_date") or ""),
+            "candidate_type": str(item.get("candidate_type") or ""),
+            "entry_source": str(item.get("entry_source") or ""),
+            "breakout_quality_score": _finite_float(item.get("breakout_quality_score")),
+            "breakout_quality_score_date": str(item.get("breakout_quality_score_date") or ""),
+            "breakout_quality_score_available": bool(item.get("breakout_quality_score_available", False)),
+            "pre_market_order_limit": (
+                None if item.get("pre_market_order_limit") in (None, "")
+                else int(item.get("pre_market_order_limit"))
+            ),
+            "direct_score_order_feasible": bool(item.get("direct_score_order_feasible", False)),
+            "repair_steps": int(item.get("repair_steps", 0) or 0),
+            "ascent_steps": int(item.get("ascent_steps", 0) or 0),
+        })
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    frame = pd.DataFrame(rows)
+    return frame[columns].sort_values(
+        ["trade_date", "stage", "stage_rank", "ticker"], kind="mergesort"
+    ).reset_index(drop=True)
+
 def _flatten_selected_buy_rows(trade_history: pd.DataFrame) -> pd.DataFrame:
     frame = pd.DataFrame(trade_history).copy()
     columns = ["ticker", "trade_date", "signal_date", "type"]
