@@ -22,6 +22,7 @@ from config.strategy_compare import (
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_profiles,
     get_strategy_multi_seed_robustness_settings,
+    get_strategy_runtime_integration_settings,
 )
 from core.console_report import render_menu_item
 from core.runtime_utils import is_interactive_console, run_cli_entrypoint
@@ -162,6 +163,42 @@ def _strategy_multi_seed_robustness_menu(robustness_id: str) -> int:
             print(f"\n目前操作已中止，返回{robustness.label}選單。")
 
 
+def _strategy_runtime_integration_menu() -> int:
+    from filters.breakout_quality.runtime_integration_gate import (
+        run_runtime_integration_gate,
+        show_latest_runtime_integration_report,
+        show_runtime_integration_status,
+    )
+
+    cfg = get_strategy_runtime_integration_settings()
+    while True:
+        print(f"\n=== {cfg.label} ===")
+        print(render_menu_item(1, "執行 Gate", default=True))
+        print(render_menu_item(2, "查看目前 Gate 狀態"))
+        print(render_menu_item(3, "查看最新 Gate 報表"))
+        print(render_menu_item(0, "返回"))
+        try:
+            raw = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            return 0
+        choice = "1" if raw == "" else raw
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        try:
+            if choice == "1":
+                run_runtime_integration_gate()
+            elif choice == "2":
+                show_runtime_integration_status()
+            elif choice == "3":
+                show_latest_runtime_integration_report()
+            else:
+                print("選項無效，請按 Enter 或輸入 0～3。")
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            print(f"[錯誤] {type(exc).__name__}: {exc}")
+        except KeyboardInterrupt:
+            print(f"\n目前操作已中止，返回{cfg.label}選單。")
+
+
 def _show_all_strategy_comparison_status() -> None:
     for profile in get_strategy_comparison_profiles():
         settings = get_strategy_comparison_settings(profile["profile_id"])
@@ -191,7 +228,10 @@ def _strategy_compare_menu() -> int:
         robustness_start = len(profiles) + 1
         for offset, robustness in enumerate(robustness_profiles):
             print(render_menu_item(robustness_start + offset, robustness["label"]))
-        status_choice = robustness_start + len(robustness_profiles)
+        integration_cfg = get_strategy_runtime_integration_settings()
+        integration_choice = robustness_start + len(robustness_profiles)
+        print(render_menu_item(integration_choice, integration_cfg.label))
+        status_choice = integration_choice + 1
         print(render_menu_item(status_choice, "查看全部階段設定與工件狀態"))
         print(render_menu_item(0, "返回"))
         try:
@@ -208,9 +248,11 @@ def _strategy_compare_menu() -> int:
             continue
         if 1 <= numeric <= len(profiles):
             _strategy_compare_profile_menu(profiles[numeric - 1]["profile_id"])
-        elif robustness_start <= numeric < status_choice:
+        elif robustness_start <= numeric < integration_choice:
             robustness = robustness_profiles[numeric - robustness_start]
             _strategy_multi_seed_robustness_menu(robustness["robustness_id"])
+        elif numeric == integration_choice:
+            _strategy_runtime_integration_menu()
         elif numeric == status_choice:
             _show_all_strategy_comparison_status()
         else:
@@ -328,7 +370,7 @@ def _print_help(program_name: str) -> None:
     print("說明: Research 單一正式入口；互動選單只選工作類型，研究標的與設定由 config/ 決定。")
     print("  model      目前 active model 的模型訓練／驗證；後續參數原樣轉交model provider")
     print("  optimizer  策略參數最佳化；後續參數原樣轉交既有 ml_optimizer service")
-    print("  compare    策略組合比較；可接 [profile] run/status 或 robustness run/status/latest")
+    print("  compare    策略組合比較；可接 [profile] run/status、robustness run/status/latest 或 integration run/status/latest")
     print("  audit      目前 config 指定 Audit module；可接 run、status 或 latest")
     print("  status     查看目前設定與工件狀態")
 
@@ -358,9 +400,30 @@ def main(argv=None) -> int:
         if str(rest[0]).strip().lower() in {"-h", "--help", "help"}:
             print(f"用法: python {program_name} compare [profile] [run|status]")
             print(f"      python {program_name} compare robustness [robustness_id] [run|status|latest]")
-            print("說明: profile與robustness設定皆由config/strategy_compare.py定義。")
+            print(f"      python {program_name} compare integration [run|status|latest]")
+            print("說明: profile、robustness與runtime integration設定皆由config/strategy_compare.py定義。")
             return 0
         first = str(rest[0]).strip()
+        if first.lower() in {"integration", "runtime-integration", "runtime_integration"}:
+            action = str(rest[1]).strip().lower() if len(rest) >= 2 else "status"
+            if len(rest) > 2:
+                raise ValueError(f"compare integration不支援額外參數: {' '.join(rest[2:])}")
+            from filters.breakout_quality.runtime_integration_gate import (
+                run_runtime_integration_gate,
+                show_latest_runtime_integration_report,
+                show_runtime_integration_status,
+            )
+            if action == "run":
+                run_runtime_integration_gate()
+                return 0
+            if action in {"status", "show"}:
+                show_runtime_integration_status()
+                return 0
+            if action == "latest":
+                show_latest_runtime_integration_report()
+                return 0
+            raise ValueError(f"compare integration不支援的命令: {action}")
+
         if first.lower() in {"robustness", "multi-seed", "multi_seed"}:
             profiles = get_strategy_multi_seed_robustness_profiles()
             profile_ids = {item["robustness_id"] for item in profiles}

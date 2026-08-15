@@ -4838,3 +4838,93 @@ def validate_breakout_quality_mr13e_strategy_source_gate_contract_case(_base_par
     summary["runtime_source"] = "DL-CONT13E"
     summary["pit_source"] = "DL-CONT13E-PIT"
     return results, summary
+
+def validate_breakout_quality_runtime_integration_gate_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_RUNTIME_INTEGRATION_GATE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config.breakout_quality import BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
+    from config.strategy_compare import get_strategy_runtime_integration_settings
+    from core.strategy_comparison import (
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+    )
+    from filters.breakout_quality.runtime_integration_gate import (
+        _overall_decision,
+        resolve_runtime_candidate_contract,
+    )
+
+    cfg = get_strategy_runtime_integration_settings()
+    contract = resolve_runtime_candidate_contract()
+    selection = dict(contract["selection"])
+    forward = dict(contract["forward"])
+    runtime = dict(contract["runtime"])
+    selection_source = dict(selection["dl_source"])
+    forward_source = dict(forward["dl_source"])
+
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "runtime_integration_candidate_is_same_mr13e_exact_semantics_across_stages",
+        True,
+        (
+            selection_source["experiment_profile"]
+            == forward_source["experiment_profile"]
+            == DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
+            and selection_source["score_source"] == "selection_point_in_time"
+            and forward_source["score_source"] == "continuous_ranker_oos"
+            and selection["param_source"] == forward["param_source"]
+            and selection["rule_policy"] == forward["rule_policy"] == "all_off"
+            and selection["dl_runtime_mode"]
+            == forward["dl_runtime_mode"]
+            == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL
+            and dict(selection["dl_runtime_options"]).get("preserve_k_r0") is True
+            and dict(forward["dl_runtime_options"]).get("preserve_k_r0") is True
+            and dict(selection["dl_runtime_options"]).get("constrained_solver")
+            == dict(forward["dl_runtime_options"]).get("constrained_solver")
+            == "exact_branch_and_bound_v1"
+            and dict(selection["dl_runtime_options"]).get("selection_only") is True
+            and dict(forward["dl_runtime_options"]).get("selection_only") is False
+        ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "runtime_integration_gate_keeps_current_anchor_separate_until_go",
+        True,
+        (
+            cfg.enabled
+            and runtime["experiment_profile"] != BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
+            and cfg.selection_profile_id == "selection_pit"
+            and cfg.forward_profile_id == "forward_oos"
+        ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "runtime_integration_decision_is_strict_three_state",
+        ("GO", "BLOCKED", "NO_GO"),
+        (
+            _overall_decision([{"status": "PASS"}]),
+            _overall_decision([{"status": "PASS"}, {"status": "BLOCKED"}]),
+            _overall_decision([{"status": "BLOCKED"}, {"status": "FAIL"}]),
+        ),
+    )
+
+    gate_source = (
+        Path(__file__).resolve().parents[2]
+        / "filters" / "breakout_quality" / "runtime_integration_gate.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "runtime_integration_reuses_historical_outputs_without_mutating_runtime_default",
+        True,
+        (
+            "settings.reuse_output_roots" in gate_source
+            and "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE =" not in gate_source
+            and "run_runtime_integration_gate" in gate_source
+        ),
+    )
+
+    summary["candidate_profile"] = runtime["experiment_profile"]
+    summary["current_anchor_profile"] = BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
+    summary["gate_label"] = cfg.label
+    return results, summary
+

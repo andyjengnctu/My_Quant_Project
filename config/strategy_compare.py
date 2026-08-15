@@ -28,11 +28,13 @@ from core.strategy_comparison import (
     StrategyComparisonContrast,
     StrategyComparisonSettings,
     StrategyMultiSeedRobustnessSettings,
+    StrategyRuntimeIntegrationSettings,
     StrategyDLSource,
     StrategyParameterSource,
     StrategyPreparationPolicy,
     validate_strategy_comparison_settings,
     validate_strategy_multi_seed_robustness_settings,
+    validate_strategy_runtime_integration_settings,
 )
 
 STRATEGY_COMPARE_SCHEMA_VERSION = 30
@@ -58,6 +60,22 @@ STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS = False
 STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES = False
 STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS = False
 STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE = True
+
+# Runtime promotion只讀取已存在的正式Strategy Compare / robustness工件；
+# Gate本身不訓練模型、不重跑策略，也不自動切換runtime default。
+STRATEGY_RUNTIME_INTEGRATION = {
+    "label": "Runtime 整合 Gate",
+    "enabled": True,
+    "selection_profile_id": "selection_pit",
+    "forward_profile_id": "forward_oos",
+    "selection_robustness_id": "selection_pit",
+    "forward_robustness_id": "forward_oos",
+    "output_root": "outputs/strategy_compare/runtime_integration",
+    # 舊exact implementation曾出現>10秒困難case；正式候選不得退回該等級。
+    "max_selector_latency_ms": 10000.0,
+    # 多seed至少必須嚴格過半勝過目前workflow runtime anchor的RoMD。
+    "require_strict_romd_majority": True,
+}
 
 # Current Strategy Compare核心比較名稱的單一真理。
 # Selection PIT／Forward-OOS由profile頁首區分，不把研究階段或固定selector語意塞進arm顯示名稱。
@@ -495,6 +513,29 @@ def _builder(raw) -> StrategyArtifactBuilder | None:
     )
 
 
+def get_strategy_runtime_integration_settings() -> StrategyRuntimeIntegrationSettings:
+    raw = dict(STRATEGY_RUNTIME_INTEGRATION)
+    settings = StrategyRuntimeIntegrationSettings(
+        label=str(raw.get("label") or "").strip(),
+        enabled=bool(raw.get("enabled", True)),
+        selection_profile_id=str(raw.get("selection_profile_id") or "").strip(),
+        forward_profile_id=str(raw.get("forward_profile_id") or "").strip(),
+        selection_robustness_id=str(raw.get("selection_robustness_id") or "").strip(),
+        forward_robustness_id=str(raw.get("forward_robustness_id") or "").strip(),
+        output_root=str(raw.get("output_root") or "").strip(),
+        require_strict_romd_majority=bool(raw.get("require_strict_romd_majority", True)),
+        max_selector_latency_ms=float(raw.get("max_selector_latency_ms", 10000.0)),
+    )
+    validate_strategy_runtime_integration_settings(settings)
+    profile_ids = set(STRATEGY_COMPARE_PROFILES)
+    robustness_ids = set(STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES)
+    if settings.selection_profile_id not in profile_ids or settings.forward_profile_id not in profile_ids:
+        raise ValueError("runtime integration引用不存在的Strategy Compare profile")
+    if settings.selection_robustness_id not in robustness_ids or settings.forward_robustness_id not in robustness_ids:
+        raise ValueError("runtime integration引用不存在的robustness profile")
+    return settings
+
+
 def get_strategy_multi_seed_robustness_profiles() -> tuple[dict[str, str], ...]:
     return tuple(
         {"robustness_id": str(robustness_id), "label": str(raw.get("label") or robustness_id)}
@@ -768,10 +809,12 @@ __all__ = [
     "STRATEGY_COMPARE_PREPARATION",
     "STRATEGY_COMPARE_PROFILES",
     "STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES",
+    "STRATEGY_RUNTIME_INTEGRATION",
     "STRATEGY_DL_SOURCES",
     "STRATEGY_PARAM_SOURCES",
     "get_strategy_comparison_profiles",
     "get_strategy_multi_seed_robustness_profiles",
     "get_strategy_multi_seed_robustness_settings",
+    "get_strategy_runtime_integration_settings",
     "get_strategy_comparison_settings",
 ]

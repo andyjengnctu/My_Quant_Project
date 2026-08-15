@@ -795,6 +795,7 @@ def validate_dataset_cli_contract_case(_base_params):
         strategy_rc == 0
         and "[run|status]" in strategy_help
         and "config/strategy_compare.py" in strategy_help
+        and "integration [run|status|latest]" in strategy_help
         and "C1" not in strategy_help
         and "TP1" not in strategy_help,
     )
@@ -881,7 +882,7 @@ def validate_dataset_cli_contract_case(_base_params):
     )
     strategy_profile_count = len(strategy_profiles)
     robustness_profile_count = len(robustness_profiles)
-    strategy_status_choice = strategy_profile_count + robustness_profile_count + 1
+    strategy_status_choice = strategy_profile_count + robustness_profile_count + 2
     with (
         patch("builtins.input", side_effect=[str(strategy_status_choice), "0"]),
         patch("apps.research.show_strategy_comparison_status") as compare_status,
@@ -965,6 +966,52 @@ def validate_dataset_cli_contract_case(_base_params):
         ),
     )
 
+
+    integration_calls = []
+
+    def _record_integration_run():
+        integration_calls.append("run")
+        return {}
+
+    def _record_integration_status():
+        integration_calls.append("status")
+        return {}
+
+    def _record_integration_latest():
+        integration_calls.append("latest")
+        return {}
+
+    with (
+        patch(
+            "filters.breakout_quality.runtime_integration_gate.run_runtime_integration_gate",
+            side_effect=_record_integration_run,
+        ),
+        patch(
+            "filters.breakout_quality.runtime_integration_gate.show_runtime_integration_status",
+            side_effect=_record_integration_status,
+        ),
+        patch(
+            "filters.breakout_quality.runtime_integration_gate.show_latest_runtime_integration_report",
+            side_effect=_record_integration_latest,
+        ),
+    ):
+        integration_run_rc = app_strategy_compare.main(
+            ["apps/research.py", "compare", "integration", "run"]
+        )
+        integration_status_rc = app_strategy_compare.main(
+            ["apps/research.py", "compare", "integration", "status"]
+        )
+        integration_latest_rc = app_strategy_compare.main(
+            ["apps/research.py", "compare", "integration", "latest"]
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "strategy_compare_runtime_integration_cli_routes_run_status_latest",
+        (0, 0, 0, ["run", "status", "latest"]),
+        (integration_run_rc, integration_status_rc, integration_latest_rc, integration_calls),
+    )
 
     fake_workflow_args = SimpleNamespace(filter_id="synthetic_quality")
     with (
