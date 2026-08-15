@@ -28,7 +28,10 @@ from config.breakout_quality import (
 
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
-from filters.breakout_quality.ranker_training_contract import training_semantics
+from filters.breakout_quality.ranker_training_contract import (
+    training_semantics,
+    training_semantics_mismatches,
+)
 from filters.breakout_quality.continuous_target import (
     TARGET_MANIFEST_FILENAME,
     resolve_continuous_target_dir,
@@ -705,20 +708,25 @@ def load_continuous_ranker_oos_contract(
             )
 
     expected_training_semantics = training_semantics(profile)
+    manifest_semantics = dict(manifest.get("training_semantics") or {})
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
         expected_pairwise = dict(
             expected_training_semantics.get("pairwise_contract") or {}
         )
         report_pairwise = dict(report_training.get("pairwise_contract") or {})
-        manifest_semantics = dict(manifest.get("training_semantics") or {})
-        # Historical MR-13A daily artifacts may predate the top-level manifest
-        # training_semantics field.  The report still carries the canonical
-        # contract, so preserve that compatibility while validating every
-        # newer manifest against the shared profile-driven contract.
+        # Historical daily pairwise artifacts may predate the top-level
+        # training_semantics field.  When the field exists, validate every
+        # objective-relevant value while allowing later-added non-applicable
+        # null keys to be absent.  This preserves frozen checkpoints across
+        # metadata schema growth without weakening the trained pairwise contract.
         if not is_daily or manifest_semantics:
-            if manifest_semantics != expected_training_semantics:
+            semantic_mismatches = training_semantics_mismatches(
+                profile, manifest_semantics
+            )
+            if semantic_mismatches:
                 raise ValueError(
-                    "Continuous pairwise ranker manifest training semantics不一致"
+                    "Continuous pairwise ranker manifest training semantics不一致: "
+                    + "; ".join(semantic_mismatches)
                 )
         if str(report_training.get("batching") or "") != str(
             expected_training_semantics.get("batching") or ""
@@ -730,11 +738,12 @@ def load_continuous_ranker_oos_contract(
         expected_listwise = dict(
             expected_training_semantics.get("listwise_contract") or {}
         )
-        manifest_semantics = dict(manifest.get("training_semantics") or {})
         report_listwise = dict(report_training.get("listwise_contract") or {})
-        if manifest_semantics != expected_training_semantics:
+        semantic_mismatches = training_semantics_mismatches(profile, manifest_semantics)
+        if semantic_mismatches:
             raise ValueError(
-                "Continuous listwise ranker manifest training semantics不一致"
+                "Continuous listwise ranker manifest training semantics不一致: "
+                + "; ".join(semantic_mismatches)
             )
         if str(report_training.get("batching") or "") != str(
             expected_training_semantics.get("batching") or ""
@@ -742,7 +751,6 @@ def load_continuous_ranker_oos_contract(
             raise ValueError("Continuous listwise ranker report batching contract不一致")
         if report_listwise != expected_listwise:
             raise ValueError("Continuous listwise ranker report listwise contract不一致")
-
     target_id = str(manifest.get("continuous_target_id") or "")
     if not target_id:
         raise ValueError("Continuous ranker manifest缺少continuous_target_id")

@@ -1464,8 +1464,6 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
 
     from config.breakout_quality import (
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-        BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
     )
     from filters.breakout_quality.models.factory import require_torch
     from services.breakout_quality.train_continuous_ranker import _pairwise_logistic_loss
@@ -1652,6 +1650,21 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
             canonical_runtime_contract_passed = False
             summary["runtime_oos_contract_error"] = f"{type(exc).__name__}: {exc}"
 
+        # Frozen MR-13E was trained before raw-R regression metadata existed.
+        # A later non-applicable null key must not invalidate that checkpoint.
+        historical_semantics = json.loads(json.dumps(canonical_semantics))
+        historical_semantics.pop("raw_r_regression_contract", None)
+        manifest_payload["training_semantics"] = historical_semantics
+        manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+        historical_schema_contract_passed = False
+        try:
+            historical_loaded = _load_contract()
+            historical_schema_contract_passed = (
+                historical_loaded.experiment_profile == profile_e.name
+            )
+        except Exception as exc:
+            summary["historical_semantics_error"] = f"{type(exc).__name__}: {exc}"
+
         wrong_semantics = json.loads(json.dumps(canonical_semantics))
         wrong_semantics["pairwise_contract"]["pair_weighting"] = (
             CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
@@ -1673,8 +1686,12 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
         "synthetic_breakout_quality",
         case_id,
         "runtime_oos_contract_uses_same_profile_driven_pairwise_semantics_as_trainer",
-        (True, True),
-        (canonical_runtime_contract_passed, wrong_weighting_rejected),
+        (True, True, True),
+        (
+            canonical_runtime_contract_passed,
+            historical_schema_contract_passed,
+            wrong_weighting_rejected,
+        ),
     )
     args = parse_continuous_ranker_args(
         ["--experiment-profile", DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE]
@@ -1687,15 +1704,6 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
         DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         args.experiment_profile,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "mr13e_registration_does_not_change_strategy_workflow_anchor",
-        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
-        BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-    )
-
     torch, _nn = require_torch()
     import torch.nn.functional as F
 

@@ -4750,7 +4750,9 @@ def validate_breakout_quality_mr13e_strategy_source_gate_contract_case(_base_par
     summary = {"ticker": case_id, "synthetic": True}
 
     from config import strategy_compare as strategy_config
+    from config.breakout_quality import get_breakout_quality_workflow_settings
 
+    workflow = get_breakout_quality_workflow_settings()
     selection = strategy_config.get_strategy_comparison_settings("selection_pit")
     forward = strategy_config.get_strategy_comparison_settings("forward_oos")
     selection_ids = tuple(arm.arm_id for arm in selection.enabled_arms)

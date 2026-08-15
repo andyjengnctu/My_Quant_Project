@@ -90,9 +90,44 @@ def training_semantics(profile) -> dict[str, Any]:
     }
 
 
+def training_semantics_mismatches(profile, payload) -> list[str]:
+    """Return objective-relevant semantic mismatches for one stored artifact.
+
+    Historical artifacts may omit keys whose canonical value is ``None`` because
+    those keys were added later for other objectives.  Non-null semantics remain
+    strict, and unknown keys are rejected so schema evolution cannot silently
+    change the trained objective.
+    """
+
+    expected = training_semantics(profile)
+    actual = dict(payload or {})
+    mismatches: list[str] = []
+
+    unexpected = sorted(set(actual) - set(expected))
+    if unexpected:
+        mismatches.append(f"unexpected_keys={unexpected}")
+
+    for key, expected_value in expected.items():
+        if expected_value is None:
+            if key in actual and actual[key] not in (None, {}):
+                mismatches.append(
+                    f"{key}: expected non-applicable, actual={actual[key]!r}"
+                )
+            continue
+        if key not in actual:
+            mismatches.append(f"{key}: missing")
+            continue
+        if actual[key] != expected_value:
+            mismatches.append(
+                f"{key}: expected={expected_value!r}, actual={actual[key]!r}"
+            )
+    return mismatches
+
+
 __all__ = [
     "LISTWISE_TRAINING_CONTRACT",
     "PAIRWISE_TRAINING_CONTRACT",
     "RAW_R_REGRESSION_TRAINING_CONTRACT",
     "training_semantics",
+    "training_semantics_mismatches",
 ]
