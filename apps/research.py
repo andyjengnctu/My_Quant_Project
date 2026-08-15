@@ -26,7 +26,7 @@ from config.strategy_compare import (
 from core.console_report import render_menu_item
 from core.runtime_utils import is_interactive_console, run_cli_entrypoint
 from filters.breakout_quality.strategy_comparison import (
-    collect_artifact_status,
+    resolve_comparison_plan,
     render_execution_plan,
     run_strategy_comparison,
     show_strategy_comparison_status,
@@ -75,9 +75,10 @@ def _run_optimizer(args: list[str] | None = None) -> int:
 
 def _run_current_comparison(*, profile_id: str, confirm: bool) -> dict:
     settings = get_strategy_comparison_settings(profile_id)
-    status = collect_artifact_status(settings=settings)
+    resolved_plan = resolve_comparison_plan(settings=settings)
+    status = resolved_plan.status_dict()
     print("\n" + render_execution_plan(settings=settings, status=status))
-    if status["overall_status"] == "BLOCKED":
+    if resolved_plan.overall_status == "BLOCKED":
         raise RuntimeError("目前缺少不可自動產生的上游工件；請先查看狀態頁。")
     if confirm and settings.preparation.require_confirmation:
         try:
@@ -92,7 +93,7 @@ def _run_current_comparison(*, profile_id: str, confirm: bool) -> dict:
             print("輸入無效，本次不執行。")
             return {}
     return run_strategy_comparison(
-        status=status,
+        resolved_plan=resolved_plan,
         auto_prepare=True,
         settings=settings,
     )

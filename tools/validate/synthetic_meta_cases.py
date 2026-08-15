@@ -1159,6 +1159,7 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
         "synthetic_breakout_quality_pit_cases",
         "synthetic_breakout_quality_strategy_cases",
         "synthetic_breakout_quality_strategy_app_cases",
+        "synthetic_breakout_quality_strategy_plan_cases",
     )
     breakout_quality_module_paths = [
         SYNTHETIC_VALIDATE_DIR / f"{module_name}.py"

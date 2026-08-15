@@ -59,6 +59,10 @@ from filters.breakout_quality.strategy_compare_reporting import (
 )
 from filters.breakout_quality.strategy_compare_engine import run_comparison
 from filters.breakout_quality.strategy_compare_replay import run_standalone_baseline
+from filters.breakout_quality.strategy_compare_plan import (
+    ResolvedComparisonPlan,
+    ResolvedContinuousScoreBinding,
+)
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
@@ -842,7 +846,50 @@ def _historical_continuous_score_provenance_entries(
     return tuple(output)
 
 
-def _completed_pair_pinned_continuous_score(
+def _continuous_score_provenance_entries(
+    *,
+    root: Path,
+    settings: StrategyComparisonSettings,
+    replay_cache: dict[str, Any],
+    dl_id: str,
+) -> tuple[dict[str, Any], ...]:
+    """Return completed-pair provenance independently of active-arm membership.
+
+    Current profile membership determines artifact demand, not artifact existence.
+    Any formally completed pair can prove the same frozen DL source when its archived
+    identity and score SHA pass the resolver checks below.
+    """
+
+    output: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in dict(replay_cache.get("pairs") or {}).values():
+        if not isinstance(raw, dict):
+            continue
+        key = (
+            str(raw.get("source_run_dir") or ""),
+            str(raw.get("source_group_id") or ""),
+        )
+        if not all(key) or key in seen:
+            continue
+        seen.add(key)
+        output.append(raw)
+    for raw in _historical_continuous_score_provenance_entries(
+        root=root,
+        settings=settings,
+        dl_id=str(dl_id),
+    ):
+        key = (
+            str(raw.get("source_run_dir") or ""),
+            str(raw.get("source_group_id") or ""),
+        )
+        if not all(key) or key in seen:
+            continue
+        seen.add(key)
+        output.append(raw)
+    return tuple(output)
+
+
+def _resolve_completed_pair_continuous_score_binding(
     *,
     root: Path,
     settings: StrategyComparisonSettings,
@@ -850,7 +897,7 @@ def _completed_pair_pinned_continuous_score(
     replay_cache: dict[str, Any],
     dl_id: str,
     diagnostics: list[str] | None = None,
-) -> dict[str, Any] | None:
+) -> ResolvedContinuousScoreBinding | None:
     """Resolve one frozen OOS score file pinned by a reusable completed pair.
 
     This is deliberately score-only.  It never rebuilds a model and never derives a
@@ -870,34 +917,12 @@ def _completed_pair_pinned_continuous_score(
     if source is None or source.score_source != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
         note("SOURCE_NOT_CONTINUOUS_OOS")
         return None
-    pairs = dict(replay_cache.get("pairs") or {})
-    dependent_arms = tuple(
-        arm
-        for arm in settings.enabled_arms
-        if arm.dl_enabled and str(arm.dl_id or "") == str(dl_id)
-    )
-    cached_entries = [
-        pairs.get(arm.arm_id)
-        for arm in dependent_arms
-        if isinstance(pairs.get(arm.arm_id), dict)
-    ]
-    historical_entries = _historical_continuous_score_provenance_entries(
+    provenance_entries = _continuous_score_provenance_entries(
         root=root,
         settings=settings,
+        replay_cache=replay_cache,
         dl_id=str(dl_id),
     )
-    provenance_entries = [
-        *cached_entries,
-        *(
-            entry
-            for entry in historical_entries
-            if not any(
-                str(existing.get("source_run_dir") or "") == str(entry.get("source_run_dir") or "")
-                and str(existing.get("source_group_id") or "") == str(entry.get("source_group_id") or "")
-                for existing in cached_entries
-            )
-        ),
-    ]
     if not provenance_entries:
         note("NO_COMPLETED_PAIR_PROVENANCE")
         return None
@@ -1038,19 +1063,43 @@ def _completed_pair_pinned_continuous_score(
                 note(f"SCORE_SIGNAL_COVERAGE_MISMATCH:{path_source}")
                 continue
             note(f"REUSE_OK:{path_source}")
-            return {
-                "score_path": score_path,
-                "sha256": actual_sha,
-                "available_from": available_from,
-                "available_through": available_through,
-                "execution_start": archived_required_start,
-                "provenance_run_dir": run_dir,
-                "provenance_pair_dir": Path(str(entry.get("source_pair_dir") or "")).resolve(),
-                "path_source": path_source,
-                "archived_path": str(archived_identity.get("path") or ""),
-                "current_canonical_path": current_score_display_path,
-            }
+            return ResolvedContinuousScoreBinding(
+                score_path=score_path,
+                sha256=actual_sha,
+                available_from=available_from,
+                available_through=available_through,
+                execution_start=archived_required_start,
+                provenance_run_dir=run_dir,
+                provenance_pair_dir=Path(
+                    str(entry.get("source_pair_dir") or "")
+                ).resolve(),
+                path_source=path_source,
+                archived_path=str(archived_identity.get("path") or ""),
+                current_canonical_path=current_score_display_path,
+            )
     return None
+
+
+def _completed_pair_pinned_continuous_score(
+    *,
+    root: Path,
+    settings: StrategyComparisonSettings,
+    status: dict[str, Any],
+    replay_cache: dict[str, Any],
+    dl_id: str,
+    diagnostics: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Compatibility projection of the typed frozen-score artifact resolver."""
+
+    binding = _resolve_completed_pair_continuous_score_binding(
+        root=root,
+        settings=settings,
+        status=status,
+        replay_cache=replay_cache,
+        dl_id=dl_id,
+        diagnostics=diagnostics,
+    )
+    return None if binding is None else binding.as_dict()
 
 
 def _apply_completed_pair_frozen_score_reuse(
@@ -1088,7 +1137,7 @@ def _apply_completed_pair_frozen_score_reuse(
         if all(isinstance(pairs.get(arm.arm_id), dict) for arm in dependent_arms):
             continue
         diagnostics: list[str] = []
-        recovered = _completed_pair_pinned_continuous_score(
+        binding = _resolve_completed_pair_continuous_score_binding(
             root=root,
             settings=settings,
             status=status,
@@ -1097,8 +1146,8 @@ def _apply_completed_pair_frozen_score_reuse(
             diagnostics=diagnostics,
         )
         reuse_diagnostics[str(dl_id)] = diagnostics
-        if recovered is not None:
-            overrides[str(dl_id)] = recovered
+        if binding is not None:
+            overrides[str(dl_id)] = binding.as_dict()
 
     if not overrides and not reuse_diagnostics:
         return status
@@ -1267,22 +1316,27 @@ def _apply_completed_pair_frozen_score_reuse(
     return updated
 
 
-def collect_artifact_status(
+def resolve_comparison_plan(
     *,
     project_root: Path = PROJECT_ROOT,
     settings: StrategyComparisonSettings | None = None,
-) -> dict[str, Any]:
+) -> ResolvedComparisonPlan:
+    """Resolve preparation, reuse, provenance and period exactly once.
+
+    UI rendering and replay execution consume this finalized plan.  Compatibility
+    callers may still use :func:`collect_artifact_status`, which returns a detached
+    status dictionary derived from the same plan.
+    """
+
+    root = Path(project_root).resolve()
     current = settings or get_strategy_comparison_settings()
-    status = collect_preparation_status(
-        project_root=Path(project_root).resolve(),
-        settings=current,
-    )
+    status = collect_preparation_status(project_root=root, settings=current)
     status["config_fingerprint"] = strategy_comparison_fingerprint(
         current,
         artifact_identities=status["artifact_identities"],
     )
     replay_cache = _collect_replay_cache_status(
-        root=Path(project_root).resolve(),
+        root=root,
         settings=current,
         status=status,
     )
@@ -1291,12 +1345,30 @@ def collect_artifact_status(
         status=status,
         replay_cache=replay_cache,
     )
-    return _apply_completed_pair_frozen_score_reuse(
-        root=Path(project_root).resolve(),
+    status = _apply_completed_pair_frozen_score_reuse(
+        root=root,
         settings=current,
         status=status,
         replay_cache=replay_cache,
     )
+    return ResolvedComparisonPlan.from_status(
+        settings=current,
+        project_root=root,
+        status=status,
+    )
+
+
+def collect_artifact_status(
+    *,
+    project_root: Path = PROJECT_ROOT,
+    settings: StrategyComparisonSettings | None = None,
+) -> dict[str, Any]:
+    """Compatibility view of the canonical resolved comparison plan."""
+
+    return resolve_comparison_plan(
+        project_root=project_root,
+        settings=settings,
+    ).status_dict()
 
 
 def render_status(
@@ -2202,38 +2274,6 @@ def _render_report(
     ).rstrip() + "\n"
 
 
-def _collect_ready_status_after_preparation(
-    *,
-    root: Path,
-    settings: StrategyComparisonSettings,
-    requested_plan: StrategyPreparationPlan,
-) -> dict[str, Any]:
-    """Refresh the full orchestration status after prerequisite builders finish.
-
-    The preparation layer owns artifact readiness only; config fingerprints and
-    replay-ready resolved paths belong to this orchestration layer. Recollecting
-    through the public wrapper prevents the low-level preparation payload from
-    replacing the richer status contract expected by report and output writers.
-    """
-    refreshed = collect_artifact_status(project_root=root, settings=settings)
-    refreshed["requested_preparation_plan"] = requested_plan
-    required_keys = (
-        "config_fingerprint",
-        "artifact_identities",
-        "resolved_parameter_paths",
-        "preparation_plan",
-        "comparison_period",
-    )
-    missing = [key for key in required_keys if key not in refreshed]
-    if missing:
-        raise RuntimeError(
-            "前置完成後狀態契約不完整: missing=" + ",".join(missing)
-        )
-    if not bool(refreshed.get("comparison_ready")) or refreshed.get("overall_status") != "READY":
-        raise RuntimeError("前置完成後正式比較狀態仍非READY")
-    return refreshed
-
-
 def _run_directory(
     *,
     root: Path,
@@ -2253,14 +2293,28 @@ def run_strategy_comparison(
     project_root: Path = PROJECT_ROOT,
     quiet: bool = False,
     status: dict[str, Any] | None = None,
+    resolved_plan: ResolvedComparisonPlan | None = None,
     auto_prepare: bool = True,
     settings: StrategyComparisonSettings | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     settings = settings or get_strategy_comparison_settings()
-    status = status or collect_artifact_status(project_root=root, settings=settings)
-    requested_fingerprint = str(status["config_fingerprint"])
-    requested_plan = status["preparation_plan"]
+    if status is not None and resolved_plan is not None:
+        raise ValueError("status與resolved_plan不可同時提供")
+    if resolved_plan is None:
+        if status is None:
+            resolved_plan = resolve_comparison_plan(project_root=root, settings=settings)
+        else:
+            resolved_plan = ResolvedComparisonPlan.from_status(
+                settings=settings,
+                project_root=root,
+                status=status,
+            )
+    elif resolved_plan.settings.as_dict() != settings.as_dict():
+        raise ValueError("resolved_plan與settings不一致")
+    status = resolved_plan.status_dict()
+    requested_fingerprint = resolved_plan.config_fingerprint
+    requested_plan = resolved_plan.preparation_plan
     if status["overall_status"] == "BLOCKED":
         print("\n" + render_status(project_root=root, settings=settings, status=status))
         raise RuntimeError(
@@ -2277,12 +2331,17 @@ def run_strategy_comparison(
                 project_root=root, settings=settings
             ),
         )
-        status = _collect_ready_status_after_preparation(
-            root=root,
+        resolved_plan = resolve_comparison_plan(
+            project_root=root,
             settings=settings,
-            requested_plan=requested_plan,
         )
+        status = resolved_plan.status_dict()
+        status["requested_preparation_plan"] = requested_plan
+        if resolved_plan.overall_status != "READY":
+            raise RuntimeError("前置完成後正式比較狀態仍非READY")
 
+    # READY has already passed ResolvedComparisonPlan.validate_contract().
+    # Replay must consume this exact finalized plan instead of recollecting state.
     comparison_period = dict(status.get("comparison_period") or {})
     comparison_start = str(comparison_period.get("start") or "")
     comparison_end = str(comparison_period.get("end") or "")
@@ -2291,12 +2350,7 @@ def run_strategy_comparison(
 
     replay_cache = dict(status.get("replay_cache") or {})
     if not replay_cache:
-        replay_cache = _collect_replay_cache_status(
-            root=root,
-            settings=settings,
-            status=status,
-        )
-        status["replay_cache"] = replay_cache
+        raise RuntimeError("ResolvedComparisonPlan缺少replay cache")
 
     run_dir, latest_dir = _run_directory(
         root=root,
@@ -2676,6 +2730,8 @@ def show_strategy_comparison_status(
 
 
 __all__ = [
+    "ResolvedComparisonPlan",
+    "resolve_comparison_plan",
     "collect_artifact_status",
     "render_execution_plan",
     "render_status",

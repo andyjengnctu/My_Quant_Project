@@ -2205,55 +2205,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     from filters.breakout_quality import strategy_comparison as strategy_comparison_module
 
-    requested_plan = SimpleNamespace(overall_status="PREPARABLE")
-    complete_post_prepare_status = {
-        "comparison_ready": True,
-        "overall_status": "READY",
-        "config_fingerprint": "postprepare123",
-        "artifact_identities": {"param:test": {"sha256": "abc"}},
-        "resolved_parameter_paths": {"test": "models/test.json"},
-        "preparation_plan": SimpleNamespace(overall_status="READY"),
-        "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
-        "comparison_period_source": "dl_runtime_common_overlap",
-    }
-    with patch.object(
-        strategy_comparison_module,
-        "collect_artifact_status",
-        return_value=dict(complete_post_prepare_status),
-    ):
-        refreshed_post_prepare_status = (
-            strategy_comparison_module._collect_ready_status_after_preparation(
-                root=project_root,
-                settings=settings,
-                requested_plan=requested_plan,
-            )
-        )
-    with patch.object(
-        strategy_comparison_module,
-        "collect_artifact_status",
-        return_value={
-            key: value
-            for key, value in complete_post_prepare_status.items()
-            if key != "config_fingerprint"
-        },
-    ):
-        try:
-            strategy_comparison_module._collect_ready_status_after_preparation(
-                root=project_root,
-                settings=settings,
-                requested_plan=requested_plan,
-            )
-        except RuntimeError as exc:
-            incomplete_post_prepare_rejected = "config_fingerprint" in str(exc)
-        else:
-            incomplete_post_prepare_rejected = False
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "post_preparation_refresh_restores_full_orchestration_status_contract",
+        "post_preparation_refresh_uses_canonical_resolved_plan_boundary",
         True,
-        refreshed_post_prepare_status["config_fingerprint"] == "postprepare123"
-        and refreshed_post_prepare_status["requested_preparation_plan"] is requested_plan
-        and incomplete_post_prepare_rejected,
+        all(token in orchestration_source for token in (
+            "resolved_plan = resolve_comparison_plan(",
+            "ResolvedComparisonPlan.from_status(",
+            "READY has already passed ResolvedComparisonPlan.validate_contract()",
+        )),
     )
 
     execution_pairs = strategy_comparison_module._execution_pairs(settings)
@@ -4094,6 +4054,19 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "preparation_plan": ready_plan,
         "comparison_period": {"start": "2021-01-01", "end": "2021-12-31"},
         "comparison_period_source": "dl_runtime_common_overlap",
+        "replay_cache": {
+            "pairs": {
+                arm.arm_id: None
+                for arm in settings.enabled_arms
+                if arm.dl_enabled
+            },
+            "baseline_groups": {},
+        },
+        "dl_sources": {
+            str(arm.dl_id): {"ready": True}
+            for arm in settings.enabled_arms
+            if arm.dl_enabled and arm.dl_id
+        },
         "expected_r_calibrations": {
             arm.arm_id: {
                 "lookup_path": f"outputs/strategy_compare/runtime_artifacts/{arm.arm_id}/expected_r_lookup.csv.gz"
@@ -4347,6 +4320,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 reuse_status = dict(ready_status)
                 reuse_status["resolved_parameter_paths"] = {
                     "min_roos": "models/min_roos.json"
+                }
+                reuse_status["dl_sources"] = {
+                    str(arm.dl_id): {"ready": True}
+                    for arm in historical_settings.enabled_arms
+                    if arm.dl_enabled and arm.dl_id
                 }
                 reuse_status["replay_cache"] = {
                     "pairs": {
