@@ -8943,3 +8943,22 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 唯一controlled strategy-system change：`param_source: selection_min_roos → selection_full_roos`、`rule_policy: all_off → formal`。C45與C32形成同一`selection_full_roos/formal` execution group，所以每日K、R0、canonical sizing、cash feasibility、orderability與execution全部由同日Full ROOS DL-off baseline建立；不得沿用C42的Min K/R0或Min all-off candidate universe。
 - 必要contrasts只新增兩個：`C45-C32`回答Full ROOS系統內加入MR-13E Exact的策略經濟增量；`C45-C42`在同MR-13E PIT source與同exact solver下比較Full ROOS/formal vs Min ROOS/all-off的整體策略體系差異，明確不是單一參數效果。
 - Gate只跑single-seed Selection。若C45沒有提供足以支持Full體系的證據，停止此分支，不占用`SR-C46`、不建立Full Forward arm、不跑8-seed；只有C45 Selection支持後，才另輪建立對稱的Full Forward-OOS MR-13E Exact arm。
+
+
+## 2026-08-15 — SR-C45 Selection REJECT → Full ROOS transfer closed
+
+- SR-C45正式Selection PIT結果已完成，run=`20260815_151550_C32-C23-C25-C28-C35-C39-C40-C41-C42-C43-C45_b90ab77b496d`，config fingerprint=`b90ab77b496d`。本輪結果回寫基準ZIP=`test-branch-1_20260815_151531_e0a8e0b.zip`，SHA256=`f000a82448a269df6b6fe22ce11952a2da9560486653df858c53a60a7834a29a`。
+- C45固定MR-13E PIT score、原始score objective與`exact_branch_and_bound_v1`，只把策略體系從C42的`selection_min_roos + all_off`切換為`selection_full_roos + formal`；K/R0、canonical sizing、cash feasibility、orderability與execution仍由同日C32 Full baseline semantics建立，因此此次失敗不能歸因為誤用Min K/R0。
+- C45主要結果：Return=`107.65%`、MDD=`19.02%`、RoMD=`5.66`、Annual=`11.01%`、EV=`0.64R`、Exposure=`79.60%`、trades=`422`、same-param DL selection R=`-29.22R`。相對同體系C32 Full ROOS：Return=`-24.60pp`、MDD=`+3.16pp`、RoMD=`-2.68`、Annual=`-1.79pp`、EV=`-0.07R`；相對Min Exact C42：Return=`-91.67pp`、MDD=`-0.86pp`、RoMD=`-4.36`、Annual=`-5.95pp`、EV=`-0.11R`、Exposure=`-8.56pp`。Full/formal transfer屬明確negative result，不需再補Forward或8-seed。
+- Decision：`SR-C45 = REJECTED_FULL_TRANSFER / NO_FORWARD / HISTORICAL_ONLY`。不建立`SR-C46`，不做Full ROOS MR-13E Exact Forward，也不做Full multi-seed。C45 arm與`C45-C32/C45-C42` contrasts從current Selection profile與active catalog移出，移到`config/compatibility/strategy_compare_history.py`只供舊工件重現；Strategy Compare schema `28 → 29`。
+- 架構結論：此結果只否決Full/formal transfer，不否決Min MR-13E Exact。既有same-seed 8-seed證據中，Min Exact相對MR-12B的RoMD為Selection `6/8`勝、ΔMean=`+0.19`，Forward `6/8`勝、ΔMean=`+2.59`；但Selection DL selection R相對MR-12B只有`1/8`勝、ΔMean=`-17.72R`，而Exact相對MR-13E heuristic在Selection/Forward都只有`4/8`勝（ΔRoMD Mean分別`+0.22/+0.05`）。因此後續以`Min/all-off + MR-13E raw score + exact constrained solver`作strategy research base，理由是完整global optimum/certificate與Forward strategy evidence，而不是宣稱MR-13E純DL source或exact solver已普遍優於所有anchor。
+- Runtime boundary：本輪不修改`config/breakout_quality.py`的production/default workflow，不把研究結論自動變成部署切換。MR-12B仍可作既有runtime/default benchmark；若要正式把Min MR-13E Exact接成production/runtime path，必須另開一輪integration，明確驗證live-like score availability、exact selector owner、artifact identity與fallback semantics，不在此次C45 research closure中偷改。
+
+## 2026-08-15 — Strategy Compare active matrix收斂為三條主線
+
+- 在SR-C45 Full transfer明確REJECT後，下一階段不再讓已結案的source／objective／solver controls持續出現在current Strategy Compare。這是research governance/profile瘦身，不新增SR實驗ID，也不改任何既有歷史結果。
+- Selection PIT current active arms固定為`C32 Full ROOS / C23 Min ROOS / C42 Min MR-13E Constrained`；必要contrasts只有`C32-C23`、`C42-C23`、`C42-C32`。其中`C42-C32`明確是最終整體策略結果比較，不宣稱為單一DL或單一參數效果。
+- Forward-OOS current active arms固定為`C1 Full ROOS / C3 Min ROOS / C44 Min MR-13E Constrained`；必要contrasts只有`C1-C3`、`C44-C3`、`C44-C1`。
+- C20/C25/C28/C29/C35/C36/C39/C40/C41/C43與其非current contrasts退出`config/strategy_compare.py` active catalog，移入`config/compatibility/strategy_compare_history.py`，只供舊工件identity解讀／歷史重現；C45維持既有`REJECTED_FULL_TRANSFER / NO_FORWARD / HISTORICAL_ONLY`。
+- Multi-seed robustness同步收斂：Selection fixed=`C32/C23`、stochastic=`C42`；Forward fixed=`C1/C3`、stochastic=`C44`。既有MR-12B／MR-13E heuristic同seed結果仍是有效歷史決策證據，但不再重訓或重放；current paired same-seed contrasts為空，直接看MR-13E Exact distribution相對Full/Min fixed references。
+- Strategy Compare schema由`29 → 30`，表示current scientific comparison matrix已明確變更；production/runtime default沒有同步切換，`DL-CONT12B`既有runtime benchmark與live-like integration仍維持原邊界。

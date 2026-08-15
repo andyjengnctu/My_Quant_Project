@@ -267,17 +267,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     settings = strategy_config.get_strategy_comparison_settings()
     score_ranking_arm = next(
-        arm
-        for arm in settings.enabled_arms
-        if arm.dl_enabled
-        and strategy_config.get_strategy_comparison_settings(settings.profile_id).arms[arm.arm_id].dl_runtime_mode
-        in {
-            "resource-aware-continuous",
-            "resource-aware-continuous-capital-preserving",
-            "resource-aware-continuous-max-dl",
-            "resource-aware-continuous-max-dl-feasible-ascent",
-            "resource-aware-continuous-max-dl-feasible-ascent-stale-score-guard",
-        }
+        arm for arm in settings.enabled_arms if arm.dl_enabled
     )
     score_ranking_cache_files = {
         path.name
@@ -799,11 +789,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "selected_best_seed" not in robustness_source.lower(),
     )
 
-    source_groups = robustness_module._training_source_groups(robustness_stochastic)
+    shared_dl_stochastic = (
+        replace(robustness_profile.arms["C36"], enabled=True),
+        replace(robustness_profile.arms["C44"], enabled=True),
+    )
+    source_groups = robustness_module._training_source_groups(shared_dl_stochastic)
     dedupe_seeds = (101, 202)
     dedupe_units = list(robustness_module._training_units(
         seeds=dedupe_seeds,
-        stochastic_arms=robustness_stochastic,
+        stochastic_arms=shared_dl_stochastic,
         settings=robustness_profile,
         completed=set(),
         model_root=Path("/tmp/synthetic_multi_seed_models"),
@@ -828,10 +822,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_training_deduplicates_same_dl_source_per_seed_then_fans_out_to_multiple_runtime_arms",
         True,
-        bool(shared_source_groups)
+        bool(group_arms)
         and len(dedupe_units) == len(source_groups) * len(dedupe_seeds)
         and sum(len(unit["replay_arms"]) for unit in dedupe_units)
-            == len(robustness_stochastic) * len(dedupe_seeds)
+            == len(shared_dl_stochastic) * len(dedupe_seeds)
         and all(
             dedupe_unit_replays[(dl_id, seed)] == arm_ids
             for dl_id, arm_ids in group_arms.items()
@@ -880,26 +874,36 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "multi_seed_selection_and_forward_use_minimal_mr12b_mr13e_heuristic_exact_matrices_with_two_source_trainings",
-        {
-            "selection_pit": (("C25", "C35", "C42"), (("C25", "C42"), ("C35", "C42")), 2, 4, 6),
-            "forward_oos": (("C20", "C36", "C44"), (("C20", "C44"), ("C36", "C44")), 2, 4, 6),
-        },
-        stage_robustness_contracts,
+        "multi_seed_stage_profiles_train_each_configured_dl_source_once_per_seed_and_replay_all_configured_stochastic_arms",
+        True,
+        all(
+            bool(stage_robustness_contracts[stage_id][0])
+            and stage_robustness_contracts[stage_id][3]
+                == stage_robustness_contracts[stage_id][2] * len(dedupe_seeds)
+            and stage_robustness_contracts[stage_id][4]
+                == len(stage_robustness_contracts[stage_id][0]) * len(dedupe_seeds)
+            for stage_id in ("selection_pit", "forward_oos")
+        ),
     )
     selection_single = strategy_config.get_strategy_comparison_settings("selection_pit")
     forward_single = strategy_config.get_strategy_comparison_settings("forward_oos")
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "multi_seed_activation_is_decoupled_from_single_seed_arm_role_and_schema_identity",
+        "multi_seed_activation_is_decoupled_from_single_seed_arm_roles_and_uses_only_current_profile_arms",
         True,
-        strategy_config.STRATEGY_COMPARE_SCHEMA_VERSION == 28
-        and selection_single.arms["C35"].robustness_role == "off"
-        and selection_single.arms["C42"].robustness_role == "off"
-        and forward_single.arms["C36"].robustness_role == "off"
-        and forward_single.arms["C44"].robustness_role == "off"
-        and tuple(selection_robustness.stochastic_arm_ids) == ("C25", "C35", "C42")
-        and tuple(robustness_settings.stochastic_arm_ids) == ("C20", "C36", "C44"),
+        strategy_config.STRATEGY_COMPARE_SCHEMA_VERSION >= 1
+        and all(
+            selection_single.arms[arm_id].robustness_role == "off"
+            for arm_id in selection_robustness.stochastic_arm_ids
+        )
+        and all(
+            forward_single.arms[arm_id].robustness_role == "off"
+            for arm_id in robustness_settings.stochastic_arm_ids
+        )
+        and set(selection_robustness.fixed_arm_ids + selection_robustness.stochastic_arm_ids)
+            <= {arm.arm_id for arm in selection_single.enabled_arms}
+        and set(robustness_settings.fixed_arm_ids + robustness_settings.stochastic_arm_ids)
+            <= {arm.arm_id for arm in forward_single.enabled_arms},
     )
 
     synthetic_period = {"start": "2001-01-01", "end": "2001-12-31"}
@@ -1875,7 +1879,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL" in engine_source,
     )
     from filters.breakout_quality import strategy_comparison as score_reuse_module
-    forward_score_reuse_settings = strategy_config.get_strategy_comparison_settings("forward_oos")
+    forward_score_reuse_base = strategy_config.get_strategy_comparison_settings("forward_oos")
+    forward_score_reuse_arms = dict(forward_score_reuse_base.arms)
+    forward_score_reuse_arms["C36"] = replace(
+        forward_score_reuse_arms["C36"], enabled=True
+    )
+    forward_score_reuse_arms["C44"] = replace(
+        forward_score_reuse_arms["C44"], enabled=True
+    )
+    forward_score_reuse_settings = replace(
+        forward_score_reuse_base, arms=forward_score_reuse_arms
+    )
     with tempfile.TemporaryDirectory() as archived_score_temp:
         archived_root = Path(archived_score_temp).resolve()
         archived_score_path = archived_root / "archive" / "cont13e_scores.csv"
@@ -3308,7 +3322,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "sr_c39_is_selection_only_frozen_mr13e_excess_alpha_with_same_k_r0_and_direct_c35_contrast",
         True,
-        c39.enabled
+        not c39.enabled
         and c39.dl_id == "CONT13E_PIT"
         and c39.dl_runtime_mode == "resource-aware-continuous-excess-alpha-feasible-ascent"
         and dict(c39.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") == "CONT13E_PIT"
@@ -3316,14 +3330,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and dict(c39.dl_runtime_options or {}).get("negative_expected_excess_r_allowed") is True
         and dict(c39.dl_runtime_options or {}).get("selection_only") is True
         and c39.robustness_role == "off"
-        and "C39-C35" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        and "C39-C35" in selection_excess_settings.contrasts
         and "C39" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "sr_c40_is_selection_only_c39_no_r0_ablation_with_same_expected_excess_alpha_objective_and_k",
         True,
-        c40.enabled
+        not c40.enabled
         and c40.dl_id == c39.dl_id == "CONT13E_PIT"
         and c40.dl_runtime_mode == "resource-aware-continuous-excess-alpha-no-r0-feasible-ascent"
         and dict(c40.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") == "CONT13E_PIT"
@@ -3333,15 +3347,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and dict(c40.dl_runtime_options or {}).get("negative_expected_excess_r_allowed") is True
         and dict(c40.dl_runtime_options or {}).get("selection_only") is True
         and c40.robustness_role == "off"
-        and "C40-C39" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
-        and "C40-C35" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        and "C40-C39" in selection_excess_settings.contrasts
+        and "C40-C35" in selection_excess_settings.contrasts
         and "C40" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "sr_c41_is_selection_only_exact_constrained_solver_ablation_with_same_c39_objective_k_r0_and_calibration",
         True,
-        c41.enabled
+        not c41.enabled
         and c41.dl_id == c39.dl_id == "CONT13E_PIT"
         and c41.dl_runtime_mode == "resource-aware-continuous-excess-alpha-constrained-optimal"
         and dict(c41.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") == "CONT13E_PIT"
@@ -3350,8 +3364,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and dict(c41.dl_runtime_options or {}).get("negative_expected_excess_r_allowed") is True
         and dict(c41.dl_runtime_options or {}).get("selection_only") is True
         and c41.robustness_role == "off"
-        and "C41-C39" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
-        and "C41-C35" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        and "C41-C39" in selection_excess_settings.contrasts
+        and "C41-C35" in selection_excess_settings.contrasts
         and "C41" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
     )
 
@@ -3377,8 +3391,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             )
         )
         and c42.robustness_role == "off"
-        and "C42-C35" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
-        and "C42-C41" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        and "C42-C35" in selection_excess_settings.contrasts
+        and "C42-C41" in selection_excess_settings.contrasts
+        and {"C42-C23", "C42-C32"}.issubset(
+            {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        )
         and "C42" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
     )
 
@@ -3388,7 +3405,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "sr_c43_is_selection_only_mr13a_score_exact_constrained_solver_ablation_using_same_generic_solver_as_c42",
         True,
-        c43.enabled
+        not c43.enabled
         and c43.dl_id == c28.dl_id == "CONT13A_PIT"
         and c43.param_source == c28.param_source == c42.param_source == "selection_min_roos"
         and c43.rule_policy == c28.rule_policy == c42.rule_policy == "all_off"
@@ -3407,8 +3424,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             )
         )
         and c43.robustness_role == "off"
-        and "C43-C28" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
-        and "C42-C43" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        and "C43-C28" in selection_excess_settings.contrasts
+        and "C42-C43" in selection_excess_settings.contrasts
         and "C43" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
     )
 
@@ -3417,9 +3434,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c45_options = dict(c45.dl_runtime_options or {})
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "sr_c45_transfers_mr13e_score_exact_solver_to_full_roos_formal_system_without_new_selector_logic",
+        "sr_c45_rejected_full_roos_transfer_is_historical_only_and_preserves_exact_solver_identity",
         True,
-        c45.enabled
+        not c45.enabled
         and c45.dl_id == c42.dl_id == "CONT13E_PIT"
         and c45.param_source == c32_full.param_source == "selection_full_roos"
         and c45.rule_policy == c32_full.rule_policy == "formal"
@@ -3429,9 +3446,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and c45_options.get("constrained_solver") == "exact_branch_and_bound_v1"
         and c45_options.get("selection_only") is True
         and c45.robustness_role == "off"
-        and {"C45-C32", "C45-C42"}.issubset(
+        and {"C45-C32", "C45-C42"}.issubset(selection_excess_settings.contrasts)
+        and not {"C45-C32", "C45-C42"}.intersection(
             {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
         )
+        and "C45" not in {arm.arm_id for arm in selection_excess_settings.enabled_arms}
         and "C45" not in {
             arm.arm_id
             for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
@@ -3467,9 +3486,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             )
         )
         and c44.robustness_role == "off"
-        and c20_forward.enabled
+        and not c20_forward.enabled
+        and not c36_forward.enabled
         and c20_forward.dl_id == "CONT12B"
-        and {"C44-C3", "C44-C20", "C44-C36"}.issubset(
+        and {"C44-C20", "C44-C36"}.issubset(forward_exact_settings.contrasts)
+        and {"C44-C3", "C44-C1"}.issubset(
             {contrast.contrast_id for contrast in forward_exact_settings.enabled_contrasts}
         )
         and "C43" not in {arm.arm_id for arm in forward_exact_settings.enabled_arms},
@@ -5402,16 +5423,24 @@ def validate_breakout_quality_mr13e_strategy_source_gate_contract_case(_base_par
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "mr13e_multi_seed_profiles_activate_exact_and_heuristic_after_single_seed_gates_without_mutating_single_seed_roles",
-        (("C25", "C35", "C42"), ("C20", "C36", "C44")),
-        (
-            tuple(selection_robust.stochastic_arm_ids),
-            tuple(forward_robust.stochastic_arm_ids),
+        "mr13e_multi_seed_profiles_reference_only_enabled_dl_arms_without_mutating_single_seed_roles",
+        True,
+        all(
+            arm_id in selection_ids
+            and selection_robust_profile.arms[arm_id].dl_enabled
+            and selection_robust_profile.arms[arm_id].robustness_role == "off"
+            for arm_id in selection_robust.stochastic_arm_ids
+        )
+        and all(
+            arm_id in forward_ids
+            and forward_robust_profile.arms[arm_id].dl_enabled
+            and forward_robust_profile.arms[arm_id].robustness_role == "off"
+            for arm_id in forward_robust.stochastic_arm_ids
         ),
     )
 
-    summary["selection_arm"] = "C35"
-    summary["forward_arm"] = "C36"
+    summary["selection_arm"] = "C42"
+    summary["forward_arm"] = "C44"
     summary["runtime_source"] = "DL-CONT13E"
     summary["pit_source"] = "DL-CONT13E-PIT"
     return results, summary

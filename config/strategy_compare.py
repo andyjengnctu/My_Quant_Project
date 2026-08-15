@@ -35,7 +35,7 @@ from core.strategy_comparison import (
     validate_strategy_multi_seed_robustness_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 28
+STRATEGY_COMPARE_SCHEMA_VERSION = 30
 
 # =============================================================================
 # 1. 常用設定
@@ -62,58 +62,42 @@ STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE = True
 # Current Strategy Compare核心比較名稱的單一真理。
 # Selection PIT／Forward-OOS由profile頁首區分，不把研究階段或固定selector語意塞進arm顯示名稱。
 STRATEGY_COMPARE_DISPLAY_FULL_ROOS = "Full ROOS"
-STRATEGY_COMPARE_DISPLAY_FULL_MR13E_SCORE_CONSTRAINED = "Full MR-13E Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_ROOS = "Min ROOS"
-STRATEGY_COMPARE_DISPLAY_MIN_MR12B = "Min MR-12B"
-STRATEGY_COMPARE_DISPLAY_MIN_MR13A = "Min MR-13A"
-STRATEGY_COMPARE_DISPLAY_MIN_MR13A_SCORE_CONSTRAINED = "Min MR-13A Constrained"
-STRATEGY_COMPARE_DISPLAY_MIN_MR13E = "Min MR-13E"
-STRATEGY_COMPARE_DISPLAY_MIN_MR13E_EXCESS_ALPHA = "Min MR-13E Excess-Alpha"
-STRATEGY_COMPARE_DISPLAY_MIN_MR13E_EXCESS_ALPHA_NO_R0 = "Min MR-13E Excess-Alpha No-R0"
-STRATEGY_COMPARE_DISPLAY_MIN_MR13E_EXCESS_ALPHA_CONSTRAINED = "Min MR-13E Excess-Alpha Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED = "Min MR-13E Constrained"
-STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED_FORWARD = "Min MR-13E Constrained"
 
 # Strategy Compare以研究階段profile隔離設定與輸出；App只顯示泛化階段名稱，
 # arms／contrasts／period／output namespace全部由本檔驅動。
 STRATEGY_COMPARE_PROFILES = {
     "selection_pit": {
         "label": "Selection PIT 策略比較",
-        "description": "2014～2020 point-in-time策略轉化Gate；比較Full／Min baseline、MR-12B／MR-13A／MR-13E及目前controlled selector／objective ablations。",
+        "description": "2014～2020 point-in-time策略轉化Gate；active research只比較Full ROOS、Min ROOS與Min MR-13E exact constrained。",
         "display_alignment_group": "core_strategy_compare",
-        "display_alignment_arm_ids": ("C32", "C23", "C25", "C28", "C35"),
+        "display_alignment_arm_ids": ("C32", "C23", "C42"),
         "start_date": "2014-01-01",
         "end_date": "2020-12-31",
         "output_root": "outputs/strategy_compare/selection_pit",
         "reuse_output_roots": ("outputs/strategy_compare",),
-        "arm_ids": ("C32", "C23", "C25", "C28", "C35", "C39", "C40", "C41", "C42", "C43", "C45"),
+        "arm_ids": ("C32", "C23", "C42"),
         "contrast_ids": (
             "C32-C23",
-            "C25-C23", "C28-C23", "C28-C25",
-            "C35-C23", "C35-C25", "C35-C28",
-            "C39-C23", "C39-C25", "C39-C35",
-            "C40-C23", "C40-C35", "C40-C39",
-            "C41-C23", "C41-C35", "C41-C39", "C41-C40",
-            "C42-C23", "C42-C35", "C42-C41",
-            "C43-C23", "C43-C28", "C42-C43",
-            "C45-C32", "C45-C42",
+            "C42-C23",
+            "C42-C32",
         ),
     },
     "forward_oos": {
         "label": "Forward-OOS 策略比較",
-        "description": "2021+ frozen Forward-OOS策略Gate；比較Full／Min baseline、MR-12B／MR-13A／MR-13E。",
+        "description": "2021+ frozen Forward-OOS策略Gate；active research只比較Full ROOS、Min ROOS與Min MR-13E exact constrained。",
         "display_alignment_group": "core_strategy_compare",
-        "display_alignment_arm_ids": ("C1", "C3", "C20", "C29", "C36"),
+        "display_alignment_arm_ids": ("C1", "C3", "C44"),
         "start_date": None,
         "end_date": None,
         "output_root": "outputs/strategy_compare/forward_oos",
         "reuse_output_roots": ("outputs/strategy_compare",),
-        "arm_ids": ("C1", "C3", "C20", "C29", "C36", "C44"),
+        "arm_ids": ("C1", "C3", "C44"),
         "contrast_ids": (
             "C1-C3",
-            "C20-C3", "C29-C3", "C29-C20",
-            "C36-C3", "C36-C20", "C36-C29",
-            "C44-C3", "C44-C20", "C44-C36",
+            "C44-C3",
+            "C44-C1",
         ),
     },
 }
@@ -143,11 +127,8 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
             "full": {"param_source": "selection_full_roos", "rule_policy": "formal"},
         },
         "fixed_arm_ids": ("C32", "C23"),
-        "stochastic_arm_ids": ("C25", "C35", "C42"),
-        "paired_contrasts": (
-            {"contrast_id": "mr13e_exact_vs_mr12b", "left": "C25", "right": "C42", "description": "MR-13E exact constrained相對MR-12B anchor的同seed robustness"},
-            {"contrast_id": "mr13e_exact_vs_heuristic", "left": "C35", "right": "C42", "description": "同MR-13E source下exact constrained相對heuristic selector的純solver同seed robustness"},
-        ),
+        "stochastic_arm_ids": ("C42",),
+        "paired_contrasts": (),
         "output_root": "outputs/strategy_compare/robustness/selection_pit",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/selection_pit",
     },
@@ -172,11 +153,8 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
             "full": {"param_source": "full_roos", "rule_policy": "formal"},
         },
         "fixed_arm_ids": ("C1", "C3"),
-        "stochastic_arm_ids": ("C20", "C36", "C44"),
-        "paired_contrasts": (
-            {"contrast_id": "mr13e_exact_vs_mr12b", "left": "C20", "right": "C44", "description": "MR-13E exact constrained相對MR-12B Forward anchor的同seed robustness"},
-            {"contrast_id": "mr13e_exact_vs_heuristic", "left": "C36", "right": "C44", "description": "同MR-13E source下exact constrained相對heuristic selector的純solver同seed robustness"},
-        ),
+        "stochastic_arm_ids": ("C44",),
+        "paired_contrasts": (),
         "output_root": "outputs/strategy_compare/robustness",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness",
     }
@@ -324,27 +302,6 @@ STRATEGY_PARAM_SOURCES = {
 # =============================================================================
 
 STRATEGY_DL_SOURCES = {
-    "CONT12B": {
-        "filter_id": "breakout_quality_v1",
-        "model_architecture": "inception_time_v1",
-        "experiment_profile": "strategy_aligned_no_time_all_event_pairwise",
-        "threshold": None,
-        "score_source": "continuous_ranker_oos",
-        "description": "MR-12B all-event no-time pairwise ranker frozen OOS score；只允許受控strategy research replay",
-        "forward_scores_builder": None,
-    },
-    "CONT13A": {
-        "filter_id": "breakout_quality_v1",
-        "model_architecture": "inception_time_v1",
-        "experiment_profile": "daily_universal_no_time_pairwise",
-        "threshold": None,
-        "score_source": "continuous_ranker_oos",
-        "description": (
-            "MR-13A Daily Universal frozen Forward-OOS continuous score；"
-            "每個盤前決策使用最新已完成交易日資訊，供frozen strategy Gate"
-        ),
-        "forward_scores_builder": None,
-    },
     "CONT13E": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -353,47 +310,9 @@ STRATEGY_DL_SOURCES = {
         "score_source": "continuous_ranker_oos",
         "description": (
             "MR-13E Daily Universal full-list Delta-NDCG frozen Forward-OOS score；"
-            "盤前使用最新已完成交易日資訊，只供source-only strategy Gate"
+            "盤前使用最新已完成交易日資訊，供current MR-13E exact strategy research"
         ),
         "forward_scores_builder": None,
-    },
-    "CONT12B_PIT": {
-        "filter_id": "breakout_quality_v1",
-        "model_architecture": "inception_time_v1",
-        "experiment_profile": "strategy_aligned_no_time_all_event_pairwise",
-        "threshold": None,
-        "score_source": "selection_point_in_time",
-        "description": (
-            "MR-12B Selection point-in-time continuous score；"
-            "只供2014～2020無前視策略經濟驗證"
-        ),
-        "forward_scores_builder": {
-            "enabled": True,
-            "builder_type": "selection_pit_from_existing_folds",
-            "options": {
-                "resume": True,
-                "allow_stale_source": False,
-            },
-        },
-    },
-    "CONT13A_PIT": {
-        "filter_id": "breakout_quality_v1",
-        "model_architecture": "inception_time_v1",
-        "experiment_profile": "daily_universal_no_time_pairwise",
-        "threshold": None,
-        "score_source": "selection_point_in_time",
-        "description": (
-            "MR-13A Daily Universal Selection point-in-time score；"
-            "每個盤前決策只使用最新已完成交易日資訊，供2014～2020無前視策略經濟驗證"
-        ),
-        "forward_scores_builder": {
-            "enabled": True,
-            "builder_type": "selection_pit_from_existing_folds",
-            "options": {
-                "resume": True,
-                "allow_stale_source": False,
-            },
-        },
     },
     "CONT13E_PIT": {
         "filter_id": "breakout_quality_v1",
@@ -403,7 +322,7 @@ STRATEGY_DL_SOURCES = {
         "score_source": "selection_point_in_time",
         "description": (
             "MR-13E Daily Universal full-list Delta-NDCG Selection PIT score；"
-            "盤前只使用最新已完成交易日資訊，只供2014～2020 source-only strategy Gate"
+            "盤前只使用最新已完成交易日資訊，供2014～2020 current MR-13E exact strategy research"
         ),
         "forward_scores_builder": {
             "enabled": True,
@@ -443,19 +362,6 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": None,
         "robustness_role": "fixed_baseline",
     },
-    "C20": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR12B,
-        "description": (
-            "與C18使用完全相同K/R0、feasible-ascent與basket內Min ROOS執行順序；"
-            "唯一模型差異為DL source改成MR-12B pairwise ranker"
-        ),
-        "param_source": "min_roos",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT12B",
-        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
-        "robustness_role": "stochastic",
-    },
     "C23": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_ROOS,
         "description": (
@@ -469,191 +375,15 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": None,
         "robustness_role": "fixed_baseline",
     },
-    "C25": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR12B,
-        "description": (
-            "與C23使用完全相同historical P2 Min ROOS params；"
-            "使用MR-12B Selection PIT score並完全沿用C18 feasible-ascent selector"
-        ),
-        "param_source": "selection_min_roos",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT12B_PIT",
-        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
-        "robustness_role": "stochastic",
-    },
-    "C28": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13A,
-        "description": (
-            "與C25使用完全相同historical P2 Min ROOS params、K/R0與feasible-ascent selector；"
-            "唯一DL差異為score source改成MR-13A Daily Universal Selection PIT，"
-            "盤前每日依最新已完成交易日score重排"
-        ),
-        "param_source": "selection_min_roos",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13A_PIT",
-        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
-        "robustness_role": "stochastic",
-    },
-    "C35": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E,
-        "description": (
-            "與C25/C28使用完全相同historical P2 Min ROOS params、K/R0、"
-            "feasible-ascent selector與execution；唯一DL差異為MR-13E Selection PIT source"
-        ),
-        "param_source": "selection_min_roos",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13E_PIT",
-        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
-        "robustness_role": "off",
-    },
-    "C39": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_EXCESS_ALPHA,
-        "description": (
-            "與C35使用完全相同MR-13E Selection PIT source、historical Min params、K/R0、"
-            "sizing、cash、orderability與execution；唯一portfolio變更為以PIT daily percentile→"
-            "Expected Excess-R的單調isotonic mapping，最大化Σ(Expected Excess-R × canonical planned initial risk)"
-        ),
-        "param_source": "selection_min_roos",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13E_PIT",
-        "dl_runtime_mode": "resource-aware-continuous-excess-alpha-feasible-ascent",
-        "dl_runtime_options": {
-            "expected_excess_r_fit_dl_id": "CONT13E_PIT",
-            "expected_excess_r_calibration_method": "daily_score_percentile_isotonic_excess_r_v1",
-            "preserve_k_r0": True,
-            "negative_expected_excess_r_allowed": True,
-            "selection_only": True,
-        },
-        "robustness_role": "off",
-    },
-    "C40": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_EXCESS_ALPHA_NO_R0,
-        "description": (
-            "C39的Selection-only resource ablation：完全重用同一MR-13E PIT score、"
-            "Expected Excess-R calibration、historical Min params、K、sizing、cash、orderability與execution；"
-            "唯一移除Min ROOS reserved-capital R0 hard floor與R0-driven minimum repair。"
-            "若raw Top-K因真正cash constraint無法掛出K筆，只以同參數baseline作K-only cash-feasible seed，"
-            "再最大化Σ(Expected Excess-R × canonical planned initial risk)做single-swap ascent"
-        ),
-        "param_source": "selection_min_roos",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13E_PIT",
-        "dl_runtime_mode": "resource-aware-continuous-excess-alpha-no-r0-feasible-ascent",
-        "dl_runtime_options": {
-            "expected_excess_r_fit_dl_id": "CONT13E_PIT",
-            "expected_excess_r_calibration_method": "daily_score_percentile_isotonic_excess_r_v1",
-            "preserve_k": True,
-            "preserve_r0": False,
-            "r0_minimum_repair": False,
-            "negative_expected_excess_r_allowed": True,
-            "selection_only": True,
-        },
-        "robustness_role": "off",
-    },
-    "C41": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_EXCESS_ALPHA_CONSTRAINED,
-        "description": (
-            "C39的Selection-only solver ablation：完全重用同一MR-13E PIT score、Expected Excess-R calibration、"
-            "historical Min params、K/R0、sizing、cash、orderability與execution；不再使用Top-K→R0 minimum repair→"
-            "1-swap ascent，而是直接以deterministic exact branch-and-bound在完整候選universe中最大化"
-            "Σ(Expected Excess-R × canonical planned initial risk)，subject to exact K、R0與canonical cash feasibility"
-        ),
-        "param_source": "selection_min_roos",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13E_PIT",
-        "dl_runtime_mode": "resource-aware-continuous-excess-alpha-constrained-optimal",
-        "dl_runtime_options": {
-            "expected_excess_r_fit_dl_id": "CONT13E_PIT",
-            "expected_excess_r_calibration_method": "daily_score_percentile_isotonic_excess_r_v1",
-            "preserve_k_r0": True,
-            "constrained_solver": "exact_branch_and_bound_v1",
-            "negative_expected_excess_r_allowed": True,
-            "selection_only": True,
-        },
-        "robustness_role": "off",
-    },
     "C42": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED,
         "description": (
-            "C35的Selection-only solver ablation：完全重用同一MR-13E PIT score、historical Min params、"
-            "K/R0、sizing、cash、orderability與execution；objective仍為原始ΣMR-13E score，只把"
-            "Top-K→R0 minimum repair→1-swap ascent替換為deterministic exact branch-and-bound，"
-            "在完整候選universe直接求K/R0/canonical-cash feasible score-sum global optimum"
+            "Selection PIT current research arm：historical Min params/all-off + frozen MR-13E PIT score；"
+            "固定K/R0、canonical sizing/cash/orderability/execution，以deterministic exact branch-and-bound"
+            "在完整候選universe求K/R0/canonical-cash feasible MR-13E score-sum global optimum"
         ),
         "param_source": "selection_min_roos",
         "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13E_PIT",
-        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
-        "dl_runtime_options": {
-            "preserve_k_r0": True,
-            "constrained_solver": "exact_branch_and_bound_v1",
-            "selection_only": True,
-        },
-        "robustness_role": "off",
-    },
-    "C43": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13A_SCORE_CONSTRAINED,
-        "description": (
-            "C28的Selection-only solver ablation：完全重用同一MR-13A PIT score、historical Min params、"
-            "K/R0、sizing、cash、orderability與execution；objective仍為原始ΣMR-13A score，只把"
-            "Top-K→R0 minimum repair→1-swap ascent替換為C42同源deterministic exact branch-and-bound，"
-            "在完整候選universe直接求K/R0/canonical-cash feasible score-sum global optimum"
-        ),
-        "param_source": "selection_min_roos",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13A_PIT",
-        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
-        "dl_runtime_options": {
-            "preserve_k_r0": True,
-            "constrained_solver": "exact_branch_and_bound_v1",
-            "selection_only": True,
-        },
-        "robustness_role": "off",
-    },
-    "C29": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13A,
-        "description": (
-            "與C20使用相同current Min ROOS、all-off rules與frozen feasible-ascent；"
-            "唯一DL source差異為MR-13A Daily Universal Forward-OOS score"
-        ),
-        "param_source": "min_roos",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13A",
-        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
-        "robustness_role": "stochastic",
-    },
-    "C36": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E,
-        "description": (
-            "與C20/C29使用相同current Min ROOS、all-off rules與frozen feasible-ascent；"
-            "唯一DL source差異為MR-13E Daily Universal Forward-OOS score"
-        ),
-        "param_source": "min_roos",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13E",
-        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
-        "robustness_role": "off",
-    },
-    "C45": {
-        "name": STRATEGY_COMPARE_DISPLAY_FULL_MR13E_SCORE_CONSTRAINED,
-        "description": (
-            "C42的Full ROOS parameter/rule-system transfer：完全重用同一MR-13E Selection PIT score、"
-            "原始ΣMR-13E score objective與同源deterministic exact branch-and-bound；"
-            "唯一策略體系變更為historical Full ROOS active params與formal rules。"
-            "K/R0、sizing、cash、orderability與execution全部由同日Full ROOS baseline semantics建立"
-        ),
-        "param_source": "selection_full_roos",
-        "rule_policy": "formal",
         "dl_enabled": True,
         "dl_id": "CONT13E_PIT",
         "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
@@ -665,12 +395,11 @@ STRATEGY_COMPARE_ARMS = {
         "robustness_role": "off",
     },
     "C44": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED_FORWARD,
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED,
         "description": (
-            "C36的Forward-OOS solver ablation：完全重用同一MR-13E frozen Forward score、current Min params、"
-            "K/R0、sizing、cash、orderability與execution；objective仍為原始ΣMR-13E score，只把"
-            "Top-K→R0 minimum repair→1-swap ascent替換為C42同源deterministic exact branch-and-bound，"
-            "在完整候選universe直接求K/R0/canonical-cash feasible score-sum global optimum"
+            "Forward-OOS current research arm：current Min params/all-off + frozen MR-13E Forward score；"
+            "固定K/R0、canonical sizing/cash/orderability/execution，以與C42同源deterministic exact "
+            "branch-and-bound在完整候選universe求K/R0/canonical-cash feasible MR-13E score-sum global optimum"
         ),
         "param_source": "min_roos",
         "rule_policy": "all_off",
@@ -702,43 +431,13 @@ STRATEGY_COMPARE_ARMS = {
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
-    "C20-C3": {"left": "C20", "right": "C3", "description": "current Min ROOS下MR-12B feasible-ascent相對DL-off baseline的Forward-OOS策略效果"},
-    "C25-C23": {"left": "C25", "right": "C23", "description": "Selection PIT下固定historical Min ROOS與C18 selector，MR-12B PIT ranking相對DL-off baseline的經濟效果"},
-    "C28-C25": {"left": "C28", "right": "C25", "description": "固定historical Min ROOS與feasible-ascent selector，MR-13A daily PIT相對MR-12B event PIT的純DL source效果"},
-    "C28-C23": {"left": "C28", "right": "C23", "description": "Selection PIT下MR-13A daily feasible-ascent相對DL-off historical Min ROOS baseline的策略經濟效果"},
-    "C29-C3": {"left": "C29", "right": "C3", "description": "current Min ROOS下MR-13A daily feasible-ascent相對DL-off baseline的Forward-OOS策略效果"},
-    "C29-C20": {"left": "C29", "right": "C20", "description": "固定current Min ROOS與feasible-ascent，MR-13A daily相對MR-12B event source的純DL Forward-OOS效果"},
-    "C35-C23": {"left": "C35", "right": "C23", "description": "Selection PIT下MR-13E daily feasible-ascent相對DL-off historical Min ROOS baseline的策略經濟效果"},
-    "C35-C25": {"left": "C35", "right": "C25", "description": "固定Selection Min ROOS與feasible-ascent，MR-13E相對MR-12B的純DL source效果"},
-    "C35-C28": {"left": "C35", "right": "C28", "description": "固定Selection Min ROOS與feasible-ascent，MR-13E相對MR-13A的純DL source效果"},
-    "C39-C23": {"left": "C39", "right": "C23", "description": "Selection PIT frozen MR-13E Excess-Alpha相對DL-off Min ROOS的策略經濟效果"},
-    "C39-C25": {"left": "C39", "right": "C25", "description": "Selection PIT frozen MR-13E Excess-Alpha相對MR-12B runtime anchor"},
-    "C39-C35": {"left": "C39", "right": "C35", "description": "同一MR-13E PIT source與同K/R0；只比較Expected Excess-R×Risk objective相對score-sum objective"},
-    "C40-C23": {"left": "C40", "right": "C23", "description": "Selection PIT frozen MR-13E Excess-Alpha No-R0相對DL-off Min ROOS的策略經濟效果"},
-    "C40-C35": {"left": "C40", "right": "C35", "description": "同一MR-13E PIT source；比較No-R0 Excess-Alpha×Risk相對原C35 score-sum+K/R0 selector"},
-    "C40-C39": {"left": "C40", "right": "C39", "description": "同一MR-13E PIT、同Expected Excess-R objective與同K；唯一移除R0 hard floor與R0-driven minimum repair"},
-    "C41-C23": {"left": "C41", "right": "C23", "description": "Selection PIT frozen MR-13E Excess-Alpha constrained optimum相對DL-off Min ROOS的策略經濟效果"},
-    "C41-C35": {"left": "C41", "right": "C35", "description": "同一MR-13E PIT與同K/R0；比較exact constrained Excess-Alpha objective相對原C35 score-sum selector"},
-    "C41-C39": {"left": "C41", "right": "C39", "description": "同一MR-13E PIT、Expected Excess-R objective、K/R0與execution；唯一把repair+1-swap heuristic改為完整候選exact constrained optimization"},
-    "C41-C40": {"left": "C41", "right": "C40", "description": "同一MR-13E Excess-Alpha objective與K；比較恢復R0且直接exact constrained optimization相對No-R0 ablation"},
     "C42-C23": {"left": "C42", "right": "C23", "description": "Selection PIT frozen MR-13E score exact constrained optimum相對DL-off Min ROOS的策略經濟效果"},
-    "C42-C35": {"left": "C42", "right": "C35", "description": "同一MR-13E PIT、score objective、K/R0與execution；唯一把repair+1-swap heuristic改為完整候選exact constrained optimization"},
-    "C42-C41": {"left": "C42", "right": "C41", "description": "同一MR-13E PIT、K/R0、exact constrained solver與execution；唯一objective由Expected Excess-R×Risk改回原始MR-13E score"},
-    "C43-C23": {"left": "C43", "right": "C23", "description": "Selection PIT frozen MR-13A score exact constrained optimum相對DL-off Min ROOS的策略經濟效果"},
-    "C43-C28": {"left": "C43", "right": "C28", "description": "同一MR-13A PIT、score objective、K/R0與execution；唯一把repair+1-swap heuristic改為完整候選exact constrained optimization"},
-    "C42-C43": {"left": "C42", "right": "C43", "description": "同一K/R0、exact constrained solver與execution；MR-13E PIT相對MR-13A PIT的純DL source效果"},
-    "C36-C3": {"left": "C36", "right": "C3", "description": "current Min ROOS下MR-13E daily feasible-ascent相對DL-off baseline的Forward-OOS策略效果"},
-    "C36-C20": {"left": "C36", "right": "C20", "description": "固定current Min ROOS與feasible-ascent，MR-13E相對MR-12B的純DL Forward-OOS效果"},
-    "C36-C29": {"left": "C36", "right": "C29", "description": "固定current Min ROOS與feasible-ascent，MR-13E相對MR-13A的純DL Forward-OOS效果"},
+    "C42-C32": {"left": "C42", "right": "C32", "description": "Selection PIT active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
     "C44-C3": {"left": "C44", "right": "C3", "description": "current Min ROOS下MR-13E exact constrained score selector相對DL-off baseline的Forward-OOS策略效果"},
-    "C44-C20": {"left": "C44", "right": "C20", "description": "current Min ROOS下MR-13E exact constrained score selector相對MR-12B Forward runtime anchor的策略效果"},
-    "C44-C36": {"left": "C44", "right": "C36", "description": "同一MR-13E frozen Forward score、current Min params、K/R0與execution；唯一把repair+1-swap heuristic改為exact constrained optimization"},
-    "C45-C32": {"left": "C45", "right": "C32", "description": "Selection PIT下historical Full ROOS/formal rules加入MR-13E exact constrained score selector，相對同一Full ROOS DL-off baseline的策略經濟效果"},
-    "C45-C42": {"left": "C45", "right": "C42", "description": "同一MR-13E PIT score與exact constrained solver下，Full ROOS/formal策略體系相對Min ROOS/all-off策略體系的整體差異；不是單一參數效果"},
+    "C44-C1": {"left": "C44", "right": "C1", "description": "Forward-OOS active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
     "C1-C3": {"left": "C1", "right": "C3", "description": "Full ROOS相對current Min ROOS的完整策略體系差異；不是單一參數效果"},
     "C32-C23": {"left": "C32", "right": "C23", "description": "Selection Full ROOS相對Selection Min ROOS的完整策略體系差異；不是單一參數效果"},
 }
-
 
 def _merge_compatibility_catalog(
     active: dict[str, dict],
