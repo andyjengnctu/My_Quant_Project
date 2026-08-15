@@ -579,7 +579,7 @@
 | T328 | `validate_strategy_compare_resolved_plan_transition_contract_case` immutable resolved-plan / active-membership-independent artifact provenance contract | B230 |
 | T329 | `validate_strategy_compare_config_driven_app_contract_case` preparation owner split：既有8個dependency-wave／parameter-preflight checks由專責helper聚合，check identity不變；changed status/helper modules必須觸發同一contract且納入coverage targets | B231 |
 | T330 | `validate_strategy_compare_config_driven_app_contract_case` completed-pair/cache/reuse owner split：既有6項checks由專責helper聚合，並要求score SHA變更使normal與archived fallback都失效；DL artifact owner與reuse helper納入change-selection／coverage targets | B232 |
-| T331 | `validate_strategy_compare_config_driven_app_contract_case` production reuse/runtime owner split：既有completed-pair/cache checks維持原identity，改驗證reuse implementation位於`strategy_compare_reuse.py`且main orchestration不得重複def；new runtime/reuse modules納入change-selection impact mapping | B233 |
+| T331 | `validate_strategy_compare_config_driven_app_contract_case` production reuse/runtime owner split：既有completed-pair/cache checks維持原identity，改驗證reuse implementation已移至專責 owner 且main orchestration不得重複def；new runtime/reuse modules納入change-selection impact mapping | B233 |
 ## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。G 只記錄實際狀態變更；不得寫 `DONE -> DONE`、`PARTIAL -> PARTIAL`、`TODO -> TODO` 等 no-op transition。同日同 ID 若有多筆狀態變更，必須依實際演進排序；`NEW -> *` 只能出現在該 ID 首筆，且 `NEW -> PARTIAL` / `NEW -> DONE` 必須排在後續 `PARTIAL -> DONE` 或 `DONE -> PARTIAL` 之前。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄僅作最小必要的治理索引與人工說明。
