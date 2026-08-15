@@ -18,8 +18,15 @@ from filters.breakout_quality.contract import (
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
 
 
-def resolve_score_table_path(project_root: str, filter_id: str = DEFAULT_FILTER_ID) -> Path:
-    contract = load_runtime_artifact_contract(str(project_root), str(filter_id))
+def resolve_score_table_path(
+    project_root: str,
+    filter_id: str = DEFAULT_FILTER_ID,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+) -> Path:
+    contract = load_runtime_artifact_contract(
+        str(project_root), str(filter_id), model_architecture, experiment_profile
+    )
     path = contract.paths.score_path
     if not path.is_file():
         raise FileNotFoundError(
@@ -30,14 +37,26 @@ def resolve_score_table_path(project_root: str, filter_id: str = DEFAULT_FILTER_
 
 
 @lru_cache(maxsize=16)
-def load_score_table(project_root: str, filter_id: str = DEFAULT_FILTER_ID) -> pd.DataFrame:
-    path = resolve_score_table_path(project_root, filter_id=filter_id)
+def load_score_table(
+    project_root: str,
+    filter_id: str = DEFAULT_FILTER_ID,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+) -> pd.DataFrame:
+    path = resolve_score_table_path(
+        project_root,
+        filter_id=filter_id,
+        model_architecture=model_architecture,
+        experiment_profile=experiment_profile,
+    )
     table = read_breakout_quality_csv(path)
     missing = sorted(set(SCORE_TABLE_REQUIRED_COLUMNS) - set(table.columns))
     if missing:
         raise ValueError(f"breakout quality score table 缺少欄位: {missing}; path={path}")
     table = table.copy()
-    contract = load_runtime_artifact_contract(str(project_root), str(filter_id))
+    contract = load_runtime_artifact_contract(
+        str(project_root), str(filter_id), model_architecture, experiment_profile
+    )
     score_metadata = contract.manifest["score_table"]
     expected_columns = list(score_metadata["columns"])
     if list(table.columns) != expected_columns:
@@ -129,17 +148,23 @@ def load_score_table(project_root: str, filter_id: str = DEFAULT_FILTER_ID) -> p
 def load_shared_group_score_table(
     project_root: str,
     filter_id: str = DEFAULT_FILTER_ID,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
 ) -> pd.DataFrame:
     """Return the canonical ticker/date score table for sequence-only runtime models."""
 
-    contract = load_runtime_artifact_contract(str(project_root), str(filter_id))
+    contract = load_runtime_artifact_contract(
+        str(project_root), str(filter_id), model_architecture, experiment_profile
+    )
     if not contract.shared_group_score_broadcast:
         raise ValueError(
             "breakout quality artifact 未宣告 shared_group_score_broadcast，"
             "不可改用 ticker/date lookup"
         )
 
-    event_table = load_score_table(str(project_root), str(filter_id)).reset_index()
+    event_table = load_score_table(
+        str(project_root), str(filter_id), model_architecture, experiment_profile
+    ).reset_index()
     score_counts = event_table.groupby(["ticker", "date"], sort=False)[SCORE_COLUMN].nunique(
         dropna=False
     )
@@ -167,11 +192,17 @@ def load_shared_group_score_table(
 def load_unavailable_score_table(
     project_root: str,
     filter_id: str = DEFAULT_FILTER_ID,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
 ) -> pd.DataFrame:
     """Return validated unscorable runtime events indexed by ticker/date/high_len."""
 
-    contract = load_runtime_artifact_contract(str(project_root), str(filter_id))
-    load_score_table(str(project_root), str(filter_id))
+    contract = load_runtime_artifact_contract(
+        str(project_root), str(filter_id), model_architecture, experiment_profile
+    )
+    load_score_table(
+        str(project_root), str(filter_id), model_architecture, experiment_profile
+    )
     unavailable_record = contract.manifest.get("conservative_unscorable_events")
     if unavailable_record is None:
         return pd.DataFrame(columns=["reason"], index=pd.MultiIndex.from_arrays([[], [], []], names=["ticker", "date", "high_len"]))
@@ -190,6 +221,8 @@ def lookup_breakout_quality_candidate_score(
     signal_date,
     high_len: int,
     filter_id: str = DEFAULT_FILTER_ID,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
 ) -> dict:
     """Resolve one candidate score and distinguish model-scored from conservative-unscorable events."""
 
@@ -200,6 +233,8 @@ def lookup_breakout_quality_candidate_score(
     return dict(_lookup_breakout_quality_candidate_score_cached(
         str(project_root),
         str(filter_id),
+        None if model_architecture is None else str(model_architecture),
+        None if experiment_profile is None else str(experiment_profile),
         ticker_text,
         date_text,
         int(high_len),
@@ -210,12 +245,16 @@ def lookup_breakout_quality_candidate_score(
 def _lookup_breakout_quality_candidate_score_cached(
     project_root: str,
     filter_id: str,
+    model_architecture: str | None,
+    experiment_profile: str | None,
     ticker_text: str,
     date_text: str,
     high_len: int,
 ) -> dict:
     # (AI註: continuation／re-entry 會反覆查同一原始 breakout event；快取可避免重複 DataFrame lookup。)
-    contract = load_runtime_artifact_contract(str(project_root), str(filter_id))
+    contract = load_runtime_artifact_contract(
+        str(project_root), str(filter_id), model_architecture, experiment_profile
+    )
     validate_required_high_len(contract, int(high_len))
     event_date = pd.Timestamp(date_text).date()
     if event_date < contract.available_from or event_date > contract.available_through:
@@ -228,9 +267,13 @@ def _lookup_breakout_quality_candidate_score_cached(
         )
 
     score_table = (
-        load_shared_group_score_table(str(project_root), str(filter_id))
+        load_shared_group_score_table(
+            str(project_root), str(filter_id), model_architecture, experiment_profile
+        )
         if contract.shared_group_score_broadcast
-        else load_score_table(str(project_root), str(filter_id))
+        else load_score_table(
+            str(project_root), str(filter_id), model_architecture, experiment_profile
+        )
     )
     lookup_key = (ticker_text, date_text) if contract.shared_group_score_broadcast else (ticker_text, date_text, int(high_len))
     try:
@@ -246,7 +289,9 @@ def _lookup_breakout_quality_candidate_score_cached(
             f"ticker={ticker_text}, date={date_text}, high_len={int(high_len)}"
         )
 
-    unavailable = load_unavailable_score_table(str(project_root), str(filter_id))
+    unavailable = load_unavailable_score_table(
+        str(project_root), str(filter_id), model_architecture, experiment_profile
+    )
     unavailable_key = (ticker_text, date_text, int(high_len))
     reason = ""
     if unavailable_key in unavailable.index:
@@ -259,6 +304,8 @@ def _lookup_breakout_quality_candidate_score_cached(
         "score_date": date_text,
         "shared_group_score": bool(contract.shared_group_score_broadcast),
         "filter_id": str(filter_id),
+        "model_architecture": contract.manifest.get("model_architecture"),
+        "experiment_profile": contract.manifest.get("experiment_profile"),
     }
 
 

@@ -169,13 +169,15 @@ def _strategy_runtime_integration_menu() -> int:
         show_latest_runtime_integration_report,
         show_runtime_integration_status,
     )
+    from services.breakout_quality.runtime_promotion import apply_or_refresh_runtime_promotion
 
     cfg = get_strategy_runtime_integration_settings()
     while True:
         print(f"\n=== {cfg.label} ===")
         print(render_menu_item(1, "執行 Gate", default=True))
-        print(render_menu_item(2, "查看目前 Gate 狀態"))
-        print(render_menu_item(3, "查看最新 Gate 報表"))
+        print(render_menu_item(2, "套用／更新正式 Runtime"))
+        print(render_menu_item(3, "查看目前 Gate 狀態"))
+        print(render_menu_item(4, "查看最新 Gate 報表"))
         print(render_menu_item(0, "返回"))
         try:
             raw = input("👉 請選擇：").strip().lower()
@@ -188,11 +190,13 @@ def _strategy_runtime_integration_menu() -> int:
             if choice == "1":
                 run_runtime_integration_gate()
             elif choice == "2":
-                show_runtime_integration_status()
+                apply_or_refresh_runtime_promotion()
             elif choice == "3":
+                show_runtime_integration_status()
+            elif choice == "4":
                 show_latest_runtime_integration_report()
             else:
-                print("選項無效，請按 Enter 或輸入 0～3。")
+                print("選項無效，請按 Enter 或輸入 0～4。")
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:
@@ -400,7 +404,7 @@ def main(argv=None) -> int:
         if str(rest[0]).strip().lower() in {"-h", "--help", "help"}:
             print(f"用法: python {program_name} compare [profile] [run|status]")
             print(f"      python {program_name} compare robustness [robustness_id] [run|status|latest]")
-            print(f"      python {program_name} compare integration [run|status|latest]")
+            print(f"      python {program_name} compare integration [run|promote|status|latest]")
             print("說明: profile、robustness與runtime integration設定皆由config/strategy_compare.py定義。")
             return 0
         first = str(rest[0]).strip()
@@ -413,8 +417,12 @@ def main(argv=None) -> int:
                 show_latest_runtime_integration_report,
                 show_runtime_integration_status,
             )
+            from services.breakout_quality.runtime_promotion import apply_or_refresh_runtime_promotion
             if action == "run":
                 run_runtime_integration_gate()
+                return 0
+            if action in {"promote", "apply", "refresh"}:
+                apply_or_refresh_runtime_promotion()
                 return 0
             if action in {"status", "show"}:
                 show_runtime_integration_status()

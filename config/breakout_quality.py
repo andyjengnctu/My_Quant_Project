@@ -47,8 +47,8 @@ from config.execution_policy import (
 # - MR-13E daily-universal full-list delta-NDCG pairwise ranker: "daily_universal_no_time_full_list_ndcg_pairwise"
 # - MR-13F daily-universal direct-R Huber regression: "daily_universal_no_time_r_huber"
 # - MR-13G daily-universal direct-R mean/MSE regression: "daily_universal_no_time_r_mse"
-# Strategy workflow remains on the latest validated deployable/PIT-capable anchor.
-BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
+# Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
+BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
@@ -247,6 +247,16 @@ BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES = (1, 2, 3, 5, 10)
 BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE = "auto"
 BREAKOUT_QUALITY_STRATEGY_SCORE_SOURCE = "auto"
 BREAKOUT_QUALITY_STRATEGY_BUY_SORT = "auto"
+
+# 正式 production runtime contract。Strategy Compare 仍用各 stage context 顯式覆寫，
+# 此處只控制沒有研究 context 的 scanner／portfolio runtime。
+BREAKOUT_QUALITY_RUNTIME_STRATEGY_ENABLED = True
+BREAKOUT_QUALITY_RUNTIME_RANKING_POLICY = "resource-aware-continuous-score-constrained-optimal"
+BREAKOUT_QUALITY_RUNTIME_RANKING_OPTIONS = {
+    "preserve_k_r0": True,
+    "constrained_solver": "exact_branch_and_bound_v1",
+    "selection_only": False,
+}
 
 # =============================================================================
 # INTERNAL PROFILE DEFINITIONS AND SUPPORTED VALUES — normally do not edit
@@ -1387,6 +1397,9 @@ class BreakoutQualityWorkflowSettings:
     strategy_comparison_mode: str
     strategy_score_source: str
     strategy_buy_sort: str
+    runtime_strategy_enabled: bool
+    runtime_ranking_policy: str
+    runtime_ranking_options: dict[str, Any]
 
     @property
     def is_binary_classification(self) -> bool:
@@ -1447,6 +1460,12 @@ class BreakoutQualityWorkflowSettings:
                 "comparison_mode": self.strategy_comparison_mode,
                 "score_source": self.strategy_score_source,
                 "buy_sort": self.strategy_buy_sort,
+            },
+            "runtime": {
+                "enabled": bool(self.runtime_strategy_enabled),
+                "score_source": WORKFLOW_SCORE_SOURCE_CANONICAL_RUNTIME,
+                "ranking_policy": self.runtime_ranking_policy,
+                "ranking_options": dict(self.runtime_ranking_options),
             },
         }
         if self.training_sample_scope != TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS:
@@ -1587,6 +1606,27 @@ def get_breakout_quality_workflow_settings(
             f"不支援的 resolved strategy comparison mode: {strategy_comparison_mode!r}"
         )
 
+    runtime_ranking_policy = str(BREAKOUT_QUALITY_RUNTIME_RANKING_POLICY).strip()
+    runtime_ranking_options = dict(BREAKOUT_QUALITY_RUNTIME_RANKING_OPTIONS or {})
+    runtime_strategy_enabled = bool(
+        BREAKOUT_QUALITY_RUNTIME_STRATEGY_ENABLED
+        and resolved_experiment_profile == str(BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE).strip()
+        and profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    )
+    if runtime_strategy_enabled:
+        if not runtime_ranking_policy:
+            raise ValueError("正式runtime ranking policy不可為空白")
+        expected_runtime_options = {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": False,
+        }
+        if runtime_ranking_options != expected_runtime_options:
+            raise ValueError(
+                "正式runtime必須維持Gate已驗證的exact K/R0 contract: "
+                f"expected={expected_runtime_options}, actual={runtime_ranking_options}"
+            )
+
     return BreakoutQualityWorkflowSettings(
         filter_id=str(BREAKOUT_QUALITY_WORKFLOW_FILTER_ID),
         model_architecture=str(BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE),
@@ -1637,6 +1677,9 @@ def get_breakout_quality_workflow_settings(
         strategy_comparison_mode=strategy_comparison_mode,
         strategy_score_source=strategy_score_source,
         strategy_buy_sort=strategy_buy_sort,
+        runtime_strategy_enabled=runtime_strategy_enabled,
+        runtime_ranking_policy=runtime_ranking_policy,
+        runtime_ranking_options=runtime_ranking_options,
     )
 
 
@@ -1875,6 +1918,9 @@ __all__ = [
     'build_breakout_quality_pretraining_profile_payload',
     'normalize_breakout_quality_experiment_profile',
     'normalize_breakout_quality_pretraining_profile',
+    'BREAKOUT_QUALITY_RUNTIME_STRATEGY_ENABLED',
+    'BREAKOUT_QUALITY_RUNTIME_RANKING_POLICY',
+    'BREAKOUT_QUALITY_RUNTIME_RANKING_OPTIONS',
     'BREAKOUT_QUALITY_STRATEGY_BUY_SORT',
     'BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE',
     'BREAKOUT_QUALITY_STRATEGY_SCORE_SOURCE',

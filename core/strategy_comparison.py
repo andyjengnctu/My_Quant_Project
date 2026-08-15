@@ -318,6 +318,7 @@ class StrategyRuntimeIntegrationSettings:
     selection_robustness_id: str
     forward_robustness_id: str
     output_root: str
+    comparison_anchor_experiment_profile: str
     require_strict_romd_majority: bool = True
     max_selector_latency_ms: float = 10000.0
 
@@ -330,6 +331,7 @@ class StrategyRuntimeIntegrationSettings:
             "selection_robustness_id": self.selection_robustness_id,
             "forward_robustness_id": self.forward_robustness_id,
             "output_root": self.output_root,
+            "comparison_anchor_experiment_profile": self.comparison_anchor_experiment_profile,
             "require_strict_romd_majority": bool(self.require_strict_romd_majority),
             "max_selector_latency_ms": float(self.max_selector_latency_ms),
         }

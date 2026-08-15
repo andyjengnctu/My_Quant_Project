@@ -55,6 +55,7 @@ from filters.breakout_quality.contract import (
     SPLIT_ASSIGNMENT_SCHEMA_VERSION,
     RUNTIME_ELIGIBLE_SCOPES,
     RUNTIME_SCOPE_FORWARD_OOS,
+    RUNTIME_SCOPE_WORKFLOW,
     TRAINING_MODE_FIXED_EPOCH_FULL_SELECTION,
     TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
 )
@@ -1086,7 +1087,7 @@ def load_runtime_artifact_contract(
         raise ValueError("breakout quality runtime available_through 不可早於 available_from")
     required_signal_start = available_from
     execution_start = available_from
-    if scope == RUNTIME_SCOPE_FORWARD_OOS:
+    if scope in {RUNTIME_SCOPE_FORWARD_OOS, RUNTIME_SCOPE_WORKFLOW}:
         information_cutoff = _parse_iso_date(
             runtime_eligibility.get("model_information_cutoff"),
             field_name="runtime_eligibility.model_information_cutoff",
@@ -1111,14 +1112,20 @@ def load_runtime_artifact_contract(
             raise ValueError(
                 "breakout quality forward_oos score table 不得包含 model_information_cutoff 之前事件"
             )
-        outer_policy = _require_mapping(manifest, "outer_oos_policy")
-        outer_execution_start = _parse_iso_date(
-            outer_policy.get("oos_start_date"),
-            field_name="outer_oos_policy.oos_start_date",
-        )
-        if execution_start != outer_execution_start:
+        if scope == RUNTIME_SCOPE_FORWARD_OOS:
+            outer_policy = _require_mapping(manifest, "outer_oos_policy")
+            outer_execution_start = _parse_iso_date(
+                outer_policy.get("oos_start_date"),
+                field_name="outer_oos_policy.oos_start_date",
+            )
+            if execution_start != outer_execution_start:
+                raise ValueError(
+                    "breakout quality forward_oos execution_start 必須等於 outer_oos_policy.oos_start_date"
+                )
+        elif execution_start != information_cutoff:
             raise ValueError(
-                "breakout quality runtime execution_start 必須等於 outer_oos_policy.oos_start_date"
+                "breakout quality workflow_runtime execution_start 必須等於 model_information_cutoff，"
+                "使同一frozen model可自cutoff日起因果延伸至目前資料尾端"
             )
         if required_signal_start > execution_start:
             raise ValueError("breakout quality required_signal_start 不可晚於 execution_start")

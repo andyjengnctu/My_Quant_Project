@@ -15,10 +15,12 @@ import pandas as pd
 from config.breakout_quality import (
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
+    get_breakout_quality_workflow_settings,
 )
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
     SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES,
 )
 from filters.breakout_quality.expected_r_calibration import lookup_expected_r
@@ -38,6 +40,9 @@ from filters.breakout_quality.binary_pit_score_store import (
 from filters.breakout_quality.score_store import (
     build_pass_condition_from_score_table,
     lookup_breakout_quality_candidate_score,
+)
+from filters.breakout_quality.workflow_runtime_score_store import (
+    lookup_workflow_runtime_candidate_score,
 )
 
 
@@ -157,9 +162,9 @@ def breakout_quality_filter_source_execution_context(
             else:
                 os.environ[key] = prior
 
-_RANKING_SOURCE_CONTEXT: ContextVar[BreakoutQualityRankingSourceContext] = ContextVar(
+_RANKING_SOURCE_CONTEXT: ContextVar[BreakoutQualityRankingSourceContext | None] = ContextVar(
     "breakout_quality_ranking_source_context",
-    default=BreakoutQualityRankingSourceContext(),
+    default=None,
 )
 
 
@@ -167,8 +172,32 @@ def resolve_project_root_from_runtime() -> str:
     return str(Path(__file__).resolve().parents[2])
 
 
+def build_breakout_quality_workflow_ranking_context() -> BreakoutQualityRankingSourceContext:
+    """Resolve the formal runtime ranking contract from the workflow SSOT."""
+
+    workflow = get_breakout_quality_workflow_settings()
+    if not workflow.runtime_strategy_enabled:
+        return BreakoutQualityRankingSourceContext()
+    policy = str(workflow.runtime_ranking_policy).strip()
+    if policy != BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL:
+        raise ValueError(
+            "正式workflow runtime只接受Gate已驗證的MR-13E exact constrained policy: "
+            f"{policy!r}"
+        )
+    if policy not in SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES:
+        raise ValueError(f"正式workflow runtime ranking policy未由core支援: {policy!r}")
+    return BreakoutQualityRankingSourceContext(
+        score_source=SCORE_SOURCE_CANONICAL_RUNTIME,
+        model_architecture=str(workflow.model_architecture),
+        experiment_profile=str(workflow.experiment_profile),
+        ranking_policy=policy,
+        ranking_options=dict(workflow.runtime_ranking_options),
+    )
+
+
 def get_breakout_quality_ranking_source_context() -> BreakoutQualityRankingSourceContext:
-    return _RANKING_SOURCE_CONTEXT.get()
+    context = _RANKING_SOURCE_CONTEXT.get()
+    return build_breakout_quality_workflow_ranking_context() if context is None else context
 
 
 def breakout_quality_ranking_uses_daily_information_date() -> bool:
@@ -176,6 +205,7 @@ def breakout_quality_ranking_uses_daily_information_date() -> bool:
 
     context = get_breakout_quality_ranking_source_context()
     if context.score_source not in {
+        SCORE_SOURCE_CANONICAL_RUNTIME,
         SCORE_SOURCE_SELECTION_POINT_IN_TIME,
         SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     }:
@@ -272,13 +302,31 @@ def resolve_breakout_quality_candidate_rank(
     root = resolve_project_root_from_runtime() if project_root is None else str(project_root)
     context = get_breakout_quality_ranking_source_context()
     if context.score_source == SCORE_SOURCE_CANONICAL_RUNTIME:
-        payload = lookup_breakout_quality_candidate_score(
-            project_root=root,
-            ticker=str(ticker),
-            signal_date=signal_date,
-            high_len=int(high_len),
-            filter_id=str(filter_id),
-        )
+        lookup_date = signal_date
+        if breakout_quality_ranking_uses_daily_information_date():
+            if information_date is None:
+                raise ValueError(
+                    "daily-universal canonical runtime必須提供最新已完成交易日 information_date"
+                )
+            lookup_date = information_date
+        if context.model_architecture and context.experiment_profile:
+            payload = lookup_workflow_runtime_candidate_score(
+                project_root=root,
+                ticker=str(ticker),
+                information_date=lookup_date,
+                high_len=int(high_len),
+                filter_id=str(filter_id),
+                model_architecture=str(context.model_architecture),
+                experiment_profile=str(context.experiment_profile),
+            )
+        else:
+            payload = lookup_breakout_quality_candidate_score(
+                project_root=root,
+                ticker=str(ticker),
+                signal_date=lookup_date,
+                high_len=int(high_len),
+                filter_id=str(filter_id),
+            )
         payload = dict(payload)
         payload.setdefault("score_source", SCORE_SOURCE_CANONICAL_RUNTIME)
         return payload

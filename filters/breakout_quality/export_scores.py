@@ -46,6 +46,7 @@ from filters.breakout_quality.contract import (
     SCORE_TABLE_REQUIRED_COLUMNS,
     SCORE_TABLE_SCHEMA_VERSION,
     RUNTIME_SCOPE_FORWARD_OOS,
+    RUNTIME_SCOPE_WORKFLOW,
     RUNTIME_SCOPE_RESEARCH,
 )
 from filters.breakout_quality.dataset_store import IndexedFeatureBank
@@ -75,6 +76,7 @@ from filters.breakout_quality.paths import (
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from core.console_report import print_artifact_paths
+from core.model_paths import resolve_models_dir
 from filters.breakout_quality.workflow_io import (
     discover_dataset_csv_inputs,
     load_dataset_frame,
@@ -100,11 +102,11 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--scope",
-        choices=(RUNTIME_SCOPE_RESEARCH, RUNTIME_SCOPE_FORWARD_OOS),
+        choices=(RUNTIME_SCOPE_RESEARCH, RUNTIME_SCOPE_FORWARD_OOS, RUNTIME_SCOPE_WORKFLOW),
         default=RUNTIME_SCOPE_RESEARCH,
         help=(
             "research 寫入 outputs/，不變更正式工件；"
-            "forward_oos 才會把模型資訊截止日之後的事件寫入 canonical scores.csv"
+            "forward_oos寫入凍結研究OOS邊界；workflow_runtime以同一frozen model延伸到目前資料尾端並寫入canonical scores.csv"
         ),
     )
     parser.add_argument(
@@ -162,7 +164,7 @@ def _date_range(values: pd.Series) -> dict[str, str | None]:
 
 
 def _validate_export_scope_model_support(scope: str, model_spec) -> None:
-    if str(scope) == RUNTIME_SCOPE_FORWARD_OOS and bool(model_spec.requires_market_set):
+    if str(scope) in {RUNTIME_SCOPE_FORWARD_OOS, RUNTIME_SCOPE_WORKFLOW} and bool(model_spec.requires_market_set):
         raise ValueError(
             "Market Set architecture 目前只允許 research score export；"
             "Stage 0/1 尚未建立正式 scanner forward market-bank 契約"
@@ -192,6 +194,30 @@ def _resolve_forward_export_write_paths(
             "再匯出正式 forward-OOS scores"
         )
     return canonical
+
+
+def _resolve_workflow_runtime_output_paths(
+    *,
+    project_root: str | Path,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+) -> dict[str, Path]:
+    output_dir = (
+        Path(resolve_models_dir(str(project_root)))
+        / "runtime"
+        / "breakout_quality"
+        / str(filter_id)
+        / str(model_architecture)
+        / str(experiment_profile)
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "dir": output_dir,
+        "score": output_dir / DEFAULT_SCORE_FILENAME,
+        "unavailable": output_dir / DEFAULT_UNAVAILABLE_SCORE_FILENAME,
+        "manifest": output_dir / "runtime_manifest.json",
+    }
 
 
 def _policy_from_manifest(payload: dict) -> BreakoutQualityLabelPolicy:
@@ -426,6 +452,7 @@ def run_export(*, project_root: str | Path = PROJECT_ROOT, argv=None) -> int:
     inference_batch_size = int(args.inference_batch_size)
     inference_workers = int(args.inference_workers)
     preload_feature_bank = bool(args.preload_feature_bank)
+    runtime_score_export = args.scope in {RUNTIME_SCOPE_FORWARD_OOS, RUNTIME_SCOPE_WORKFLOW}
     if inference_batch_size < 1 or inference_workers < 1:
         raise ValueError("inference-batch-size 與 inference-workers 必須 >=1")
     torch, _nn = require_torch()
@@ -587,8 +614,11 @@ def run_export(*, project_root: str | Path = PROJECT_ROOT, argv=None) -> int:
     unavailable_events = pd.DataFrame(columns=["ticker", "date", "high_len", "reason"])
     runtime_source_metadata = None
     forward_runtime_dates = None
-    if args.scope == RUNTIME_SCOPE_FORWARD_OOS:
+    if runtime_score_export:
         forward_runtime_dates = _resolve_forward_runtime_dates(manifest)
+        if args.scope == RUNTIME_SCOPE_WORKFLOW:
+            forward_runtime_dates = dict(forward_runtime_dates)
+            forward_runtime_dates["execution_end"] = None
         information_cutoff = str(manifest.get("model_information_cutoff", "")).strip()
         policy = _policy_from_manifest(model_policy)
         features, context, events, unavailable_events, runtime_source_metadata = _build_forward_runtime_inputs(
@@ -667,14 +697,14 @@ def run_export(*, project_root: str | Path = PROJECT_ROOT, argv=None) -> int:
 
     scored = events.copy()
     scored[SCORE_COLUMN] = pass_probabilities
-    if args.scope == RUNTIME_SCOPE_FORWARD_OOS and not unavailable_events.empty:
+    if runtime_score_export and not unavailable_events.empty:
         conservative_rows = unavailable_events[["ticker", "date", "high_len"]].copy()
         conservative_rows[SCORE_COLUMN] = np.float32(0.0)
         scored = pd.concat([scored, conservative_rows], ignore_index=True)
-    if args.scope == RUNTIME_SCOPE_FORWARD_OOS:
+    if runtime_score_export:
         scored = scored.sort_values(["ticker", "date", "high_len"], kind="mergesort").reset_index(drop=True)
     information_cutoff = str(manifest.get("model_information_cutoff", "")).strip()
-    if args.scope == RUNTIME_SCOPE_FORWARD_OOS:
+    if runtime_score_export:
         if forward_runtime_dates is None:
             raise RuntimeError("forward_oos runtime dates 尚未初始化")
         source_range = (runtime_source_metadata or {}).get("source_data_date_range")
@@ -796,7 +826,7 @@ def run_export(*, project_root: str | Path = PROJECT_ROOT, argv=None) -> int:
                     else "event_row"
                 ),
                 "event_row_batch_boundaries_preserved": not shared_group_score_broadcast,
-                "output_row_order_changed": bool(args.scope == RUNTIME_SCOPE_FORWARD_OOS),
+                "output_row_order_changed": bool(runtime_score_export),
             },
             "reason": (
                 "research rows include outer Selection and OOS; epochs and threshold must be fixed before OOS, "
@@ -807,6 +837,95 @@ def run_export(*, project_root: str | Path = PROJECT_ROOT, argv=None) -> int:
         print_artifact_paths(
             (("Research scores", score_path), ("Research manifest", research_manifest_path)),
             project_root=root,
+        )
+        print(f"scope={args.scope} rows={len(scored)} date_range={event_range}")
+        return 0
+
+    if args.scope == RUNTIME_SCOPE_WORKFLOW:
+        workflow_paths = _resolve_workflow_runtime_output_paths(
+            project_root=root,
+            filter_id=str(args.filter_id),
+            model_architecture=str(args.model_architecture),
+            experiment_profile=str(args.experiment_profile),
+        )
+        score_path = workflow_paths["score"]
+        scored[out_cols].to_csv(score_path, index=False, encoding="utf-8-sig")
+        unavailable_path = workflow_paths["unavailable"]
+        unavailable_events.to_csv(unavailable_path, index=False, encoding="utf-8-sig")
+        source_data_range = (runtime_source_metadata or {}).get("source_data_date_range")
+        if not isinstance(source_data_range, dict):
+            source_data_range = event_range
+        available_through = str(source_data_range.get("end") or event_range["end"] or "")
+        available_from = str(event_range["start"] or "")
+        if forward_runtime_dates is None:
+            raise RuntimeError("workflow_runtime dates 尚未初始化")
+        deployment_manifest = {
+            "schema_version": 1,
+            "artifact_type": "breakout_quality_workflow_runtime_scores",
+            "filter_id": str(args.filter_id),
+            "model_architecture": str(args.model_architecture),
+            "experiment_profile": str(args.experiment_profile),
+            "model_identity": {
+                "model_checkpoint": build_file_manifest(artifact_paths.model_path),
+                "model_information_cutoff": information_cutoff,
+                "experiment_settings": manifest.get("experiment_settings"),
+                "model_spec": manifest.get("model_spec"),
+            },
+            "score_table": _build_score_record(
+                score_path,
+                out_cols=out_cols,
+                row_count=len(scored),
+                high_len_values=[int(value) for value in high_len_values],
+                event_range=event_range,
+                dataset_summary=dataset_summary,
+                runtime_source=runtime_source_metadata,
+            ),
+            "conservative_unscorable_events": {
+                **build_file_manifest(unavailable_path),
+                "columns": ["ticker", "date", "high_len", "reason"],
+                "row_count": int(len(unavailable_events)),
+                "reason_counts": {
+                    str(key): int(value)
+                    for key, value in unavailable_events["reason"].value_counts().sort_index().items()
+                },
+                "conservative_runtime_score": 0.0,
+                "runtime_action": "reject",
+            },
+            "runtime_eligibility": {
+                "eligible": True,
+                "scope": RUNTIME_SCOPE_WORKFLOW,
+                "available_from": available_from,
+                "available_through": available_through,
+                "required_signal_start": str(forward_runtime_dates["score_signal_start"].date()),
+                "execution_start": str(forward_runtime_dates["score_signal_start"].date()),
+                "model_information_cutoff": information_cutoff,
+                "causal_information_contract": "same_day_and_earlier_ohlcv_only",
+            },
+            "shared_group_score_broadcast": bool(shared_group_score_broadcast),
+            "inference_execution": {
+                "batch_size": inference_batch_size,
+                "workers": (1 if execution_plan.device_type == "cuda" else inference_workers),
+                "torch_execution": execution_plan.as_manifest_payload(),
+                "feature_bank_preloaded": preload_feature_bank,
+                "inference_input_row_count": inference_input_row_count,
+                "output_event_row_count": int(len(scored)),
+                "model_scored_event_row_count": int(len(events)),
+                "conservative_reject_event_row_count": int(len(unavailable_events)),
+            },
+            "reason": (
+                "Dedicated production score artifact generated from the frozen accepted model; "
+                "the canonical Forward-OOS research score/manifest are not modified."
+            ),
+        }
+        write_json(workflow_paths["manifest"], deployment_manifest)
+        print_artifact_paths(
+            (("Workflow runtime scores", score_path), ("Unavailable audit", unavailable_path), ("Runtime manifest", workflow_paths["manifest"])),
+            project_root=root,
+        )
+        print(
+            "workflow runtime candidate coverage: "
+            f"total={len(scored):,}, model_scored={len(events):,}, "
+            f"conservative_reject={len(unavailable_events):,}"
         )
         print(f"scope={args.scope} rows={len(scored)} date_range={event_range}")
         return 0
@@ -879,21 +998,23 @@ def run_export(*, project_root: str | Path = PROJECT_ROOT, argv=None) -> int:
             else "event_row"
         ),
         "event_row_batch_boundaries_preserved": not shared_group_score_broadcast,
-        "output_row_order_changed": bool(args.scope == RUNTIME_SCOPE_FORWARD_OOS),
+        "output_row_order_changed": bool(runtime_score_export),
     }
     if forward_runtime_dates is None:
         raise RuntimeError("forward_oos runtime dates 尚未初始化")
     manifest["runtime_eligibility"] = {
         "eligible": True,
-        "scope": RUNTIME_SCOPE_FORWARD_OOS,
+        "scope": str(args.scope),
         "available_from": available_from,
         "available_through": available_through,
         "required_signal_start": str(forward_runtime_dates["score_signal_start"].date()),
         "execution_start": str(forward_runtime_dates["execution_start"].date()),
         "model_information_cutoff": information_cutoff,
         "reason": (
-            "score rows begin at model_information_cutoff close and include the pre-execution signal anchor "
-            "required by next-session OOS orders; strategy execution still begins at outer_oos_policy.oos_start_date"
+            ("workflow runtime scores use the frozen accepted model and extend causally through the current source-data tail; "
+             "each score date contains only same-day-and-earlier OHLCV information"
+             if args.scope == RUNTIME_SCOPE_WORKFLOW
+             else "score rows begin at model_information_cutoff close and include the pre-execution signal anchor required by next-session OOS orders; strategy execution still begins at outer_oos_policy.oos_start_date")
         ),
     }
     manifest["score_filename"] = DEFAULT_SCORE_FILENAME
@@ -931,6 +1052,40 @@ def export_forward_oos_scores(
         "--model-architecture", str(model_architecture),
         "--experiment-profile", str(experiment_profile),
         "--scope", RUNTIME_SCOPE_FORWARD_OOS,
+        "--inference-batch-size", str(int(inference_batch_size)),
+        "--inference-workers", str(int(inference_workers)),
+        "--device", str(device),
+        "--mixed-precision" if mixed_precision else "--no-mixed-precision",
+        "--mixed-precision-dtype", str(mixed_precision_dtype),
+        "--deterministic-algorithms" if deterministic_algorithms else "--no-deterministic-algorithms",
+        "--allow-tf32" if allow_tf32 else "--no-allow-tf32",
+        "--preload-feature-bank" if preload_feature_bank else "--no-preload-feature-bank",
+    ]
+    return run_export(project_root=project_root, argv=argv)
+
+
+def export_workflow_runtime_scores(
+    *,
+    project_root: str | Path = PROJECT_ROOT,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    inference_batch_size: int,
+    inference_workers: int,
+    device: str,
+    mixed_precision: bool,
+    mixed_precision_dtype: str,
+    deterministic_algorithms: bool,
+    allow_tf32: bool,
+    preload_feature_bank: bool,
+) -> int:
+    """Refresh the accepted frozen model through the current source-data tail."""
+
+    argv = [
+        "--filter-id", str(filter_id),
+        "--model-architecture", str(model_architecture),
+        "--experiment-profile", str(experiment_profile),
+        "--scope", RUNTIME_SCOPE_WORKFLOW,
         "--inference-batch-size", str(int(inference_batch_size)),
         "--inference-workers", str(int(inference_workers)),
         "--device", str(device),

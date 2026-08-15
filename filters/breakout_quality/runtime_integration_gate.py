@@ -481,6 +481,7 @@ def _robustness_checks(
     root: Path,
     robustness_id: str,
     stage_label: str,
+    anchor_experiment_profile: str,
     require_strict_majority: bool,
 ) -> None:
     """Validate same-generated-seed strategy evidence against the current anchor.
@@ -549,7 +550,7 @@ def _robustness_checks(
                 and dict(arm.get("dl_runtime_options") or {}) == dict(candidate.dl_runtime_options or {})
             ):
                 candidate_contract = arm
-            if str(source.get("experiment_profile") or "") == str(BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE):
+            if str(source.get("experiment_profile") or "") == str(anchor_experiment_profile):
                 anchor_contract = arm
         if candidate_contract is None or anchor_contract is None:
             continue
@@ -588,7 +589,7 @@ def _robustness_checks(
             status="BLOCKED",
             detail=(
                 f"{stage_label}找不到同generated seeds、同Min策略universe，且同時包含目前exact candidate與"
-                f"workflow anchor profile={BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE}的canonical robustness結果。"
+                f"pre-promotion anchor profile={anchor_experiment_profile}的canonical robustness結果。"
             ),
             evidence=project_relative_display_path(output_root, project_root=root),
         )
@@ -629,13 +630,13 @@ def _robustness_checks(
         category="robustness",
         status="PASS" if pass_gate else "FAIL",
         detail=(
-            f"{stage_label} exact candidate對目前workflow anchor的same-seed RoMD必須平均為正，且candidate勝出seed數嚴格過半。"
+            f"{stage_label} exact candidate對pre-promotion anchor的same-seed RoMD必須平均為正，且candidate勝出seed數嚴格過半。"
         ),
         evidence={
             "summary_path": project_relative_display_path(summary_path, project_root=root),
             "candidate_arm_id": candidate_arm_id,
             "anchor_arm_id": anchor_arm_id,
-            "workflow_anchor_profile": BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+            "workflow_anchor_profile": anchor_experiment_profile,
             "wins": wins,
             "losses": losses,
             "n": n,
@@ -747,6 +748,7 @@ def collect_runtime_integration_status(*, project_root: Path = PROJECT_ROOT) -> 
         root=root,
         robustness_id=cfg.selection_robustness_id,
         stage_label="Selection PIT",
+        anchor_experiment_profile=cfg.comparison_anchor_experiment_profile,
         require_strict_majority=cfg.require_strict_romd_majority,
     )
     _robustness_checks(
@@ -754,6 +756,7 @@ def collect_runtime_integration_status(*, project_root: Path = PROJECT_ROOT) -> 
         root=root,
         robustness_id=cfg.forward_robustness_id,
         stage_label="Forward-OOS",
+        anchor_experiment_profile=cfg.comparison_anchor_experiment_profile,
         require_strict_majority=cfg.require_strict_romd_majority,
     )
     _operational_artifact_checks(checks, root=root, settings=selection, stage_label="Selection PIT")

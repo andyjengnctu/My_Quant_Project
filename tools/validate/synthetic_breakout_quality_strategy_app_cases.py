@@ -4889,15 +4889,61 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "runtime_integration_gate_keeps_current_anchor_separate_until_go",
+        "runtime_integration_gate_freezes_pre_promotion_anchor_after_workflow_go",
         True,
         (
             cfg.enabled
-            and runtime["experiment_profile"] != BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
+            and runtime["experiment_profile"] == BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
+            and cfg.comparison_anchor_experiment_profile != BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
             and cfg.selection_profile_id == "selection_pit"
             and cfg.forward_profile_id == "forward_oos"
         ),
     )
+    from config.breakout_quality import get_breakout_quality_workflow_settings
+    from filters.breakout_quality.runtime import get_breakout_quality_ranking_source_context
+
+    workflow = get_breakout_quality_workflow_settings()
+    runtime_context = get_breakout_quality_ranking_source_context()
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "promoted_workflow_runtime_uses_mr13e_exact_canonical_context",
+        True,
+        (
+            workflow.runtime_strategy_enabled
+            and runtime_context.experiment_profile == workflow.experiment_profile
+            and runtime_context.model_architecture == workflow.model_architecture
+            and runtime_context.score_source == "canonical_runtime"
+            and runtime_context.ranking_policy == workflow.runtime_ranking_policy
+            and dict(runtime_context.ranking_options or {}) == dict(workflow.runtime_ranking_options)
+        ),
+    )
+    export_source = (
+        Path(__file__).resolve().parents[2]
+        / "filters" / "breakout_quality" / "export_scores.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "workflow_runtime_scores_are_separate_from_forward_oos_canonical_scores",
+        True,
+        (
+            '"runtime"' in export_source
+            and '"runtime_manifest.json"' in export_source
+            and "if args.scope == RUNTIME_SCOPE_WORKFLOW" in export_source
+            and "canonical Forward-OOS research score/manifest are not modified" in export_source
+        ),
+    )
+    research_source = (Path(__file__).resolve().parents[2] / "apps" / "research.py").read_text(encoding="utf-8")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "runtime_promotion_is_explicit_gate_guarded_menu_action",
+        True,
+        (
+            "套用／更新正式 Runtime" in research_source
+            and "apply_or_refresh_runtime_promotion" in research_source
+            and 'action in {"promote", "apply", "refresh"}' in research_source
+        ),
+    )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "runtime_integration_decision_is_strict_three_state",
@@ -4963,7 +5009,8 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
     )
 
     summary["candidate_profile"] = runtime["experiment_profile"]
-    summary["current_anchor_profile"] = BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
+    summary["current_anchor_profile"] = cfg.comparison_anchor_experiment_profile
+    summary["promoted_workflow_profile"] = BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
     summary["gate_label"] = cfg.label
     return results, summary
 

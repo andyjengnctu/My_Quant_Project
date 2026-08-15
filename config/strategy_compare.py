@@ -71,6 +71,8 @@ STRATEGY_RUNTIME_INTEGRATION = {
     "selection_robustness_id": "selection_pit",
     "forward_robustness_id": "forward_oos",
     "output_root": "outputs/strategy_compare/runtime_integration",
+    # Gate通過後workflow可升格；robustness對照仍固定為升格前production anchor。
+    "comparison_anchor_experiment_profile": "strategy_aligned_no_time_all_event_pairwise",
     # 舊exact implementation曾出現>10秒困難case；正式候選不得退回該等級。
     "max_selector_latency_ms": 10000.0,
     # 多seed至少必須嚴格過半勝過目前workflow runtime anchor的RoMD。
@@ -523,6 +525,9 @@ def get_strategy_runtime_integration_settings() -> StrategyRuntimeIntegrationSet
         selection_robustness_id=str(raw.get("selection_robustness_id") or "").strip(),
         forward_robustness_id=str(raw.get("forward_robustness_id") or "").strip(),
         output_root=str(raw.get("output_root") or "").strip(),
+        comparison_anchor_experiment_profile=str(
+            raw.get("comparison_anchor_experiment_profile") or ""
+        ).strip(),
         require_strict_romd_majority=bool(raw.get("require_strict_romd_majority", True)),
         max_selector_latency_ms=float(raw.get("max_selector_latency_ms", 10000.0)),
     )
