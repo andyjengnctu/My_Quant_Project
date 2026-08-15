@@ -255,6 +255,7 @@ def load_daily_universal_ranker_data(
     experiment_profile: str,
     preload_feature_bank: bool,
     allow_stale_source: bool,
+    extend_score_eligibility_to_source_tail: bool = False,
     project_root: str | Path = PROJECT_ROOT,
 ) -> ContinuousRankerDataBundle:
     """Build a lightweight daily stock/day index and lazy feature provider.
@@ -306,6 +307,10 @@ def load_daily_universal_ranker_data(
     )
     benchmark = load_dataset_frame(benchmark_path, benchmark_ticker, min_rows=min_rows)
     benchmark_index = pd.DatetimeIndex(benchmark.index).normalize()
+    if bool(extend_score_eligibility_to_source_tail):
+        source_tail = pd.Timestamp(benchmark_index.max()).normalize()
+        if source_tail > sample_end:
+            sample_end = source_tail
 
     spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
     tickers: list[str] = []
@@ -535,6 +540,8 @@ def load_daily_universal_ranker_data(
         "ticker_count": int(len(tickers)),
         "skipped_ticker_count": int(skipped_tickers),
         "feature_storage": "lazy",
+        "score_eligibility_extended_to_source_tail": bool(extend_score_eligibility_to_source_tail),
+        "score_eligibility_end_date": str(pd.Timestamp(sample_end).date()),
     }
     # ``events`` is retained only for the shared bundle interface; one row now equals one
     # stock-day rather than a breakout event.

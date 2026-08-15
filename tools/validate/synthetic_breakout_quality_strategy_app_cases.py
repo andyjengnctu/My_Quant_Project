@@ -4765,9 +4765,9 @@ def validate_breakout_quality_mr13e_strategy_source_gate_contract_case(_base_par
         results, "synthetic_breakout_quality", case_id,
         "mr13e_strategy_gate_sources_bind_only_to_mr13e_daily_profile",
         (
-            DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            workflow.experiment_profile,
             "selection_point_in_time",
-            DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            workflow.experiment_profile,
             "continuous_ranker_oos",
         ),
         (
@@ -4844,7 +4844,9 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    from config.breakout_quality import BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
+    from config.breakout_quality import (
+        get_breakout_quality_workflow_settings,
+    )
     from config.strategy_compare import get_strategy_runtime_integration_settings
     from core.strategy_comparison import (
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
@@ -4856,6 +4858,8 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
     )
 
     cfg = get_strategy_runtime_integration_settings()
+    workflow = get_breakout_quality_workflow_settings()
+    workflow_profile = get_breakout_quality_experiment_profile(workflow.experiment_profile)
     contract = resolve_runtime_candidate_contract()
     selection = dict(contract["selection"])
     forward = dict(contract["forward"])
@@ -4870,7 +4874,9 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
         (
             selection_source["experiment_profile"]
             == forward_source["experiment_profile"]
-            == DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
+            == workflow.experiment_profile
+            and workflow_profile.training_sample_scope
+            == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
             and selection_source["score_source"] == "selection_point_in_time"
             and forward_source["score_source"] == "continuous_ranker_oos"
             and runtime["param_source"] == forward["param_source"]
@@ -4893,16 +4899,14 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
         True,
         (
             cfg.enabled
-            and runtime["experiment_profile"] == BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
-            and cfg.comparison_anchor_experiment_profile != BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
+            and runtime["experiment_profile"] == workflow.experiment_profile
+            and cfg.comparison_anchor_experiment_profile != workflow.experiment_profile
             and cfg.selection_profile_id == "selection_pit"
             and cfg.forward_profile_id == "forward_oos"
         ),
     )
-    from config.breakout_quality import get_breakout_quality_workflow_settings
     from filters.breakout_quality.runtime import get_breakout_quality_ranking_source_context
 
-    workflow = get_breakout_quality_workflow_settings()
     runtime_context = get_breakout_quality_ranking_source_context()
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -4917,6 +4921,45 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
             and dict(runtime_context.ranking_options or {}) == dict(workflow.runtime_ranking_options)
         ),
     )
+    from filters.breakout_quality.export_scores import parse_args as parse_score_export_args
+
+    parsed_runtime_export = parse_score_export_args(
+        [
+            "--experiment-profile",
+            workflow.experiment_profile,
+            "--scope",
+            "workflow_runtime",
+        ]
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "promoted_mr13e_profile_is_accepted_by_workflow_runtime_score_export_cli",
+        (workflow.experiment_profile, "workflow_runtime"),
+        (parsed_runtime_export.experiment_profile, parsed_runtime_export.scope),
+    )
+
+    from filters.breakout_quality.export_scores import run_export as run_score_export
+
+    with patch(
+        "filters.breakout_quality.export_scores._run_daily_continuous_workflow_export",
+        return_value=0,
+    ) as daily_export:
+        dispatch_rc = run_score_export(
+            project_root=Path(__file__).resolve().parents[2],
+            argv=[
+                "--experiment-profile",
+                workflow.experiment_profile,
+                "--scope",
+                "workflow_runtime",
+            ],
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "promoted_mr13e_workflow_export_dispatches_to_daily_continuous_path",
+        True,
+        dispatch_rc == 0 and daily_export.call_count == 1,
+    )
+
     export_source = (
         Path(__file__).resolve().parents[2]
         / "filters" / "breakout_quality" / "export_scores.py"
@@ -4930,6 +4973,157 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
             and '"runtime_manifest.json"' in export_source
             and "if args.scope == RUNTIME_SCOPE_WORKFLOW" in export_source
             and "canonical Forward-OOS research score/manifest are not modified" in export_source
+        ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "workflow_runtime_mr13e_export_uses_daily_continuous_ranker_contract",
+        True,
+        (
+            "load_daily_universal_ranker_data" in export_source
+            and "load_continuous_ranker_oos_contract" in export_source
+            and "ranker_api.predict_scores" in export_source
+            and '"model_score"' in export_source
+        ),
+    )
+
+    from filters.breakout_quality import workflow_runtime_score_store as runtime_store
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        models_root = temp_root / "models"
+        source_model = temp_root / "canonical" / "model.pt"
+        source_model.parent.mkdir(parents=True, exist_ok=True)
+        source_model.write_bytes(b"synthetic-mr13e-model")
+        runtime_dir = (
+            models_root
+            / "runtime"
+            / "breakout_quality"
+            / BREAKOUT_QUALITY_DEFAULT_FILTER_ID
+            / workflow.model_architecture
+            / workflow.experiment_profile
+        )
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        score_path = runtime_dir / "scores.csv"
+        unavailable_path = runtime_dir / "unavailable_scores.csv"
+        manifest_path = runtime_dir / "runtime_manifest.json"
+        pd.DataFrame(
+            [
+                {"ticker": "2330", "date": "2026-08-14", "model_score": 0.75},
+            ]
+        ).to_csv(score_path, index=False, encoding="utf-8-sig")
+        pd.DataFrame(columns=["ticker", "date", "reason"]).to_csv(
+            unavailable_path, index=False, encoding="utf-8-sig"
+        )
+        source_manifest = {
+            "experiment_settings": {"name": "synthetic"},
+            "model_spec": {"architecture": workflow.model_architecture},
+            "training_objective": str(workflow_profile.training_objective),
+            "training_sample_scope": str(workflow_profile.training_sample_scope),
+        }
+        model_record = build_file_manifest(source_model)
+        score_record = build_file_manifest(score_path)
+        score_record.update(
+            {
+                "columns": ["ticker", "date", "model_score"],
+                "key_columns": ["ticker", "date"],
+                "row_count": 1,
+            }
+        )
+        unavailable_record = build_file_manifest(unavailable_path)
+        unavailable_record.update(
+            {
+                "columns": ["ticker", "date", "reason"],
+                "key_columns": ["ticker", "date"],
+                "row_count": 0,
+            }
+        )
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                    "model_architecture": workflow.model_architecture,
+                    "experiment_profile": workflow.experiment_profile,
+                    "shared_group_score_broadcast": True,
+                    "model_identity": {
+                        "model_checkpoint": model_record,
+                        "model_information_cutoff": "2021-01-01",
+                        **source_manifest,
+                    },
+                    "score_table": score_record,
+                    "conservative_unscorable_events": unavailable_record,
+                    "runtime_eligibility": {
+                        "eligible": True,
+                        "scope": "workflow_runtime",
+                        "available_from": "2026-08-14",
+                        "available_through": "2026-08-14",
+                        "causal_information_contract": "same_day_and_earlier_ohlcv_only",
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        fake_contract = SimpleNamespace(
+            model_information_cutoff="2021-01-01",
+            manifest=source_manifest,
+        )
+        runtime_store.load_workflow_runtime_score_bundle.cache_clear()
+        with (
+            patch.object(runtime_store, "resolve_models_dir", return_value=str(models_root)),
+            patch.object(runtime_store, "load_continuous_ranker_oos_contract", return_value=fake_contract),
+            patch.object(
+                runtime_store,
+                "resolve_filter_artifact_paths",
+                return_value=SimpleNamespace(model_path=source_model),
+            ),
+        ):
+            available_rank = runtime_store.lookup_workflow_runtime_candidate_score(
+                project_root=str(temp_root),
+                ticker="2330",
+                information_date="2026-08-14",
+                high_len=201,
+                filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                model_architecture=workflow.model_architecture,
+                experiment_profile=workflow.experiment_profile,
+            )
+            missing_rank = runtime_store.lookup_workflow_runtime_candidate_score(
+                project_root=str(temp_root),
+                ticker="2317",
+                information_date="2026-08-14",
+                high_len=201,
+                filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                model_architecture=workflow.model_architecture,
+                experiment_profile=workflow.experiment_profile,
+            )
+            try:
+                runtime_store.lookup_workflow_runtime_candidate_score(
+                    project_root=str(temp_root),
+                    ticker="2330",
+                    information_date="2026-08-15",
+                    high_len=201,
+                    filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                    model_architecture=workflow.model_architecture,
+                    experiment_profile=workflow.experiment_profile,
+                )
+            except ValueError as exc:
+                outside_coverage_rejected = "coverage不足" in str(exc)
+            else:
+                outside_coverage_rejected = False
+        runtime_store.load_workflow_runtime_score_bundle.cache_clear()
+
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "workflow_runtime_daily_score_lookup_preserves_c44_unavailable_semantics",
+        True,
+        (
+            available_rank["available"] is True
+            and available_rank["score"] == 0.75
+            and available_rank["score_source"] == "canonical_runtime"
+            and missing_rank["available"] is False
+            and missing_rank["unavailable_reason"] == "missing_ticker_date_score"
+            and missing_rank["score_source"] == "canonical_runtime"
+            and outside_coverage_rejected
         ),
     )
     research_source = (Path(__file__).resolve().parents[2] / "apps" / "research.py").read_text(encoding="utf-8")
@@ -5003,14 +5197,14 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
         True,
         (
             "settings.reuse_output_roots" in gate_source
-            and "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE =" not in gate_source
+            and "workflow.experiment_profile =" not in gate_source
             and "run_runtime_integration_gate" in gate_source
         ),
     )
 
     summary["candidate_profile"] = runtime["experiment_profile"]
     summary["current_anchor_profile"] = cfg.comparison_anchor_experiment_profile
-    summary["promoted_workflow_profile"] = BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
+    summary["promoted_workflow_profile"] = workflow.experiment_profile
     summary["gate_label"] = cfg.label
     return results, summary
 

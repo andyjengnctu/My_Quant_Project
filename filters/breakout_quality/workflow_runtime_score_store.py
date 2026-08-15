@@ -11,13 +11,15 @@ import pandas as pd
 
 from core.file_integrity import compute_file_sha256
 from core.model_paths import resolve_models_dir
-from filters.breakout_quality.artifacts import load_model_artifact_contract
 from filters.breakout_quality.contract import (
     DEFAULT_SCORE_FILENAME,
     DEFAULT_UNAVAILABLE_SCORE_FILENAME,
     RUNTIME_SCOPE_WORKFLOW,
-    SCORE_COLUMN,
-    SCORE_TABLE_REQUIRED_COLUMNS,
+)
+from filters.breakout_quality.paths import resolve_filter_artifact_paths
+from filters.breakout_quality.ranking_score_store import (
+    SCORE_SOURCE_CANONICAL_RUNTIME,
+    load_continuous_ranker_oos_contract,
 )
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
 
@@ -98,17 +100,27 @@ def load_workflow_runtime_score_bundle(
     if str(runtime.get("causal_information_contract") or "") != "same_day_and_earlier_ohlcv_only":
         raise ValueError("workflow runtime artifact 缺少 causal information contract")
 
-    model_contract = load_model_artifact_contract(
+    ranker_contract = load_continuous_ranker_oos_contract(
         str(project_root), str(filter_id), str(model_architecture), str(experiment_profile)
+    )
+    artifact_paths = resolve_filter_artifact_paths(
+        project_root, str(filter_id), str(model_architecture), str(experiment_profile)
     )
     model_identity = dict(manifest.get("model_identity") or {})
     _validate_file_record(
-        model_contract.paths.model_path,
+        artifact_paths.model_path,
         dict(model_identity.get("model_checkpoint") or {}),
         field_name="source model checkpoint",
     )
-    for field_name in ("model_information_cutoff", "experiment_settings", "model_spec"):
-        if model_identity.get(field_name) != model_contract.manifest.get(field_name):
+    expected_identity_fields = {
+        "model_information_cutoff": ranker_contract.model_information_cutoff,
+        "experiment_settings": ranker_contract.manifest.get("experiment_settings"),
+        "model_spec": ranker_contract.manifest.get("model_spec"),
+        "training_objective": ranker_contract.manifest.get("training_objective"),
+        "training_sample_scope": ranker_contract.manifest.get("training_sample_scope"),
+    }
+    for field_name, expected_value in expected_identity_fields.items():
+        if model_identity.get(field_name) != expected_value:
             raise ValueError(
                 f"workflow runtime source model identity漂移: field={field_name}"
             )
@@ -118,47 +130,48 @@ def load_workflow_runtime_score_bundle(
     table = read_breakout_quality_csv(paths["score"]).copy()
     if list(table.columns) != list(score_record.get("columns") or []):
         raise ValueError("workflow runtime score columns 與 manifest 不一致")
-    missing = sorted(set(SCORE_TABLE_REQUIRED_COLUMNS) - set(table.columns))
+    required_score_columns = {"ticker", "date", "model_score"}
+    missing = sorted(required_score_columns - set(table.columns))
     if missing:
-        raise ValueError(f"workflow runtime score 缺少欄位: {missing}")
+        raise ValueError(f"workflow runtime daily score 缺少欄位: {missing}")
+    if list(score_record.get("key_columns") or []) != ["ticker", "date"]:
+        raise ValueError("workflow runtime daily score key必須是ticker/date")
     if len(table) != int(score_record.get("row_count") or -1):
         raise ValueError("workflow runtime score row_count 與 manifest 不一致")
     table["ticker"] = table["ticker"].astype(str)
     table["date"] = pd.to_datetime(table["date"], errors="raise").dt.strftime("%Y-%m-%d")
-    table["high_len"] = pd.to_numeric(table["high_len"], errors="raise").astype(int)
-    table[SCORE_COLUMN] = pd.to_numeric(table[SCORE_COLUMN], errors="raise").astype(float)
-    scores = table[SCORE_COLUMN].to_numpy(dtype=np.float64, copy=False)
+    table["model_score"] = pd.to_numeric(table["model_score"], errors="raise").astype(float)
+    scores = table["model_score"].to_numpy(dtype=np.float64, copy=False)
     if not np.isfinite(scores).all():
         raise ValueError("workflow runtime score 含非有限值")
-    if table.duplicated(["ticker", "date", "high_len"]).any():
-        raise ValueError("workflow runtime score table 有重複 event key")
+    if table.duplicated(["ticker", "date"]).any():
+        raise ValueError("workflow runtime daily score table 有重複 ticker/date")
 
     shared = bool(manifest.get("shared_group_score_broadcast"))
-    if shared:
-        counts = table.groupby(["ticker", "date"], sort=False)[SCORE_COLUMN].nunique(dropna=False)
-        if bool((counts != 1).any()):
-            raise ValueError("workflow runtime shared ticker/date score 不一致")
-        score_lookup = (
-            table.drop_duplicates(["ticker", "date"], keep="first")
-            .set_index(["ticker", "date"])[[SCORE_COLUMN]]
-            .sort_index()
-        )
-    else:
-        score_lookup = table.set_index(["ticker", "date", "high_len"])[[SCORE_COLUMN]].sort_index()
+    if not shared:
+        raise ValueError("daily-universal workflow runtime必須宣告shared_group_score_broadcast")
+    score_lookup = table.set_index(["ticker", "date"])[["model_score"]].sort_index()
 
     unavailable_record = dict(manifest.get("conservative_unscorable_events") or {})
     _validate_file_record(paths["unavailable"], unavailable_record, field_name="unavailable_scores.csv")
     unavailable = read_breakout_quality_csv(paths["unavailable"]).copy()
+    required_unavailable_columns = ["ticker", "date", "reason"]
+    if list(unavailable.columns) != required_unavailable_columns:
+        raise ValueError(
+            "workflow runtime unavailable score columns不一致: "
+            f"expected={required_unavailable_columns}, actual={list(unavailable.columns)}"
+        )
     if not unavailable.empty:
         unavailable["ticker"] = unavailable["ticker"].astype(str)
         unavailable["date"] = pd.to_datetime(unavailable["date"], errors="raise").dt.strftime("%Y-%m-%d")
-        unavailable["high_len"] = pd.to_numeric(unavailable["high_len"], errors="raise").astype(int)
         unavailable["reason"] = unavailable["reason"].astype(str)
-        unavailable_lookup = unavailable.set_index(["ticker", "date", "high_len"])[["reason"]].sort_index()
+        if unavailable.duplicated(["ticker", "date"]).any():
+            raise ValueError("workflow runtime unavailable score ticker/date必須唯一")
+        unavailable_lookup = unavailable.set_index(["ticker", "date"])[["reason"]].sort_index()
     else:
         unavailable_lookup = pd.DataFrame(
             columns=["reason"],
-            index=pd.MultiIndex.from_arrays([[], [], []], names=["ticker", "date", "high_len"]),
+            index=pd.MultiIndex.from_arrays([[], []], names=["ticker", "date"]),
         )
     return {
         "manifest": manifest,
@@ -193,30 +206,39 @@ def lookup_workflow_runtime_candidate_score(
             f"date={date_text}, coverage={available_from}~{available_through}"
         )
     ticker_text = str(ticker).strip()
-    shared = bool(bundle["shared_group_score_broadcast"])
-    key = (ticker_text, date_text) if shared else (ticker_text, date_text, int(high_len))
-    try:
-        score = float(bundle["score_lookup"].loc[key, SCORE_COLUMN])
-    except KeyError as exc:
-        raise ValueError(
-            f"workflow runtime score缺少候選: ticker={ticker_text}, date={date_text}, high_len={int(high_len)}"
-        ) from exc
-    unavailable_key = (ticker_text, date_text, int(high_len))
+    if not ticker_text:
+        raise ValueError("workflow runtime score lookup必須提供ticker")
+    key = (ticker_text, date_text)
     reason = ""
+    score = None
+    try:
+        row = bundle["score_lookup"].loc[key]
+    except KeyError:
+        reason = "missing_ticker_date_score"
+    else:
+        if isinstance(row, pd.DataFrame):
+            raise ValueError(
+                f"workflow runtime daily score lookup非唯一: ticker={ticker_text}, date={date_text}"
+            )
+        score = float(row["model_score"])
     unavailable_lookup = bundle["unavailable_lookup"]
-    if unavailable_key in unavailable_lookup.index:
-        value = unavailable_lookup.loc[unavailable_key, "reason"]
-        reason = str(value.iloc[0] if hasattr(value, "iloc") else value)
+    if key in unavailable_lookup.index:
+        value = unavailable_lookup.loc[key, "reason"]
+        explicit_reason = str(value.iloc[0] if hasattr(value, "iloc") else value)
+        if explicit_reason:
+            reason = explicit_reason
+            score = None
     return {
         "score": score,
         "available": not bool(reason),
         "unavailable_reason": reason,
         "score_date": date_text,
-        "shared_group_score": shared,
+        "shared_group_score": True,
         "filter_id": str(filter_id),
         "model_architecture": str(model_architecture),
         "experiment_profile": str(experiment_profile),
-        "score_source": RUNTIME_SCOPE_WORKFLOW,
+        "score_source": SCORE_SOURCE_CANONICAL_RUNTIME,
+        "high_len": int(high_len),
     }
 
 

@@ -964,16 +964,27 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         signal_date=reentry_trigger_date,
     )
     inherited_rank = resolve_breakout_quality_rank(reentry_signal)
-    with patch(
-        "core.portfolio_candidates.resolve_breakout_quality_candidate_rank",
-        side_effect=AssertionError("re-entry 不得以確認日重新查 score table"),
+    from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_CANONICAL_RUNTIME
+    from filters.breakout_quality.runtime import breakout_quality_ranking_source_context
+
+    # This case validates the historical fixed-signal-score continuation contract.
+    # Isolate it from the promoted daily-universal workflow, whose intended contract
+    # refreshes the score on each latest completed trading day.
+    with breakout_quality_ranking_source_context(
+        score_source=SCORE_SOURCE_CANONICAL_RUNTIME,
+        model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+        experiment_profile=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     ):
-        resolved_reentry_rank = _resolve_candidate_quality_ranking(
-            params=reentry_params,
-            ticker="3706",
-            signal_date=reentry_trigger_date,
-            signal_state=reentry_signal,
-        )
+        with patch(
+            "core.portfolio_candidates.resolve_breakout_quality_candidate_rank",
+            side_effect=AssertionError("fixed-signal re-entry 不得以確認日重新查 score table"),
+        ):
+            resolved_reentry_rank = _resolve_candidate_quality_ranking(
+                params=reentry_params,
+                ticker="3706",
+                signal_date=reentry_trigger_date,
+                signal_state=reentry_signal,
+            )
     add_check(
         results,
         "synthetic_breakout_quality",

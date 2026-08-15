@@ -159,6 +159,7 @@ def apply_or_refresh_runtime_promotion(*, project_root: Path = PROJECT_ROOT) -> 
         allow_tf32=bool(BREAKOUT_QUALITY_ALLOW_TF32),
         preload_feature_bank=bool(BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK),
     )
+    load_workflow_runtime_score_bundle.cache_clear()
     bundle = load_workflow_runtime_score_bundle(
         str(root), workflow.filter_id, workflow.model_architecture, workflow.experiment_profile
     )

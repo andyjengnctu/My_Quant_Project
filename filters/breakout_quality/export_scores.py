@@ -15,8 +15,11 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES
 from config.breakout_quality import (
+    CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
+    SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    get_breakout_quality_experiment_profile,
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
@@ -50,6 +53,8 @@ from filters.breakout_quality.contract import (
     RUNTIME_SCOPE_RESEARCH,
 )
 from filters.breakout_quality.dataset_store import IndexedFeatureBank
+from filters.breakout_quality.daily_ranker_data import load_daily_universal_ranker_data
+from filters.breakout_quality.ranking_score_store import load_continuous_ranker_oos_contract
 from filters.breakout_quality.features import build_breakout_quality_inference_dataset_for_frame
 from filters.breakout_quality.inference import (
     materialize_indexed_feature_inputs,
@@ -57,6 +62,7 @@ from filters.breakout_quality.inference import (
     strict_unique_group_batched_logits,
 )
 from filters.breakout_quality.model import build_model, require_torch
+from filters.breakout_quality.paths import resolve_filter_artifact_paths
 from filters.breakout_quality.models.spec import (
     model_spec_from_manifest,
     validate_model_sequence_length,
@@ -70,13 +76,13 @@ from filters.breakout_quality.paths import (
     BreakoutQualityArtifactPaths,
     ensure_filter_model_output_dir,
     ensure_filter_output_dir,
-    resolve_filter_artifact_paths,
     resolve_filter_research_manifest_path,
     resolve_filter_research_score_path,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from core.console_report import print_artifact_paths
 from core.model_paths import resolve_models_dir
+from services.breakout_quality import ranker_training as ranker_api
 from filters.breakout_quality.workflow_io import (
     discover_dataset_csv_inputs,
     load_dataset_frame,
@@ -96,7 +102,7 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--experiment-profile",
-        choices=SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+        choices=SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
         default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
         help="要讀取／輸出的訓練實驗 profile",
     )
@@ -446,9 +452,239 @@ def _build_score_record(
     return score_record
 
 
+
+def _run_daily_continuous_workflow_export(*, root: Path, args, profile) -> int:
+    """Export the accepted daily-universal frozen ranker through the current data tail.
+
+    The research Forward-OOS artifact remains immutable.  This path owns only the
+    production ``workflow_runtime`` score artifact and reuses the canonical daily
+    sample provider plus the shared continuous-ranker inference semantic.
+    """
+
+    if str(args.scope) != RUNTIME_SCOPE_WORKFLOW:
+        raise ValueError(
+            "continuous ranker的research／Forward-OOS score由canonical ranker pipeline管理；"
+            "export_scores只允許continuous profile使用workflow_runtime scope"
+        )
+    if profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        raise ValueError(
+            "workflow_runtime continuous score目前只接受daily_eligible_stock_days profile"
+        )
+
+    contract = load_continuous_ranker_oos_contract(
+        str(root),
+        str(args.filter_id),
+        str(args.model_architecture),
+        str(args.experiment_profile),
+    )
+    bundle = load_daily_universal_ranker_data(
+        filter_id=str(args.filter_id),
+        model_architecture=str(args.model_architecture),
+        experiment_profile=str(args.experiment_profile),
+        preload_feature_bank=bool(args.preload_feature_bank),
+        allow_stale_source=True,
+        extend_score_eligibility_to_source_tail=True,
+        project_root=root,
+    )
+
+    torch, _nn = require_torch()
+    execution_plan = resolve_torch_execution_plan(
+        torch,
+        requested_device=str(args.device),
+        mixed_precision=bool(args.mixed_precision),
+        mixed_precision_dtype=str(args.mixed_precision_dtype),
+        deterministic_algorithms=bool(args.deterministic_algorithms),
+        allow_tf32=bool(args.allow_tf32),
+    )
+    if execution_plan.device_type == "cpu":
+        if int(torch.get_num_threads()) != 1:
+            torch.set_num_threads(1)
+        if int(torch.get_num_interop_threads()) != 1:
+            try:
+                torch.set_num_interop_threads(1)
+            except RuntimeError as exc:
+                if "cannot set number of interop threads" not in str(exc):
+                    raise
+                warnings.warn(
+                    f"torch.set_num_interop_threads(1) skipped: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+
+    artifact_paths = resolve_filter_artifact_paths(
+        root,
+        str(args.filter_id),
+        str(args.model_architecture),
+        str(args.experiment_profile),
+    )
+    checkpoint = torch.load(artifact_paths.model_path, map_location="cpu")
+    if not isinstance(checkpoint, dict):
+        raise ValueError("continuous ranker checkpoint 根節點必須是 object")
+    expected_spec = bundle.model_spec.as_manifest_payload()
+    if checkpoint.get("model_spec") != expected_spec:
+        raise ValueError("workflow runtime ranker checkpoint model_spec 與daily sample provider不一致")
+    if str(checkpoint.get("experiment_profile") or "") != str(args.experiment_profile):
+        raise ValueError("workflow runtime ranker checkpoint experiment_profile不一致")
+    if str(checkpoint.get("training_objective") or "") != str(profile.training_objective):
+        raise ValueError("workflow runtime ranker checkpoint training_objective不一致")
+    if str(checkpoint.get("training_sample_scope") or "") != str(profile.training_sample_scope):
+        raise ValueError("workflow runtime ranker checkpoint training_sample_scope不一致")
+    if checkpoint.get("experiment_settings") != profile.as_manifest_payload():
+        raise ValueError("workflow runtime ranker checkpoint experiment_settings不一致")
+
+    feature_count = int(checkpoint.get("feature_count", -1))
+    context_count = int(checkpoint.get("context_count", -1))
+    sequence_length = int(checkpoint.get("sequence_length", -1))
+    expected_dims = (
+        int(bundle.feature_bank.shape[2]),
+        int(bundle.group_context.shape[1]),
+        int(bundle.feature_bank.shape[1]),
+    )
+    if (feature_count, context_count, sequence_length) != expected_dims:
+        raise ValueError(
+            "workflow runtime ranker checkpoint與daily feature維度不一致: "
+            f"model={(feature_count, context_count, sequence_length)}, data={expected_dims}"
+        )
+
+    model = build_model(
+        feature_count,
+        context_count,
+        architecture=str(args.model_architecture),
+        model_spec=expected_spec,
+    )
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.to(execution_plan.device)
+    model.eval()
+
+    dates = pd.to_datetime(bundle.group_table["date"], errors="raise").dt.normalize()
+    information_cutoff = pd.Timestamp(contract.model_information_cutoff).normalize()
+    score_ids = np.flatnonzero((dates >= information_cutoff).to_numpy(dtype=bool)).astype(np.int64)
+    if len(score_ids) < 1:
+        raise ValueError(
+            "workflow runtime ranker沒有model_information_cutoff當日或之後的score-eligible stock-day"
+        )
+    scores = ranker_api.predict_scores(
+        torch,
+        model,
+        bundle.feature_bank,
+        bundle.group_context,
+        score_ids,
+        batch_size=int(args.inference_batch_size),
+        plan=execution_plan,
+        training_objective=str(profile.training_objective),
+    )
+    if len(scores) != len(score_ids) or not np.isfinite(scores).all():
+        raise ValueError("workflow runtime ranker inference輸出長度或finite contract失敗")
+
+    scored = bundle.group_table.iloc[score_ids][["ticker", "date"]].copy()
+    scored["ticker"] = scored["ticker"].astype(str)
+    scored["date"] = pd.to_datetime(scored["date"], errors="raise").dt.strftime("%Y-%m-%d")
+    scored["model_score"] = np.asarray(scores, dtype=np.float32)
+    scored = scored.sort_values(["ticker", "date"], kind="mergesort").reset_index(drop=True)
+    if scored.duplicated(["ticker", "date"]).any():
+        raise ValueError("workflow runtime daily score ticker/date必須唯一")
+
+    workflow_paths = _resolve_workflow_runtime_output_paths(
+        project_root=root,
+        filter_id=str(args.filter_id),
+        model_architecture=str(args.model_architecture),
+        experiment_profile=str(args.experiment_profile),
+    )
+    score_path = workflow_paths["score"]
+    scored.to_csv(score_path, index=False, encoding="utf-8-sig")
+    unavailable = pd.DataFrame(columns=["ticker", "date", "reason"])
+    unavailable_path = workflow_paths["unavailable"]
+    unavailable.to_csv(unavailable_path, index=False, encoding="utf-8-sig")
+
+    available_from = str(scored["date"].min())
+    available_through = str(scored["date"].max())
+    score_record = build_file_manifest(score_path)
+    score_record.update(
+        {
+            "schema_version": 1,
+            "columns": list(scored.columns),
+            "key_columns": ["ticker", "date"],
+            "row_count": int(len(scored)),
+            "event_date_range": {"start": available_from, "end": available_through},
+            "source_dataset_artifacts": bundle.summary.get("source_dataset_artifacts"),
+            "score_semantic_id": str(contract.report.get("score_semantic_id") or ""),
+        }
+    )
+    unavailable_record = build_file_manifest(unavailable_path)
+    unavailable_record.update(
+        {
+            "columns": list(unavailable.columns),
+            "key_columns": ["ticker", "date"],
+            "row_count": 0,
+            "reason": "missing ticker/date is represented at lookup time as score unavailable; it is not a rejected candidate",
+        }
+    )
+    model_manifest = dict(contract.manifest)
+    deployment_manifest = {
+        "schema_version": 2,
+        "artifact_type": "breakout_quality_workflow_runtime_daily_ranker_scores",
+        "filter_id": str(args.filter_id),
+        "model_architecture": str(args.model_architecture),
+        "experiment_profile": str(args.experiment_profile),
+        "training_objective": str(profile.training_objective),
+        "training_sample_scope": str(profile.training_sample_scope),
+        "continuous_target_id": str(profile.continuous_target_id or ""),
+        "shared_group_score_broadcast": True,
+        "model_identity": {
+            "model_checkpoint": build_file_manifest(artifact_paths.model_path),
+            "model_information_cutoff": str(contract.model_information_cutoff),
+            "experiment_settings": model_manifest.get("experiment_settings"),
+            "model_spec": model_manifest.get("model_spec"),
+            "training_objective": model_manifest.get("training_objective"),
+            "training_sample_scope": model_manifest.get("training_sample_scope"),
+        },
+        "score_table": score_record,
+        "conservative_unscorable_events": unavailable_record,
+        "runtime_eligibility": {
+            "eligible": True,
+            "scope": RUNTIME_SCOPE_WORKFLOW,
+            "available_from": available_from,
+            "available_through": available_through,
+            "required_signal_start": str(contract.model_information_cutoff),
+            "execution_start": available_from,
+            "model_information_cutoff": str(contract.model_information_cutoff),
+            "causal_information_contract": "same_day_and_earlier_ohlcv_only",
+            "future_target_required_for_score": False,
+            "reason": (
+                "Frozen accepted daily-universal ranker is evaluated on each score-eligible "
+                "stock-day using only that day and earlier OHLCV; research Forward-OOS artifacts are immutable."
+            ),
+        },
+        "inference_execution": {
+            "batch_size": int(args.inference_batch_size),
+            "workers": 1,
+            "torch_execution": execution_plan.as_manifest_payload(),
+            "feature_storage": str(bundle.summary.get("feature_storage") or "lazy"),
+            "score_eligible_row_count": int(len(scored)),
+            "output_row_order_changed": True,
+        },
+    }
+    write_json(workflow_paths["manifest"], deployment_manifest)
+    print_artifact_paths(
+        (
+            ("Workflow runtime daily scores", score_path),
+            ("Runtime manifest", workflow_paths["manifest"]),
+        ),
+        project_root=root,
+    )
+    print(
+        "workflow runtime daily ranker coverage: "
+        f"rows={len(scored):,}, dates={available_from}~{available_through}, "
+        f"future_target_required=False"
+    )
+    return 0
+
 def run_export(*, project_root: str | Path = PROJECT_ROOT, argv=None) -> int:
     root = Path(project_root).resolve()
     args = parse_args(argv)
+    experiment = get_breakout_quality_experiment_profile(str(args.experiment_profile))
+    if experiment.training_objective in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
+        return _run_daily_continuous_workflow_export(root=root, args=args, profile=experiment)
     inference_batch_size = int(args.inference_batch_size)
     inference_workers = int(args.inference_workers)
     preload_feature_bank = bool(args.preload_feature_bank)
