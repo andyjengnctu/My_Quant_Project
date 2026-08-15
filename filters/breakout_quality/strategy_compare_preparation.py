@@ -191,7 +191,7 @@ def _validate_param_artifact(
     return True, "READY", policy
 
 
-def _resolve_comparison_period(
+def resolve_comparison_period(
     *,
     settings: StrategyComparisonSettings,
     runtime_periods: dict[str, tuple[str, str]],
@@ -1123,7 +1123,7 @@ def collect_artifact_status(
             "status": calibration_status,
         }
 
-    comparison_start, comparison_end, comparison_period_source = _resolve_comparison_period(
+    comparison_start, comparison_end, comparison_period_source = resolve_comparison_period(
         settings=settings,
         runtime_periods=runtime_periods,
     )

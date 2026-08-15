@@ -2012,6 +2012,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )
         archived_score_status["overall_status"] = "BLOCKED"
         archived_score_status["comparison_ready"] = False
+        # Match the real minimal-matrix failure mode: preparation cannot resolve a
+        # common runtime period until the historical frozen score has been recovered.
+        archived_score_status["comparison_period"] = None
+        archived_score_status["comparison_period_source"] = "runtime_pending"
         archived_score_applied = score_reuse_module._apply_completed_pair_frozen_score_reuse(
             root=archived_root,
             settings=forward_score_reuse_settings,
@@ -2040,6 +2044,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "REUSE_OK:archived_artifact_identity" in archived_score_diagnostics
         and archived_score_applied.get("overall_status") == "READY"
         and archived_score_applied.get("comparison_ready") is True
+        and archived_score_applied.get("comparison_period") == {
+            "start": "2021-01-01",
+            "end": "2021-01-05",
+        }
+        and archived_score_applied.get("comparison_period_source")
+        == "dl_runtime_common_overlap"
         and archived_score_applied.get("continuous_score_overrides", {})
             .get("CONT13E", {})
             .get("path_source") == "archived_artifact_identity"

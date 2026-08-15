@@ -84,6 +84,7 @@ from filters.breakout_quality.strategy_rule_policies import (
     ALL_RULE_FILTERS_OFF_OVERRIDES,
 )
 from filters.breakout_quality.strategy_compare_preparation import (
+    resolve_comparison_period,
     collect_artifact_status as collect_preparation_status,
     prepare_strategy_comparison_artifacts,
 )
@@ -1232,6 +1233,33 @@ def _apply_completed_pair_frozen_score_reuse(
             "path_source": value["path_source"],
         }
     updated["artifact_identities"] = artifact_identities
+
+    # Preparation resolves the common period before completed-pair score recovery.
+    # When every required continuous source is historical-only, that first pass has
+    # no runtime period and legitimately returns ``None``.  Recovery has now restored
+    # the exact execution coverage, so resolve the period again through the same SSOT
+    # used by preparation instead of maintaining a second date-intersection rule here.
+    if not dict(updated.get("comparison_period") or {}):
+        recovered_runtime_periods = {
+            str(dl_id): (
+                str(value["execution_start"]),
+                str(value["available_through"]),
+            )
+            for dl_id, value in overrides.items()
+        }
+        comparison_start, comparison_end, comparison_period_source = (
+            resolve_comparison_period(
+                settings=settings,
+                runtime_periods=recovered_runtime_periods,
+            )
+        )
+        if comparison_start is not None and comparison_end is not None:
+            updated["comparison_period"] = {
+                "start": comparison_start,
+                "end": comparison_end,
+            }
+            updated["comparison_period_source"] = comparison_period_source
+
     updated["config_fingerprint"] = strategy_comparison_fingerprint(
         settings,
         artifact_identities=artifact_identities,

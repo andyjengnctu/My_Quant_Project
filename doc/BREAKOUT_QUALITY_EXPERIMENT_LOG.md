@@ -8971,3 +8971,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 同時，當current arm透過completed-pair-pinned frozen score執行時，實際score path/SHA會回寫本次`artifact_identities`並重算config fingerprint，讓後續completed result具備自足的frozen-score provenance。model/manifest/report在此score-only replay仍明示`NOT_REQUIRED`；若找不到可驗證的historical/current score bytes，仍維持BLOCKED並導向正式模型工作類型。
 - Scientific decision不變：active matrix仍只保留`Full ROOS / Min ROOS / Min MR-13E Constrained`；不重訓MR-13E、不新增SR ID、不變更C44 objective/K/R0/exact solver/sizing/execution，也不改既有C44 Forward與8-seed結果。
 
+## 2026-08-15 — Minimal Forward archived-score recovery common-period refresh fix
+
+- 使用者套用historical CONT13E provenance reuse後，Forward planning已由`BLOCKED`正確轉為`READY`，`CONT13E forward_scores=REUSE`且model/manifest/report=`NOT_REQUIRED`；但按Enter執行立即拋出`RuntimeError: 正式比較缺少已解析的共同comparison period`。這證明score provenance recovery已成功，剩餘問題是orchestration status refresh，而不是模型、score、C44策略或參數工件缺失。
+- 根因：`collect_preparation_status()`會在completed-pair frozen-score recovery之前呼叫共同period resolver。minimal Forward matrix只有C44一個DL-on source，而該source在第一階段尚未READY，因此`runtime_periods`為空、`comparison_period=None`。後續`_apply_completed_pair_frozen_score_reuse()`雖把plan改成READY並恢復`execution_start/available_through`，卻沒有用新恢復的runtime coverage重新解析`comparison_period`，造成status頁READY、run入口才失敗的狀態契約分叉。
+- 修正：recovery成功後若原status尚無`comparison_period`，直接呼叫`strategy_compare_preparation.resolve_comparison_period()`同一SSOT，以每個recovered source的`execution_start/available_through`重建runtime period；同時寫回`comparison_period_source`。不在orchestrator新增第二套日期intersection規則。explicit config period仍由同一resolver驗證是否落在archived score coverage內。
+- Synthetic改成真正重現此次failure：apply recovery前強制`comparison_period=None / source=runtime_pending`，要求recovery後plan=`READY`且共同period=`2021-01-01~2021-01-05`、source=`dl_runtime_common_overlap`；原有archived path/SHA/profile/required-start/first-score-event guards全部保留。
+- Scientific decision不變：active Forward仍只有`C1 Full ROOS / C3 Min ROOS / C44 Min MR-13E Constrained`；不重訓MR-13E、不重建score、不改C44 objective/K/R0/exact solver/sizing/execution，也不新增SR ID。
+
