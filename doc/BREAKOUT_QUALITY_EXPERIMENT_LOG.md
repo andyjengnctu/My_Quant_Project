@@ -9008,3 +9008,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 同輪修正既有completed-pair cache語意漏洞：normal cache在current frozen score SHA改變時會正確miss，但archived completed-pair fallback先前仍可能在current score identity已明確存在且SHA不同時重用舊pair。修正後archived fallback只可替代已不存在／無SHA的current source；只要current source對應artifact identity已有SHA，stored archived identity必須同SHA，Selection PIT則對`manifest/audit/forward_scores`各自套用同一衝突檢查，continuous OOS至少鎖`forward_scores`。因此score byte identity變更無法再經historical fallback繞過cache invalidation。
 - Synthetic change-selection／coverage metadata同步新增`strategy_compare_dl_artifacts.py`與`synthetic_breakout_quality_strategy_reuse_cases.py` owner；不建立第二套formal入口或臨時CLI。
 - Scientific/runtime boundary不變：Selection active=`C32/C23/C42`、Forward active=`C1/C3/C44`；MR-13E score、exact constrained solver、K/R0、cash/sizing/execution、historical compatibility與既有single/multi-seed結果全部不變。
+
+## 2026-08-15 — Strategy Compare P2-C completed-pair production resolver ownership split
+
+- 本輪是engineering P2-C consolidation，不新增MR/DL/SR/PARAM/AUD identity，也不改scientific result。程式基準=`test-branch-1_20260815_165301_5865bc3.zip`，SHA256=`5cda5c1ca47e6ce7339b3eac5f0e93f0f3d1575746f0512c2021fd5d60828b53` + 本輪patch。
+- `filters/breakout_quality/strategy_compare_reuse.py`成為completed-pair cache fingerprint、normal/archived pair discovery、shared baseline reuse、dependency waiver、historical continuous-score provenance、pair-pinned frozen-score binding與recovery的單一production owner；`strategy_comparison.py`不再實作這些搜尋／SHA／archived fallback細節，只import/re-export原private names供既有robustness與compatibility caller使用。
+- `filters/breakout_quality/strategy_compare_runtime.py`成為DL runtime mode→comparison/ranking spec、execution pair grouping與standalone baseline membership的SSOT，避免reuse resolver為了cache completeness複製runtime mapping；`strategy_comparison.py`與reuse owner共同import同一runtime contract。
+- 未修改原ZIP與refactor版本分別解析`selection_pit`、`forward_oos`，normalized `overall_status/comparison_ready/comparison_period/source/config_fingerprint/preparation actions/artifact identities/parameter paths/DL status/continuous overrides/replay cache/execution pairs/standalone baselines`完全一致。config-driven Strategy Compare synthetic維持原114個check且`114/114 PASS`；既有completed-pair/cache/reuse checks改驗證implementation位於reuse owner且orchestrator沒有重複def，不新增事故型case。
+- Scientific/runtime boundary不變：Selection active=`C32/C23/C42`、Forward active=`C1/C3/C44`；MR-13E score、exact constrained solver、K/R0、cash/sizing/execution、historical compatibility與既有single/multi-seed結果全部不變。
+

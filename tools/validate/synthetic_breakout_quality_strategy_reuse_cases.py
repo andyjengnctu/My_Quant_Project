@@ -24,6 +24,9 @@ def append_completed_pair_score_reuse_contract_checks(
     from config import strategy_compare as strategy_config
     from filters.breakout_quality import strategy_comparison as score_reuse_module
 
+    reuse_source = (
+        project_root / "filters" / "breakout_quality" / "strategy_compare_reuse.py"
+    ).read_text(encoding="utf-8")
     orchestration_source = (
         project_root / "filters" / "breakout_quality" / "strategy_comparison.py"
     ).read_text(encoding="utf-8")
@@ -38,15 +41,17 @@ def append_completed_pair_score_reuse_contract_checks(
         "completed_pair_cache_waives_source_only_when_no_arm_needs_runtime_source",
         True,
         all(
-            token in orchestration_source
+            token in reuse_source
             for token in (
                 "archived_completed_pair",
-                "_find_reusable_pair_with_archived_source",
-                "_apply_completed_pair_dependency_waivers",
+                "def _find_reusable_pair_with_archived_source(",
+                "def _apply_completed_pair_dependency_waivers(",
                 "all(isinstance(pairs.get(arm.arm_id), dict) for arm in dependent_arms)",
                 "本次使用此DL的arms全部重用identity一致的completed pair",
             )
-        ),
+        )
+        and "def _find_reusable_pair_with_archived_source(" not in orchestration_source
+        and "def _apply_completed_pair_dependency_waivers(" not in orchestration_source,
     )
     add_check(
         results,

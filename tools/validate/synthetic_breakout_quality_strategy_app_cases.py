@@ -162,6 +162,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     preparation_path = project_root / "filters" / "breakout_quality" / "strategy_compare_preparation.py"
     preparation_status_path = project_root / "filters" / "breakout_quality" / "strategy_compare_preparation_status.py"
     dl_artifacts_path = project_root / "filters" / "breakout_quality" / "strategy_compare_dl_artifacts.py"
+    reuse_path = project_root / "filters" / "breakout_quality" / "strategy_compare_reuse.py"
+    runtime_path = project_root / "filters" / "breakout_quality" / "strategy_compare_runtime.py"
     engine_path = project_root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
     contracts_path = project_root / "filters" / "breakout_quality" / "strategy_compare_contracts.py"
     sources_path = project_root / "filters" / "breakout_quality" / "strategy_compare_sources.py"
@@ -253,6 +255,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         + "\n"
         + dl_artifacts_path.read_text(encoding="utf-8")
     )
+    reuse_source = reuse_path.read_text(encoding="utf-8")
+    runtime_source = runtime_path.read_text(encoding="utf-8")
     strategy_compare_source = engine_path.read_text(encoding="utf-8")
     contracts_source = contracts_path.read_text(encoding="utf-8")
     sources_source = sources_path.read_text(encoding="utf-8")
@@ -692,7 +696,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             == tuple(raw_profile.get("reuse_output_roots", ()))
             for profile_id, raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.items()
         )
-        and "_comparison_runs_roots" in orchestration_source,
+        and "def _comparison_runs_roots(" in reuse_source
+        and "def _comparison_runs_roots(" not in orchestration_source,
     )
 
     display_alignment_groups = {}

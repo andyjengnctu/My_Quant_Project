@@ -1,0 +1,180 @@
+"""Strategy Compare runtime grouping and arm execution-spec SSOT."""
+
+from __future__ import annotations
+
+from core.strategy_comparison import (
+    STRATEGY_DL_RUNTIME_MODE_HARD_FILTER,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+    StrategyComparisonArm,
+    StrategyComparisonSettings,
+)
+from core.buy_sort import (
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+    BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+)
+from filters.breakout_quality.strategy_compare_contracts import (
+    COMPARISON_MODE_HARD_FILTER,
+    COMPARISON_MODE_SCORE_RANKING,
+)
+
+def _arm_runtime_spec(arm: StrategyComparisonArm) -> dict[str, str]:
+    mode = str(arm.dl_runtime_mode or "")
+    if mode == STRATEGY_DL_RUNTIME_MODE_HARD_FILTER:
+        return {
+            "comparison_mode": COMPARISON_MODE_HARD_FILTER,
+            "ranking_policy": BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+            "active_key": "quality_filter",
+            "yearly_key": "quality_filter_return_pct",
+            "active_trades_filename": "quality_filter_trades.csv",
+        }
+    if mode in {
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+    }:
+        return {
+            "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
+            "ranking_policy": (
+                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY
+            ),
+            "active_key": "score_ranking",
+            "yearly_key": "score_ranking_return_pct",
+            "active_trades_filename": "score_ranking_trades.csv",
+        }
+    raise ValueError(f"不支援的DL runtime mode: arm={arm.arm_id}, mode={mode!r}")
+
+def _execution_pairs(
+    settings: StrategyComparisonSettings,
+) -> tuple[tuple[str, str, StrategyComparisonArm, StrategyComparisonArm], ...]:
+    """Return one replay pair per enabled DL source in config order.
+
+    A ``param_source`` / ``rule_policy`` group owns one shared DL-off baseline
+    and may expose multiple DL-on arms.  Each DL-on arm is replayed against the
+    same baseline; downstream aggregation verifies that repeated baseline
+    summaries and yearly returns remain identical.
+    """
+    grouped: dict[
+        tuple[str, str],
+        dict[str, StrategyComparisonArm | list[StrategyComparisonArm] | None],
+    ] = {}
+    ordered_keys: list[tuple[str, str]] = []
+    for arm in settings.enabled_arms:
+        key = (arm.param_source, arm.rule_policy)
+        if key not in grouped:
+            grouped[key] = {"off": None, "on": []}
+            ordered_keys.append(key)
+        group = grouped[key]
+        if not arm.dl_enabled:
+            if group["off"] is not None:
+                raise ValueError(
+                    "啟用比較群組重複定義DL-off基準: "
+                    f"{arm.param_source}/{arm.rule_policy}"
+                )
+            group["off"] = arm
+            continue
+        on_arms = group["on"]
+        if not isinstance(on_arms, list):
+            raise TypeError("strategy comparison execution group contract錯誤")
+        if not arm.dl_id:
+            raise ValueError(f"DL-on arm缺少dl_id: {arm.arm_id}")
+        if any(
+            existing.dl_id == arm.dl_id
+            and existing.dl_runtime_mode == arm.dl_runtime_mode
+            for existing in on_arms
+        ):
+            raise ValueError(
+                "啟用比較群組重複定義相同DL source/runtime mode: "
+                f"{arm.param_source}/{arm.rule_policy}/{arm.dl_id}/{arm.dl_runtime_mode}"
+            )
+        on_arms.append(arm)
+
+    pairs: list[
+        tuple[str, str, StrategyComparisonArm, StrategyComparisonArm]
+    ] = []
+    for param_source, rule_policy in ordered_keys:
+        group = grouped[(param_source, rule_policy)]
+        off_arm = group["off"]
+        on_arms = group["on"]
+        if not isinstance(off_arm, StrategyComparisonArm) or not isinstance(on_arms, list):
+            raise ValueError(
+                "啟用比較群組缺少共用DL-off基準: "
+                f"{param_source}/{rule_policy}"
+            )
+        if not on_arms:
+            # Standalone DL-off comparator由run_standalone_baseline處理；
+            # 不需要為了engine pair contract而保留無研究價值的DL-on arm。
+            continue
+        for on_arm in on_arms:
+            pairs.append((param_source, rule_policy, off_arm, on_arm))
+    return tuple(pairs)
+
+def _standalone_baseline_arms(
+    settings: StrategyComparisonSettings,
+) -> tuple[StrategyComparisonArm, ...]:
+    enabled = tuple(settings.enabled_arms)
+    output: list[StrategyComparisonArm] = []
+    for arm in enabled:
+        if arm.dl_enabled:
+            continue
+        has_enabled_on = any(
+            other.dl_enabled
+            and other.param_source == arm.param_source
+            and other.rule_policy == arm.rule_policy
+            for other in enabled
+        )
+        if not has_enabled_on:
+            output.append(arm)
+    return tuple(output)
