@@ -4850,6 +4850,7 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
     )
     from filters.breakout_quality.runtime_integration_gate import (
+        _exact_certificate_status,
         _overall_decision,
         resolve_runtime_candidate_contract,
     )
@@ -4872,7 +4873,7 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
             == DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
             and selection_source["score_source"] == "selection_point_in_time"
             and forward_source["score_source"] == "continuous_ranker_oos"
-            and selection["param_source"] == forward["param_source"]
+            and runtime["param_source"] == forward["param_source"]
             and selection["rule_policy"] == forward["rule_policy"] == "all_off"
             and selection["dl_runtime_mode"]
             == forward["dl_runtime_mode"]
@@ -4906,6 +4907,44 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
             _overall_decision([{"status": "PASS"}, {"status": "BLOCKED"}]),
             _overall_decision([{"status": "BLOCKED"}, {"status": "FAIL"}]),
         ),
+    )
+
+    certificate_status, certificate_evidence = _exact_certificate_status({
+        "resource_aware_dl_selection_days": 5,
+        "resource_aware_capital_utilization_days": 3,
+        "resource_aware_max_dl_eligible_days": 5,
+        "resource_aware_constrained_optimality_certified_days": 8,
+        "resource_aware_max_dl_order_count_violation_days": 0,
+        "resource_aware_preservation_violation_days": 0,
+    })
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "runtime_integration_exact_certificate_uses_exact_active_days_not_max_dl_subset",
+        True,
+        (
+            certificate_status == "PASS"
+            and certificate_evidence["certificate_required_days"] == 8
+            and certificate_evidence["max_dl_eligible_days_diagnostic_only"] == 5
+            and certificate_evidence["certified_days"] == 8
+        ),
+    )
+    violation_status, _ = _exact_certificate_status({
+        "resource_aware_dl_selection_days": 5,
+        "resource_aware_capital_utilization_days": 3,
+        "resource_aware_max_dl_eligible_days": 5,
+        "resource_aware_constrained_optimality_certified_days": 8,
+        "resource_aware_max_dl_order_count_violation_days": 1,
+        "resource_aware_preservation_violation_days": 0,
+    })
+    missing_status, _ = _exact_certificate_status({
+        "resource_aware_max_dl_eligible_days": 5,
+        "resource_aware_constrained_optimality_certified_days": 5,
+    })
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "runtime_integration_exact_certificate_violation_and_missing_evidence_are_distinct",
+        ("FAIL", "BLOCKED"),
+        (violation_status, missing_status),
     )
 
     gate_source = (

@@ -38,7 +38,7 @@ from core.strategy_comparison import (
 from filters.breakout_quality.strategy_comparison import collect_artifact_status
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-GATE_SCHEMA_VERSION = 1
+GATE_SCHEMA_VERSION = 2
 RESULT_FILENAME = "runtime_integration.json"
 REPORT_FILENAME = "runtime_integration.md"
 
@@ -331,6 +331,59 @@ def _find_strategy_result_evidence(
         f"searched_roots={searched}"
     )
 
+def _exact_certificate_status(candidate_row: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Validate exact certificates against the days on which the exact policy was active.
+
+    ``resource_aware_max_dl_eligible_days`` is intentionally *not* the denominator.
+    It only marks the non-trivial candidate-competition subset.  The exact owner also
+    certifies trivial optima (for example candidate_count <= K), which are reported as
+    ``capital-utilization`` days.  Therefore certified days may legitimately exceed
+    max-DL eligible days.
+    """
+
+    required_fields = (
+        "resource_aware_dl_selection_days",
+        "resource_aware_capital_utilization_days",
+        "resource_aware_constrained_optimality_certified_days",
+        "resource_aware_max_dl_order_count_violation_days",
+        "resource_aware_preservation_violation_days",
+    )
+    missing = [key for key in required_fields if key not in candidate_row]
+    if missing:
+        return "BLOCKED", {"missing_fields": missing}
+
+    try:
+        dl_selection_days = int(candidate_row["resource_aware_dl_selection_days"])
+        capital_utilization_days = int(candidate_row["resource_aware_capital_utilization_days"])
+        certified_days = int(candidate_row["resource_aware_constrained_optimality_certified_days"])
+        order_violations = int(candidate_row["resource_aware_max_dl_order_count_violation_days"])
+        preservation_violations = int(candidate_row["resource_aware_preservation_violation_days"])
+        max_dl_eligible_days = int(candidate_row.get("resource_aware_max_dl_eligible_days") or 0)
+    except (TypeError, ValueError):
+        return "BLOCKED", {
+            "invalid_fields": {key: candidate_row.get(key) for key in required_fields},
+        }
+
+    certificate_required_days = dl_selection_days + capital_utilization_days
+    evidence = {
+        "certificate_required_days": certificate_required_days,
+        "dl_selection_days": dl_selection_days,
+        "capital_utilization_days": capital_utilization_days,
+        "max_dl_eligible_days_diagnostic_only": max_dl_eligible_days,
+        "certified_days": certified_days,
+        "order_count_violation_days": order_violations,
+        "preservation_violation_days": preservation_violations,
+    }
+    if certificate_required_days <= 0:
+        return "BLOCKED", evidence
+    ok = (
+        certified_days == certificate_required_days
+        and order_violations == 0
+        and preservation_violations == 0
+    )
+    return ("PASS" if ok else "FAIL"), evidence
+
+
 def _single_run_checks(
     checks: list[dict[str, Any]],
     *,
@@ -390,23 +443,17 @@ def _single_run_checks(
             evidence={"candidate": candidate_romd, "baseline": baseline_romd, "delta": candidate_romd - baseline_romd},
         )
 
-    eligible = int(candidate_row.get("resource_aware_max_dl_eligible_days") or 0)
-    certified = int(candidate_row.get("resource_aware_constrained_optimality_certified_days") or 0)
-    order_violations = int(candidate_row.get("resource_aware_max_dl_order_count_violation_days") or 0)
-    preservation_violations = int(candidate_row.get("resource_aware_preservation_violation_days") or 0)
-    certificate_ok = eligible > 0 and certified == eligible and order_violations == 0 and preservation_violations == 0
+    certificate_status, certificate_evidence = _exact_certificate_status(candidate_row)
     _add_check(
         checks,
         check_id=f"{settings.profile_id}_exact_optimality_certificate",
         category="runtime",
-        status="PASS" if certificate_ok else "FAIL",
-        detail=f"{stage_label}每個exact eligible day都必須有optimality certificate，且K/R0 preservation/order count不可違規。",
-        evidence={
-            "eligible_days": eligible,
-            "certified_days": certified,
-            "order_count_violation_days": order_violations,
-            "preservation_violation_days": preservation_violations,
-        },
+        status=certificate_status,
+        detail=(
+            f"{stage_label}每個實際進入exact selector的active day（DL-selection或capital-utilization）"
+            "都必須有optimality certificate，且K/R0 preservation/order count不可違規。"
+        ),
+        evidence=certificate_evidence,
     )
 
     raw_latency = candidate_row.get("resource_aware_selector_timing_max_ms")
