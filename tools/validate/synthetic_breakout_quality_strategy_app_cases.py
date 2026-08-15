@@ -893,7 +893,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_activation_is_decoupled_from_single_seed_arm_role_and_schema_identity",
         True,
-        strategy_config.STRATEGY_COMPARE_SCHEMA_VERSION == 27
+        strategy_config.STRATEGY_COMPARE_SCHEMA_VERSION == 28
         and selection_single.arms["C35"].robustness_role == "off"
         and selection_single.arms["C42"].robustness_role == "off"
         and forward_single.arms["C36"].robustness_role == "off"
@@ -3410,6 +3410,32 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "C43-C28" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
         and "C42-C43" in {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
         and "C43" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
+    )
+
+    c32_full = selection_excess_settings.arms["C32"]
+    c45 = selection_excess_settings.arms["C45"]
+    c45_options = dict(c45.dl_runtime_options or {})
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "sr_c45_transfers_mr13e_score_exact_solver_to_full_roos_formal_system_without_new_selector_logic",
+        True,
+        c45.enabled
+        and c45.dl_id == c42.dl_id == "CONT13E_PIT"
+        and c45.param_source == c32_full.param_source == "selection_full_roos"
+        and c45.rule_policy == c32_full.rule_policy == "formal"
+        and c45.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+        and c45_options == c42_options
+        and c45_options.get("preserve_k_r0") is True
+        and c45_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+        and c45_options.get("selection_only") is True
+        and c45.robustness_role == "off"
+        and {"C45-C32", "C45-C42"}.issubset(
+            {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        )
+        and "C45" not in {
+            arm.arm_id
+            for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
+        },
     )
 
     forward_exact_settings = strategy_config.get_strategy_comparison_settings("forward_oos")

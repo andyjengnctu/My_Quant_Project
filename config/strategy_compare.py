@@ -35,7 +35,7 @@ from core.strategy_comparison import (
     validate_strategy_multi_seed_robustness_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 27
+STRATEGY_COMPARE_SCHEMA_VERSION = 28
 
 # =============================================================================
 # 1. 常用設定
@@ -62,6 +62,7 @@ STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE = True
 # Current Strategy Compare核心比較名稱的單一真理。
 # Selection PIT／Forward-OOS由profile頁首區分，不把研究階段或固定selector語意塞進arm顯示名稱。
 STRATEGY_COMPARE_DISPLAY_FULL_ROOS = "Full ROOS"
+STRATEGY_COMPARE_DISPLAY_FULL_MR13E_SCORE_CONSTRAINED = "Full MR-13E Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_ROOS = "Min ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_MR12B = "Min MR-12B"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13A = "Min MR-13A"
@@ -85,7 +86,7 @@ STRATEGY_COMPARE_PROFILES = {
         "end_date": "2020-12-31",
         "output_root": "outputs/strategy_compare/selection_pit",
         "reuse_output_roots": ("outputs/strategy_compare",),
-        "arm_ids": ("C32", "C23", "C25", "C28", "C35", "C39", "C40", "C41", "C42", "C43"),
+        "arm_ids": ("C32", "C23", "C25", "C28", "C35", "C39", "C40", "C41", "C42", "C43", "C45"),
         "contrast_ids": (
             "C32-C23",
             "C25-C23", "C28-C23", "C28-C25",
@@ -95,6 +96,7 @@ STRATEGY_COMPARE_PROFILES = {
             "C41-C23", "C41-C35", "C41-C39", "C41-C40",
             "C42-C23", "C42-C35", "C42-C41",
             "C43-C23", "C43-C28", "C42-C43",
+            "C45-C32", "C45-C42",
         ),
     },
     "forward_oos": {
@@ -642,6 +644,26 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
         "robustness_role": "off",
     },
+    "C45": {
+        "name": STRATEGY_COMPARE_DISPLAY_FULL_MR13E_SCORE_CONSTRAINED,
+        "description": (
+            "C42的Full ROOS parameter/rule-system transfer：完全重用同一MR-13E Selection PIT score、"
+            "原始ΣMR-13E score objective與同源deterministic exact branch-and-bound；"
+            "唯一策略體系變更為historical Full ROOS active params與formal rules。"
+            "K/R0、sizing、cash、orderability與execution全部由同日Full ROOS baseline semantics建立"
+        ),
+        "param_source": "selection_full_roos",
+        "rule_policy": "formal",
+        "dl_enabled": True,
+        "dl_id": "CONT13E_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
     "C44": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED_FORWARD,
         "description": (
@@ -711,6 +733,8 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C44-C3": {"left": "C44", "right": "C3", "description": "current Min ROOS下MR-13E exact constrained score selector相對DL-off baseline的Forward-OOS策略效果"},
     "C44-C20": {"left": "C44", "right": "C20", "description": "current Min ROOS下MR-13E exact constrained score selector相對MR-12B Forward runtime anchor的策略效果"},
     "C44-C36": {"left": "C44", "right": "C36", "description": "同一MR-13E frozen Forward score、current Min params、K/R0與execution；唯一把repair+1-swap heuristic改為exact constrained optimization"},
+    "C45-C32": {"left": "C45", "right": "C32", "description": "Selection PIT下historical Full ROOS/formal rules加入MR-13E exact constrained score selector，相對同一Full ROOS DL-off baseline的策略經濟效果"},
+    "C45-C42": {"left": "C45", "right": "C42", "description": "同一MR-13E PIT score與exact constrained solver下，Full ROOS/formal策略體系相對Min ROOS/all-off策略體系的整體差異；不是單一參數效果"},
     "C1-C3": {"left": "C1", "right": "C3", "description": "Full ROOS相對current Min ROOS的完整策略體系差異；不是單一參數效果"},
     "C32-C23": {"left": "C32", "right": "C23", "description": "Selection Full ROOS相對Selection Min ROOS的完整策略體系差異；不是單一參數效果"},
 }
