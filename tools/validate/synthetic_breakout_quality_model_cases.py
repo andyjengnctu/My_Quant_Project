@@ -639,17 +639,32 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         ),
     )
 
+    from filters.breakout_quality.contract import RUNTIME_SCOPE_WORKFLOW
+    from filters.breakout_quality.export_scores import _run_daily_continuous_workflow_export
+
+    event_scope_runtime_export_rejected = False
+    try:
+        _run_daily_continuous_workflow_export(
+            root=project_root,
+            args=SimpleNamespace(scope=RUNTIME_SCOPE_WORKFLOW),
+            profile=profile,
+        )
+    except ValueError as exc:
+        event_scope_runtime_export_rejected = (
+            "daily_eligible_stock_days" in str(exc)
+        )
+
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "continuous_ranker_profile_is_blocked_from_binary_workflow_and_runtime_loader",
+        "event_scope_continuous_ranker_stays_out_of_binary_runtime_while_daily_runtime_export_is_separate",
         (True, True, True, True),
         (
             "SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES" in train_source,
             "research-only continuous ranker artifact不得載入正式binary runtime contract" in artifact_source,
             "SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES" in app_source,
-            "SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES" in export_source,
+            event_scope_runtime_export_rejected,
         ),
     )
 
