@@ -471,6 +471,27 @@ def _find_reusable_pair_with_archived_source(
         ):
             continue
 
+        # Archived fallback is only a substitute for artifacts that are no longer
+        # available locally.  It must never override a current artifact identity
+        # that explicitly proves different bytes; otherwise a changed frozen score
+        # could miss the normal cache and then be incorrectly resurrected here.
+        current_artifacts = dict(status.get("artifact_identities") or {})
+        source_identity_names = (
+            ("manifest", "audit", "forward_scores")
+            if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+            else ("forward_scores",)
+        )
+        current_identity_conflict = any(
+            (current_sha := _artifact_identity_sha(
+                current_artifacts.get(f"dl:{dl_id}:{name}")
+            ))
+            and current_sha
+            != _artifact_identity_sha(run_artifacts.get(f"dl:{dl_id}:{name}"))
+            for name in source_identity_names
+        )
+        if current_identity_conflict:
+            continue
+
         stored_group_id = _pair_group_id(
             param_source=str(stored_on.get("param_source") or ""),
             rule_policy=str(stored_on.get("rule_policy") or ""),
