@@ -1866,6 +1866,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         all(token in orchestration_source for token in (
             "_completed_pair_pinned_continuous_score",
+            "_historical_continuous_score_provenance_entries",
             "_apply_completed_pair_frozen_score_reuse",
             "archived_artifact_identity",
             "current_canonical_path",
@@ -2017,6 +2018,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             status=archived_score_status,
             replay_cache=archived_score_replay_cache,
         )
+        historical_only_diagnostics = []
+        historical_only_recovered = score_reuse_module._completed_pair_pinned_continuous_score(
+            root=archived_root,
+            settings=forward_score_reuse_base,
+            status=archived_score_status,
+            replay_cache={"pairs": {"C44": None}},
+            dl_id="CONT13E",
+            diagnostics=historical_only_diagnostics,
+        )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "completed_pair_frozen_score_reuse_prefers_archived_identity_path_when_current_canonical_path_moved",
@@ -2041,7 +2051,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "dl:CONT13E:manifest": "NOT_REQUIRED",
             "dl:CONT13E:report": "NOT_REQUIRED",
             "dl:CONT13E:forward_scores": "REUSE",
-        },
+        }
+        and isinstance(historical_only_recovered, dict)
+        and historical_only_recovered.get("path_source") == "archived_artifact_identity"
+        and historical_only_recovered.get("sha256") == archived_score_sha
+        and "REUSE_OK:archived_artifact_identity" in historical_only_diagnostics,
     )
 
     add_check(

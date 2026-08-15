@@ -8962,3 +8962,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - C20/C25/C28/C29/C35/C36/C39/C40/C41/C43與其非current contrasts退出`config/strategy_compare.py` active catalog，移入`config/compatibility/strategy_compare_history.py`，只供舊工件identity解讀／歷史重現；C45維持既有`REJECTED_FULL_TRANSFER / NO_FORWARD / HISTORICAL_ONLY`。
 - Multi-seed robustness同步收斂：Selection fixed=`C32/C23`、stochastic=`C42`；Forward fixed=`C1/C3`、stochastic=`C44`。既有MR-12B／MR-13E heuristic同seed結果仍是有效歷史決策證據，但不再重訓或重放；current paired same-seed contrasts為空，直接看MR-13E Exact distribution相對Full/Min fixed references。
 - Strategy Compare schema由`29 → 30`，表示current scientific comparison matrix已明確變更；production/runtime default沒有同步切換，`DL-CONT12B`既有runtime benchmark與live-like integration仍維持原邊界。
+
+## 2026-08-15 — Minimal Forward matrix historical CONT13E provenance reuse fix
+
+- 使用者將current Strategy Compare收斂為`C1 Full ROOS / C3 Min ROOS / C44 Min MR-13E Constrained`後，Forward planning顯示`CONT13E model/manifest/report/forward_scores`全部BLOCKED，並導向「準備策略比較所需模型工件」。這不是新scientific failure：`SR-C44`已於正式run=`20260815_053617_C1-C3-C20-C29-C36-C44_182b73f08149`完成single-seed Forward PASS，後續8-seed robustness亦已完成。
+- 根因是completed-pair frozen-score recovery原本只會從「目前enabled且已cache命中的同DL arm」取得provenance。矩陣瘦身前C36仍active，可用其completed pair釘住`DL-CONT13E` archived score path/SHA；C36移入historical compatibility後，同一正式provenance因profile membership改變而不可見，造成假性model-training blocker。
+- 修正為：continuous frozen-score provenance與current profile membership解耦。`filters/breakout_quality/strategy_comparison.py`會從config-declared reuse roots掃描同一`DL-CONT13E` identity的正式completed pairs；只有stored DL identity一致、正式run為COMPLETED、`dl:<id>:forward_scores`有SHA、score path仍位於project root且實際bytes SHA一致、score table schema合法、completed pair coverage與current comparison period一致時才可作score-only reuse。不得由交易、selector sidecar或candidate輸出重建score universe。
+- 同時，當current arm透過completed-pair-pinned frozen score執行時，實際score path/SHA會回寫本次`artifact_identities`並重算config fingerprint，讓後續completed result具備自足的frozen-score provenance。model/manifest/report在此score-only replay仍明示`NOT_REQUIRED`；若找不到可驗證的historical/current score bytes，仍維持BLOCKED並導向正式模型工作類型。
+- Scientific decision不變：active matrix仍只保留`Full ROOS / Min ROOS / Min MR-13E Constrained`；不重訓MR-13E、不新增SR ID、不變更C44 objective/K/R0/exact solver/sizing/execution，也不改既有C44 Forward與8-seed結果。
+

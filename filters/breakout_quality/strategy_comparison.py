@@ -335,12 +335,20 @@ def _archived_pair_source_is_self_contained(
     *,
     run_artifact_identities: dict[str, Any],
     dl_id: str,
+    score_source: str,
 ) -> bool:
-    """Require proof that the completed pair was built from fully materialized PIT artifacts."""
+    """Require immutable source provenance before reusing an archived completed pair."""
 
-    return all(
+    required_names = (
+        ("manifest", "audit", "forward_scores")
+        if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+        else ("forward_scores",)
+        if score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS
+        else ()
+    )
+    return bool(required_names) and all(
         bool(_artifact_identity_sha(run_artifact_identities.get(f"dl:{dl_id}:{name}")))
-        for name in ("manifest", "audit", "forward_scores")
+        for name in required_names
     )
 
 
@@ -377,7 +385,11 @@ def _find_reusable_pair_with_archived_source(
     dl_id = str(on_arm.dl_id or "")
     if not dl_id or dl_id not in settings.dl_sources:
         return None
-    if settings.dl_sources[dl_id].score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+    score_source = settings.dl_sources[dl_id].score_source
+    if score_source not in {
+        SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+        SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+    }:
         return None
     dl_status = dict((status.get("dl_sources") or {}).get(dl_id) or {})
     if bool(dl_status.get("ready")):
@@ -450,6 +462,7 @@ def _find_reusable_pair_with_archived_source(
         if not _archived_pair_source_is_self_contained(
             run_artifact_identities=run_artifacts,
             dl_id=dl_id,
+            score_source=score_source,
         ):
             continue
 
@@ -739,6 +752,95 @@ def _resolve_pair_pinned_score_path(
     return resolved
 
 
+def _historical_continuous_score_provenance_entries(
+    *,
+    root: Path,
+    settings: StrategyComparisonSettings,
+    dl_id: str,
+) -> tuple[dict[str, Any], ...]:
+    """Find completed pairs that can prove one historical continuous-score artifact.
+
+    Source provenance is independent of current profile membership.  A retired
+    compatibility arm may therefore prove the exact frozen score used by a current
+    arm, provided the DL identity and recorded score SHA remain identical.
+    """
+
+    source = settings.dl_sources.get(str(dl_id))
+    if source is None or source.score_source != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+        return ()
+    current_identity = source.as_dict()
+    output: list[dict[str, Any]] = []
+    seen: set[tuple[Path, str]] = set()
+    run_dirs = sorted(
+        (
+            path
+            for runs_root in _comparison_runs_roots(root=root, settings=settings)
+            if runs_root.is_dir()
+            for path in runs_root.iterdir()
+            if path.is_dir()
+        ),
+        key=lambda path: path.name,
+        reverse=True,
+    )
+    for run_dir in run_dirs:
+        payload = _read_json(run_dir / "strategy_comparison.json")
+        if not isinstance(payload, dict) or str(payload.get("status") or "") != "COMPLETED":
+            continue
+        stored_settings = dict(payload.get("settings") or {})
+        stored_source = dict((stored_settings.get("dl_sources") or {}).get(str(dl_id)) or {})
+        if not stored_source:
+            continue
+        if any(
+            stored_source.get(field) != current_identity.get(field)
+            for field in (
+                "filter_id",
+                "model_architecture",
+                "experiment_profile",
+                "threshold",
+                "score_source",
+            )
+        ):
+            continue
+        archived_identity = dict(
+            (payload.get("artifact_identities") or {}).get(
+                f"dl:{dl_id}:forward_scores"
+            )
+            or {}
+        )
+        if not _artifact_identity_sha(archived_identity):
+            continue
+
+        stored_arms = dict(stored_settings.get("arms") or {})
+        pairs = dict(payload.get("pairs") or {})
+        for arm_id, raw_arm in stored_arms.items():
+            arm = dict(raw_arm or {})
+            if not bool(arm.get("dl_enabled")) or str(arm.get("dl_id") or "") != str(dl_id):
+                continue
+            source_group_id = _pair_group_id(
+                param_source=str(arm.get("param_source") or ""),
+                rule_policy=str(arm.get("rule_policy") or ""),
+                dl_id=str(dl_id),
+                dl_runtime_mode=str(arm.get("dl_runtime_mode") or ""),
+            )
+            pair_payload = pairs.get(source_group_id)
+            if not isinstance(pair_payload, dict):
+                continue
+            key = (run_dir, source_group_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            output.append(
+                {
+                    "source_run_dir": run_dir,
+                    "source_pair_dir": run_dir / "pairs" / source_group_id,
+                    "source_group_id": source_group_id,
+                    "provenance_arm_id": str(arm_id),
+                    "source_artifact_mode": "historical_completed_pair_provenance",
+                }
+            )
+    return tuple(output)
+
+
 def _completed_pair_pinned_continuous_score(
     *,
     root: Path,
@@ -778,7 +880,24 @@ def _completed_pair_pinned_continuous_score(
         for arm in dependent_arms
         if isinstance(pairs.get(arm.arm_id), dict)
     ]
-    if not cached_entries:
+    historical_entries = _historical_continuous_score_provenance_entries(
+        root=root,
+        settings=settings,
+        dl_id=str(dl_id),
+    )
+    provenance_entries = [
+        *cached_entries,
+        *(
+            entry
+            for entry in historical_entries
+            if not any(
+                str(existing.get("source_run_dir") or "") == str(entry.get("source_run_dir") or "")
+                and str(existing.get("source_group_id") or "") == str(entry.get("source_group_id") or "")
+                for existing in cached_entries
+            )
+        ),
+    ]
+    if not provenance_entries:
         note("NO_COMPLETED_PAIR_PROVENANCE")
         return None
 
@@ -791,7 +910,7 @@ def _completed_pair_pinned_continuous_score(
     current_start = str(current_period.get("start") or "")
     current_end = str(current_period.get("end") or "")
 
-    for entry in cached_entries:
+    for entry in provenance_entries:
         run_dir = Path(str(entry.get("source_run_dir") or "")).resolve()
         payload = _read_json(run_dir / "strategy_comparison.json")
         if not isinstance(payload, dict) or str(payload.get("status") or "") != "COMPLETED":
@@ -967,8 +1086,6 @@ def _apply_completed_pair_frozen_score_reuse(
             continue
         if all(isinstance(pairs.get(arm.arm_id), dict) for arm in dependent_arms):
             continue
-        if not any(isinstance(pairs.get(arm.arm_id), dict) for arm in dependent_arms):
-            continue
         diagnostics: list[str] = []
         recovered = _completed_pair_pinned_continuous_score(
             root=root,
@@ -1078,12 +1195,16 @@ def _apply_completed_pair_frozen_score_reuse(
         }
         for dl_id, value in overrides.items()
     }
+    artifact_identities = dict(updated.get("artifact_identities") or {})
     for dl_id, value in overrides.items():
         row = dict(updated["dl_sources"][dl_id])
         row["ready"] = True
         row["status"] = "COMPLETED_PAIR_PINNED_FROZEN_SCORE"
         row["required_for_current_execution"] = True
         files = {}
+        display_score_path = project_relative_display_path(
+            Path(value["score_path"]), project_root=root
+        )
         for key, file_row in dict(row.get("files") or {}).items():
             file_updated = dict(file_row)
             if key == "forward_scores":
@@ -1092,9 +1213,7 @@ def _apply_completed_pair_frozen_score_reuse(
                     "status": "READY_BY_COMPLETED_PAIR_SHA",
                     "action": "REUSE",
                     "sha256": value["sha256"],
-                    "path": project_relative_display_path(
-                        Path(value["score_path"]), project_root=root
-                    ),
+                    "path": display_score_path,
                     "required_for_current_execution": True,
                     "path_source": value["path_source"],
                 })
@@ -1106,6 +1225,17 @@ def _apply_completed_pair_frozen_score_reuse(
             files[key] = file_updated
         row["files"] = files
         updated["dl_sources"][dl_id] = row
+        artifact_identities[f"dl:{dl_id}:forward_scores"] = {
+            "path": display_score_path,
+            "sha256": value["sha256"],
+            "status": "READY_BY_COMPLETED_PAIR_SHA",
+            "path_source": value["path_source"],
+        }
+    updated["artifact_identities"] = artifact_identities
+    updated["config_fingerprint"] = strategy_comparison_fingerprint(
+        settings,
+        artifact_identities=artifact_identities,
+    )
     return updated
 
 
