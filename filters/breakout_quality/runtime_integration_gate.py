@@ -82,13 +82,24 @@ def _add_check(
 
 def _resolve_candidate_and_baseline(
     settings: StrategyComparisonSettings,
+    *,
+    candidate_arm_id: str,
 ) -> tuple[StrategyComparisonArm, StrategyComparisonArm]:
-    candidates = [arm for arm in settings.enabled_arms if arm.dl_enabled]
+    candidates = [
+        arm
+        for arm in settings.enabled_arms
+        if arm.arm_id == str(candidate_arm_id)
+    ]
     if len(candidates) != 1:
         raise ValueError(
-            f"{settings.profile_id} runtime integration必須恰有一個active DL candidate，actual={len(candidates)}"
+            f"{settings.profile_id} runtime integration candidate必須由config唯一解析："
+            f"arm_id={candidate_arm_id!r}, actual={len(candidates)}"
         )
     candidate = candidates[0]
+    if not candidate.dl_enabled:
+        raise ValueError(
+            f"{settings.profile_id} runtime integration candidate必須是DL-enabled arm: {candidate.arm_id}"
+        )
     baselines = [
         arm
         for arm in settings.enabled_arms
@@ -107,8 +118,12 @@ def resolve_runtime_candidate_contract() -> dict[str, Any]:
     cfg = get_strategy_runtime_integration_settings()
     selection = get_strategy_comparison_settings(cfg.selection_profile_id)
     forward = get_strategy_comparison_settings(cfg.forward_profile_id)
-    selection_candidate, selection_baseline = _resolve_candidate_and_baseline(selection)
-    forward_candidate, forward_baseline = _resolve_candidate_and_baseline(forward)
+    selection_candidate, selection_baseline = _resolve_candidate_and_baseline(
+        selection, candidate_arm_id=cfg.selection_candidate_arm_id
+    )
+    forward_candidate, forward_baseline = _resolve_candidate_and_baseline(
+        forward, candidate_arm_id=cfg.forward_candidate_arm_id
+    )
     selection_source = selection.dl_sources[str(selection_candidate.dl_id)]
     forward_source = forward.dl_sources[str(forward_candidate.dl_id)]
     return {

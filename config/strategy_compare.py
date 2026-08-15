@@ -37,7 +37,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 30
+STRATEGY_COMPARE_SCHEMA_VERSION = 31
 
 # =============================================================================
 # 1. 常用設定
@@ -68,6 +68,9 @@ STRATEGY_RUNTIME_INTEGRATION = {
     "enabled": True,
     "selection_profile_id": "selection_pit",
     "forward_profile_id": "forward_oos",
+    # Runtime promotion candidate由config明確指定；研究matrix可同時存在其他DL arms。
+    "selection_candidate_arm_id": "C42",
+    "forward_candidate_arm_id": "C44",
     "selection_robustness_id": "selection_pit",
     "forward_robustness_id": "forward_oos",
     "output_root": "outputs/strategy_compare/runtime_integration",
@@ -84,24 +87,29 @@ STRATEGY_RUNTIME_INTEGRATION = {
 STRATEGY_COMPARE_DISPLAY_FULL_ROOS = "Full ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_ROOS = "Min ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED = "Min MR-13E Constrained"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_NO_R0 = "Min MR-13E Score Exact No-R0"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CAPITAL_NO_R0 = "Min MR-13E Score×Capital Exact No-R0"
 
 # Strategy Compare以研究階段profile隔離設定與輸出；App只顯示泛化階段名稱，
 # arms／contrasts／period／output namespace全部由本檔驅動。
 STRATEGY_COMPARE_PROFILES = {
     "selection_pit": {
         "label": "Selection PIT 策略比較",
-        "description": "2014～2020 point-in-time策略轉化Gate；active research只比較Full ROOS、Min ROOS與Min MR-13E exact constrained。",
+        "description": "2014～2020 point-in-time策略轉化Gate；同批比較MR-13E exact R0 control、raw-score No-R0與Score×Capital No-R0。",
         "display_alignment_group": "core_strategy_compare",
         "display_alignment_arm_ids": ("C32", "C23", "C42"),
         "start_date": "2014-01-01",
         "end_date": "2020-12-31",
         "output_root": "outputs/strategy_compare/selection_pit",
         "reuse_output_roots": ("outputs/strategy_compare",),
-        "arm_ids": ("C32", "C23", "C42"),
+        "arm_ids": ("C32", "C23", "C42", "C46", "C47"),
         "contrast_ids": (
             "C32-C23",
             "C42-C23",
             "C42-C32",
+            "C46-C42",
+            "C47-C46",
+            "C47-C42",
         ),
     },
     "forward_oos": {
@@ -414,6 +422,47 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C46": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_NO_R0,
+        "description": (
+            "Selection PIT R0 ablation：與C42相同historical Min params/all-off、frozen MR-13E PIT score、"
+            "K、canonical sizing/cash/orderability/execution與exact branch-and-bound；唯一移除baseline R0 floor，"
+            "直接求canonical-cash feasible的MR-13E score-sum global optimum"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-r0-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k": True,
+            "preserve_r0": False,
+            "r0_minimum_repair": False,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C47": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CAPITAL_NO_R0,
+        "description": (
+            "Selection PIT最簡單Score×Capital objective：與C46相同No-R0/K/canonical constraints與frozen MR-13E PIT score；"
+            "exact objective僅改為Σ(score_i × canonical reserved_cost_i)，不做normalization、shift、lambda或額外R0 repair"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-capital-no-r0-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k": True,
+            "preserve_r0": False,
+            "r0_minimum_repair": False,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
     "C44": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED,
         "description": (
@@ -453,6 +502,9 @@ STRATEGY_COMPARE_ARMS = {
 STRATEGY_COMPARE_CONTRASTS = {
     "C42-C23": {"left": "C42", "right": "C23", "description": "Selection PIT frozen MR-13E score exact constrained optimum相對DL-off Min ROOS的策略經濟效果"},
     "C42-C32": {"left": "C42", "right": "C32", "description": "Selection PIT active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
+    "C46-C42": {"left": "C46", "right": "C42", "description": "Selection PIT純R0消融：同MR-13E score/K/exact/cash下移除baseline R0 floor的增量"},
+    "C47-C46": {"left": "C47", "right": "C46", "description": "Selection PIT同為No-R0 exact，只把objective由ΣScore改成Σ(Score×canonical reserved capital)"},
+    "C47-C42": {"left": "C47", "right": "C42", "description": "Selection PIT Score×Capital No-R0相對current R0-constrained MR-13E exact control的整體效果"},
     "C44-C3": {"left": "C44", "right": "C3", "description": "current Min ROOS下MR-13E exact constrained score selector相對DL-off baseline的Forward-OOS策略效果"},
     "C44-C1": {"left": "C44", "right": "C1", "description": "Forward-OOS active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
     "C1-C3": {"left": "C1", "right": "C3", "description": "Full ROOS相對current Min ROOS的完整策略體系差異；不是單一參數效果"},
@@ -522,6 +574,8 @@ def get_strategy_runtime_integration_settings() -> StrategyRuntimeIntegrationSet
         enabled=bool(raw.get("enabled", True)),
         selection_profile_id=str(raw.get("selection_profile_id") or "").strip(),
         forward_profile_id=str(raw.get("forward_profile_id") or "").strip(),
+        selection_candidate_arm_id=str(raw.get("selection_candidate_arm_id") or "").strip(),
+        forward_candidate_arm_id=str(raw.get("forward_candidate_arm_id") or "").strip(),
         selection_robustness_id=str(raw.get("selection_robustness_id") or "").strip(),
         forward_robustness_id=str(raw.get("forward_robustness_id") or "").strip(),
         output_root=str(raw.get("output_root") or "").strip(),
@@ -536,6 +590,16 @@ def get_strategy_runtime_integration_settings() -> StrategyRuntimeIntegrationSet
     robustness_ids = set(STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES)
     if settings.selection_profile_id not in profile_ids or settings.forward_profile_id not in profile_ids:
         raise ValueError("runtime integration引用不存在的Strategy Compare profile")
+    candidate_specs = (
+        (settings.selection_profile_id, settings.selection_candidate_arm_id, "Selection"),
+        (settings.forward_profile_id, settings.forward_candidate_arm_id, "Forward"),
+    )
+    for profile_id, arm_id, stage_label in candidate_specs:
+        active_ids = {str(value) for value in STRATEGY_COMPARE_PROFILES[profile_id].get("arm_ids", ())}
+        if arm_id not in active_ids:
+            raise ValueError(
+                f"runtime integration {stage_label} candidate不在active profile: {arm_id}"
+            )
     if settings.selection_robustness_id not in robustness_ids or settings.forward_robustness_id not in robustness_ids:
         raise ValueError("runtime integration引用不存在的robustness profile")
     return settings

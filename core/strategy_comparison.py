@@ -40,6 +40,12 @@ STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTI
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL = (
     'resource-aware-continuous-score-constrained-optimal'
 )
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL = (
+    'resource-aware-continuous-score-no-r0-constrained-optimal'
+)
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL = (
+    'resource-aware-continuous-score-capital-no-r0-constrained-optimal'
+)
 SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_HARD_FILTER,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
@@ -54,6 +60,8 @@ SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
 )
 
 
@@ -315,6 +323,8 @@ class StrategyRuntimeIntegrationSettings:
     enabled: bool
     selection_profile_id: str
     forward_profile_id: str
+    selection_candidate_arm_id: str
+    forward_candidate_arm_id: str
     selection_robustness_id: str
     forward_robustness_id: str
     output_root: str
@@ -328,6 +338,8 @@ class StrategyRuntimeIntegrationSettings:
             "enabled": bool(self.enabled),
             "selection_profile_id": self.selection_profile_id,
             "forward_profile_id": self.forward_profile_id,
+            "selection_candidate_arm_id": self.selection_candidate_arm_id,
+            "forward_candidate_arm_id": self.forward_candidate_arm_id,
             "selection_robustness_id": self.selection_robustness_id,
             "forward_robustness_id": self.forward_robustness_id,
             "output_root": self.output_root,
@@ -344,6 +356,8 @@ def validate_strategy_runtime_integration_settings(
         "label",
         "selection_profile_id",
         "forward_profile_id",
+        "selection_candidate_arm_id",
+        "forward_candidate_arm_id",
         "selection_robustness_id",
         "forward_robustness_id",
     ):
@@ -869,6 +883,20 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                     raise ValueError(f"arm {key} Score constrained必須preserve_k_r0=True")
                 if options.get("constrained_solver") != "exact_branch_and_bound_v1":
                     raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
+            if arm.dl_runtime_mode in {
+                STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
+                STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
+            }:
+                if options.get("preserve_k") is not True:
+                    raise ValueError(f"arm {key} Score no-R0 exact必須preserve_k=True")
+                if options.get("preserve_r0") is not False:
+                    raise ValueError(f"arm {key} Score no-R0 exact必須preserve_r0=False")
+                if options.get("r0_minimum_repair") is not False:
+                    raise ValueError(f"arm {key} Score no-R0 exact必須r0_minimum_repair=False")
+                if options.get("constrained_solver") != "exact_branch_and_bound_v1":
+                    raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
+                if options.get("selection_only") is not True:
+                    raise ValueError(f"arm {key} Score no-R0 exact目前只允許Selection PIT")
                 selection_only = options.get("selection_only")
                 if not isinstance(selection_only, bool):
                     raise ValueError(f"arm {key} Score constrained selection_only必須為bool")

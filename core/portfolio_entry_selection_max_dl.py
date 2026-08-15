@@ -224,6 +224,8 @@ def _objective_selector_name(objective_mode, *, suffix, no_r0=False):
         prefix = 'continuous-expected-pnl'
     elif objective_mode == 'excess_alpha':
         prefix = 'continuous-excess-alpha'
+    elif objective_mode == 'score_capital':
+        prefix = 'continuous-score-capital-product'
     else:
         prefix = 'continuous-score-max-dl'
     if no_r0:
@@ -254,6 +256,31 @@ def _max_dl_basket_quality_key(rows, *, base_rank):
         int(len(scores)),
         float(sum(scores)),
         sorted_scores,
+        stable_base_ranks,
+    )
+
+
+def _score_capital_basket_quality_key(result, *, base_rank):
+    """Higher is better: score coverage, then Σ(score × canonical reserved capital)."""
+
+    rows = list(result.get('selected_rows') or [])
+    plans = list(result.get('selected_plans') or [])
+    if len(rows) != len(plans):
+        raise ValueError('Score×Capital selector selected_rows/plans長度不一致')
+    values = []
+    for row, plan in zip(rows, plans):
+        score = _candidate_continuous_score(row)
+        if score is None:
+            continue
+        reserved_cost_milli = int(plan.get('reserved_cost_milli', 0) or 0)
+        values.append(float(score) * float(reserved_cost_milli))
+    stable_base_ranks = tuple(
+        -base_rank[id(row)]
+        for row in sorted(rows, key=lambda item: base_rank[id(item)])
+    )
+    return (
+        int(len(values)),
+        float(sum(values)),
         stable_base_ranks,
     )
 
@@ -873,62 +900,72 @@ def _reorder_resource_aware_continuous_constrained_optimal(
     baseline,
     default_diag,
     objective_mode,
+    preserve_reserve_floor=True,
 ):
-    """Exactly maximize one frozen DL objective under the existing K/R0 contract.
+    """Exactly maximize one frozen DL objective under canonical K/cash feasibility.
 
-    The matching feasible-ascent selector is used only to obtain a feasible incumbent
-    lower bound; it never restricts membership. Branch-and-bound then visits the full
-    candidate include/exclude tree in canonical baseline execution order. Every
-    included state is rebuilt through canonical cash-capped reservation, preserving
-    production sizing/cash semantics. Pruning uses only admissible optimistic bounds:
-    remaining candidate count, standalone maximum reserve, objective coverage, and
-    objective sum. There is no candidate truncation, beam width, time budget, lambda,
-    or tuned tolerance. A normal return therefore certifies the exact lexicographic
-    optimum for the selected objective under K/R0/canonical-cash feasibility.
+    The existing C42/C41 paths keep the same-parameter baseline R0 floor.  No-R0
+    research paths keep only baseline K plus canonical sizing/cash/orderability and use
+    the baseline solely as a feasible incumbent; no minimum-repair or feasible-ascent
+    membership restriction is applied. Branch-and-bound visits the full candidate
+    include/exclude tree in canonical baseline execution order. Every included state is
+    rebuilt through canonical cash-capped reservation. Pruning uses only admissible
+    optimistic bounds. A normal return certifies the exact lexicographic optimum for
+    the selected objective under the requested constraints.
     """
 
-    if objective_mode not in {'score', 'excess_alpha'}:
+    if objective_mode not in {'score', 'score_capital', 'excess_alpha'}:
         raise ValueError(f'constrained optimal不支援objective_mode={objective_mode!r}')
 
     candidates = list(rows or [])
     target_count = int(baseline['selected_count'])
-    reserve_floor_milli = int(baseline['reserved_cost_milli'])
+    reserve_floor_milli = (
+        int(baseline['reserved_cost_milli']) if preserve_reserve_floor else 0
+    )
     base_rank = {id(row): idx for idx, row in enumerate(candidates)}
     seed_source = (
-        'c35-feasible-ascent' if objective_mode == 'score' else 'c39-feasible-ascent'
+        'c35-feasible-ascent'
+        if preserve_reserve_floor and objective_mode == 'score'
+        else 'c39-feasible-ascent'
+        if preserve_reserve_floor and objective_mode == 'excess_alpha'
+        else 'objective-top-k-if-cash-feasible-else-baseline'
     )
     selector_name = _objective_selector_name(
         objective_mode,
         suffix='constrained-optimal',
+        no_r0=not preserve_reserve_floor,
     )
 
-    seed_order, seed_diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
-        candidates,
-        available_cash=available_cash,
-        sizing_equity=sizing_equity,
-        free_slots=free_slots,
-        params=params,
-        baseline=baseline,
-        default_diag=default_diag,
-        objective_mode=objective_mode,
-    )
-    if not bool(seed_diag.get('max_dl_eligible', False)):
-        out = dict(seed_diag)
-        out.update({
-            'selector': selector_name,
-            'basket_objective': str(objective_mode),
-            'constrained_solver_optimality_certified': True,
-            'constrained_solver_search_states': 0,
-            'constrained_solver_pruned_states': 0,
-            'constrained_solver_feasible_baskets': 0,
-            'constrained_solver_seed_source': seed_source,
-            'max_dl_repair_steps': 0,
-            'max_dl_repair_evaluations': 0,
-            'max_dl_feasible_ascent_steps': 0,
-            'max_dl_feasible_ascent_evaluations': 0,
-            'max_dl_feasible_ascent_local_optimum': False,
-        })
-        return seed_order, out
+    seed_order = None
+    seed_diag = {}
+    if preserve_reserve_floor:
+        seed_order, seed_diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
+            candidates,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=free_slots,
+            params=params,
+            baseline=baseline,
+            default_diag=default_diag,
+            objective_mode=objective_mode,
+        )
+        if not bool(seed_diag.get('max_dl_eligible', False)):
+            out = dict(seed_diag)
+            out.update({
+                'selector': selector_name,
+                'basket_objective': str(objective_mode),
+                'constrained_solver_optimality_certified': True,
+                'constrained_solver_search_states': 0,
+                'constrained_solver_pruned_states': 0,
+                'constrained_solver_feasible_baskets': 0,
+                'constrained_solver_seed_source': seed_source,
+                'max_dl_repair_steps': 0,
+                'max_dl_repair_evaluations': 0,
+                'max_dl_feasible_ascent_steps': 0,
+                'max_dl_feasible_ascent_evaluations': 0,
+                'max_dl_feasible_ascent_local_optimum': False,
+            })
+            return seed_order, out
 
     def evaluate_basket(basket):
         ordered = _max_dl_execution_order(basket, base_rank=base_rank)
@@ -947,19 +984,9 @@ def _reorder_resource_aware_continuous_constrained_optimal(
                 result.get('selected_rows') or [],
                 base_rank=base_rank,
             )
+        if objective_mode == 'score_capital':
+            return _score_capital_basket_quality_key(result, base_rank=base_rank)
         return _excess_alpha_basket_quality_key(result, base_rank=base_rank)
-
-    seed_basket = list(seed_order[:target_count])
-    incumbent_order, incumbent_result = evaluate_basket(seed_basket)
-    if not _max_dl_basket_is_feasible(
-        incumbent_result,
-        target_count=target_count,
-        reserve_floor_milli=reserve_floor_milli,
-    ):
-        raise RuntimeError('constrained solver無法取得同objective可行incumbent')
-    best_basket = list(incumbent_order)
-    best_result = incumbent_result
-    best_key = basket_quality_key(best_result)
 
     standalone = []
     for row in candidates:
@@ -978,6 +1005,16 @@ def _reorder_resource_aware_continuous_constrained_optimal(
             score = _candidate_continuous_score(row)
             coverage = int(score is not None)
             raw_value = 0.0 if score is None else float(score)
+        elif objective_mode == 'score_capital':
+            score = _candidate_continuous_score(row)
+            plan = single_result['selected_plans'][0]
+            reserved_cost_milli = int(plan.get('reserved_cost_milli', 0) or 0)
+            coverage = int(score is not None)
+            raw_value = (
+                0.0
+                if not coverage
+                else float(score) * float(reserved_cost_milli)
+            )
         else:
             plan = single_result['selected_plans'][0]
             expected_excess_r = _candidate_expected_excess_r(row)
@@ -1009,6 +1046,41 @@ def _reorder_resource_aware_continuous_constrained_optimal(
             standalone[idx]['coverage_upper']
         )
 
+    if preserve_reserve_floor:
+        seed_basket = list(seed_order[:target_count])
+    else:
+        if objective_mode == 'score':
+            seed_ranked = _max_dl_score_order(candidates, base_rank=base_rank)
+        else:
+            seed_ranked = sorted(
+                candidates,
+                key=lambda row: (
+                    0 if standalone[base_rank[id(row)]]['coverage_upper'] else 1,
+                    -float(standalone[base_rank[id(row)]]['objective_upper']),
+                    base_rank[id(row)],
+                ),
+            )
+        seed_basket = list(seed_ranked[:target_count])
+
+    incumbent_order, incumbent_result = evaluate_basket(seed_basket)
+    if not _max_dl_basket_is_feasible(
+        incumbent_result,
+        target_count=target_count,
+        reserve_floor_milli=reserve_floor_milli,
+    ):
+        incumbent_order, incumbent_result = evaluate_basket(
+            list(baseline.get('selected_rows') or [])
+        )
+    if not _max_dl_basket_is_feasible(
+        incumbent_result,
+        target_count=target_count,
+        reserve_floor_milli=reserve_floor_milli,
+    ):
+        raise RuntimeError('constrained solver無法取得同objective可行incumbent')
+    best_basket = list(incumbent_order)
+    best_result = incumbent_result
+    best_key = basket_quality_key(best_result)
+
     search_states = 0
     pruned_states = 0
     feasible_baskets = 1
@@ -1020,6 +1092,19 @@ def _reorder_resource_aware_continuous_constrained_optimal(
                 for row in list(result.get('selected_rows') or [])
                 if (score := _candidate_continuous_score(row)) is not None
             ]
+            return int(len(values)), float(sum(values))
+        if objective_mode == 'score_capital':
+            values = []
+            for row, plan in zip(
+                list(result.get('selected_rows') or []),
+                list(result.get('selected_plans') or []),
+            ):
+                score = _candidate_continuous_score(row)
+                if score is None:
+                    continue
+                values.append(
+                    float(score) * float(int(plan.get('reserved_cost_milli', 0) or 0))
+                )
             return int(len(values)), float(sum(values))
 
         coverage = 0
@@ -1175,7 +1260,7 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         'basket_search_states': int(search_states),
         'basket_search_pruned': int(pruned_states),
         'basket_feasible_count': int(feasible_baskets),
-        'resource_preservation_required': True,
+        'resource_preservation_required': bool(preserve_reserve_floor),
         'pre_market_order_limit': int(target_count),
         'max_dl_eligible': True,
         'max_dl_repair_steps': 0,
@@ -1207,7 +1292,7 @@ def _reorder_resource_aware_continuous_constrained_optimal(
     })
     if int(best_result['selected_count']) != target_count:
         raise RuntimeError('constrained solver未維持同參數baseline K')
-    if int(best_result['reserved_cost_milli']) < reserve_floor_milli:
+    if preserve_reserve_floor and int(best_result['reserved_cost_milli']) < reserve_floor_milli:
         raise RuntimeError('constrained solver輸出低於同參數baseline R0')
     return final_order, out
 
@@ -1254,6 +1339,52 @@ def _reorder_resource_aware_continuous_score_constrained_optimal(
         default_diag=default_diag,
         objective_mode='score',
     )
+
+def _reorder_resource_aware_continuous_score_no_r0_constrained_optimal(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    return _reorder_resource_aware_continuous_constrained_optimal(
+        rows,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=free_slots,
+        params=params,
+        baseline=baseline,
+        default_diag=default_diag,
+        objective_mode='score',
+        preserve_reserve_floor=False,
+    )
+
+
+def _reorder_resource_aware_continuous_score_capital_no_r0_constrained_optimal(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    return _reorder_resource_aware_continuous_constrained_optimal(
+        rows,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=free_slots,
+        params=params,
+        baseline=baseline,
+        default_diag=default_diag,
+        objective_mode='score_capital',
+        preserve_reserve_floor=False,
+    )
+
 
 def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     rows,

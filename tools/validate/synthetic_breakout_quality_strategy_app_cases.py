@@ -2159,6 +2159,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         build_max_dl_repair_mechanism_diagnostic,
         _excess_alpha_basket_quality_key,
         _max_dl_basket_quality_key,
+        _score_capital_basket_quality_key,
         _max_dl_execution_order,
     )
     from core.strategy_params import V16StrategyParams
@@ -3023,6 +3024,130 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == [row["ticker"] for row in score_brute_best["selected_rows"]],
     )
 
+    score_no_r0_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-score-no-r0-constrained-optimal",
+            expected_excess_r=expected_excess_r,
+        )
+        for ticker, price, qty, score, expected_excess_r in constrained_seed
+    ]
+    score_no_r0_order, score_no_r0_diag = reorder_candidates_for_resource_aware_quality(
+        score_no_r0_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=resource_params,
+    )
+    score_no_r0_action = select_resource_aware_action_candidates(
+        score_no_r0_order, score_no_r0_diag
+    )
+    score_no_r0_result = _simulate_reserved_candidate_order(
+        score_no_r0_action,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=2,
+        params=resource_params,
+    )
+    score_no_r0_base_rank = {id(row): idx for idx, row in enumerate(score_no_r0_rows)}
+    score_no_r0_brute_best = None
+    score_no_r0_brute_key = None
+    for combo in itertools.combinations(score_no_r0_rows, 2):
+        combo_order = _max_dl_execution_order(combo, base_rank=score_no_r0_base_rank)
+        combo_result = _simulate_reserved_candidate_order(
+            combo_order,
+            available_cash=350_000.0,
+            sizing_equity=2_000_000.0,
+            free_slots=2,
+            params=resource_params,
+        )
+        if combo_result["selected_count"] != 2:
+            continue
+        combo_key = _max_dl_basket_quality_key(
+            combo_result["selected_rows"], base_rank=score_no_r0_base_rank
+        )
+        if score_no_r0_brute_key is None or combo_key > score_no_r0_brute_key:
+            score_no_r0_brute_key = combo_key
+            score_no_r0_brute_best = combo_result
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "mr13e_score_no_r0_exact_matches_exhaustive_k_cash_oracle_without_r0_repair",
+        True,
+        score_no_r0_diag.get("basket_objective") == "score"
+        and score_no_r0_diag.get("resource_preservation_required") is False
+        and score_no_r0_diag.get("constrained_solver_optimality_certified") is True
+        and score_no_r0_diag.get("constrained_solver_seed_source")
+        == "objective-top-k-if-cash-feasible-else-baseline"
+        and int(score_no_r0_diag.get("max_dl_repair_steps", -1)) == 0
+        and int(score_no_r0_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
+        and score_no_r0_result["selected_count"] == 2
+        and score_no_r0_brute_best is not None
+        and [row["ticker"] for row in score_no_r0_result["selected_rows"]]
+        == [row["ticker"] for row in score_no_r0_brute_best["selected_rows"]],
+    )
+
+    score_capital_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-score-capital-no-r0-constrained-optimal",
+            expected_excess_r=expected_excess_r,
+        )
+        for ticker, price, qty, score, expected_excess_r in constrained_seed
+    ]
+    score_capital_order, score_capital_diag = reorder_candidates_for_resource_aware_quality(
+        score_capital_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=resource_params,
+    )
+    score_capital_action = select_resource_aware_action_candidates(
+        score_capital_order, score_capital_diag
+    )
+    score_capital_result = _simulate_reserved_candidate_order(
+        score_capital_action,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=2,
+        params=resource_params,
+    )
+    score_capital_base_rank = {id(row): idx for idx, row in enumerate(score_capital_rows)}
+    score_capital_brute_best = None
+    score_capital_brute_key = None
+    for combo in itertools.combinations(score_capital_rows, 2):
+        combo_order = _max_dl_execution_order(combo, base_rank=score_capital_base_rank)
+        combo_result = _simulate_reserved_candidate_order(
+            combo_order,
+            available_cash=350_000.0,
+            sizing_equity=2_000_000.0,
+            free_slots=2,
+            params=resource_params,
+        )
+        if combo_result["selected_count"] != 2:
+            continue
+        combo_key = _score_capital_basket_quality_key(
+            combo_result, base_rank=score_capital_base_rank
+        )
+        if score_capital_brute_key is None or combo_key > score_capital_brute_key:
+            score_capital_brute_key = combo_key
+            score_capital_brute_best = combo_result
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "mr13e_score_times_canonical_reserved_capital_no_r0_exact_matches_exhaustive_k_cash_oracle",
+        True,
+        score_capital_diag.get("basket_objective") == "score_capital"
+        and score_capital_diag.get("resource_preservation_required") is False
+        and score_capital_diag.get("constrained_solver_optimality_certified") is True
+        and int(score_capital_diag.get("max_dl_repair_steps", -1)) == 0
+        and int(score_capital_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
+        and score_capital_result["selected_count"] == 2
+        and score_capital_brute_best is not None
+        and [row["ticker"] for row in score_capital_result["selected_rows"]]
+        == [row["ticker"] for row in score_capital_brute_best["selected_rows"]],
+    )
+
     multi_swap_seed = (
         ("MS0", 100.0, 771, 1.0, -0.2293296791117404),
         ("MS1", 30.0, 1447, 0.9166666666666666, -0.10787340892209005),
@@ -3183,6 +3308,35 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
         )
         and "C42" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
+    )
+
+    c46 = selection_excess_settings.arms["C46"]
+    c46_options = dict(c46.dl_runtime_options or {})
+    c47 = selection_excess_settings.arms["C47"]
+    c47_options = dict(c47.dl_runtime_options or {})
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "sr_c46_c47_are_selection_only_no_r0_exact_ablation_and_score_times_capital_pair",
+        True,
+        c46.enabled
+        and c47.enabled
+        and c46.dl_id == c47.dl_id == c42.dl_id == "CONT13E_PIT"
+        and c46.dl_runtime_mode == "resource-aware-continuous-score-no-r0-constrained-optimal"
+        and c47.dl_runtime_mode == "resource-aware-continuous-score-capital-no-r0-constrained-optimal"
+        and c46_options.get("preserve_k") is True
+        and c47_options.get("preserve_k") is True
+        and c46_options.get("preserve_r0") is False
+        and c47_options.get("preserve_r0") is False
+        and c46_options.get("r0_minimum_repair") is False
+        and c47_options.get("r0_minimum_repair") is False
+        and c46_options.get("constrained_solver") == c47_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+        and c46_options.get("selection_only") is True
+        and c47_options.get("selection_only") is True
+        and {"C46-C42", "C47-C46", "C47-C42"}.issubset(
+            {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        )
+        and "C46" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms}
+        and "C47" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
     )
 
     c43 = selection_excess_settings.arms["C43"]
@@ -4905,6 +5059,8 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
             and cfg.comparison_anchor_experiment_profile != workflow.experiment_profile
             and cfg.selection_profile_id == "selection_pit"
             and cfg.forward_profile_id == "forward_oos"
+            and selection["candidate_arm_id"] == cfg.selection_candidate_arm_id
+            and forward["candidate_arm_id"] == cfg.forward_candidate_arm_id
         ),
     )
     from filters.breakout_quality.runtime import get_breakout_quality_ranking_source_context
