@@ -59,8 +59,9 @@ BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horiz
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 
-# Daily-universal model Gate：只在各profile已通過Forward Model Gate後加入。
-# 此清單只控制模型研究選單的batch Selection PIT驗證，不改Strategy workflow/runtime source。
+# Daily-universal batch PIT Gate：只放「可共用同一Target/period/fold contract」的profile。
+# 單一profile是否已被Forward證據授權PIT，改由ContinuousRankerResearchSpec.selection_pit_authorized控制；
+# 此清單只控制模型研究選單的batch Selection PIT比較，不改Strategy workflow/runtime source。
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_PIT_GATE_PROFILES = (
     ("MR-13C", "daily_universal_no_time_percentile_mse"),
     ("MR-13D", "daily_universal_no_time_upper_tail_pairwise"),
@@ -1192,7 +1193,7 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         score_semantic_id="daily_full_horizon_opportunity_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         reference_profile_name=DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        selection_pit_authorized=False,
+        selection_pit_authorized=True,
     ),
     DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE,

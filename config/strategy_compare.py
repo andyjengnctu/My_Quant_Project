@@ -89,24 +89,28 @@ STRATEGY_RUNTIME_INTEGRATION = {
 STRATEGY_COMPARE_DISPLAY_FULL_ROOS = "Full ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_ROOS = "Min ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED = "Min MR-13E Constrained"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13H_SCORE_CONSTRAINED = "Min MR-13H Constrained"
 
 # Strategy Compare以研究階段profile隔離設定與輸出；App只顯示泛化階段名稱，
 # arms／contrasts／period／output namespace全部由本檔驅動。
 STRATEGY_COMPARE_PROFILES = {
     "selection_pit": {
         "label": "Selection PIT 策略比較",
-        "description": "2014～2020既有Selection PIT策略Gate；固定Full/Min references與MR-13E C42，不因後續target可用起日較晚而改寫歷史比較期間。",
+        "description": "2014～2020 Selection PIT策略Gate；固定Full/Min references與MR-13E C42，新增MR-13H C51作同K/R0/exact source-only controlled comparison；不因新target改寫歷史比較期間。",
         "display_alignment_group": "core_strategy_compare",
         "display_alignment_arm_ids": ("C32", "C23", "C42"),
         "start_date": "2014-01-01",
         "end_date": "2020-12-31",
         "output_root": "outputs/strategy_compare/selection_pit",
         "reuse_output_roots": ("outputs/strategy_compare",),
-        "arm_ids": ("C32", "C23", "C42"),
+        "arm_ids": ("C32", "C23", "C42", "C51"),
         "contrast_ids": (
             "C32-C23",
             "C42-C23",
             "C42-C32",
+            "C51-C42",
+            "C51-C23",
+            "C51-C32",
         ),
     },
     "forward_oos": {
@@ -358,6 +362,25 @@ STRATEGY_DL_SOURCES = {
             },
         },
     },
+    "CONT13H_PIT": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": (
+            "MR-13H Daily Universal full-horizon no-breach Selection PIT score；"
+            "盤前只使用最新已完成交易日資訊，供C51與C42作同K/R0/exact source-only策略比較"
+        ),
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {
+                "resume": True,
+                "allow_stale_source": False,
+            },
+        },
+    },
 
 
 }
@@ -421,6 +444,25 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C51": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13H_SCORE_CONSTRAINED,
+        "description": (
+            "Selection PIT MR-13H controlled arm：與C42完全相同historical Min params/all-off、K/R0、"
+            "canonical sizing/cash/orderability/execution與exact branch-and-bound；唯一scientific change"
+            "是DL source由MR-13E PIT替換為MR-13H PIT"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13H_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
     "C44": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED,
         "description": (
@@ -460,6 +502,9 @@ STRATEGY_COMPARE_ARMS = {
 STRATEGY_COMPARE_CONTRASTS = {
     "C42-C23": {"left": "C42", "right": "C23", "description": "Selection PIT frozen MR-13E score exact constrained optimum相對DL-off Min ROOS的策略經濟效果"},
     "C42-C32": {"left": "C42", "right": "C32", "description": "Selection PIT active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
+    "C51-C42": {"left": "C51", "right": "C42", "description": "同Min/K/R0/exact/cash/execution下只將MR-13E PIT替換為MR-13H PIT，隔離no-breach Target模型本身的策略轉化效果"},
+    "C51-C23": {"left": "C51", "right": "C23", "description": "Selection PIT MR-13H exact constrained相對DL-off Min ROOS的策略經濟效果"},
+    "C51-C32": {"left": "C51", "right": "C32", "description": "Selection PIT MR-13H exact constrained相對Full ROOS的整體策略結果；不是單一參數效果"},
     "C44-C3": {"left": "C44", "right": "C3", "description": "current Min ROOS下MR-13E exact constrained score selector相對DL-off baseline的Forward-OOS策略效果"},
     "C44-C1": {"left": "C44", "right": "C1", "description": "Forward-OOS active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
     "C1-C3": {"left": "C1", "right": "C3", "description": "Full ROOS相對current Min ROOS的完整策略體系差異；不是單一參數效果"},

@@ -3500,7 +3500,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and c48_options.get("pareto_quality") == "score_sum_max_coverage_first"
         and c48_options.get("pareto_capital") == "canonical_reserved_cost_milli"
         and c48_options.get("selection_only") is True
-        and {"C32", "C23", "C42"}
+        and {"C32", "C23", "C42", "C51"}
         == {arm.arm_id for arm in selection_excess_settings.enabled_arms}
         and "C48-C42" not in {
             contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts
@@ -3510,6 +3510,30 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             arm.arm_id
             for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
         },
+    )
+
+    c51 = selection_excess_settings.arms["C51"]
+    c51_options = dict(c51.dl_runtime_options or {})
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "sr_c51_is_mr13h_source_only_exact_constrained_selection_arm_and_robustness_stays_off",
+        True,
+        c51.enabled
+        and c51.param_source == c42.param_source == "selection_min_roos"
+        and c51.rule_policy == c42.rule_policy == "all_off"
+        and c51.dl_id == "CONT13H_PIT"
+        and c51.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+        and c51_options == c42_options
+        and c51.robustness_role == "off"
+        and {"C51-C42", "C51-C23", "C51-C32"}.issubset(
+            {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+        )
+        and "C51" not in {
+            arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
+        }
+        and "C51" not in set(
+            strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit").stochastic_arm_ids
+        ),
     )
 
     from filters.breakout_quality.strategy_compare_diagnostics import (

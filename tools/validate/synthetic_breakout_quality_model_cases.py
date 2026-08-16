@@ -1966,14 +1966,27 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
             DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
             CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
             DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+            True,
         ),
         (
             spec_h.model_research_id,
             spec_h.reference_profile_name,
             spec_h.pairwise_reduction,
             profile_h.continuous_target_id,
+            bool(spec_h.selection_pit_authorized),
         ),
     )
+    from config.breakout_quality import BREAKOUT_QUALITY_CONTINUOUS_RANKER_PIT_GATE_PROFILES
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13h_uses_single_profile_pit_authorization_not_mr13e_same_target_batch",
+        False,
+        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        in {profile for _model_id, profile in BREAKOUT_QUALITY_CONTINUOUS_RANKER_PIT_GATE_PROFILES},
+    )
+
     contract = build_daily_full_horizon_opportunity_contract(DEFAULT_LABEL_POLICY)
     add_check(
         results,

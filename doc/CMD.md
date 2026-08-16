@@ -171,7 +171,7 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-MR-13E已完成Selection/Forward exact K/R0策略驗證、8-seed robustness與Runtime Integration promotion；production仍固定MR-13E。Model Research active profile目前為MR-13H `daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise`，先測label simplification：相對MR-13E只移除first -10% risk-breach的40D path truncation。正式操作順序先進`[1] 模型訓練`後選「比較目前 Target 與 reference Target」做只讀Label Audit；若證據支持再回到同一選單執行「訓練目前模型 → forward-OOS模型報表」。MR-13H未加入PIT Gate profile前，選單不提供Selection PIT。MR-13I/J risk-normalized/context路線已REJECT；R0維持。Selection PIT策略比較仍為`C32/C23/C42`，Forward-OOS為`C1/C3/C44`。
+MR-13E已完成Selection/Forward exact K/R0策略驗證、8-seed robustness與Runtime Integration promotion；production仍固定MR-13E。Model Research active profile為MR-13H `daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise`；Label Audit與Seed42 Forward已完成且Forward Gate PASS。現在正式下一步為`[1] 模型訓練 → [2] 建立／更新 Selection PIT Scores → PIT模型驗證`。MR-13H因Target不同，不加入13C/D/E同Target batch PIT，而以單profile PIT執行。Selection Strategy已預先接上`C51 Min MR-13H Constrained`，與C42只替換PIT source；PIT合法後可直接進`[3] 策略組合比較 → [1] Selection PIT策略比較`。Forward-OOS與robustness仍固定既有MR-13E matrix，只有C51 Selection支持後才新增MR-13H Forward arm。MR-13I/J risk-normalized/context路線已REJECT；R0維持。
 
 Active continuous model menu由config／research spec動態產生；MR-13H目前會額外顯示：
 
