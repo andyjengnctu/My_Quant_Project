@@ -166,12 +166,12 @@ Breakout-quality 模型／Label／training／workflow設定只編輯 `config/bre
 目前模型研究與策略anchor設定為：
 
 ```python
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_pairwise"
-BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-MR-13A Stage 1 forward-OOS與Stage 2 Selection PIT模型Gate均已通過。Stage 3前置契約要求daily PIT的**score存在只依feature history，不得依future target完整性**，且策略盤前每次decision必須使用最新已完成交易日score；舊Stage 2 target-complete-only PIT table只保留model-audit evidence，Strategy Compare會拒絕使用；若既有合法fold score/checkpoint仍在，正式前置服務可checkpoint-only重建PIT Scores＋Audit而不訓練模型，否則才導向模型研究選單。Selection historical P2參數若缺少／過期也由Strategy Compare的正式parameter builder自動建立／接續。重建後才允許以config-driven `C27/C28`做Selection同參數策略轉化；策略workflow active仍維持MR-12B，未取得Selection經濟結果前不得自動切換。Binary、continuous、pretraining與Selection PIT流程共用`BREAKOUT_QUALITY_RANDOM_SEED`；只有單次重現特殊實驗時才用CLI `--seed`覆寫。
+MR-13E已完成Selection/Forward exact K/R0策略驗證、8-seed robustness與Runtime Integration promotion；目前production與model-research anchor都維持MR-13E。MR-13I/J risk-normalized/context路線在C49/C50 Selection strategy-conversion後已REJECT，不建立Forward或multi-seed；R0維持。Selection PIT正式比較回到`C32/C23/C42`，Forward-OOS為`C1/C3/C44`。
 
 
 ### A2 Realized Trade-path Label研究

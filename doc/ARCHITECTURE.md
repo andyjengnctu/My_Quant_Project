@@ -291,7 +291,7 @@ P3不得使用final 9A score回灌歷史optimizer。`tools/filters/breakout_qual
 
 ### Daily Universal Risk-normalized Ranker（MR-13I / MR-13J）
 
-- Production daily ranker仍是MR-13E `daily_universal_no_time_full_list_ndcg_pairwise / inception_time_v1`；MR-13I Forward model Gate失敗後，model-research active profile依Registry決策前進至MR-13J `daily_universal_risk_context_net_full_list_ndcg_pairwise / inception_time_risk_context_v1`，production/runtime不因研究profile切換。
+- Production daily ranker與目前model-research anchor均為MR-13E `daily_universal_no_time_full_list_ndcg_pairwise / inception_time_v1`。MR-13I/J risk-normalized/context路線已在C49/C50 Selection strategy-conversion後REJECT；其architecture/target只保留歷史重現，production/runtime維持MR-13E + exact K/R0 constrained。
 - MR-13I與MR-13E使用完全相同的daily feature-eligible stock-day universe、300×10 lazy sequence、固定40-bar horizon、InceptionTime sequence architecture與full-list Delta-NDCG pairwise training；13I只把Target改成`daily_risk_normalized_net_opportunity_r_v1`。
 - `filters/breakout_quality/risk_normalized_target.py`是risk target/context單一owner：historical-effective risk calibration只讀Strategy Compare Min ROOS sources的`atr_len / atr_times_init`；禁止`high_len / atr_buy_tol / atr_times_trail / breakout qualification / K / R0 / cash / holdings`。Target reference為decision-date close，initial stop/1% sizing/position cap/board lot/tick/fees/tax全部重用canonical core functions；future path仍固定`t+1…t+40`且adverse-first，不使用strategy exit。
 - MR-13J使用與13I完全相同的Target與training semantics，唯一新增5維`risk_distance_pct / risk_distance_atr / capital_per_risk / cost_per_risk / risk_capacity`。`inception_time_risk_context_v1`重用原InceptionTime sequence encoder，在global-average embedding後拼接獨立5→16→16 context MLP；architecture identity分離，舊`inception_time_v1` checkpoint shape不變。

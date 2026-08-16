@@ -882,6 +882,83 @@ HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({'C20-C3': {'left': 'C20',
                             'params、K/R0與execution；唯一把repair+1-swap heuristic改為exact constrained '
                             'optimization'}})
 
+
+# 2026-08-17 MR-13J strategy-conversion研究結案：保留唯讀歷史重現 identity。
+HISTORICAL_STRATEGY_DL_SOURCES.update({
+    "CONT13J_PIT": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_risk_context_v1",
+        "experiment_profile": "daily_universal_risk_context_net_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": (
+            "MR-13J Daily Universal risk-context canonical-cost Selection PIT score；"
+            "C49/C50 Selection研究已結案，只供歷史工件解讀／重現"
+        ),
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
+})
+
+HISTORICAL_STRATEGY_COMPARE_ARMS.update({
+    "C49": {
+        "name": "Min MR-13J Constrained",
+        "description": (
+            "SR-C49 historical rejected model-only arm：與C42同historical Min params/all-off、"
+            "K/R0、canonical sizing/cash/orderability/execution與exact solver；只換MR-13J PIT score"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13J_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C50": {
+        "name": "Min MR-13J No-R0",
+        "description": (
+            "SR-C50 historical rejected R0 ablation：與C49同MR-13J PIT、historical Min params/all-off、"
+            "K、canonical sizing/cash/orderability/execution與exact solver；只移除baseline R0 floor"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13J_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-r0-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k": True,
+            "preserve_r0": False,
+            "r0_minimum_repair": False,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+})
+
+HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({
+    "C49-C42": {
+        "left": "C49", "right": "C42",
+        "description": "SR-C49 historical：同Min/K/R0/exact/cash下只替換MR-13E PIT為MR-13J PIT",
+    },
+    "C50-C49": {
+        "left": "C50", "right": "C49",
+        "description": "SR-C50 historical：同MR-13J PIT/K/exact/cash下只移除R0",
+    },
+    "C50-C42": {
+        "left": "C50", "right": "C42",
+        "description": "historical MR-13J No-R0最終架構相對MR-13E + R0 C42",
+    },
+})
+
 __all__ = [
     "HISTORICAL_STRATEGY_PARAM_SOURCES",
     "HISTORICAL_STRATEGY_DL_SOURCES",

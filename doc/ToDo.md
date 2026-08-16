@@ -1,8 +1,7 @@
 ## Going
 
 - imrove DL module
-    - predict R per risk
-    - use risk parameter to predict R
+
     - attention
     - non breakout strategy
     - 三大法人籌碼資訊
