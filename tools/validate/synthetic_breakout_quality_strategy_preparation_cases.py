@@ -9,8 +9,10 @@ from __future__ import annotations
 import io
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
+import tempfile
 
 from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
 from .synthetic_breakout_quality_support import add_check
@@ -227,6 +229,74 @@ def append_strategy_compare_preparation_contract_checks(
         and forwarded_period.get("first_oos_date") is None
         and forwarded_period.get("last_oos_date") is None
         and canonical_period == ("2014-01-01", "2020-12-31"),
+    )
+
+    from filters.breakout_quality import strategy_compare_dl_artifacts as dl_artifacts_module
+
+    risk_source = auto_settings.dl_sources["CONT13J_PIT"]
+    with tempfile.TemporaryDirectory() as raw_temp:
+        missing_actions: list[StrategyPreparationAction] = []
+        missing_row, missing_ready = dl_artifacts_module._collect_selection_pit_source_status(
+            root=Path(raw_temp),
+            settings=auto_settings,
+            dl_id="CONT13J_PIT",
+            source=risk_source,
+            source_upstream_dependencies=tuple(),
+            runtime_required_dl_sources={"CONT13J_PIT"},
+            artifact_identities={},
+            actions=missing_actions,
+            runtime_periods={},
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_compare_missing_selection_pit_is_model_work_blocker_not_checkpoint_rebuild",
+        True,
+        not missing_ready
+        and str(missing_row.get("status") or "").startswith("SELECTION_PIT_INVALID")
+        and len(missing_actions) == 3
+        and all(action.action == "BLOCKED" for action in missing_actions)
+        and all(action.builder_type is None for action in missing_actions)
+        and all(action.producer_work_type == "model_training" for action in missing_actions)
+        and all("Research → [1] 模型訓練 → [2]" in action.description for action in missing_actions),
+    )
+
+    failed_gate_contract = SimpleNamespace(
+        model_validation_gate={"status": "FAIL", "checks": {"synthetic": False}},
+        available_from="2016-04-01",
+        available_through="2020-12-31",
+        manifest_path=Path("models/synthetic/selection_point_in_time_manifest.json"),
+        audit_path=Path("outputs/synthetic/selection_point_in_time_audit.json"),
+        score_path=Path("models/synthetic/selection_point_in_time_scores.csv"),
+    )
+    failed_actions: list[StrategyPreparationAction] = []
+    with patch.object(
+        dl_artifacts_module,
+        "load_selection_point_in_time_ranking_contract",
+        return_value=failed_gate_contract,
+    ):
+        failed_row, failed_ready = dl_artifacts_module._collect_selection_pit_source_status(
+            root=project_root,
+            settings=auto_settings,
+            dl_id="CONT13J_PIT",
+            source=risk_source,
+            source_upstream_dependencies=tuple(),
+            runtime_required_dl_sources={"CONT13J_PIT"},
+            artifact_identities={},
+            actions=failed_actions,
+            runtime_periods={},
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_compare_failed_selection_pit_gate_blocks_replay_without_rebuild_or_rerun_guidance",
+        True,
+        not failed_ready
+        and failed_row.get("status") == "SELECTION_PIT_MODEL_GATE_FAIL"
+        and (failed_row.get("model_validation_gate") or {}).get("status") == "FAIL"
+        and len(failed_actions) == 3
+        and all(action.action == "BLOCKED" for action in failed_actions)
+        and all(action.builder_type is None for action in failed_actions)
+        and all("Model Gate=FAIL" in action.description for action in failed_actions)
+        and all("不得進入策略績效驗證" in action.description for action in failed_actions),
     )
 
     partial_period_rejected = False

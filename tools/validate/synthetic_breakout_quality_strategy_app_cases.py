@@ -487,8 +487,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         all(path.is_file() for path in canonical_service_paths)
         and not forbidden_reverse_imports
-        and "from services.breakout_quality.point_in_time_scores import (" in preparation_source
-        and "from services.breakout_quality.point_in_time_audit import (" in preparation_source
+        and "from services.breakout_quality.point_in_time_scores import (" not in preparation_source
+        and "from services.breakout_quality.point_in_time_audit import (" not in preparation_source
+        and "build_selection_point_in_time_scores" not in preparation_source
+        and "audit_selection_point_in_time_scores" not in preparation_source
         and "from services.breakout_quality.binary_point_in_time_scores import (" in param_service_source
         and "from services.optimizer.outer_rolling_oos import" in param_service_source
         and "from services.optimizer.runtime import" in param_service_source
@@ -608,7 +610,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )[1].split("def _interactive_model_research", 1)[0]
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "selection_pit_compare_is_checkpoint_only_but_model_work_type_can_resume_train_missing_folds",
+        "selection_pit_compare_is_consumer_only_and_model_work_type_owns_build_audit_and_missing_fold_training",
         True,
         bool(pit_sources)
         and all(source.threshold is None for source in pit_sources)
@@ -619,9 +621,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             for source in pit_sources
         )
         and "load_selection_point_in_time_ranking_contract" in preparation_source
-        and "build_selection_point_in_time_scores" in preparation_source
-        and "checkpoint_only=True" in preparation_source
-        and "audit_selection_point_in_time_scores" in preparation_source
+        and "Strategy Compare只消費既有PIT" in preparation_source
+        and "不建立、不重建也不執行PIT Model Gate" in preparation_source
+        and "checkpoint_only=True" not in preparation_source
+        and "audit_selection_point_in_time_scores" not in preparation_source
         and "build_selection_point_in_time_scores" in model_prepare_source
         and "resume=True" in model_prepare_source
         and "checkpoint_only=True" not in model_prepare_source

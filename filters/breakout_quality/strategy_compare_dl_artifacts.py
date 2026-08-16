@@ -228,6 +228,7 @@ def _collect_selection_pit_source_status(
     pit_contract = None
     pit_ready = False
     pit_status = "MISSING"
+    pit_gate_status: str | None = None
     try:
         pit_contract = load_selection_point_in_time_ranking_contract(
             str(root),
@@ -235,7 +236,10 @@ def _collect_selection_pit_source_status(
             source.model_architecture,
             source.experiment_profile,
         )
-        if str(pit_contract.model_validation_gate.get("status") or "") != "PASS":
+        pit_gate_status = str(
+            pit_contract.model_validation_gate.get("status") or ""
+        ).strip().upper() or None
+        if pit_gate_status != "PASS":
             raise ValueError("Selection PIT model validation Gate非PASS")
         pit_ready = True
         pit_status = "READY"
@@ -245,7 +249,11 @@ def _collect_selection_pit_source_status(
                 str(pit_contract.available_through),
             )
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        pit_status = f"SELECTION_PIT_INVALID ({type(exc).__name__})"
+        pit_status = (
+            "SELECTION_PIT_MODEL_GATE_FAIL"
+            if pit_gate_status == "FAIL"
+            else f"SELECTION_PIT_INVALID ({type(exc).__name__})"
+        )
 
     if pit_contract is not None:
         files = {
@@ -274,32 +282,13 @@ def _collect_selection_pit_source_status(
                 source.experiment_profile,
             ),
         }
-    builder = source.forward_scores_builder
-    checkpoint_rebuild_blockers = (
-        model_upstream_prerequisite_blockers(
-            root,
-            filter_id=source.filter_id,
-            model_architecture=source.model_architecture,
-            experiment_profile=source.experiment_profile,
-            dataset=settings.dataset,
-            max_tickers=0,
-        )
-        if (
-            not pit_ready
-            and builder is not None
-            and builder.enabled
-            and builder.builder_type == "selection_pit_from_existing_folds"
-        )
-        else tuple()
-    )
-    checkpoint_rebuild_allowed = bool(
-        not pit_ready
-        and settings.preparation.auto_prepare
-        and builder is not None
-        and builder.enabled
-        and builder.builder_type == "selection_pit_from_existing_folds"
-        and not checkpoint_rebuild_blockers
-    )
+    # Selection PIT scores / manifest / audit are model-research artifacts.
+    # Strategy Compare is a consumer only: even when compatible fold checkpoints
+    # already exist, rebuilding the PIT bundle also runs the PIT model Gate and
+    # therefore belongs to Research -> Model Training -> Selection PIT Scores.
+    # Keep the configured builder identity for the model-work-type orchestrator,
+    # but never turn a missing PIT bundle into a Strategy Compare BUILD action.
+    checkpoint_rebuild_blockers: tuple[str, ...] = tuple()
     file_rows: dict[str, Any] = {}
     for key, path in files.items():
         sha256 = compute_file_sha256(path) if path.is_file() else None
@@ -310,25 +299,19 @@ def _collect_selection_pit_source_status(
         if pit_ready and settings.preparation.reuse_ready_artifacts:
             action = "REUSE"
             description = "重用既有Selection PIT score／audit工件"
-        elif checkpoint_rebuild_allowed:
-            action = "BUILD"
-            description = (
-                "以既有PIT fold score／checkpoint重建Selection PIT推論工件與Audit；"
-                "若任何fold需要模型訓練則立即停止"
-            )
-        elif checkpoint_rebuild_blockers:
-            action = "BLOCKED"
-            description = (
-                "模型上游工件未就緒；Strategy Compare不得建立Dataset／Label／Target。"
-                "請先由模型訓練工作類型執行「準備策略比較所需模型工件」："
-                + "；".join(checkpoint_rebuild_blockers)
-            )
         else:
             action = "BLOCKED"
-            description = (
-                "缺少或無效；既有fold/checkpoint無可用的checkpoint-only builder，"
-                "請先由模型研究入口執行Selection PIT Scores與模型驗證"
-            )
+            if pit_gate_status == "FAIL":
+                description = (
+                    "Selection PIT Model Gate=FAIL；Strategy Compare不得進入策略績效驗證，"
+                    "也不得重建或覆寫模型工件。請回 Research → [1] 模型訓練檢視PIT模型驗證結果。"
+                )
+            else:
+                description = (
+                    "缺少或無效的Selection PIT模型工件；Strategy Compare只消費既有PIT "
+                    "score／manifest／audit，不建立、不重建也不執行PIT Model Gate。"
+                    "請先執行 Research → [1] 模型訓練 → [2] 建立／更新 Selection PIT Scores。"
+                )
         file_rows[key] = {
             "ready": pit_ready,
             "status": pit_status,
@@ -336,39 +319,22 @@ def _collect_selection_pit_source_status(
             "path": project_relative_display_path(path, project_root=root),
             "sha256": sha256,
         }
-        if pit_ready or not checkpoint_rebuild_allowed:
-            actions.append(
-                _preparation_action(
-                    action_id=f"dl:{dl_id}:{key}",
-                    artifact_key=f"dl:{dl_id}:{key}",
-                    action=action,
-                    builder_type=None,
-                    description=description,
-                    path=file_rows[key]["path"],
-                    dependencies=(
-                        (f"dl:{dl_id}:forward_scores",)
-                        if key == "audit"
-                        else source_upstream_dependencies
-                    ),
-                    producer_work_type=(
-                        "existing_artifact" if action == "REUSE" else "model_training"
-                    ),
-                )
-            )
-    if checkpoint_rebuild_allowed:
         actions.append(
             _preparation_action(
-                action_id=f"dl:{dl_id}:selection_pit_bundle",
-                artifact_key=f"dl:{dl_id}:selection_pit_bundle",
-                action="BUILD",
-                builder_type="selection_pit_from_existing_folds",
-                description=(
-                    "重建Selection PIT scores／manifest／audit（僅允許既有fold/checkpoint，禁止訓練）"
+                action_id=f"dl:{dl_id}:{key}",
+                artifact_key=f"dl:{dl_id}:{key}",
+                action=action,
+                builder_type=None,
+                description=description,
+                path=file_rows[key]["path"],
+                dependencies=(
+                    (f"dl:{dl_id}:forward_scores",)
+                    if key == "audit"
+                    else source_upstream_dependencies
                 ),
-                path=file_rows["forward_scores"]["path"],
-                dependencies=source_upstream_dependencies,
-                producer_work_type="strategy_compare_checkpoint_rebuild",
-                execution_priority=20,
+                producer_work_type=(
+                    "existing_artifact" if action == "REUSE" else "model_training"
+                ),
             )
         )
     return (
@@ -378,6 +344,11 @@ def _collect_selection_pit_source_status(
             "identity": source.as_dict(),
             "files": file_rows,
             "checkpoint_rebuild_blockers": list(checkpoint_rebuild_blockers),
+            "model_validation_gate": (
+                None
+                if pit_contract is None
+                else dict(pit_contract.model_validation_gate)
+            ),
         },
         pit_ready,
     )

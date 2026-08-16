@@ -113,39 +113,6 @@ def _execute_preparation_action(
             quiet=bool(options.get("quiet", False)),
         )
         return
-    if action.builder_type == "selection_pit_from_existing_folds":
-        _kind, dl_id, _bundle = action.artifact_key.split(":", 2)
-        source = settings.dl_sources[dl_id]
-        builder = source.forward_scores_builder
-        if builder is None:
-            raise RuntimeError(f"Selection PIT builder設定不完整: {dl_id}")
-        options = dict(builder.options)
-        from services.breakout_quality.point_in_time_scores import (
-            build_selection_point_in_time_scores,
-        )
-        from services.breakout_quality.point_in_time_audit import (
-            audit_selection_point_in_time_scores,
-        )
-
-        code = build_selection_point_in_time_scores(
-            filter_id=str(source.filter_id),
-            model_architecture=str(source.model_architecture),
-            experiment_profile=str(source.experiment_profile),
-            checkpoint_only=True,
-            resume=bool(options.get("resume", True)),
-            allow_stale_source=bool(options.get("allow_stale_source", False)),
-        )
-        if int(code) != 0:
-            raise RuntimeError(f"Selection PIT checkpoint-only重建失敗: {dl_id}/{code}")
-        code = audit_selection_point_in_time_scores(
-            filter_id=str(source.filter_id),
-            model_architecture=str(source.model_architecture),
-            experiment_profile=str(source.experiment_profile),
-            allow_stale_source=bool(options.get("allow_stale_source", False)),
-        )
-        if int(code) != 0:
-            raise RuntimeError(f"Selection PIT Audit失敗: {dl_id}/{code}")
-        return
     if action.builder_type == "expected_r_calibration":
         _runtime, arm_id, _artifact = action.artifact_key.split(":", 2)
         arm = settings.arms[arm_id]

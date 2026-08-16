@@ -81,7 +81,13 @@ def _run_current_comparison(*, profile_id: str, confirm: bool) -> dict:
     status = resolved_plan.status_dict()
     print("\n" + render_execution_plan(settings=settings, status=status))
     if resolved_plan.overall_status == "BLOCKED":
-        raise RuntimeError("目前缺少不可自動產生的上游工件；請先查看狀態頁。")
+        blocked_reasons = list(dict.fromkeys(
+            action.description
+            for action in resolved_plan.preparation_plan.actions
+            if action.action == "BLOCKED" and str(action.description).strip()
+        ))
+        reason = blocked_reasons[0] if blocked_reasons else "目前缺少不可自動產生的上游工件。"
+        raise RuntimeError(reason)
     if confirm and settings.preparation.require_confirmation:
         try:
             choice = input("👉 按 Enter 執行；輸入 0 返回：").strip().lower()
