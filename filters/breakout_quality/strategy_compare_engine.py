@@ -83,7 +83,7 @@ from filters.breakout_quality.strategy_compare_diagnostics import (
     _load_isolated_selection_pit_contract,
     _selection_target_lookup,
     _strategy_selection_diagnostics,
-    paired_target_selection_delta_r,
+    paired_trade_r_conversion_diagnostic,
 )
 
 from config.breakout_quality import (
@@ -972,8 +972,11 @@ def run_comparison(
                 "no_filter": baseline_diag,
                 "score_ranking": quality_diag,
                 "score_ranking_minus_no_filter": _delta(quality_diag, baseline_diag),
-                "selection_r_conversion": paired_target_selection_delta_r(
-                    baseline_selected_joined, quality_selected_joined
+                "selection_r_conversion": paired_trade_r_conversion_diagnostic(
+                    baseline_payload["trade_history"],
+                    quality_payload["trade_history"],
+                    baseline_selected_joined,
+                    quality_selected_joined,
                 ),
                 "future_target_join_stage": "post_replay_offline_diagnostic_only",
                 "future_target_used_for_runtime_sort": False,

@@ -1156,7 +1156,11 @@ def run_strategy_comparison(
                 ),
             })
             pair_payload["metadata"] = pair_metadata
-            backfill_pair_r_conversion_diagnostic(pair_payload, pair_dir=pair_dir)
+            backfill_pair_r_conversion_diagnostic(
+                pair_payload,
+                pair_dir=pair_dir,
+                active_trades_filename=runtime_spec["active_trades_filename"],
+            )
             _write_json(pair_dir / "strategy_comparison.json", pair_payload)
             materialize_strategy_pair_readable_report(
                 pair_payload,
@@ -1293,8 +1297,16 @@ def run_strategy_comparison(
                 runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
             ),
         )
-        backfill_pair_r_conversion_diagnostic(pair_payload, pair_dir=pair_dir)
+        backfill_pair_r_conversion_diagnostic(
+            pair_payload,
+            pair_dir=pair_dir,
+            active_trades_filename=runtime_spec["active_trades_filename"],
+        )
         _write_json(pair_dir / "strategy_comparison.json", pair_payload)
+        materialize_strategy_pair_readable_report(
+            pair_payload,
+            output_dir=pair_dir,
+        )
         pair_payloads[group_id] = {
             "arm_contract": (param_source, rule_policy, off_arm, on_arm),
             "payload": pair_payload,

@@ -3543,7 +3543,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and '"bottom_target_r": bottom' in diagnostics_source
         and '"r_conversion_efficiency", "RCE"' in report_metrics_source
         and '`選股轉換＝RCE、Target mean R、Target %ile、Top-K、Opp gap`' in project_settings
-        and "paired_target_selection_delta_r" in diagnostics_source
+        and "paired_trade_r_conversion_diagnostic" in diagnostics_source
         and "backfill_pair_r_conversion_diagnostic" in comparison_source
         and "Target %ile" in report_metrics_source
         and "Top-K" in report_metrics_source
@@ -3585,6 +3585,45 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "表格下方註解" in project_settings
         and "renderer只負責組裝與顯示" in project_settings,
     )
+    from filters.breakout_quality.strategy_compare_diagnostics import (
+        paired_trade_r_conversion_diagnostic,
+    )
+    baseline_trades = pd.DataFrame([
+        {"Date": "2020-01-02", "Ticker": "AAA", "Type": "買進 (test)", "進場類型": "normal", "買訊日": "2020-01-01", "成交價": 10.0},
+        {"Date": "2020-01-03", "Ticker": "BBB", "Type": "買進 (test)", "進場類型": "normal", "買訊日": "2020-01-02", "成交價": 10.0},
+        {"Date": "2020-01-10", "Ticker": "AAA", "Type": "全倉結算", "成交價": 11.0, "R_Multiple": 0.5, "該筆總損益": 100.0},
+        {"Date": "2020-01-11", "Ticker": "BBB", "Type": "全倉結算", "成交價": 9.0, "R_Multiple": -1.0, "該筆總損益": -100.0},
+    ])
+    active_trades = pd.DataFrame([
+        {"Date": "2020-01-02", "Ticker": "AAA", "Type": "買進 (test)", "進場類型": "normal", "買訊日": "2020-01-01", "成交價": 10.0},
+        {"Date": "2020-01-04", "Ticker": "CCC", "Type": "買進 (test)", "進場類型": "normal", "買訊日": "2020-01-03", "成交價": 10.0},
+        {"Date": "2020-01-10", "Ticker": "AAA", "Type": "全倉結算", "成交價": 11.0, "R_Multiple": 0.5, "該筆總損益": 100.0},
+        {"Date": "2020-01-12", "Ticker": "CCC", "Type": "全倉結算", "成交價": 12.0, "R_Multiple": 1.0, "該筆總損益": 100.0},
+    ])
+    baseline_targets = pd.DataFrame([
+        {"ticker": "AAA", "trade_date": "2020-01-02", "signal_date": "2020-01-01", "target_raw_r": 1.0, "target_available": True},
+        {"ticker": "BBB", "trade_date": "2020-01-03", "signal_date": "2020-01-02", "target_raw_r": 0.5, "target_available": True},
+    ])
+    active_targets = pd.DataFrame([
+        {"ticker": "AAA", "trade_date": "2020-01-02", "signal_date": "2020-01-01", "target_raw_r": 1.0, "target_available": True},
+        {"ticker": "CCC", "trade_date": "2020-01-04", "signal_date": "2020-01-03", "target_raw_r": 1.5, "target_available": True},
+    ])
+    rce_diag = paired_trade_r_conversion_diagnostic(
+        baseline_trades, active_trades, baseline_targets, active_targets
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "rce_uses_same_exclusive_completed_trade_universe_for_target_and_realized_edges",
+        True,
+        rce_diag.get("comparison_basis") == "paired_exclusive_realized_trade_mean_r"
+        and abs(float(rce_diag.get("paired_target_selection_edge_r")) - 1.0) < 1e-12
+        and abs(float(rce_diag.get("paired_realized_selection_edge_r")) - 2.0) < 1e-12
+        and abs(float(rce_diag.get("exclusive_selection_delta_r")) - 2.0) < 1e-12
+        and abs(float(rce_diag.get("r_conversion_efficiency")) - 2.0) < 1e-12,
+    )
+
     add_check(
         results,
         "synthetic_breakout_quality",

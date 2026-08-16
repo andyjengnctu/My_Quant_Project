@@ -37,6 +37,7 @@ from filters.breakout_quality.ranking_score_store import (
     load_selection_point_in_time_score_table_from_path,
 )
 from filters.breakout_quality.strategy_compare_contracts import comparison_labels
+from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 
 
 def _finite_float(value: Any) -> float | None:
@@ -729,28 +730,49 @@ def _strategy_selection_diagnostics(
     return metrics, orderable_joined, selected_joined
 
 
-def paired_target_selection_delta_r(
+def paired_trade_r_conversion_diagnostic(
+    baseline_trade_history: pd.DataFrame,
+    active_trade_history: pd.DataFrame,
     baseline_selected: pd.DataFrame,
     active_selected: pd.DataFrame,
 ) -> dict[str, Any]:
-    """Compare paired exclusive selections using the existing post-replay Future Target.
+    """Measure Target-R -> realized-R conversion on the same exclusive trades.
 
-    The comparison basis mirrors direct-selection attribution conceptually: only
-    selections unique to the active arm versus selections unique to its same-param
-    DL-off baseline contribute.  This remains a post-replay diagnostic and never
-    feeds runtime selection, sizing, cash allocation, or execution.
+    Both numerator and denominator use the canonical closed-trade partition
+    (active-only versus baseline-only).  Future Target is joined only after
+    replay using the existing selected-target sidecars.  This prevents trade
+    count / fill differences from contaminating an efficiency ratio whose
+    intent is to measure quality-edge realization.
     """
 
-    keys = ["ticker", "trade_date", "signal_date"]
-    required = [*keys, "target_raw_r", "target_available"]
-    frames = []
-    for label, raw in (("baseline", baseline_selected), ("active", active_selected)):
+    baseline_trades = reconstruct_round_trips(
+        pd.DataFrame(baseline_trade_history), scenario="baseline"
+    )
+    active_trades = reconstruct_round_trips(
+        pd.DataFrame(active_trade_history), scenario="active"
+    )
+    baseline_keys = set(baseline_trades.get("match_key", pd.Series(dtype=str)).astype(str))
+    active_keys = set(active_trades.get("match_key", pd.Series(dtype=str)).astype(str))
+    baseline_only = baseline_trades.loc[
+        baseline_trades["match_key"].astype(str).isin(baseline_keys - active_keys)
+    ].copy()
+    active_only = active_trades.loc[
+        active_trades["match_key"].astype(str).isin(active_keys - baseline_keys)
+    ].copy()
+
+    join_keys = ["ticker", "trade_date", "signal_date"]
+    required_target = [*join_keys, "target_raw_r", "target_available"]
+
+    def normalize_targets(raw: pd.DataFrame, label: str) -> pd.DataFrame:
         frame = pd.DataFrame(raw).copy()
-        missing = [column for column in required if column not in frame.columns]
+        missing = [column for column in required_target if column not in frame.columns]
         if missing:
             raise ValueError(f"{label} selected target diagnostics缺欄位: {missing}")
-        if bool(frame.duplicated(keys).any()):
-            bad = frame.loc[frame.duplicated(keys, keep=False), keys].iloc[0].to_dict()
+        for column in ("trade_date", "signal_date"):
+            frame[column] = pd.to_datetime(frame[column], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+        frame["ticker"] = frame["ticker"].fillna("").astype(str).str.strip()
+        if bool(frame.duplicated(join_keys).any()):
+            bad = frame.loc[frame.duplicated(join_keys, keep=False), join_keys].iloc[0].to_dict()
             raise ValueError(f"{label} selected target diagnostics selection key不唯一: {bad}")
         frame["target_raw_r"] = pd.to_numeric(frame["target_raw_r"], errors="coerce")
         available = frame["target_available"]
@@ -758,49 +780,76 @@ def paired_target_selection_delta_r(
             frame["target_available"] = available.fillna(False)
         else:
             frame["target_available"] = (
-                available.fillna(False).astype(str).str.strip().str.lower()
-                .isin({"true", "1", "yes"})
+                available.fillna(False).astype(str).str.strip().str.lower().isin({"true", "1", "yes"})
             )
-        frames.append(frame)
-    baseline, active = frames
-    baseline_keys = set(map(tuple, baseline[keys].itertuples(index=False, name=None)))
-    active_keys = set(map(tuple, active[keys].itertuples(index=False, name=None)))
-    baseline_only_keys = baseline_keys - active_keys
-    active_only_keys = active_keys - baseline_keys
+        return frame[required_target]
 
-    def exclusive(frame: pd.DataFrame, selected_keys: set[tuple[Any, ...]]) -> pd.DataFrame:
-        if not selected_keys:
-            return frame.iloc[0:0].copy()
-        mask = [tuple(row) in selected_keys for row in frame[keys].itertuples(index=False, name=None)]
-        return frame.loc[mask].copy()
+    def join_targets(trades: pd.DataFrame, targets: pd.DataFrame, label: str) -> pd.DataFrame:
+        work = pd.DataFrame(trades).copy()
+        if work.empty:
+            work["trade_date"] = pd.Series(dtype=str)
+            work["target_raw_r"] = pd.Series(dtype=float)
+            work["target_available"] = pd.Series(dtype=bool)
+            return work
+        work["ticker"] = work["ticker"].fillna("").astype(str).str.strip()
+        work["trade_date"] = pd.to_datetime(work["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+        work["signal_date"] = pd.to_datetime(work["signal_date"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+        return work.merge(
+            targets, on=join_keys, how="left", validate="many_to_one", suffixes=("", "_target")
+        )
 
-    baseline_only = exclusive(baseline, baseline_only_keys)
-    active_only = exclusive(active, active_only_keys)
+    baseline_target = normalize_targets(baseline_selected, "baseline")
+    active_target = normalize_targets(active_selected, "active")
+    baseline_only = join_targets(baseline_only, baseline_target, "baseline")
+    active_only = join_targets(active_only, active_target, "active")
     all_exclusive = pd.concat([baseline_only, active_only], ignore_index=True)
-    valid_mask = (
-        all_exclusive["target_available"]
-        & all_exclusive["target_raw_r"].map(math.isfinite)
-    ) if not all_exclusive.empty else pd.Series(dtype=bool)
-    exclusive_count = int(len(all_exclusive))
-    covered_count = int(valid_mask.sum()) if exclusive_count else 0
-    coverage = (float(covered_count / exclusive_count) if exclusive_count else 1.0)
-    if exclusive_count and covered_count != exclusive_count:
-        delta_r = None
-        baseline_only_r = None
-        active_only_r = None
+    if all_exclusive.empty:
+        coverage = 1.0
+        covered_count = 0
     else:
-        baseline_only_r = float(baseline_only["target_raw_r"].sum()) if len(baseline_only) else 0.0
-        active_only_r = float(active_only["target_raw_r"].sum()) if len(active_only) else 0.0
-        delta_r = float(active_only_r - baseline_only_r)
+        available = all_exclusive["target_available"].fillna(False).astype(bool)
+        finite_target = pd.to_numeric(all_exclusive["target_raw_r"], errors="coerce").map(math.isfinite)
+        valid = available & finite_target
+        covered_count = int(valid.sum())
+        coverage = float(covered_count / len(all_exclusive))
+
+    baseline_realized = pd.to_numeric(baseline_only.get("r_multiple"), errors="coerce").dropna().astype(float)
+    active_realized = pd.to_numeric(active_only.get("r_multiple"), errors="coerce").dropna().astype(float)
+    realized_edge = None
+    target_edge = None
+    baseline_target_mean = None
+    active_target_mean = None
+    if len(baseline_realized) and len(active_realized):
+        realized_edge = float(active_realized.mean() - baseline_realized.mean())
+    complete_target_coverage = int(len(all_exclusive)) == covered_count
+    if complete_target_coverage and len(baseline_only) and len(active_only):
+        baseline_target_mean = float(pd.to_numeric(baseline_only["target_raw_r"], errors="coerce").mean())
+        active_target_mean = float(pd.to_numeric(active_only["target_raw_r"], errors="coerce").mean())
+        target_edge = float(active_target_mean - baseline_target_mean)
+    rce = (
+        None
+        if target_edge is None or target_edge <= 1e-12 or realized_edge is None
+        else float(realized_edge / target_edge)
+    )
+    baseline_total_r = float(baseline_realized.sum()) if len(baseline_realized) else 0.0
+    active_total_r = float(active_realized.sum()) if len(active_realized) else 0.0
     return {
-        "comparison_basis": "paired_exclusive_selected_occurrence_target_raw_r",
+        "comparison_basis": "paired_exclusive_realized_trade_mean_r",
         "active_only_count": int(len(active_only)),
         "baseline_only_count": int(len(baseline_only)),
         "target_covered_exclusive_count": covered_count,
         "target_coverage_rate": coverage,
-        "active_only_target_r": active_only_r,
-        "baseline_only_target_r": baseline_only_r,
-        "paired_target_selection_delta_r": delta_r,
+        "complete_target_coverage": bool(complete_target_coverage),
+        "active_only_target_mean_r": active_target_mean,
+        "baseline_only_target_mean_r": baseline_target_mean,
+        "paired_target_selection_edge_r": target_edge,
+        "active_only_realized_mean_r": float(active_realized.mean()) if len(active_realized) else None,
+        "baseline_only_realized_mean_r": float(baseline_realized.mean()) if len(baseline_realized) else None,
+        "paired_realized_selection_edge_r": realized_edge,
+        "active_only_realized_total_r": active_total_r,
+        "baseline_only_realized_total_r": baseline_total_r,
+        "exclusive_selection_delta_r": float(active_total_r - baseline_total_r),
+        "r_conversion_efficiency": rce,
         "future_target_used_for_runtime_sort": False,
     }
 
@@ -809,26 +858,30 @@ def backfill_pair_r_conversion_diagnostic(
     payload: dict[str, Any],
     *,
     pair_dir: Path,
+    active_trades_filename: str = "score_ranking_trades.csv",
 ) -> bool:
-    """Backfill paired Target-selection R from existing canonical sidecars on REUSE.
-
-    Returns True only when the payload was changed.  This deliberately avoids any
-    market replay or raw-data reconstruction.
-    """
+    """Backfill realized-trade RCE from existing canonical pair sidecars on RUN/REUSE."""
 
     diagnostics = dict(payload.get("selection_diagnostics") or {})
     existing = dict(diagnostics.get("selection_r_conversion") or {})
-    if _finite(existing.get("paired_target_selection_delta_r")) is not None:
+    if _finite(existing.get("r_conversion_efficiency")) is not None and str(
+        existing.get("comparison_basis") or ""
+    ) == "paired_exclusive_realized_trade_mean_r":
         return False
-    baseline_path = Path(pair_dir) / "no_filter_selected_target_diagnostics.csv"
-    active_path = Path(pair_dir) / "score_ranking_selected_target_diagnostics.csv"
-    if not baseline_path.is_file() or not active_path.is_file():
+    baseline_target_path = Path(pair_dir) / "no_filter_selected_target_diagnostics.csv"
+    active_target_path = Path(pair_dir) / "score_ranking_selected_target_diagnostics.csv"
+    baseline_trades_path = Path(pair_dir) / "no_filter_trades.csv"
+    active_trades_path = Path(pair_dir) / str(active_trades_filename)
+    required_paths = (baseline_target_path, active_target_path, baseline_trades_path, active_trades_path)
+    if not all(path.is_file() for path in required_paths):
         return False
-    baseline = pd.read_csv(baseline_path, encoding="utf-8-sig")
-    active = pd.read_csv(active_path, encoding="utf-8-sig")
-    diagnostics["selection_r_conversion"] = paired_target_selection_delta_r(
-        baseline, active
+    conversion = paired_trade_r_conversion_diagnostic(
+        pd.read_csv(baseline_trades_path, encoding="utf-8-sig"),
+        pd.read_csv(active_trades_path, encoding="utf-8-sig"),
+        pd.read_csv(baseline_target_path, encoding="utf-8-sig"),
+        pd.read_csv(active_target_path, encoding="utf-8-sig"),
     )
+    diagnostics["selection_r_conversion"] = conversion
     payload["selection_diagnostics"] = diagnostics
     return True
 
@@ -988,22 +1041,20 @@ def _selection_translation_rows(
         scenario = scenarios.get(on_arm.arm_id) or {}
         conversion = dict(diagnostics.get("selection_r_conversion") or {})
         target_selection_delta_r = _finite(
-            conversion.get("paired_target_selection_delta_r")
+            conversion.get("paired_target_selection_edge_r")
         )
         realized_selection_delta_r = _finite(scenario.get("direct_selection_delta_r"))
-        r_conversion_efficiency = (
-            None
-            if target_selection_delta_r is None
-            or target_selection_delta_r <= 1e-12
-            or realized_selection_delta_r is None
-            else float(realized_selection_delta_r / target_selection_delta_r)
+        r_conversion_efficiency = _finite(conversion.get("r_conversion_efficiency"))
+        realized_selection_edge_r = _finite(
+            conversion.get("paired_realized_selection_edge_r")
         )
         by_arm[on_arm.arm_id] = {
             "arm_id": on_arm.arm_id,
             "name": on_arm.name,
             "dl_id": on_arm.dl_id,
             "score_coverage": _finite(active.get("orderable_score_coverage_rate")),
-            "paired_target_selection_delta_r": target_selection_delta_r,
+            "paired_target_selection_edge_r": target_selection_delta_r,
+            "paired_realized_selection_edge_r": realized_selection_edge_r,
             "r_conversion_efficiency": r_conversion_efficiency,
             "selected_target_mean_r": _finite(active.get("selected_target_mean_r")),
             "selected_target_mean_r_delta": delta("selected_target_mean_r"),
@@ -1074,7 +1125,7 @@ def _r_analysis_rows(
             "bottom_target_r": _finite(model.get("bottom_target_r")),
             "top_bottom_target_spread_r": _finite(model.get("top_bottom_target_spread_r")),
             "score_coverage": _finite(translation.get("score_coverage")),
-            "paired_target_selection_delta_r": _finite(translation.get("paired_target_selection_delta_r")),
+            "paired_target_selection_edge_r": _finite(translation.get("paired_target_selection_edge_r")),
             "r_conversion_efficiency": _finite(translation.get("r_conversion_efficiency")),
             "selected_target_mean_r": _finite(translation.get("selected_target_mean_r")),
             "selected_target_mean_r_delta": _finite(translation.get("selected_target_mean_r_delta")),
