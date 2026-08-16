@@ -857,6 +857,7 @@ def validate_dataset_cli_contract_case(_base_params):
     )
 
     strategy_profiles = app_strategy_compare.get_strategy_comparison_profiles()
+    menu_profiles = app_strategy_compare.get_strategy_comparison_menu_profiles()
     robustness_profiles = app_strategy_compare.get_strategy_multi_seed_robustness_profiles()
     menu_renderer = importlib.import_module("core.console_report").render_menu_item
     add_check(
@@ -867,22 +868,29 @@ def validate_dataset_cli_contract_case(_base_params):
         "[1]  synthetic  (Enter)",
         menu_renderer(1, "synthetic", default=True),
     )
+    robustness_profile_ids = [
+        app_strategy_compare.get_strategy_multi_seed_robustness_settings(
+            item["robustness_id"]
+        ).profile_id
+        for item in robustness_profiles
+    ]
+    robustness_profile_id_set = set(robustness_profile_ids)
     add_check(
         results,
         "cli_contract",
         case_id,
         "strategy_compare_robustness_order_matches_strategy_profile_order",
-        [item["profile_id"] for item in strategy_profiles],
         [
-            app_strategy_compare.get_strategy_multi_seed_robustness_settings(
-                item["robustness_id"]
-            ).profile_id
-            for item in robustness_profiles
+            item["profile_id"]
+            for item in strategy_profiles
+            if item["profile_id"] in robustness_profile_id_set
         ],
+        robustness_profile_ids,
     )
+    menu_profile_count = len(menu_profiles)
     strategy_profile_count = len(strategy_profiles)
     robustness_profile_count = len(robustness_profiles)
-    strategy_status_choice = strategy_profile_count + robustness_profile_count + 2
+    strategy_status_choice = menu_profile_count + robustness_profile_count + 2
     with (
         patch("builtins.input", side_effect=[str(strategy_status_choice), "0"]),
         patch("apps.research.show_strategy_comparison_status") as compare_status,
