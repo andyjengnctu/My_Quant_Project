@@ -235,6 +235,7 @@ def _collect_selection_pit_source_status(
             source.filter_id,
             source.model_architecture,
             source.experiment_profile,
+            require_model_validation_pass=False,
         )
         pit_gate_status = str(
             pit_contract.model_validation_gate.get("status") or ""

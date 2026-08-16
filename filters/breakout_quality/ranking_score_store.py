@@ -263,13 +263,17 @@ def derive_point_in_time_model_validation_gate(audit: dict[str, Any]) -> dict[st
     return result
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=32)
 def load_selection_point_in_time_ranking_contract(
     project_root: str,
     filter_id: str,
     model_architecture: str,
     experiment_profile: str,
+    *,
+    require_model_validation_pass: bool = True,
 ) -> SelectionPointInTimeRankingContract:
+    """Validate the PIT bundle; optionally allow inspection of a completed FAIL gate."""
+
     root = Path(project_root).resolve()
     score_path = resolve_selection_point_in_time_score_path(
         root, filter_id, model_architecture, experiment_profile
@@ -423,7 +427,7 @@ def load_selection_point_in_time_ranking_contract(
         raise ValueError("Selection PIT audit score group count與manifest coverage不一致")
 
     gate = derive_point_in_time_model_validation_gate(audit)
-    if gate["status"] != "PASS":
+    if require_model_validation_pass and gate["status"] != "PASS":
         failed = [name for name, passed in gate["checks"].items() if not passed]
         raise ValueError(
             "Selection PIT模型驗證未通過，不得進入策略排序: " + ", ".join(failed)

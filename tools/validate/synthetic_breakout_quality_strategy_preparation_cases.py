@@ -273,7 +273,7 @@ def append_strategy_compare_preparation_contract_checks(
         dl_artifacts_module,
         "load_selection_point_in_time_ranking_contract",
         return_value=failed_gate_contract,
-    ):
+    ) as failed_gate_loader:
         failed_row, failed_ready = dl_artifacts_module._collect_selection_pit_source_status(
             root=project_root,
             settings=auto_settings,
@@ -296,7 +296,9 @@ def append_strategy_compare_preparation_contract_checks(
         and all(action.action == "BLOCKED" for action in failed_actions)
         and all(action.builder_type is None for action in failed_actions)
         and all("Model Gate=FAIL" in action.description for action in failed_actions)
-        and all("不得進入策略績效驗證" in action.description for action in failed_actions),
+        and all("不得進入策略績效驗證" in action.description for action in failed_actions)
+        and failed_gate_loader.call_count == 1
+        and failed_gate_loader.call_args.kwargs.get("require_model_validation_pass") is False,
     )
 
     partial_period_rejected = False

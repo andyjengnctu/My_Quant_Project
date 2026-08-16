@@ -9168,3 +9168,9 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 事前`derive_point_in_time_model_validation_gate()`要求Primary Global rho>0、Daily rho>0、正向Spearman年度嚴格過半、正向spread年度嚴格過半全部成立。MR-13J只有Global rho=`-0.0321`未通過，其餘三條成立，因此`MR-13J Selection PIT Model Gate = FAIL`。決策：C49/C50不得進strategy replay，不以R0／No-R0 selector結果繞過模型Gate；Production仍是MR-13E + C42/C44。
 - Engineering ownership同步收斂：一般Strategy Compare對Selection PIT source改成consumer-only。Gate=PASS時只REUSE既有score／manifest／audit；缺失／無效時直接BLOCK並導向`Research → [1] 模型訓練 → [2] 建立／更新 Selection PIT Scores`；已有工件但Gate=FAIL時直接BLOCK策略績效驗證。即使既有fold score／checkpoint可checkpoint-only重建，Strategy Compare也不得執行PIT builder或PIT Audit。Forward-OOS deterministic score export與策略參數auto builder契約不變。
 
+### 2026-08-16 — Selection PIT Gate FAIL status inspection closure
+
+- MR-13J Selection PIT已完整完成且Model Gate=`FAIL`；使用者由Strategy Compare檢視依賴計畫時，planner卻把CONT13J_PIT顯示成「缺少或無效」並錯誤導向重跑`[1]→[2]`。根因是canonical `load_selection_point_in_time_ranking_contract()`在Gate非PASS時於建立contract前直接raise，導致consumer-only planner無法區分「工件合法但Gate FAIL」與真正missing/invalid。
+- 修正只增加read-only inspection mode：loader預設仍`require_model_validation_pass=True`，所有真正ranking/runtime consumer維持Gate非PASS即拒絕；Strategy Compare readiness inspection唯一使用`False`，因此可讀取同一份已驗證score/manifest/audit與canonical Gate payload，再明確標示`SELECTION_PIT_MODEL_GATE_FAIL`並BLOCK C49/C50。缺件／hash／identity／coverage等真正artifact invalid仍維持原invalid路徑。
+- Scientific decision完全不變：MR-13J Selection PIT Gate仍FAIL，C49/C50仍NOT_RUN，production仍MR-13E + C42/C44；本輪只修artifact-state observability，不重跑PIT、不放寬Gate、不改Strategy Compare renderer。
+
