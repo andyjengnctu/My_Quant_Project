@@ -9174,3 +9174,8 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 修正只增加read-only inspection mode：loader預設仍`require_model_validation_pass=True`，所有真正ranking/runtime consumer維持Gate非PASS即拒絕；Strategy Compare readiness inspection唯一使用`False`，因此可讀取同一份已驗證score/manifest/audit與canonical Gate payload，再明確標示`SELECTION_PIT_MODEL_GATE_FAIL`並BLOCK C49/C50。缺件／hash／identity／coverage等真正artifact invalid仍維持原invalid路徑。
 - Scientific decision完全不變：MR-13J Selection PIT Gate仍FAIL，C49/C50仍NOT_RUN，production仍MR-13E + C42/C44；本輪只修artifact-state observability，不重跑PIT、不放寬Gate、不改Strategy Compare renderer。
 
+### 2026-08-16 — MR-13J rejected strategy-profile retirement / blocked-plan display closure
+
+- MR-13J Selection PIT Model Gate已正式FAIL，C49/C50從未進strategy replay；因此`selection_risk_context`、`CONT13J_PIT` Strategy Compare source、C49/C50 active arms與其contrasts退出current `config/strategy_compare.py`，主選單恢復canonical `selection_pit / forward_oos`。MR-13J模型／PIT工件本體仍保留為研究證據；Registry保留C49/C50 identity與NOT_RUN結論。
+- `Strategy Compare`執行計畫在overall=`BLOCKED`時不再把未執行的BUILD/REBUILD、arms與contrasts顯示成`REBUILD/RUN/REPORT`；真正blocker維持`BLOCKED`，可重用工件維持`REUSE`，其餘一律顯示`NOT_RUN`並註明上游前置Gate阻擋。此變更只修可稽核顯示，不放寬任何readiness/Gate或replay行為。
+- Scientific decision不變：MR-13J=`SELECTION_PIT_MODEL_GATE_FAIL / NO_STRATEGY_GATE / NO_RUNTIME_PROMOTION`；production仍為MR-13E + C42/C44。

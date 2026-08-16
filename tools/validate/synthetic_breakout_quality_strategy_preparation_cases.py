@@ -6,6 +6,7 @@ embedded in the config-driven application validator.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import io
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -196,7 +197,8 @@ def append_strategy_compare_preparation_contract_checks(
     from config.strategy_compare import get_strategy_comparison_settings
     from filters.breakout_quality import strategy_param_training as param_training_module
 
-    auto_settings = get_strategy_comparison_settings("selection_risk_context")
+    selection_settings = get_strategy_comparison_settings("selection_pit")
+    auto_settings = replace(selection_settings, start_date=None, end_date=None)
     selection_source = auto_settings.parameter_sources["selection_min_roos"]
     auto_action = StrategyPreparationAction(
         action_id="param:selection_min_roos",
@@ -233,16 +235,16 @@ def append_strategy_compare_preparation_contract_checks(
 
     from filters.breakout_quality import strategy_compare_dl_artifacts as dl_artifacts_module
 
-    risk_source = auto_settings.dl_sources["CONT13J_PIT"]
+    pit_source = selection_settings.dl_sources["CONT13E_PIT"]
     with tempfile.TemporaryDirectory() as raw_temp:
         missing_actions: list[StrategyPreparationAction] = []
         missing_row, missing_ready = dl_artifacts_module._collect_selection_pit_source_status(
             root=Path(raw_temp),
             settings=auto_settings,
-            dl_id="CONT13J_PIT",
-            source=risk_source,
+            dl_id="CONT13E_PIT",
+            source=pit_source,
             source_upstream_dependencies=tuple(),
-            runtime_required_dl_sources={"CONT13J_PIT"},
+            runtime_required_dl_sources={"CONT13E_PIT"},
             artifact_identities={},
             actions=missing_actions,
             runtime_periods={},
@@ -277,10 +279,10 @@ def append_strategy_compare_preparation_contract_checks(
         failed_row, failed_ready = dl_artifacts_module._collect_selection_pit_source_status(
             root=project_root,
             settings=auto_settings,
-            dl_id="CONT13J_PIT",
-            source=risk_source,
+            dl_id="CONT13E_PIT",
+            source=pit_source,
             source_upstream_dependencies=tuple(),
-            runtime_required_dl_sources={"CONT13J_PIT"},
+            runtime_required_dl_sources={"CONT13E_PIT"},
             artifact_identities={},
             actions=failed_actions,
             runtime_periods={},

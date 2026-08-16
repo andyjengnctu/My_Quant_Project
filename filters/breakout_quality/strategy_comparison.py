@@ -347,14 +347,23 @@ def render_execution_plan(
             item.artifact_key,
         ),
     )
-    rows = [
-        (item.action, item.artifact_key, item.description)
-        for item in ordered_actions
-    ]
+    blocked = plan.overall_status == "BLOCKED"
+    rows = []
+    for item in ordered_actions:
+        action = item.action
+        description = item.description
+        if blocked and action in {"BUILD", "REBUILD"}:
+            action = "NOT_RUN"
+            description = f"{description}｜整體計畫已BLOCKED，本次不執行"
+        rows.append((action, item.artifact_key, description))
+
     replay_cache = dict(status.get("replay_cache") or {})
     cached_pairs = dict(replay_cache.get("pairs") or {})
     cached_baselines = dict(replay_cache.get("baseline_groups") or {})
     for arm in settings.enabled_arms:
+        if blocked:
+            rows.append(("NOT_RUN", arm.arm_id, f"{arm.name}｜上游前置工件BLOCKED，本次不執行"))
+            continue
         if arm.dl_enabled:
             action = "REUSE" if cached_pairs.get(arm.arm_id) is not None else "RUN"
             description = (
@@ -372,7 +381,11 @@ def render_execution_plan(
             )
         rows.append((action, arm.arm_id, description))
     rows.extend(
-        ("REPORT", item.contrast_id, item.description)
+        (
+            "NOT_RUN" if blocked else "REPORT",
+            item.contrast_id,
+            f"{item.description}｜上游前置工件BLOCKED，本次不產生報表" if blocked else item.description,
+        )
         for item in settings.enabled_contrasts
     )
     return "\n\n".join(
