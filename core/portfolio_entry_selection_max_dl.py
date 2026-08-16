@@ -1386,6 +1386,423 @@ def _reorder_resource_aware_continuous_score_capital_no_r0_constrained_optimal(
     )
 
 
+def _score_capital_pareto_summary(result, *, base_rank):
+    rows = list(result.get('selected_rows') or [])
+    scores = [
+        float(score)
+        for row in rows
+        if (score := _candidate_continuous_score(row)) is not None
+    ]
+    stable_base_ranks = tuple(
+        -base_rank[id(row)]
+        for row in sorted(rows, key=lambda item: base_rank[id(item)])
+    )
+    return (
+        int(len(scores)),
+        float(sum(scores)),
+        int(result.get('reserved_cost_milli', 0) or 0),
+        stable_base_ranks,
+    )
+
+
+def _normalize_pareto_axis(value, *, low, high):
+    value = float(value)
+    low = float(low)
+    high = float(high)
+    if high <= low + 1e-12:
+        return 1.0
+    return min(1.0, max(0.0, (value - low) / (high - low)))
+
+
+def _score_capital_pareto_basket_quality_key(
+    result,
+    *,
+    base_rank,
+    quality_min,
+    quality_max,
+    capital_min_milli,
+    capital_max_milli,
+):
+    coverage, quality, capital_milli, stable = _score_capital_pareto_summary(
+        result, base_rank=base_rank
+    )
+    quality_norm = _normalize_pareto_axis(
+        quality, low=quality_min, high=quality_max
+    )
+    capital_norm = _normalize_pareto_axis(
+        capital_milli, low=capital_min_milli, high=capital_max_milli
+    )
+    return (
+        int(coverage),
+        float(quality_norm * capital_norm),
+        float(quality),
+        int(capital_milli),
+        stable,
+    )
+
+
+def _reorder_resource_aware_continuous_score_capital_pareto_no_r0_constrained_optimal(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    """Exact C48 basket-level Pareto selection under K/canonical-cash and no R0.
+
+    Missing scores never gain an advantage over scored rows: every pass first
+    maximizes score coverage.  Within that maximal-coverage universe, pass 1
+    finds the score-sum endpoint and pass 2 the canonical-reserved-capital
+    endpoint.  These two efficient endpoints define the no-lambda normalization
+    range.  Pass 3 exactly maximizes normalized quality * normalized capital.
+    Because the scalar is monotone in both axes and deterministic ties prefer
+    higher quality then higher capital, the selected basket is Pareto-efficient.
+    """
+
+    candidates = list(rows or [])
+    target_count = int(baseline['selected_count'])
+    base_rank = {id(row): idx for idx, row in enumerate(candidates)}
+    selector_name = 'continuous-score-capital-pareto-no-r0-constrained-optimal'
+
+    def evaluate_basket(basket):
+        ordered = _max_dl_execution_order(basket, base_rank=base_rank)
+        result = _simulate_reserved_candidate_order(
+            ordered,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=target_count,
+            params=params,
+        )
+        return ordered, result
+
+    baseline_order, baseline_result = evaluate_basket(
+        list(baseline.get('selected_rows') or [])
+    )
+    if int(baseline_result['selected_count']) != target_count:
+        raise RuntimeError('C48 Pareto exact無法取得同參數baseline K可行incumbent')
+
+    standalone = []
+    for row in candidates:
+        _single_order, single_result = evaluate_basket([row])
+        if int(single_result['selected_count']) != 1:
+            standalone.append({
+                'orderable': False,
+                'reserve_upper_milli': 0,
+                'coverage_upper': 0,
+                'score_upper': 0.0,
+            })
+            continue
+        score = _candidate_continuous_score(row)
+        standalone.append({
+            'orderable': True,
+            'reserve_upper_milli': int(single_result['reserved_cost_milli']),
+            'coverage_upper': int(score is not None),
+            'score_upper': max(0.0, 0.0 if score is None else float(score)),
+        })
+
+    n = len(candidates)
+    suffix_orderable = [0] * (n + 1)
+    suffix_coverage = [0] * (n + 1)
+    for idx in range(n - 1, -1, -1):
+        suffix_orderable[idx] = suffix_orderable[idx + 1] + int(
+            standalone[idx]['orderable']
+        )
+        suffix_coverage[idx] = suffix_coverage[idx + 1] + int(
+            standalone[idx]['coverage_upper']
+        )
+
+    def optimistic_quality_upper(idx, need, current_quality):
+        if need <= 0:
+            return float(current_quality)
+        values = sorted(
+            (
+                float(standalone[pos]['score_upper'])
+                for pos in range(idx, n)
+                if standalone[pos]['orderable']
+            ),
+            reverse=True,
+        )
+        return float(current_quality) + float(sum(values[:need]))
+
+    def optimistic_capital_upper(idx, need, current_capital_milli):
+        if need <= 0:
+            return int(current_capital_milli)
+        values = sorted(
+            (
+                int(standalone[pos]['reserve_upper_milli'])
+                for pos in range(idx, n)
+                if standalone[pos]['orderable']
+            ),
+            reverse=True,
+        )
+        return int(current_capital_milli) + int(sum(values[:need]))
+
+    empty_result = _simulate_reserved_candidate_order(
+        [],
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=target_count,
+        params=params,
+    )
+
+    def run_search(mode, *, normalization=None, seed_results=()):
+        if mode not in {'score', 'capital', 'product'}:
+            raise ValueError(f'C48不支援search mode={mode!r}')
+
+        def key_for(result):
+            coverage, quality, capital_milli, stable = _score_capital_pareto_summary(
+                result, base_rank=base_rank
+            )
+            if mode == 'score':
+                return (coverage, quality, capital_milli, stable)
+            if mode == 'capital':
+                return (coverage, capital_milli, quality, stable)
+            return _score_capital_pareto_basket_quality_key(
+                result,
+                base_rank=base_rank,
+                quality_min=normalization['quality_min'],
+                quality_max=normalization['quality_max'],
+                capital_min_milli=normalization['capital_min_milli'],
+                capital_max_milli=normalization['capital_max_milli'],
+            )
+
+        initial = [baseline_result, *list(seed_results or [])]
+        feasible_initial = [
+            result
+            for result in initial
+            if int(result.get('selected_count', 0) or 0) == target_count
+        ]
+        if not feasible_initial:
+            raise RuntimeError('C48 exact search缺少K可行初始解')
+        best_result = max(feasible_initial, key=key_for)
+        best_basket = list(best_result.get('selected_rows') or [])
+        best_key = key_for(best_result)
+        search_states = 0
+        pruned_states = 0
+        feasible_baskets = 0
+
+        def visit(idx, basket, result):
+            nonlocal best_result, best_basket, best_key
+            nonlocal search_states, pruned_states, feasible_baskets
+            search_states += 1
+            coverage, quality, capital_milli, _stable = _score_capital_pareto_summary(
+                result, base_rank=base_rank
+            )
+            selected_count = int(result['selected_count'])
+            need = int(target_count - selected_count)
+
+            if need == 0:
+                feasible_baskets += 1
+                candidate_key = key_for(result)
+                if candidate_key > best_key:
+                    best_key = candidate_key
+                    best_result = result
+                    best_basket = list(basket)
+                return
+
+            if idx >= n or suffix_orderable[idx] < need:
+                pruned_states += 1
+                return
+
+            max_coverage = int(coverage) + min(int(need), int(suffix_coverage[idx]))
+            if max_coverage < int(best_key[0]):
+                pruned_states += 1
+                return
+
+            quality_upper = optimistic_quality_upper(idx, need, quality)
+            capital_upper = optimistic_capital_upper(idx, need, capital_milli)
+            if max_coverage == int(best_key[0]):
+                if mode == 'score':
+                    if quality_upper < float(best_key[1]) - 1e-12:
+                        pruned_states += 1
+                        return
+                    if (
+                        math.isclose(quality_upper, float(best_key[1]), rel_tol=0.0, abs_tol=1e-12)
+                        and capital_upper < int(best_key[2])
+                    ):
+                        pruned_states += 1
+                        return
+                elif mode == 'capital':
+                    if capital_upper < int(best_key[1]):
+                        pruned_states += 1
+                        return
+                    if (
+                        capital_upper == int(best_key[1])
+                        and quality_upper < float(best_key[2]) - 1e-12
+                    ):
+                        pruned_states += 1
+                        return
+                else:
+                    quality_norm_upper = _normalize_pareto_axis(
+                        quality_upper,
+                        low=normalization['quality_min'],
+                        high=normalization['quality_max'],
+                    )
+                    capital_norm_upper = _normalize_pareto_axis(
+                        capital_upper,
+                        low=normalization['capital_min_milli'],
+                        high=normalization['capital_max_milli'],
+                    )
+                    product_upper = float(quality_norm_upper * capital_norm_upper)
+                    if product_upper < float(best_key[1]) - 1e-12:
+                        pruned_states += 1
+                        return
+
+            row = candidates[idx]
+            if standalone[idx]['orderable']:
+                include_basket = list(basket) + [row]
+                include_order, include_result = evaluate_basket(include_basket)
+                if int(include_result['selected_count']) == selected_count + 1:
+                    visit(idx + 1, include_order, include_result)
+            visit(idx + 1, basket, result)
+
+        visit(0, [], empty_result)
+        if int(best_result['selected_count']) != target_count:
+            raise RuntimeError('C48 exact search未維持同參數baseline K')
+        return {
+            'basket': list(best_basket),
+            'result': best_result,
+            'key': best_key,
+            'search_states': int(search_states),
+            'pruned_states': int(pruned_states),
+            'feasible_baskets': int(feasible_baskets),
+        }
+
+    score_pass = run_search('score')
+    capital_pass = run_search('capital', seed_results=(score_pass['result'],))
+    score_coverage, quality_max, capital_min_milli, _ = _score_capital_pareto_summary(
+        score_pass['result'], base_rank=base_rank
+    )
+    capital_coverage, quality_min, capital_max_milli, _ = _score_capital_pareto_summary(
+        capital_pass['result'], base_rank=base_rank
+    )
+    if score_coverage != capital_coverage:
+        raise RuntimeError('C48 Pareto兩個端點的最大Score coverage不一致')
+    if quality_min > quality_max + 1e-12:
+        raise RuntimeError('C48 Pareto quality normalization範圍反向')
+    if capital_min_milli > capital_max_milli:
+        raise RuntimeError('C48 Pareto capital normalization範圍反向')
+
+    normalization = {
+        'quality_min': float(quality_min),
+        'quality_max': float(quality_max),
+        'capital_min_milli': int(capital_min_milli),
+        'capital_max_milli': int(capital_max_milli),
+    }
+    product_pass = run_search(
+        'product',
+        normalization=normalization,
+        seed_results=(score_pass['result'], capital_pass['result']),
+    )
+    best_result = product_pass['result']
+    best_basket = list(product_pass['basket'])
+    final_ordered = _max_dl_execution_order(best_basket, base_rank=base_rank)
+    final_result = _simulate_reserved_candidate_order(
+        final_ordered,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=target_count,
+        params=params,
+    )
+    final_key = _score_capital_pareto_basket_quality_key(
+        final_result,
+        base_rank=base_rank,
+        quality_min=quality_min,
+        quality_max=quality_max,
+        capital_min_milli=capital_min_milli,
+        capital_max_milli=capital_max_milli,
+    )
+    if final_key != product_pass['key']:
+        raise RuntimeError('C48 final canonical execution改變Pareto optimum')
+
+    selected_ids = {id(row) for row in final_result['selected_rows']}
+    baseline_ids = {id(row) for row in baseline['selected_rows']}
+    final_order = final_ordered + [row for row in candidates if id(row) not in selected_ids]
+    final_coverage, final_quality, final_capital_milli, _ = _score_capital_pareto_summary(
+        final_result, base_rank=base_rank
+    )
+    quality_norm = _normalize_pareto_axis(
+        final_quality, low=quality_min, high=quality_max
+    )
+    capital_norm = _normalize_pareto_axis(
+        final_capital_milli, low=capital_min_milli, high=capital_max_milli
+    )
+    total_states = sum(
+        int(item['search_states']) for item in (score_pass, capital_pass, product_pass)
+    )
+    total_pruned = sum(
+        int(item['pruned_states']) for item in (score_pass, capital_pass, product_pass)
+    )
+    total_feasible = sum(
+        int(item['feasible_baskets']) for item in (score_pass, capital_pass, product_pass)
+    )
+    out = _resource_aware_diag_from_result(
+        default_diag,
+        baseline,
+        final_result,
+        changed=bool(selected_ids != baseline_ids),
+        promoted_pass_count=0,
+        selector=selector_name,
+    )
+    out.update({
+        'mode': 'dl-selection',
+        'promoted_score_orders': int(
+            sum(1 for row in final_result['selected_rows'] if id(row) not in baseline_ids)
+        ),
+        'direct_score_order_feasible': False,
+        'basket_search_states': int(total_states),
+        'basket_search_pruned': int(total_pruned),
+        'basket_feasible_count': int(total_feasible),
+        'resource_preservation_required': False,
+        'pre_market_order_limit': int(target_count),
+        'max_dl_eligible': True,
+        'max_dl_repair_steps': 0,
+        'max_dl_repair_evaluations': 0,
+        'max_dl_seed_fallback': False,
+        'max_dl_fallback_to_baseline': False,
+        'max_dl_feasible_ascent_steps': 0,
+        'max_dl_feasible_ascent_evaluations': 0,
+        'max_dl_feasible_ascent_local_optimum': False,
+        'basket_objective': 'score_capital_pareto',
+        'constrained_solver_optimality_certified': True,
+        'constrained_solver_search_states': int(total_states),
+        'constrained_solver_pruned_states': int(total_pruned),
+        'constrained_solver_feasible_baskets': int(total_feasible),
+        'constrained_solver_seed_source': 'baseline-plus-exact-pareto-extremes',
+        'constrained_solver_seed_repair_evaluations': 0,
+        'constrained_solver_seed_ascent_evaluations': 0,
+        'pareto_selection_method': 'normalized_product_v1',
+        'pareto_max_score_coverage': int(score_coverage),
+        'pareto_quality_min': float(quality_min),
+        'pareto_quality_max': float(quality_max),
+        'pareto_capital_min_milli': int(capital_min_milli),
+        'pareto_capital_max_milli': int(capital_max_milli),
+        'pareto_selected_quality': float(final_quality),
+        'pareto_selected_capital_milli': int(final_capital_milli),
+        'pareto_selected_quality_norm': float(quality_norm),
+        'pareto_selected_capital_norm': float(capital_norm),
+        'pareto_selected_product': float(quality_norm * capital_norm),
+        'pareto_quality_axis_degenerate': bool(quality_max <= quality_min + 1e-12),
+        'pareto_capital_axis_degenerate': bool(capital_max_milli <= capital_min_milli),
+        'pareto_score_pass_states': int(score_pass['search_states']),
+        'pareto_capital_pass_states': int(capital_pass['search_states']),
+        'pareto_product_pass_states': int(product_pass['search_states']),
+        '_selector_trace_baskets': {
+            'raw_top_n': [],
+            'minimum_repair_seed': [],
+            'feasible_ascent_final': [],
+            'constrained_optimal_final': list(final_result.get('selected_rows') or []),
+        },
+        '_selector_repair_steps': [],
+    })
+    if int(final_result['selected_count']) != target_count:
+        raise RuntimeError('C48 Pareto exact未維持同參數baseline K')
+    return final_order, out
+
+
 def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     rows,
     *,

@@ -3148,6 +3148,113 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == [row["ticker"] for row in score_capital_brute_best["selected_rows"]],
     )
 
+    pareto_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-score-capital-pareto-no-r0-constrained-optimal",
+            expected_excess_r=expected_excess_r,
+        )
+        for ticker, price, qty, score, expected_excess_r in constrained_seed
+    ]
+    pareto_order, pareto_diag = reorder_candidates_for_resource_aware_quality(
+        pareto_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=resource_params,
+    )
+    pareto_action = select_resource_aware_action_candidates(pareto_order, pareto_diag)
+    pareto_result = _simulate_reserved_candidate_order(
+        pareto_action,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=2,
+        params=resource_params,
+    )
+    pareto_base_rank = {id(row): idx for idx, row in enumerate(pareto_rows)}
+
+    def _pareto_oracle_summary(result):
+        selected_rows = list(result.get("selected_rows") or [])
+        scores = [
+            float(row["breakout_quality_score"])
+            for row in selected_rows
+            if bool((row.get("breakout_quality_rank") or {}).get("available", False))
+        ]
+        stable = tuple(
+            -pareto_base_rank[id(row)]
+            for row in sorted(selected_rows, key=lambda item: pareto_base_rank[id(item)])
+        )
+        return (
+            int(len(scores)),
+            float(sum(scores)),
+            int(result.get("reserved_cost_milli", 0) or 0),
+            stable,
+        )
+
+    def _pareto_oracle_norm(value, low, high):
+        if float(high) <= float(low) + 1e-12:
+            return 1.0
+        return min(1.0, max(0.0, (float(value) - float(low)) / (float(high) - float(low))))
+
+    pareto_feasible = []
+    for combo in itertools.combinations(pareto_rows, 2):
+        combo_order = _max_dl_execution_order(combo, base_rank=pareto_base_rank)
+        combo_result = _simulate_reserved_candidate_order(
+            combo_order,
+            available_cash=350_000.0,
+            sizing_equity=2_000_000.0,
+            free_slots=2,
+            params=resource_params,
+        )
+        if combo_result["selected_count"] == 2:
+            pareto_feasible.append(combo_result)
+    pareto_score_endpoint = max(
+        pareto_feasible,
+        key=lambda result: (
+            _pareto_oracle_summary(result)[0],
+            _pareto_oracle_summary(result)[1],
+            _pareto_oracle_summary(result)[2],
+            _pareto_oracle_summary(result)[3],
+        ),
+    )
+    pareto_capital_endpoint = max(
+        pareto_feasible,
+        key=lambda result: (
+            _pareto_oracle_summary(result)[0],
+            _pareto_oracle_summary(result)[2],
+            _pareto_oracle_summary(result)[1],
+            _pareto_oracle_summary(result)[3],
+        ),
+    )
+    _score_cov, pareto_quality_max, pareto_capital_min, _ = _pareto_oracle_summary(pareto_score_endpoint)
+    _capital_cov, pareto_quality_min, pareto_capital_max, _ = _pareto_oracle_summary(pareto_capital_endpoint)
+    def _pareto_oracle_final_key(result):
+        coverage, quality, capital_milli, stable = _pareto_oracle_summary(result)
+        quality_norm = _pareto_oracle_norm(quality, pareto_quality_min, pareto_quality_max)
+        capital_norm = _pareto_oracle_norm(capital_milli, pareto_capital_min, pareto_capital_max)
+        return (coverage, quality_norm * capital_norm, quality, capital_milli, stable)
+
+    pareto_brute_best = max(pareto_feasible, key=_pareto_oracle_final_key)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "mr13e_basket_level_pareto_no_r0_exact_matches_exhaustive_normalized_quality_capital_oracle",
+        True,
+        pareto_diag.get("basket_objective") == "score_capital_pareto"
+        and pareto_diag.get("pareto_selection_method") == "normalized_product_v1"
+        and pareto_diag.get("resource_preservation_required") is False
+        and pareto_diag.get("constrained_solver_optimality_certified") is True
+        and int(pareto_diag.get("max_dl_repair_steps", -1)) == 0
+        and int(pareto_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
+        and pareto_result["selected_count"] == 2
+        and [row["ticker"] for row in pareto_result["selected_rows"]]
+        == [row["ticker"] for row in pareto_brute_best["selected_rows"]]
+        and math.isclose(float(pareto_diag.get("pareto_quality_min")), float(pareto_quality_min))
+        and math.isclose(float(pareto_diag.get("pareto_quality_max")), float(pareto_quality_max))
+        and int(pareto_diag.get("pareto_capital_min_milli")) == int(pareto_capital_min)
+        and int(pareto_diag.get("pareto_capital_max_milli")) == int(pareto_capital_max),
+    )
+
     multi_swap_seed = (
         ("MS0", 100.0, 771, 1.0, -0.2293296791117404),
         ("MS1", 30.0, 1447, 0.9166666666666666, -0.10787340892209005),
@@ -3311,32 +3418,35 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     c46 = selection_excess_settings.arms["C46"]
-    c46_options = dict(c46.dl_runtime_options or {})
     c47 = selection_excess_settings.arms["C47"]
-    c47_options = dict(c47.dl_runtime_options or {})
+    c48 = selection_excess_settings.arms["C48"]
+    c48_options = dict(c48.dl_runtime_options or {})
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "sr_c46_c47_are_selection_only_no_r0_exact_ablation_and_score_times_capital_pair",
+        "sr_c48_is_selection_only_basket_level_pareto_no_r0_exact_and_rejected_c46_c47_are_historical",
         True,
-        c46.enabled
-        and c47.enabled
-        and c46.dl_id == c47.dl_id == c42.dl_id == "CONT13E_PIT"
-        and c46.dl_runtime_mode == "resource-aware-continuous-score-no-r0-constrained-optimal"
-        and c47.dl_runtime_mode == "resource-aware-continuous-score-capital-no-r0-constrained-optimal"
-        and c46_options.get("preserve_k") is True
-        and c47_options.get("preserve_k") is True
-        and c46_options.get("preserve_r0") is False
-        and c47_options.get("preserve_r0") is False
-        and c46_options.get("r0_minimum_repair") is False
-        and c47_options.get("r0_minimum_repair") is False
-        and c46_options.get("constrained_solver") == c47_options.get("constrained_solver") == "exact_branch_and_bound_v1"
-        and c46_options.get("selection_only") is True
-        and c47_options.get("selection_only") is True
-        and {"C46-C42", "C47-C46", "C47-C42"}.issubset(
-            {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
-        )
-        and "C46" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms}
-        and "C47" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
+        not c46.enabled
+        and not c47.enabled
+        and c48.enabled
+        and c48.dl_id == c42.dl_id == "CONT13E_PIT"
+        and c48.dl_runtime_mode == "resource-aware-continuous-score-capital-pareto-no-r0-constrained-optimal"
+        and c48_options.get("preserve_k") is True
+        and c48_options.get("preserve_r0") is False
+        and c48_options.get("r0_minimum_repair") is False
+        and c48_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+        and c48_options.get("pareto_selection") == "normalized_product_v1"
+        and c48_options.get("pareto_quality") == "score_sum_max_coverage_first"
+        and c48_options.get("pareto_capital") == "canonical_reserved_cost_milli"
+        and c48_options.get("selection_only") is True
+        and {"C32", "C23", "C42", "C48"}
+        == {arm.arm_id for arm in selection_excess_settings.enabled_arms}
+        and "C48-C42" in {
+            contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts
+        }
+        and "C48" not in {
+            arm.arm_id
+            for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
+        },
     )
 
     c43 = selection_excess_settings.arms["C43"]

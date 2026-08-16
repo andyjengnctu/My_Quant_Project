@@ -441,6 +441,46 @@ HISTORICAL_STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C46": {
+        "name": "Min MR-13E Score Exact No-R0",
+        "description": (
+            "SR-C46 historical rejected R0 ablation：historical Min params/all-off + frozen MR-13E PIT score；"
+            "固定K與canonical sizing/cash/orderability/execution，移除baseline R0，exact maximize ΣScore"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-r0-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k": True,
+            "preserve_r0": False,
+            "r0_minimum_repair": False,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C47": {
+        "name": "Min MR-13E Score×Capital Exact No-R0",
+        "description": (
+            "SR-C47 historical rejected objective：與C46同K/No-R0/canonical constraints與frozen MR-13E PIT score；"
+            "exact maximize Σ(score_i × canonical reserved_cost_i)，不做normalization、shift或lambda"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-capital-no-r0-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k": True,
+            "preserve_r0": False,
+            "r0_minimum_repair": False,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
     "C45": {
         "name": "Full MR-13E Constrained",
         "description": (
@@ -540,6 +580,9 @@ HISTORICAL_STRATEGY_COMPARE_CONTRASTS = {
     "C38-C3": {"left": "C38", "right": "C3", "description": "Forward-OOS frozen MR-13E Expected-PnL相對DL-off Min ROOS的策略經濟效果"},
     "C38-C36": {"left": "C38", "right": "C36", "description": "同一frozen MR-13E Forward source與同K/R0；只比較Expected-Dollar-PnL objective相對score-sum objective"},
     "C38-C20": {"left": "C38", "right": "C20", "description": "Forward-OOS frozen MR-13E Expected-PnL相對MR-12B runtime anchor"},
+    "C46-C42": {"left": "C46", "right": "C42", "description": "SR-C46 historical純R0 ablation：同MR-13E score/K/exact/cash下移除baseline R0 floor"},
+    "C47-C46": {"left": "C47", "right": "C46", "description": "SR-C47 historical同No-R0 exact下由ΣScore改為Σ(Score×canonical reserved capital)"},
+    "C47-C42": {"left": "C47", "right": "C42", "description": "SR-C47 historical Score×Capital No-R0相對C42 R0-constrained control"},
     "C45-C32": {"left": "C45", "right": "C32", "description": "SR-C45 historical Full ROOS/formal MR-13E exact constrained相對C32 Full ROOS DL-off baseline"},
     "C45-C42": {"left": "C45", "right": "C42", "description": "SR-C45 historical同MR-13E PIT score/exact solver下Full/formal相對Min/all-off整體策略體系差異"},
 }

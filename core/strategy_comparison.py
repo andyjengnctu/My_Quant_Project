@@ -46,6 +46,9 @@ STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIM
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL = (
     'resource-aware-continuous-score-capital-no-r0-constrained-optimal'
 )
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL = (
+    'resource-aware-continuous-score-capital-pareto-no-r0-constrained-optimal'
+)
 SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_HARD_FILTER,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
@@ -62,6 +65,7 @@ SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
 )
 
 
@@ -886,6 +890,7 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
             if arm.dl_runtime_mode in {
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
+                STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
             }:
                 if options.get("preserve_k") is not True:
                     raise ValueError(f"arm {key} Score no-R0 exact必須preserve_k=True")
@@ -895,6 +900,13 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                     raise ValueError(f"arm {key} Score no-R0 exact必須r0_minimum_repair=False")
                 if options.get("constrained_solver") != "exact_branch_and_bound_v1":
                     raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
+                if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL:
+                    if options.get("pareto_selection") != "normalized_product_v1":
+                        raise ValueError(f"arm {key} Pareto selection method不支援")
+                    if options.get("pareto_quality") != "score_sum_max_coverage_first":
+                        raise ValueError(f"arm {key} Pareto quality contract不支援")
+                    if options.get("pareto_capital") != "canonical_reserved_cost_milli":
+                        raise ValueError(f"arm {key} Pareto capital contract不支援")
                 if options.get("selection_only") is not True:
                     raise ValueError(f"arm {key} Score no-R0 exact目前只允許Selection PIT")
                 selection_only = options.get("selection_only")
