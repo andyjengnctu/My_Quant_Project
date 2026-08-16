@@ -18,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from config.audit import get_active_audit_module_id
 from config.research import get_active_model_research_provider
 from config.strategy_compare import (
+    get_strategy_comparison_menu_profiles,
     get_strategy_comparison_profiles,
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_profiles,
@@ -224,7 +225,7 @@ def _show_all_strategy_comparison_status() -> None:
 
 
 def _strategy_compare_menu() -> int:
-    profiles = get_strategy_comparison_profiles()
+    profiles = get_strategy_comparison_menu_profiles()
     while True:
         print("\n=== 策略組合比較 ===")
         for index, profile in enumerate(profiles, start=1):

@@ -37,7 +37,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 34
+STRATEGY_COMPARE_SCHEMA_VERSION = 35
 
 # =============================================================================
 # 1. 常用設定
@@ -47,6 +47,8 @@ STRATEGY_COMPARE_SCHEMA_VERSION = 34
 # =============================================================================
 
 STRATEGY_COMPARE_DEFAULT_PROFILE = "forward_oos"
+# 主互動選單只暴露泛化工作階段；研究 profile identity 留在 config/報表。
+STRATEGY_COMPARE_MENU_PROFILE_IDS = ("selection_risk_context", "forward_oos")
 STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE = "forward_oos"
 STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT = 8
 STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED = 20260810
@@ -110,7 +112,7 @@ STRATEGY_COMPARE_PROFILES = {
         ),
     },
     "selection_risk_context": {
-        "label": "MR-13J Selection PIT 策略比較",
+        "label": "Selection PIT 策略比較",
         "description": "C42/C49/C50受控策略轉化Gate；保留同Min/all-off的C23 DL-off共同基準以滿足comparison contract。期間不硬編2014起日，而由MR-13E/MR-13J PIT runtime共同合法coverage自動解析，禁止pre-risk-param backfill。",
         "start_date": None,
         "end_date": None,
@@ -744,6 +746,7 @@ def get_strategy_multi_seed_robustness_settings(
 
 
 def get_strategy_comparison_profiles() -> tuple[dict[str, str], ...]:
+    """Return the full configured profile catalog, including historical/replay profiles."""
     return tuple(
         {
             "profile_id": str(profile_id),
@@ -751,6 +754,25 @@ def get_strategy_comparison_profiles() -> tuple[dict[str, str], ...]:
             "description": str(raw.get("description") or ""),
         }
         for profile_id, raw in STRATEGY_COMPARE_PROFILES.items()
+    )
+
+
+def get_strategy_comparison_menu_profiles() -> tuple[dict[str, str], ...]:
+    """Return only the config-selected generic work stages exposed by the main menu."""
+    missing = [
+        profile_id
+        for profile_id in STRATEGY_COMPARE_MENU_PROFILE_IDS
+        if profile_id not in STRATEGY_COMPARE_PROFILES
+    ]
+    if missing:
+        raise ValueError(f"Strategy Compare主選單引用不存在profile: {missing}")
+    return tuple(
+        {
+            "profile_id": str(profile_id),
+            "label": str(STRATEGY_COMPARE_PROFILES[profile_id]["label"]),
+            "description": str(STRATEGY_COMPARE_PROFILES[profile_id].get("description") or ""),
+        }
+        for profile_id in STRATEGY_COMPARE_MENU_PROFILE_IDS
     )
 
 
@@ -908,11 +930,13 @@ __all__ = [
     "STRATEGY_COMPARE_CONTRASTS",
     "STRATEGY_COMPARE_PREPARATION",
     "STRATEGY_COMPARE_PROFILES",
+    "STRATEGY_COMPARE_MENU_PROFILE_IDS",
     "STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES",
     "STRATEGY_RUNTIME_INTEGRATION",
     "STRATEGY_DL_SOURCES",
     "STRATEGY_PARAM_SOURCES",
     "get_strategy_comparison_profiles",
+    "get_strategy_comparison_menu_profiles",
     "get_strategy_multi_seed_robustness_profiles",
     "get_strategy_multi_seed_robustness_settings",
     "get_strategy_runtime_integration_settings",

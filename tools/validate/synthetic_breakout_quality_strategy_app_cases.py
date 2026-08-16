@@ -360,6 +360,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             for profile_id, raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.items()
         ),
     )
+    menu_profiles = strategy_config.get_strategy_comparison_menu_profiles()
+    menu_labels = tuple(str(item["label"]) for item in menu_profiles)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_compare_main_menu_exposes_only_generic_config_selected_stages",
+        True,
+        tuple(item["profile_id"] for item in menu_profiles)
+        == tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS)
+        and menu_labels == ("Selection PIT 策略比較", "Forward-OOS 策略比較")
+        and all("MR-" not in label and "C42" not in label and "C49" not in label and "C50" not in label for label in menu_labels),
+    )
     active_arm_ids = {
         str(arm_id)
         for raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.values()
