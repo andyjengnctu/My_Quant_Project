@@ -24,10 +24,11 @@ from filters.breakout_quality.paths import (
 )
 from core.console_report import (
     console_color_enabled,
+    paint as console_paint,
     print_artifact_paths,
     render_title,
 )
-from core.report_style import signal_for_signed_value, tone_for_signal
+from core.report_style import markdown_tone, signal_for_signed_value, tone_for_signal
 from tools.filters.breakout_quality.evaluate import (
     EVALUATION_SPLIT_OOS,
     EVALUATION_SPLIT_SELECTION,
@@ -40,22 +41,6 @@ from tools.filters.breakout_quality.evaluate import (
 
 REPORT_SCHEMA_VERSION = 4
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
-ANSI_COLORS = {
-    "reset": "\033[0m",
-    "bold": "\033[1m",
-    "blue": "\033[96m",
-    "green": "\033[92m",
-    "yellow": "\033[93m",
-    "red": "\033[91m",
-    "gray": "\033[90m",
-}
-MARKDOWN_COLORS = {
-    "blue": "#42A5F5",
-    "green": "#188038",
-    "yellow": "#B06000",
-    "red": "#C62828",
-    "gray": "#667085",
-}
 SPLIT_LABELS = {
     EVALUATION_SPLIT_TRAIN: "Inner Train",
     EVALUATION_SPLIT_VALIDATION: "Validation*",
@@ -110,13 +95,8 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 
 def _paint(text: object, tone: str, *, enabled: bool, bold: bool = False) -> str:
-    raw = str(text)
-    if not enabled:
-        return raw
-    prefix = ANSI_COLORS.get(tone, "")
-    if bold:
-        prefix = ANSI_COLORS["bold"] + prefix
-    return f"{prefix}{raw}{ANSI_COLORS['reset']}"
+    normalized_tone = "cyan" if str(tone) == "blue" else str(tone)
+    return console_paint(text, normalized_tone, enabled=enabled, bold=bold)
 
 
 def _paint_multiline(text: object, tone: str, *, enabled: bool, bold: bool = False) -> str:
@@ -131,10 +111,7 @@ def _paint_multiline(text: object, tone: str, *, enabled: bool, bold: bool = Fal
 
 
 def _markdown_color(text: object, tone: str, *, bold: bool = True) -> str:
-    raw = str(text)
-    color = MARKDOWN_COLORS.get(tone, MARKDOWN_COLORS["gray"])
-    weight = "font-weight:700;" if bold else ""
-    return f'<span style="color:{color};{weight}">{raw}</span>'
+    return markdown_tone(text, tone, bold=bold)
 
 
 def _tone_for_delta(value: float | None) -> str:

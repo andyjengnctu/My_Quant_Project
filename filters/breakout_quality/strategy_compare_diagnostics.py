@@ -18,7 +18,8 @@ from core.report_style import (
     signal_for_coverage,
     signal_for_delta,
     signal_for_signed_value,
-    signal_marker,
+    markdown_signal,
+    styled_signal,
 )
 from core.strategy_comparison import StrategyComparisonSettings
 
@@ -1011,14 +1012,15 @@ def _fmt_pct_fraction(value: Any) -> str:
     return "-" if numeric is None else f"{numeric * 100.0:.2f}%"
 
 
-def _signed_with_marker(value: Any, *, digits: int = 3, unit: str = "") -> str:
+def _markdown_signed(value: Any, *, digits: int = 3, unit: str = "") -> str:
     numeric = _finite(value)
     if numeric is None:
         return "-"
-    return f"{_fmt(numeric, digits=digits, unit=unit)} {signal_marker(signal_for_signed_value(numeric), include_label=False)}"
+    text = _fmt(numeric, digits=digits, unit=unit)
+    return markdown_signal(text, signal_for_signed_value(numeric))
 
 
-def _delta_with_marker(
+def _markdown_delta(
     value: Any,
     *,
     preference: str,
@@ -1028,15 +1030,16 @@ def _delta_with_marker(
     numeric = _finite(value)
     if numeric is None:
         return "-"
-    return f"{_fmt(numeric, digits=digits, unit=unit)} {signal_marker(signal_for_delta(numeric, preference=preference), include_label=False)}"
+    text = _fmt(numeric, digits=digits, unit=unit)
+    return markdown_signal(text, signal_for_delta(numeric, preference=preference))
 
 
 
 
-def _value_with_marker(text: str, signal: str) -> str:
-    if text == "-" or signal == SIGNAL_NEUTRAL:
+def _value_with_signal(text: str, signal: str, *, target: str) -> str:
+    if text == "-":
         return text
-    return f"{text} {signal_marker(signal, include_label=False)}"
+    return styled_signal(text, signal, target=target)
 
 
 def _relative_r_marker(
@@ -1052,7 +1055,7 @@ def _relative_r_marker(
     return signal_for_delta(numeric - ref, preference=preference)
 
 
-def render_strategy_r_analysis_table(diagnostics: dict[str, Any]) -> str:
+def render_strategy_r_analysis_table(diagnostics: dict[str, Any], *, target: str = "plain") -> str:
     """Render the shared per-arm R prediction/translation table used by console and Markdown."""
 
     rows = list(diagnostics.get("r_analysis") or [])
@@ -1066,59 +1069,65 @@ def render_strategy_r_analysis_table(diagnostics: dict[str, Any]) -> str:
         avg_r = _fmt(row.get("portfolio_avg_r"), digits=2, unit=" R")
         median_r = _fmt(row.get("portfolio_median_r"), digits=2, unit=" R")
         if not is_reference:
-            avg_r = _value_with_marker(
+            avg_r = _value_with_signal(
                 avg_r,
                 _relative_r_marker(
                     row.get("portfolio_avg_r"), reference.get("portfolio_avg_r")
                 ),
+                target=target,
             )
-            median_r = _value_with_marker(
+            median_r = _value_with_signal(
                 median_r,
                 _relative_r_marker(
                     row.get("portfolio_median_r"), reference.get("portfolio_median_r")
                 ),
+                target=target,
             )
 
         daily_rho = _fmt(row.get("mean_daily_spearman"), digits=3)
-        daily_rho = _value_with_marker(
-            daily_rho, signal_for_signed_value(row.get("mean_daily_spearman"))
+        daily_rho = _value_with_signal(
+            daily_rho, signal_for_signed_value(row.get("mean_daily_spearman")), target=target
         )
         global_rho = _fmt(row.get("global_spearman"), digits=3)
-        global_rho = _value_with_marker(
-            global_rho, signal_for_signed_value(row.get("global_spearman"))
+        global_rho = _value_with_signal(
+            global_rho, signal_for_signed_value(row.get("global_spearman")), target=target
         )
         pair = _fmt_pct_fraction(row.get("pairwise_concordance"))
-        pair = _value_with_marker(pair, signal_for_auc(row.get("pairwise_concordance")))
+        pair = _value_with_signal(pair, signal_for_auc(row.get("pairwise_concordance")), target=target)
         spread = _fmt(row.get("top_bottom_target_spread_r"), digits=2, unit=" R")
-        spread = _value_with_marker(
-            spread, signal_for_signed_value(row.get("top_bottom_target_spread_r"))
+        spread = _value_with_signal(
+            spread, signal_for_signed_value(row.get("top_bottom_target_spread_r")), target=target
         )
         coverage = _fmt_pct_fraction(row.get("score_coverage"))
-        coverage = _value_with_marker(coverage, signal_for_coverage(row.get("score_coverage")))
+        coverage = _value_with_signal(coverage, signal_for_coverage(row.get("score_coverage")), target=target)
 
         target_mean = _fmt(row.get("selected_target_mean_r"), digits=2, unit=" R")
-        target_mean = _value_with_marker(
+        target_mean = _value_with_signal(
             target_mean,
             signal_for_delta(row.get("selected_target_mean_r_delta"), preference="higher"),
+            target=target,
         )
         percentile = _fmt(row.get("selected_target_percentile"), digits=3)
-        percentile = _value_with_marker(
+        percentile = _value_with_signal(
             percentile,
             signal_for_delta(row.get("selected_target_percentile_delta"), preference="higher"),
+            target=target,
         )
         top_k = _fmt_pct_fraction(row.get("target_top_k_retention"))
-        top_k = _value_with_marker(
+        top_k = _value_with_signal(
             top_k,
             signal_for_delta(row.get("target_top_k_retention_delta"), preference="higher"),
+            target=target,
         )
         gap = _fmt(row.get("target_opportunity_gap_r"), digits=2, unit=" R")
-        gap = _value_with_marker(
+        gap = _value_with_signal(
             gap,
             signal_for_delta(row.get("target_opportunity_gap_r_delta"), preference="lower"),
+            target=target,
         )
         direct_r = _fmt(row.get("direct_selection_delta_r"), digits=2, unit=" R")
-        direct_r = _value_with_marker(
-            direct_r, signal_for_signed_value(row.get("direct_selection_delta_r"))
+        direct_r = _value_with_signal(
+            direct_r, signal_for_signed_value(row.get("direct_selection_delta_r")), target=target
         )
         rendered.append((
             row.get("arm_id", "-"),
@@ -1178,10 +1187,10 @@ def render_strategy_diagnostics_markdown(diagnostics: dict[str, Any]) -> str:
             years = "-" if valid in (None, 0) else f"{int(positive or 0)}/{int(valid)}"
             lines.append(
                 f"| {row.get('dl_id','-')} | {row.get('score_source','-')} | {row.get('scope','-')} "
-                f"| {_signed_with_marker(row.get('mean_daily_spearman'))} "
-                f"| {_signed_with_marker(row.get('global_spearman'))} "
-                f"| {_fmt_pct_fraction(row.get('pairwise_concordance'))} "
-                f"| {_signed_with_marker(row.get('top_bottom_target_spread_r'), unit=' R')} | {years} |"
+                f"| {_markdown_signed(row.get('mean_daily_spearman'))} "
+                f"| {_markdown_signed(row.get('global_spearman'))} "
+                f"| {markdown_signal(_fmt_pct_fraction(row.get('pairwise_concordance')), signal_for_auc(row.get('pairwise_concordance')))} "
+                f"| {_markdown_signed(row.get('top_bottom_target_spread_r'), unit=' R')} | {years} |"
             )
     else:
         lines.append("| - | - | - | - | - | - | - | - | - |")
@@ -1198,14 +1207,14 @@ def render_strategy_diagnostics_markdown(diagnostics: dict[str, Any]) -> str:
         for row in translation_rows:
             lines.append(
                 f"| {row.get('arm_id')} {row.get('name')} "
-                f"| {_fmt_pct_fraction(row.get('score_coverage'))} "
-                f"| {_fmt(row.get('selected_target_mean_r'), digits=3, unit=' R')} "
-                f"| {_signed_with_marker(row.get('selected_target_mean_r_delta'), digits=3, unit=' R')} "
-                f"| {_fmt(row.get('selected_target_percentile'), digits=4)} "
-                f"| {_fmt_pct_fraction(row.get('target_top_k_retention'))} "
-                f"| {_fmt(row.get('target_opportunity_gap_r'), digits=3, unit=' R')} "
-                f"| {_delta_with_marker(row.get('target_opportunity_gap_r_delta'), preference='lower', digits=3, unit=' R')} "
-                f"| {_signed_with_marker(row.get('direct_selection_delta_r'), digits=2, unit=' R')} |"
+                f"| {markdown_signal(_fmt_pct_fraction(row.get('score_coverage')), signal_for_coverage(row.get('score_coverage')))} "
+                f"| {markdown_signal(_fmt(row.get('selected_target_mean_r'), digits=3, unit=' R'), signal_for_delta(row.get('selected_target_mean_r_delta'), preference='higher'))} "
+                f"| {_markdown_signed(row.get('selected_target_mean_r_delta'), digits=3, unit=' R')} "
+                f"| {markdown_signal(_fmt(row.get('selected_target_percentile'), digits=4), signal_for_delta(row.get('selected_target_percentile_delta'), preference='higher'))} "
+                f"| {markdown_signal(_fmt_pct_fraction(row.get('target_top_k_retention')), signal_for_delta(row.get('target_top_k_retention_delta'), preference='higher'))} "
+                f"| {markdown_signal(_fmt(row.get('target_opportunity_gap_r'), digits=3, unit=' R'), signal_for_delta(row.get('target_opportunity_gap_r_delta'), preference='lower'))} "
+                f"| {_markdown_delta(row.get('target_opportunity_gap_r_delta'), preference='lower', digits=3, unit=' R')} "
+                f"| {_markdown_signed(row.get('direct_selection_delta_r'), digits=2, unit=' R')} |"
             )
     else:
         lines.append("| - | - | - | - | - | - | - | - |")

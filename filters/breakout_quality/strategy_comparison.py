@@ -42,8 +42,10 @@ from core.report_metrics import (
     PORTFOLIO_RESULT_METRICS,
     TRADE_RESULT_METRICS,
 )
-from core.report_style import SIGNAL_NEUTRAL, signal_for_delta, signal_marker
+from core.report_style import markdown_tone, signal_for_delta, styled_signal
 from core.console_report import (
+    console_color_enabled,
+    paint,
     print_artifact_paths,
     project_relative_display_path,
     render_key_values,
@@ -574,10 +576,18 @@ def _report_reference_arm_id(settings: StrategyComparisonSettings) -> str | None
     return arm_id if arm_id in {arm.arm_id for arm in settings.enabled_arms} else None
 
 
-def _value_with_signal(text: str, signal: str) -> str:
-    if text == "-" or signal == SIGNAL_NEUTRAL:
+def _value_with_signal(text: str, signal: str, *, target: str) -> str:
+    if text == "-":
         return text
-    return f"{text} {signal_marker(signal, include_label=False)}"
+    return styled_signal(text, signal, target=target)
+
+
+def _reference_text(text: str, *, target: str) -> str:
+    if target == "console":
+        return paint(text, "cyan", enabled=console_color_enabled(), bold=True)
+    if target == "markdown":
+        return markdown_tone(text, "cyan", bold=True)
+    return text
 
 
 def _metric_table(
@@ -587,6 +597,7 @@ def _metric_table(
     metrics: tuple[Any, ...],
     reference_arm_id: str | None,
     include_name: bool = True,
+    target: str = "plain",
 ) -> str:
     reference = scenarios.get(str(reference_arm_id or "")) or {}
     rows = []
@@ -604,9 +615,16 @@ def _metric_table(
                         preference=metric.preference,
                         warning_threshold=metric.warning_threshold,
                     )
-                    text = _value_with_signal(text, signal)
+                    text = _value_with_signal(text, signal, target=target)
             values.append(text)
-        identity = (arm.arm_id, arm.name) if include_name else (arm.arm_id,)
+        if arm.arm_id == reference_arm_id:
+            identity = (
+                (_reference_text(arm.arm_id, target=target), _reference_text(arm.name, target=target))
+                if include_name
+                else (_reference_text(arm.arm_id, target=target),)
+            )
+        else:
+            identity = (arm.arm_id, arm.name) if include_name else (arm.arm_id,)
         rows.append((*identity, *values))
     identity_headers = ("編號", "比較對象") if include_name else ("編號",)
     return render_table(
@@ -620,6 +638,7 @@ def _core_result_table(
     *,
     settings: StrategyComparisonSettings,
     reference_arm_id: str | None,
+    target: str = "plain",
 ) -> str:
     direct_trade_metrics = TRADE_RESULT_METRICS[:4]
     metrics = (
@@ -633,6 +652,7 @@ def _core_result_table(
         metrics=metrics,
         reference_arm_id=reference_arm_id,
         include_name=True,
+        target=target,
     )
 
 
@@ -641,6 +661,7 @@ def _execution_table(
     *,
     settings: StrategyComparisonSettings,
     reference_arm_id: str | None,
+    target: str = "plain",
 ) -> str:
     metrics = (
         next(metric for metric in TRADE_RESULT_METRICS if metric.key == "reserved_buy_fill_rate_pct"),
@@ -652,6 +673,7 @@ def _execution_table(
         metrics=metrics,
         reference_arm_id=reference_arm_id,
         include_name=False,
+        target=target,
     )
 
 
@@ -875,6 +897,7 @@ def _yearly_table(
     *,
     settings: StrategyComparisonSettings,
     reference_arm_id: str | None,
+    target: str = "plain",
 ) -> str:
     enabled_ids = tuple(arm.arm_id for arm in settings.enabled_arms)
     by_id: dict[str, dict[int, float | None]] = {arm_id: {} for arm_id in enabled_ids}
@@ -911,6 +934,7 @@ def _yearly_table(
                 text = _value_with_signal(
                     text,
                     signal_for_delta(float(value) - float(reference_value), preference="higher"),
+                    target=target,
                 )
             values.append(text)
         rows.append((year, *values))
@@ -940,6 +964,7 @@ def _render_report(
     pair_payloads: dict[str, dict[str, Any]],
     diagnostics: dict[str, Any],
     reference_arm_id: str | None,
+    target: str = "plain",
 ) -> str:
     reference_name = next(
         (arm.name for arm in settings.enabled_arms if arm.arm_id == reference_arm_id),
@@ -962,17 +987,17 @@ def _render_report(
             ),
             render_section("1. 核心策略結果"),
             _core_result_table(
-                scenarios, settings=settings, reference_arm_id=reference_arm_id
+                scenarios, settings=settings, reference_arm_id=reference_arm_id, target=target
             ),
             render_section("2. R 預測／轉化"),
-            render_strategy_r_analysis_table(diagnostics),
+            render_strategy_r_analysis_table(diagnostics, target=target),
             render_section("3. 資金／執行"),
             _execution_table(
-                scenarios, settings=settings, reference_arm_id=reference_arm_id
+                scenarios, settings=settings, reference_arm_id=reference_arm_id, target=target
             ),
             render_section("4. 年度結果"),
             _yearly_table(
-                pair_payloads, settings=settings, reference_arm_id=reference_arm_id
+                pair_payloads, settings=settings, reference_arm_id=reference_arm_id, target=target
             ),
         )
     ).rstrip() + "\n"
@@ -1354,6 +1379,16 @@ def run_strategy_comparison(
         pair_payloads=pair_payloads,
         diagnostics=diagnostics,
         reference_arm_id=reference_arm_id,
+        target="markdown",
+    )
+    console_report = _render_report(
+        settings=settings,
+        status=status,
+        scenarios=scenarios,
+        pair_payloads=pair_payloads,
+        diagnostics=diagnostics,
+        reference_arm_id=reference_arm_id,
+        target="console",
     )
     report_path = run_dir / "strategy_comparison.md"
     diagnostics_path = run_dir / "strategy_diagnostics.md"
@@ -1434,7 +1469,7 @@ def run_strategy_comparison(
     ):
         shutil.copy2(source, latest_dir / filename)
 
-    print("\n" + report)
+    print("\n" + console_report)
     print_artifact_paths(
         (
             ("策略比較Markdown", report_path),

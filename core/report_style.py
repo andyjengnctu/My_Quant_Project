@@ -1,8 +1,12 @@
 """Project-wide semantic color and judgment rules for human-readable reports.
 
 Renderers must classify a metric using an explicit metric contract first, then use
-this module to map that semantic signal to markers/terminal colors.  A numeric
-sign alone is not enough unless the metric contract defines it as meaningful.
+this module to map that semantic signal to text color. A numeric sign alone is
+not enough unless the metric contract defines it as meaningful.
+
+Semantic judgment must never rely on traffic-light / circle emoji. Console
+reports color the judgment text/value itself with ANSI. Markdown reports use
+inline HTML text color so the same semantic palette is preserved without icons.
 """
 
 from __future__ import annotations
@@ -17,12 +21,6 @@ SIGNAL_NEGATIVE = "negative"
 SIGNAL_WARNING = "warning"
 SIGNAL_NEUTRAL = "neutral"
 
-_SIGNAL_MARKERS = {
-    SIGNAL_POSITIVE: "🟢",
-    SIGNAL_NEGATIVE: "🔴",
-    SIGNAL_WARNING: "🟡",
-    SIGNAL_NEUTRAL: "⚪",
-}
 _SIGNAL_LABELS = {
     SIGNAL_POSITIVE: "改善",
     SIGNAL_NEGATIVE: "惡化",
@@ -40,6 +38,20 @@ _SIGNAL_TONES = {
     SIGNAL_NEGATIVE: "red",
     SIGNAL_WARNING: "yellow",
     SIGNAL_NEUTRAL: "gray",
+}
+_SIGNAL_MARKDOWN_COLORS = {
+    SIGNAL_POSITIVE: "#188038",
+    SIGNAL_NEGATIVE: "#C62828",
+    SIGNAL_WARNING: "#B06000",
+    SIGNAL_NEUTRAL: "#667085",
+}
+_TONE_MARKDOWN_COLORS = {
+    "green": "#188038",
+    "red": "#C62828",
+    "yellow": "#B06000",
+    "gray": "#667085",
+    "cyan": "#42A5F5",
+    "blue": "#42A5F5",
 }
 
 
@@ -123,12 +135,21 @@ def signal_for_auc(value: Any) -> str:
     return SIGNAL_POSITIVE if numeric > 0.5 else SIGNAL_NEGATIVE
 
 
+def signal_label(signal: str) -> str:
+    """Return the plain semantic judgment word, without any icon."""
+
+    return _SIGNAL_LABELS.get(str(signal), _SIGNAL_LABELS[SIGNAL_NEUTRAL])
+
+
 def signal_marker(signal: str, *, include_label: bool = True) -> str:
-    normalized = str(signal)
-    marker = _SIGNAL_MARKERS.get(normalized, _SIGNAL_MARKERS[SIGNAL_NEUTRAL])
-    if not include_label:
-        return marker
-    return f"{marker} {_SIGNAL_LABELS.get(normalized, _SIGNAL_LABELS[SIGNAL_NEUTRAL])}"
+    """Backward-compatible alias with icon-free semantics.
+
+    New renderers should prefer :func:`signal_label` and color the text/value
+    itself.  ``include_label=False`` intentionally returns an empty string so
+    legacy call sites can never re-introduce traffic-light glyphs.
+    """
+
+    return signal_label(signal) if include_label else ""
 
 
 def tone_for_signal(signal: str) -> str:
@@ -142,11 +163,51 @@ def terminal_color_for_signal(signal: str) -> str:
 
 
 def terminal_signal(text: str, signal: str, *, enabled: bool | None = None) -> str:
+    """Color the text itself for console output; never prefix an icon."""
+
     use_color = console_color_enabled() if enabled is None else bool(enabled)
     if not use_color:
         return str(text)
     color = _SIGNAL_COLORS.get(str(signal), C_GRAY)
     return f"{color}{text}{C_RESET}"
+
+
+def markdown_tone(text: Any, tone: str, *, bold: bool = False) -> str:
+    """Color Markdown text with the project-wide HTML palette, without icons."""
+
+    raw = str(text)
+    color = _TONE_MARKDOWN_COLORS.get(str(tone), _TONE_MARKDOWN_COLORS["gray"])
+    weight = "font-weight:700;" if bool(bold) else ""
+    return f'<span style="color:{color};{weight}">{raw}</span>'
+
+
+def markdown_signal(text: Any, signal: str, *, bold: bool = False) -> str:
+    """Color Markdown text using the same semantic signal palette as console."""
+
+    raw = str(text)
+    color = _SIGNAL_MARKDOWN_COLORS.get(str(signal), _SIGNAL_MARKDOWN_COLORS[SIGNAL_NEUTRAL])
+    weight = "font-weight:700;" if bool(bold) else ""
+    return f'<span style="color:{color};{weight}">{raw}</span>'
+
+
+def styled_signal(
+    text: Any,
+    signal: str,
+    *,
+    target: str,
+    enabled: bool | None = None,
+    bold: bool = False,
+) -> str:
+    """Render semantic text consistently for console, Markdown or plain output."""
+
+    normalized = str(target).strip().lower()
+    if normalized == "console":
+        return terminal_signal(str(text), signal, enabled=enabled)
+    if normalized == "markdown":
+        return markdown_signal(text, signal, bold=bold)
+    if normalized == "plain":
+        return str(text)
+    raise ValueError(f"不支援的report target: {target!r}")
 
 
 __all__ = [
@@ -160,8 +221,12 @@ __all__ = [
     "signal_for_coverage",
     "signal_for_ratio",
     "signal_for_auc",
+    "signal_label",
     "signal_marker",
     "tone_for_signal",
     "terminal_color_for_signal",
     "terminal_signal",
+    "markdown_tone",
+    "markdown_signal",
+    "styled_signal",
 ]

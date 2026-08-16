@@ -40,14 +40,19 @@ def render_elapsed(seconds, *, color=False):
 
 
 ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+HTML_SPAN_RE = re.compile(r'</?span\b[^>]*>', re.IGNORECASE)
 
 
 def _strip_ansi(s):
     return ANSI_RE.sub('', str(s))
 
 
+def _strip_display_markup(s):
+    return HTML_SPAN_RE.sub('', _strip_ansi(s))
+
+
 def _display_width(s):
-    text = _strip_ansi(s)
+    text = _strip_display_markup(s)
     width = 0
     for ch in text:
         if unicodedata.combining(ch):

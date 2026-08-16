@@ -3542,7 +3542,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "PAIR_MAIN_METRICS" in report_metrics_source
         and "from core.report_metrics import" in comparison_source
         and "_report_reference_arm_id" in comparison_source
-        and "signal_marker" in comparison_source
+        and "styled_signal" in comparison_source
+        and 'target="markdown"' in comparison_source
+        and 'target="console"' in comparison_source
         and "判讀基準" in render_report_source
         and "from core.report_metrics import PAIR_MAIN_METRICS" in reporting_source
         and "from core.report_style import" in reporting_source
@@ -3553,7 +3555,10 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "from core.report_style import" in optimizer_callbacks_source
         and "from core.report_style import" in outer_roos_source
         and "SIGNAL_POSITIVE" in report_style_source
-        and "綠色只表示" in project_settings
+        and "markdown_signal" in report_style_source
+        and not any(marker in report_style_source for marker in ("🟢", "🔴", "🟡", "⚪"))
+        and "文字本身上色" in project_settings
+        and "禁止以`🟢`、`🔴`、`🟡`、`⚪`" in project_settings
         and "renderer只負責組裝與顯示" in project_settings,
     )
     add_check(

@@ -30,7 +30,8 @@ from core.report_style import (
     SIGNAL_POSITIVE,
     SIGNAL_WARNING,
     signal_for_delta,
-    signal_marker,
+    signal_label,
+    markdown_signal,
     terminal_signal,
 )
 
@@ -411,8 +412,8 @@ def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagno
         lines.append(
             f"| {label} | {_format_metric(baseline.get(key), digits=digits, unit=unit)} "
             f"| {_format_metric(quality.get(key), digits=digits, unit=unit)} "
-            f"| {_format_metric(delta.get(key), digits=digits, unit=unit, signed=True)} "
-            f"| {signal_marker(metric_signal)} |"
+            f"| {markdown_signal(_format_metric(delta.get(key), digits=digits, unit=unit, signed=True), metric_signal)} "
+            f"| {markdown_signal(signal_label(metric_signal), metric_signal, bold=True)} |"
         )
     lines += ["", "## 年度報酬", ""]
     if yearly.empty:
@@ -425,8 +426,8 @@ def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagno
                 f"| {int(row['year'])} "
                 f"| {_format_metric(row.get('no_filter_return_pct'), digits=2, unit='%')} "
                 f"| {_format_metric(row.get(active_yearly_column), digits=2, unit='%')} "
-                f"| {_format_metric(row.get('delta_pct'), digits=2, unit='%', signed=True)} "
-                f"| {signal_marker(year_signal)} "
+                f"| {markdown_signal(_format_metric(row.get('delta_pct'), digits=2, unit='%', signed=True), year_signal)} "
+                f"| {markdown_signal(signal_label(year_signal), year_signal, bold=True)} "
                 f"| {'是' if row.get('is_full_year') else '否'} |"
             )
     if strategy_diagnostics:
@@ -449,8 +450,8 @@ def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagno
             diag_signal = signal_for_delta(dv, preference=preference)
             lines.append(
                 f"| {label} | {_format_metric(lv, digits=digits)} | "
-                f"{_format_metric(rv, digits=digits)} | {_format_metric(dv, digits=digits, signed=True)} "
-                f"| {signal_marker(diag_signal)} |"
+                f"{_format_metric(rv, digits=digits)} | {markdown_signal(_format_metric(dv, digits=digits, signed=True), diag_signal)} "
+                f"| {markdown_signal(signal_label(diag_signal), diag_signal, bold=True)} |"
             )
         lines += [
             "",
@@ -509,7 +510,7 @@ def _compact_metric_rows(
                 signal,
                 enabled=use_color,
             ),
-            terminal_signal(signal_marker(signal), signal, enabled=use_color),
+            terminal_signal(signal_label(signal), signal, enabled=use_color),
         ))
     return rows
 
@@ -614,7 +615,7 @@ def _render_compact_strategy_console_report(
                     signal,
                     enabled=use_color,
                 ),
-                terminal_signal(signal_marker(signal), signal, enabled=use_color),
+                terminal_signal(signal_label(signal), signal, enabled=use_color),
             ))
         if available_count:
             model_signal = (
@@ -632,10 +633,10 @@ def _render_compact_strategy_console_report(
             ("歷史參數無前視", metadata.get("lookahead_safe_active_param_schedule", "-")),
         )),
         render_section("綜合判定", number=1),
-        terminal_signal(f"{signal_marker(portfolio_signal)} {portfolio_text}", portfolio_signal, enabled=use_color),
-        terminal_signal(f"{signal_marker(trade_signal)} {trade_text}", trade_signal, enabled=use_color),
-        terminal_signal(f"{signal_marker(capital_signal)} {capital_text}", capital_signal, enabled=use_color),
-        terminal_signal(f"{signal_marker(model_signal)} {model_text}", model_signal, enabled=use_color),
+        terminal_signal(portfolio_text, portfolio_signal, enabled=use_color),
+        terminal_signal(trade_text, trade_signal, enabled=use_color),
+        terminal_signal(capital_text, capital_signal, enabled=use_color),
+        terminal_signal(model_text, model_signal, enabled=use_color),
     ]
     if total_delta is not None or mdd_delta is not None:
         lines.append(
@@ -721,7 +722,7 @@ def _render_compact_strategy_console_report(
                     signal,
                     enabled=use_color,
                 ),
-                terminal_signal(signal_marker(signal), signal, enabled=use_color),
+                terminal_signal(signal_label(signal), signal, enabled=use_color),
             ))
         lines.append(render_table(
             ("年度", "Baseline", active_label, "差異", "判讀"),
@@ -832,7 +833,7 @@ def _render_strategy_console_report(
             warning_threshold=metric.warning_threshold,
         )
         delta_text = _format_metric(delta.get(key), digits=digits, unit=unit, signed=True)
-        judgment = signal_marker(signal)
+        judgment = signal_label(signal)
         metric_rows.append((
             label,
             _format_metric(baseline.get(key), digits=digits, unit=unit),
@@ -864,7 +865,7 @@ def _render_strategy_console_report(
                     _format_metric(row.get("delta_pct"), digits=2, unit="%", signed=True),
                     signal, enabled=use_color,
                 ),
-                terminal_signal(signal_marker(signal), signal, enabled=use_color),
+                terminal_signal(signal_label(signal), signal, enabled=use_color),
                 "是" if row.get("is_full_year") else "否",
             ))
         lines.append(render_table(
@@ -898,7 +899,7 @@ def _render_strategy_console_report(
                     _format_metric(delta_value, digits=4, signed=True),
                     signal, enabled=use_color,
                 ),
-                terminal_signal(signal_marker(signal), signal, enabled=use_color),
+                terminal_signal(signal_label(signal), signal, enabled=use_color),
             ))
         lines.extend((
             render_section("Selection 選股診斷（Future Target 僅於回放後 join）", number=3),
