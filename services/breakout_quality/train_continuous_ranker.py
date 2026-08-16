@@ -150,7 +150,7 @@ def parse_args(argv=None):
         "--model-architecture",
         default=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
         choices=ACTIVE_MODEL_ARCHITECTURES,
-        help="continuous ranker architecture；正式新訓練只允許 active sequence-only model",
+        help="continuous ranker architecture；實際輸入能力由profile sample provider與model spec共同驗證",
     )
     parser.add_argument(
         "--experiment-profile",
@@ -270,15 +270,16 @@ def resolve_training_output_paths(args):
 def validate_args(args) -> None:
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     model_spec = get_model_spec(str(args.model_architecture))
-    if (
-        bool(model_spec.requires_market_set)
-        or bool(model_spec.use_dataset_context)
-        or bool(model_spec.derived_context_features)
-    ):
-        raise ValueError("continuous ranker只允許sequence-only architecture")
     if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
         raise ValueError("continuous ranker命令只接受continuous ranking profile")
     spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
+    if bool(model_spec.requires_market_set) or bool(model_spec.derived_context_features):
+        raise ValueError("continuous ranker不支援market-set／derived-context architecture")
+    if (
+        bool(model_spec.use_dataset_context)
+        and spec.trainer_family != CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL
+    ):
+        raise ValueError("event continuous ranker只允許sequence-only architecture")
     expected_family = (
         CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL
         if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS

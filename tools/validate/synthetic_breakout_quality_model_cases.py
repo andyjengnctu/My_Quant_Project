@@ -2067,6 +2067,34 @@ def validate_breakout_quality_risk_normalized_13ij_contract_case(_base_params):
         (tuple(logits_i.shape), tuple(logits_j.shape)),
     )
 
+    from services.breakout_quality import train_continuous_ranker as continuous_ranker_trainer
+    args_j = continuous_ranker_trainer.parse_args([
+        "--model-architecture", settings_j.model_architecture,
+        "--experiment-profile", profile_j.name,
+    ])
+    try:
+        continuous_ranker_trainer.validate_args(args_j)
+        daily_context_profile_allowed = True
+    except ValueError:
+        daily_context_profile_allowed = False
+    event_context_args = continuous_ranker_trainer.parse_args([
+        "--model-architecture", settings_j.model_architecture,
+        "--experiment-profile", STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+    ])
+    try:
+        continuous_ranker_trainer.validate_args(event_context_args)
+        event_context_rejected = False
+    except ValueError as exc:
+        event_context_rejected = "event continuous ranker" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_dispatch_allows_daily_risk_context_but_keeps_event_ranker_sequence_only",
+        (True, True),
+        (daily_context_profile_allowed, event_context_rejected),
+    )
+
     application_source = read_source_text("tools/filters/breakout_quality/application.py")
     risk_source = read_source_text("filters/breakout_quality/risk_normalized_target.py")
     add_check(
@@ -2082,8 +2110,10 @@ def validate_breakout_quality_risk_normalized_13ij_contract_case(_base_params):
         ),
     )
 
-    summary["active_model_research"] = profile_i.name
-    summary["mr13j_status"] = "implemented_not_active"
+    summary["active_model_research"] = active_research.experiment_profile
+    summary["mr13j_status"] = (
+        "active" if active_research.experiment_profile == profile_j.name else "implemented_not_active"
+    )
     return results, summary
 
 def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_params):

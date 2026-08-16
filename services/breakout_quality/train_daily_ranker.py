@@ -477,7 +477,7 @@ def run(args) -> int:
         "continuous_target_id": target_id,
         "sequence_length": int(bundle.feature_bank.shape[1]),
         "feature_columns": list(FEATURE_COLUMNS),
-        "context_columns": [],
+        "context_columns": list(bundle.target_manifest.get("context_features") or []),
         "feature_storage": "lazy_from_canonical_ohlcv",
         "trainable_parameter_count": int(trainable_parameter_count),
         "total_parameter_count": int(total_parameter_count),
