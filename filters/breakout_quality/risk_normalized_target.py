@@ -190,23 +190,21 @@ def resolve_risk_period(
     schedule: Iterable[RiskParamPeriod],
     decision_date: Any,
 ) -> RiskParamPeriod | None:
+    """Resolve one PIT period from an already validated, start-date-sorted schedule.
+
+    The loader validates same-start conflicts once.  Hot-path target generation therefore
+    scans from the newest period backward instead of allocating/sorting a matches list for
+    every stock-day.
+    """
+
     date_value = _normalized_date(decision_date)
-    matches = [
-        period
-        for period in schedule
-        if period.start_date <= date_value
-        and (period.end_date is None or date_value <= period.end_date)
-    ]
-    if not matches:
-        return None
-    matches.sort(key=lambda item: (item.start_date, item.source_id))
-    selected = matches[-1]
-    # Same-start conflicts cannot be silently resolved by source name.
-    same_start = [p for p in matches if p.start_date == selected.start_date]
-    tuples = {(p.atr_len, round(p.atr_times_init, 12)) for p in same_start}
-    if len(tuples) > 1:
-        raise ValueError(f"Min ROOS risk schedule同日存在衝突: {date_value.date()}")
-    return selected
+    periods = schedule if isinstance(schedule, tuple) else tuple(schedule)
+    for period in reversed(periods):
+        if period.start_date > date_value:
+            continue
+        if period.end_date is None or date_value <= period.end_date:
+            return period
+    return None
 
 
 def build_risk_target_contract(
@@ -275,6 +273,7 @@ def compute_risk_geometry(
     atr: float,
     period: RiskParamPeriod | None,
     standardized_equity: float = STANDARDIZED_EQUITY,
+    params: V16StrategyParams | None = None,
 ) -> RiskGeometryResult:
     if period is None:
         return RiskGeometryResult(False, "missing_risk_period", math.nan, math.nan, math.nan, 0, 0, ())
@@ -282,8 +281,8 @@ def compute_risk_geometry(
         return RiskGeometryResult(False, "invalid_reference", math.nan, math.nan, math.nan, 0, 0, ())
     if not math.isfinite(atr) or atr <= 0.0:
         return RiskGeometryResult(False, "invalid_atr", float(reference_price), math.nan, math.nan, 0, 0, ())
-    params = _params_for_period(period)
-    stop = float(calc_initial_stop_from_reference(reference_price, atr, params, ticker=ticker))
+    resolved_params = _params_for_period(period) if params is None else params
+    stop = float(calc_initial_stop_from_reference(reference_price, atr, resolved_params, ticker=ticker))
     risk_distance = float(reference_price - stop)
     if not math.isfinite(stop) or stop <= 0.0 or risk_distance <= 0.0:
         return RiskGeometryResult(False, "invalid_stop", float(reference_price), float(atr), stop, 0, 0, ())
@@ -293,12 +292,12 @@ def compute_risk_geometry(
             stop,
             standardized_equity,
             float(DEFAULT_FIXED_RISK),
-            params,
+            resolved_params,
             ticker=ticker,
             trade_date=pd.Timestamp(decision_date).date(),
         )
     )
-    qty = int(apply_board_lot_preferred_qty(reference_price, qty, params))
+    qty = int(apply_board_lot_preferred_qty(reference_price, qty, resolved_params))
     if qty <= 0:
         return RiskGeometryResult(False, "zero_qty", float(reference_price), float(atr), stop, 0, 0, ())
     planned_risk_milli = int(
@@ -306,18 +305,18 @@ def compute_risk_geometry(
             reference_price,
             stop,
             qty,
-            params,
+            resolved_params,
             ticker=ticker,
             trade_date=pd.Timestamp(decision_date).date(),
         )
     )
     if planned_risk_milli <= 0:
         return RiskGeometryResult(False, "non_positive_planned_risk", float(reference_price), float(atr), stop, qty, 0, ())
-    buy = build_buy_ledger_from_price(reference_price, qty, params)
+    buy = build_buy_ledger_from_price(reference_price, qty, resolved_params)
     flat_sell = build_sell_ledger_from_price(
         reference_price,
         qty,
-        params,
+        resolved_params,
         ticker=ticker,
         trade_date=pd.Timestamp(decision_date).date(),
     )
@@ -457,12 +456,18 @@ def compute_targets_and_context_for_positions(
         if atr_values is None:
             atr_values = tv_atr(high, low, close, int(period.atr_len))
             atr_cache[int(period.atr_len)] = atr_values
+        key = (int(period.atr_len), float(period.atr_times_init))
+        params = params_cache.get(key)
+        if params is None:
+            params = _params_for_period(period)
+            params_cache[key] = params
         geometry = compute_risk_geometry(
             ticker=ticker,
             decision_date=decision_date,
             reference_price=float(close[source_pos]),
             atr=float(atr_values[source_pos]),
             period=period,
+            params=params,
         )
         if not geometry.valid:
             continue
@@ -470,11 +475,6 @@ def compute_targets_and_context_for_positions(
         context[out_idx] = np.asarray(geometry.context, dtype=np.float32)
         if source_pos + int(horizon_bars) >= len(frame):
             continue
-        key = (int(period.atr_len), float(period.atr_times_init))
-        params = params_cache.get(key)
-        if params is None:
-            params = _params_for_period(period)
-            params_cache[key] = params
         start = source_pos + 1
         end = source_pos + int(horizon_bars) + 1
         value, valid_target, _reason = risk_normalized_target_from_future_path(

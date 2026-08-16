@@ -184,12 +184,34 @@ def run(args) -> int:
             "daily ranker orchestrator只接受daily_universal research spec: "
             f"profile={args.experiment_profile}, family={research_spec.trainer_family}"
         )
+    build_started = time.perf_counter()
+    progress_state = {"last_bucket": -1}
+
+    def _daily_build_progress(processed, total, target_valid, skipped):
+        total = max(int(total), 1)
+        processed = int(processed)
+        bucket = min(20, int(processed * 20 / total))
+        if processed not in {0, total} and bucket <= int(progress_state["last_bucket"]):
+            return
+        progress_state["last_bucket"] = bucket
+        pct = min(100.0, 100.0 * processed / total)
+        elapsed = time.perf_counter() - build_started
+        print(
+            "[Daily target/index] "
+            f"{processed}/{total} tickers ({pct:5.1f}%)｜"
+            f"target_valid={int(target_valid):,}｜skipped={int(skipped)}｜"
+            f"elapsed={elapsed:,.1f}s",
+            flush=True,
+        )
+
+    print("[Daily target/index] 開始建立daily stock-day index與40D target...", flush=True)
     bundle = load_daily_universal_ranker_data(
         filter_id=str(args.filter_id),
         model_architecture=str(args.model_architecture),
         experiment_profile=str(args.experiment_profile),
         preload_feature_bank=bool(args.preload_feature_bank),
         allow_stale_source=bool(args.allow_stale_source),
+        progress_callback=_daily_build_progress,
     )
     target_id = str(bundle.profile.continuous_target_id or "").strip()
     if not target_id:

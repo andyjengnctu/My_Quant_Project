@@ -1880,17 +1880,19 @@ def validate_breakout_quality_risk_normalized_13ij_contract_case(_base_params):
             spec_j.model_research_id,
         ),
     )
+    from config.breakout_quality import get_breakout_quality_model_research_settings
+    active_research = get_breakout_quality_model_research_settings()
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "model_research_moves_to_mr13i_without_changing_production_mr13e_workflow",
-        (
-            DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-            DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        ),
+        "model_research_profile_resolves_from_config_without_changing_production_workflow",
         (
             BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        ),
+        (
+            active_research.experiment_profile,
             BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
         ),
     )

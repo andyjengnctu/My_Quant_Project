@@ -264,6 +264,7 @@ def load_daily_universal_ranker_data(
     allow_stale_source: bool,
     extend_score_eligibility_to_source_tail: bool = False,
     project_root: str | Path = PROJECT_ROOT,
+    progress_callback=None,
 ) -> ContinuousRankerDataBundle:
     """Build a lightweight daily stock/day index and lazy feature provider.
 
@@ -355,20 +356,28 @@ def load_daily_universal_ranker_data(
     inference_context_chunks: list[np.ndarray] = []
     pending_inference_only_tickers: list[tuple[str, pd.DataFrame, np.ndarray, np.ndarray, pd.DatetimeIndex, np.ndarray]] = []
     skipped_tickers = 0
+    processed_tickers = 0
+    target_valid_so_far = 0
+    stock_input_count = sum(1 for raw_ticker, _path in csv_inputs if str(raw_ticker) != benchmark_ticker)
+    if progress_callback is not None:
+        progress_callback(0, stock_input_count, 0, 0)
 
-    for ticker, path in csv_inputs:
-        ticker = str(ticker)
-        if ticker == benchmark_ticker:
-            continue
+    stock_inputs = [(str(raw_ticker), path) for raw_ticker, path in csv_inputs if str(raw_ticker) != benchmark_ticker]
+    for ticker, path in stock_inputs:
+        processed_tickers += 1
         try:
             frame = load_dataset_frame(path, ticker, min_rows=min_rows)
         except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError):
             skipped_tickers += 1
+            if progress_callback is not None:
+                progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
             continue
 
         first_pos = int(DEFAULT_LABEL_POLICY.feature_window_bars) - 1
         if len(frame) <= first_pos:
             skipped_tickers += 1
+            if progress_callback is not None:
+                progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
             continue
         candidate_positions = np.arange(first_pos, len(frame), dtype=np.int64)
         frame_dates = pd.DatetimeIndex(frame.index).normalize()
@@ -380,6 +389,8 @@ def load_daily_universal_ranker_data(
         local_benchmark_positions = benchmark_pos[feature_eligible]
         if len(local_positions) == 0:
             skipped_tickers += 1
+            if progress_callback is not None:
+                progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
             continue
 
         # Future target completion is a training/evaluation property, not an inference
@@ -420,7 +431,13 @@ def load_daily_universal_ranker_data(
                 local_context = np.asarray(risk_context[keep], dtype=np.float32)
                 if len(local_positions) == 0:
                     skipped_tickers += 1
+                    if progress_callback is not None:
+                        progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
                     continue
+
+        target_valid_so_far += int(np.count_nonzero(local_target_valid))
+        if progress_callback is not None:
+            progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
 
         valid_positions = local_positions[local_target_valid]
         valid_benchmark_positions = local_benchmark_positions[local_target_valid]
