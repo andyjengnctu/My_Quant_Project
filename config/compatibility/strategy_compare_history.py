@@ -461,6 +461,31 @@ HISTORICAL_STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C48": {
+        "name": "Min MR-13E Pareto Exact No-R0",
+        "description": (
+            "SR-C48 historical rejected basket-level Pareto No-R0：與C42同historical Min params/all-off、"
+            "frozen MR-13E PIT score、K、canonical 1% risk sizing/cash/orderability/execution；移除R0。"
+            "exact三pass先求最大Score coverage下的Score/Capital端點，再以端點min-max normalization"
+            "全域最大化Q_norm×C_norm；Selection結果明顯輸C42，因此不建Forward"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-capital-pareto-no-r0-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k": True,
+            "preserve_r0": False,
+            "r0_minimum_repair": False,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "pareto_selection": "normalized_product_v1",
+            "pareto_quality": "score_sum_max_coverage_first",
+            "pareto_capital": "canonical_reserved_cost_milli",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
     "C47": {
         "name": "Min MR-13E Score×Capital Exact No-R0",
         "description": (
@@ -583,6 +608,7 @@ HISTORICAL_STRATEGY_COMPARE_CONTRASTS = {
     "C46-C42": {"left": "C46", "right": "C42", "description": "SR-C46 historical純R0 ablation：同MR-13E score/K/exact/cash下移除baseline R0 floor"},
     "C47-C46": {"left": "C47", "right": "C46", "description": "SR-C47 historical同No-R0 exact下由ΣScore改為Σ(Score×canonical reserved capital)"},
     "C47-C42": {"left": "C47", "right": "C42", "description": "SR-C47 historical Score×Capital No-R0相對C42 R0-constrained control"},
+    "C48-C42": {"left": "C48", "right": "C42", "description": "SR-C48 historical basket-level Pareto Exact No-R0相對C42 R0-constrained control"},
     "C45-C32": {"left": "C45", "right": "C32", "description": "SR-C45 historical Full ROOS/formal MR-13E exact constrained相對C32 Full ROOS DL-off baseline"},
     "C45-C42": {"left": "C45", "right": "C42", "description": "SR-C45 historical同MR-13E PIT score/exact solver下Full/formal相對Min/all-off整體策略體系差異"},
 }

@@ -3423,11 +3423,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c48_options = dict(c48.dl_runtime_options or {})
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "sr_c48_is_selection_only_basket_level_pareto_no_r0_exact_and_rejected_c46_c47_are_historical",
+        "sr_c48_rejected_selection_only_pareto_no_r0_is_historical_with_c46_c47_and_current_matrix_is_minimal",
         True,
         not c46.enabled
         and not c47.enabled
-        and c48.enabled
+        and not c48.enabled
         and c48.dl_id == c42.dl_id == "CONT13E_PIT"
         and c48.dl_runtime_mode == "resource-aware-continuous-score-capital-pareto-no-r0-constrained-optimal"
         and c48_options.get("preserve_k") is True
@@ -3438,11 +3438,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and c48_options.get("pareto_quality") == "score_sum_max_coverage_first"
         and c48_options.get("pareto_capital") == "canonical_reserved_cost_milli"
         and c48_options.get("selection_only") is True
-        and {"C32", "C23", "C42", "C48"}
+        and {"C32", "C23", "C42"}
         == {arm.arm_id for arm in selection_excess_settings.enabled_arms}
-        and "C48-C42" in {
+        and "C48-C42" not in {
             contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts
         }
+        and "C48-C42" in selection_excess_settings.contrasts
         and "C48" not in {
             arm.arm_id
             for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms

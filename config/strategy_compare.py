@@ -37,7 +37,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 32
+STRATEGY_COMPARE_SCHEMA_VERSION = 33
 
 # =============================================================================
 # 1. 常用設定
@@ -87,26 +87,24 @@ STRATEGY_RUNTIME_INTEGRATION = {
 STRATEGY_COMPARE_DISPLAY_FULL_ROOS = "Full ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_ROOS = "Min ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED = "Min MR-13E Constrained"
-STRATEGY_COMPARE_DISPLAY_MIN_MR13E_PARETO_NO_R0 = "Min MR-13E Pareto Exact No-R0"
 
 # Strategy Compare以研究階段profile隔離設定與輸出；App只顯示泛化階段名稱，
 # arms／contrasts／period／output namespace全部由本檔驅動。
 STRATEGY_COMPARE_PROFILES = {
     "selection_pit": {
         "label": "Selection PIT 策略比較",
-        "description": "2014～2020 point-in-time策略轉化Gate；比較MR-13E exact R0 control與basket-level Pareto Exact No-R0。",
+        "description": "2014～2020 point-in-time策略轉化Gate；current只保留Full ROOS、Min ROOS與Min MR-13E exact constrained核心比較。",
         "display_alignment_group": "core_strategy_compare",
         "display_alignment_arm_ids": ("C32", "C23", "C42"),
         "start_date": "2014-01-01",
         "end_date": "2020-12-31",
         "output_root": "outputs/strategy_compare/selection_pit",
         "reuse_output_roots": ("outputs/strategy_compare",),
-        "arm_ids": ("C32", "C23", "C42", "C48"),
+        "arm_ids": ("C32", "C23", "C42"),
         "contrast_ids": (
             "C32-C23",
             "C42-C23",
             "C42-C32",
-            "C48-C42",
         ),
     },
     "forward_oos": {
@@ -419,31 +417,6 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
-    "C48": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_PARETO_NO_R0,
-        "description": (
-            "Selection PIT basket-level Pareto No-R0：與C42相同historical Min params/all-off、frozen MR-13E PIT score、"
-            "K、canonical 1% risk sizing/cash/orderability/execution與exact search；移除baseline R0 floor。"
-            "先在最大Score coverage的K/cash-feasible baskets找ΣScore與canonical reserved capital兩個exact Pareto端點，"
-            "再以端點min-max normalize後exact maximize normalized_quality×normalized_capital，不使用lambda或candidate-level score×capital"
-        ),
-        "param_source": "selection_min_roos",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13E_PIT",
-        "dl_runtime_mode": "resource-aware-continuous-score-capital-pareto-no-r0-constrained-optimal",
-        "dl_runtime_options": {
-            "preserve_k": True,
-            "preserve_r0": False,
-            "r0_minimum_repair": False,
-            "constrained_solver": "exact_branch_and_bound_v1",
-            "pareto_selection": "normalized_product_v1",
-            "pareto_quality": "score_sum_max_coverage_first",
-            "pareto_capital": "canonical_reserved_cost_milli",
-            "selection_only": True,
-        },
-        "robustness_role": "off",
-    },
     "C44": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED,
         "description": (
@@ -483,7 +456,6 @@ STRATEGY_COMPARE_ARMS = {
 STRATEGY_COMPARE_CONTRASTS = {
     "C42-C23": {"left": "C42", "right": "C23", "description": "Selection PIT frozen MR-13E score exact constrained optimum相對DL-off Min ROOS的策略經濟效果"},
     "C42-C32": {"left": "C42", "right": "C32", "description": "Selection PIT active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
-    "C48-C42": {"left": "C48", "right": "C42", "description": "Selection PIT basket-level Pareto Exact No-R0相對current R0-constrained MR-13E exact control的策略與資金轉化效果"},
     "C44-C3": {"left": "C44", "right": "C3", "description": "current Min ROOS下MR-13E exact constrained score selector相對DL-off baseline的Forward-OOS策略效果"},
     "C44-C1": {"left": "C44", "right": "C1", "description": "Forward-OOS active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
     "C1-C3": {"left": "C1", "right": "C3", "description": "Full ROOS相對current Min ROOS的完整策略體系差異；不是單一參數效果"},
