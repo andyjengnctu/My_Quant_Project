@@ -1066,6 +1066,29 @@ def _build_min_roos_schedule_contract(
     }
 
 
+def _resolve_selection_historical_oos_period(
+    first_oos_date: str | None,
+    last_oos_date: str | None,
+) -> tuple[str, str]:
+    """Resolve a Selection historical parameter source's own canonical coverage.
+
+    Strategy Compare profiles may leave their runtime comparison period on auto.
+    That must not be serialized as the literal string ``"None"`` or used to
+    redefine the historical parameter-training schedule.  When both values are
+    absent, the source retains the canonical Selection 2014-2020 coverage; an
+    actual runtime comparison subset is resolved later from ready DL artifacts.
+    """
+
+    if first_oos_date in (None, "") and last_oos_date in (None, ""):
+        return (
+            TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
+            TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+        )
+    if first_oos_date in (None, "") or last_oos_date in (None, ""):
+        raise ValueError("Selection historical參數期間起訖必須同時設定或同時留空")
+    return str(first_oos_date), str(last_oos_date)
+
+
 def prepare_selection_historical_p2_params(
     *,
     project_root=PROJECT_ROOT,
@@ -1081,8 +1104,8 @@ def prepare_selection_historical_p2_params(
     quiet: bool = False,
     comparison_output_root: str = "outputs/strategy_compare",
     comparison_output_roots: tuple[str, ...] | None = None,
-    first_oos_date: str = TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
-    last_oos_date: str = TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+    first_oos_date: str | None = TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
+    last_oos_date: str | None = TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
     train_window_months: int = TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
     oos_months: int = TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
 ):
@@ -1094,14 +1117,17 @@ def prepare_selection_historical_p2_params(
     """
 
     root = Path(project_root).resolve()
+    resolved_first_oos_date, resolved_last_oos_date = _resolve_selection_historical_oos_period(
+        first_oos_date, last_oos_date
+    )
     recovered = restore_selection_historical_p2_from_completed_strategy_compare(
         project_root=root,
         output_root=str(comparison_output_root),
         output_roots=tuple(comparison_output_roots or (str(comparison_output_root),)),
         dataset=str(dataset),
         param_policy=str(param_policy),
-        start_date=str(first_oos_date),
-        end_date=str(last_oos_date),
+        start_date=resolved_first_oos_date,
+        end_date=resolved_last_oos_date,
         max_positions=int(max_positions),
         rotation=str(rotation),
         quiet=bool(quiet),
@@ -1124,8 +1150,8 @@ def prepare_selection_historical_p2_params(
         }
 
     schedule_contract = _build_min_roos_schedule_contract(
-        first_oos_date=str(first_oos_date),
-        last_oos_date=str(last_oos_date),
+        first_oos_date=resolved_first_oos_date,
+        last_oos_date=resolved_last_oos_date,
         train_window_months=int(train_window_months),
         oos_months=int(oos_months),
     )
@@ -1297,17 +1323,20 @@ def prepare_selection_historical_full_roos_params(
     optimizer_seed: int,
     resume_parameter_training: bool = True,
     quiet: bool = False,
-    first_oos_date: str = TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
-    last_oos_date: str = TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+    first_oos_date: str | None = TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
+    last_oos_date: str | None = TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
     train_window_months: int = TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
     oos_months: int = TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
 ):
     """Build/reuse Selection historical Full ROOS using the canonical full search space."""
 
     root = Path(project_root).resolve()
+    resolved_first_oos_date, resolved_last_oos_date = _resolve_selection_historical_oos_period(
+        first_oos_date, last_oos_date
+    )
     schedule_contract = _build_selection_full_roos_schedule_contract(
-        first_oos_date=str(first_oos_date),
-        last_oos_date=str(last_oos_date),
+        first_oos_date=resolved_first_oos_date,
+        last_oos_date=resolved_last_oos_date,
         train_window_months=int(train_window_months),
         oos_months=int(oos_months),
     )

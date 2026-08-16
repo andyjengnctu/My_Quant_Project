@@ -191,6 +191,58 @@ def append_strategy_compare_preparation_contract_checks(
         and "BASELINE_PARAMS_IDENTITY_MISMATCH" not in preparation_source,
     )
 
+    from config.strategy_compare import get_strategy_comparison_settings
+    from filters.breakout_quality import strategy_param_training as param_training_module
+
+    auto_settings = get_strategy_comparison_settings("selection_risk_context")
+    selection_source = auto_settings.parameter_sources["selection_min_roos"]
+    auto_action = StrategyPreparationAction(
+        action_id="param:selection_min_roos",
+        artifact_key="param:selection_min_roos",
+        action="REBUILD",
+        builder_type="selection_historical_p2",
+        description="build selection historical params",
+        path="models/selection_min.json",
+    )
+    forwarded_period: dict[str, Any] = {}
+    with patch.object(
+        preparation_module,
+        "prepare_selection_historical_p2_params",
+        side_effect=lambda **kwargs: forwarded_period.update(kwargs),
+    ):
+        preparation_module._execute_preparation_action(
+            root=project_root, settings=auto_settings, action=auto_action
+        )
+    canonical_period = param_training_module._resolve_selection_historical_oos_period(
+        forwarded_period.get("first_oos_date"),
+        forwarded_period.get("last_oos_date"),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "auto_period_strategy_profile_keeps_selection_param_source_on_canonical_history",
+        True,
+        auto_settings.start_date is None
+        and auto_settings.end_date is None
+        and selection_source.builder is not None
+        and forwarded_period.get("first_oos_date") is None
+        and forwarded_period.get("last_oos_date") is None
+        and canonical_period == ("2014-01-01", "2020-12-31"),
+    )
+
+    partial_period_rejected = False
+    try:
+        param_training_module._resolve_selection_historical_oos_period(
+            None, "2020-12-31"
+        )
+    except ValueError:
+        partial_period_rejected = True
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "selection_historical_period_requires_both_explicit_dates_or_both_auto",
+        True,
+        partial_period_rejected,
+    )
+
 
 
 
