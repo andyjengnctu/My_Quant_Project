@@ -3423,7 +3423,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c48_options = dict(c48.dl_runtime_options or {})
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "sr_c48_rejected_selection_only_pareto_no_r0_is_historical_with_c46_c47_and_current_matrix_is_minimal",
+        "sr_c48_rejected_selection_only_pareto_no_r0_remains_historical_while_13j_opens_new_upstream_model_gate",
         True,
         not c46.enabled
         and not c47.enabled
@@ -3448,6 +3448,68 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             arm.arm_id
             for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
         },
+    )
+
+    risk_context_settings = strategy_config.get_strategy_comparison_settings("selection_risk_context")
+    c49 = risk_context_settings.arms["C49"]
+    c50 = risk_context_settings.arms["C50"]
+    c49_options = dict(c49.dl_runtime_options or {})
+    c50_options = dict(c50.dl_runtime_options or {})
+    cont13j_pit = risk_context_settings.dl_sources["CONT13J_PIT"]
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "sr_c49_c50_are_controlled_mr13j_r0_translation_gate_with_same_pit_source_and_exact_cash_semantics",
+        True,
+        c49.enabled
+        and c50.enabled
+        and c49.param_source == c50.param_source == c42.param_source == "selection_min_roos"
+        and c49.rule_policy == c50.rule_policy == c42.rule_policy == "all_off"
+        and c49.dl_id == c50.dl_id == "CONT13J_PIT"
+        and cont13j_pit.model_architecture == "inception_time_risk_context_v1"
+        and cont13j_pit.experiment_profile == "daily_universal_risk_context_net_full_list_ndcg_pairwise"
+        and cont13j_pit.score_source == "selection_point_in_time"
+        and cont13j_pit.forward_scores_builder is not None
+        and cont13j_pit.forward_scores_builder.builder_type == "selection_pit_from_existing_folds"
+        and c49.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+        and c49_options == c42_options
+        and c49_options.get("preserve_k_r0") is True
+        and c50.dl_runtime_mode == "resource-aware-continuous-score-no-r0-constrained-optimal"
+        and c50_options.get("preserve_k") is True
+        and c50_options.get("preserve_r0") is False
+        and c50_options.get("r0_minimum_repair") is False
+        and c50_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+        and c50_options.get("selection_only") is True
+        and {"C23", "C42", "C49", "C50"}
+        == {arm.arm_id for arm in risk_context_settings.enabled_arms}
+        and {"C49-C42", "C50-C49", "C50-C42"}
+        == {contrast.contrast_id for contrast in risk_context_settings.enabled_contrasts}
+        and risk_context_settings.start_date is None
+        and risk_context_settings.end_date is None
+        and not {"C49", "C50"}.intersection(
+            {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms}
+        ),
+    )
+
+    from filters.breakout_quality.strategy_compare_preparation_status import (
+        resolve_comparison_period as resolve_strategy_comparison_period,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "mr13j_selection_profile_uses_common_legal_pit_overlap_without_rewriting_core_2014_selection_period",
+        (
+            ("2017-01-01", "2020-12-31", "dl_runtime_common_overlap"),
+            ("2014-01-01", "2020-12-31"),
+        ),
+        (
+            resolve_strategy_comparison_period(
+                settings=risk_context_settings,
+                runtime_periods={
+                    "CONT13E_PIT": ("2014-01-01", "2020-12-31"),
+                    "CONT13J_PIT": ("2017-01-01", "2020-12-31"),
+                },
+            ),
+            (selection_excess_settings.start_date, selection_excess_settings.end_date),
+        ),
     )
 
     c43 = selection_excess_settings.arms["C43"]
