@@ -124,8 +124,8 @@ R_MODEL_PREDICTION_METRICS = (
 R_SELECTION_TRANSLATION_METRICS = (
     RAnalysisMetricSpec(
         "r_conversion_efficiency", "RCE",
-        "同一批exclusive completed trades的 realized mean-R edge ÷ Target mean-R edge；衡量預測品質edge轉成實際交易品質edge的效率",
-        "僅在exclusive trade Target coverage完整且Target mean-R edge > 0時有效；越高越好，100%代表等量轉化",
+        "同一批有Future Target的exclusive completed trades之 realized mean-R edge ÷ Target mean-R edge；衡量預測品質edge轉成實際交易品質edge的效率",
+        "兩側皆有Target-covered exclusive trades且Target mean-R edge > 0時有效；越高越好，100%代表等量轉化",
         digits=2, format_kind="fraction_pct", preference="higher", signal_mode="relative",
     ),
     RAnalysisMetricSpec(

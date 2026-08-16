@@ -803,48 +803,80 @@ def paired_trade_r_conversion_diagnostic(
     baseline_only = join_targets(baseline_only, baseline_target, "baseline")
     active_only = join_targets(active_only, active_target, "active")
     all_exclusive = pd.concat([baseline_only, active_only], ignore_index=True)
-    if all_exclusive.empty:
-        coverage = 1.0
-        covered_count = 0
-    else:
-        available = all_exclusive["target_available"].fillna(False).astype(bool)
-        finite_target = pd.to_numeric(all_exclusive["target_raw_r"], errors="coerce").map(math.isfinite)
-        valid = available & finite_target
-        covered_count = int(valid.sum())
-        coverage = float(covered_count / len(all_exclusive))
 
-    baseline_realized = pd.to_numeric(baseline_only.get("r_multiple"), errors="coerce").dropna().astype(float)
-    active_realized = pd.to_numeric(active_only.get("r_multiple"), errors="coerce").dropna().astype(float)
+    def target_covered(frame: pd.DataFrame) -> pd.DataFrame:
+        if frame.empty:
+            return frame.copy()
+        available = frame["target_available"].fillna(False).astype(bool)
+        finite_target = pd.to_numeric(frame["target_raw_r"], errors="coerce").map(math.isfinite)
+        finite_realized = pd.to_numeric(frame["r_multiple"], errors="coerce").map(math.isfinite)
+        return frame.loc[available & finite_target & finite_realized].copy()
+
+    baseline_covered = target_covered(baseline_only)
+    active_covered = target_covered(active_only)
+    covered_count = int(len(baseline_covered) + len(active_covered))
+    coverage = (
+        1.0 if all_exclusive.empty else float(covered_count / len(all_exclusive))
+    )
+    complete_target_coverage = int(len(all_exclusive)) == covered_count
+
+    # RCE must compare Target-R and realized-R on the exact same observable trade subset.
+    # Missing Future Target rows are excluded from both numerator and denominator rather
+    # than forcing an all-or-nothing 100% coverage gate.  Coverage remains explicit
+    # diagnostic evidence, so no hidden minimum-coverage magic threshold is introduced.
+    baseline_covered_realized = pd.to_numeric(
+        baseline_covered.get("r_multiple"), errors="coerce"
+    ).dropna().astype(float)
+    active_covered_realized = pd.to_numeric(
+        active_covered.get("r_multiple"), errors="coerce"
+    ).dropna().astype(float)
+    baseline_all_realized = pd.to_numeric(
+        baseline_only.get("r_multiple"), errors="coerce"
+    ).dropna().astype(float)
+    active_all_realized = pd.to_numeric(
+        active_only.get("r_multiple"), errors="coerce"
+    ).dropna().astype(float)
+
     realized_edge = None
     target_edge = None
     baseline_target_mean = None
     active_target_mean = None
-    if len(baseline_realized) and len(active_realized):
-        realized_edge = float(active_realized.mean() - baseline_realized.mean())
-    complete_target_coverage = int(len(all_exclusive)) == covered_count
-    if complete_target_coverage and len(baseline_only) and len(active_only):
-        baseline_target_mean = float(pd.to_numeric(baseline_only["target_raw_r"], errors="coerce").mean())
-        active_target_mean = float(pd.to_numeric(active_only["target_raw_r"], errors="coerce").mean())
+    if len(baseline_covered) and len(active_covered):
+        baseline_target_mean = float(
+            pd.to_numeric(baseline_covered["target_raw_r"], errors="coerce").mean()
+        )
+        active_target_mean = float(
+            pd.to_numeric(active_covered["target_raw_r"], errors="coerce").mean()
+        )
         target_edge = float(active_target_mean - baseline_target_mean)
+        realized_edge = float(
+            active_covered_realized.mean() - baseline_covered_realized.mean()
+        )
     rce = (
         None
         if target_edge is None or target_edge <= 1e-12 or realized_edge is None
         else float(realized_edge / target_edge)
     )
-    baseline_total_r = float(baseline_realized.sum()) if len(baseline_realized) else 0.0
-    active_total_r = float(active_realized.sum()) if len(active_realized) else 0.0
+    baseline_total_r = float(baseline_all_realized.sum()) if len(baseline_all_realized) else 0.0
+    active_total_r = float(active_all_realized.sum()) if len(active_all_realized) else 0.0
     return {
-        "comparison_basis": "paired_exclusive_realized_trade_mean_r",
+        "comparison_basis": "target_covered_exclusive_realized_trade_mean_r",
         "active_only_count": int(len(active_only)),
         "baseline_only_count": int(len(baseline_only)),
+        "active_only_target_covered_count": int(len(active_covered)),
+        "baseline_only_target_covered_count": int(len(baseline_covered)),
         "target_covered_exclusive_count": covered_count,
         "target_coverage_rate": coverage,
         "complete_target_coverage": bool(complete_target_coverage),
         "active_only_target_mean_r": active_target_mean,
         "baseline_only_target_mean_r": baseline_target_mean,
         "paired_target_selection_edge_r": target_edge,
-        "active_only_realized_mean_r": float(active_realized.mean()) if len(active_realized) else None,
-        "baseline_only_realized_mean_r": float(baseline_realized.mean()) if len(baseline_realized) else None,
+        "active_only_realized_mean_r": (
+            float(active_covered_realized.mean()) if len(active_covered_realized) else None
+        ),
+        "baseline_only_realized_mean_r": (
+            float(baseline_covered_realized.mean()) if len(baseline_covered_realized) else None
+        ),
         "paired_realized_selection_edge_r": realized_edge,
         "active_only_realized_total_r": active_total_r,
         "baseline_only_realized_total_r": baseline_total_r,
@@ -866,7 +898,7 @@ def backfill_pair_r_conversion_diagnostic(
     existing = dict(diagnostics.get("selection_r_conversion") or {})
     if _finite(existing.get("r_conversion_efficiency")) is not None and str(
         existing.get("comparison_basis") or ""
-    ) == "paired_exclusive_realized_trade_mean_r":
+    ) == "target_covered_exclusive_realized_trade_mean_r":
         return False
     baseline_target_path = Path(pair_dir) / "no_filter_selected_target_diagnostics.csv"
     active_target_path = Path(pair_dir) / "score_ranking_selected_target_diagnostics.csv"

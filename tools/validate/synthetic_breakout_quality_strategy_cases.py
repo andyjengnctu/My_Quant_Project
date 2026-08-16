@@ -3617,11 +3617,44 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         case_id,
         "rce_uses_same_exclusive_completed_trade_universe_for_target_and_realized_edges",
         True,
-        rce_diag.get("comparison_basis") == "paired_exclusive_realized_trade_mean_r"
+        rce_diag.get("comparison_basis") == "target_covered_exclusive_realized_trade_mean_r"
         and abs(float(rce_diag.get("paired_target_selection_edge_r")) - 1.0) < 1e-12
         and abs(float(rce_diag.get("paired_realized_selection_edge_r")) - 2.0) < 1e-12
         and abs(float(rce_diag.get("exclusive_selection_delta_r")) - 2.0) < 1e-12
         and abs(float(rce_diag.get("r_conversion_efficiency")) - 2.0) < 1e-12,
+    )
+
+    partial_baseline_targets = baseline_targets.copy()
+    partial_active_targets = pd.concat([
+        active_targets,
+        pd.DataFrame([{
+            "ticker": "DDD", "trade_date": "2020-01-05", "signal_date": "2020-01-04",
+            "target_raw_r": float("nan"), "target_available": False,
+        }]),
+    ], ignore_index=True)
+    partial_active_trades = pd.concat([
+        active_trades,
+        pd.DataFrame([
+            {"Date": "2020-01-05", "Ticker": "DDD", "Type": "買進 (test)", "進場類型": "normal", "買訊日": "2020-01-04", "成交價": 10.0},
+            {"Date": "2020-01-13", "Ticker": "DDD", "Type": "全倉結算", "成交價": 11.0, "R_Multiple": 5.0, "該筆總損益": 100.0},
+        ])
+    ], ignore_index=True)
+    partial_rce = paired_trade_r_conversion_diagnostic(
+        baseline_trades, partial_active_trades, partial_baseline_targets, partial_active_targets
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "rce_excludes_missing_target_trade_from_both_edges_without_100pct_coverage_gate",
+        True,
+        partial_rce.get("complete_target_coverage") is False
+        and int(partial_rce.get("active_only_count") or 0) == 2
+        and int(partial_rce.get("active_only_target_covered_count") or 0) == 1
+        and abs(float(partial_rce.get("target_coverage_rate")) - (2.0 / 3.0)) < 1e-12
+        and abs(float(partial_rce.get("paired_target_selection_edge_r")) - 1.0) < 1e-12
+        and abs(float(partial_rce.get("paired_realized_selection_edge_r")) - 2.0) < 1e-12
+        and abs(float(partial_rce.get("r_conversion_efficiency")) - 2.0) < 1e-12,
     )
 
     add_check(
