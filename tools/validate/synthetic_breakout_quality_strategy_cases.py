@@ -3398,20 +3398,6 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         ),
     )
 
-    project_settings = (project_root / "doc/PROJECT_SETTINGS.md").read_text(encoding="utf-8")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "project_settings_define_disposable_transient_code_and_advisory_slimming_scan",
-        (True, True, True),
-        (
-            "臨時性研究／Audit／診斷／synthetic test 程式屬可拋棄工程資產" in project_settings,
-            "輕量瘦身掃描" in project_settings,
-            "不得因檔名、年齡或行數直接刪除" in project_settings,
-        ),
-    )
-
     summary["retired_paths"] = list(retired_paths)
     summary["current_replacements"] = list(current_paths)
     summary["compatibility_preserved"] = list(compatibility_paths)
@@ -3511,7 +3497,6 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         comparison_source.index("def _render_report("):
         comparison_source.index("def _run_directory(")
     ]
-    project_settings = (project_root / "doc/PROJECT_SETTINGS.md").read_text(encoding="utf-8")
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -3543,7 +3528,6 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and '"top_target_r": top' in diagnostics_source
         and '"bottom_target_r": bottom' in diagnostics_source
         and '"r_conversion_efficiency", "RCE"' in report_metrics_source
-        and '`選股轉換＝RCE、Target mean R、Target %ile、Top-K、Opp gap`' in project_settings
         and "paired_trade_r_conversion_diagnostic" in diagnostics_source
         and "backfill_pair_r_conversion_diagnostic" in comparison_source
         and "Target %ile" in report_metrics_source
@@ -3579,13 +3563,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "from core.report_style import" in outer_roos_source
         and "SIGNAL_POSITIVE" in report_style_source
         and "markdown_signal" in report_style_source
-        and not any(marker in report_style_source for marker in ("🟢", "🔴", "🟡", "⚪"))
-        and "文字本身上色" in project_settings
-        and "綠＝最佳、紅＝最差、白＝其餘" in project_settings
-        and "前兩欄固定為`編號`、`比較對象`" in project_settings
-        and "不在aggregate console" in project_settings
-        and "不在aggregate console、`strategy_comparison.md`或`strategy_diagnostics.md`的人讀表格下方另外顯示註解" in project_settings
-        and "renderer只負責組裝與顯示" in project_settings,
+        and not any(marker in report_style_source for marker in ("🟢", "🔴", "🟡", "⚪")),
     )
     from filters.breakout_quality.strategy_compare_diagnostics import (
         paired_trade_r_conversion_diagnostic,

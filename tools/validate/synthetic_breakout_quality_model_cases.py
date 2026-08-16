@@ -389,9 +389,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         "pass_conditional_ranker_is_named_profile_with_no_time_target_and_pass_scope",
         (
             TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
-            DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
-    DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
-    STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
             TRAINING_LABEL_SCOPE_PASS_ONLY,
             False,
         ),
@@ -789,8 +787,7 @@ def validate_breakout_quality_all_event_no_time_ranker_contract_case(_base_param
     from tools.filters.breakout_quality.train_continuous_ranker import (
         _profile_contract,
         _scope_group_ids,
-        build_daily_full_horizon_opportunity_contract,
-    build_daily_percentile_targets,
+        build_daily_percentile_targets,
         parse_args as parse_continuous_ranker_args,
     )
 
@@ -804,9 +801,7 @@ def validate_breakout_quality_all_event_no_time_ranker_contract_case(_base_param
         "all_event_no_time_profile_uses_existing_target_and_all_label_scope",
         (
             TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
-            DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
-    DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
-    STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
             TRAINING_LABEL_SCOPE_ALL,
             TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
             "mse",
@@ -922,9 +917,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         "mr12b_profile_changes_only_learning_objective_with_same_target_scope_architecture_family",
         (
             TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-            DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
-    DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
-    STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
             TRAINING_LABEL_SCOPE_ALL,
             TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
             "pairwise_logistic",
