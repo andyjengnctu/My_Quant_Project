@@ -11,8 +11,15 @@ from typing import Any
 
 import pandas as pd
 
-from core.console_report import project_relative_display_path
-from core.report_style import signal_for_delta, signal_for_signed_value, signal_marker
+from core.console_report import project_relative_display_path, render_table
+from core.report_style import (
+    SIGNAL_NEUTRAL,
+    signal_for_auc,
+    signal_for_coverage,
+    signal_for_delta,
+    signal_for_signed_value,
+    signal_marker,
+)
 from core.strategy_comparison import StrategyComparisonSettings
 
 from core.exact_accounting import (
@@ -909,6 +916,54 @@ def _execution_rows(
     return rows
 
 
+def _r_analysis_rows(
+    *,
+    settings: StrategyComparisonSettings,
+    scenarios: dict[str, dict[str, Any]],
+    model_prediction: list[dict[str, Any]],
+    selection_translation: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Join canonical model/selection diagnostics to canonical strategy R outcomes."""
+
+    model_by_dl = {
+        str(row.get("dl_id") or ""): dict(row)
+        for row in model_prediction
+        if str(row.get("dl_id") or "")
+    }
+    translation_by_arm = {
+        str(row.get("arm_id") or ""): dict(row)
+        for row in selection_translation
+        if str(row.get("arm_id") or "")
+    }
+    rows: list[dict[str, Any]] = []
+    for arm in settings.enabled_arms:
+        scenario = dict(scenarios.get(arm.arm_id) or {})
+        model = dict(model_by_dl.get(str(arm.dl_id or "")) or {})
+        translation = dict(translation_by_arm.get(arm.arm_id) or {})
+        rows.append({
+            "arm_id": arm.arm_id,
+            "name": arm.name,
+            "dl_id": arm.dl_id,
+            "portfolio_avg_r": _finite(scenario.get("portfolio_avg_r")),
+            "portfolio_median_r": _finite(scenario.get("portfolio_median_r")),
+            "mean_daily_spearman": _finite(model.get("mean_daily_spearman")),
+            "global_spearman": _finite(model.get("global_spearman")),
+            "pairwise_concordance": _finite(model.get("pairwise_concordance")),
+            "top_bottom_target_spread_r": _finite(model.get("top_bottom_target_spread_r")),
+            "score_coverage": _finite(translation.get("score_coverage")),
+            "selected_target_mean_r": _finite(translation.get("selected_target_mean_r")),
+            "selected_target_mean_r_delta": _finite(translation.get("selected_target_mean_r_delta")),
+            "selected_target_percentile": _finite(translation.get("selected_target_percentile")),
+            "selected_target_percentile_delta": _finite(translation.get("selected_target_percentile_delta")),
+            "target_top_k_retention": _finite(translation.get("target_top_k_retention")),
+            "target_top_k_retention_delta": _finite(translation.get("target_top_k_retention_delta")),
+            "target_opportunity_gap_r": _finite(translation.get("target_opportunity_gap_r")),
+            "target_opportunity_gap_r_delta": _finite(translation.get("target_opportunity_gap_r_delta")),
+            "direct_selection_delta_r": _finite(translation.get("direct_selection_delta_r")),
+        })
+    return rows
+
+
 def build_strategy_diagnostics(
     *,
     project_root: Path,
@@ -916,14 +971,24 @@ def build_strategy_diagnostics(
     status: dict[str, Any],
     scenarios: dict[str, dict[str, Any]],
     pair_payloads: dict[str, dict[str, Any]],
+    reference_arm_id: str | None = None,
 ) -> dict[str, Any]:
     """Build one reusable diagnostic payload from already-canonical artifacts."""
 
     root = Path(project_root).resolve()
+    model_prediction = _model_prediction_rows(root=root, settings=settings, status=status)
+    selection_translation = _selection_translation_rows(
+        settings=settings, pair_payloads=pair_payloads, scenarios=scenarios
+    )
     return {
-        "model_prediction": _model_prediction_rows(root=root, settings=settings, status=status),
-        "selection_translation": _selection_translation_rows(
-            settings=settings, pair_payloads=pair_payloads, scenarios=scenarios
+        "reference_arm_id": str(reference_arm_id or ""),
+        "model_prediction": model_prediction,
+        "selection_translation": selection_translation,
+        "r_analysis": _r_analysis_rows(
+            settings=settings,
+            scenarios=scenarios,
+            model_prediction=model_prediction,
+            selection_translation=selection_translation,
         ),
         "execution_conversion": _execution_rows(settings=settings, scenarios=scenarios),
         "contract": {
@@ -965,6 +1030,129 @@ def _delta_with_marker(
         return "-"
     return f"{_fmt(numeric, digits=digits, unit=unit)} {signal_marker(signal_for_delta(numeric, preference=preference), include_label=False)}"
 
+
+
+
+def _value_with_marker(text: str, signal: str) -> str:
+    if text == "-" or signal == SIGNAL_NEUTRAL:
+        return text
+    return f"{text} {signal_marker(signal, include_label=False)}"
+
+
+def _relative_r_marker(
+    value: Any,
+    reference: Any,
+    *,
+    preference: str = "higher",
+) -> str:
+    numeric = _finite(value)
+    ref = _finite(reference)
+    if numeric is None or ref is None:
+        return SIGNAL_NEUTRAL
+    return signal_for_delta(numeric - ref, preference=preference)
+
+
+def render_strategy_r_analysis_table(diagnostics: dict[str, Any]) -> str:
+    """Render the shared per-arm R prediction/translation table used by console and Markdown."""
+
+    rows = list(diagnostics.get("r_analysis") or [])
+    if not rows:
+        return "沒有可用的R預測／轉化診斷。"
+    reference_id = str(diagnostics.get("reference_arm_id") or "")
+    reference = next((row for row in rows if str(row.get("arm_id")) == reference_id), {})
+    rendered = []
+    for row in rows:
+        is_reference = str(row.get("arm_id")) == reference_id
+        avg_r = _fmt(row.get("portfolio_avg_r"), digits=2, unit=" R")
+        median_r = _fmt(row.get("portfolio_median_r"), digits=2, unit=" R")
+        if not is_reference:
+            avg_r = _value_with_marker(
+                avg_r,
+                _relative_r_marker(
+                    row.get("portfolio_avg_r"), reference.get("portfolio_avg_r")
+                ),
+            )
+            median_r = _value_with_marker(
+                median_r,
+                _relative_r_marker(
+                    row.get("portfolio_median_r"), reference.get("portfolio_median_r")
+                ),
+            )
+
+        daily_rho = _fmt(row.get("mean_daily_spearman"), digits=3)
+        daily_rho = _value_with_marker(
+            daily_rho, signal_for_signed_value(row.get("mean_daily_spearman"))
+        )
+        global_rho = _fmt(row.get("global_spearman"), digits=3)
+        global_rho = _value_with_marker(
+            global_rho, signal_for_signed_value(row.get("global_spearman"))
+        )
+        pair = _fmt_pct_fraction(row.get("pairwise_concordance"))
+        pair = _value_with_marker(pair, signal_for_auc(row.get("pairwise_concordance")))
+        spread = _fmt(row.get("top_bottom_target_spread_r"), digits=2, unit=" R")
+        spread = _value_with_marker(
+            spread, signal_for_signed_value(row.get("top_bottom_target_spread_r"))
+        )
+        coverage = _fmt_pct_fraction(row.get("score_coverage"))
+        coverage = _value_with_marker(coverage, signal_for_coverage(row.get("score_coverage")))
+
+        target_mean = _fmt(row.get("selected_target_mean_r"), digits=2, unit=" R")
+        target_mean = _value_with_marker(
+            target_mean,
+            signal_for_delta(row.get("selected_target_mean_r_delta"), preference="higher"),
+        )
+        percentile = _fmt(row.get("selected_target_percentile"), digits=3)
+        percentile = _value_with_marker(
+            percentile,
+            signal_for_delta(row.get("selected_target_percentile_delta"), preference="higher"),
+        )
+        top_k = _fmt_pct_fraction(row.get("target_top_k_retention"))
+        top_k = _value_with_marker(
+            top_k,
+            signal_for_delta(row.get("target_top_k_retention_delta"), preference="higher"),
+        )
+        gap = _fmt(row.get("target_opportunity_gap_r"), digits=2, unit=" R")
+        gap = _value_with_marker(
+            gap,
+            signal_for_delta(row.get("target_opportunity_gap_r_delta"), preference="lower"),
+        )
+        direct_r = _fmt(row.get("direct_selection_delta_r"), digits=2, unit=" R")
+        direct_r = _value_with_marker(
+            direct_r, signal_for_signed_value(row.get("direct_selection_delta_r"))
+        )
+        rendered.append((
+            row.get("arm_id", "-"),
+            avg_r,
+            median_r,
+            daily_rho,
+            global_rho,
+            pair,
+            spread,
+            coverage,
+            target_mean,
+            percentile,
+            top_k,
+            gap,
+            direct_r,
+        ))
+    return render_table(
+        (
+            "編號",
+            "平均R",
+            "中位R",
+            "Dailyρ",
+            "Globalρ",
+            "Pair一致",
+            "Top-BottomR",
+            "Coverage",
+            "Target mean R",
+            "Target %ile",
+            "Top-K",
+            "Opp gap",
+            "DL選擇R",
+        ),
+        rendered,
+    )
 
 def render_strategy_diagnostics_markdown(diagnostics: dict[str, Any]) -> str:
     lines = [

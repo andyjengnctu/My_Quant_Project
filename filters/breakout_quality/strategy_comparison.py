@@ -10,7 +10,10 @@ from typing import Any
 
 import pandas as pd
 
-from config.strategy_compare import get_strategy_comparison_settings
+from config.strategy_compare import (
+    get_strategy_comparison_settings,
+    get_strategy_runtime_integration_settings,
+)
 from core.runtime_utils import get_taipei_now
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
@@ -39,6 +42,7 @@ from core.report_metrics import (
     PORTFOLIO_RESULT_METRICS,
     TRADE_RESULT_METRICS,
 )
+from core.report_style import SIGNAL_NEUTRAL, signal_for_delta, signal_marker
 from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
@@ -60,6 +64,7 @@ from filters.breakout_quality.strategy_compare_sources import (
 from filters.breakout_quality.strategy_compare_diagnostics import (
     build_strategy_diagnostics,
     render_strategy_diagnostics_markdown,
+    render_strategy_r_analysis_table,
 )
 from filters.breakout_quality.strategy_compare_reporting import (
     materialize_strategy_pair_readable_report,
@@ -558,47 +563,96 @@ def _scenario_payloads(
     return output
 
 
+def _report_reference_arm_id(settings: StrategyComparisonSettings) -> str | None:
+    integration = get_strategy_runtime_integration_settings()
+    if settings.profile_id == integration.selection_profile_id:
+        arm_id = integration.selection_candidate_arm_id
+    elif settings.profile_id == integration.forward_profile_id:
+        arm_id = integration.forward_candidate_arm_id
+    else:
+        return None
+    return arm_id if arm_id in {arm.arm_id for arm in settings.enabled_arms} else None
+
+
+def _value_with_signal(text: str, signal: str) -> str:
+    if text == "-" or signal == SIGNAL_NEUTRAL:
+        return text
+    return f"{text} {signal_marker(signal, include_label=False)}"
+
+
 def _metric_table(
     scenarios: dict[str, dict[str, Any]],
     *,
     settings: StrategyComparisonSettings,
     metrics: tuple[Any, ...],
+    reference_arm_id: str | None,
+    include_name: bool = True,
 ) -> str:
+    reference = scenarios.get(str(reference_arm_id or "")) or {}
     rows = []
     for arm in settings.enabled_arms:
         payload = scenarios[arm.arm_id]
-        rows.append((
-            arm.arm_id,
-            arm.name,
-            *(_fmt(payload.get(metric.key), unit=metric.unit, digits=metric.digits) for metric in metrics),
-        ))
+        values = []
+        for metric in metrics:
+            text = _fmt(payload.get(metric.key), unit=metric.unit, digits=metric.digits)
+            if arm.arm_id != reference_arm_id and reference:
+                value = _metric(payload, metric.key)
+                ref_value = _metric(reference, metric.key)
+                if value is not None and ref_value is not None:
+                    signal = signal_for_delta(
+                        value - ref_value,
+                        preference=metric.preference,
+                        warning_threshold=metric.warning_threshold,
+                    )
+                    text = _value_with_signal(text, signal)
+            values.append(text)
+        identity = (arm.arm_id, arm.name) if include_name else (arm.arm_id,)
+        rows.append((*identity, *values))
+    identity_headers = ("編號", "比較對象") if include_name else ("編號",)
     return render_table(
-        ("編號", "比較對象", *(metric.label for metric in metrics)),
+        (*identity_headers, *(metric.label for metric in metrics)),
         rows,
     )
 
 
-def _summary_table(
+def _core_result_table(
     scenarios: dict[str, dict[str, Any]],
     *,
     settings: StrategyComparisonSettings,
+    reference_arm_id: str | None,
 ) -> str:
-    trade_metrics = tuple(metric for metric in TRADE_RESULT_METRICS if metric.key != "reserved_buy_fill_rate_pct")
-    execution_metrics = (
+    direct_trade_metrics = TRADE_RESULT_METRICS[:4]
+    metrics = (
+        *PORTFOLIO_RESULT_METRICS[:-1],
+        *direct_trade_metrics,
         PORTFOLIO_RESULT_METRICS[-1],
+    )
+    return _metric_table(
+        scenarios,
+        settings=settings,
+        metrics=metrics,
+        reference_arm_id=reference_arm_id,
+        include_name=True,
+    )
+
+
+def _execution_table(
+    scenarios: dict[str, dict[str, Any]],
+    *,
+    settings: StrategyComparisonSettings,
+    reference_arm_id: str | None,
+) -> str:
+    metrics = (
         next(metric for metric in TRADE_RESULT_METRICS if metric.key == "reserved_buy_fill_rate_pct"),
         *EXECUTION_CAPACITY_METRICS,
     )
-    return "\n\n".join((
-        render_section("投組績效"),
-        _metric_table(
-            scenarios, settings=settings, metrics=PORTFOLIO_RESULT_METRICS[:-1]
-        ),
-        render_section("單筆交易"),
-        _metric_table(scenarios, settings=settings, metrics=trade_metrics),
-        render_section("資金／執行"),
-        _metric_table(scenarios, settings=settings, metrics=execution_metrics),
-    ))
+    return _metric_table(
+        scenarios,
+        settings=settings,
+        metrics=metrics,
+        reference_arm_id=reference_arm_id,
+        include_name=False,
+    )
 
 
 def _delta(left: dict[str, Any], right: dict[str, Any], key: str) -> float | None:
@@ -820,6 +874,7 @@ def _yearly_table(
     pair_payloads: dict[str, dict[str, Any]],
     *,
     settings: StrategyComparisonSettings,
+    reference_arm_id: str | None,
 ) -> str:
     enabled_ids = tuple(arm.arm_id for arm in settings.enabled_arms)
     by_id: dict[str, dict[int, float | None]] = {arm_id: {} for arm_id in enabled_ids}
@@ -845,13 +900,20 @@ def _yearly_table(
                 runtime_spec = _arm_runtime_spec(on_arm)
                 by_id[on_arm.arm_id][year] = row.get(runtime_spec["yearly_key"])
     years = sorted({year for values in by_id.values() for year in values})
-    rows = [
-        (
-            year,
-            *(_fmt(by_id[arm_id].get(year), unit="%") for arm_id in enabled_ids),
-        )
-        for year in years
-    ]
+    rows = []
+    for year in years:
+        reference_value = by_id.get(str(reference_arm_id or ""), {}).get(year)
+        values = []
+        for arm_id in enabled_ids:
+            value = by_id[arm_id].get(year)
+            text = _fmt(value, unit="%")
+            if arm_id != reference_arm_id and value is not None and reference_value is not None:
+                text = _value_with_signal(
+                    text,
+                    signal_for_delta(float(value) - float(reference_value), preference="higher"),
+                )
+            values.append(text)
+        rows.append((year, *values))
     return render_table(("年度", *enabled_ids), rows)
 
 
@@ -876,7 +938,13 @@ def _render_report(
     status: dict[str, Any],
     scenarios: dict[str, dict[str, Any]],
     pair_payloads: dict[str, dict[str, Any]],
+    diagnostics: dict[str, Any],
+    reference_arm_id: str | None,
 ) -> str:
+    reference_name = next(
+        (arm.name for arm in settings.enabled_arms if arm.arm_id == reference_arm_id),
+        "-",
+    )
     return "\n\n".join(
         (
             render_title("策略績效比較"),
@@ -887,20 +955,24 @@ def _render_report(
                     ("Param policy", settings.param_policy),
                     ("Max positions", settings.max_positions),
                     ("Rotation", settings.rotation),
+                    ("判讀基準", f"{reference_arm_id} {reference_name}" if reference_arm_id else "-"),
                     ("Config fingerprint", status["config_fingerprint"]),
                     ("比較設定", "config/strategy_compare.py"),
                 )
             ),
             render_section("1. 核心策略結果"),
-            _summary_table(scenarios, settings=settings),
-            render_section("2. 年度結果"),
-            _yearly_table(pair_payloads, settings=settings),
-            render_section("3. 報表分工"),
-            (
-                "主報表只保留跨策略／allocator可共同解讀的投組、單筆交易與資金執行指標。"
-                "R預測能力、Score→實際選股轉換、同參數DL選擇R與轉換率集中於"
-                "strategy_diagnostics.md；solver states、repair/ascent、stale guard與selector timing"
-                "等演算法專屬診斷保留於canonical JSON／sidecar，不進共同人讀表。"
+            _core_result_table(
+                scenarios, settings=settings, reference_arm_id=reference_arm_id
+            ),
+            render_section("2. R 預測／轉化"),
+            render_strategy_r_analysis_table(diagnostics),
+            render_section("3. 資金／執行"),
+            _execution_table(
+                scenarios, settings=settings, reference_arm_id=reference_arm_id
+            ),
+            render_section("4. 年度結果"),
+            _yearly_table(
+                pair_payloads, settings=settings, reference_arm_id=reference_arm_id
             ),
         )
     ).rstrip() + "\n"
@@ -1266,18 +1338,22 @@ def run_strategy_comparison(
             print(f"[DONE] {on_arm.arm_id} {on_arm.name}")
 
     scenarios = _scenario_payloads(pair_payloads, direct_r, settings=settings)
+    reference_arm_id = _report_reference_arm_id(settings)
     diagnostics = build_strategy_diagnostics(
         project_root=root,
         settings=settings,
         status=status,
         scenarios=scenarios,
         pair_payloads=pair_payloads,
+        reference_arm_id=reference_arm_id,
     )
     report = _render_report(
         settings=settings,
         status=status,
         scenarios=scenarios,
         pair_payloads=pair_payloads,
+        diagnostics=diagnostics,
+        reference_arm_id=reference_arm_id,
     )
     report_path = run_dir / "strategy_comparison.md"
     diagnostics_path = run_dir / "strategy_diagnostics.md"

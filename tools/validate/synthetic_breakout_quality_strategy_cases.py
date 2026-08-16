@@ -3516,17 +3516,21 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         results,
         "synthetic_breakout_quality",
         case_id,
-        "strategy_compare_main_report_is_common_metrics_only_and_indirect_metrics_are_separate",
+        "strategy_compare_main_report_surfaces_core_r_conversion_and_compact_execution",
         True,
         '"strategy_diagnostics.md"' in comparison_source
         and "核心策略結果" in render_report_source
-        and "資金／執行" in comparison_source
+        and "R 預測／轉化" in render_report_source
+        and "資金／執行" in render_report_source
+        and "報表分工" not in render_report_source
+        and "render_strategy_r_analysis_table" in render_report_source
         and "_contrast_table(" not in render_report_source
         and "_resource_aware_table(" not in render_report_source
         and "_selector_timing_table(" not in render_report_source
-        and "R 預測／排序能力" in diagnostics_source
-        and "Score → 實際選股轉換" in diagnostics_source
-        and "資金／執行轉換" in diagnostics_source,
+        and "Target %ile" in diagnostics_source
+        and "Top-K" in diagnostics_source
+        and "Opp gap" in diagnostics_source
+        and "DL選擇R" in diagnostics_source,
     )
     add_check(
         results,
@@ -3537,6 +3541,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "PORTFOLIO_RESULT_METRICS" in report_metrics_source
         and "PAIR_MAIN_METRICS" in report_metrics_source
         and "from core.report_metrics import" in comparison_source
+        and "_report_reference_arm_id" in comparison_source
+        and "signal_marker" in comparison_source
+        and "判讀基準" in render_report_source
         and "from core.report_metrics import PAIR_MAIN_METRICS" in reporting_source
         and "from core.report_style import" in reporting_source
         and "from core.report_style import" in multi_seed_source
