@@ -108,6 +108,8 @@ def _render_markdown(payload: dict) -> str:
 
     objective = str(payload["training"].get("objective") or "")
     direct_r = objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+    source_dataset = dict(payload.get("source_dataset") or {})
+    target_manifest = dict(payload.get("target_manifest") or {})
     lines = [
         "# Daily Universal Continuous Model Report",
         "",
@@ -115,6 +117,9 @@ def _render_markdown(payload: dict) -> str:
         f"- Profile：`{payload['experiment_profile']}`",
         f"- Sample scope：`{payload['training']['sample_scope']}`",
         f"- Target：`{payload['training']['target']}`",
+        f"- Target-valid / score-eligible：`{int(source_dataset.get('target_valid_sample_count', 0) or 0):,}` / `{int(source_dataset.get('score_eligible_sample_count', 0) or 0):,}`",
+        f"- Risk-param coverage start：`{source_dataset.get('risk_param_coverage_start') or '-'}`",
+        f"- Context features：`{', '.join(target_manifest.get('context_features') or []) or '-'}`",
         f"- Score semantic：`{payload.get('score_semantic_id')}`",
         f"- Selected epoch：`{payload['training']['selected_epoch']}`",
         "- Feature storage：`lazy canonical OHLCV windows`；未建立 expanded daily 300×10 feature bank。",
@@ -218,9 +223,17 @@ def run(args) -> int:
     )
     print(
         "Daily Universal Ranker｜"
-        f"samples={len(bundle.group_table):,} tickers={int(bundle.summary['ticker_count']):,} "
+        f"score_eligible={len(bundle.group_table):,} "
+        f"target_valid={int(bundle.summary.get('target_valid_sample_count', 0) or 0):,} "
+        f"tickers={int(bundle.summary['ticker_count']):,} "
         f"feature_storage={bundle.summary['feature_storage']}"
     )
+    if bundle.summary.get("risk_param_coverage_start"):
+        print(
+            "Risk-normalized target｜"
+            f"risk_param_coverage_start={bundle.summary['risk_param_coverage_start']} "
+            f"context={','.join(bundle.summary.get('context_features') or []) or '-'}"
+        )
 
     epoch_selection = ranker_api.select_epoch(
         torch,

@@ -600,7 +600,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         "continuous_ranker_reuses_active_two_logit_head_and_pass_probability",
         (True, True, True),
         (
-            "self.classifier = nn.Linear(module_output_channels, 2)" in inception_source,
+            "self.classifier = nn.Linear(classifier_input, 2)" in inception_source,
             "torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]" in ranker_source,
             '"model_state_dict"' in ranker_source and "torch.save(" in ranker_source,
         ),
@@ -1794,6 +1794,296 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
     return results, summary
 
 
+
+def validate_breakout_quality_risk_normalized_13ij_contract_case(_base_params):
+    """Pin MR-13I/J universal target/accounting/context attribution."""
+
+    case_id = "BREAKOUT_QUALITY_RISK_NORMALIZED_13IJ"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        get_breakout_quality_workflow_settings,
+    )
+    from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.models.runtime import require_torch
+    from filters.breakout_quality.risk_normalized_target import (
+        DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
+        RISK_GEOMETRY_CONTEXT_FEATURES,
+        RiskParamPeriod,
+        _params_for_period,
+        build_risk_target_contract,
+        compute_risk_geometry,
+        load_min_roos_risk_schedule,
+        risk_normalized_target_from_future_path,
+    )
+
+    profile_e = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    profile_i = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    profile_j = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    spec_i = get_continuous_ranker_research_spec(profile_i.name)
+    spec_j = get_continuous_ranker_research_spec(profile_j.name)
+
+    common_fields = (
+        "optimizer_name",
+        "training_sampling_mode",
+        "training_objective",
+        "loss_name",
+        "epoch_selection_metric",
+        "training_label_scope",
+        "training_sample_scope",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13i_keeps_mr13e_universe_objective_and_loss_and_changes_target_only",
+        (
+            tuple(getattr(profile_e, field) for field in common_fields),
+            DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
+            "MR-13I",
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        ),
+        (
+            tuple(getattr(profile_i, field) for field in common_fields),
+            profile_i.continuous_target_id,
+            spec_i.model_research_id,
+            spec_i.pairwise_reduction,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13j_target_and_training_contract_equal_mr13i_while_architecture_adds_context",
+        (
+            profile_i.continuous_target_id,
+            tuple(getattr(profile_i, field) for field in common_fields),
+            "inception_time_risk_context_v1",
+            "MR-13J",
+        ),
+        (
+            profile_j.continuous_target_id,
+            tuple(getattr(profile_j, field) for field in common_fields),
+            profile_j.model_architecture,
+            spec_j.model_research_id,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "model_research_moves_to_mr13i_without_changing_production_mr13e_workflow",
+        (
+            DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        ),
+    )
+
+    contract = build_risk_target_contract(
+        horizon_bars=int(DEFAULT_LABEL_POLICY.label_horizon_bars),
+        param_policy="base-finalist-best",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "risk_target_uses_only_min_roos_initial_risk_fields_and_canonical_accounting",
+        (
+            ["atr_len", "atr_times_init"],
+            False,
+            True,
+            False,
+        ),
+        (
+            list(contract["risk_fields"]),
+            "high_len" in contract["risk_fields"],
+            "canonical" in str(contract["accounting"]),
+            bool(contract["strategy_exit_path_used"]),
+        ),
+    )
+
+    from config.strategy_compare import get_strategy_comparison_settings
+    from core.params_io import params_to_json_dict
+    from core.strategy_params import V16StrategyParams
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        param_payload = params_to_json_dict(V16StrategyParams())
+        param_payload.update({
+            "atr_len": 14,
+            "atr_times_init": 2.0,
+            "high_len": 201,
+            "atr_buy_tol": 1.5,
+            "atr_times_trail": 3.0,
+        })
+        strategy_settings = get_strategy_comparison_settings("selection_pit")
+        for source_id, years in (
+            ("selection_min_roos", range(2014, 2021)),
+            ("min_roos", range(2021, 2027)),
+        ):
+            source = strategy_settings.parameter_sources[source_id]
+            path = temp_root / str(source.path_template).format(
+                param_filename="roos_base_best.json"
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps({
+                    "meta": {},
+                    "summary": {},
+                    "params_ensemble_by_effective_date": {
+                        f"{year}-01-01": [{"params": dict(param_payload)}]
+                        for year in years
+                    },
+                }),
+                encoding="utf-8",
+            )
+        risk_schedule = load_min_roos_risk_schedule(
+            temp_root, param_policy="base-finalist-best"
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "risk_schedule_reuses_strategy_compare_param_sources_without_future_backfill",
+        (13, "2014-01-01", "2026-01-01", 14, 2.0),
+        (
+            len(risk_schedule),
+            risk_schedule[0].start_date.date().isoformat(),
+            risk_schedule[-1].start_date.date().isoformat(),
+            risk_schedule[0].atr_len,
+            risk_schedule[0].atr_times_init,
+        ),
+    )
+
+    period = RiskParamPeriod(
+        start_date=pd.Timestamp("2020-01-01"),
+        end_date=pd.Timestamp("2020-12-31"),
+        atr_len=14,
+        atr_times_init=2.0,
+        source_id="synthetic",
+        params_signature="synthetic",
+    )
+    geometry = compute_risk_geometry(
+        ticker="2330",
+        decision_date="2020-06-01",
+        reference_price=100.0,
+        atr=2.5,
+        period=period,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "risk_geometry_is_five_dimensional_finite_and_encodes_capital_cost_capacity",
+        (True, 5, True, True, True),
+        (
+            bool(geometry.valid),
+            len(geometry.context),
+            bool(all(math.isfinite(value) for value in geometry.context)),
+            bool(float(geometry.context[2]) > 1.0 and float(geometry.context[3]) > 0.0),
+            bool(0.0 < float(geometry.context[4]) <= 1.0),
+        ),
+    )
+    params = _params_for_period(period)
+    horizon = int(DEFAULT_LABEL_POLICY.label_horizon_bars)
+    dates = pd.date_range("2020-06-02", periods=horizon, freq="B")
+    safe_target, safe_valid, _ = risk_normalized_target_from_future_path(
+        ticker="2330",
+        decision_date="2020-06-01",
+        reference_price=geometry.reference_price,
+        stop_price=geometry.stop_price,
+        qty=geometry.qty,
+        planned_initial_risk_milli=geometry.planned_initial_risk_milli,
+        future_high=np.full(horizon, 105.0, dtype=np.float64),
+        future_low=np.full(horizon, 99.0, dtype=np.float64),
+        future_dates=dates,
+        params=params,
+    )
+    stop_target, stop_valid, stop_reason = risk_normalized_target_from_future_path(
+        ticker="2330",
+        decision_date="2020-06-01",
+        reference_price=geometry.reference_price,
+        stop_price=geometry.stop_price,
+        qty=geometry.qty,
+        planned_initial_risk_milli=geometry.planned_initial_risk_milli,
+        future_high=np.full(horizon, 120.0, dtype=np.float64),
+        future_low=np.full(horizon, 94.0, dtype=np.float64),
+        future_dates=dates,
+        params=params,
+    )
+    # Gross price-only favorable-minus-adverse would be 0.8R before fees when D=5.
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "risk_target_deducts_canonical_cost_and_same_bar_stop_is_adverse_first",
+        (True, True, True, "stop_first"),
+        (
+            bool(safe_valid and safe_target < 0.8),
+            bool(stop_valid),
+            bool(math.isclose(float(stop_target), -1.0, rel_tol=0.0, abs_tol=1e-12)),
+            stop_reason,
+        ),
+    )
+
+    settings_i = get_breakout_quality_workflow_settings(experiment_profile=profile_i.name)
+    settings_j = get_breakout_quality_workflow_settings(experiment_profile=profile_j.name)
+    torch, _nn = require_torch()
+    model_i = build_active_model(10, 0, architecture=settings_i.model_architecture)
+    model_j = build_active_model(
+        10,
+        len(RISK_GEOMETRY_CONTEXT_FEATURES),
+        architecture=settings_j.model_architecture,
+    )
+    x = torch.zeros((2, int(DEFAULT_LABEL_POLICY.feature_window_bars), 10), dtype=torch.float32)
+    logits_i = model_i(x, torch.empty((2, 0), dtype=torch.float32))
+    logits_j = model_j(
+        x,
+        torch.zeros((2, len(RISK_GEOMETRY_CONTEXT_FEATURES)), dtype=torch.float32),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13i_and_mr13j_model_heads_accept_zero_vs_five_dimensional_context",
+        ((2, 2), (2, 2)),
+        (tuple(logits_i.shape), tuple(logits_j.shape)),
+    )
+
+    application_source = read_source_text("tools/filters/breakout_quality/application.py")
+    risk_source = read_source_text("filters/breakout_quality/risk_normalized_target.py")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "model_app_preflights_risk_params_and_risk_target_has_no_services_reverse_dependency",
+        (True, False),
+        (
+            "load_min_roos_risk_schedule(PROJECT_ROOT)" in application_source
+            and "[Risk params] BLOCKED" in application_source,
+            "from services." in risk_source or "import services." in risk_source,
+        ),
+    )
+
+    summary["active_model_research"] = profile_i.name
+    summary["mr13j_status"] = "implemented_not_active"
+    return results, summary
+
 def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_params):
     """Pin the profile-driven continuous-ranker boundary before adding new Daily MR variants."""
 
@@ -1889,8 +2179,8 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
         results,
         "synthetic_breakout_quality",
         case_id,
-        "non_default_pairwise_reductions_have_explicit_unique_mr_owners",
+        "non_default_pairwise_reductions_have_explicit_mr_owners_without_identity_collision",
         True,
-        all(len(owners) == 1 for owners in non_default_owners.values()),
+        all(owners and len(owners) == len(set(owners)) for owners in non_default_owners.values()),
     )
     return results, summary

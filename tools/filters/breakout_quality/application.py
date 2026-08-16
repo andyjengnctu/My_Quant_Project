@@ -82,6 +82,10 @@ from filters.breakout_quality.paths import (
     resolve_selection_point_in_time_score_path,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
+from filters.breakout_quality.risk_normalized_target import (
+    DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
+    load_min_roos_risk_schedule,
+)
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
@@ -2262,8 +2266,25 @@ def _prepare_continuous_research_inputs(
             return int(code)
     profile = get_breakout_quality_experiment_profile(settings.experiment_profile)
     if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
-        # MR-13A target is derived directly from canonical future OHLCV for each
-        # eligible stock-day.  Do not create an event-group Continuous Target artifact.
+        # Daily-universal targets are derived directly from canonical OHLCV and do not
+        # create an event-group Continuous Target artifact.  MR-13I/J additionally need
+        # historical-effective Min ROOS risk calibration; fail before GPU training when
+        # those read-only upstream parameter artifacts are unavailable.
+        if str(profile.continuous_target_id or "") == DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID:
+            try:
+                schedule = load_min_roos_risk_schedule(PROJECT_ROOT)
+            except (FileNotFoundError, OSError, ValueError, KeyError, TypeError) as exc:
+                print(
+                    paint("[Risk params] BLOCKED", "red", enabled=color_enabled, bold=True)
+                    + f"｜{exc}"
+                )
+                print("請先由Strategy Compare參數工作流準備Selection/Forward Min ROOS正式risk-param工件；模型流程不得自行訓練或補值。")
+                return 2
+            print(
+                paint("[Risk params] READY", "green", enabled=color_enabled, bold=True)
+                + "｜historical-effective Min ROOS atr_len / atr_times_init"
+                + f"｜periods={len(schedule)}"
+            )
         return 0
     with _compact_console_scope():
         return int(

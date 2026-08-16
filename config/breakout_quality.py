@@ -47,11 +47,13 @@ from config.execution_policy import (
 # - MR-13E daily-universal full-list delta-NDCG pairwise ranker: "daily_universal_no_time_full_list_ndcg_pairwise"
 # - MR-13F daily-universal direct-R Huber regression: "daily_universal_no_time_r_huber"
 # - MR-13G daily-universal direct-R mean/MSE regression: "daily_universal_no_time_r_mse"
+# - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
+# - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42
@@ -280,6 +282,8 @@ DAILY_UNIVERSAL_NO_TIME_UPPER_TAIL_PAIRWISE_PROFILE = "daily_universal_no_time_u
 DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE = "daily_universal_no_time_r_huber"
 DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE = "daily_universal_no_time_r_mse"
+DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
+DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 
@@ -374,6 +378,7 @@ class BreakoutQualityExperimentProfile:
     training_label_scope: str = TRAINING_LABEL_SCOPE_ALL
     training_sample_scope: str = TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
     raw_r_huber_delta_r: float | None = None
+    model_architecture: str | None = None
 
     def __post_init__(self) -> None:
         normalized_name = str(self.name).strip().lower()
@@ -406,6 +411,12 @@ class BreakoutQualityExperimentProfile:
             raise ValueError(f"不支援的 training label scope: {self.training_label_scope!r}")
         if self.training_sample_scope not in SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLE_SCOPES:
             raise ValueError(f"不支援的 training sample scope: {self.training_sample_scope!r}")
+        if self.model_architecture is not None:
+            architecture = str(self.model_architecture).strip().lower()
+            if not architecture or architecture != self.model_architecture:
+                raise ValueError("profile model_architecture 必須是非空白小寫名稱")
+            if any(token in architecture for token in ("/", "\\", "\x00")):
+                raise ValueError("profile model_architecture 必須是安全名稱")
         if self.training_objective == TRAINING_OBJECTIVE_BINARY_CLASSIFICATION:
             if self.continuous_target_id is not None:
                 raise ValueError("binary classification profile 不得指定 continuous_target_id")
@@ -555,6 +566,8 @@ class BreakoutQualityExperimentProfile:
                 payload["training_sample_scope"] = self.training_sample_scope
             if self.training_label_scope != TRAINING_LABEL_SCOPE_ALL:
                 payload["training_label_scope"] = self.training_label_scope
+        if self.model_architecture is not None:
+            payload["model_architecture"] = str(self.model_architecture)
         return payload
 
 
@@ -872,6 +885,29 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     ),
+    DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_risk_normalized_net_opportunity_r_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    ),
+    DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_risk_normalized_net_opportunity_r_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_risk_context_v1",
+    ),
 }
 
 SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES = tuple(_EXPERIMENT_PROFILES)
@@ -1138,6 +1174,37 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         metric_scope="all_stock_days",
         score_semantic_id="daily_predicted_r",
+    ),
+    DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13I",
+        experiment_name="MR-13I Daily Universal Cost-adjusted Risk-normalized 40D Ranker",
+        phase="13I",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="same_date_all_stock_order_of_daily_risk_normalized_net_opportunity_r_v1",
+        objective_description=(
+            "MR-13E universe/backbone/40D horizon不變；只把target改為以historical-effective Min ROOS "
+            "atr_len+atr_times_init定義generic initial risk distance，並使用canonical 1% sizing/fee/tax後的40D opportunity R；"
+            "full-list Delta-NDCG pairwise objective不變"
+        ),
+        metric_scope="all_stock_days",
+        score_semantic_id="daily_risk_normalized_opportunity_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    ),
+    DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13J",
+        experiment_name="MR-13J Daily Universal Risk-context 40D Ranker",
+        phase="13J",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="same_target_as_MR-13I_daily_risk_normalized_net_opportunity_r_v1",
+        objective_description=(
+            "Target/universe/horizon/loss與MR-13I完全相同；唯一新增decision-time universal risk/economic geometry context "
+            "(risk distance, capital per risk, cost per risk, risk capacity)"
+        ),
+        metric_scope="all_stock_days",
+        score_semantic_id="daily_risk_normalized_opportunity_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
     ),
 }
 
@@ -1629,7 +1696,7 @@ def get_breakout_quality_workflow_settings(
 
     return BreakoutQualityWorkflowSettings(
         filter_id=str(BREAKOUT_QUALITY_WORKFLOW_FILTER_ID),
-        model_architecture=str(BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE),
+        model_architecture=str(profile.model_architecture or BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE),
         experiment_profile=resolved_experiment_profile,
         training_objective=str(profile.training_objective),
         continuous_target_id=(
@@ -1895,6 +1962,8 @@ __all__ = [
     'DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE',
     'DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE',
+    'DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'ContinuousRankerResearchSpec',
     'CONTINUOUS_RANKER_TRAINER_EVENT',
     'CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL',

@@ -13,6 +13,7 @@ from filters.breakout_quality.models.runtime import (
 from filters.breakout_quality.models.spec import (
     ACTIVE_MODEL_ARCHITECTURES,
     INCEPTION_TIME_V1,
+    INCEPTION_TIME_RISK_CONTEXT_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
     get_model_spec,
     model_spec_from_manifest,
@@ -63,7 +64,7 @@ def build_active_model(
         model_spec=model_spec,
     )
     torch, nn = require_torch()
-    if spec.architecture == INCEPTION_TIME_V1:
+    if spec.architecture in {INCEPTION_TIME_V1, INCEPTION_TIME_RISK_CONTEXT_V1}:
         return build_inception_time(
             nn,
             torch,

@@ -4,8 +4,15 @@ from __future__ import annotations
 
 
 def build_inception_time(nn, torch, *, feature_count: int, context_count: int, spec):
-    if bool(spec.use_dataset_context):
-        raise ValueError("InceptionTime 9A 必須停用 Dataset event context")
+    use_risk_context = str(spec.architecture) == "inception_time_risk_context_v1"
+    if bool(spec.use_dataset_context) != bool(use_risk_context):
+        raise ValueError("InceptionTime dataset context contract與architecture不一致")
+    if use_risk_context and int(context_count) != 5:
+        raise ValueError("MR-13J InceptionTime risk context固定需要5個universal geometry features")
+    # Historical sequence-only InceptionTime callers may still pass the Dataset event-context
+    # width through the generic factory.  The accepted 9A/13E architecture intentionally
+    # ignores that tensor, so preserve the frozen checkpoint/API behavior instead of turning
+    # an unused context_count into a new architecture contract.
     depth = int(spec.inception_depth)
     filters = int(spec.inception_filters)
     bottleneck_channels = int(spec.inception_bottleneck_channels)
@@ -104,7 +111,20 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             self.residual_projections = nn.ModuleList(shortcuts)
             self.residual_activation = nn.ReLU()
             self.dropout = nn.Dropout(float(spec.dropout))
-            self.classifier = nn.Linear(module_output_channels, 2)
+            if use_risk_context:
+                context_width = int(spec.head_width or 16)
+                self.context_network = nn.Sequential(
+                    nn.LayerNorm(int(context_count)),
+                    nn.Linear(int(context_count), context_width),
+                    nn.ReLU(),
+                    nn.Linear(context_width, context_width),
+                    nn.ReLU(),
+                )
+                classifier_input = module_output_channels + context_width
+            else:
+                self.context_network = None
+                classifier_input = module_output_channels
+            self.classifier = nn.Linear(classifier_input, 2)
 
         def encode(self, x):
             z = x.transpose(1, 2)
@@ -121,8 +141,12 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             return torch.mean(z, dim=2)
 
         def forward(self, x, context):
-            del context
-            return self.classifier(self.dropout(self.encode(x)))
+            encoded = self.dropout(self.encode(x))
+            if self.context_network is not None:
+                if context is None or context.ndim != 2 or int(context.shape[1]) != int(context_count):
+                    raise ValueError("MR-13J risk context tensor shape不一致")
+                encoded = torch.cat([encoded, self.context_network(context)], dim=1)
+            return self.classifier(encoded)
 
     return InceptionTimeClassifier()
 

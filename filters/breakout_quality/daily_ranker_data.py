@@ -22,6 +22,13 @@ from filters.breakout_quality.continuous_target import (
     build_daily_opportunity_no_time_contract,
 )
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
+from filters.breakout_quality.risk_normalized_target import (
+    DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
+    RISK_GEOMETRY_CONTEXT_FEATURES,
+    build_risk_target_contract,
+    compute_targets_and_context_for_positions,
+    load_min_roos_risk_schedule,
+)
 from filters.breakout_quality.features import normalize_ohlcv_array_window
 from filters.breakout_quality.models.spec import get_model_spec, validate_model_sequence_length
 from filters.breakout_quality.splits import resolve_breakout_quality_outer_policy
@@ -269,15 +276,20 @@ def load_daily_universal_ranker_data(
     del preload_feature_bank
     root = Path(project_root)
     profile = get_breakout_quality_experiment_profile(experiment_profile)
-    if str(profile.continuous_target_id) != DAILY_OPPORTUNITY_NO_TIME_TARGET_ID:
-        raise ValueError("daily universal ranker target identity不一致")
+    target_id = str(profile.continuous_target_id or "").strip()
+    if target_id not in {
+        DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
+        DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
+    }:
+        raise ValueError(f"daily universal ranker target identity不一致: {target_id!r}")
     model_spec = get_model_spec(model_architecture)
-    if (
-        bool(model_spec.requires_market_set)
-        or bool(model_spec.use_dataset_context)
-        or bool(model_spec.derived_context_features)
-    ):
-        raise ValueError("daily universal ranker第一版只支援sequence-only architecture")
+    if bool(model_spec.requires_market_set) or bool(model_spec.derived_context_features):
+        raise ValueError("daily universal ranker不支援market-set／derived-context architecture")
+    use_risk_context = str(model_spec.architecture) == "inception_time_risk_context_v1"
+    if bool(model_spec.use_dataset_context) != bool(use_risk_context):
+        raise ValueError("daily universal ranker architecture/context contract不一致")
+    if use_risk_context and target_id != DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID:
+        raise ValueError("risk-context architecture只允許MR-13I/J同源risk-normalized target")
 
     # The existing official event dataset remains the source-selection/inventory truth.
     summary, _indexed_features, _context, _labels, event_rows = load_validated_dataset_bundle(
@@ -313,6 +325,15 @@ def load_daily_universal_ranker_data(
             sample_end = source_tail
 
     spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
+    risk_schedule = None
+    risk_param_policy = None
+    if target_id == DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID:
+        from config.strategy_compare import get_strategy_comparison_settings
+
+        risk_param_policy = str(
+            get_strategy_comparison_settings("selection_pit").param_policy
+        ).strip()
+        risk_schedule = load_min_roos_risk_schedule(root, param_policy=risk_param_policy)
     tickers: list[str] = []
     frames: list[pd.DataFrame] = []
 
@@ -325,12 +346,14 @@ def load_daily_universal_ranker_data(
     valid_date_chunks: list[np.ndarray] = []
     valid_label_end_chunks: list[np.ndarray] = []
     valid_target_chunks: list[np.ndarray] = []
+    valid_context_chunks: list[np.ndarray] = []
 
     inference_ticker_id_chunks: list[np.ndarray] = []
     inference_source_pos_chunks: list[np.ndarray] = []
     inference_benchmark_pos_chunks: list[np.ndarray] = []
     inference_date_chunks: list[np.ndarray] = []
-    pending_inference_only_tickers: list[tuple[str, pd.DataFrame, np.ndarray, np.ndarray, pd.DatetimeIndex]] = []
+    inference_context_chunks: list[np.ndarray] = []
+    pending_inference_only_tickers: list[tuple[str, pd.DataFrame, np.ndarray, np.ndarray, pd.DatetimeIndex, np.ndarray]] = []
     skipped_tickers = 0
 
     for ticker, path in csv_inputs:
@@ -360,24 +383,52 @@ def load_daily_universal_ranker_data(
             continue
 
         # Future target completion is a training/evaluation property, not an inference
-        # eligibility rule.  Rows without a complete 40-bar future path still receive PIT
-        # scores, but they never enter loss, epoch selection, refit, or audit target metrics.
-        local_targets = np.full(len(local_positions), np.nan, dtype=np.float32)
-        local_target_valid = np.zeros(len(local_positions), dtype=bool)
-        target_complete = local_positions + int(spec.horizon_bars) < len(frame)
-        if bool(target_complete.any()):
-            completed_targets, completed_valid = _daily_targets_for_positions(
-                frame, local_positions[target_complete], spec=spec
+        # eligibility rule. MR-13I/J keep the MR-13E daily-universal stock-day universe;
+        # Min ROOS contributes only historical-effective risk calibration.
+        context_width = len(RISK_GEOMETRY_CONTEXT_FEATURES) if use_risk_context else 0
+        local_context = np.empty((len(local_positions), context_width), dtype=np.float32)
+        if target_id == DAILY_OPPORTUNITY_NO_TIME_TARGET_ID:
+            local_targets = np.full(len(local_positions), np.nan, dtype=np.float32)
+            local_target_valid = np.zeros(len(local_positions), dtype=bool)
+            target_complete = local_positions + int(spec.horizon_bars) < len(frame)
+            if bool(target_complete.any()):
+                completed_targets, completed_valid = _daily_targets_for_positions(
+                    frame, local_positions[target_complete], spec=spec
+                )
+                completed_indexes = np.flatnonzero(target_complete)
+                local_targets[completed_indexes] = completed_targets
+                local_target_valid[completed_indexes] = completed_valid
+        else:
+            local_targets, local_target_valid, risk_context, geometry_valid = (
+                compute_targets_and_context_for_positions(
+                    frame,
+                    local_positions,
+                    ticker=ticker,
+                    schedule=risk_schedule,
+                    horizon_bars=int(spec.horizon_bars),
+                )
             )
-            completed_indexes = np.flatnonzero(target_complete)
-            local_targets[completed_indexes] = completed_targets
-            local_target_valid[completed_indexes] = completed_valid
+            if use_risk_context:
+                # MR-13J requires legal decision-time geometry to emit a score.  Filtering
+                # applies only where no historical risk calibration exists; within covered
+                # dates the stock-day universe remains the same as MR-13E/I.
+                keep = np.asarray(geometry_valid, dtype=bool)
+                local_positions = local_positions[keep]
+                local_benchmark_positions = local_benchmark_positions[keep]
+                local_targets = local_targets[keep]
+                local_target_valid = local_target_valid[keep]
+                local_context = np.asarray(risk_context[keep], dtype=np.float32)
+                if len(local_positions) == 0:
+                    skipped_tickers += 1
+                    continue
 
         valid_positions = local_positions[local_target_valid]
         valid_benchmark_positions = local_benchmark_positions[local_target_valid]
         valid_targets = local_targets[local_target_valid]
+        valid_context = local_context[local_target_valid]
         invalid_positions = local_positions[~local_target_valid]
         invalid_benchmark_positions = local_benchmark_positions[~local_target_valid]
+        invalid_context = local_context[~local_target_valid]
 
         if len(valid_positions):
             ticker_id = len(tickers)
@@ -398,6 +449,7 @@ def load_daily_universal_ranker_data(
                 )
             )
             valid_target_chunks.append(np.asarray(valid_targets, dtype=np.float32))
+            valid_context_chunks.append(np.asarray(valid_context, dtype=np.float32))
             if len(invalid_positions):
                 inference_ticker_id_chunks.append(
                     np.full(len(invalid_positions), ticker_id, dtype=np.int32)
@@ -411,6 +463,7 @@ def load_daily_universal_ranker_data(
                 inference_date_chunks.append(
                     frame_dates.take(invalid_positions).to_numpy(dtype="datetime64[D]")
                 )
+                inference_context_chunks.append(np.asarray(invalid_context, dtype=np.float32))
         else:
             # A ticker with no target-valid row can still be score-eligible.  Append these
             # tickers after the historical training tickers so existing target-valid ticker
@@ -422,13 +475,14 @@ def load_daily_universal_ranker_data(
                     np.asarray(invalid_positions, dtype=np.int32),
                     np.asarray(invalid_benchmark_positions, dtype=np.int32),
                     frame_dates,
+                    np.asarray(invalid_context, dtype=np.float32),
                 )
             )
 
     if not valid_target_chunks:
         raise ValueError("daily universal ranker沒有任何有效target stock-day sample")
 
-    for ticker, frame, positions, benchmark_positions_local, frame_dates in pending_inference_only_tickers:
+    for ticker, frame, positions, benchmark_positions_local, frame_dates, pending_context in pending_inference_only_tickers:
         if len(positions) == 0:
             continue
         ticker_id = len(tickers)
@@ -444,6 +498,7 @@ def load_daily_universal_ranker_data(
         inference_date_chunks.append(
             frame_dates.take(positions).to_numpy(dtype="datetime64[D]")
         )
+        inference_context_chunks.append(np.asarray(pending_context, dtype=np.float32))
 
     valid_ticker_ids = np.concatenate(valid_ticker_id_chunks)
     valid_source_positions = np.concatenate(valid_source_pos_chunks)
@@ -451,17 +506,21 @@ def load_daily_universal_ranker_data(
     valid_dates = np.concatenate(valid_date_chunks)
     valid_label_end_dates = np.concatenate(valid_label_end_chunks)
     valid_targets = np.concatenate(valid_target_chunks)
+    context_width = len(RISK_GEOMETRY_CONTEXT_FEATURES) if use_risk_context else 0
+    valid_context = np.concatenate(valid_context_chunks, axis=0)
 
     if inference_source_pos_chunks:
         inference_ticker_ids = np.concatenate(inference_ticker_id_chunks)
         inference_source_positions = np.concatenate(inference_source_pos_chunks)
         inference_benchmark_positions = np.concatenate(inference_benchmark_pos_chunks)
         inference_dates = np.concatenate(inference_date_chunks)
+        inference_context = np.concatenate(inference_context_chunks, axis=0)
     else:
         inference_ticker_ids = np.empty(0, dtype=np.int32)
         inference_source_positions = np.empty(0, dtype=np.int32)
         inference_benchmark_positions = np.empty(0, dtype=np.int32)
         inference_dates = np.empty(0, dtype="datetime64[D]")
+        inference_context = np.empty((0, context_width), dtype=np.float32)
 
     ticker_ids = np.concatenate([valid_ticker_ids, inference_ticker_ids])
     source_positions = np.concatenate([valid_source_positions, inference_source_positions])
@@ -469,6 +528,7 @@ def load_daily_universal_ranker_data(
         [valid_benchmark_positions, inference_benchmark_positions]
     )
     dates = np.concatenate([valid_dates, inference_dates])
+    group_context = np.concatenate([valid_context, inference_context], axis=0)
     raw_target = np.concatenate(
         [valid_targets, np.full(len(inference_dates), np.nan, dtype=np.float32)]
     )
@@ -509,9 +569,15 @@ def load_daily_universal_ranker_data(
         policy=DEFAULT_LABEL_POLICY,
     )
     validate_model_sequence_length(model_spec, int(feature_bank.shape[1]))
-    target_contract = build_daily_opportunity_no_time_contract(DEFAULT_LABEL_POLICY)
+    if target_id == DAILY_OPPORTUNITY_NO_TIME_TARGET_ID:
+        target_contract = build_daily_opportunity_no_time_contract(DEFAULT_LABEL_POLICY)
+    else:
+        target_contract = build_risk_target_contract(
+            horizon_bars=int(spec.horizon_bars),
+            param_policy=str(risk_param_policy),
+        )
     target_manifest = {
-        "target_id": DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
+        "target_id": target_id,
         "target_contract": target_contract,
         "sample_scope": "daily_eligible_stock_days",
         "sample_count": target_valid_count,
@@ -524,6 +590,10 @@ def load_daily_universal_ranker_data(
             "end": str(pd.Timestamp(group_table["date"].max()).date()),
         },
         "feature_storage": "lazy_from_canonical_ohlcv_no_expanded_daily_feature_bank",
+        "context_features": list(RISK_GEOMETRY_CONTEXT_FEATURES) if use_risk_context else [],
+        "risk_param_coverage_start": (
+            None if risk_schedule is None else min(item.start_date for item in risk_schedule).date().isoformat()
+        ),
     }
     daily_summary = {
         "filter_id": filter_id,
@@ -540,6 +610,10 @@ def load_daily_universal_ranker_data(
         "ticker_count": int(len(tickers)),
         "skipped_ticker_count": int(skipped_tickers),
         "feature_storage": "lazy",
+        "context_features": list(RISK_GEOMETRY_CONTEXT_FEATURES) if use_risk_context else [],
+        "risk_param_coverage_start": (
+            None if risk_schedule is None else min(item.start_date for item in risk_schedule).date().isoformat()
+        ),
         "score_eligibility_extended_to_source_tail": bool(extend_score_eligibility_to_source_tail),
         "score_eligibility_end_date": str(pd.Timestamp(sample_end).date()),
     }
@@ -552,7 +626,7 @@ def load_daily_universal_ranker_data(
         feature_bank=feature_bank,
         event_group_index=group_index,
         group_table=group_table,
-        group_context=np.empty((group_count, 0), dtype=np.float32),
+        group_context=np.asarray(group_context, dtype=np.float32),
         raw_target=raw_target,
         target_valid=target_valid,
         target_manifest=target_manifest,

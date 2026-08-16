@@ -3063,6 +3063,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         (
             (
                 "inception_time_v1",
+                "inception_time_risk_context_v1",
                 "multiscale_cnn_sequence_only_v1",
             ),
             set(legacy_architectures),
