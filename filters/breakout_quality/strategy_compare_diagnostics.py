@@ -12,13 +12,18 @@ from typing import Any
 import pandas as pd
 
 from core.console_report import project_relative_display_path, render_table
+from core.report_metrics import (
+    R_ACTUAL_TRADE_METRICS,
+    R_MODEL_PREDICTION_METRICS,
+    R_SELECTION_TRANSLATION_METRICS,
+    RAnalysisMetricSpec,
+)
 from core.report_style import (
     SIGNAL_NEUTRAL,
     signal_for_auc,
     signal_for_coverage,
     signal_for_delta,
     signal_for_signed_value,
-    markdown_signal,
     styled_signal,
 )
 from core.strategy_comparison import StrategyComparisonSettings
@@ -787,6 +792,8 @@ def _selection_pit_prediction_row(
         "global_spearman": _finite(metrics.get("global_spearman")),
         "mean_daily_spearman": _finite(metrics.get("mean_daily_spearman")),
         "pairwise_concordance": _finite(metrics.get("pairwise_concordance")),
+        "top_target_r": _finite(metrics.get("top_decile_target_mean")),
+        "bottom_target_r": _finite(metrics.get("bottom_decile_target_mean")),
         "top_bottom_target_spread_r": _finite(metrics.get("top_bottom_target_spread")),
         "valid_year_count": int(direction.get("valid_year_count") or 0),
         "positive_spearman_year_count": int(direction.get("positive_spearman_year_count") or 0),
@@ -820,6 +827,8 @@ def _continuous_prediction_row(
         "global_spearman": _finite(metrics.get("global_spearman_vs_raw_target")),
         "mean_daily_spearman": _finite(metrics.get("mean_daily_spearman")),
         "pairwise_concordance": _finite(metrics.get("pairwise_concordance")),
+        "top_target_r": top,
+        "bottom_target_r": bottom,
         "top_bottom_target_spread_r": spread,
         "valid_year_count": None,
         "positive_spearman_year_count": None,
@@ -950,6 +959,8 @@ def _r_analysis_rows(
             "mean_daily_spearman": _finite(model.get("mean_daily_spearman")),
             "global_spearman": _finite(model.get("global_spearman")),
             "pairwise_concordance": _finite(model.get("pairwise_concordance")),
+            "top_target_r": _finite(model.get("top_target_r")),
+            "bottom_target_r": _finite(model.get("bottom_target_r")),
             "top_bottom_target_spread_r": _finite(model.get("top_bottom_target_spread_r")),
             "score_coverage": _finite(translation.get("score_coverage")),
             "selected_target_mean_r": _finite(translation.get("selected_target_mean_r")),
@@ -1012,238 +1023,102 @@ def _fmt_pct_fraction(value: Any) -> str:
     return "-" if numeric is None else f"{numeric * 100.0:.2f}%"
 
 
-def _markdown_signed(value: Any, *, digits: int = 3, unit: str = "") -> str:
-    numeric = _finite(value)
-    if numeric is None:
-        return "-"
-    text = _fmt(numeric, digits=digits, unit=unit)
-    return markdown_signal(text, signal_for_signed_value(numeric))
-
-
-def _markdown_delta(
-    value: Any,
-    *,
-    preference: str,
-    digits: int = 3,
-    unit: str = "",
-) -> str:
-    numeric = _finite(value)
-    if numeric is None:
-        return "-"
-    text = _fmt(numeric, digits=digits, unit=unit)
-    return markdown_signal(text, signal_for_delta(numeric, preference=preference))
-
-
-
-
 def _value_with_signal(text: str, signal: str, *, target: str) -> str:
     if text == "-":
         return text
     return styled_signal(text, signal, target=target)
 
 
-def _relative_r_marker(
-    value: Any,
-    reference: Any,
+def _format_r_analysis_value(value: Any, metric: RAnalysisMetricSpec) -> str:
+    if metric.format_kind == "fraction_pct":
+        return _fmt_pct_fraction(value)
+    return _fmt(value, digits=metric.digits, unit=metric.unit)
+
+
+def _r_analysis_signal(
     *,
-    preference: str = "higher",
+    row: dict[str, Any],
+    reference: dict[str, Any],
+    metric: RAnalysisMetricSpec,
+    is_reference: bool,
 ) -> str:
-    numeric = _finite(value)
-    ref = _finite(reference)
-    if numeric is None or ref is None:
+    value = row.get(metric.key)
+    if value is None:
         return SIGNAL_NEUTRAL
-    return signal_for_delta(numeric - ref, preference=preference)
+    if metric.signal_mode == "signed":
+        return signal_for_signed_value(value)
+    if metric.signal_mode == "auc":
+        return signal_for_auc(value)
+    if metric.signal_mode == "coverage":
+        return signal_for_coverage(value)
+    if metric.signal_mode == "relative":
+        if is_reference:
+            return SIGNAL_NEUTRAL
+        numeric = _finite(value)
+        ref = _finite(reference.get(metric.key))
+        if numeric is None or ref is None:
+            return SIGNAL_NEUTRAL
+        return signal_for_delta(numeric - ref, preference=metric.preference)
+    return SIGNAL_NEUTRAL
+
+
+def _render_transposed_r_table(
+    *,
+    rows: list[dict[str, Any]],
+    reference_id: str,
+    metrics: tuple[RAnalysisMetricSpec, ...],
+    target: str,
+) -> str:
+    reference = next((row for row in rows if str(row.get("arm_id")) == reference_id), {})
+    headers = ("指標", *(str(row.get("arm_id") or "-") for row in rows), "定義", "理想方向")
+    body = []
+    for metric in metrics:
+        values = []
+        for row in rows:
+            text = _format_r_analysis_value(row.get(metric.key), metric)
+            if text != "-":
+                signal = _r_analysis_signal(
+                    row=row,
+                    reference=reference,
+                    metric=metric,
+                    is_reference=str(row.get("arm_id")) == reference_id,
+                )
+                text = _value_with_signal(text, signal, target=target)
+            values.append(text)
+        body.append((metric.label, *values, metric.definition, metric.ideal_direction))
+    return render_table(headers, body)
 
 
 def render_strategy_r_analysis_table(diagnostics: dict[str, Any], *, target: str = "plain") -> str:
-    """Render the shared per-arm R prediction/translation table used by console and Markdown."""
+    """Render canonical R diagnostics as three transposed arm-comparison tables."""
 
     rows = list(diagnostics.get("r_analysis") or [])
     if not rows:
         return "沒有可用的R預測／轉化診斷。"
     reference_id = str(diagnostics.get("reference_arm_id") or "")
-    reference = next((row for row in rows if str(row.get("arm_id")) == reference_id), {})
-    rendered = []
-    for row in rows:
-        is_reference = str(row.get("arm_id")) == reference_id
-        avg_r = _fmt(row.get("portfolio_avg_r"), digits=2, unit=" R")
-        median_r = _fmt(row.get("portfolio_median_r"), digits=2, unit=" R")
-        if not is_reference:
-            avg_r = _value_with_signal(
-                avg_r,
-                _relative_r_marker(
-                    row.get("portfolio_avg_r"), reference.get("portfolio_avg_r")
-                ),
-                target=target,
-            )
-            median_r = _value_with_signal(
-                median_r,
-                _relative_r_marker(
-                    row.get("portfolio_median_r"), reference.get("portfolio_median_r")
-                ),
-                target=target,
-            )
-
-        daily_rho = _fmt(row.get("mean_daily_spearman"), digits=3)
-        daily_rho = _value_with_signal(
-            daily_rho, signal_for_signed_value(row.get("mean_daily_spearman")), target=target
-        )
-        global_rho = _fmt(row.get("global_spearman"), digits=3)
-        global_rho = _value_with_signal(
-            global_rho, signal_for_signed_value(row.get("global_spearman")), target=target
-        )
-        pair = _fmt_pct_fraction(row.get("pairwise_concordance"))
-        pair = _value_with_signal(pair, signal_for_auc(row.get("pairwise_concordance")), target=target)
-        spread = _fmt(row.get("top_bottom_target_spread_r"), digits=2, unit=" R")
-        spread = _value_with_signal(
-            spread, signal_for_signed_value(row.get("top_bottom_target_spread_r")), target=target
-        )
-        coverage = _fmt_pct_fraction(row.get("score_coverage"))
-        coverage = _value_with_signal(coverage, signal_for_coverage(row.get("score_coverage")), target=target)
-
-        target_mean = _fmt(row.get("selected_target_mean_r"), digits=2, unit=" R")
-        target_mean = _value_with_signal(
-            target_mean,
-            signal_for_delta(row.get("selected_target_mean_r_delta"), preference="higher"),
-            target=target,
-        )
-        percentile = _fmt(row.get("selected_target_percentile"), digits=3)
-        percentile = _value_with_signal(
-            percentile,
-            signal_for_delta(row.get("selected_target_percentile_delta"), preference="higher"),
-            target=target,
-        )
-        top_k = _fmt_pct_fraction(row.get("target_top_k_retention"))
-        top_k = _value_with_signal(
-            top_k,
-            signal_for_delta(row.get("target_top_k_retention_delta"), preference="higher"),
-            target=target,
-        )
-        gap = _fmt(row.get("target_opportunity_gap_r"), digits=2, unit=" R")
-        gap = _value_with_signal(
-            gap,
-            signal_for_delta(row.get("target_opportunity_gap_r_delta"), preference="lower"),
-            target=target,
-        )
-        direct_r = _fmt(row.get("direct_selection_delta_r"), digits=2, unit=" R")
-        direct_r = _value_with_signal(
-            direct_r, signal_for_signed_value(row.get("direct_selection_delta_r")), target=target
-        )
-        rendered.append((
-            row.get("arm_id", "-"),
-            avg_r,
-            median_r,
-            daily_rho,
-            global_rho,
-            pair,
-            spread,
-            coverage,
-            target_mean,
-            percentile,
-            top_k,
-            gap,
-            direct_r,
-        ))
-    return render_table(
-        (
-            "編號",
-            "平均R",
-            "中位R",
-            "Dailyρ",
-            "Globalρ",
-            "Pair一致",
-            "Top-BottomR",
-            "Coverage",
-            "Target mean R",
-            "Target %ile",
-            "Top-K",
-            "Opp gap",
-            "DL選擇R",
-        ),
-        rendered,
+    sections = (
+        ("實際交易", R_ACTUAL_TRADE_METRICS),
+        ("模型預測", R_MODEL_PREDICTION_METRICS),
+        ("選股轉化", R_SELECTION_TRANSLATION_METRICS),
     )
+    rendered = []
+    for title, metrics in sections:
+        rendered.append(f"{title}\n{'-' * len(title) * 2}")
+        rendered.append(
+            _render_transposed_r_table(
+                rows=rows,
+                reference_id=reference_id,
+                metrics=metrics,
+                target=target,
+            )
+        )
+    return "\n\n".join(rendered)
 
 def render_strategy_diagnostics_markdown(diagnostics: dict[str, Any]) -> str:
-    lines = [
-        "# Strategy Compare 間接指標",
-        "",
-        "> 本報表只重用既有 canonical 模型驗證工件與 Strategy Compare pair payload；不從 raw market/trade rows 另算第二套指標。",
-        "",
-        "## 1. R 預測／排序能力",
-        "",
-        "| DL | Score source | Scope | Daily rho | Global rho | Pair concordance | Top-Bottom R spread | 正 rho 年度 |",
-        "|---|---|---|---:|---:|---:|---:|---:|",
-    ]
-    model_rows = list(diagnostics.get("model_prediction") or [])
-    if model_rows:
-        for row in model_rows:
-            if not row.get("available"):
-                lines.append(
-                    f"| {row.get('dl_id','-')} | {row.get('score_source','-')} | {row.get('scope','-')} | - | - | - | - | - |"
-                )
-                continue
-            valid = row.get("valid_year_count")
-            positive = row.get("positive_spearman_year_count")
-            years = "-" if valid in (None, 0) else f"{int(positive or 0)}/{int(valid)}"
-            lines.append(
-                f"| {row.get('dl_id','-')} | {row.get('score_source','-')} | {row.get('scope','-')} "
-                f"| {_markdown_signed(row.get('mean_daily_spearman'))} "
-                f"| {_markdown_signed(row.get('global_spearman'))} "
-                f"| {markdown_signal(_fmt_pct_fraction(row.get('pairwise_concordance')), signal_for_auc(row.get('pairwise_concordance')))} "
-                f"| {_markdown_signed(row.get('top_bottom_target_spread_r'), unit=' R')} | {years} |"
-            )
-    else:
-        lines.append("| - | - | - | - | - | - | - | - | - |")
+    """Persist the same canonical three-table R view used by the aggregate report."""
 
-    lines.extend([
-        "",
-        "## 2. Score → 實際選股轉換",
-        "",
-        "| Arm | Coverage | 選中 Target mean R | ΔTarget mean R | Target percentile | Top-K retention | Opportunity gap | ΔOpportunity gap | 同參數DL選擇R |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
-    ])
-    translation_rows = list(diagnostics.get("selection_translation") or [])
-    if translation_rows:
-        for row in translation_rows:
-            lines.append(
-                f"| {row.get('arm_id')} {row.get('name')} "
-                f"| {markdown_signal(_fmt_pct_fraction(row.get('score_coverage')), signal_for_coverage(row.get('score_coverage')))} "
-                f"| {markdown_signal(_fmt(row.get('selected_target_mean_r'), digits=3, unit=' R'), signal_for_delta(row.get('selected_target_mean_r_delta'), preference='higher'))} "
-                f"| {_markdown_signed(row.get('selected_target_mean_r_delta'), digits=3, unit=' R')} "
-                f"| {markdown_signal(_fmt(row.get('selected_target_percentile'), digits=4), signal_for_delta(row.get('selected_target_percentile_delta'), preference='higher'))} "
-                f"| {markdown_signal(_fmt_pct_fraction(row.get('target_top_k_retention')), signal_for_delta(row.get('target_top_k_retention_delta'), preference='higher'))} "
-                f"| {markdown_signal(_fmt(row.get('target_opportunity_gap_r'), digits=3, unit=' R'), signal_for_delta(row.get('target_opportunity_gap_r_delta'), preference='lower'))} "
-                f"| {_markdown_delta(row.get('target_opportunity_gap_r_delta'), preference='lower', digits=3, unit=' R')} "
-                f"| {_markdown_signed(row.get('direct_selection_delta_r'), digits=2, unit=' R')} |"
-            )
-    else:
-        lines.append("| - | - | - | - | - | - | - | - |")
-
-    lines.extend([
-        "",
-        "## 3. 資金／執行轉換",
-        "",
-        "| Arm | 平均曝險 | 掛單成交率 | 日均可掛候選 | 候選不足日 | 期末未滿倉日 | 持股缺口 |",
-        "|---|---:|---:|---:|---:|---:|---:|",
-    ])
-    for row in diagnostics.get("execution_conversion") or []:
-        lines.append(
-            f"| {row.get('arm_id')} {row.get('name')} "
-            f"| {_fmt(row.get('avg_exposure_pct'), digits=2, unit='%')} "
-            f"| {_fmt(row.get('reserved_buy_fill_rate_pct'), digits=2, unit='%')} "
-            f"| {_fmt(row.get('avg_orderable_candidates'), digits=2)} "
-            f"| {_fmt(row.get('candidate_supply_gap_days'), digits=0, unit=' 日')} "
-            f"| {_fmt(row.get('underfilled_end_days'), digits=0, unit=' 日')} "
-            f"| {_fmt(row.get('end_position_gap_slot_days'), digits=0, unit=' 格日')} |"
-        )
-
-    lines.extend([
-        "",
-        "## 判讀邊界",
-        "",
-        "- R 預測／排序能力來自既有模型驗證工件；不代表策略 PnL，必須與策略結果分開判讀。",
-        "- Selection Future Target 僅在 replay 後 join 作診斷，不進候選排序、資金配置或成交決策。",
-        "- 資金／執行欄位只保留跨 allocator 都有共同物理意義的指標；solver states、repair/ascent、stale guard、selector timing 等演算法專屬欄位仍保留在 JSON/sidecar，不放進共同人讀報表。",
-    ])
-    return "\n".join(lines).rstrip() + "\n"
-
+    return (
+        "# Strategy Compare 間接指標\n\n"
+        + render_strategy_r_analysis_table(diagnostics, target="markdown").rstrip()
+        + "\n"
+    )

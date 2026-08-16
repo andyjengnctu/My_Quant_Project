@@ -42,6 +42,8 @@
 21. 長流程互動執行預設只顯示必要的RUN／REUSE／DONE進度與最終核心摘要；pair-level詳細報表、solver states、repair/ascent、stale guard、timing等過程資訊應保存於工件供追查，不得在aggregate執行時重複洗版。
 22. Strategy Compare 等以「核心策略結果」作跨arm共同主表時，欄位順序固定為：`報酬 → MDD → RoMD → 年化 → 最差完整年度 → Log R² → 月勝率 → 勝率 → Payoff → EV → 交易數 → 平均曝險`。此順序屬人讀報表契約，必須由`core/report_metrics.py`的共用metric registry持有並由renderer重用，不得在個別報表重新手排；R預測／轉化與資金／執行等非核心結果維持獨立分表。
 
+23. Strategy Compare 的 `R 預測／轉化` 人讀區固定拆成三個子表，採「指標放列、比較 arm 放欄」的轉置格式，且最右兩欄固定為 `定義`、`理想方向`；三表順序與指標固定為：(1) `實際交易：平均R、中位R、Coverage、DL選擇R`；(2) `模型預測：Dailyρ、Globalρ、Pair一致、Top-R、Bottom-R、Top-BottomR`；(3) `選股轉化：Target mean R、Target %ile、Top-K、Opp gap`。`Top-R`／`Bottom-R`必須直接重用既有模型驗證工件中最高／最低Score十分位的平均Target R，`Top-BottomR=Top-R−Bottom-R`，不得為報表另算第二套；aggregate console、`strategy_comparison.md`與`strategy_diagnostics.md`必須重用同一canonical diagnostics payload與metric registry。
+
 
 ## C. Coding 與架構原則
 

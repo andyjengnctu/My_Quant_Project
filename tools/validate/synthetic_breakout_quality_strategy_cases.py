@@ -3528,10 +3528,23 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "_contrast_table(" not in render_report_source
         and "_resource_aware_table(" not in render_report_source
         and "_selector_timing_table(" not in render_report_source
-        and "Target %ile" in diagnostics_source
-        and "Top-K" in diagnostics_source
-        and "Opp gap" in diagnostics_source
-        and "DL選擇R" in diagnostics_source,
+        and "R_ACTUAL_TRADE_METRICS" in diagnostics_source
+        and "R_MODEL_PREDICTION_METRICS" in diagnostics_source
+        and "R_SELECTION_TRANSLATION_METRICS" in diagnostics_source
+        and '("實際交易", R_ACTUAL_TRADE_METRICS)' in diagnostics_source
+        and '("模型預測", R_MODEL_PREDICTION_METRICS)' in diagnostics_source
+        and '("選股轉化", R_SELECTION_TRANSLATION_METRICS)' in diagnostics_source
+        and '("指標", *(str(row.get("arm_id") or "-") for row in rows), "定義", "理想方向")' in diagnostics_source
+        and '"top_target_r": _finite(metrics.get("top_decile_target_mean"))' in diagnostics_source
+        and '"bottom_target_r": _finite(metrics.get("bottom_decile_target_mean"))' in diagnostics_source
+        and '"top_target_r": top' in diagnostics_source
+        and '"bottom_target_r": bottom' in diagnostics_source
+        and "Target %ile" in report_metrics_source
+        and "Top-K" in report_metrics_source
+        and "Opp gap" in report_metrics_source
+        and "Top-R" in report_metrics_source
+        and "Bottom-R" in report_metrics_source
+        and "DL選擇R" in report_metrics_source,
     )
     add_check(
         results,
