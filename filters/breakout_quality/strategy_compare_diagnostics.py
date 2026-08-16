@@ -1258,17 +1258,6 @@ def _render_grouped_table(headers_top: list[str], headers_bottom: list[str], row
     return "\n".join([join_line(headers_top, centers=set(range(column_count))), join_line(headers_bottom, centers=set(range(1, column_count))), separator, *[join_line(row) for row in rows]])
 
 
-def _render_metric_notes() -> str:
-    lines = ["註解", "----"]
-    for group_label, metrics in R_ANALYSIS_GROUPED_SECTIONS:
-        lines.append(f"{group_label}：")
-        for metric in metrics:
-            lines.append(
-                f"- {metric.label}：{metric.definition}｜理想方向：{metric.ideal_direction}"
-            )
-    return "\n".join(lines)
-
-
 def render_strategy_r_analysis_table(diagnostics: dict[str, Any], *, target: str = "plain") -> str:
     """Render canonical R diagnostics as one grouped arm-comparison table."""
 
@@ -1298,7 +1287,7 @@ def render_strategy_r_analysis_table(diagnostics: dict[str, Any], *, target: str
             signal = metric_signals.get(metric.key, {}).get(arm_id)
             values.append(_value_with_signal(text, signal, target=target))
         body.append(values)
-    return _render_grouped_table(top_headers, bottom_headers, body) + "\n\n" + _render_metric_notes()
+    return _render_grouped_table(top_headers, bottom_headers, body)
 
 def render_strategy_diagnostics_markdown(diagnostics: dict[str, Any]) -> str:
     """Persist the same canonical three-table R view used by the aggregate report."""

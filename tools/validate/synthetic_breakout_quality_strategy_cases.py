@@ -3536,7 +3536,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and 'top_headers = ["分群", ""]' in diagnostics_source
         and 'bottom_headers = ["編號", "比較對象"]' in diagnostics_source
         and "best_worst_signals" in diagnostics_source
-        and "_render_metric_notes()" in diagnostics_source
+        and "_render_metric_notes" not in diagnostics_source
+        and 'lines = ["註解", "----"]' not in diagnostics_source
         and '"top_target_r": _finite(metrics.get("top_decile_target_mean"))' in diagnostics_source
         and '"bottom_target_r": _finite(metrics.get("bottom_decile_target_mean"))' in diagnostics_source
         and '"top_target_r": top' in diagnostics_source
@@ -3582,7 +3583,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "文字本身上色" in project_settings
         and "綠＝最佳、紅＝最差、白＝其餘" in project_settings
         and "前兩欄固定為`編號`、`比較對象`" in project_settings
-        and "表格下方註解" in project_settings
+        and "不在aggregate console" in project_settings
+        and "不在aggregate console、`strategy_comparison.md`或`strategy_diagnostics.md`的人讀表格下方另外顯示註解" in project_settings
         and "renderer只負責組裝與顯示" in project_settings,
     )
     from filters.breakout_quality.strategy_compare_diagnostics import (
