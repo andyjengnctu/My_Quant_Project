@@ -97,6 +97,7 @@ def _run_current_comparison(*, profile_id: str, confirm: bool) -> dict:
         resolved_plan=resolved_plan,
         auto_prepare=True,
         settings=settings,
+        quiet=True,
     )
 
 

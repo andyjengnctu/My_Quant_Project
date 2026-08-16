@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 import sys
@@ -10,6 +11,17 @@ C_BLUE = '\033[94m'
 C_GREEN = '\033[92m'
 C_GRAY = '\033[90m'
 C_RESET = '\033[0m'
+
+
+def console_color_enabled(stream=None):
+    """Return whether ANSI color is appropriate for the active console."""
+
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    if os.environ.get("TERM", "").strip().lower() == "dumb":
+        return False
+    target = stream if stream is not None else getattr(sys, "stdout", None)
+    return bool(target is not None and hasattr(target, "isatty") and target.isatty())
 
 
 def format_elapsed(seconds):

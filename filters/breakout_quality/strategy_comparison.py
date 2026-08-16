@@ -34,6 +34,11 @@ from core.strategy_comparison import (
     StrategyPreparationPlan,
     strategy_comparison_fingerprint,
 )
+from core.report_metrics import (
+    EXECUTION_CAPACITY_METRICS,
+    PORTFOLIO_RESULT_METRICS,
+    TRADE_RESULT_METRICS,
+)
 from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
@@ -51,6 +56,10 @@ from filters.breakout_quality.strategy_compare_sources import (
     resolve_project_relative_path as _resolve_relative_path,
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+)
+from filters.breakout_quality.strategy_compare_diagnostics import (
+    build_strategy_diagnostics,
+    render_strategy_diagnostics_markdown,
 )
 from filters.breakout_quality.strategy_compare_reporting import (
     materialize_strategy_pair_readable_report,
@@ -96,7 +105,7 @@ from filters.breakout_quality.strategy_compare_preparation import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RESULT_SCHEMA_VERSION = 6
+RESULT_SCHEMA_VERSION = 7
 
 
 def _json_native(value: Any) -> Any:
@@ -549,45 +558,47 @@ def _scenario_payloads(
     return output
 
 
+def _metric_table(
+    scenarios: dict[str, dict[str, Any]],
+    *,
+    settings: StrategyComparisonSettings,
+    metrics: tuple[Any, ...],
+) -> str:
+    rows = []
+    for arm in settings.enabled_arms:
+        payload = scenarios[arm.arm_id]
+        rows.append((
+            arm.arm_id,
+            arm.name,
+            *(_fmt(payload.get(metric.key), unit=metric.unit, digits=metric.digits) for metric in metrics),
+        ))
+    return render_table(
+        ("編號", "比較對象", *(metric.label for metric in metrics)),
+        rows,
+    )
+
+
 def _summary_table(
     scenarios: dict[str, dict[str, Any]],
     *,
     settings: StrategyComparisonSettings,
 ) -> str:
-    rows = []
-    for arm in settings.enabled_arms:
-        payload = scenarios[arm.arm_id]
-        rows.append(
-            (
-                arm.arm_id,
-                arm.name,
-                _fmt(payload.get("total_return_pct"), unit="%"),
-                _fmt(payload.get("max_drawdown_pct"), unit="%"),
-                _fmt(payload.get("return_over_max_drawdown")),
-                _fmt(payload.get("annual_return_pct"), unit="%"),
-                _fmt(payload.get("expected_value_r"), unit=" R"),
-                _fmt(payload.get("payoff_ratio")),
-                _fmt(payload.get("avg_exposure_pct"), unit="%"),
-                _fmt(payload.get("trade_count"), digits=0),
-                _fmt(payload.get("direct_selection_delta_r"), unit=" R"),
-            )
-        )
-    return render_table(
-        (
-            "編號",
-            "比較對象",
-            "報酬",
-            "MDD",
-            "RoMD",
-            "年化",
-            "EV",
-            "Payoff",
-            "曝險",
-            "交易",
-            "同參數DL選擇R",
-        ),
-        rows,
+    trade_metrics = tuple(metric for metric in TRADE_RESULT_METRICS if metric.key != "reserved_buy_fill_rate_pct")
+    execution_metrics = (
+        PORTFOLIO_RESULT_METRICS[-1],
+        next(metric for metric in TRADE_RESULT_METRICS if metric.key == "reserved_buy_fill_rate_pct"),
+        *EXECUTION_CAPACITY_METRICS,
     )
+    return "\n\n".join((
+        render_section("投組績效"),
+        _metric_table(
+            scenarios, settings=settings, metrics=PORTFOLIO_RESULT_METRICS[:-1]
+        ),
+        render_section("單筆交易"),
+        _metric_table(scenarios, settings=settings, metrics=trade_metrics),
+        render_section("資金／執行"),
+        _metric_table(scenarios, settings=settings, metrics=execution_metrics),
+    ))
 
 
 def _delta(left: dict[str, Any], right: dict[str, Any], key: str) -> float | None:
@@ -880,28 +891,16 @@ def _render_report(
                     ("比較設定", "config/strategy_compare.py"),
                 )
             ),
-            render_section("1. 比較結果"),
+            render_section("1. 核心策略結果"),
             _summary_table(scenarios, settings=settings),
-            render_section("2. 設定中的差異比較"),
-            _contrast_table(scenarios, settings=settings),
-            render_section("3. 年度結果"),
+            render_section("2. 年度結果"),
             _yearly_table(pair_payloads, settings=settings),
-            render_section("4. Resource-aware盤前診斷"),
-            _resource_aware_table(scenarios, settings=settings),
-            render_section("5. Max-DL Selector計算時間"),
-            _selector_timing_table(scenarios, settings=settings),
-            render_section("6. 判讀原則"),
+            render_section("3. 報表分工"),
             (
-                "以config中啟用的contrast逐項判讀；不得用單一年份改善取代"
-                "全期RoMD、EV、同參數DL選擇R與年度穩定性。同參數DL選擇R只可在"
-                "param_source與rule_policy皆相同的arms之間比較；跨參數contrast固定顯示-。"
-                "比較流程不建立Label、不選模型也不訓練模型權重；可依config透過正式"
-                "共用服務補建既有模型的forward-OOS scores與比較所需策略參數工件。"
-                "Resource-aware Binary與舊Continuous沿用各自資源Gate；Max-DL Continuous則以Min ROOS"
-                "預留單數與reserved-capital floor作硬限制，合法範圍內只最大化frozen DL score；"
-                "Feasible-ascent只在相同K/R0合法集合內做best-improvement single-swap，不引入capital objective；"
-                "不得新增資金利用Threshold。Binary arm看PASS資源配置，Continuous arm看selected score改善；各者都必須同時檢查"
-                "總曝險、預留資金與策略績效，不能只看模型分數。"
+                "主報表只保留跨策略／allocator可共同解讀的投組、單筆交易與資金執行指標。"
+                "R預測能力、Score→實際選股轉換、同參數DL選擇R與轉換率集中於"
+                "strategy_diagnostics.md；solver states、repair/ascent、stale guard與selector timing"
+                "等演算法專屬診斷保留於canonical JSON／sidecar，不進共同人讀表。"
             ),
         )
     ).rstrip() + "\n"
@@ -1053,6 +1052,9 @@ def run_strategy_comparison(
             ),
             "standalone_dl_off_baseline": True,
         }
+        if quiet:
+            action = "REUSE" if baseline_reuse_source is not None else "DONE"
+            print(f"[{action}] {off_arm.arm_id} {off_arm.name}")
         baseline_sources[group_key] = pair_dir
 
     for param_source, rule_policy, off_arm, on_arm in _execution_pairs(settings):
@@ -1121,7 +1123,9 @@ def run_strategy_comparison(
                     "source_artifact_mode", "current_artifacts"
                 ),
             }
-            if not quiet:
+            if quiet:
+                print(f"[REUSE] {on_arm.arm_id} {on_arm.name}")
+            else:
                 print(
                     f"[{on_arm.arm_id}] REUSE 已完成正式pair："
                     + project_relative_display_path(
@@ -1143,6 +1147,8 @@ def run_strategy_comparison(
             and runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
             else None
         )
+        if quiet:
+            print(f"[RUN] {on_arm.arm_id} {on_arm.name}")
         pair_payload = run_comparison(
             project_root=root,
             dataset=settings.dataset,
@@ -1256,8 +1262,17 @@ def run_strategy_comparison(
                 )
             ),
         }
+        if quiet:
+            print(f"[DONE] {on_arm.arm_id} {on_arm.name}")
 
     scenarios = _scenario_payloads(pair_payloads, direct_r, settings=settings)
+    diagnostics = build_strategy_diagnostics(
+        project_root=root,
+        settings=settings,
+        status=status,
+        scenarios=scenarios,
+        pair_payloads=pair_payloads,
+    )
     report = _render_report(
         settings=settings,
         status=status,
@@ -1265,9 +1280,13 @@ def run_strategy_comparison(
         pair_payloads=pair_payloads,
     )
     report_path = run_dir / "strategy_comparison.md"
+    diagnostics_path = run_dir / "strategy_diagnostics.md"
     json_path = run_dir / "strategy_comparison.json"
     manifest_path = run_dir / "manifest.json"
     report_path.write_text(report, encoding="utf-8")
+    diagnostics_path.write_text(
+        render_strategy_diagnostics_markdown(diagnostics), encoding="utf-8"
+    )
     payload = {
         "schema_version": RESULT_SCHEMA_VERSION,
         "status": "COMPLETED",
@@ -1281,6 +1300,7 @@ def run_strategy_comparison(
         "requested_preparation_plan": requested_plan.as_dict(),
         "final_preparation_plan": status["preparation_plan"].as_dict(),
         "scenarios": scenarios,
+        "diagnostics": diagnostics,
         "contrasts": {
             item.contrast_id: {
                 "left": item.left,
@@ -1332,6 +1352,7 @@ def run_strategy_comparison(
     latest_dir.mkdir(parents=True, exist_ok=True)
     for source, filename in (
         (report_path, "strategy_comparison.md"),
+        (diagnostics_path, "strategy_diagnostics.md"),
         (json_path, "strategy_comparison.json"),
         (manifest_path, "manifest.json"),
     ):
@@ -1341,6 +1362,7 @@ def run_strategy_comparison(
     print_artifact_paths(
         (
             ("策略比較Markdown", report_path),
+            ("間接指標Markdown", diagnostics_path),
             ("策略比較JSON", json_path),
             ("執行Manifest", manifest_path),
             ("最新結果", latest_dir),

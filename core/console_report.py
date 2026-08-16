@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 from typing import Iterable, Sequence
+
+from core.display_common import console_color_enabled
 
 from core.display import (
     C_CYAN,
@@ -27,17 +28,6 @@ def compact_console_enabled() -> bool:
 
     value = os.environ.get(COMPACT_CONSOLE_ENV, "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def console_color_enabled(stream=None) -> bool:
-    """Return whether ANSI color is appropriate for the active console."""
-
-    if os.environ.get("NO_COLOR") is not None:
-        return False
-    if os.environ.get("TERM", "").strip().lower() == "dumb":
-        return False
-    target = stream if stream is not None else getattr(sys, "stdout", None)
-    return bool(target is not None and hasattr(target, "isatty") and target.isatty())
 
 
 def paint(text: object, tone: str, *, enabled: bool, bold: bool = False) -> str:

@@ -23,7 +23,8 @@ from filters.breakout_quality.strategy_compare_contracts import (
     COMPARISON_MODE_SCORE_RANKING,
     comparison_labels as _comparison_labels,
 )
-from filters.breakout_quality.strategy_report_style import (
+from core.report_metrics import PAIR_MAIN_METRICS
+from core.report_style import (
     SIGNAL_NEGATIVE,
     SIGNAL_NEUTRAL,
     SIGNAL_POSITIVE,
@@ -366,22 +367,8 @@ def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagno
     labels = _comparison_labels(str(metadata["comparison_mode"]))
     active_yearly_column = f"{labels['active_name']}_return_pct"
     rows = [
-        ("淨總報酬", "total_return_pct", "%", "higher"),
-        ("最大回撤", "max_drawdown_pct", "%", "lower"),
-        ("報酬／最大回撤", "return_over_max_drawdown", "", "higher"),
-        ("年化報酬", "annual_return_pct", "%", "higher"),
-        ("Log R²", "log_r_squared", "", "higher"),
-        ("月勝率", "monthly_win_rate_pct", "%", "higher"),
-        ("交易數", "trade_count", "", "neutral"),
-        ("勝率", "win_rate_pct", "%", "higher"),
-        ("Payoff", "payoff_ratio", "", "higher"),
-        ("EV", "expected_value_r", " R", "higher"),
-        ("平均曝險", "avg_exposure_pct", "%", "attention"),
-        ("最差完整年度", "min_full_year_return_pct", "%", "higher"),
-        ("平均每日可掛單候選", "avg_orderable_candidates", "", "neutral"),
-        ("候選供給不足日", "candidate_supply_gap_days", " 日", "lower"),
-        ("期末未滿倉日", "underfilled_end_days", " 日", "lower"),
-        ("期末持股缺口總和", "end_position_gap_slot_days", " 格日", "lower"),
+        (metric.label, metric.key, metric.unit, metric.preference, metric.digits, metric.warning_threshold)
+        for metric in PAIR_MAIN_METRICS
     ]
     lines = [
         ("# Breakout Quality Score 排序策略經濟效果對照" if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING else "# Breakout Quality 策略經濟效果對照"), "",
@@ -415,12 +402,11 @@ def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagno
         ),
         "", "## 主要結果", "", f"| 指標 | No filter | {labels['active_title']} | 差異 | 判讀 |", "|---|---:|---:|---:|:---:|",
     ]
-    for label, key, unit, preference in rows:
-        digits = 0 if key in {"trade_count", "candidate_supply_gap_days", "underfilled_end_days", "end_position_gap_slot_days"} else 4 if key == "log_r_squared" else 2
+    for label, key, unit, preference, digits, warning_threshold in rows:
         metric_signal = signal_for_delta(
             delta.get(key),
             preference=preference,
-            warning_threshold=5.0 if key == "avg_exposure_pct" else 0.0,
+            warning_threshold=warning_threshold,
         )
         lines.append(
             f"| {label} | {_format_metric(baseline.get(key), digits=digits, unit=unit)} "
@@ -836,31 +822,14 @@ def _render_strategy_console_report(
     ]
 
     metric_rows = []
-    for label, key, unit, preference in (
-        ("淨總報酬", "total_return_pct", "%", "higher"),
-        ("最大回撤", "max_drawdown_pct", "%", "lower"),
-        ("報酬／最大回撤", "return_over_max_drawdown", "", "higher"),
-        ("年化報酬", "annual_return_pct", "%", "higher"),
-        ("Log R²", "log_r_squared", "", "higher"),
-        ("月勝率", "monthly_win_rate_pct", "%", "higher"),
-        ("交易數", "trade_count", "", "neutral"),
-        ("勝率", "win_rate_pct", "%", "higher"),
-        ("Payoff", "payoff_ratio", "", "higher"),
-        ("EV", "expected_value_r", " R", "higher"),
-        ("平均曝險", "avg_exposure_pct", "%", "attention"),
-        ("最差完整年度", "min_full_year_return_pct", "%", "higher"),
-        ("平均每日可掛單候選", "avg_orderable_candidates", "", "neutral"),
-        ("候選供給不足日", "candidate_supply_gap_days", " 日", "lower"),
-        ("期末未滿倉日", "underfilled_end_days", " 日", "lower"),
-        ("期末持股缺口總和", "end_position_gap_slot_days", " 格日", "lower"),
-    ):
-        digits = 0 if key in {
-            "trade_count", "candidate_supply_gap_days", "underfilled_end_days",
-            "end_position_gap_slot_days",
-        } else 4 if key == "log_r_squared" else 2
+    for metric in PAIR_MAIN_METRICS:
+        label = metric.label
+        key = metric.key
+        unit = metric.unit
+        digits = metric.digits
         signal = signal_for_delta(
-            delta.get(key), preference=preference,
-            warning_threshold=5.0 if key == "avg_exposure_pct" else 0.0,
+            delta.get(key), preference=metric.preference,
+            warning_threshold=metric.warning_threshold,
         )
         delta_text = _format_metric(delta.get(key), digits=digits, unit=unit, signed=True)
         judgment = signal_marker(signal)

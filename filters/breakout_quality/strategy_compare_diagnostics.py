@@ -11,6 +11,10 @@ from typing import Any
 
 import pandas as pd
 
+from core.console_report import project_relative_display_path
+from core.report_style import signal_for_delta, signal_for_signed_value, signal_marker
+from core.strategy_comparison import StrategyComparisonSettings
+
 from core.exact_accounting import (
     calc_planned_initial_risk_from_prices_milli,
     milli_to_money,
@@ -21,9 +25,12 @@ from core.price_utils import calc_position_size
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from filters.breakout_quality.ranking_score_store import (
+    SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+    SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     load_selection_point_in_time_score_table,
     load_selection_point_in_time_score_table_from_path,
 )
+from filters.breakout_quality.strategy_compare_contracts import comparison_labels
 
 
 def _finite_float(value: Any) -> float | None:
@@ -717,3 +724,329 @@ def _strategy_selection_diagnostics(
 
 # Stable public aliases for read-only consumers.
 flatten_candidate_replay_rows = _flatten_candidate_replay_rows
+
+# Human-readable aggregate report reuse layer.
+def _finite(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _resolve_status_file(root: Path, status: dict[str, Any], dl_id: str, key: str) -> Path | None:
+    row = (((status.get("dl_sources") or {}).get(dl_id) or {}).get("files") or {}).get(key) or {}
+    raw = str(row.get("path") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    return path if path.is_absolute() else (root / path).resolve()
+
+
+def _selection_pit_prediction_row(
+    *, root: Path, status: dict[str, Any], dl_id: str, source: Any
+) -> dict[str, Any]:
+    path = _resolve_status_file(root, status, dl_id, "audit")
+    payload = _read_json(path) if path is not None else None
+    if payload is None:
+        return {
+            "dl_id": dl_id,
+            "score_source": source.score_source,
+            "scope": "-",
+            "artifact": None if path is None else project_relative_display_path(path, project_root=root),
+            "available": False,
+        }
+    contract = dict(payload.get("decision_contract") or {})
+    scope = str(contract.get("primary_metric_scope") or "all_valid_target")
+    metrics = dict((payload.get("metrics") or {}).get(scope) or {})
+    direction = dict(payload.get("direction_summary") or {})
+    return {
+        "dl_id": dl_id,
+        "score_source": source.score_source,
+        "scope": str(contract.get("primary_metric_label") or scope),
+        "global_spearman": _finite(metrics.get("global_spearman")),
+        "mean_daily_spearman": _finite(metrics.get("mean_daily_spearman")),
+        "pairwise_concordance": _finite(metrics.get("pairwise_concordance")),
+        "top_bottom_target_spread_r": _finite(metrics.get("top_bottom_target_spread")),
+        "valid_year_count": int(direction.get("valid_year_count") or 0),
+        "positive_spearman_year_count": int(direction.get("positive_spearman_year_count") or 0),
+        "positive_spearman_year_rate": _finite(direction.get("positive_spearman_year_rate")),
+        "artifact": project_relative_display_path(path, project_root=root),
+        "available": True,
+    }
+
+
+def _continuous_prediction_row(
+    *, root: Path, status: dict[str, Any], dl_id: str, source: Any
+) -> dict[str, Any]:
+    path = _resolve_status_file(root, status, dl_id, "report")
+    payload = _read_json(path) if path is not None else None
+    if payload is None:
+        return {
+            "dl_id": dl_id,
+            "score_source": source.score_source,
+            "scope": "Forward OOS",
+            "artifact": None if path is None else project_relative_display_path(path, project_root=root),
+            "available": False,
+        }
+    metrics = dict((payload.get("split_metrics") or {}).get("oos") or {})
+    top = _finite(metrics.get("top_score_decile_raw_target_mean"))
+    bottom = _finite(metrics.get("bottom_score_decile_raw_target_mean"))
+    spread = None if top is None or bottom is None else top - bottom
+    return {
+        "dl_id": dl_id,
+        "score_source": source.score_source,
+        "scope": "Forward OOS all eligible stock-days",
+        "global_spearman": _finite(metrics.get("global_spearman_vs_raw_target")),
+        "mean_daily_spearman": _finite(metrics.get("mean_daily_spearman")),
+        "pairwise_concordance": _finite(metrics.get("pairwise_concordance")),
+        "top_bottom_target_spread_r": spread,
+        "valid_year_count": None,
+        "positive_spearman_year_count": None,
+        "positive_spearman_year_rate": None,
+        "artifact": project_relative_display_path(path, project_root=root),
+        "available": True,
+    }
+
+
+def _model_prediction_rows(
+    *, root: Path, settings: StrategyComparisonSettings, status: dict[str, Any]
+) -> list[dict[str, Any]]:
+    rows = []
+    seen: set[str] = set()
+    for arm in settings.enabled_arms:
+        if not arm.dl_enabled or not arm.dl_id or arm.dl_id in seen:
+            continue
+        seen.add(arm.dl_id)
+        source = settings.dl_sources[arm.dl_id]
+        if source.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            row = _selection_pit_prediction_row(root=root, status=status, dl_id=arm.dl_id, source=source)
+        elif source.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+            row = _continuous_prediction_row(root=root, status=status, dl_id=arm.dl_id, source=source)
+        else:
+            row = {
+                "dl_id": arm.dl_id,
+                "score_source": source.score_source,
+                "scope": "-",
+                "artifact": None,
+                "available": False,
+            }
+        rows.append(row)
+    return rows
+
+
+def _selection_translation_rows(
+    *, settings: StrategyComparisonSettings, pair_payloads: dict[str, dict[str, Any]], scenarios: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    by_arm: dict[str, dict[str, Any]] = {}
+    for pair in pair_payloads.values():
+        _param_source, _rule_policy, _off_arm, on_arm = pair["arm_contract"]
+        if on_arm is None:
+            continue
+        payload = dict(pair.get("payload") or {})
+        diagnostics = dict(payload.get("selection_diagnostics") or {})
+        if not diagnostics:
+            continue
+        mode = str((payload.get("metadata") or {}).get("comparison_mode") or "")
+        active_name = comparison_labels(mode)["active_name"]
+        baseline = dict(diagnostics.get("no_filter") or {})
+        active = dict(diagnostics.get(active_name) or {})
+        if not active:
+            continue
+
+        def delta(key: str) -> float | None:
+            left = _finite(active.get(key))
+            right = _finite(baseline.get(key))
+            return None if left is None or right is None else left - right
+
+        scenario = scenarios.get(on_arm.arm_id) or {}
+        by_arm[on_arm.arm_id] = {
+            "arm_id": on_arm.arm_id,
+            "name": on_arm.name,
+            "dl_id": on_arm.dl_id,
+            "score_coverage": _finite(active.get("orderable_score_coverage_rate")),
+            "selected_target_mean_r": _finite(active.get("selected_target_mean_r")),
+            "selected_target_mean_r_delta": delta("selected_target_mean_r"),
+            "selected_target_percentile": _finite(active.get("selected_target_percentile_mean")),
+            "selected_target_percentile_delta": delta("selected_target_percentile_mean"),
+            "target_top_k_retention": _finite(active.get("target_top_k_retention_mean")),
+            "target_top_k_retention_delta": delta("target_top_k_retention_mean"),
+            "target_opportunity_gap_r": _finite(active.get("target_opportunity_gap_r_mean")),
+            "target_opportunity_gap_r_delta": delta("target_opportunity_gap_r_mean"),
+            "direct_selection_delta_r": _finite(scenario.get("direct_selection_delta_r")),
+        }
+    return [by_arm[arm.arm_id] for arm in settings.enabled_arms if arm.arm_id in by_arm]
+
+
+def _execution_rows(
+    *, settings: StrategyComparisonSettings, scenarios: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    rows = []
+    for arm in settings.enabled_arms:
+        scenario = scenarios[arm.arm_id]
+        rows.append({
+            "arm_id": arm.arm_id,
+            "name": arm.name,
+            "avg_exposure_pct": _finite(scenario.get("avg_exposure_pct")),
+            "reserved_buy_fill_rate_pct": _finite(scenario.get("reserved_buy_fill_rate_pct")),
+            "avg_orderable_candidates": _finite(scenario.get("avg_orderable_candidates")),
+            "candidate_supply_gap_days": _finite(scenario.get("candidate_supply_gap_days")),
+            "underfilled_end_days": _finite(scenario.get("underfilled_end_days")),
+            "end_position_gap_slot_days": _finite(scenario.get("end_position_gap_slot_days")),
+        })
+    return rows
+
+
+def build_strategy_diagnostics(
+    *,
+    project_root: Path,
+    settings: StrategyComparisonSettings,
+    status: dict[str, Any],
+    scenarios: dict[str, dict[str, Any]],
+    pair_payloads: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Build one reusable diagnostic payload from already-canonical artifacts."""
+
+    root = Path(project_root).resolve()
+    return {
+        "model_prediction": _model_prediction_rows(root=root, settings=settings, status=status),
+        "selection_translation": _selection_translation_rows(
+            settings=settings, pair_payloads=pair_payloads, scenarios=scenarios
+        ),
+        "execution_conversion": _execution_rows(settings=settings, scenarios=scenarios),
+        "contract": {
+            "model_metrics_source": "validated existing PIT audit / continuous ranker report",
+            "strategy_metrics_source": "canonical Strategy Compare pair payloads",
+            "raw_market_or_trade_recalculation": False,
+        },
+    }
+
+
+def _fmt(value: Any, *, digits: int = 3, unit: str = "") -> str:
+    numeric = _finite(value)
+    if numeric is None:
+        return "-"
+    return f"{numeric:.{digits}f}{unit}"
+
+
+def _fmt_pct_fraction(value: Any) -> str:
+    numeric = _finite(value)
+    return "-" if numeric is None else f"{numeric * 100.0:.2f}%"
+
+
+def _signed_with_marker(value: Any, *, digits: int = 3, unit: str = "") -> str:
+    numeric = _finite(value)
+    if numeric is None:
+        return "-"
+    return f"{_fmt(numeric, digits=digits, unit=unit)} {signal_marker(signal_for_signed_value(numeric), include_label=False)}"
+
+
+def _delta_with_marker(
+    value: Any,
+    *,
+    preference: str,
+    digits: int = 3,
+    unit: str = "",
+) -> str:
+    numeric = _finite(value)
+    if numeric is None:
+        return "-"
+    return f"{_fmt(numeric, digits=digits, unit=unit)} {signal_marker(signal_for_delta(numeric, preference=preference), include_label=False)}"
+
+
+def render_strategy_diagnostics_markdown(diagnostics: dict[str, Any]) -> str:
+    lines = [
+        "# Strategy Compare 間接指標",
+        "",
+        "> 本報表只重用既有 canonical 模型驗證工件與 Strategy Compare pair payload；不從 raw market/trade rows 另算第二套指標。",
+        "",
+        "## 1. R 預測／排序能力",
+        "",
+        "| DL | Score source | Scope | Daily rho | Global rho | Pair concordance | Top-Bottom R spread | 正 rho 年度 |",
+        "|---|---|---|---:|---:|---:|---:|---:|",
+    ]
+    model_rows = list(diagnostics.get("model_prediction") or [])
+    if model_rows:
+        for row in model_rows:
+            if not row.get("available"):
+                lines.append(
+                    f"| {row.get('dl_id','-')} | {row.get('score_source','-')} | {row.get('scope','-')} | - | - | - | - | - |"
+                )
+                continue
+            valid = row.get("valid_year_count")
+            positive = row.get("positive_spearman_year_count")
+            years = "-" if valid in (None, 0) else f"{int(positive or 0)}/{int(valid)}"
+            lines.append(
+                f"| {row.get('dl_id','-')} | {row.get('score_source','-')} | {row.get('scope','-')} "
+                f"| {_signed_with_marker(row.get('mean_daily_spearman'))} "
+                f"| {_signed_with_marker(row.get('global_spearman'))} "
+                f"| {_fmt_pct_fraction(row.get('pairwise_concordance'))} "
+                f"| {_signed_with_marker(row.get('top_bottom_target_spread_r'), unit=' R')} | {years} |"
+            )
+    else:
+        lines.append("| - | - | - | - | - | - | - | - | - |")
+
+    lines.extend([
+        "",
+        "## 2. Score → 實際選股轉換",
+        "",
+        "| Arm | Coverage | 選中 Target mean R | ΔTarget mean R | Target percentile | Top-K retention | Opportunity gap | ΔOpportunity gap | 同參數DL選擇R |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ])
+    translation_rows = list(diagnostics.get("selection_translation") or [])
+    if translation_rows:
+        for row in translation_rows:
+            lines.append(
+                f"| {row.get('arm_id')} {row.get('name')} "
+                f"| {_fmt_pct_fraction(row.get('score_coverage'))} "
+                f"| {_fmt(row.get('selected_target_mean_r'), digits=3, unit=' R')} "
+                f"| {_signed_with_marker(row.get('selected_target_mean_r_delta'), digits=3, unit=' R')} "
+                f"| {_fmt(row.get('selected_target_percentile'), digits=4)} "
+                f"| {_fmt_pct_fraction(row.get('target_top_k_retention'))} "
+                f"| {_fmt(row.get('target_opportunity_gap_r'), digits=3, unit=' R')} "
+                f"| {_delta_with_marker(row.get('target_opportunity_gap_r_delta'), preference='lower', digits=3, unit=' R')} "
+                f"| {_signed_with_marker(row.get('direct_selection_delta_r'), digits=2, unit=' R')} |"
+            )
+    else:
+        lines.append("| - | - | - | - | - | - | - | - |")
+
+    lines.extend([
+        "",
+        "## 3. 資金／執行轉換",
+        "",
+        "| Arm | 平均曝險 | 掛單成交率 | 日均可掛候選 | 候選不足日 | 期末未滿倉日 | 持股缺口 |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ])
+    for row in diagnostics.get("execution_conversion") or []:
+        lines.append(
+            f"| {row.get('arm_id')} {row.get('name')} "
+            f"| {_fmt(row.get('avg_exposure_pct'), digits=2, unit='%')} "
+            f"| {_fmt(row.get('reserved_buy_fill_rate_pct'), digits=2, unit='%')} "
+            f"| {_fmt(row.get('avg_orderable_candidates'), digits=2)} "
+            f"| {_fmt(row.get('candidate_supply_gap_days'), digits=0, unit=' 日')} "
+            f"| {_fmt(row.get('underfilled_end_days'), digits=0, unit=' 日')} "
+            f"| {_fmt(row.get('end_position_gap_slot_days'), digits=0, unit=' 格日')} |"
+        )
+
+    lines.extend([
+        "",
+        "## 判讀邊界",
+        "",
+        "- R 預測／排序能力來自既有模型驗證工件；不代表策略 PnL，必須與策略結果分開判讀。",
+        "- Selection Future Target 僅在 replay 後 join 作診斷，不進候選排序、資金配置或成交決策。",
+        "- 資金／執行欄位只保留跨 allocator 都有共同物理意義的指標；solver states、repair/ascent、stale guard、selector timing 等演算法專屬欄位仍保留在 JSON/sidecar，不放進共同人讀報表。",
+    ])
+    return "\n".join(lines).rstrip() + "\n"
+

@@ -67,6 +67,13 @@ from core.console_report import (
     render_table,
     render_title,
 )
+from core.report_style import (
+    signal_for_auc,
+    signal_for_coverage,
+    signal_for_ratio,
+    signal_for_signed_value,
+    tone_for_signal,
+)
 
 AUDIT_SCHEMA_VERSION = 3
 DRIFT_MEAN_SHIFT_STD_THRESHOLD = 1.0
@@ -555,49 +562,19 @@ def _finite_number(value: Any) -> float | None:
 
 
 def _signed_tone(value: Any) -> str:
-    numeric = _finite_number(value)
-    if numeric is None:
-        return "gray"
-    if numeric > 0.0:
-        return "green"
-    if numeric < 0.0:
-        return "red"
-    return "yellow"
+    return tone_for_signal(signal_for_signed_value(value))
 
 
 def _coverage_tone(value: Any) -> str:
-    numeric = _finite_number(value)
-    if numeric is None:
-        return "gray"
-    if numeric >= 1.0 - 1e-12:
-        return "green"
-    if numeric > 0.0:
-        return "yellow"
-    return "red"
+    return tone_for_signal(signal_for_coverage(value))
 
 
 def _ratio_tone(numerator: Any, denominator: Any) -> str:
-    top = _finite_number(numerator)
-    bottom = _finite_number(denominator)
-    if top is None or bottom is None or bottom <= 0.0:
-        return "gray"
-    ratio = top / bottom
-    if ratio >= 1.0 - 1e-12:
-        return "green"
-    if ratio >= 0.5:
-        return "yellow"
-    return "red"
+    return tone_for_signal(signal_for_ratio(numerator, denominator))
 
 
 def _auc_tone(value: Any) -> str:
-    numeric = _finite_number(value)
-    if numeric is None:
-        return "gray"
-    if numeric > 0.5:
-        return "green"
-    if numeric < 0.5:
-        return "red"
-    return "yellow"
+    return tone_for_signal(signal_for_auc(value))
 
 
 def _colored_section(title: str, *, number: int, color: bool) -> str:

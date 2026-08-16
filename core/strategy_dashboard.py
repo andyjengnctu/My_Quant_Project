@@ -30,6 +30,14 @@ from core.display_common import (
     get_p,
 )
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score
+from core.report_style import (
+    SIGNAL_NEGATIVE,
+    SIGNAL_NEUTRAL,
+    SIGNAL_POSITIVE,
+    SIGNAL_WARNING,
+    signal_for_signed_value,
+    terminal_color_for_signal,
+)
 from core.history_filters import history_threshold_is_enabled
 
 
@@ -384,12 +392,7 @@ def _colorize(text: str, color: str) -> str:
 
 
 def _delta_color(value: float) -> str:
-    value = float(value)
-    if value > 0:
-        return C_GREEN
-    if value < 0:
-        return C_RED
-    return ""
+    return terminal_color_for_signal(signal_for_signed_value(value))
 
 
 def _format_metric_pair(left_value: float, right_value: float, *, left_digits: int = 2, right_digits: int = 3, right_unit: str = "R") -> str:
@@ -416,10 +419,11 @@ def _format_split_bucket(total: int, left_label: str, left_value: int, right_lab
 
 def _first_zone_base_color(metric_name: str, numeric_value: float) -> str:
     if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬", "季度最差報酬", "月度最差報酬"}:
-        return C_GREEN if float(numeric_value) > 0 else C_RED
+        return terminal_color_for_signal(signal_for_signed_value(numeric_value))
     if metric_name == "最大回撤 (MDD)":
-        return C_YELLOW if abs(float(numeric_value)) <= float(MAX_PORTFOLIO_MDD_PCT) else C_RED
-    return ""
+        signal = SIGNAL_WARNING if abs(float(numeric_value)) <= float(MAX_PORTFOLIO_MDD_PCT) else SIGNAL_NEGATIVE
+        return terminal_color_for_signal(signal)
+    return terminal_color_for_signal(SIGNAL_NEUTRAL)
 
 
 def _compose_first_zone_cell(metric_name: str, base_text: str, numeric_value: float, *, delta_text: str = "", delta_value: float | None = None, use_blue: bool = False, base_color_override: str | None = None) -> str:
@@ -719,43 +723,48 @@ def _optimizer_dashboard_metric_color(metric_name: str, value: str) -> str:
     metric_name = str(metric_name or "")
     value_text = str(value or "").strip()
     if value_text in {"-", ""}:
-        return ""
+        return terminal_color_for_signal(SIGNAL_NEUTRAL)
     if any(token in metric_name for token in ("報酬回撤比", "RoMD")):
-        return C_CYAN
+        return terminal_color_for_signal(SIGNAL_NEUTRAL)
     if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬", "季度最差報酬", "月度最差報酬"}:
-        if value_text.startswith("+"):
-            return C_GREEN
-        return C_RED
+        try:
+            numeric = float(value_text.replace('%', '').replace('R', '').replace(',', '').strip())
+        except ValueError:
+            return terminal_color_for_signal(SIGNAL_NEUTRAL)
+        return terminal_color_for_signal(signal_for_signed_value(numeric))
     if "平滑度" in metric_name:
         try:
             numeric = float(value_text.replace('%', '').replace('R', '').replace(',', '').strip())
         except ValueError:
-            return ""
-        return C_GREEN if numeric >= float(MIN_EQUITY_CURVE_R_SQUARED) else C_RED
+            return terminal_color_for_signal(SIGNAL_NEUTRAL)
+        signal = SIGNAL_POSITIVE if numeric >= float(MIN_EQUITY_CURVE_R_SQUARED) else SIGNAL_NEGATIVE
+        return terminal_color_for_signal(signal)
     if metric_name == "月度獲利勝率":
         try:
             numeric = float(value_text.replace('%', '').replace('R', '').replace(',', '').strip())
         except ValueError:
-            return ""
-        return C_GREEN if numeric >= float(MIN_MONTHLY_WIN_RATE) else C_RED
+            return terminal_color_for_signal(SIGNAL_NEUTRAL)
+        signal = SIGNAL_POSITIVE if numeric >= float(MIN_MONTHLY_WIN_RATE) else SIGNAL_NEGATIVE
+        return terminal_color_for_signal(signal)
     if "最大回撤" in metric_name or "最大視窗 MDD" in metric_name:
         try:
             numeric = abs(float(value_text.replace('少跌', '').replace('多跌', '').replace('%', '').replace('(', '').replace(')', '').replace('-', '').replace(',', '').strip()))
         except ValueError:
-            return C_YELLOW
-        return C_YELLOW if numeric <= float(MAX_PORTFOLIO_MDD_PCT) else C_RED
-    return ""
+            return terminal_color_for_signal(SIGNAL_WARNING)
+        signal = SIGNAL_WARNING if numeric <= float(MAX_PORTFOLIO_MDD_PCT) else SIGNAL_NEGATIVE
+        return terminal_color_for_signal(signal)
+    return terminal_color_for_signal(SIGNAL_NEUTRAL)
 
 
 def _optimizer_dashboard_status_color(status_text: str) -> str:
     normalized = str(status_text or "").strip().lower()
     if normalized in {"pass", "ok", "true", "升版", "接班", "通過"}:
-        return C_GREEN
+        return terminal_color_for_signal(SIGNAL_POSITIVE)
     if normalized in {"watch", "warn", "warning", "觀察"}:
-        return C_YELLOW
+        return terminal_color_for_signal(SIGNAL_WARNING)
     if normalized in {"fail", "false", "不升版", "不接班", "淘汰", "未通過"}:
-        return C_RED
-    return ""
+        return terminal_color_for_signal(SIGNAL_NEGATIVE)
+    return terminal_color_for_signal(SIGNAL_NEUTRAL)
 
 
 def _wrap_optimizer_dashboard_cell(text: str, color: str) -> str:

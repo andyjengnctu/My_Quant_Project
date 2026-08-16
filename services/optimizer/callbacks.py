@@ -19,6 +19,7 @@ from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.active_param_ensemble import get_active_param_ensemble_policy, load_json_file
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score
+from core.report_style import SIGNAL_NEGATIVE, SIGNAL_POSITIVE, signal_for_signed_value, terminal_signal
 from core.runtime_utils import stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import V16StrategyParams, build_runtime_param_raw_value
 from core.strategy_dashboard import (
@@ -101,7 +102,7 @@ def _format_signed_r(value, *, digits: int = 3, large: bool = False) -> str:
 
 
 def _colorize_signed_number(text: str, value) -> str:
-    return f"{C_GREEN if _safe_float(value, 0.0) >= 0.0 else C_RED}{text}{C_RESET}"
+    return terminal_signal(str(text), signal_for_signed_value(_safe_float(value, 0.0)), enabled=True)
 
 
 def _build_study_full_breakout_stats(attrs: dict) -> dict:
@@ -114,7 +115,11 @@ def _build_study_full_breakout_stats(attrs: dict) -> dict:
     win_rate_text = f"{win_rate:.2f}%"
     return {
         "trade_count": f"{trade_count:,}",
-        "win_rate": f"{C_GREEN if win_rate >= MIN_TRADE_WIN_RATE else C_RED}{win_rate_text}{C_RESET}",
+        "win_rate": terminal_signal(
+            win_rate_text,
+            SIGNAL_POSITIVE if win_rate >= MIN_TRADE_WIN_RATE else SIGNAL_NEGATIVE,
+            enabled=True,
+        ),
         "payoff": f"{C_CYAN}{payoff:.2f}{C_RESET}",
         "avg_r": _colorize_signed_number(_format_signed_r(avg_r), avg_r),
         "median_r": _colorize_signed_number(_format_signed_r(median_r), median_r),

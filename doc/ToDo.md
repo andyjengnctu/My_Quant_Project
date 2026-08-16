@@ -1,7 +1,7 @@
 ## Going
 
 - imrove DL module
-    - predict R
+    - predict R per risk
     - use risk parameter to predict R
     - attention
     - non breakout strategy

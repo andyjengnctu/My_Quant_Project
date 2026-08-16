@@ -27,6 +27,7 @@ from core.console_report import (
     print_artifact_paths,
     render_title,
 )
+from core.report_style import signal_for_signed_value, tone_for_signal
 from tools.filters.breakout_quality.evaluate import (
     EVALUATION_SPLIT_OOS,
     EVALUATION_SPLIT_SELECTION,
@@ -137,9 +138,7 @@ def _markdown_color(text: object, tone: str, *, bold: bool = True) -> str:
 
 
 def _tone_for_delta(value: float | None) -> str:
-    if value is None:
-        return "gray"
-    return "green" if float(value) > 0 else "red" if float(value) < 0 else "yellow"
+    return tone_for_signal(signal_for_signed_value(value))
 
 def _pct(value: float | None, digits: int = 2) -> str:
     if value is None:

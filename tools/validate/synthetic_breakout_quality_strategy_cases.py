@@ -3490,5 +3490,76 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and 'pair_dir / "strategy_comparison.md"' in comparison_source,
     )
 
+    diagnostics_source = (
+        project_root / "filters/breakout_quality/strategy_compare_diagnostics.py"
+    ).read_text(encoding="utf-8")
+    report_metrics_source = (project_root / "core/report_metrics.py").read_text(encoding="utf-8")
+    report_style_source = (project_root / "core/report_style.py").read_text(encoding="utf-8")
+    pit_audit_source = (
+        project_root / "services/breakout_quality/point_in_time_audit.py"
+    ).read_text(encoding="utf-8")
+    multi_seed_source = (
+        project_root / "filters/breakout_quality/strategy_multi_seed_robustness.py"
+    ).read_text(encoding="utf-8")
+    model_report_source = (
+        project_root / "tools/filters/breakout_quality/report.py"
+    ).read_text(encoding="utf-8")
+    strategy_dashboard_source = (project_root / "core/strategy_dashboard.py").read_text(encoding="utf-8")
+    optimizer_callbacks_source = (project_root / "services/optimizer/callbacks.py").read_text(encoding="utf-8")
+    outer_roos_source = (project_root / "services/optimizer/outer_rolling_oos.py").read_text(encoding="utf-8")
+    render_report_source = comparison_source[
+        comparison_source.index("def _render_report("):
+        comparison_source.index("def _run_directory(")
+    ]
+    project_settings = (project_root / "doc/PROJECT_SETTINGS.md").read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strategy_compare_main_report_is_common_metrics_only_and_indirect_metrics_are_separate",
+        True,
+        '"strategy_diagnostics.md"' in comparison_source
+        and "核心策略結果" in render_report_source
+        and "資金／執行" in comparison_source
+        and "_contrast_table(" not in render_report_source
+        and "_resource_aware_table(" not in render_report_source
+        and "_selector_timing_table(" not in render_report_source
+        and "R 預測／排序能力" in diagnostics_source
+        and "Score → 實際選股轉換" in diagnostics_source
+        and "資金／執行轉換" in diagnostics_source,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strategy_reports_share_metric_registry_and_project_wide_color_semantics",
+        True,
+        "PORTFOLIO_RESULT_METRICS" in report_metrics_source
+        and "PAIR_MAIN_METRICS" in report_metrics_source
+        and "from core.report_metrics import" in comparison_source
+        and "from core.report_metrics import PAIR_MAIN_METRICS" in reporting_source
+        and "from core.report_style import" in reporting_source
+        and "from core.report_style import" in multi_seed_source
+        and "from core.report_style import" in pit_audit_source
+        and "from core.report_style import" in model_report_source
+        and "from core.report_style import" in strategy_dashboard_source
+        and "from core.report_style import" in optimizer_callbacks_source
+        and "from core.report_style import" in outer_roos_source
+        and "SIGNAL_POSITIVE" in report_style_source
+        and "綠色只表示" in project_settings
+        and "renderer只負責組裝與顯示" in project_settings,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strategy_diagnostics_reuse_existing_canonical_artifacts_without_raw_recalculation",
+        True,
+        '"raw_market_or_trade_recalculation": False' in diagnostics_source
+        and '"audit"' in diagnostics_source
+        and '"report"' in diagnostics_source
+        and "selection_diagnostics" in diagnostics_source,
+    )
+
     summary["strategy_output_contracts"] = [row[0] for row in contract_rows]
     return results, summary

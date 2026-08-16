@@ -71,6 +71,7 @@ from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.model_paths import resolve_models_dir
 from core.portfolio_stats import calc_annual_return_pct, calc_curve_stats, calc_plain_romd, calc_portfolio_score
+from core.report_style import signal_for_signed_value, terminal_signal
 from core.portfolio_param_runtime import (
     build_active_param_objects_from_payload,
     build_active_param_ensemble_objects_from_payload,
@@ -1436,12 +1437,7 @@ def _pad_ansi(text: str, width: int, *, align: str = "<") -> str:
 def _color_numeric_text(text: str, value: float | int | None) -> str:
     if value is None:
         return str(text)
-    v = _safe_float(value, 0.0)
-    if v > 0.0:
-        return f"{C_GREEN}{text}{C_RESET}"
-    if v < 0.0:
-        return f"{C_RED}{text}{C_RESET}"
-    return str(text)
+    return terminal_signal(str(text), signal_for_signed_value(_safe_float(value, 0.0)), enabled=True)
 
 
 def _format_score(value) -> str:
