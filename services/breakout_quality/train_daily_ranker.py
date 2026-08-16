@@ -164,6 +164,27 @@ def _render_markdown(payload: dict) -> str:
             f"| {fmt(row.get('global_spearman_vs_raw_target'))} | {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
             f"| {fmt(row.get('top_score_decile_raw_target_mean'))} | {fmt(row.get('bottom_score_decile_raw_target_mean'))} |"
         )
+    reference_eval = dict(payload.get("reference_target_evaluation") or {})
+    if reference_eval.get("available"):
+        lines.extend([
+            "",
+            "## Common Target Reference",
+            "",
+            f"- Reference profile：`{reference_eval.get('reference_profile')}`",
+            f"- Reference target：`{reference_eval.get('reference_target_id')}`",
+            "- 此reference target只在checkpoint寫入與forward inference後計算；不參與loss、gradient、epoch selection或final refit。",
+            "",
+            "| Scope | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ])
+        for label, key in (("All eligible stock-days", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
+            row = dict((reference_eval.get("split_metrics") or {}).get(key) or {})
+            pair = row.get("pairwise_concordance")
+            lines.append(
+                f"| {label} | {int(row.get('group_count', 0) or 0):,} | {fmt(row.get('mean_daily_spearman'))} "
+                f"| {fmt(row.get('global_spearman_vs_raw_target'))} | {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
+                f"| {fmt(row.get('top_score_decile_raw_target_mean'))} | {fmt(row.get('bottom_score_decile_raw_target_mean'))} |"
+            )
     lines.extend([
         "",
         "## Boundary",
@@ -362,6 +383,62 @@ def run(args) -> int:
         )
     )
 
+    reference_target_evaluation = {
+        "available": False,
+        "reason": "active research profile沒有設定reference target",
+    }
+    reference_raw_target = None
+    if research_spec.reference_profile_name:
+        reference_bundle = load_daily_universal_ranker_data(
+            filter_id=str(args.filter_id),
+            model_architecture=str(args.model_architecture),
+            experiment_profile=str(research_spec.reference_profile_name),
+            preload_feature_bank=False,
+            allow_stale_source=bool(args.allow_stale_source),
+            project_root=PROJECT_ROOT,
+        )
+        key_columns = ["ticker", "date", "source_pos", "label_eval_end_date"]
+        if len(reference_bundle.group_table) != len(bundle.group_table) or not (
+            reference_bundle.group_table[key_columns].astype(str).equals(
+                bundle.group_table[key_columns].astype(str)
+            )
+        ):
+            raise ValueError("reference target與candidate daily stock-day universe／順序不一致")
+        if not np.array_equal(reference_bundle.target_valid, bundle.target_valid):
+            raise ValueError("reference target與candidate target-valid universe不一致")
+        reference_raw_target = np.asarray(reference_bundle.raw_target, dtype=np.float32)
+        reference_percentile = np.full(reference_raw_target.shape, np.nan, dtype=np.float32)
+        reference_oos_percentile = ranker_api.build_daily_percentile_targets(
+            reference_raw_target, oos_mask, bundle.group_table["date"]
+        )
+        reference_percentile[split.oos_ids] = reference_oos_percentile[split.oos_ids]
+        reference_oos_metrics = ranker_api.split_metrics(
+            split.oos_ids, bundle.group_table, reference_raw_target, reference_percentile,
+            oos_scores, include_top_k_quality=True,
+        )
+        reference_candidate_metrics = (
+            ranker_api.split_metrics(
+                candidate_ids, bundle.group_table, reference_raw_target, reference_percentile,
+                score_by_group[candidate_ids], include_top_k_quality=True,
+            )
+            if len(candidate_ids) >= 2
+            else _empty_split_metrics(
+                len(candidate_ids), "breakout candidate OOS slice有效sample不足"
+            )
+        )
+        reference_target_evaluation = {
+            "available": True,
+            "reference_profile": str(research_spec.reference_profile_name),
+            "reference_target_id": str(reference_bundle.profile.continuous_target_id),
+            "used_for_training_or_epoch_selection": False,
+            "evaluated_after_checkpoint_write": True,
+            "split_metrics": {
+                "oos": reference_oos_metrics,
+                "breakout_candidate_oos": reference_candidate_metrics,
+            },
+        }
+        del reference_bundle
+
     output_dir.mkdir(parents=True, exist_ok=True)
     score_path = output_dir / DAILY_RANKER_OOS_SCORE_FILENAME
     report_json_path = output_dir / ranker_api.RANKER_REPORT_JSON_FILENAME
@@ -378,6 +455,11 @@ def run(args) -> int:
     oos_frame.loc[evaluable_forward_mask, "target_daily_percentile"] = percentile_target[
         forward_score_ids[evaluable_forward_mask]
     ]
+    if reference_raw_target is not None:
+        oos_frame["reference_target_raw_r"] = np.nan
+        oos_frame.loc[evaluable_forward_mask, "reference_target_raw_r"] = reference_raw_target[
+            forward_score_ids[evaluable_forward_mask]
+        ]
     oos_frame["model_score"] = forward_scores
     if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
         oos_frame["predicted_r"] = forward_scores
@@ -430,6 +512,7 @@ def run(args) -> int:
         "split_report": split.report,
         "split_metrics": split_metrics,
         "all_group_split_metrics": split_metrics,
+        "reference_target_evaluation": reference_target_evaluation,
         "trade_alignment": {"available": False, "reason": "daily universal model先做模型本身驗證；未接策略trade attribution"},
         "target_manifest": bundle.target_manifest,
         "source_dataset": bundle.summary,
@@ -489,6 +572,7 @@ def run(args) -> int:
         "model_information_cutoff": information_cutoff,
         "source_dataset": bundle.summary,
         "source_continuous_target": bundle.target_manifest,
+        "reference_target_evaluation": reference_target_evaluation,
         "runtime_eligibility": payload["runtime_eligibility"],
         "score_eligibility_contract": payload["score_eligibility_contract"],
         "forward_score_coverage": payload["forward_score_coverage"],

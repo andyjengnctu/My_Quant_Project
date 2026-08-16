@@ -166,12 +166,25 @@ Breakout-quality 模型／Label／training／workflow設定只編輯 `config/bre
 目前模型研究與策略anchor設定為：
 
 ```python
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise"
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-MR-13E已完成Selection/Forward exact K/R0策略驗證、8-seed robustness與Runtime Integration promotion；目前production與model-research anchor都維持MR-13E。MR-13I/J risk-normalized/context路線在C49/C50 Selection strategy-conversion後已REJECT，不建立Forward或multi-seed；R0維持。Selection PIT正式比較回到`C32/C23/C42`，Forward-OOS為`C1/C3/C44`。
+MR-13E已完成Selection/Forward exact K/R0策略驗證、8-seed robustness與Runtime Integration promotion；production仍固定MR-13E。Model Research active profile目前為MR-13H `daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise`，先測label simplification：相對MR-13E只移除first -10% risk-breach的40D path truncation。正式操作順序先進`[1] 模型訓練`後選「比較目前 Target 與 reference Target」做只讀Label Audit；若證據支持再回到同一選單執行「訓練目前模型 → forward-OOS模型報表」。MR-13H未加入PIT Gate profile前，選單不提供Selection PIT。MR-13I/J risk-normalized/context路線已REJECT；R0維持。Selection PIT策略比較仍為`C32/C23/C42`，Forward-OOS為`C1/C3/C44`。
+
+Active continuous model menu由config／research spec動態產生；MR-13H目前會額外顯示：
+
+```text
+=== Continuous DL 模型研究與驗證 ===
+Active Profile：daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise
+[1]  訓練目前模型 → forward-OOS模型報表  (Enter)
+[3]  查看目前Workflow與工件狀態
+[6]  比較目前 Target 與 reference Target
+[0]  返回
+```
+
+`[6]`只讀canonical OHLCV與兩個daily Target，輸出`outputs/filters/breakout_quality/<filter_id>/daily_target_comparison/`的console摘要、Markdown、JSON與by-date CSV；除整體rank/overlap/breach統計外，也會依`config/breakout_quality.py`的barrier band比較門檻上下兩側的label cliff；不訓練、不fit、不建立PIT。
 
 
 ### A2 Realized Trade-path Label研究

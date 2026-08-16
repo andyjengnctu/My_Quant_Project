@@ -1,8 +1,10 @@
 ## Going
 
 - imrove DL module
-
-    - attention
+    - simply label
+        - remove -10%
+        - the 40t day's R
+    - attention (cross-secction)
     - non breakout strategy
     - 三大法人籌碼資訊
 

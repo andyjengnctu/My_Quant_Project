@@ -118,6 +118,7 @@ COMMAND_MODULES = {
     "evaluate": "tools.filters.breakout_quality.evaluate",
     "prepare-continuous-target": "tools.filters.breakout_quality.prepare_continuous_target",
     "train-continuous-ranker": "services.breakout_quality.ranker_cli",
+    "compare-daily-targets": "services.breakout_quality.daily_target_comparison",
     "compare-continuous-rankers": "tools.filters.breakout_quality.compare_continuous_rankers",
     "build-point-in-time-scores": "tools.filters.breakout_quality.build_point_in_time_scores",
     "build-binary-point-in-time-scores": (
@@ -149,6 +150,7 @@ COMMAND_DESCRIPTIONS = {
     "evaluate": "輸出 train、validation、selection 或 OOS 的詳細 JSON",
     "prepare-continuous-target": "依目前workflow檢查並建立continuous target工件",
     "train-continuous-ranker": "執行目前設定的continuous ranker模型研究；正式選單亦可使用",
+    "compare-daily-targets": "比較目前daily target與config指定reference target；只讀、不訓練",
     "compare-continuous-rankers": (
         "只讀config設定的continuous-ranker frozen scores，做paired／random baseline／Dynamic-K品質比較"
     ),
@@ -214,7 +216,7 @@ def _safe_json_object(path: Path) -> dict:
 def _simple_report_context(command: str, args: list[str]) -> tuple[str, str, str]:
     settings = (
         get_breakout_quality_model_research_settings()
-        if command == "train-continuous-ranker"
+        if command in {"train-continuous-ranker", "compare-daily-targets"}
         else get_breakout_quality_workflow_settings()
     )
     filter_id = normalize_filter_id(
@@ -426,6 +428,37 @@ def _simple_report_details(
                 ("日期範圍", summary.get("selected_date_range") or summary.get("date_range") or "-"),
             ]
         )
+    elif command == "compare-daily-targets":
+        candidate = get_breakout_quality_experiment_profile(profile)
+        spec = get_continuous_ranker_research_spec(profile)
+        reference_name = str(
+            _cli_option_value(
+                args,
+                "--reference-experiment-profile",
+                spec.reference_profile_name or "",
+            )
+        ).strip()
+        reference = get_breakout_quality_experiment_profile(reference_name) if reference_name else None
+        if reference is not None:
+            detail_dir = (
+                resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
+                / "daily_target_comparison"
+                / f"{candidate.continuous_target_id}__vs__{reference.continuous_target_id}"
+            )
+            report_json = detail_dir / "daily_target_comparison.json"
+            payload = _safe_json_object(report_json)
+            metrics = dict(payload.get("metrics") or {})
+            rows.extend(
+                [
+                    ("Common stock-days", metrics.get("common_sample_count")),
+                    ("Risk breach", _fmt_simple_metric(metrics.get("risk_breach_rate"), percent=True)),
+                    ("Target changed", _fmt_simple_metric(metrics.get("changed_target_rate"), percent=True)),
+                    ("Daily rank correlation", _fmt_simple_metric(metrics.get("mean_daily_spearman_reference_vs_candidate"))),
+                    ("Top-K overlap", _fmt_simple_metric(metrics.get("mean_daily_top_k_overlap"), percent=True)),
+                    ("Mean abs delta R", _fmt_simple_metric((metrics.get("target_delta_r") or {}).get("mean_abs"))),
+                ]
+            )
+            detail_report = detail_dir / "daily_target_comparison.md"
     elif command == "train-continuous-ranker":
         output_dir = resolve_filter_model_output_dir(
             PROJECT_ROOT, filter_id, architecture, profile
@@ -464,6 +497,21 @@ def _simple_report_details(
                 ),
             ]
         )
+        reference_eval = dict(payload.get("reference_target_evaluation") or {})
+        if reference_eval.get("available"):
+            reference_metrics = dict(reference_eval.get("split_metrics") or {})
+            rows.extend(
+                [
+                    (
+                        "Reference Target OOS rho",
+                        _fmt_simple_metric((reference_metrics.get("oos") or {}).get("mean_daily_spearman")),
+                    ),
+                    (
+                        "Reference Target Pair",
+                        _fmt_simple_metric((reference_metrics.get("oos") or {}).get("pairwise_concordance"), percent=True),
+                    ),
+                ]
+            )
         candidate = output_dir / "continuous_ranker_report.md"
         detail_report = candidate if candidate.is_file() else None
     elif command == "compare-continuous-rankers":
@@ -2821,15 +2869,19 @@ def _interactive_model_research(program_name: str) -> int:
 
     while True:
         comparison_settings = get_breakout_quality_continuous_ranker_comparison_settings()
+        research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
         print(render_menu_item(1, "訓練目前模型 → forward-OOS模型報表", default=True))
+        pit_authorized = bool(
+            settings.supports_point_in_time_scores and research_spec.selection_pit_authorized
+        )
         pit_gate_batch = (
             _continuous_pit_gate_batch_for_active(settings)
-            if settings.supports_point_in_time_scores
+            if pit_authorized
             else None
         )
-        if settings.supports_point_in_time_scores:
+        if pit_authorized:
             pit_label = (
                 "建立／更新設定中的 Selection PIT Scores → PIT模型比較"
                 if pit_gate_batch is not None
@@ -2842,6 +2894,8 @@ def _interactive_model_research(program_name: str) -> int:
         _comparisons, strategy_model_sources = _strategy_compare_required_model_sources()
         if strategy_model_sources:
             print(render_menu_item(5, "準備策略比較所需模型工件"))
+        if research_spec.reference_profile_name:
+            print(render_menu_item(6, "比較目前 Target 與 reference Target"))
         print(render_menu_item(0, "返回"))
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
@@ -2853,7 +2907,7 @@ def _interactive_model_research(program_name: str) -> int:
             return 0
         if choice == "1":
             return _interactive_continuous_full_train(program_name, settings)
-        if choice == "2" and settings.supports_point_in_time_scores:
+        if choice == "2" and pit_authorized:
             if pit_gate_batch is not None:
                 return _interactive_continuous_pit_gate_batch(
                     program_name, pit_gate_batch
@@ -2875,6 +2929,19 @@ def _interactive_model_research(program_name: str) -> int:
             )
         if choice == "5" and strategy_model_sources:
             return int(_prepare_strategy_compare_model_artifacts(program_name))
+        if choice == "6" and research_spec.reference_profile_name:
+            return int(
+                _run_command(
+                    "compare-daily-targets",
+                    [
+                        "--filter-id", settings.filter_id,
+                        "--model-architecture", settings.model_architecture,
+                        "--experiment-profile", settings.experiment_profile,
+                        "--reference-experiment-profile", research_spec.reference_profile_name,
+                    ],
+                    program_name=program_name,
+                )
+            )
         print("無效選項，請重新輸入。")
 
 def run_model_training_menu(program_name: str = "apps/research.py model") -> int:

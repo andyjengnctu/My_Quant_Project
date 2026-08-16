@@ -97,6 +97,7 @@ from config.breakout_quality import (
     DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE,
     DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE,
+    DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
@@ -186,15 +187,20 @@ from filters.breakout_quality.augmentation import (
 )
 from filters.breakout_quality.continuous_target import (
     CONTINUOUS_TARGET_SCHEMA_VERSION,
+    DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+    DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
     STRATEGY_ALIGNED_TARGET_ID,
     STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
     StrategyAlignedContinuousTargetSpec,
+    build_daily_full_horizon_opportunity_contract,
     build_strategy_aligned_group_targets,
     build_strategy_aligned_no_time_contract,
     build_strategy_aligned_no_time_group_targets,
     load_validated_continuous_target_arrays,
     load_validated_continuous_target_component_arrays,
     resolve_continuous_target_dir,
+    daily_full_horizon_opportunity_target_from_cached_path,
+    daily_opportunity_no_time_target_from_cached_path,
     strategy_aligned_target_from_cached_path,
     TARGET_ADVERSE_RETURN_FILENAME,
     TARGET_FAVORABLE_RETURN_FILENAME,
@@ -204,6 +210,9 @@ from filters.breakout_quality.continuous_target import (
     TARGET_RISK_BREACH_BAR_FILENAME,
     TARGET_TRADE_MATCHES_CSV_FILENAME,
     TARGET_VALID_MASK_FILENAME,
+)
+from filters.breakout_quality.daily_ranker_data import (
+    compute_daily_opportunity_target_batch,
 )
 from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,

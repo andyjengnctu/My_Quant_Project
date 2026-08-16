@@ -17,8 +17,10 @@ import pandas as pd
 from config.breakout_quality import get_breakout_quality_experiment_profile
 from filters.breakout_quality.continuous_ranker_data import ContinuousRankerDataBundle
 from filters.breakout_quality.continuous_target import (
+    DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
     DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
     StrategyAlignedContinuousTargetSpec,
+    build_daily_full_horizon_opportunity_contract,
     build_daily_opportunity_no_time_contract,
 )
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
@@ -180,18 +182,30 @@ def _source_data_end(summary: dict[str, Any]) -> str:
     return str(source_range["end"])
 
 
-def _daily_targets_for_positions(
+@dataclass(frozen=True)
+class DailyOpportunityTargetBatch:
+    target_raw_r: np.ndarray
+    valid_mask: np.ndarray
+    favorable_return: np.ndarray
+    adverse_return_to_peak: np.ndarray
+    opportunity_bar: np.ndarray
+    first_risk_breach_bar: np.ndarray
+    minimum_low_return: np.ndarray
+
+
+def compute_daily_opportunity_target_batch(
     frame: pd.DataFrame,
     positions: np.ndarray,
     *,
     spec: StrategyAlignedContinuousTargetSpec,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Vectorize the exact adverse-first no-time target over one ticker.
+    target_id: str,
+) -> DailyOpportunityTargetBatch:
+    """Vectorize the canonical daily opportunity targets over one ticker.
 
-    This is a compute optimization only.  Semantics match
-    ``daily_opportunity_no_time_target_from_cached_path``: barrier-day high is
-    excluded, the earliest maximum safe high is selected, and adverse excursion
-    is measured through that selected peak bar.
+    ``daily_opportunity_no_time_r_v1`` keeps the historical adverse-first
+    risk-barrier truncation. ``daily_full_horizon_opportunity_r_v1`` uses the
+    same horizon/R scale/adverse-to-peak semantics but treats a barrier touch as
+    diagnostic only.
     """
 
     source_positions = np.asarray(positions, dtype=np.int64)
@@ -199,7 +213,20 @@ def _daily_targets_for_positions(
         raise ValueError("daily target positions必須是一維")
     count = int(len(source_positions))
     if count == 0:
-        return np.empty(0, dtype=np.float32), np.empty(0, dtype=bool)
+        return DailyOpportunityTargetBatch(
+            target_raw_r=np.empty(0, dtype=np.float32),
+            valid_mask=np.empty(0, dtype=bool),
+            favorable_return=np.empty(0, dtype=np.float32),
+            adverse_return_to_peak=np.empty(0, dtype=np.float32),
+            opportunity_bar=np.empty(0, dtype=np.int16),
+            first_risk_breach_bar=np.empty(0, dtype=np.int16),
+            minimum_low_return=np.empty(0, dtype=np.float32),
+        )
+    if target_id not in {
+        DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
+        DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+    }:
+        raise ValueError(f"不支援的daily opportunity target: {target_id}")
 
     horizon = int(spec.horizon_bars)
     offsets = np.arange(1, horizon + 1, dtype=np.int64)
@@ -222,8 +249,21 @@ def _daily_targets_for_positions(
         )
     )
     target = np.full(count, np.nan, dtype=np.float64)
+    favorable = np.full(count, np.nan, dtype=np.float64)
+    adverse = np.full(count, np.nan, dtype=np.float64)
+    opportunity = np.full(count, -1, dtype=np.int16)
+    first_breach = np.full(count, -1, dtype=np.int16)
+    minimum_low_return = np.full(count, np.nan, dtype=np.float64)
     if not bool(np.any(valid)):
-        return target.astype(np.float32), valid
+        return DailyOpportunityTargetBatch(
+            target_raw_r=target.astype(np.float32),
+            valid_mask=valid,
+            favorable_return=favorable.astype(np.float32),
+            adverse_return_to_peak=adverse.astype(np.float32),
+            opportunity_bar=opportunity,
+            first_risk_breach_bar=first_breach,
+            minimum_low_return=minimum_low_return.astype(np.float32),
+        )
 
     valid_rows = np.flatnonzero(valid)
     a = anchor[valid_rows]
@@ -234,25 +274,73 @@ def _daily_targets_for_positions(
     breach = l <= barrier
     any_breach = breach.any(axis=1)
     first_breach_zero = np.where(any_breach, breach.argmax(axis=1), horizon)
-    bar_index = np.arange(horizon, dtype=np.int64)[None, :]
-    safe = bar_index < first_breach_zero[:, None]
-
-    favorable_matrix = h / a[:, None] - 1.0
-    safe_favorable = np.where(safe, favorable_matrix, -np.inf)
-    has_safe_bar = safe.any(axis=1)
-    best_zero = safe_favorable.argmax(axis=1)
+    first_breach_valid = np.where(any_breach, first_breach_zero + 1, -1).astype(np.int16)
     row_index = np.arange(len(valid_rows), dtype=np.int64)
-    best_favorable = safe_favorable[row_index, best_zero]
     running_low = np.minimum.accumulate(l, axis=1)
-    adverse = np.maximum(0.0, 1.0 - running_low[row_index, best_zero] / a)
+    minimum_low_return_valid = np.min(l, axis=1) / a - 1.0
+    favorable_matrix = h / a[:, None] - 1.0
 
-    favorable = np.where(has_safe_bar, best_favorable, 0.0)
-    adverse = np.where(has_safe_bar, adverse, risk_budget)
-    target[valid_rows] = favorable / risk_budget - adverse / risk_budget
-    finite = np.isfinite(target)
+    if target_id == DAILY_OPPORTUNITY_NO_TIME_TARGET_ID:
+        bar_index = np.arange(horizon, dtype=np.int64)[None, :]
+        safe = bar_index < first_breach_zero[:, None]
+        safe_favorable = np.where(safe, favorable_matrix, -np.inf)
+        has_safe_bar = safe.any(axis=1)
+        best_zero = safe_favorable.argmax(axis=1)
+        best_favorable = safe_favorable[row_index, best_zero]
+        selected_adverse = np.maximum(
+            0.0, 1.0 - running_low[row_index, best_zero] / a
+        )
+        selected_favorable = np.where(has_safe_bar, best_favorable, 0.0)
+        selected_adverse = np.where(has_safe_bar, selected_adverse, risk_budget)
+        selected_opportunity = np.where(
+            has_safe_bar, best_zero + 1, np.where(any_breach, first_breach_zero + 1, 1)
+        )
+    else:
+        best_zero = favorable_matrix.argmax(axis=1)
+        selected_favorable = favorable_matrix[row_index, best_zero]
+        selected_adverse = np.maximum(
+            0.0, 1.0 - running_low[row_index, best_zero] / a
+        )
+        selected_opportunity = best_zero + 1
+
+    selected_target = selected_favorable / risk_budget - selected_adverse / risk_budget
+    target[valid_rows] = selected_target
+    favorable[valid_rows] = selected_favorable
+    adverse[valid_rows] = selected_adverse
+    opportunity[valid_rows] = np.asarray(selected_opportunity, dtype=np.int16)
+    first_breach[valid_rows] = first_breach_valid
+    minimum_low_return[valid_rows] = minimum_low_return_valid
+    finite = np.isfinite(target) & np.isfinite(favorable) & np.isfinite(adverse)
     valid &= finite
     target[~valid] = np.nan
-    return target.astype(np.float32), valid
+    favorable[~valid] = np.nan
+    adverse[~valid] = np.nan
+    opportunity[~valid] = -1
+    first_breach[~valid] = -1
+    minimum_low_return[~valid] = np.nan
+    return DailyOpportunityTargetBatch(
+        target_raw_r=target.astype(np.float32),
+        valid_mask=valid,
+        favorable_return=favorable.astype(np.float32),
+        adverse_return_to_peak=adverse.astype(np.float32),
+        opportunity_bar=opportunity,
+        first_risk_breach_bar=first_breach,
+        minimum_low_return=minimum_low_return.astype(np.float32),
+    )
+
+
+def _daily_targets_for_positions(
+    frame: pd.DataFrame,
+    positions: np.ndarray,
+    *,
+    spec: StrategyAlignedContinuousTargetSpec,
+    target_id: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    batch = compute_daily_opportunity_target_batch(
+        frame, positions, spec=spec, target_id=target_id
+    )
+    return batch.target_raw_r, batch.valid_mask
+
 
 
 def load_daily_universal_ranker_data(
@@ -280,6 +368,7 @@ def load_daily_universal_ranker_data(
     target_id = str(profile.continuous_target_id or "").strip()
     if target_id not in {
         DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
+        DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
         DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
     }:
         raise ValueError(f"daily universal ranker target identity不一致: {target_id!r}")
@@ -348,6 +437,11 @@ def load_daily_universal_ranker_data(
     valid_label_end_chunks: list[np.ndarray] = []
     valid_target_chunks: list[np.ndarray] = []
     valid_context_chunks: list[np.ndarray] = []
+    valid_favorable_chunks: list[np.ndarray] = []
+    valid_adverse_chunks: list[np.ndarray] = []
+    valid_opportunity_bar_chunks: list[np.ndarray] = []
+    valid_first_breach_bar_chunks: list[np.ndarray] = []
+    valid_minimum_low_return_chunks: list[np.ndarray] = []
 
     inference_ticker_id_chunks: list[np.ndarray] = []
     inference_source_pos_chunks: list[np.ndarray] = []
@@ -398,17 +492,27 @@ def load_daily_universal_ranker_data(
         # Min ROOS contributes only historical-effective risk calibration.
         context_width = len(RISK_GEOMETRY_CONTEXT_FEATURES) if use_risk_context else 0
         local_context = np.empty((len(local_positions), context_width), dtype=np.float32)
-        if target_id == DAILY_OPPORTUNITY_NO_TIME_TARGET_ID:
+        local_favorable = np.full(len(local_positions), np.nan, dtype=np.float32)
+        local_adverse = np.full(len(local_positions), np.nan, dtype=np.float32)
+        local_opportunity_bar = np.full(len(local_positions), -1, dtype=np.int16)
+        local_first_breach_bar = np.full(len(local_positions), -1, dtype=np.int16)
+        local_minimum_low_return = np.full(len(local_positions), np.nan, dtype=np.float32)
+        if target_id in {DAILY_OPPORTUNITY_NO_TIME_TARGET_ID, DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID}:
             local_targets = np.full(len(local_positions), np.nan, dtype=np.float32)
             local_target_valid = np.zeros(len(local_positions), dtype=bool)
             target_complete = local_positions + int(spec.horizon_bars) < len(frame)
             if bool(target_complete.any()):
-                completed_targets, completed_valid = _daily_targets_for_positions(
-                    frame, local_positions[target_complete], spec=spec
+                completed_batch = compute_daily_opportunity_target_batch(
+                    frame, local_positions[target_complete], spec=spec, target_id=target_id
                 )
                 completed_indexes = np.flatnonzero(target_complete)
-                local_targets[completed_indexes] = completed_targets
-                local_target_valid[completed_indexes] = completed_valid
+                local_targets[completed_indexes] = completed_batch.target_raw_r
+                local_target_valid[completed_indexes] = completed_batch.valid_mask
+                local_favorable[completed_indexes] = completed_batch.favorable_return
+                local_adverse[completed_indexes] = completed_batch.adverse_return_to_peak
+                local_opportunity_bar[completed_indexes] = completed_batch.opportunity_bar
+                local_first_breach_bar[completed_indexes] = completed_batch.first_risk_breach_bar
+                local_minimum_low_return[completed_indexes] = completed_batch.minimum_low_return
         else:
             local_targets, local_target_valid, risk_context, geometry_valid = (
                 compute_targets_and_context_for_positions(
@@ -429,6 +533,11 @@ def load_daily_universal_ranker_data(
                 local_targets = local_targets[keep]
                 local_target_valid = local_target_valid[keep]
                 local_context = np.asarray(risk_context[keep], dtype=np.float32)
+                local_favorable = local_favorable[keep]
+                local_adverse = local_adverse[keep]
+                local_opportunity_bar = local_opportunity_bar[keep]
+                local_first_breach_bar = local_first_breach_bar[keep]
+                local_minimum_low_return = local_minimum_low_return[keep]
                 if len(local_positions) == 0:
                     skipped_tickers += 1
                     if progress_callback is not None:
@@ -443,6 +552,11 @@ def load_daily_universal_ranker_data(
         valid_benchmark_positions = local_benchmark_positions[local_target_valid]
         valid_targets = local_targets[local_target_valid]
         valid_context = local_context[local_target_valid]
+        valid_favorable = local_favorable[local_target_valid]
+        valid_adverse = local_adverse[local_target_valid]
+        valid_opportunity_bar = local_opportunity_bar[local_target_valid]
+        valid_first_breach_bar = local_first_breach_bar[local_target_valid]
+        valid_minimum_low_return = local_minimum_low_return[local_target_valid]
         invalid_positions = local_positions[~local_target_valid]
         invalid_benchmark_positions = local_benchmark_positions[~local_target_valid]
         invalid_context = local_context[~local_target_valid]
@@ -467,6 +581,11 @@ def load_daily_universal_ranker_data(
             )
             valid_target_chunks.append(np.asarray(valid_targets, dtype=np.float32))
             valid_context_chunks.append(np.asarray(valid_context, dtype=np.float32))
+            valid_favorable_chunks.append(np.asarray(valid_favorable, dtype=np.float32))
+            valid_adverse_chunks.append(np.asarray(valid_adverse, dtype=np.float32))
+            valid_opportunity_bar_chunks.append(np.asarray(valid_opportunity_bar, dtype=np.int16))
+            valid_first_breach_bar_chunks.append(np.asarray(valid_first_breach_bar, dtype=np.int16))
+            valid_minimum_low_return_chunks.append(np.asarray(valid_minimum_low_return, dtype=np.float32))
             if len(invalid_positions):
                 inference_ticker_id_chunks.append(
                     np.full(len(invalid_positions), ticker_id, dtype=np.int32)
@@ -523,6 +642,11 @@ def load_daily_universal_ranker_data(
     valid_dates = np.concatenate(valid_date_chunks)
     valid_label_end_dates = np.concatenate(valid_label_end_chunks)
     valid_targets = np.concatenate(valid_target_chunks)
+    valid_favorable = np.concatenate(valid_favorable_chunks)
+    valid_adverse = np.concatenate(valid_adverse_chunks)
+    valid_opportunity_bar = np.concatenate(valid_opportunity_bar_chunks)
+    valid_first_breach_bar = np.concatenate(valid_first_breach_bar_chunks)
+    valid_minimum_low_return = np.concatenate(valid_minimum_low_return_chunks)
     context_width = len(RISK_GEOMETRY_CONTEXT_FEATURES) if use_risk_context else 0
     valid_context = np.concatenate(valid_context_chunks, axis=0)
 
@@ -561,6 +685,11 @@ def load_daily_universal_ranker_data(
             np.full(len(inference_dates), np.datetime64("NaT"), dtype="datetime64[ns]"),
         ]
     )
+    favorable_return = np.concatenate([valid_favorable, np.full(len(inference_dates), np.nan, dtype=np.float32)])
+    adverse_return = np.concatenate([valid_adverse, np.full(len(inference_dates), np.nan, dtype=np.float32)])
+    opportunity_bar = np.concatenate([valid_opportunity_bar, np.full(len(inference_dates), -1, dtype=np.int16)])
+    first_breach_bar = np.concatenate([valid_first_breach_bar, np.full(len(inference_dates), -1, dtype=np.int16)])
+    minimum_low_return = np.concatenate([valid_minimum_low_return, np.full(len(inference_dates), np.nan, dtype=np.float32)])
     group_count = int(len(raw_target))
     target_valid_count = int(target_valid.sum())
     inference_only_count = int(group_count - target_valid_count)
@@ -575,6 +704,11 @@ def load_daily_universal_ranker_data(
             "source_pos": source_positions,
             "label": np.full(group_count, -1, dtype=np.int8),
             "label_eval_end_date": pd.to_datetime(label_end_dates),
+            "target_favorable_return": favorable_return,
+            "target_adverse_return_to_peak": adverse_return,
+            "target_opportunity_bar": opportunity_bar,
+            "target_first_risk_breach_bar": first_breach_bar,
+            "target_minimum_low_return": minimum_low_return,
         }
     )
     feature_bank = LazyDailyFeatureBank(
@@ -588,6 +722,8 @@ def load_daily_universal_ranker_data(
     validate_model_sequence_length(model_spec, int(feature_bank.shape[1]))
     if target_id == DAILY_OPPORTUNITY_NO_TIME_TARGET_ID:
         target_contract = build_daily_opportunity_no_time_contract(DEFAULT_LABEL_POLICY)
+    elif target_id == DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID:
+        target_contract = build_daily_full_horizon_opportunity_contract(DEFAULT_LABEL_POLICY)
     else:
         target_contract = build_risk_target_contract(
             horizon_bars=int(spec.horizon_bars),
@@ -750,9 +886,11 @@ def build_daily_ranker_split(bundle: ContinuousRankerDataBundle, *, inner_valida
 
 
 __all__ = [
+    "DailyOpportunityTargetBatch",
     "DailyRankerSplit",
     "LazyDailyFeatureBank",
     "build_daily_ranker_split",
+    "compute_daily_opportunity_target_batch",
     "load_daily_universal_ranker_data",
     "select_breakout_candidate_group_ids",
 ]

@@ -17,6 +17,7 @@ CONTINUOUS_TARGET_SCHEMA_VERSION = 1
 STRATEGY_ALIGNED_TARGET_ID = "strategy_aligned_opportunity_r_v1"
 STRATEGY_ALIGNED_NO_TIME_TARGET_ID = "strategy_aligned_opportunity_no_time_r_v1"
 DAILY_OPPORTUNITY_NO_TIME_TARGET_ID = "daily_opportunity_no_time_r_v1"
+DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID = "daily_full_horizon_opportunity_r_v1"
 
 TARGET_RAW_FILENAME = "group_target_raw_r.npy"
 TARGET_FAVORABLE_RETURN_FILENAME = "group_favorable_return.npy"
@@ -243,6 +244,104 @@ def daily_opportunity_no_time_target_from_cached_path(
         opportunity_bar=int(source.opportunity_bar),
         first_risk_breach_bar=int(source.first_risk_breach_bar),
     )
+
+
+def daily_full_horizon_opportunity_target_from_cached_path(
+    high_prices: np.ndarray,
+    low_prices: np.ndarray,
+    *,
+    anchor_price: float,
+    available_bars: int,
+    spec: StrategyAlignedContinuousTargetSpec,
+) -> StrategyAlignedContinuousTargetResult:
+    """Build the no-breach full-horizon opportunity target for MR-13H.
+
+    Relative to ``daily_opportunity_no_time_r_v1``, the only scientific change is
+    that a low crossing the canonical risk-budget return is diagnostic only and
+    does not truncate the future high path.  The earliest maximum high over the
+    full fixed horizon is selected and adverse excursion is still measured from
+    horizon start through that selected peak bar.
+    """
+
+    spec = spec.validated()
+    horizon = int(spec.horizon_bars)
+    if int(available_bars) < horizon:
+        return _invalid_result("insufficient_future")
+    if not math.isfinite(float(anchor_price)) or float(anchor_price) <= 0.0:
+        return _invalid_result("invalid_anchor")
+
+    highs = np.asarray(high_prices[:horizon], dtype=np.float64)
+    lows = np.asarray(low_prices[:horizon], dtype=np.float64)
+    if highs.shape != lows.shape or highs.size != horizon:
+        return _invalid_result("insufficient_future")
+    valid = np.isfinite(highs) & np.isfinite(lows) & (highs > 0.0) & (lows > 0.0) & (highs >= lows)
+    if not bool(np.all(valid)):
+        return _invalid_result("invalid_future_bar")
+
+    anchor = float(anchor_price)
+    risk_budget = float(spec.risk_budget_return)
+    risk_barrier_price = anchor * (1.0 - risk_budget)
+    breach = np.flatnonzero(lows <= risk_barrier_price)
+    first_risk_breach_bar = int(breach[0] + 1) if len(breach) else -1
+
+    favorable_returns = highs / anchor - 1.0
+    best_zero = int(np.argmax(favorable_returns))  # np.argmax preserves earliest tie.
+    opportunity_bar = int(best_zero + 1)
+    favorable_return = float(favorable_returns[best_zero])
+    running_low = float(np.min(lows[: best_zero + 1]))
+    adverse_return = max(0.0, float(1.0 - running_low / anchor))
+    target_raw_r = favorable_return / risk_budget - adverse_return / risk_budget
+    if not all(
+        math.isfinite(value)
+        for value in (target_raw_r, favorable_return, adverse_return)
+    ):
+        return _invalid_result("non_finite_target")
+
+    return StrategyAlignedContinuousTargetResult(
+        valid=True,
+        reason="ok",
+        target_raw_r=float(target_raw_r),
+        favorable_return=float(favorable_return),
+        adverse_return_to_peak=float(adverse_return),
+        opportunity_bar=int(opportunity_bar),
+        first_risk_breach_bar=int(first_risk_breach_bar),
+    )
+
+
+def build_daily_full_horizon_opportunity_contract(
+    policy: BreakoutQualityLabelPolicy,
+) -> dict[str, object]:
+    """Return the MR-13H full-horizon no-breach target contract."""
+
+    spec = StrategyAlignedContinuousTargetSpec.from_label_policy(policy)
+    return {
+        "schema_version": CONTINUOUS_TARGET_SCHEMA_VERSION,
+        "target_id": DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+        "objective_family": "daily_cross_sectional_full_horizon_opportunity_no_time",
+        "information_source": "fixed_future_high_low_path",
+        "sample_scope": "daily_eligible_stock_days",
+        "horizon_bars": int(spec.horizon_bars),
+        "risk_budget_return": float(spec.risk_budget_return),
+        "formula": (
+            "full_horizon_favorable_return / risk_budget_return "
+            "- adverse_return_required_to_reach_that_peak / risk_budget_return"
+        ),
+        "peak_rule": "earliest maximum high across the complete fixed horizon",
+        "risk_rule": (
+            "risk-barrier touch is diagnostic only and never truncates the future path"
+        ),
+        "adverse_scope": "worst low from horizon start through selected peak bar",
+        "no_safe_bar_rule": "not_applicable",
+        "requires_breakout_event": False,
+        "requires_high_len": False,
+        "requires_breakout_level": False,
+        "requires_strategy_candidate_membership": False,
+        "time_penalty_included": False,
+        "normalization": "fixed canonical risk-budget return used only as R scale",
+        "clipping": "none",
+        "split_derived_parameters": False,
+        "oos_fitted_parameters": False,
+    }
 
 
 def build_daily_opportunity_no_time_contract(
@@ -714,6 +813,7 @@ def load_validated_continuous_target_component_arrays(
 
 __all__ = [
     "CONTINUOUS_TARGET_SCHEMA_VERSION",
+    "DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID",
     "DAILY_OPPORTUNITY_NO_TIME_TARGET_ID",
     "STRATEGY_ALIGNED_TARGET_ID",
     "STRATEGY_ALIGNED_NO_TIME_TARGET_ID",
@@ -730,6 +830,7 @@ __all__ = [
     "TARGET_VALID_MASK_FILENAME",
     "StrategyAlignedContinuousTargetResult",
     "StrategyAlignedContinuousTargetSpec",
+    "build_daily_full_horizon_opportunity_contract",
     "build_daily_opportunity_no_time_contract",
     "build_strategy_aligned_group_targets",
     "build_strategy_aligned_no_time_contract",
@@ -738,6 +839,7 @@ __all__ = [
     "load_validated_continuous_target_arrays",
     "load_validated_continuous_target_component_arrays",
     "resolve_continuous_target_dir",
+    "daily_full_horizon_opportunity_target_from_cached_path",
     "daily_opportunity_no_time_target_from_cached_path",
     "strategy_aligned_target_from_cached_path",
 ]
