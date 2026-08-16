@@ -37,7 +37,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 35
+STRATEGY_COMPARE_SCHEMA_VERSION = 36
 
 # =============================================================================
 # 1. 常用設定
@@ -48,7 +48,7 @@ STRATEGY_COMPARE_SCHEMA_VERSION = 35
 
 STRATEGY_COMPARE_DEFAULT_PROFILE = "forward_oos"
 # 主互動選單只暴露泛化工作階段；研究 profile identity 留在 config/報表。
-STRATEGY_COMPARE_MENU_PROFILE_IDS = ("selection_pit", "forward_oos")
+STRATEGY_COMPARE_MENU_PROFILE_IDS = ("selection_risk_context", "forward_oos")
 STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE = "forward_oos"
 STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT = 8
 STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED = 20260810
@@ -89,6 +89,8 @@ STRATEGY_RUNTIME_INTEGRATION = {
 STRATEGY_COMPARE_DISPLAY_FULL_ROOS = "Full ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_ROOS = "Min ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED = "Min MR-13E Constrained"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13J_SCORE_CONSTRAINED = "Min MR-13J Constrained"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13J_SCORE_NO_R0 = "Min MR-13J No-R0"
 
 # Strategy Compare以研究階段profile隔離設定與輸出；App只顯示泛化階段名稱，
 # arms／contrasts／period／output namespace全部由本檔驅動。
@@ -107,6 +109,23 @@ STRATEGY_COMPARE_PROFILES = {
             "C32-C23",
             "C42-C23",
             "C42-C32",
+        ),
+    },
+    "selection_risk_context": {
+        "label": "Selection PIT 策略比較",
+        "description": "C42/C49/C50受控策略轉化Gate；保留同Min/all-off的C23 DL-off共同基準以滿足comparison contract。期間不硬編2014起日，而由MR-13E/MR-13J PIT runtime共同合法coverage自動解析，禁止pre-risk-param backfill。",
+        "start_date": None,
+        "end_date": None,
+        "output_root": "outputs/strategy_compare/selection_risk_context",
+        "reuse_output_roots": (
+            "outputs/strategy_compare/selection_pit",
+            "outputs/strategy_compare",
+        ),
+        "arm_ids": ("C23", "C42", "C49", "C50"),
+        "contrast_ids": (
+            "C49-C42",
+            "C50-C49",
+            "C50-C42",
         ),
     },
     "forward_oos": {
@@ -358,6 +377,26 @@ STRATEGY_DL_SOURCES = {
             },
         },
     },
+    "CONT13J_PIT": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_risk_context_v1",
+        "experiment_profile": "daily_universal_risk_context_net_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": (
+            "MR-13J Daily Universal risk-context canonical-cost Selection PIT score；"
+            "盤前只使用最新已完成交易日資訊，供13J K/R0與No-R0受控策略轉化Gate"
+        ),
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {
+                "resume": True,
+                "allow_stale_source": False,
+            },
+        },
+    },
+
 }
 
 # =============================================================================
@@ -419,6 +458,45 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C49": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13J_SCORE_CONSTRAINED,
+        "description": (
+            "Selection PIT MR-13J model-only controlled arm：與C42完全相同historical Min params/all-off、"
+            "K/R0、canonical sizing/cash/orderability/execution與exact branch-and-bound；"
+            "唯一scientific change是DL source由MR-13E PIT替換為MR-13J PIT score"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13J_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C50": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13J_SCORE_NO_R0,
+        "description": (
+            "Selection PIT MR-13J R0-ablation：與C49完全相同MR-13J PIT score、historical Min params/all-off、"
+            "K、canonical sizing/cash/orderability/execution與exact solver；唯一controlled change是移除baseline R0 floor"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13J_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-r0-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k": True,
+            "preserve_r0": False,
+            "r0_minimum_repair": False,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
     "C44": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED,
         "description": (
@@ -458,6 +536,9 @@ STRATEGY_COMPARE_ARMS = {
 STRATEGY_COMPARE_CONTRASTS = {
     "C42-C23": {"left": "C42", "right": "C23", "description": "Selection PIT frozen MR-13E score exact constrained optimum相對DL-off Min ROOS的策略經濟效果"},
     "C42-C32": {"left": "C42", "right": "C32", "description": "Selection PIT active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
+    "C49-C42": {"left": "C49", "right": "C42", "description": "同Min/K/R0/exact/cash下只替換MR-13E PIT為MR-13J PIT，隔離13J模型本身的策略轉化效果"},
+    "C50-C49": {"left": "C50", "right": "C49", "description": "同MR-13J PIT/K/exact/cash下只移除R0，直接檢驗13J是否已吸收資金投入約束的功能"},
+    "C50-C42": {"left": "C50", "right": "C42", "description": "MR-13J No-R0最終架構相對現行MR-13E + R0 C42的整體策略結果"},
     "C44-C3": {"left": "C44", "right": "C3", "description": "current Min ROOS下MR-13E exact constrained score selector相對DL-off baseline的Forward-OOS策略效果"},
     "C44-C1": {"left": "C44", "right": "C1", "description": "Forward-OOS active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
     "C1-C3": {"left": "C1", "right": "C3", "description": "Full ROOS相對current Min ROOS的完整策略體系差異；不是單一參數效果"},

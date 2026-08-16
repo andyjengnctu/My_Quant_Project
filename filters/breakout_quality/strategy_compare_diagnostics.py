@@ -16,6 +16,8 @@ from core.display_common import _display_width
 from core.report_metrics import (
     R_ANALYSIS_GROUPED_SECTIONS,
     R_ANALYSIS_MERGED_METRICS,
+    R_MODEL_PREDICTION_METRICS,
+    R_SELECTION_TRANSLATION_METRICS,
     RAnalysisMetricSpec,
 )
 from core.report_style import best_worst_signals, styled_signal
@@ -971,6 +973,7 @@ def _selection_pit_prediction_row(
         "dl_id": dl_id,
         "score_source": source.score_source,
         "scope": str(contract.get("primary_metric_label") or scope),
+        "continuous_target_id": str(payload.get("continuous_target_id") or ""),
         "global_spearman": _finite(metrics.get("global_spearman")),
         "mean_daily_spearman": _finite(metrics.get("mean_daily_spearman")),
         "pairwise_concordance": _finite(metrics.get("pairwise_concordance")),
@@ -1006,6 +1009,7 @@ def _continuous_prediction_row(
         "dl_id": dl_id,
         "score_source": source.score_source,
         "scope": "Forward OOS all eligible stock-days",
+        "continuous_target_id": str(payload.get("continuous_target_id") or ""),
         "global_spearman": _finite(metrics.get("global_spearman_vs_raw_target")),
         "mean_daily_spearman": _finite(metrics.get("mean_daily_spearman")),
         "pairwise_concordance": _finite(metrics.get("pairwise_concordance")),
@@ -1148,6 +1152,7 @@ def _r_analysis_rows(
             "arm_id": arm.arm_id,
             "name": arm.name,
             "dl_id": arm.dl_id,
+            "continuous_target_id": str(model.get("continuous_target_id") or ""),
             "portfolio_avg_r": _finite(scenario.get("portfolio_avg_r")),
             "portfolio_median_r": _finite(scenario.get("portfolio_median_r")),
             "mean_daily_spearman": _finite(model.get("mean_daily_spearman")),
@@ -1272,13 +1277,34 @@ def render_strategy_r_analysis_table(diagnostics: dict[str, Any], *, target: str
             top_headers.append(group_label if index == 0 else "")
             bottom_headers.append(metric.label)
     body: list[list[str]] = []
-    metric_signals = {
-        metric.key: best_worst_signals(
-            {str(row.get("arm_id") or "-"): row.get(metric.key) for row in rows},
-            preference=metric.preference,
-        )
-        for metric in metrics
+    target_dependent_keys = {
+        metric.key
+        for metric in (*R_MODEL_PREDICTION_METRICS, *R_SELECTION_TRANSLATION_METRICS)
+        if metric.key != "score_coverage"
     }
+    metric_signals: dict[str, dict[str, str]] = {}
+    for metric in metrics:
+        if metric.key not in target_dependent_keys:
+            metric_signals[metric.key] = best_worst_signals(
+                {str(row.get("arm_id") or "-"): row.get(metric.key) for row in rows},
+                preference=metric.preference,
+            )
+            continue
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            target_id = str(row.get("continuous_target_id") or "").strip()
+            if not target_id:
+                continue
+            grouped.setdefault(target_id, []).append(row)
+        signals: dict[str, str] = {}
+        for group_rows in grouped.values():
+            if len(group_rows) < 2:
+                continue
+            signals.update(best_worst_signals(
+                {str(row.get("arm_id") or "-"): row.get(metric.key) for row in group_rows},
+                preference=metric.preference,
+            ))
+        metric_signals[metric.key] = signals
     for row in rows:
         arm_id = str(row.get("arm_id") or "-")
         values = [arm_id, str(row.get("name") or "-")]

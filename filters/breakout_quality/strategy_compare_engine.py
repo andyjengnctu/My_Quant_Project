@@ -650,7 +650,11 @@ def run_comparison(
             )
         else:
             pit_contract = load_selection_point_in_time_ranking_contract(
-                str(root), filter_id, model_architecture, experiment_profile
+                str(root),
+                filter_id,
+                model_architecture,
+                experiment_profile,
+                require_model_validation_pass=False,
             )
             workflow_settings = get_breakout_quality_workflow_settings()
             if (
@@ -673,12 +677,11 @@ def run_comparison(
             "experiment_profile": manifest_profile,
             "ranking_policy": ranking_policy,
             "ranking_options": ranking_options,
-            "score_path_override": (
-                str(pit_contract.score_path) if has_selection_pit_score_override else None
-            ),
-            "score_manifest_path_override": (
-                str(pit_contract.manifest_path) if has_selection_pit_score_override else None
-            ),
+            # Strategy Compare has already validated PIT identity/hash/coverage at the
+            # planning boundary. Always pin the exact score/manifest paths so downstream
+            # research replay does not re-apply the advisory model-quality gate.
+            "score_path_override": str(pit_contract.score_path),
+            "score_manifest_path_override": str(pit_contract.manifest_path),
         }
     else:
         try:
@@ -947,12 +950,8 @@ def run_comparison(
             lookup = _selection_target_lookup(
                 root=root, filter_id=filter_id, architecture=manifest_architecture,
                 profile=manifest_profile,
-                score_path_override=(
-                    str(pit_contract.score_path) if has_selection_pit_score_override else None
-                ),
-                manifest_path_override=(
-                    str(pit_contract.manifest_path) if has_selection_pit_score_override else None
-                ),
+                score_path_override=str(pit_contract.score_path),
+                manifest_path_override=str(pit_contract.manifest_path),
             )
             baseline_diag, baseline_orderable_joined, baseline_selected_joined = (
                 _strategy_selection_diagnostics(

@@ -240,21 +240,23 @@ def _collect_selection_pit_source_status(
         pit_gate_status = str(
             pit_contract.model_validation_gate.get("status") or ""
         ).strip().upper() or None
-        if pit_gate_status != "PASS":
-            raise ValueError("Selection PIT model validation Gate非PASS")
+        # Strategy Compare is a research consumer of already-completed PIT artifacts.
+        # Artifact legality / PIT chronology remain hard gates, while the model-quality
+        # gate is advisory evidence: a FAIL must be visible, but does not preclude the
+        # explicitly configured strategy-conversion experiment.
         pit_ready = True
-        pit_status = "READY"
+        pit_status = (
+            "READY"
+            if pit_gate_status == "PASS"
+            else f"READY_MODEL_GATE_{pit_gate_status or 'UNKNOWN'}"
+        )
         if dl_id in runtime_required_dl_sources:
             runtime_periods[dl_id] = (
                 str(pit_contract.available_from),
                 str(pit_contract.available_through),
             )
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        pit_status = (
-            "SELECTION_PIT_MODEL_GATE_FAIL"
-            if pit_gate_status == "FAIL"
-            else f"SELECTION_PIT_INVALID ({type(exc).__name__})"
-        )
+        pit_status = f"SELECTION_PIT_INVALID ({type(exc).__name__})"
 
     if pit_contract is not None:
         files = {
@@ -300,19 +302,18 @@ def _collect_selection_pit_source_status(
         if pit_ready and settings.preparation.reuse_ready_artifacts:
             action = "REUSE"
             description = "重用既有Selection PIT score／audit工件"
+            if pit_gate_status not in (None, "", "PASS"):
+                description += (
+                    f"；WARN: Model Gate={pit_gate_status}，僅作研究診斷，"
+                    "本次仍允許既定strategy-conversion replay；不代表runtime promotion資格"
+                )
         else:
             action = "BLOCKED"
-            if pit_gate_status == "FAIL":
-                description = (
-                    "Selection PIT Model Gate=FAIL；Strategy Compare不得進入策略績效驗證，"
-                    "也不得重建或覆寫模型工件。請回 Research → [1] 模型訓練檢視PIT模型驗證結果。"
-                )
-            else:
-                description = (
-                    "缺少或無效的Selection PIT模型工件；Strategy Compare只消費既有PIT "
-                    "score／manifest／audit，不建立、不重建也不執行PIT Model Gate。"
-                    "請先執行 Research → [1] 模型訓練 → [2] 建立／更新 Selection PIT Scores。"
-                )
+            description = (
+                "缺少或無效的Selection PIT模型工件；Strategy Compare只消費既有PIT "
+                "score／manifest／audit，不建立、不重建也不執行PIT Model Gate。"
+                "請先執行 Research → [1] 模型訓練 → [2] 建立／更新 Selection PIT Scores。"
+            )
         file_rows[key] = {
             "ready": pit_ready,
             "status": pit_status,

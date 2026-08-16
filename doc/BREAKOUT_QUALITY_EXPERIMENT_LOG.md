@@ -9179,3 +9179,10 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - MR-13J Selection PIT Model Gate已正式FAIL，C49/C50從未進strategy replay；因此`selection_risk_context`、`CONT13J_PIT` Strategy Compare source、C49/C50 active arms與其contrasts退出current `config/strategy_compare.py`，主選單恢復canonical `selection_pit / forward_oos`。MR-13J模型／PIT工件本體仍保留為研究證據；Registry保留C49/C50 identity與NOT_RUN結論。
 - `Strategy Compare`執行計畫在overall=`BLOCKED`時不再把未執行的BUILD/REBUILD、arms與contrasts顯示成`REBUILD/RUN/REPORT`；真正blocker維持`BLOCKED`，可重用工件維持`REUSE`，其餘一律顯示`NOT_RUN`並註明上游前置Gate阻擋。此變更只修可稽核顯示，不放寬任何readiness/Gate或replay行為。
 - Scientific decision不變：MR-13J=`SELECTION_PIT_MODEL_GATE_FAIL / NO_STRATEGY_GATE / NO_RUNTIME_PROMOTION`；production仍為MR-13E + C42/C44。
+
+### 2026-08-17 — MR-13J PIT quality gate reclassified as advisory for controlled strategy conversion
+
+- 使用者明確修正研究治理：PIT模型排序Gate不能自動取代最終策略經濟驗證。MR-13J Selection PIT工件本身已完整合法（2016-04-01～2020-12-31、5 folds、coverage=100%、identity/hash/PIT chronology合法），因此Global rho=-0.0321造成的Model Gate=FAIL保留為重要WARN，但不得單獨阻止已事前定義的C49/C50 controlled strategy replay。
+- Ownership邊界不變：Selection PIT score/manifest/audit與Model Gate仍只由`[1] 模型訓練 → [2] 建立／更新 Selection PIT Scores`產生；Strategy Compare不得建立、重建或重跑PIT。真正hard blocker仍是missing/invalid identity/hash/coverage/period/look-ahead。
+- Current Selection研究profile恢復`selection_risk_context`：C23共同DL-off baseline、C42=`MR-13E+R0`、C49=`MR-13J+R0`、C50=`MR-13J+No-R0`；實際比較期間由CONT13E/CONT13J PIT共同合法coverage自動取交集。核心歸因仍為C49-C42（13J model effect）、C50-C49（R0 ablation）、C50-C42（最終架構）。
+- Production/runtime promotion規則不放寬：MR-13J仍`NO_RUNTIME_PROMOTION`，只有本次明確configured strategy-conversion研究可在WARN下消費既有PIT scores。最終是否繼續13J只看實際strategy replay的Return/MDD/RoMD/EV/realized R/RCE/exposure/underfill，而不是單靠PIT rho提前決定。

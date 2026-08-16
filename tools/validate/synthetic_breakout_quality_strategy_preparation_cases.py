@@ -270,7 +270,8 @@ def append_strategy_compare_preparation_contract_checks(
         audit_path=Path("outputs/synthetic/selection_point_in_time_audit.json"),
         score_path=Path("models/synthetic/selection_point_in_time_scores.csv"),
     )
-    failed_actions: list[StrategyPreparationAction] = []
+    failed_runtime_periods: dict[str, tuple[str, str]] = {}
+    failed_actions = []
     with patch.object(
         dl_artifacts_module,
         "load_selection_point_in_time_ranking_contract",
@@ -285,20 +286,21 @@ def append_strategy_compare_preparation_contract_checks(
             runtime_required_dl_sources={"CONT13E_PIT"},
             artifact_identities={},
             actions=failed_actions,
-            runtime_periods={},
+            runtime_periods=failed_runtime_periods,
         )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "strategy_compare_failed_selection_pit_gate_blocks_replay_without_rebuild_or_rerun_guidance",
+        "strategy_compare_failed_selection_pit_quality_gate_is_visible_warning_but_legal_artifact_can_replay",
         True,
-        not failed_ready
-        and failed_row.get("status") == "SELECTION_PIT_MODEL_GATE_FAIL"
+        failed_ready
+        and failed_row.get("status") == "READY_MODEL_GATE_FAIL"
         and (failed_row.get("model_validation_gate") or {}).get("status") == "FAIL"
+        and failed_runtime_periods.get("CONT13E_PIT") == ("2016-04-01", "2020-12-31")
         and len(failed_actions) == 3
-        and all(action.action == "BLOCKED" for action in failed_actions)
+        and all(action.action == "REUSE" for action in failed_actions)
         and all(action.builder_type is None for action in failed_actions)
-        and all("Model Gate=FAIL" in action.description for action in failed_actions)
-        and all("不得進入策略績效驗證" in action.description for action in failed_actions)
+        and all("WARN: Model Gate=FAIL" in action.description for action in failed_actions)
+        and all("仍允許既定strategy-conversion replay" in action.description for action in failed_actions)
         and failed_gate_loader.call_count == 1
         and failed_gate_loader.call_args.kwargs.get("require_model_validation_pass") is False,
     )
