@@ -65,27 +65,28 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
 
     base = get_strategy_comparison_settings("forward_oos")
     current_dl_arms = tuple(arm for arm in base.enabled_arms if arm.dl_enabled)
-    current_arm = current_dl_arms[0] if len(current_dl_arms) == 1 else None
-    retired_same_source = (
-        next(
+    current_arm = None
+    retired_same_source = None
+    for candidate in current_dl_arms:
+        retired = next(
             (
                 arm
                 for arm in base.arms.values()
-                if current_arm is not None
-                and not arm.enabled
+                if not arm.enabled
                 and arm.dl_enabled
-                and arm.dl_id == current_arm.dl_id
+                and arm.dl_id == candidate.dl_id
             ),
             None,
         )
-        if current_arm is not None
-        else None
-    )
+        if retired is not None:
+            current_arm = candidate
+            retired_same_source = retired
+            break
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "fixture_has_one_current_dl_arm_and_one_retired_same_source_arm",
+        "fixture_has_current_dl_arm_with_retired_same_source_arm",
         True,
         current_arm is not None and retired_same_source is not None,
     )
@@ -93,6 +94,18 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
         return results, summary
 
     dl_id = str(current_arm.dl_id or "")
+    isolated_arms = {
+        arm_id: (
+            replace(arm, enabled=(arm_id == current_arm.arm_id))
+            if arm.dl_enabled
+            else arm
+        )
+        for arm_id, arm in base.arms.items()
+    }
+    base = replace(base, arms=isolated_arms)
+    current_arm = base.arms[current_arm.arm_id]
+    retired_same_source = base.arms[retired_same_source.arm_id]
+
     expanded_arms = dict(base.arms)
     expanded_arms[retired_same_source.arm_id] = replace(
         retired_same_source,
