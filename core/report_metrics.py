@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Tuple
 
 
 @dataclass(frozen=True)
@@ -139,6 +140,18 @@ R_SELECTION_TRANSLATION_METRICS = (
     ),
 )
 
+R_ANALYSIS_GROUPED_SECTIONS: Tuple[tuple[str, tuple[RAnalysisMetricSpec, ...]], ...] = (
+    ("實際交易", R_ACTUAL_TRADE_METRICS),
+    ("模型預測", R_MODEL_PREDICTION_METRICS),
+    ("選股轉換", R_SELECTION_TRANSLATION_METRICS),
+)
+
+R_ANALYSIS_MERGED_METRICS = tuple(
+    metric
+    for _group_label, group_metrics in R_ANALYSIS_GROUPED_SECTIONS
+    for metric in group_metrics
+)
+
 # Pair reports keep the same canonical metrics as before, but source their labels,
 # units and direction semantics from this shared registry.
 PAIR_MAIN_METRICS = (
@@ -161,4 +174,6 @@ __all__ = [
     "R_ACTUAL_TRADE_METRICS",
     "R_MODEL_PREDICTION_METRICS",
     "R_SELECTION_TRANSLATION_METRICS",
+    "R_ANALYSIS_GROUPED_SECTIONS",
+    "R_ANALYSIS_MERGED_METRICS",
 ]

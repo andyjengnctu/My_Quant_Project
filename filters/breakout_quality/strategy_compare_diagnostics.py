@@ -11,19 +11,16 @@ from typing import Any
 
 import pandas as pd
 
-from core.console_report import project_relative_display_path, render_table
+from core.console_report import project_relative_display_path
+from core.display_common import _display_width
 from core.report_metrics import (
-    R_ACTUAL_TRADE_METRICS,
-    R_MODEL_PREDICTION_METRICS,
-    R_SELECTION_TRANSLATION_METRICS,
+    R_ANALYSIS_GROUPED_SECTIONS,
+    R_ANALYSIS_MERGED_METRICS,
     RAnalysisMetricSpec,
 )
 from core.report_style import (
-    SIGNAL_NEUTRAL,
-    signal_for_auc,
-    signal_for_coverage,
-    signal_for_delta,
-    signal_for_signed_value,
+    SIGNAL_NEGATIVE,
+    SIGNAL_POSITIVE,
     styled_signal,
 )
 from core.strategy_comparison import StrategyComparisonSettings
@@ -1023,8 +1020,8 @@ def _fmt_pct_fraction(value: Any) -> str:
     return "-" if numeric is None else f"{numeric * 100.0:.2f}%"
 
 
-def _value_with_signal(text: str, signal: str, *, target: str) -> str:
-    if text == "-":
+def _value_with_signal(text: str, signal: str | None, *, target: str) -> str:
+    if text == "-" or not signal:
         return text
     return styled_signal(text, signal, target=target)
 
@@ -1035,84 +1032,96 @@ def _format_r_analysis_value(value: Any, metric: RAnalysisMetricSpec) -> str:
     return _fmt(value, digits=metric.digits, unit=metric.unit)
 
 
-def _r_analysis_signal(
-    *,
-    row: dict[str, Any],
-    reference: dict[str, Any],
-    metric: RAnalysisMetricSpec,
-    is_reference: bool,
-) -> str:
-    value = row.get(metric.key)
-    if value is None:
-        return SIGNAL_NEUTRAL
-    if metric.signal_mode == "signed":
-        return signal_for_signed_value(value)
-    if metric.signal_mode == "auc":
-        return signal_for_auc(value)
-    if metric.signal_mode == "coverage":
-        return signal_for_coverage(value)
-    if metric.signal_mode == "relative":
-        if is_reference:
-            return SIGNAL_NEUTRAL
-        numeric = _finite(value)
-        ref = _finite(reference.get(metric.key))
-        if numeric is None or ref is None:
-            return SIGNAL_NEUTRAL
-        return signal_for_delta(numeric - ref, preference=metric.preference)
-    return SIGNAL_NEUTRAL
-
-
-def _render_transposed_r_table(
+def _best_worst_by_metric(
     *,
     rows: list[dict[str, Any]],
-    reference_id: str,
-    metrics: tuple[RAnalysisMetricSpec, ...],
-    target: str,
-) -> str:
-    reference = next((row for row in rows if str(row.get("arm_id")) == reference_id), {})
-    headers = ("指標", *(str(row.get("arm_id") or "-") for row in rows), "定義", "理想方向")
-    body = []
-    for metric in metrics:
-        values = []
-        for row in rows:
-            text = _format_r_analysis_value(row.get(metric.key), metric)
-            if text != "-":
-                signal = _r_analysis_signal(
-                    row=row,
-                    reference=reference,
-                    metric=metric,
-                    is_reference=str(row.get("arm_id")) == reference_id,
-                )
-                text = _value_with_signal(text, signal, target=target)
-            values.append(text)
-        body.append((metric.label, *values, metric.definition, metric.ideal_direction))
-    return render_table(headers, body)
+    metric: RAnalysisMetricSpec,
+) -> dict[str, str]:
+    values: list[tuple[str, float]] = []
+    for row in rows:
+        numeric = _finite(row.get(metric.key))
+        if numeric is None:
+            continue
+        values.append((str(row.get("arm_id") or "-"), numeric))
+    if len(values) < 2:
+        return {}
+    numbers = [value for _arm, value in values]
+    best_value = max(numbers) if metric.preference != "lower" else min(numbers)
+    worst_value = min(numbers) if metric.preference != "lower" else max(numbers)
+    if math.isclose(best_value, worst_value, rel_tol=0.0, abs_tol=1e-12):
+        return {}
+    signals: dict[str, str] = {}
+    for arm_id, value in values:
+        if math.isclose(value, best_value, rel_tol=0.0, abs_tol=1e-12):
+            signals[arm_id] = SIGNAL_POSITIVE
+    for arm_id, value in values:
+        if math.isclose(value, worst_value, rel_tol=0.0, abs_tol=1e-12):
+            signals[arm_id] = SIGNAL_NEGATIVE
+    return signals
+
+
+def _pad_cell(text: str, width: int, *, align: str = "left") -> str:
+    value = str(text)
+    padding = max(0, int(width) - _display_width(value))
+    if align == "right":
+        return " " * padding + value
+    if align == "center":
+        left = padding // 2
+        return " " * left + value + " " * (padding - left)
+    return value + " " * padding
+
+
+def _render_grouped_table(headers_top: list[str], headers_bottom: list[str], rows: list[list[str]]) -> str:
+    column_count = len(headers_bottom)
+    widths = []
+    for index in range(column_count):
+        values = [headers_top[index], headers_bottom[index], *(row[index] for row in rows)]
+        widths.append(max(_display_width(value) for value in values))
+    def join_line(values: list[str], *, centers: set[int] | None = None) -> str:
+        centers = centers or set()
+        return "  ".join(
+            _pad_cell(value, widths[idx], align="center" if idx in centers else "left")
+            for idx, value in enumerate(values)
+        )
+    separator = "  ".join("-" * width for width in widths)
+    return "\n".join([join_line(headers_top, centers=set(range(column_count))), join_line(headers_bottom, centers=set(range(1, column_count))), separator, *[join_line(row) for row in rows]])
+
+
+def _render_metric_notes() -> str:
+    lines = ["註解", "----"]
+    for group_label, metrics in R_ANALYSIS_GROUPED_SECTIONS:
+        lines.append(f"{group_label}：")
+        for metric in metrics:
+            lines.append(
+                f"- {metric.label}：{metric.definition}｜理想方向：{metric.ideal_direction}"
+            )
+    return "\n".join(lines)
 
 
 def render_strategy_r_analysis_table(diagnostics: dict[str, Any], *, target: str = "plain") -> str:
-    """Render canonical R diagnostics as three transposed arm-comparison tables."""
+    """Render canonical R diagnostics as one grouped arm-comparison table."""
 
     rows = list(diagnostics.get("r_analysis") or [])
     if not rows:
         return "沒有可用的R預測／轉化診斷。"
-    reference_id = str(diagnostics.get("reference_arm_id") or "")
-    sections = (
-        ("實際交易", R_ACTUAL_TRADE_METRICS),
-        ("模型預測", R_MODEL_PREDICTION_METRICS),
-        ("選股轉化", R_SELECTION_TRANSLATION_METRICS),
-    )
-    rendered = []
-    for title, metrics in sections:
-        rendered.append(f"{title}\n{'-' * len(title) * 2}")
-        rendered.append(
-            _render_transposed_r_table(
-                rows=rows,
-                reference_id=reference_id,
-                metrics=metrics,
-                target=target,
-            )
-        )
-    return "\n\n".join(rendered)
+    metrics = R_ANALYSIS_MERGED_METRICS
+    top_headers = ["分群"]
+    bottom_headers = ["編號"]
+    for group_label, group_metrics in R_ANALYSIS_GROUPED_SECTIONS:
+        for index, metric in enumerate(group_metrics):
+            top_headers.append(group_label if index == 0 else "")
+            bottom_headers.append(metric.label)
+    body: list[list[str]] = []
+    metric_signals = {metric.key: _best_worst_by_metric(rows=rows, metric=metric) for metric in metrics}
+    for row in rows:
+        arm_id = str(row.get("arm_id") or "-")
+        values = [arm_id]
+        for metric in metrics:
+            text = _format_r_analysis_value(row.get(metric.key), metric)
+            signal = metric_signals.get(metric.key, {}).get(arm_id)
+            values.append(_value_with_signal(text, signal, target=target))
+        body.append(values)
+    return _render_grouped_table(top_headers, bottom_headers, body) + "\n\n" + _render_metric_notes()
 
 def render_strategy_diagnostics_markdown(diagnostics: dict[str, Any]) -> str:
     """Persist the same canonical three-table R view used by the aggregate report."""

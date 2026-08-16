@@ -3573,7 +3573,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "markdown_signal" in report_style_source
         and not any(marker in report_style_source for marker in ("🟢", "🔴", "🟡", "⚪"))
         and "文字本身上色" in project_settings
-        and "禁止以`🟢`、`🔴`、`🟡`、`⚪`" in project_settings
+        and "綠＝最佳、紅＝最差、白＝其餘" in project_settings
+        and "表格下方註解" in project_settings
         and "renderer只負責組裝與顯示" in project_settings,
     )
     add_check(
