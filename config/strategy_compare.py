@@ -115,18 +115,21 @@ STRATEGY_COMPARE_PROFILES = {
     },
     "forward_oos": {
         "label": "Forward-OOS 策略比較",
-        "description": "2021+ frozen Forward-OOS策略Gate；active research只比較Full ROOS、Min ROOS與Min MR-13E exact constrained。",
+        "description": "2021+ frozen Forward-OOS策略Gate；固定Full/Min references與MR-13E C44，新增MR-13H C52作同K/R0/exact source-only controlled comparison。",
         "display_alignment_group": "core_strategy_compare",
         "display_alignment_arm_ids": ("C1", "C3", "C44"),
         "start_date": None,
         "end_date": None,
         "output_root": "outputs/strategy_compare/forward_oos",
         "reuse_output_roots": ("outputs/strategy_compare",),
-        "arm_ids": ("C1", "C3", "C44"),
+        "arm_ids": ("C1", "C3", "C44", "C52"),
         "contrast_ids": (
             "C1-C3",
             "C44-C3",
             "C44-C1",
+            "C52-C44",
+            "C52-C3",
+            "C52-C1",
         ),
     },
 }
@@ -156,8 +159,15 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
             "full": {"param_source": "selection_full_roos", "rule_policy": "formal"},
         },
         "fixed_arm_ids": ("C32", "C23"),
-        "stochastic_arm_ids": ("C42",),
-        "paired_contrasts": (),
+        "stochastic_arm_ids": ("C42", "C51"),
+        "paired_contrasts": (
+            {
+                "contrast_id": "C51-C42",
+                "left": "C51",
+                "right": "C42",
+                "description": "同seed、同Min/K/R0/exact/cash/execution，只比較MR-13H與MR-13E Selection PIT模型來源",
+            },
+        ),
         "output_root": "outputs/strategy_compare/robustness/selection_pit",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/selection_pit",
     },
@@ -182,8 +192,15 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
             "full": {"param_source": "full_roos", "rule_policy": "formal"},
         },
         "fixed_arm_ids": ("C1", "C3"),
-        "stochastic_arm_ids": ("C44",),
-        "paired_contrasts": (),
+        "stochastic_arm_ids": ("C44", "C52"),
+        "paired_contrasts": (
+            {
+                "contrast_id": "C52-C44",
+                "left": "C52",
+                "right": "C44",
+                "description": "同seed、同Min/K/R0/exact/cash/execution，只比較MR-13H與MR-13E Forward-OOS模型來源",
+            },
+        ),
         "output_root": "outputs/strategy_compare/robustness",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness",
     }
@@ -362,6 +379,18 @@ STRATEGY_DL_SOURCES = {
             },
         },
     },
+    "CONT13H": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "continuous_ranker_oos",
+        "description": (
+            "MR-13H Daily Universal full-horizon no-breach frozen Forward-OOS score；"
+            "盤前使用最新已完成交易日資訊，供C52與C44作同K/R0/exact source-only策略比較"
+        ),
+        "forward_scores_builder": None,
+    },
     "CONT13H_PIT": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -482,6 +511,25 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C52": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13H_SCORE_CONSTRAINED,
+        "description": (
+            "Forward-OOS MR-13H controlled arm：與C44完全相同current Min params/all-off、K/R0、"
+            "canonical sizing/cash/orderability/execution與exact branch-and-bound；唯一scientific change"
+            "是DL source由MR-13E Forward替換為MR-13H Forward"
+        ),
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13H",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": False,
+        },
+        "robustness_role": "off",
+    },
     "C32": {
         "name": STRATEGY_COMPARE_DISPLAY_FULL_ROOS,
         "description": "2014～2020 historical Full ROOS active params；formal rules；DL-off共同baseline",
@@ -505,6 +553,9 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C51-C42": {"left": "C51", "right": "C42", "description": "同Min/K/R0/exact/cash/execution下只將MR-13E PIT替換為MR-13H PIT，隔離no-breach Target模型本身的策略轉化效果"},
     "C51-C23": {"left": "C51", "right": "C23", "description": "Selection PIT MR-13H exact constrained相對DL-off Min ROOS的策略經濟效果"},
     "C51-C32": {"left": "C51", "right": "C32", "description": "Selection PIT MR-13H exact constrained相對Full ROOS的整體策略結果；不是單一參數效果"},
+    "C52-C44": {"left": "C52", "right": "C44", "description": "同Min/K/R0/exact/cash/execution下只將MR-13E Forward替換為MR-13H Forward，隔離no-breach Target模型本身的Forward策略轉化效果"},
+    "C52-C3": {"left": "C52", "right": "C3", "description": "Forward-OOS MR-13H exact constrained相對DL-off Min ROOS的策略經濟效果"},
+    "C52-C1": {"left": "C52", "right": "C1", "description": "Forward-OOS MR-13H exact constrained相對Full ROOS的整體策略結果；不是單一參數效果"},
     "C44-C3": {"left": "C44", "right": "C3", "description": "current Min ROOS下MR-13E exact constrained score selector相對DL-off baseline的Forward-OOS策略效果"},
     "C44-C1": {"left": "C44", "right": "C1", "description": "Forward-OOS active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
     "C1-C3": {"left": "C1", "right": "C3", "description": "Full ROOS相對current Min ROOS的完整策略體系差異；不是單一參數效果"},

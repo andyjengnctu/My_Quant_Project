@@ -9219,3 +9219,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Selection strategy controlled arm新增`DL-CONT13H-PIT / SR-C51`。C51與C42固定完全相同historical Min params、all-off、K/R0、canonical sizing/cash/orderability/execution與`exact_branch_and_bound_v1`，唯一變更為MR-13H PIT score。Primary contrast=`C51-C42`；C51未進multi-seed。
 - 階段順序依使用者要求改為先把MR-13H整條流程做完才開下一個Label：Selection PIT Model Gate → C51 Selection strategy translation → 若Selection支持才建立MR-13H Forward strategy arm → 若Forward亦支持才進same-generated-8-seed robustness／promotion判讀。任何一關失敗即結案MR-13H，不提前開Pure-MFE或cross-sectional新MR。Production/runtime目前仍固定MR-13E C42/C44。
 
+### 2026-08-17 — MR-13H Selection result → full Forward + robustness evaluation authorized
+
+- 程式基準：`test-branch-1_20260817_022948_d464717.zip`，SHA256=`872d3388407c815f770573a94694f22d6b4a950583b3d4fb041e7021132203b6`。本輪不改MR-13H Target、architecture、loss、Seed policy、K/R0或exact solver；只擴充Forward與multi-seed評估矩陣及一次串跑UI。
+- Selection Strategy結果：C42 MR-13E Return=`199.32%`、MDD=`19.88%`、RoMD=`10.03`、EV=`0.75R`；C51 MR-13H Return=`158.21%`、MDD=`19.64%`、RoMD=`8.06`、EV=`0.80R`。C51單次Selection在Return/RoMD低於C42，雖EV略高，不足以單獨支持promotion。
+- 使用者明確決策：不在Selection單次結果提前REJECT；先完整測完MR-13H整條流程，再決定是否保留此Label。故建立`DL-CONT13H / SR-C52` Forward source-only exact arm，與C44唯一差異為MR-13H vs MR-13E Forward model source。
+- Current Forward matrix=`C1/C3/C44/C52`；primary source-only contrast=`C52-C44`。Selection robustness stochastic=`C42/C51`、paired=`C51-C42`；Forward robustness stochastic=`C44/C52`、paired=`C52-C44`；fixed references仍分別為Selection `C32/C23`、Forward `C1/C3`。兩stage使用同一deterministic generated 8 seeds與generator seed=`20260810`，不挑best seed、不ensemble。
+- `apps/research.py → [3] 策略組合比較`新增泛化工作項`[5] 一次執行全部 Multi-seed robustness`：依config啟用profile順序串行執行Selection PIT與Forward-OOS robustness，兩stage之間不再要求確認；每一stage仍先顯示自己的canonical execution plan，任一stage BLOCKED/FAIL立即停止，不執行後續stage。原Runtime Integration Gate與全部狀態頁順延。
+- Production/runtime candidate仍固定Selection C42／Forward C44；本輪只擴張research evaluation matrix，不構成promotion。下一步：先完成C52 Forward single-seed strategy comparison，再由`[5]`一次跑完Selection+Forward 8-seed robustness，最後依Selection/Forward/paired-seed整體證據決定MR-13H。

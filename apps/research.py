@@ -171,6 +171,24 @@ def _strategy_multi_seed_robustness_menu(robustness_id: str) -> int:
             print(f"\n目前操作已中止，返回{robustness.label}選單。")
 
 
+def _run_all_strategy_multi_seed_robustness() -> None:
+    """Run every enabled robustness stage sequentially without mid-run prompts."""
+    from filters.breakout_quality.strategy_multi_seed_robustness import (
+        run_multi_seed_robustness,
+    )
+
+    profiles = get_strategy_multi_seed_robustness_profiles()
+    if not profiles:
+        raise RuntimeError("目前沒有啟用的Multiple-seed robustness profile")
+    print("\n=== 一次執行全部 Multi-seed robustness ===")
+    for index, robustness in enumerate(profiles, start=1):
+        label = str(robustness["label"])
+        robustness_id = str(robustness["robustness_id"])
+        print(f"\n[{index}/{len(profiles)}] {label}")
+        run_multi_seed_robustness(robustness_id=robustness_id, confirm=False)
+    print("\n全部 Multi-seed robustness 已完成。")
+
+
 def _strategy_runtime_integration_menu() -> int:
     from filters.breakout_quality.runtime_integration_gate import (
         run_runtime_integration_gate,
@@ -240,8 +258,10 @@ def _strategy_compare_menu() -> int:
         robustness_start = len(profiles) + 1
         for offset, robustness in enumerate(robustness_profiles):
             print(render_menu_item(robustness_start + offset, robustness["label"]))
+        combined_robustness_choice = robustness_start + len(robustness_profiles)
+        print(render_menu_item(combined_robustness_choice, "一次執行全部 Multi-seed robustness"))
         integration_cfg = get_strategy_runtime_integration_settings()
-        integration_choice = robustness_start + len(robustness_profiles)
+        integration_choice = combined_robustness_choice + 1
         print(render_menu_item(integration_choice, integration_cfg.label))
         status_choice = integration_choice + 1
         print(render_menu_item(status_choice, "查看全部階段設定與工件狀態"))
@@ -260,9 +280,14 @@ def _strategy_compare_menu() -> int:
             continue
         if 1 <= numeric <= len(profiles):
             _strategy_compare_profile_menu(profiles[numeric - 1]["profile_id"])
-        elif robustness_start <= numeric < integration_choice:
+        elif robustness_start <= numeric < combined_robustness_choice:
             robustness = robustness_profiles[numeric - robustness_start]
             _strategy_multi_seed_robustness_menu(robustness["robustness_id"])
+        elif numeric == combined_robustness_choice:
+            try:
+                _run_all_strategy_multi_seed_robustness()
+            except (FileNotFoundError, RuntimeError, ValueError) as exc:
+                print(f"[錯誤] {type(exc).__name__}: {exc}")
         elif numeric == integration_choice:
             _strategy_runtime_integration_menu()
         elif numeric == status_choice:

@@ -890,7 +890,7 @@ def validate_dataset_cli_contract_case(_base_params):
     menu_profile_count = len(menu_profiles)
     strategy_profile_count = len(strategy_profiles)
     robustness_profile_count = len(robustness_profiles)
-    strategy_status_choice = menu_profile_count + robustness_profile_count + 2
+    strategy_status_choice = menu_profile_count + robustness_profile_count + 3
     with (
         patch("builtins.input", side_effect=[str(strategy_status_choice), "0"]),
         patch("apps.research.show_strategy_comparison_status") as compare_status,
@@ -910,6 +910,33 @@ def validate_dataset_cli_contract_case(_base_params):
             compare_status.call_count,
             robustness_status.call_count,
         ),
+    )
+
+    combined_robustness_calls = []
+
+    def _record_combined_robustness_run(*, robustness_id, confirm):
+        combined_robustness_calls.append((str(robustness_id), bool(confirm)))
+        return {}
+
+    combined_robustness_choice = menu_profile_count + robustness_profile_count + 1
+    with (
+        patch("builtins.input", side_effect=[str(combined_robustness_choice), "0"]),
+        patch(
+            "filters.breakout_quality.strategy_multi_seed_robustness.run_multi_seed_robustness",
+            side_effect=_record_combined_robustness_run,
+        ),
+    ):
+        combined_menu_rc = app_strategy_compare._strategy_compare_menu()
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "strategy_compare_combined_robustness_menu_runs_all_enabled_profiles_without_midrun_confirmation",
+        (
+            0,
+            [(str(item["robustness_id"]), False) for item in robustness_profiles],
+        ),
+        (combined_menu_rc, combined_robustness_calls),
     )
 
     robustness_calls = []
