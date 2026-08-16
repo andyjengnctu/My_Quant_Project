@@ -201,7 +201,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 
 ## 正式入口
 
-- `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練、策略參數最佳化、策略組合比較與Audit維持獨立責任；Strategy Compare透過`services/portfolio_replay.py`重用canonical replay，模型／PIT producer由`services/breakout_quality/`承接。Multiple-seed robustness可保存經驗證的compact attribution source供必要的read-only診斷，但已完成的attribution Audit implementation不因此永久保留。目前formal Audit只保留`mr13e-minimum-repair-mechanism`；完成該決策後也應依disposable lifecycle退役。
+- `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練、策略參數最佳化、策略組合比較與Audit維持獨立責任；Strategy Compare透過`services/portfolio_replay.py`重用canonical replay，模型／PIT producer由`services/breakout_quality/`承接。Multiple-seed robustness可保存經驗證的compact attribution source供必要的read-only診斷，但已完成的attribution Audit implementation不因此永久保留。目前formal Audit只保留`min-roos-planned-risk-40d-alignment`：它只讀C42 completed Selection pair與canonical OHLCV，在同completed-trade／同entry-date控制下比較原MR-13E target、entry-date fixed-risk 40D與Min-ROOS planned-risk 40D對realized R的alignment；不得replay、train或建立canonical Label。決策完成後也應依disposable lifecycle退役。
 - `tools/filters/breakout_quality/application.py`：Breakout Quality model provider，承接原完整model workflow、dataset、training、score export、易讀report與詳細evaluation；不是使用者直接入口。
 - `apps/run_bundle.py`：日常本機 double check 與修改交付的單一使用者入口；固定順序為stage → commit current snapshot → package ZIP → formal test。formal test失敗時保留commit與ZIP，讓該失敗版本可被完整重現與交付。
 - `apps/test_suite.py`：`run_bundle.py`內部formal test runner；不作為一般日常使用者入口。

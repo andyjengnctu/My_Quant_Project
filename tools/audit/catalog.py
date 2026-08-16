@@ -47,6 +47,16 @@ class AuditCatalogEntry:
 
 AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
     # Only decision-relevant formal Audit handlers stay registered here.
+    "planned_risk_40d_alignment": AuditCatalogEntry(
+        audit_type="planned_risk_40d_alignment",
+        domain="breakout_quality",
+        module="tools.audit.breakout_quality.planned_risk_40d_alignment",
+        mode="formal",
+        description="Min ROOS planned-risk 40D target與realized R alignment gate",
+        read_only=True,
+        status_function="planned_risk_40d_alignment_status",
+        run_function="run_planned_risk_40d_alignment_audit",
+    ),
 
 
     # Only genuinely supported diagnostic commands belong here.  Canonical
