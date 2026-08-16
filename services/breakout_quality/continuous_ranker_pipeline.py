@@ -39,6 +39,7 @@ def load_continuous_ranker_data(
     preload_feature_bank: bool,
     allow_stale_source: bool,
     project_root: Path | None = None,
+    progress_callback=None,
 ) -> ContinuousRankerDataBundle:
     """Compatibility facade for the domain-layer canonical sample provider."""
 
@@ -48,6 +49,7 @@ def load_continuous_ranker_data(
         "experiment_profile": experiment_profile,
         "preload_feature_bank": bool(preload_feature_bank),
         "allow_stale_source": bool(allow_stale_source),
+        "progress_callback": progress_callback,
     }
     if project_root is not None:
         kwargs["project_root"] = Path(project_root)

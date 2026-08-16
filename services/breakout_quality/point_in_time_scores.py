@@ -369,17 +369,91 @@ def _resolve_score_start(
     label_end_dates = pd.to_datetime(
         bundle.group_table["label_eval_end_date"], errors="raise"
     ).dt.normalize()
-    scoped_target = build_training_scope_mask(bundle)
+    scoped_target = np.asarray(build_training_scope_mask(bundle), dtype=bool)
 
-    rejected: list[dict[str, Any]] = []
-    for candidate in _candidate_month_starts(selection_start, score_end):
+    # ``auto`` may have to reject many early calendar months before enough legal
+    # target history exists (MR-13I/J start only when historical Min ROOS risk
+    # calibration is available).  Rebuilding four full-size masks through
+    # ``_fold_group_ids`` for every rejected month made the CLI look hung on the
+    # ~1M-row daily universe.  Precompute the immutable date arrays once and count
+    # the first-fold partitions with search/small-window comparisons.  The formulas
+    # below are exactly the same strict date/cutoff predicates as _fold_group_ids.
+    all_date_ns = group_dates.to_numpy(dtype="datetime64[ns]").view("i8")
+    sorted_all_date_ns = np.sort(all_date_ns)
+    scoped_date_ns = all_date_ns[scoped_target]
+    scoped_label_ns = (
+        label_end_dates.to_numpy(dtype="datetime64[ns]").view("i8")[scoped_target]
+    )
+    nat_ns = np.datetime64("NaT", "ns").view("i8")
+    valid_label_end = scoped_label_ns != nat_ns
+    ready_ns = np.maximum(scoped_date_ns[valid_label_end], scoped_label_ns[valid_label_end])
+    sorted_ready_ns = np.sort(ready_ns)
+    scoped_order = np.argsort(scoped_date_ns, kind="mergesort")
+    sorted_scoped_date_ns = scoped_date_ns[scoped_order]
+    sorted_scoped_label_ns = scoped_label_ns[scoped_order]
+
+    def first_fold_counts(candidate: pd.Timestamp) -> dict[str, int]:
         fold = _build_fold_periods(
             candidate,
             score_end,
             fold_months=int(fold_months),
         )[0]
-        ids = _fold_group_ids(bundle, fold, validation_months=int(validation_months))
-        failures = _minimum_count_failures(settings, ids)
+        score_start_ns = np.int64(pd.Timestamp(candidate).value)
+        score_end_ns = np.int64(pd.Timestamp(fold["score_end"]).value)
+        validation_start = (
+            pd.Timestamp(candidate) - pd.DateOffset(months=int(validation_months))
+        ).normalize()
+        validation_start_ns = np.int64(validation_start.value)
+
+        train_count = int(
+            np.searchsorted(sorted_ready_ns, validation_start_ns, side="left")
+        )
+        validation_left = int(
+            np.searchsorted(
+                sorted_scoped_date_ns, validation_start_ns, side="left"
+            )
+        )
+        validation_right = int(
+            np.searchsorted(sorted_scoped_date_ns, score_start_ns, side="left")
+        )
+        validation_label_ns = sorted_scoped_label_ns[
+            validation_left:validation_right
+        ]
+        validation_count = int(
+            (
+                (validation_label_ns != nat_ns)
+                & (validation_label_ns < score_start_ns)
+            ).sum()
+        )
+        score_count = int(
+            np.searchsorted(sorted_all_date_ns, score_end_ns, side="right")
+            - np.searchsorted(sorted_all_date_ns, score_start_ns, side="left")
+        )
+        return {
+            "inner_train": train_count,
+            "validation": validation_count,
+            "score": score_count,
+        }
+
+    rejected: list[dict[str, Any]] = []
+    for candidate in _candidate_month_starts(selection_start, score_end):
+        counts = first_fold_counts(candidate)
+        required = {
+            "inner_train": (
+                counts["inner_train"],
+                settings.point_in_time_min_train_groups,
+            ),
+            "validation": (
+                counts["validation"],
+                settings.point_in_time_min_validation_groups,
+            ),
+            "score": (counts["score"], settings.point_in_time_min_score_groups),
+        }
+        failures = [
+            f"{name}={actual}<{minimum}"
+            for name, (actual, minimum) in required.items()
+            if int(actual) < int(minimum)
+        ]
         if not failures:
             scoped_dates = group_dates[scoped_target]
             scoped_label_ends = label_end_dates[scoped_target]
@@ -397,11 +471,7 @@ def _resolve_score_start(
                     str(scoped_label_ends.min().date()) if len(scoped_label_ends) else None
                 ),
                 "candidate_months_checked": int(len(rejected) + 1),
-                "first_fold_group_counts": {
-                    "inner_train": int(len(ids["train_ids"])),
-                    "validation": int(len(ids["validation_ids"])),
-                    "score": int(len(ids["score_ids"])),
-                },
+                "first_fold_group_counts": counts,
                 "rejected_candidate_count": int(len(rejected)),
                 "recent_rejected_candidates": rejected[-6:],
             }
@@ -1183,6 +1253,31 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
         )
     started = time.perf_counter()
     color_enabled = console_color_enabled()
+    data_started = time.perf_counter()
+    data_progress_state = {"last_bucket": -1}
+
+    def _daily_data_progress(processed, total, target_valid, skipped):
+        total = max(int(total), 1)
+        processed = int(processed)
+        bucket = min(20, int(processed * 20 / total))
+        if processed not in {0, total} and bucket <= int(data_progress_state["last_bucket"]):
+            return
+        data_progress_state["last_bucket"] = bucket
+        pct = min(100.0, 100.0 * processed / total)
+        print(
+            "[PIT data] "
+            f"{processed}/{total} tickers ({pct:5.1f}%)｜"
+            f"target_valid={int(target_valid):,}｜skipped={int(skipped)}｜"
+            f"elapsed={format_elapsed(time.perf_counter() - data_started)}",
+            flush=True,
+        )
+
+    daily_scope = (
+        settings.training_sample_scope
+        == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    )
+    if daily_scope:
+        print("[PIT data] 建立daily stock-day index／40D target...", flush=True)
     bundle = load_continuous_ranker_data(
         filter_id=args.filter_id,
         model_architecture=args.model_architecture,
@@ -1190,6 +1285,7 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
         preload_feature_bank=bool(args.preload_feature_bank),
         allow_stale_source=bool(args.allow_stale_source),
         project_root=PROJECT_ROOT,
+        progress_callback=_daily_data_progress if daily_scope else None,
     )
     selection_start = _iso_timestamp(
         bundle.outer_policy.get("selection_start_date"), field_name="selection_start_date"
@@ -1208,6 +1304,8 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
             f"selection={selection_start.date()}~{selection_end.date()}, "
             f"score_end={score_end.date()}"
         )
+    if str(args.score_start_date or "").strip().lower() == AUTO_SCORE_START_VALUE:
+        print("[PIT start] 自動解析最早合法PIT Score日期...", flush=True)
     score_start, score_start_resolution = _resolve_score_start(
         args.score_start_date,
         bundle=bundle,
@@ -1224,13 +1322,6 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
             f"score={score_start.date()}~{score_end.date()}"
         )
 
-    folds = _build_fold_periods(score_start, score_end, fold_months=int(args.fold_months))
-    fold_details = [
-        _fold_group_ids(bundle, fold, validation_months=int(args.inner_validation_months))
-        for fold in folds
-    ]
-    for fold, ids in zip(folds, fold_details):
-        _validate_minimum_counts(settings, str(fold["fold_id"]), ids)
     if score_start_resolution.get("mode") == "auto_earliest_legal":
         print(
             paint("最早合法 PIT Score 日期", "cyan", enabled=color_enabled, bold=True)
@@ -1242,6 +1333,14 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
                 for key in ("inner_train", "validation", "score")
             )
         )
+    folds = _build_fold_periods(score_start, score_end, fold_months=int(args.fold_months))
+    print(f"[PIT plan] 建立 {len(folds)} 個fold的合法 train/validation/score partitions...", flush=True)
+    fold_details = [
+        _fold_group_ids(bundle, fold, validation_months=int(args.inner_validation_months))
+        for fold in folds
+    ]
+    for fold, ids in zip(folds, fold_details):
+        _validate_minimum_counts(settings, str(fold["fold_id"]), ids)
     _print_plan(folds, fold_details, color=color_enabled)
     if bool(args.plan_only):
         print(
