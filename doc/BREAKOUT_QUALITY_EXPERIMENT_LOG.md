@@ -9114,3 +9114,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 為隔離使用者先前指出的entry-date敏感性，Audit在**同一批completed trades、同一actual entry date、同一planned limit**上比較三種target：(1)原MR-13E score-event-date fixed-risk 40D target；(2)entry-date fixed-risk 40D control；(3)entry-date Min-ROOS planned-risk 40D。後兩者都從entry date之後第1個交易日開始40 bars，entry day不納入；同bar碰risk barrier採adverse-first並排除該bar high。planned-risk denominator=`planned limit - planned initial stop`，fixed-risk denominator沿用current canonical `abs(max_adverse_return)`。
 - Primary gate只比較(3) vs (2)，因此planned-risk若改善不能被「只是重新錨到較晚entry date」解釋。GO要求planned-risk同時提高Target↔Realized Spearman及Top-vs-Bottom decile realized-R spread，且spread>0；兩者皆未提高即REJECT；一好一壞為NEXT_EXPERIMENT且不直接訓練。另輸出Pair一致、MAE/RMSE、逐年Spearman與capital-per-risk quintiles供判讀，但不另設magic threshold。
 - Synthetic implementation evidence：20筆完成交易fixture刻意讓stop gap與realized R交互，使entry-date fixed-risk排序近乎失效而planned-risk normalization恢復正確排序；Audit pure core得到Decision=`GO`、planned Spearman=`1.0`且Top-Bottom realized-R spread明顯高於fixed control。這只驗證Audit計算與control設計，**不是正式研究結果**。正式結果必須由使用者本機canonical C42 artifacts執行Audit後回寫。
+
+## 2026-08-16 — AUD-min-roos-planned-risk-40d-alignment result / closure
+
+- 使用者本機正式執行結果：Decision=`GO`；source=`outputs/strategy_compare/selection_pit/runs/20260816_164730_C32-C23-C42-C48_27354349956f/pairs/selection_min_roos__all_off__CONT13E_PIT__resource_aware_continuous_score_constrained_optimal`；completed trades=`420`、comparable=`414`、horizon=`40 trading bars after entry date`、fixed-risk control=`10.00%`。
+- Headline：MR-13E existing Spearman=`0.5288`、Pair=`69.10%`、Top-Bottom realized R=`4.13R`、MAE=`1.63R`；entry-date fixed-risk 40D=`0.3689 / 64.45% / 4.43R / 1.58R`；planned-risk 40D=`0.5267 / 70.03% / 5.00R / 1.57R`。planned-risk相對same-entry fixed-risk同時改善Spearman與Top-Bottom separation，依事前gate正式GO；其整體Spearman與existing MR-13E近乎相同，不得解讀成全面取代MR-13E。
+- 年度Spearman planned-risk 2014～2020=`0.608, 0.543, 0.629, 0.629, 0.524, 0.654, 0.117`；相對entry-fixed在2014～2019皆不差且多數明顯更好，2020仍弱，故後續模型必須保留year/regime reporting但不得新增year gate。
+- Capital/Risk quintile planned-risk rho Q1～Q5=`0.477, 0.527, 0.566, 0.627, 0.453`；沒有只在單一capital bucket成立，但Q1/Q5弱於中間區，後續不得假設capital intensity與utility為單調線性關係。
+- Entry-age quartile planned-risk rho Q1～Q4=`0.436, 0.328, 0.703, 0.540`；相對MR-13E Q1/Q2較弱、Q3/Q4較強，說明planned-risk geometry在較晚entry候選的alignment改善最明顯；這只作diagnostic，不建立entry-age gate。
+- 決策：`AUD-min-roos-planned-risk-40d-alignment`完成使命，停止Audit鏈。下一步是受控模型實驗，不再新增同題Audit；為隔離candidate-universe改變與planned-risk target效果，下一模型研究必須先保留同candidate universe的existing-target control，再只切換planned-risk target。
+- Lifecycle：依`PROJECT_SETTINGS.md C11`，formal Audit implementation/config/catalog與只服務本Audit的dedicated synthetic退役；Registry/Log保留結果與identity。

@@ -12,38 +12,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-AUDIT_SCHEMA_VERSION = 6
+AUDIT_SCHEMA_VERSION = 7
 AUDIT_OUTPUT_ROOT = "outputs/audit"
 AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
 
 AUDIT_MODULES: dict[str, dict[str, Any]] = {
     "breakout_quality": {
         "enabled": True,
-        "audits": {
-            "min-roos-planned-risk-40d-alignment": {
-                "enabled": True,
-                "audit_type": "planned_risk_40d_alignment",
-                "description": (
-                    "比較現有MR-13E target、同entry-date fixed-risk 40D control與"
-                    "Min ROOS planned-risk 40D target對completed-trade realized R的alignment"
-                ),
-                "source": {
-                    "strategy_compare_profile": "selection_pit",
-                    "candidate_role": "selection_candidate_arm_id",
-                },
-                "dimensions": {
-                    "horizon_bars": "canonical",
-                    "capital_bucket_count": 5,
-                    "entry_age_bucket_count": 4,
-                },
-                "outcomes": {
-                    "primary_control": "entry_date_fixed_risk_40d",
-                    "go_rule": "planned_risk_improves_spearman_and_top_bottom_realized_r",
-                    "mixed_rule": "next_experiment_without_model_training",
-                },
-                "output_subdir": "breakout_quality/min-roos-planned-risk-40d-alignment",
-            },
-        },
+        "audits": {},
     },
 }
 
