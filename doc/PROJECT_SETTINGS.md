@@ -40,6 +40,7 @@
 19. 所有人讀報表的判讀色彩必須使用專案共用語意來源`core/report_style.py`，並固定採「文字本身上色」而非燈號／圓點／emoji marker：禁止以`🟢`、`🔴`、`🟡`、`⚪`或等價圖示表達好壞。綠色只表示依明確metric contract屬有利／PASS，紅色只表示不利／FAIL，黃色表示注意／partial／尚未達完整條件，灰色表示中性／N/A／沒有方向性判讀；青色只用於標題、identity或reference等非好壞資訊。不得因數值正負直接上綠紅，除非該指標明確定義「正／負即好／壞」（例如rho、spread或相對alpha）；MDD等lower-is-better必須依metric direction判讀，曝險、交易數、候選數等沒有通用好壞者預設中性。多arm aggregate若已有config明確指定的current candidate/reference，所有可比較metric固定相對該reference依metric direction對「數值或判讀文字本身」上色；reference本身與無方向metric不做綠紅推論；沒有明確reference時不得自行用最佳／最差臆造判讀。Console使用ANSI文字色；Markdown使用`core/report_style.py`提供的同一palette inline HTML文字色；若顯示環境不支援色彩，只退化為純文字，不得再用燈號圖示補償。
 20. 同一研究／策略結果若同時輸出console、Markdown、JSON、dashboard或跨報表摘要，metric定義、label、單位、小數位與方向性必須重用共用metric registry與同一canonical結果／既有驗證工件；renderer只負責組裝與顯示，不得從raw market／trade rows另算第二套同名指標。演算法專屬debug欄位可以留在JSON／sidecar，但共同人讀報表只放跨方法可比較的核心指標；R預測、轉換率等間接指標應與最終策略績效分表呈現並保留來源。
 21. 長流程互動執行預設只顯示必要的RUN／REUSE／DONE進度與最終核心摘要；pair-level詳細報表、solver states、repair/ascent、stale guard、timing等過程資訊應保存於工件供追查，不得在aggregate執行時重複洗版。
+22. Strategy Compare 等以「核心策略結果」作跨arm共同主表時，欄位順序固定為：`報酬 → MDD → RoMD → 年化 → 最差完整年度 → Log R² → 月勝率 → 勝率 → Payoff → EV → 交易數 → 平均曝險`。此順序屬人讀報表契約，必須由`core/report_metrics.py`的共用metric registry持有並由renderer重用，不得在個別報表重新手排；R預測／轉化與資金／執行等非核心結果維持獨立分表。
 
 
 ## C. Coding 與架構原則

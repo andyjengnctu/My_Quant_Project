@@ -36,6 +36,22 @@ TRADE_RESULT_METRICS = (
     ReportMetricSpec("reserved_buy_fill_rate_pct", "掛單成交率", "%", 2, "higher"),
 )
 
+
+CORE_STRATEGY_RESULT_METRICS = (
+    next(metric for metric in PORTFOLIO_RESULT_METRICS if metric.key == "total_return_pct"),
+    next(metric for metric in PORTFOLIO_RESULT_METRICS if metric.key == "max_drawdown_pct"),
+    next(metric for metric in PORTFOLIO_RESULT_METRICS if metric.key == "return_over_max_drawdown"),
+    next(metric for metric in PORTFOLIO_RESULT_METRICS if metric.key == "annual_return_pct"),
+    next(metric for metric in PORTFOLIO_RESULT_METRICS if metric.key == "min_full_year_return_pct"),
+    next(metric for metric in PORTFOLIO_RESULT_METRICS if metric.key == "log_r_squared"),
+    next(metric for metric in PORTFOLIO_RESULT_METRICS if metric.key == "monthly_win_rate_pct"),
+    next(metric for metric in TRADE_RESULT_METRICS if metric.key == "win_rate_pct"),
+    next(metric for metric in TRADE_RESULT_METRICS if metric.key == "payoff_ratio"),
+    next(metric for metric in TRADE_RESULT_METRICS if metric.key == "expected_value_r"),
+    next(metric for metric in TRADE_RESULT_METRICS if metric.key == "trade_count"),
+    next(metric for metric in PORTFOLIO_RESULT_METRICS if metric.key == "avg_exposure_pct"),
+)
+
 EXECUTION_CAPACITY_METRICS = (
     ReportMetricSpec("avg_orderable_candidates", "日均可掛候選", "", 2, "neutral"),
     ReportMetricSpec("candidate_supply_gap_days", "候選不足日", " 日", 0, "lower"),
@@ -57,6 +73,7 @@ PAIR_MAIN_METRICS = (
 __all__ = [
     "ReportMetricSpec",
     "PORTFOLIO_RESULT_METRICS",
+    "CORE_STRATEGY_RESULT_METRICS",
     "TRADE_RESULT_METRICS",
     "EXECUTION_CAPACITY_METRICS",
     "PAIR_MAIN_METRICS",

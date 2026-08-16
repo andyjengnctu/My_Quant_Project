@@ -3524,6 +3524,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "資金／執行" in render_report_source
         and "報表分工" not in render_report_source
         and "render_strategy_r_analysis_table" in render_report_source
+        and "metrics = CORE_STRATEGY_RESULT_METRICS" in comparison_source
         and "_contrast_table(" not in render_report_source
         and "_resource_aware_table(" not in render_report_source
         and "_selector_timing_table(" not in render_report_source
@@ -3539,6 +3540,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "strategy_reports_share_metric_registry_and_project_wide_color_semantics",
         True,
         "PORTFOLIO_RESULT_METRICS" in report_metrics_source
+        and "CORE_STRATEGY_RESULT_METRICS" in report_metrics_source
         and "PAIR_MAIN_METRICS" in report_metrics_source
         and "from core.report_metrics import" in comparison_source
         and "_report_reference_arm_id" in comparison_source

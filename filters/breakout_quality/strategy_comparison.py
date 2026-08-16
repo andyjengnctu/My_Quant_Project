@@ -39,6 +39,7 @@ from core.strategy_comparison import (
 )
 from core.report_metrics import (
     EXECUTION_CAPACITY_METRICS,
+    CORE_STRATEGY_RESULT_METRICS,
     PORTFOLIO_RESULT_METRICS,
     TRADE_RESULT_METRICS,
 )
@@ -640,12 +641,7 @@ def _core_result_table(
     reference_arm_id: str | None,
     target: str = "plain",
 ) -> str:
-    direct_trade_metrics = TRADE_RESULT_METRICS[:4]
-    metrics = (
-        *PORTFOLIO_RESULT_METRICS[:-1],
-        *direct_trade_metrics,
-        PORTFOLIO_RESULT_METRICS[-1],
-    )
+    metrics = CORE_STRATEGY_RESULT_METRICS
     return _metric_table(
         scenarios,
         settings=settings,
