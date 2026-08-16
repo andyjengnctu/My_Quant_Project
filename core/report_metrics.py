@@ -123,6 +123,12 @@ R_MODEL_PREDICTION_METRICS = (
 
 R_SELECTION_TRANSLATION_METRICS = (
     RAnalysisMetricSpec(
+        "r_conversion_efficiency", "RCE",
+        "DL選擇R ÷ paired ΔTarget Selection R；衡量模型選股理論R edge轉成實際交易R edge的效率",
+        "僅在 paired ΔTarget Selection R > 0 時有效；越高越好，100%代表等量轉化",
+        digits=2, format_kind="fraction_pct", preference="higher", signal_mode="relative",
+    ),
+    RAnalysisMetricSpec(
         "selected_target_mean_r", "Target mean R", "實際選入候選的平均 Target R", "越高越好",
         unit=" R", digits=2, preference="higher", signal_mode="relative",
     ),

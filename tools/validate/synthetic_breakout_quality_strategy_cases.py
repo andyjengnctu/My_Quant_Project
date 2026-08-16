@@ -3541,6 +3541,10 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and '"bottom_target_r": _finite(metrics.get("bottom_decile_target_mean"))' in diagnostics_source
         and '"top_target_r": top' in diagnostics_source
         and '"bottom_target_r": bottom' in diagnostics_source
+        and '"r_conversion_efficiency", "RCE"' in report_metrics_source
+        and '`選股轉換＝RCE、Target mean R、Target %ile、Top-K、Opp gap`' in project_settings
+        and "paired_target_selection_delta_r" in diagnostics_source
+        and "backfill_pair_r_conversion_diagnostic" in comparison_source
         and "Target %ile" in report_metrics_source
         and "Top-K" in report_metrics_source
         and "Opp gap" in report_metrics_source
