@@ -3528,13 +3528,15 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "_contrast_table(" not in render_report_source
         and "_resource_aware_table(" not in render_report_source
         and "_selector_timing_table(" not in render_report_source
-        and "R_ACTUAL_TRADE_METRICS" in diagnostics_source
-        and "R_MODEL_PREDICTION_METRICS" in diagnostics_source
-        and "R_SELECTION_TRANSLATION_METRICS" in diagnostics_source
-        and '("實際交易", R_ACTUAL_TRADE_METRICS)' in diagnostics_source
-        and '("模型預測", R_MODEL_PREDICTION_METRICS)' in diagnostics_source
-        and '("選股轉化", R_SELECTION_TRANSLATION_METRICS)' in diagnostics_source
-        and '("指標", *(str(row.get("arm_id") or "-") for row in rows), "定義", "理想方向")' in diagnostics_source
+        and "R_ANALYSIS_GROUPED_SECTIONS" in diagnostics_source
+        and "R_ANALYSIS_MERGED_METRICS" in diagnostics_source
+        and '("實際交易", R_ACTUAL_TRADE_METRICS)' in report_metrics_source
+        and '("模型預測", R_MODEL_PREDICTION_METRICS)' in report_metrics_source
+        and '("選股轉換", R_SELECTION_TRANSLATION_METRICS)' in report_metrics_source
+        and 'top_headers = ["分群", ""]' in diagnostics_source
+        and 'bottom_headers = ["編號", "比較對象"]' in diagnostics_source
+        and "best_worst_signals" in diagnostics_source
+        and "_render_metric_notes()" in diagnostics_source
         and '"top_target_r": _finite(metrics.get("top_decile_target_mean"))' in diagnostics_source
         and '"bottom_target_r": _finite(metrics.get("bottom_decile_target_mean"))' in diagnostics_source
         and '"top_target_r": top' in diagnostics_source
@@ -3557,10 +3559,11 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "PAIR_MAIN_METRICS" in report_metrics_source
         and "from core.report_metrics import" in comparison_source
         and "_report_reference_arm_id" in comparison_source
+        and "best_worst_signals" in comparison_source
         and "styled_signal" in comparison_source
         and 'target="markdown"' in comparison_source
         and 'target="console"' in comparison_source
-        and "判讀基準" in render_report_source
+        and "判讀基準" not in render_report_source
         and "from core.report_metrics import PAIR_MAIN_METRICS" in reporting_source
         and "from core.report_style import" in reporting_source
         and "from core.report_style import" in multi_seed_source
@@ -3574,6 +3577,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and not any(marker in report_style_source for marker in ("🟢", "🔴", "🟡", "⚪"))
         and "文字本身上色" in project_settings
         and "綠＝最佳、紅＝最差、白＝其餘" in project_settings
+        and "前兩欄固定為`編號`、`比較對象`" in project_settings
         and "表格下方註解" in project_settings
         and "renderer只負責組裝與顯示" in project_settings,
     )

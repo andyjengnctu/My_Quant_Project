@@ -43,10 +43,8 @@ from core.report_metrics import (
     PORTFOLIO_RESULT_METRICS,
     TRADE_RESULT_METRICS,
 )
-from core.report_style import markdown_tone, signal_for_delta, styled_signal
+from core.report_style import best_worst_signals, styled_signal
 from core.console_report import (
-    console_color_enabled,
-    paint,
     print_artifact_paths,
     project_relative_display_path,
     render_key_values,
@@ -583,53 +581,33 @@ def _value_with_signal(text: str, signal: str, *, target: str) -> str:
     return styled_signal(text, signal, target=target)
 
 
-def _reference_text(text: str, *, target: str) -> str:
-    if target == "console":
-        return paint(text, "cyan", enabled=console_color_enabled(), bold=True)
-    if target == "markdown":
-        return markdown_tone(text, "cyan", bold=True)
-    return text
-
-
 def _metric_table(
     scenarios: dict[str, dict[str, Any]],
     *,
     settings: StrategyComparisonSettings,
     metrics: tuple[Any, ...],
-    reference_arm_id: str | None,
-    include_name: bool = True,
     target: str = "plain",
 ) -> str:
-    reference = scenarios.get(str(reference_arm_id or "")) or {}
+    signals_by_metric = {
+        metric.key: best_worst_signals(
+            {arm.arm_id: _metric(scenarios[arm.arm_id], metric.key) for arm in settings.enabled_arms},
+            preference=metric.preference,
+        )
+        for metric in metrics
+    }
     rows = []
     for arm in settings.enabled_arms:
         payload = scenarios[arm.arm_id]
         values = []
         for metric in metrics:
             text = _fmt(payload.get(metric.key), unit=metric.unit, digits=metric.digits)
-            if arm.arm_id != reference_arm_id and reference:
-                value = _metric(payload, metric.key)
-                ref_value = _metric(reference, metric.key)
-                if value is not None and ref_value is not None:
-                    signal = signal_for_delta(
-                        value - ref_value,
-                        preference=metric.preference,
-                        warning_threshold=metric.warning_threshold,
-                    )
-                    text = _value_with_signal(text, signal, target=target)
+            signal = signals_by_metric.get(metric.key, {}).get(arm.arm_id)
+            if signal:
+                text = _value_with_signal(text, signal, target=target)
             values.append(text)
-        if arm.arm_id == reference_arm_id:
-            identity = (
-                (_reference_text(arm.arm_id, target=target), _reference_text(arm.name, target=target))
-                if include_name
-                else (_reference_text(arm.arm_id, target=target),)
-            )
-        else:
-            identity = (arm.arm_id, arm.name) if include_name else (arm.arm_id,)
-        rows.append((*identity, *values))
-    identity_headers = ("編號", "比較對象") if include_name else ("編號",)
+        rows.append((arm.arm_id, arm.name, *values))
     return render_table(
-        (*identity_headers, *(metric.label for metric in metrics)),
+        ("編號", "比較對象", *(metric.label for metric in metrics)),
         rows,
     )
 
@@ -638,7 +616,6 @@ def _core_result_table(
     scenarios: dict[str, dict[str, Any]],
     *,
     settings: StrategyComparisonSettings,
-    reference_arm_id: str | None,
     target: str = "plain",
 ) -> str:
     metrics = CORE_STRATEGY_RESULT_METRICS
@@ -646,8 +623,6 @@ def _core_result_table(
         scenarios,
         settings=settings,
         metrics=metrics,
-        reference_arm_id=reference_arm_id,
-        include_name=True,
         target=target,
     )
 
@@ -656,7 +631,6 @@ def _execution_table(
     scenarios: dict[str, dict[str, Any]],
     *,
     settings: StrategyComparisonSettings,
-    reference_arm_id: str | None,
     target: str = "plain",
 ) -> str:
     metrics = (
@@ -667,8 +641,6 @@ def _execution_table(
         scenarios,
         settings=settings,
         metrics=metrics,
-        reference_arm_id=reference_arm_id,
-        include_name=False,
         target=target,
     )
 
@@ -892,7 +864,6 @@ def _yearly_table(
     pair_payloads: dict[str, dict[str, Any]],
     *,
     settings: StrategyComparisonSettings,
-    reference_arm_id: str | None,
     target: str = "plain",
 ) -> str:
     enabled_ids = tuple(arm.arm_id for arm in settings.enabled_arms)
@@ -921,17 +892,17 @@ def _yearly_table(
     years = sorted({year for values in by_id.values() for year in values})
     rows = []
     for year in years:
-        reference_value = by_id.get(str(reference_arm_id or ""), {}).get(year)
+        signals = best_worst_signals(
+            {arm_id: by_id[arm_id].get(year) for arm_id in enabled_ids},
+            preference="higher",
+        )
         values = []
         for arm_id in enabled_ids:
             value = by_id[arm_id].get(year)
             text = _fmt(value, unit="%")
-            if arm_id != reference_arm_id and value is not None and reference_value is not None:
-                text = _value_with_signal(
-                    text,
-                    signal_for_delta(float(value) - float(reference_value), preference="higher"),
-                    target=target,
-                )
+            signal = signals.get(arm_id)
+            if signal:
+                text = _value_with_signal(text, signal, target=target)
             values.append(text)
         rows.append((year, *values))
     return render_table(("年度", *enabled_ids), rows)
@@ -959,13 +930,8 @@ def _render_report(
     scenarios: dict[str, dict[str, Any]],
     pair_payloads: dict[str, dict[str, Any]],
     diagnostics: dict[str, Any],
-    reference_arm_id: str | None,
     target: str = "plain",
 ) -> str:
-    reference_name = next(
-        (arm.name for arm in settings.enabled_arms if arm.arm_id == reference_arm_id),
-        "-",
-    )
     return "\n\n".join(
         (
             render_title("策略績效比較"),
@@ -976,24 +942,23 @@ def _render_report(
                     ("Param policy", settings.param_policy),
                     ("Max positions", settings.max_positions),
                     ("Rotation", settings.rotation),
-                    ("判讀基準", f"{reference_arm_id} {reference_name}" if reference_arm_id else "-"),
                     ("Config fingerprint", status["config_fingerprint"]),
                     ("比較設定", "config/strategy_compare.py"),
                 )
             ),
             render_section("1. 核心策略結果"),
             _core_result_table(
-                scenarios, settings=settings, reference_arm_id=reference_arm_id, target=target
+                scenarios, settings=settings, target=target
             ),
             render_section("2. R 預測／轉化"),
             render_strategy_r_analysis_table(diagnostics, target=target),
             render_section("3. 資金／執行"),
             _execution_table(
-                scenarios, settings=settings, reference_arm_id=reference_arm_id, target=target
+                scenarios, settings=settings, target=target
             ),
             render_section("4. 年度結果"),
             _yearly_table(
-                pair_payloads, settings=settings, reference_arm_id=reference_arm_id, target=target
+                pair_payloads, settings=settings, target=target
             ),
         )
     ).rstrip() + "\n"
@@ -1374,7 +1339,6 @@ def run_strategy_comparison(
         scenarios=scenarios,
         pair_payloads=pair_payloads,
         diagnostics=diagnostics,
-        reference_arm_id=reference_arm_id,
         target="markdown",
     )
     console_report = _render_report(
@@ -1383,7 +1347,6 @@ def run_strategy_comparison(
         scenarios=scenarios,
         pair_payloads=pair_payloads,
         diagnostics=diagnostics,
-        reference_arm_id=reference_arm_id,
         target="console",
     )
     report_path = run_dir / "strategy_comparison.md"

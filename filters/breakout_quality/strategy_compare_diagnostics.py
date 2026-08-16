@@ -18,11 +18,7 @@ from core.report_metrics import (
     R_ANALYSIS_MERGED_METRICS,
     RAnalysisMetricSpec,
 )
-from core.report_style import (
-    SIGNAL_NEGATIVE,
-    SIGNAL_POSITIVE,
-    styled_signal,
-)
+from core.report_style import best_worst_signals, styled_signal
 from core.strategy_comparison import StrategyComparisonSettings
 
 from core.exact_accounting import (
@@ -1032,34 +1028,6 @@ def _format_r_analysis_value(value: Any, metric: RAnalysisMetricSpec) -> str:
     return _fmt(value, digits=metric.digits, unit=metric.unit)
 
 
-def _best_worst_by_metric(
-    *,
-    rows: list[dict[str, Any]],
-    metric: RAnalysisMetricSpec,
-) -> dict[str, str]:
-    values: list[tuple[str, float]] = []
-    for row in rows:
-        numeric = _finite(row.get(metric.key))
-        if numeric is None:
-            continue
-        values.append((str(row.get("arm_id") or "-"), numeric))
-    if len(values) < 2:
-        return {}
-    numbers = [value for _arm, value in values]
-    best_value = max(numbers) if metric.preference != "lower" else min(numbers)
-    worst_value = min(numbers) if metric.preference != "lower" else max(numbers)
-    if math.isclose(best_value, worst_value, rel_tol=0.0, abs_tol=1e-12):
-        return {}
-    signals: dict[str, str] = {}
-    for arm_id, value in values:
-        if math.isclose(value, best_value, rel_tol=0.0, abs_tol=1e-12):
-            signals[arm_id] = SIGNAL_POSITIVE
-    for arm_id, value in values:
-        if math.isclose(value, worst_value, rel_tol=0.0, abs_tol=1e-12):
-            signals[arm_id] = SIGNAL_NEGATIVE
-    return signals
-
-
 def _pad_cell(text: str, width: int, *, align: str = "left") -> str:
     value = str(text)
     padding = max(0, int(width) - _display_width(value))
@@ -1105,17 +1073,23 @@ def render_strategy_r_analysis_table(diagnostics: dict[str, Any], *, target: str
     if not rows:
         return "沒有可用的R預測／轉化診斷。"
     metrics = R_ANALYSIS_MERGED_METRICS
-    top_headers = ["分群"]
-    bottom_headers = ["編號"]
+    top_headers = ["分群", ""]
+    bottom_headers = ["編號", "比較對象"]
     for group_label, group_metrics in R_ANALYSIS_GROUPED_SECTIONS:
         for index, metric in enumerate(group_metrics):
             top_headers.append(group_label if index == 0 else "")
             bottom_headers.append(metric.label)
     body: list[list[str]] = []
-    metric_signals = {metric.key: _best_worst_by_metric(rows=rows, metric=metric) for metric in metrics}
+    metric_signals = {
+        metric.key: best_worst_signals(
+            {str(row.get("arm_id") or "-"): row.get(metric.key) for row in rows},
+            preference=metric.preference,
+        )
+        for metric in metrics
+    }
     for row in rows:
         arm_id = str(row.get("arm_id") or "-")
-        values = [arm_id]
+        values = [arm_id, str(row.get("name") or "-")]
         for metric in metrics:
             text = _format_r_analysis_value(row.get(metric.key), metric)
             signal = metric_signals.get(metric.key, {}).get(arm_id)

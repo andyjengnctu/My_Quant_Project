@@ -135,6 +135,38 @@ def signal_for_auc(value: Any) -> str:
     return SIGNAL_POSITIVE if numeric > 0.5 else SIGNAL_NEGATIVE
 
 
+def best_worst_signals(
+    values_by_id: dict[str, Any],
+    *,
+    preference: str,
+    tolerance: float = 1e-12,
+) -> dict[str, str]:
+    """Mark only the best and worst comparable values; all others stay unstyled.
+
+    This is the canonical multi-arm aggregate color contract. Metrics without a
+    universal higher/lower preference intentionally return no signal.
+    """
+
+    if preference not in {"higher", "lower"}:
+        return {}
+    finite = {str(key): finite_number(value) for key, value in values_by_id.items()}
+    finite = {key: value for key, value in finite.items() if value is not None}
+    if len(finite) < 2:
+        return {}
+    numeric_values = list(finite.values())
+    best = max(numeric_values) if preference == "higher" else min(numeric_values)
+    worst = min(numeric_values) if preference == "higher" else max(numeric_values)
+    if math.isclose(best, worst, rel_tol=0.0, abs_tol=float(tolerance)):
+        return {}
+    signals: dict[str, str] = {}
+    for key, value in finite.items():
+        if math.isclose(value, best, rel_tol=0.0, abs_tol=float(tolerance)):
+            signals[key] = SIGNAL_POSITIVE
+        elif math.isclose(value, worst, rel_tol=0.0, abs_tol=float(tolerance)):
+            signals[key] = SIGNAL_NEGATIVE
+    return signals
+
+
 def signal_label(signal: str) -> str:
     """Return the plain semantic judgment word, without any icon."""
 
@@ -221,6 +253,7 @@ __all__ = [
     "signal_for_coverage",
     "signal_for_ratio",
     "signal_for_auc",
+    "best_worst_signals",
     "signal_label",
     "signal_marker",
     "tone_for_signal",
