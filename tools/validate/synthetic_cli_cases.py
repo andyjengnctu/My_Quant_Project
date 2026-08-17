@@ -23,6 +23,7 @@ from config.breakout_quality import (
     STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+    DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
 )
 from .checks import add_check
 
@@ -184,6 +185,59 @@ def validate_dataset_cli_contract_case(_base_params):
                 and "## Top-K / K-boundary" in ranker_markdown
                 and "只看候選數>K" in ranker_markdown
                 and "## Actual Round-trip R" in ranker_markdown,
+            ),
+        )
+
+        dual_output = app_breakout_quality.resolve_filter_model_output_dir(
+            simple_root,
+            "synthetic_quality",
+            BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+            DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
+        )
+        dual_output.mkdir(parents=True, exist_ok=True)
+        (dual_output / "continuous_ranker_report.json").write_text(
+            json.dumps(
+                {
+                    "training": {
+                        "selected_epoch": 1,
+                        "epoch_selection": {"best_validation_mean_daily_spearman": 0.0227},
+                    },
+                    "split_metrics": {
+                        "validation": dict(ranker_row),
+                        "oos": dict(ranker_row),
+                        "breakout_candidate_oos": dict(ranker_row),
+                    },
+                    "dual_component_evaluation": {
+                        "oos": {
+                            "favorable_mfe_r": {"mean_daily_spearman": 0.3812},
+                            "adverse_to_peak_r": {"mean_daily_spearman": 0.0944},
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch.object(app_breakout_quality, "PROJECT_ROOT", simple_root):
+            _, dual_stdout = _capture_stdout(
+                app_breakout_quality._emit_breakout_quality_simple_report,
+                "train-continuous-ranker",
+                [
+                    "--filter-id", "synthetic_quality",
+                    "--model-architecture", BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+                    "--experiment-profile", DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
+                ],
+                returncode=0,
+                elapsed_sec=2.5,
+            )
+        add_check(
+            results,
+            "cli_contract",
+            case_id,
+            "continuous_ranker_dual_component_simple_report_surfaces_primary_oos_component_rhos",
+            (True, True),
+            (
+                "OOS MFE component rho" in dual_stdout and "0.3812" in dual_stdout,
+                "OOS Adverse component rho" in dual_stdout and "0.0944" in dual_stdout,
             ),
         )
 

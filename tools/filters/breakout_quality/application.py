@@ -497,6 +497,23 @@ def _simple_report_details(
                 ),
             ]
         )
+        dual_component_eval = dict(payload.get("dual_component_evaluation") or {})
+        oos_components = dict(dual_component_eval.get("oos") or {})
+        if oos_components:
+            favorable = dict(oos_components.get("favorable_mfe_r") or {})
+            adverse = dict(oos_components.get("adverse_to_peak_r") or {})
+            rows.extend(
+                [
+                    (
+                        "OOS MFE component rho",
+                        _fmt_simple_metric(favorable.get("mean_daily_spearman")),
+                    ),
+                    (
+                        "OOS Adverse component rho",
+                        _fmt_simple_metric(adverse.get("mean_daily_spearman")),
+                    ),
+                ]
+            )
         reference_eval = dict(payload.get("reference_target_evaluation") or {})
         if reference_eval.get("available"):
             reference_metrics = dict(reference_eval.get("split_metrics") or {})
