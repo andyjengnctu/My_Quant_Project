@@ -9266,3 +9266,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 相對MR-13E歷史Selection PIT模型層：MR-13K Daily rho=`0.2877` vs MR-13E=`0.1627`，Pair=`60.13%` vs `55.75%`，breakout Daily rho=`0.2081` vs `0.1019`，顯示Pure-MFE在PIT條件下的ranking learnability提升仍存在；但這不等於portfolio economics改善，最終只由C53-C42 controlled replay判定。
 - Decision：`MR-13K = SELECTION_PIT_MODEL_GATE_PASS / SELECTION_STRATEGY_READY`，`DL-CONT13K-PIT = RESULT_AVAILABLE / ACTIVE_RESEARCH_SOURCE`，`SR-C53 = READY_FOR_SELECTION_STRATEGY_REPLAY`。下一步只執行`apps/research.py → [3] 策略組合比較 → Selection PIT 策略比較 → 執行目前比較設定`，Primary contrast=`C53-C42`。在C53結果出來前，不建立MR-13K Forward arm、不開multi-seed robustness、不改Target或selector。
 - App層輸出修正：首次build PIT時audit JSON尚未存在，`build-point-in-time-scores`簡易報表原本因此顯示`Score coverage=- / Scored groups=None`；改為只在build command且audit coverage尚不存在時，直接讀同一canonical `selection_point_in_time_manifest.json.coverage`。Daily/Global rho仍只在audit完成後由audit canonical payload顯示，不另算第二套指標。
+
+### 2026-08-17 — MR-13K C53 Selection result → full Forward + 16-seed robustness authorized
+
+- 程式基準：`test-branch-1_20260817_184430_4ffd959(1).zip`，SHA256=`54ba69db9821793d97cd948dfc95158ea74a50f2ccca7425630ec471a87d74e7`。本輪不改MR-13K Target、architecture、loss、K/R0、exact solver、cash/execution或production C42/C44；只依使用者明確要求擴充完整研究評估矩陣。
+- C53 Seed42 Selection正式結果：Return=`143.55%`、MDD=`19.11%`、RoMD=`7.51`、Annual=`13.56%`、EV=`0.70R`、DL選擇R=`100.72R`；C42 reference為Return=`199.32%`、MDD=`19.88%`、RoMD=`10.03`、Annual=`16.96%`、EV=`0.75R`、DL選擇R=`117.16R`。MR-13K模型層Daily rho/Pair明顯較高，但Seed42 Selection portfolio translation低於MR-13E。
+- 使用者決策：不在單次Selection提前結案，要求把Forward-OOS與robustness全部測完。因此新增`DL-CONT13K / SR-C54` Forward source-only exact arm；C54與C44除MR-13K vs MR-13E frozen Forward source外，Min/all-off、K/R0、canonical sizing/cash/orderability/execution與`exact_branch_and_bound_v1`完全固定。
+- Current Forward matrix=`C1/C3/C44/C54`，primary source-only contrast=`C54-C44`。Selection robustness stochastic=`C42/C53`、paired=`C53-C42`；Forward robustness stochastic=`C44/C54`、paired=`C54-C44`；fixed references分別為Selection `C32/C23`、Forward `C1/C3`。
+- Robustness完全沿用current config，不覆寫使用者設定：`seed_count=16`、`seed_generator_seed=20260810`、deterministic generated seeds、不挑best seed、不ensemble、completed unit可reuse。Production/runtime candidate仍固定Selection C42／Forward C44。
+- 正式執行順序：先`apps/research.py → [3] 策略組合比較 → Forward-OOS 策略比較 → 執行目前比較設定`取得C54 single-seed；再由同一策略比較選單的`一次執行全部 Multi-seed robustness`依config串行完成Selection與Forward robustness。完成兩stage後再依single-seed＋paired 16-seed整體證據結案MR-13K。

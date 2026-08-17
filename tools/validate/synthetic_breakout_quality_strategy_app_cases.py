@@ -3618,20 +3618,47 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     forward_current_settings = strategy_config.get_strategy_comparison_settings("forward_oos")
     c44_current = forward_current_settings.arms["C44"]
-    selection_robustness_staged = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
-    forward_robustness_staged = strategy_config.get_strategy_multi_seed_robustness_settings("forward_oos")
+    c54_current = forward_current_settings.arms["C54"]
+    c44_options = dict(c44_current.dl_runtime_options or {})
+    c54_options = dict(c54_current.dl_runtime_options or {})
+    selection_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
+    forward_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("forward_oos")
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "mr13k_stage_stops_at_selection_single_seed_without_forward_or_multiseed_preauthorization",
+        "mr13k_full_forward_and_multiseed_research_matrix_is_source_only_and_keeps_runtime_candidates_frozen",
         True,
-        {"C1", "C3", "C44"} == {arm.arm_id for arm in forward_current_settings.enabled_arms}
+        {"C1", "C3", "C44", "C54"}
+        == {arm.arm_id for arm in forward_current_settings.enabled_arms}
         and c44_current.enabled
-        and not selection_robustness_staged.enabled
-        and not forward_robustness_staged.enabled
-        and tuple(selection_robustness_staged.stochastic_arm_ids) == ("C42",)
-        and tuple(forward_robustness_staged.stochastic_arm_ids) == ("C44",)
-        and tuple(selection_robustness_staged.paired_contrasts) == ()
-        and tuple(forward_robustness_staged.paired_contrasts) == ()
+        and c54_current.enabled
+        and c54_current.param_source == c44_current.param_source == "min_roos"
+        and c54_current.rule_policy == c44_current.rule_policy == "all_off"
+        and c54_current.dl_id == "CONT13K"
+        and c44_current.dl_id == "CONT13E"
+        and c54_current.dl_runtime_mode == c44_current.dl_runtime_mode
+        == "resource-aware-continuous-score-constrained-optimal"
+        and c54_options == c44_options
+        and c54_current.robustness_role == c44_current.robustness_role == "off"
+        and {"C54-C44", "C54-C3", "C54-C1"}.issubset(
+            {contrast.contrast_id for contrast in forward_current_settings.enabled_contrasts}
+        )
+        and selection_robustness_active.enabled
+        and forward_robustness_active.enabled
+        and tuple(selection_robustness_active.stochastic_arm_ids) == ("C42", "C53")
+        and tuple(forward_robustness_active.stochastic_arm_ids) == ("C44", "C54")
+        and tuple(
+            (str(item["left"]), str(item["right"]))
+            for item in selection_robustness_active.paired_contrasts
+        ) == (("C53", "C42"),)
+        and tuple(
+            (str(item["left"]), str(item["right"]))
+            for item in forward_robustness_active.paired_contrasts
+        ) == (("C54", "C44"),)
+        and selection_robustness_active.seed_count == forward_robustness_active.seed_count
+        == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT
+        and selection_robustness_active.seed_generator_seed
+        == forward_robustness_active.seed_generator_seed
+        == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED
         and strategy_config.get_strategy_runtime_integration_settings().selection_candidate_arm_id == "C42"
         and strategy_config.get_strategy_runtime_integration_settings().forward_candidate_arm_id == "C44",
     )
