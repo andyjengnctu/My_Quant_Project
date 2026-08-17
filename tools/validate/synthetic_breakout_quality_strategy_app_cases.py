@@ -1184,6 +1184,51 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "active_trades_filename=runtime_spec[\"active_trades_filename\"]" in robustness_source,
     )
 
+    rendered_common_report = robustness_module.render_multi_seed_robustness_report(synthetic_summary)
+    historical_summary = dict(synthetic_summary)
+    historical_summary["schema_version"] = 8
+    historical_summary.pop("common_strategy_report", None)
+    historical_contract = dict(historical_summary["contract"])
+    historical_contract["report_schema_version"] = 8
+    historical_contract["resolved_seeds"] = [101, 202]
+    historical_contract["seed_count"] = 2
+    historical_summary["contract"] = historical_contract
+    with patch.object(
+        robustness_module, "_train_one_unit", side_effect=AssertionError("report refresh must not train"),
+    ), patch.object(
+        robustness_module, "_replay_one_unit", side_effect=AssertionError("report refresh must not replay"),
+    ), patch.object(
+        robustness_module, "_reusable_fixed_scenario_metrics", return_value={},
+    ):
+        upgraded_historical_summary = robustness_module._upgrade_derived_report_summary(
+            historical_summary,
+            seed_frame=synthetic_frame,
+            seed_yearly_frame=synthetic_yearly_frame,
+            run_root=None,
+        )
+    upgraded_common_report = robustness_module.render_multi_seed_robustness_report(
+        upgraded_historical_summary
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_report_reuses_canonical_strategy_sections_and_upgrades_historical_results_without_train_or_replay",
+        True,
+        synthetic_summary.get("schema_version") == robustness_module.ROBUSTNESS_SCHEMA_VERSION
+        and bool(synthetic_summary.get("common_strategy_report"))
+        and upgraded_historical_summary.get("schema_version") == robustness_module.ROBUSTNESS_SCHEMA_VERSION
+        and bool(upgraded_historical_summary.get("common_strategy_report"))
+        and all(
+            section in rendered_common_report and section in upgraded_common_report
+            for section in (
+                "## 1. 核心策略結果",
+                "## 2. R 預測／轉化",
+                "## 3. 資金／執行",
+                "## 4. 年度結果",
+                "## 5. RoMD完整統計",
+            )
+        ),
+    )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_work_artifacts_are_isolated_and_retention_is_config_driven_with_optional_compact_attribution",

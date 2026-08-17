@@ -37,7 +37,7 @@ from core.report_style import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-def _capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
+def capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
     frame = pd.DataFrame(profile.get("portfolio_capacity_rows") or [])
     if frame.empty:
         return {
@@ -246,6 +246,11 @@ def _capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
         })
     return summary
 
+def _capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
+    """Compatibility façade for historical imports; new consumers use capacity_summary()."""
+    return capacity_summary(profile)
+
+
 def _to_json_native(value: Any) -> Any:
     """Convert pandas/numpy scalars and timestamps to stable JSON-native values."""
 
@@ -288,7 +293,7 @@ def _scenario_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "min_quarter_return_pct": float(profile.get("min_quarter_return_pct", 0.0)),
         "full_year_count": int(profile.get("full_year_count", 0)),
     })
-    summary.update(_capacity_summary(profile))
+    summary.update(capacity_summary(profile))
     return _to_json_native(summary)
 
 def _delta(quality: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:

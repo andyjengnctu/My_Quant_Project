@@ -39,7 +39,7 @@ from core.strategy_comparison import (
     strategy_comparison_fingerprint,
 )
 from core.report_metrics import (
-    EXECUTION_CAPACITY_METRICS,
+    EXECUTION_STRATEGY_RESULT_METRICS,
     CORE_STRATEGY_RESULT_METRICS,
     PORTFOLIO_RESULT_METRICS,
     TRADE_RESULT_METRICS,
@@ -627,17 +627,41 @@ def _metric_table(
     )
 
 
+def render_strategy_core_result_table(
+    scenarios: dict[str, dict[str, Any]],
+    *,
+    settings: StrategyComparisonSettings,
+    target: str = "plain",
+) -> str:
+    return _metric_table(
+        scenarios,
+        settings=settings,
+        metrics=CORE_STRATEGY_RESULT_METRICS,
+        target=target,
+    )
+
+
 def _core_result_table(
     scenarios: dict[str, dict[str, Any]],
     *,
     settings: StrategyComparisonSettings,
     target: str = "plain",
 ) -> str:
-    metrics = CORE_STRATEGY_RESULT_METRICS
+    return render_strategy_core_result_table(
+        scenarios, settings=settings, target=target
+    )
+
+
+def render_strategy_execution_table(
+    scenarios: dict[str, dict[str, Any]],
+    *,
+    settings: StrategyComparisonSettings,
+    target: str = "plain",
+) -> str:
     return _metric_table(
         scenarios,
         settings=settings,
-        metrics=metrics,
+        metrics=EXECUTION_STRATEGY_RESULT_METRICS,
         target=target,
     )
 
@@ -648,15 +672,8 @@ def _execution_table(
     settings: StrategyComparisonSettings,
     target: str = "plain",
 ) -> str:
-    metrics = (
-        next(metric for metric in TRADE_RESULT_METRICS if metric.key == "reserved_buy_fill_rate_pct"),
-        *EXECUTION_CAPACITY_METRICS,
-    )
-    return _metric_table(
-        scenarios,
-        settings=settings,
-        metrics=metrics,
-        target=target,
+    return render_strategy_execution_table(
+        scenarios, settings=settings, target=target
     )
 
 
@@ -877,6 +894,32 @@ def _selector_timing_table(
     )
 
 
+def render_strategy_yearly_values_table(
+    by_id: dict[str, dict[int, float | None]],
+    *,
+    settings: StrategyComparisonSettings,
+    target: str = "plain",
+) -> str:
+    enabled_ids = tuple(arm.arm_id for arm in settings.enabled_arms)
+    years = sorted({year for values in by_id.values() for year in values})
+    rows = []
+    for year in years:
+        signals = best_worst_signals(
+            {arm_id: dict(by_id.get(arm_id) or {}).get(year) for arm_id in enabled_ids},
+            preference="higher",
+        )
+        values = []
+        for arm_id in enabled_ids:
+            value = dict(by_id.get(arm_id) or {}).get(year)
+            text = _fmt(value, unit="%")
+            signal = signals.get(arm_id)
+            if signal:
+                text = _value_with_signal(text, signal, target=target)
+            values.append(text)
+        rows.append((year, *values))
+    return render_table(("年度", *enabled_ids), rows)
+
+
 def _yearly_table(
     pair_payloads: dict[str, dict[str, Any]],
     *,
@@ -906,23 +949,9 @@ def _yearly_table(
             if on_arm is not None and on_arm.arm_id in by_id:
                 runtime_spec = _arm_runtime_spec(on_arm)
                 by_id[on_arm.arm_id][year] = row.get(runtime_spec["yearly_key"])
-    years = sorted({year for values in by_id.values() for year in values})
-    rows = []
-    for year in years:
-        signals = best_worst_signals(
-            {arm_id: by_id[arm_id].get(year) for arm_id in enabled_ids},
-            preference="higher",
-        )
-        values = []
-        for arm_id in enabled_ids:
-            value = by_id[arm_id].get(year)
-            text = _fmt(value, unit="%")
-            signal = signals.get(arm_id)
-            if signal:
-                text = _value_with_signal(text, signal, target=target)
-            values.append(text)
-        rows.append((year, *values))
-    return render_table(("年度", *enabled_ids), rows)
+    return render_strategy_yearly_values_table(
+        by_id, settings=settings, target=target
+    )
 
 
 def _comparison_period(pair_payloads: dict[str, dict[str, Any]]) -> Any:

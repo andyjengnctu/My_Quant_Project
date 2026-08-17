@@ -73,6 +73,11 @@ EXECUTION_CAPACITY_METRICS = (
     ReportMetricSpec("end_position_gap_slot_days", "持股缺口", " 格日", 0, "lower"),
 )
 
+EXECUTION_STRATEGY_RESULT_METRICS = (
+    next(metric for metric in TRADE_RESULT_METRICS if metric.key == "reserved_buy_fill_rate_pct"),
+    *EXECUTION_CAPACITY_METRICS,
+)
+
 
 
 R_ACTUAL_TRADE_METRICS = (
@@ -176,6 +181,7 @@ __all__ = [
     "CORE_STRATEGY_RESULT_METRICS",
     "TRADE_RESULT_METRICS",
     "EXECUTION_CAPACITY_METRICS",
+    "EXECUTION_STRATEGY_RESULT_METRICS",
     "PAIR_MAIN_METRICS",
     "R_ACTUAL_TRADE_METRICS",
     "R_MODEL_PREDICTION_METRICS",

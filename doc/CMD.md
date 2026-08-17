@@ -91,6 +91,8 @@ python apps/research.py compare robustness latest
 
 `run`會依`config/strategy_compare.py`對應robustness profile的`stochastic_arm_ids`，以deterministic generated seeds逐一建立隔離模型／score並做final strategy replay；`fixed_arm_ids`只計算一次。robustness membership與single-seed arm `robustness_role`分離，啟用[3]/[4]不得改寫[1]/[2] scientific identity。GPU training queue與CPU replay queue依config worker數重疊。checkpoint、full score與完整replay tree仍依retention清除；`keep_attribution_source=true`時會在清除前只永久抽取active `trades/equity/daily_capacity/selected_buys/execution`的gzip compact attribution source；`execution`只保存entry execution的qty、risk-budget、actual initial risk與binding診斷，不保存完整orderable universe。舊completed robustness若scientific observation已存在但compact source缺失，再次`run`會顯示`REBUILD ATTRIBUTION`，使用完全相同scientific fingerprint／resolved seeds重建缺失工件，compact unit先以`PENDING`落盤，並驗證selected epoch／fold count、正式策略metrics與逐年報酬與既有observation一致；既有model/score SHA可得時亦須一致，全部通過後才標記`VERIFIED`供resume/Audit使用。程序若在驗證前中止，PENDING unit下次不得列READY；整個流程不建立新的scientific結果。
 
+Robustness報表前四區與一般Selection PIT／Forward-OOS Strategy Compare共用同一canonical metric registry與renderer；Multi-seed專屬的RoMD分布、same-seed contrasts、seed-by-seed delta與跨seed年度統計保留在後段。`latest`若偵測到舊report schema，會直接以既有`seed_results.csv`、`seed_yearly_returns.csv`與compact attribution source做report-only refresh並覆寫同run的summary/report；此refresh不得呼叫trainer、score builder或strategy replay，因此已完成或正在執行中的scientific run不需為報表格式更新重跑。舊run當時未永久保存的per-seed model prediction／Future Target conversion欄位會顯示`-`；未來新run會在清理暫存model report前保留可直接取用的小型canonical model metrics。
+
 選擇 `[4] Audit／診斷` 會進入固定Audit子選單；Audit module由`config/audit.py`指定，不在選單中選擇：
 
 ```text

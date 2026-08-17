@@ -9227,3 +9227,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Current Forward matrix=`C1/C3/C44/C52`；primary source-only contrast=`C52-C44`。Selection robustness stochastic=`C42/C51`、paired=`C51-C42`；Forward robustness stochastic=`C44/C52`、paired=`C52-C44`；fixed references仍分別為Selection `C32/C23`、Forward `C1/C3`。兩stage使用同一deterministic generated 8 seeds與generator seed=`20260810`，不挑best seed、不ensemble。
 - `apps/research.py → [3] 策略組合比較`新增泛化工作項`[5] 一次執行全部 Multi-seed robustness`：依config啟用profile順序串行執行Selection PIT與Forward-OOS robustness，兩stage之間不再要求確認；每一stage仍先顯示自己的canonical execution plan，任一stage BLOCKED/FAIL立即停止，不執行後續stage。原Runtime Integration Gate與全部狀態頁順延。
 - Production/runtime candidate仍固定Selection C42／Forward C44；本輪只擴張research evaluation matrix，不構成promotion。下一步：先完成C52 Forward single-seed strategy comparison，再由`[5]`一次跑完Selection+Forward 8-seed robustness，最後依Selection/Forward/paired-seed整體證據決定MR-13H。
+
+### 2026-08-17 — Robustness canonical report reuse / report-only refresh
+
+- 程式基準：`test-branch-1_20260817_032352_149f11d.zip`，SHA256=`e5012bad4f10393ca066e7089d82060392087615cb5cfb45c4fb820032f914eb`。本輪只重構報表與compact metric持久化，不改MR-13H／MR-13E training、resolved seeds、Strategy replay、C51/C52、K/R0、exact solver或scientific fingerprint。
+- 問題：Selection PIT／Forward-OOS已由Strategy Compare canonical registry/renderer輸出「核心策略結果／R預測轉化／資金執行／年度結果」，但multi-seed robustness仍自行維護`MEAN_METRICS`與縮水版年度表，造成同名metric與人讀格式開始分叉。
+- 修正：robustness schema升級為9（display-only），前四區直接重用Strategy Compare canonical renderers；stochastic arm為per-seed canonical metric Mean，fixed arm沿用正式baseline。RoMD完整分布、config-driven same-seed contrast、seed-by-seed translation及歷年跨seed完整統計維持robustness-only extension。legacy `MEAN_METRICS`只保留舊seed CSV相容與scientific observation identity，不再是人讀報表SSOT。
+- Backward compatibility：既有schema 8 completed run可由`seed_results.csv`、`seed_yearly_returns.csv`與`attribution_source/*.csv.gz`做report-only refresh；refresh path明確不得呼叫trainer或strategy replay。可由compact trades／daily capacity／execution重建的canonical metric直接回填；歷史run未保存的model prediction／Future Target conversion顯示`-`，不為補表重跑昂貴計算。
+- Forward future retention：新run在暫存continuous ranker report被cleanup前，只抽取既有OOS Daily/Global rho、Pair、Top/Bottom/Spread與Target identity寫進seed observation；不新增模型評估、不重建Future Target。Selection PIT若當輪沒有同等compact model audit來源則維持`-`。
+- Scientific decision不變：目前正在執行的MR-13H Selection/Forward 8-seed robustness應先完整跑完，不因本報表schema更新中斷或重跑；完成後套用本patch並開啟latest即可升級人讀報表。

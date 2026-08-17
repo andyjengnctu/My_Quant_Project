@@ -12,7 +12,7 @@ import argparse
 import gzip
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -66,6 +66,13 @@ from core.console_report import (
     render_title,
 )
 from core.display_common import InlineProgress
+from core.report_metrics import (
+    CORE_STRATEGY_RESULT_METRICS,
+    EXECUTION_STRATEGY_RESULT_METRICS,
+    R_MODEL_PREDICTION_METRICS,
+    R_SELECTION_TRANSLATION_METRICS,
+    TRADE_RESULT_METRICS,
+)
 from core.strategy_comparison import StrategyComparisonArm
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.dataset_store import resolve_dataset_paths
@@ -100,7 +107,15 @@ from filters.breakout_quality.strategy_comparison import (
     _find_reusable_baseline_source,
     _load_direct_selection_r,
     collect_artifact_status,
+    render_strategy_core_result_table,
+    render_strategy_execution_table,
+    render_strategy_yearly_values_table,
 )
+from filters.breakout_quality.strategy_compare_diagnostics import (
+    render_strategy_r_analysis_table,
+)
+from filters.breakout_quality.strategy_compare_reporting import capacity_summary
+from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 from filters.breakout_quality.strategy_compare_preparation import (
     model_upstream_prerequisite_blockers,
     prepare_strategy_parameter_artifacts,
@@ -115,7 +130,7 @@ MANIFEST_FILENAME = "manifest.json"
 LATEST_FILENAME = "latest.json"
 ATTRIBUTION_SOURCE_DIRNAME = "attribution_source"
 ATTRIBUTION_SOURCE_SCHEMA_VERSION = 2
-ROBUSTNESS_SCHEMA_VERSION = 8
+ROBUSTNESS_SCHEMA_VERSION = 9
 ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 1
 TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
@@ -134,6 +149,26 @@ MEAN_METRICS: tuple[tuple[str, str, str], ...] = (
     ("DL選擇R", "direct_selection_r", " R"),
 )
 
+# ``MEAN_METRICS`` is the v8 scientific-observation compatibility set.  Keep it
+# stable so completed runs remain reusable; the human report below is sourced from
+# the canonical Strategy Compare metric registry instead of this legacy list.
+COMMON_STRATEGY_REPORT_METRIC_KEYS = tuple(dict.fromkeys(
+    metric.key
+    for metric in (
+        *CORE_STRATEGY_RESULT_METRICS,
+        *TRADE_RESULT_METRICS,
+        *EXECUTION_STRATEGY_RESULT_METRICS,
+    )
+))
+MODEL_PREDICTION_METRIC_KEYS = tuple(metric.key for metric in R_MODEL_PREDICTION_METRICS)
+SELECTION_TRANSLATION_METRIC_KEYS = tuple(metric.key for metric in R_SELECTION_TRANSLATION_METRICS)
+ROBUSTNESS_OPTIONAL_SEED_METRIC_KEYS = tuple(dict.fromkeys((
+    *COMMON_STRATEGY_REPORT_METRIC_KEYS,
+    *MODEL_PREDICTION_METRIC_KEYS,
+    *SELECTION_TRANSLATION_METRIC_KEYS,
+    "continuous_target_id",
+)))
+
 
 def _read_json(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -149,6 +184,266 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         encoding="utf-8",
     )
 
+
+
+
+def _finite_or_none(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _mean_metric(frame: pd.DataFrame, key: str) -> float | None:
+    if key not in frame.columns:
+        return None
+    values = pd.to_numeric(frame[key], errors="coerce").dropna()
+    return None if values.empty else float(values.mean())
+
+
+def _report_settings_for_contract(contract: dict[str, Any], settings):
+    ordered_ids = [
+        str(dict(item or {}).get("arm_id") or "").strip()
+        for item in (*tuple(contract.get("fixed_arms") or ()), *tuple(contract.get("stochastic_arms") or ()))
+    ]
+    ordered_ids = [arm_id for arm_id in ordered_ids if arm_id]
+    if not ordered_ids:
+        return settings
+    selected = {}
+    for arm_id in ordered_ids:
+        arm = settings.arms.get(arm_id)
+        if arm is None:
+            raise ValueError(f"robustness report contract引用不存在的arm: {arm_id}")
+        selected[arm_id] = replace(arm, enabled=True)
+    return replace(settings, arms=selected, contrasts={})
+
+
+def _read_attribution_csv(unit_manifest: dict[str, Any], role: str) -> pd.DataFrame:
+    item = dict(dict(unit_manifest.get("files") or {}).get(role) or {})
+    relative = str(item.get("path") or "").strip()
+    if not relative:
+        return pd.DataFrame()
+    path = (PROJECT_ROOT / relative).resolve()
+    try:
+        path.relative_to(PROJECT_ROOT)
+    except ValueError as exc:
+        raise ValueError("robustness attribution source path必須位於專案root內") from exc
+    if not path.is_file():
+        return pd.DataFrame()
+    return pd.read_csv(path, encoding="utf-8-sig", compression="gzip")
+
+
+def _backfill_seed_common_metrics_from_attribution(
+    frame: pd.DataFrame,
+    *,
+    seed_yearly_frame: pd.DataFrame,
+    run_root: Path | None,
+    contract: dict[str, Any],
+) -> pd.DataFrame:
+    out = pd.DataFrame(frame).copy()
+    if out.empty:
+        return out
+    for key in ROBUSTNESS_OPTIONAL_SEED_METRIC_KEYS:
+        if key not in out.columns:
+            out[key] = np.nan if key != "continuous_target_id" else ""
+
+    for index, row in out.iterrows():
+        arm_id = str(row["arm_id"])
+        seed = int(row["seed"])
+        yearly = seed_yearly_frame[
+            (seed_yearly_frame.get("arm_id", pd.Series(dtype=str)).astype(str) == arm_id)
+            & (pd.to_numeric(seed_yearly_frame.get("seed", pd.Series(dtype=float)), errors="coerce") == seed)
+        ] if not seed_yearly_frame.empty else pd.DataFrame()
+        if _finite_or_none(out.at[index, "min_full_year_return_pct"]) is None and not yearly.empty:
+            complete = yearly.loc[yearly.get("is_complete_year", True).astype(bool)] if "is_complete_year" in yearly.columns else yearly
+            values = pd.to_numeric(complete.get("return_pct"), errors="coerce").dropna()
+            if not values.empty:
+                out.at[index, "min_full_year_return_pct"] = float(values.min())
+
+        if run_root is None:
+            continue
+        manifest = _read_attribution_unit_manifest(
+            run_root,
+            arm_id=arm_id,
+            seed=seed,
+            expected_fingerprint=str(contract["fingerprint"]),
+        )
+        if manifest is None:
+            continue
+
+        need_trade_r = any(
+            _finite_or_none(out.at[index, key]) is None
+            for key in ("portfolio_avg_r", "portfolio_median_r")
+        )
+        if need_trade_r:
+            trades = _read_attribution_csv(manifest, "trades")
+            if not trades.empty:
+                closed = reconstruct_round_trips(trades, scenario=arm_id)
+                r_values = pd.to_numeric(closed.get("r_multiple"), errors="coerce").dropna()
+                if not r_values.empty:
+                    if _finite_or_none(out.at[index, "portfolio_avg_r"]) is None:
+                        out.at[index, "portfolio_avg_r"] = float(r_values.mean())
+                    if _finite_or_none(out.at[index, "portfolio_median_r"]) is None:
+                        out.at[index, "portfolio_median_r"] = float(r_values.median())
+
+        capacity_keys = tuple(metric.key for metric in EXECUTION_STRATEGY_RESULT_METRICS if metric.key != "reserved_buy_fill_rate_pct")
+        if any(_finite_or_none(out.at[index, key]) is None for key in capacity_keys):
+            capacity = _read_attribution_csv(manifest, "daily_capacity")
+            if not capacity.empty:
+                summary = capacity_summary({"portfolio_capacity_rows": capacity.to_dict("records")})
+                for key in capacity_keys:
+                    if _finite_or_none(out.at[index, key]) is None and key in summary:
+                        out.at[index, key] = summary[key]
+
+        if _finite_or_none(out.at[index, "reserved_buy_fill_rate_pct"]) is None:
+            execution = _read_attribution_csv(manifest, "execution")
+            if not execution.empty and "entry_filled" in execution.columns:
+                filled = execution["entry_filled"].astype(str).str.strip().str.lower().map(
+                    {"true": True, "false": False, "1": True, "0": False}
+                )
+                valid = filled.dropna()
+                if not valid.empty:
+                    out.at[index, "reserved_buy_fill_rate_pct"] = float(valid.astype(bool).mean() * 100.0)
+    return out
+
+
+def _model_prediction_metrics_from_training_artifacts(artifacts: dict[str, Any]) -> dict[str, Any]:
+    report_path = str(artifacts.get("report") or "").strip()
+    if not report_path:
+        return {}
+    path = Path(report_path).resolve()
+    if not path.is_file():
+        return {}
+    report = _read_json(path)
+    split = dict((report.get("split_metrics") or {}).get("oos") or {})
+    top = _finite_or_none(split.get("top_score_decile_raw_target_mean"))
+    bottom = _finite_or_none(split.get("bottom_score_decile_raw_target_mean"))
+    return {
+        "continuous_target_id": str(report.get("continuous_target_id") or ""),
+        "mean_daily_spearman": _finite_or_none(split.get("mean_daily_spearman")),
+        "global_spearman": _finite_or_none(split.get("global_spearman_vs_raw_target")),
+        "pairwise_concordance": _finite_or_none(split.get("pairwise_concordance")),
+        "top_target_r": top,
+        "bottom_target_r": bottom,
+        "top_bottom_target_spread_r": None if top is None or bottom is None else float(top - bottom),
+    }
+
+
+
+def _reusable_fixed_scenario_metrics(settings, arm: StrategyComparisonArm) -> dict[str, Any]:
+    status = collect_artifact_status(project_root=PROJECT_ROOT, settings=settings)
+    reusable_dir = _find_reusable_baseline_source(
+        root=PROJECT_ROOT, settings=settings, status=status, off_arm=arm
+    )
+    if reusable_dir is None:
+        return {}
+    payload = _read_json(reusable_dir / "strategy_comparison.json")
+    return dict(payload.get("no_filter") or {})
+
+
+def _build_common_report_payload(
+    *,
+    summary: dict[str, Any],
+    seed_frame: pd.DataFrame,
+    seed_yearly_frame: pd.DataFrame,
+    run_root: Path | None,
+) -> dict[str, Any]:
+    contract = dict(summary.get("contract") or {})
+    settings = get_strategy_comparison_settings(str(contract["profile_id"]))
+    report_settings = _report_settings_for_contract(contract, settings)
+    stochastic_ids = {
+        str(dict(item or {}).get("arm_id") or "") for item in contract.get("stochastic_arms") or ()
+    }
+    enriched = _backfill_seed_common_metrics_from_attribution(
+        seed_frame,
+        seed_yearly_frame=seed_yearly_frame,
+        run_root=run_root,
+        contract=contract,
+    )
+    legacy_mean_by_id = {
+        str(row.get("arm_id") or ""): dict(row)
+        for row in summary.get("mean_strategy_metrics") or ()
+    }
+    yearly_stats = list(summary.get("yearly_statistics") or ())
+    scenarios: dict[str, dict[str, Any]] = {}
+    r_rows: list[dict[str, Any]] = []
+    yearly_by_id: dict[str, dict[int, float | None]] = {}
+
+    for arm in report_settings.enabled_arms:
+        if arm.arm_id in stochastic_ids:
+            rows = enriched[enriched["arm_id"].astype(str) == arm.arm_id]
+            scenario = {key: _mean_metric(rows, key) for key in COMMON_STRATEGY_REPORT_METRIC_KEYS}
+            direct_selection = _mean_metric(rows, "direct_selection_r")
+            target_ids = [
+                str(value).strip() for value in rows.get("continuous_target_id", pd.Series(dtype=str)).tolist()
+                if str(value).strip() and str(value).lower() != "nan"
+            ]
+            target_id = target_ids[0] if target_ids and len(set(target_ids)) == 1 else ""
+            r_row = {
+                "arm_id": arm.arm_id,
+                "name": arm.name,
+                "continuous_target_id": target_id,
+                "portfolio_avg_r": scenario.get("portfolio_avg_r"),
+                "portfolio_median_r": scenario.get("portfolio_median_r"),
+                "direct_selection_delta_r": direct_selection,
+            }
+            for key in (*MODEL_PREDICTION_METRIC_KEYS, *SELECTION_TRANSLATION_METRIC_KEYS):
+                r_row[key] = _mean_metric(rows, key)
+        else:
+            scenario = dict(legacy_mean_by_id.get(arm.arm_id) or {})
+            missing_common = [
+                key for key in COMMON_STRATEGY_REPORT_METRIC_KEYS
+                if _finite_or_none(scenario.get(key)) is None
+            ]
+            if missing_common:
+                try:
+                    reusable_metrics = _reusable_fixed_scenario_metrics(report_settings, arm)
+                except (FileNotFoundError, ValueError, RuntimeError, OSError):
+                    reusable_metrics = {}
+                for key in missing_common:
+                    if key in reusable_metrics:
+                        scenario[key] = reusable_metrics.get(key)
+            fixed_years = [row for row in yearly_stats if str(row.get("arm_id") or "") == arm.arm_id]
+            complete_values = [
+                _finite_or_none(row.get("mean")) for row in fixed_years if bool(row.get("is_complete_year", True))
+            ]
+            complete_values = [value for value in complete_values if value is not None]
+            if _finite_or_none(scenario.get("min_full_year_return_pct")) is None and complete_values:
+                scenario["min_full_year_return_pct"] = min(complete_values)
+            r_row = {
+                "arm_id": arm.arm_id,
+                "name": arm.name,
+                "continuous_target_id": "",
+                "portfolio_avg_r": scenario.get("portfolio_avg_r"),
+                "portfolio_median_r": scenario.get("portfolio_median_r"),
+                "direct_selection_delta_r": None,
+                **{key: None for key in (*MODEL_PREDICTION_METRIC_KEYS, *SELECTION_TRANSLATION_METRIC_KEYS)},
+            }
+        scenarios[arm.arm_id] = scenario
+        r_rows.append(r_row)
+
+        values: dict[int, float | None] = {}
+        if arm.arm_id in stochastic_ids and not seed_yearly_frame.empty:
+            arm_yearly = seed_yearly_frame[seed_yearly_frame["arm_id"].astype(str) == arm.arm_id]
+            for year, group in arm_yearly.groupby("year", sort=True):
+                values[int(year)] = _mean_metric(group, "return_pct")
+        else:
+            for row in yearly_stats:
+                if str(row.get("arm_id") or "") == arm.arm_id:
+                    values[int(row["year"])] = _finite_or_none(row.get("mean"))
+        yearly_by_id[arm.arm_id] = values
+
+    return {
+        "scenarios": scenarios,
+        "r_analysis": r_rows,
+        "yearly_by_id": yearly_by_id,
+        "seed_common_metric_coverage": {
+            key: int(pd.to_numeric(enriched.get(key), errors="coerce").notna().sum())
+            for key in COMMON_STRATEGY_REPORT_METRIC_KEYS
+            if key in enriched.columns
+        },
+    }
 
 
 def resolve_multi_seed_values(*, seed_count: int, generator_seed: int) -> tuple[int, ...]:
@@ -1109,7 +1404,7 @@ def _validate_training_artifacts(
         raise ValueError("multi-seed score table缺少日期範圍metadata")
     if execution_start > score_available_from:
         raise ValueError("multi-seed isolated score時間契約不一致")
-    return {
+    artifact_payload = {
         **{key: str(path.resolve()) for key, path in paths.items()},
         "model_sha256": compute_file_sha256(paths["model"]),
         "score_sha256": compute_file_sha256(paths["score"]),
@@ -1120,6 +1415,8 @@ def _validate_training_artifacts(
         "score_available_through": score_available_through,
         "fold_count": None,
     }
+    artifact_payload["model_prediction_metrics"] = _model_prediction_metrics_from_training_artifacts(artifact_payload)
+    return artifact_payload
 
 
 def _training_command(
@@ -1532,6 +1829,7 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     metrics["direct_selection_r"] = _load_direct_selection_r(
         pair_dir, root=PROJECT_ROOT, active_trades_filename=runtime_spec["active_trades_filename"]
     )
+    model_prediction = dict(job.get("model_prediction_metrics") or {})
     result = {
         "arm_id": arm.arm_id, "name": arm.name, "seed": int(job["seed"]),
         "arm_order": int(job["arm_order"]), "seed_order": int(job["seed_order"]),
@@ -1542,6 +1840,8 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         "model_sha256": str(job.get("model_sha256") or "") or None,
         "score_sha256": str(job.get("score_sha256") or "") or None,
         **{key: metrics.get(key) for _label, key, _unit in MEAN_METRICS},
+        **{key: metrics.get(key) for key in COMMON_STRATEGY_REPORT_METRIC_KEYS},
+        **{key: model_prediction.get(key) for key in (*MODEL_PREDICTION_METRIC_KEYS, "continuous_target_id")},
         "yearly": _normalize_yearly_rows(
             payload.get("yearly"), arm_id=arm.arm_id, name=arm.name, seed=int(job["seed"]),
             seed_order=int(job["seed_order"]), arm_order=int(job["arm_order"]),
@@ -1848,6 +2148,7 @@ def _upgrade_derived_report_summary(
     *,
     seed_frame: pd.DataFrame,
     seed_yearly_frame: pd.DataFrame | None = None,
+    run_root: Path | None = None,
 ) -> dict[str, Any]:
     contract = dict(summary.get("contract") or {})
     profile_id = str(contract.get("profile_id") or "").strip()
@@ -1875,6 +2176,12 @@ def _upgrade_derived_report_summary(
     upgraded["direct_selection_r_same_seed_comparison"] = None if legacy is None else legacy.get("direct_selection_r_same_seed")
     upgraded["selection_r_to_strategy_same_seed_translation"] = None if legacy is None else legacy.get("selection_r_to_strategy")
     upgraded["schema_version"] = ROBUSTNESS_SCHEMA_VERSION
+    upgraded["common_strategy_report"] = _build_common_report_payload(
+        summary=upgraded,
+        seed_frame=seed_frame,
+        seed_yearly_frame=(pd.DataFrame() if seed_yearly_frame is None else seed_yearly_frame),
+        run_root=run_root,
+    )
     upgraded["report_refreshed_at_utc"] = datetime.now(timezone.utc).isoformat()
     return upgraded
 
@@ -1882,6 +2189,7 @@ def _upgrade_derived_report_summary(
 def _robustness_summary(
     *, contract: dict[str, Any], fixed_results: dict[str, dict[str, Any]],
     seed_frame: pd.DataFrame, seed_yearly_frame: pd.DataFrame,
+    run_root: Path | None = None,
 ) -> dict[str, Any]:
     settings = get_strategy_comparison_settings(str(contract["profile_id"]))
     current_robustness = get_strategy_multi_seed_robustness_settings(str(contract.get("robustness_id") or contract["profile_id"]))
@@ -1900,12 +2208,17 @@ def _robustness_summary(
         mean_rows.append({
             "arm_id": arm.arm_id, "name": arm.name, "type": "Fixed", "n": 1,
             **{key: metrics.get(key) for _label, key, _unit in MEAN_METRICS},
+            **{key: metrics.get(key) for key in COMMON_STRATEGY_REPORT_METRIC_KEYS},
         })
     for arm in stochastic:
         rows = seed_frame[seed_frame["arm_id"] == arm.arm_id].copy()
+        enriched_rows = _backfill_seed_common_metrics_from_attribution(
+            rows, seed_yearly_frame=seed_yearly_frame, run_root=run_root, contract=contract
+        )
         mean_rows.append({
             "arm_id": arm.arm_id, "name": arm.name, "type": "Multi-seed", "n": int(len(rows)),
             **{key: _mean_or_none(rows[key]) for _label, key, _unit in MEAN_METRICS},
+            **{key: _mean_metric(enriched_rows, key) for key in COMMON_STRATEGY_REPORT_METRIC_KEYS},
         })
 
     fixed_by_arm_id = {row["arm_id"]: row for row in mean_rows if row["type"] == "Fixed"}
@@ -1972,7 +2285,7 @@ def _robustness_summary(
         {"contrast_id": item["contrast_id"], **row}
         for item in paired for row in item.get("yearly_same_seed") or []
     ]
-    return {
+    payload = {
         "schema_version": ROBUSTNESS_SCHEMA_VERSION,
         "status": "RESULT_AVAILABLE", "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "contract": contract, "mean_strategy_metrics": mean_rows,
@@ -1985,6 +2298,13 @@ def _robustness_summary(
         "yearly_statistics": yearly_statistics,
         "yearly_same_seed_comparison": flattened_yearly,
     }
+    payload["common_strategy_report"] = _build_common_report_payload(
+        summary=payload,
+        seed_frame=seed_frame,
+        seed_yearly_frame=seed_yearly_frame,
+        run_root=run_root,
+    )
+    return payload
 
 
 def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -2009,14 +2329,18 @@ def _fmt(value: Any, *, digits: int = 2, suffix: str = "") -> str:
 
 
 def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
-    mean_headers = ["比較對象", "類型", "N"] + [f"{label} Mean" for label, _key, _unit in MEAN_METRICS]
-    mean_rows = []
-    for row in summary["mean_strategy_metrics"]:
-        cells = [row["name"], row["type"], str(row["n"])]
-        for _label, key, unit in MEAN_METRICS:
-            digits = 1 if key == "trade_count" else 4 if key == "log_r_squared" else 2
-            cells.append(_fmt(row.get(key), digits=digits, suffix=unit))
-        mean_rows.append(cells)
+    contract = dict(summary["contract"])
+    settings = _report_settings_for_contract(
+        contract, get_strategy_comparison_settings(str(contract["profile_id"]))
+    )
+    common = dict(summary.get("common_strategy_report") or {})
+    scenarios = dict(common.get("scenarios") or {})
+    r_analysis = list(common.get("r_analysis") or [])
+    yearly_by_id = {
+        str(arm_id): {int(year): value for year, value in dict(values or {}).items()}
+        for arm_id, values in dict(common.get("yearly_by_id") or {}).items()
+    }
+
     romd_headers = ["比較對象", "N", "Mean", "Median", "Std", "CV", "Min", "P25", "P75", "Max", "勝Min", "勝Full"]
     romd_rows = []
     for row in summary["romd_statistics"]:
@@ -2027,15 +2351,22 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
             "-" if row["beats_min_count"] is None else f"{row['beats_min_count']}/{n}",
             "-" if row["beats_full_count"] is None else f"{row['beats_full_count']}/{n}",
         ])
-    contract = dict(summary["contract"])
+
     lines = [
         f"# {contract.get('label') or 'Multiple-seed Robustness'}", "",
         f"- Profile：`{contract['profile_id']}`",
         f"- Seeds：`{contract['seed_count']}`（deterministic generated；不作best-seed選擇）",
         f"- Scientific fingerprint：`{contract['fingerprint']}`",
         f"- Report schema：`{summary['schema_version']}`（不影響scientific fingerprint）", "",
-        "## 1. 平均策略績效", "", _markdown_table(mean_headers, mean_rows), "",
-        "## 2. RoMD完整統計", "", _markdown_table(romd_headers, romd_rows),
+        "## 1. 核心策略結果", "",
+        render_strategy_core_result_table(scenarios, settings=settings, target="markdown") if scenarios else "沒有可用的核心策略結果。", "",
+        "## 2. R 預測／轉化", "",
+        render_strategy_r_analysis_table({"r_analysis": r_analysis}, target="markdown") if r_analysis else "沒有可用的R預測／轉化診斷。", "",
+        "## 3. 資金／執行", "",
+        render_strategy_execution_table(scenarios, settings=settings, target="markdown") if scenarios else "沒有可用的資金／執行結果。", "",
+        "## 4. 年度結果", "",
+        render_strategy_yearly_values_table(yearly_by_id, settings=settings, target="markdown") if yearly_by_id else "沒有可用的年度結果。", "",
+        "## 5. RoMD完整統計", "", _markdown_table(romd_headers, romd_rows),
     ]
 
     paired = list(summary.get("paired_comparisons") or [])
@@ -2054,7 +2385,7 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
                 "yearly_same_seed": summary.get("yearly_same_seed_comparison") or [],
             }]
 
-    next_section = 3
+    next_section = 6
     if paired:
         lines += ["", f"## {next_section}. 設定中的同seed contrasts", ""]
         for item in paired:
@@ -2140,7 +2471,7 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
 
     yearly = list(summary.get("yearly_statistics") or [])
     if yearly:
-        lines += ["", f"## {next_section}. 歷年報酬完整統計", ""]
+        lines += ["", f"## {next_section}. 歷年報酬跨seed完整統計", ""]
         rows = []
         for row in sorted(yearly, key=lambda x: (int(x["year"]), str(x["type"]), str(x["name"]))):
             rows.append([
@@ -2155,6 +2486,8 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
     min_name = str(dict(references.get("min") or {}).get("name") or "Min baseline")
     full_name = str(dict(references.get("full") or {}).get("name") or "Full baseline")
     lines += ["", f"## {next_section}. 限制", "",
+        "- 前四張表直接重用Strategy Compare canonical metric registry與renderer；Multi-seed arm顯示per-seed canonical metric的Mean，Fixed arm顯示正式baseline值。",
+        "- 舊robustness工件若未永久保存model prediction／Future Target conversion欄位，report-only refresh會顯示`-`，不為補報表重訓或重跑strategy replay。",
         "- resolved seeds只用於重現；不得挑best seed或依本報表組seed ensemble。",
         f"- {full_name}／{min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一表。",
         "- 同一DL source／seed只訓練一次，允許fan-out到不同runtime selector replay；此reuse不改變模型scientific condition。",
@@ -2168,24 +2501,27 @@ def _color_delta(text: str, value: Any, *, preference: str = "higher") -> str:
 
 def _print_report_tables(summary: dict[str, Any]) -> None:
     color_enabled = console_color_enabled()
-    print("\n" + render_title(str(dict(summary.get("contract") or {}).get("label") or "Multiple-seed robustness")))
-    mean_rows = []
-    for row in summary["mean_strategy_metrics"]:
-        mean_rows.append([
-            row["name"], row["type"], row["n"],
-            _fmt(row.get("total_return_pct"), suffix="%"),
-            _fmt(row.get("max_drawdown_pct"), suffix="%"),
-            _fmt(row.get("return_over_max_drawdown")),
-            _fmt(row.get("annual_return_pct"), suffix="%"),
-            _fmt(row.get("expected_value_r"), suffix=" R"),
-            _fmt(row.get("avg_exposure_pct"), suffix="%"),
-            _fmt(row.get("direct_selection_r"), suffix=" R"),
-        ])
-    print("\n1. 平均策略績效")
-    print(render_table(
-        ["比較對象", "類型", "N", "Return", "MDD", "RoMD", "Annual", "EV", "Exposure", "DL選擇R"],
-        mean_rows,
-    ))
+    contract = dict(summary.get("contract") or {})
+    settings = _report_settings_for_contract(
+        contract, get_strategy_comparison_settings(str(contract["profile_id"]))
+    )
+    common = dict(summary.get("common_strategy_report") or {})
+    scenarios = dict(common.get("scenarios") or {})
+    r_analysis = list(common.get("r_analysis") or [])
+    yearly_by_id = {
+        str(arm_id): {int(year): value for year, value in dict(values or {}).items()}
+        for arm_id, values in dict(common.get("yearly_by_id") or {}).items()
+    }
+
+    print("\n" + render_title(str(contract.get("label") or "Multiple-seed robustness")))
+    print("\n1. 核心策略結果")
+    print(render_strategy_core_result_table(scenarios, settings=settings) if scenarios else "沒有可用的核心策略結果。")
+    print("\n2. R 預測／轉化")
+    print(render_strategy_r_analysis_table({"r_analysis": r_analysis}) if r_analysis else "沒有可用的R預測／轉化診斷。")
+    print("\n3. 資金／執行")
+    print(render_strategy_execution_table(scenarios, settings=settings) if scenarios else "沒有可用的資金／執行結果。")
+    print("\n4. 年度結果")
+    print(render_strategy_yearly_values_table(yearly_by_id, settings=settings) if yearly_by_id else "沒有可用的年度結果。")
 
     romd_rows = []
     for row in summary["romd_statistics"]:
@@ -2196,7 +2532,7 @@ def _print_report_tables(summary: dict[str, Any]) -> None:
             "-" if row["beats_min_count"] is None else f"{row['beats_min_count']}/{n}",
             "-" if row["beats_full_count"] is None else f"{row['beats_full_count']}/{n}",
         ])
-    print("\n2. RoMD完整統計")
+    print("\n5. RoMD完整統計")
     print(render_table(["比較對象", "N", "Mean", "Median", "Std", "CV", "Min", "P25", "P75", "Max", "勝Min", "勝Full"], romd_rows))
 
     paired = list(summary.get("paired_comparisons") or [])
@@ -2211,7 +2547,7 @@ def _print_report_tables(summary: dict[str, Any]) -> None:
                 "selection_r_to_strategy": summary.get("selection_r_to_strategy_same_seed_translation"),
             }]
     if paired:
-        print("\n3. 設定中的同seed contrasts")
+        print("\n6. 設定中的同seed contrasts")
         for item in paired:
             same = item.get("romd_same_seed")
             if not isinstance(same, dict):
@@ -2244,18 +2580,15 @@ def _print_report_tables(summary: dict[str, Any]) -> None:
 
     yearly = list(summary.get("yearly_statistics") or [])
     if yearly:
-        print("\n歷年報酬 Mean")
-        names = [row["name"] for row in summary["mean_strategy_metrics"]]
-        by_key = {(int(row["year"]), str(row["name"])): row for row in yearly}
-        table_rows = []
-        for year in sorted({int(row["year"]) for row in yearly}):
-            sample = next(row for row in yearly if int(row["year"]) == year)
-            cells = [str(year) + ("" if sample.get("is_complete_year") else "*")]
-            for name in names:
-                record = by_key.get((year, name))
-                cells.append("-" if record is None else _fmt(record["mean"], suffix="%"))
-            table_rows.append(cells)
-        print(render_table(["年度", *names], table_rows))
+        print("\n7. 歷年報酬跨seed完整統計")
+        rows = []
+        for row in sorted(yearly, key=lambda x: (int(x["year"]), str(x["type"]), str(x["name"]))):
+            rows.append([
+                str(row["year"]) + ("" if row.get("is_complete_year") else "*"), row["name"], row["type"], row["n"],
+                _fmt(row["mean"], suffix="%"), _fmt(row["median"], suffix="%"), _fmt(row["std"], suffix="%"),
+                _fmt(row["min"], suffix="%"), _fmt(row["p25"], suffix="%"), _fmt(row["p75"], suffix="%"), _fmt(row["max"], suffix="%"),
+            ])
+        print(render_table(["年度", "比較對象", "類型", "N", "Mean", "Median", "Std", "Min", "P25", "P75", "Max"], rows))
         print("* 非完整年度")
 
 
@@ -2313,6 +2646,7 @@ def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None
             or "paired_comparisons" not in summary
             or "direct_selection_r_same_seed_comparison" not in summary
             or "selection_r_to_strategy_same_seed_translation" not in summary
+            or "common_strategy_report" not in summary
         )
         seed_results_path = summary_path.parent / SEED_RESULTS_FILENAME
         seed_yearly_results_path = summary_path.parent / SEED_YEARLY_RESULTS_FILENAME
@@ -2327,6 +2661,7 @@ def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None
                 summary,
                 seed_frame=seed_frame,
                 seed_yearly_frame=seed_yearly_frame,
+                run_root=summary_path.parent,
             )
             _write_json(summary_path, upgraded)
             report.write_text(
@@ -2806,6 +3141,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
                     "training_elapsed_sec": artifacts["training_elapsed_sec"],
                     "model_sha256": artifacts.get("model_sha256"),
                     "score_sha256": artifacts.get("score_sha256"),
+                    "model_prediction_metrics": dict(artifacts.get("model_prediction_metrics") or {}),
                     "pair_dir": str(pair_dir),
                     "result_path": str(result_path),
                     "scientific_fingerprint": str(contract["fingerprint"]),
@@ -2953,7 +3289,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             )
         summary = _robustness_summary(
             contract=contract, fixed_results=fixed_results, seed_frame=seed_frame,
-            seed_yearly_frame=seed_yearly_frame,
+            seed_yearly_frame=seed_yearly_frame, run_root=run_root,
         )
         summary["elapsed_sec"] = round(time.perf_counter() - started_total, 3)
         _write_json(run_root / SUMMARY_FILENAME, summary)

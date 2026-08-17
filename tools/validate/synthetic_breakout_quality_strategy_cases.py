@@ -3509,7 +3509,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "資金／執行" in render_report_source
         and "報表分工" not in render_report_source
         and "render_strategy_r_analysis_table" in render_report_source
-        and "metrics = CORE_STRATEGY_RESULT_METRICS" in comparison_source
+        and "metrics=CORE_STRATEGY_RESULT_METRICS" in comparison_source
         and "_contrast_table(" not in render_report_source
         and "_resource_aware_table(" not in render_report_source
         and "_selector_timing_table(" not in render_report_source
@@ -3537,6 +3537,24 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "Bottom-R" in report_metrics_source
         and "DL選擇R" in report_metrics_source,
     )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multi_seed_robustness_reuses_strategy_compare_canonical_report_renderers_and_keeps_seed_extensions_separate",
+        True,
+        "render_strategy_core_result_table" in multi_seed_source
+        and "render_strategy_r_analysis_table" in multi_seed_source
+        and "render_strategy_execution_table" in multi_seed_source
+        and "render_strategy_yearly_values_table" in multi_seed_source
+        and "common_strategy_report" in multi_seed_source
+        and "RoMD完整統計" in multi_seed_source
+        and "設定中的同seed contrasts" in multi_seed_source
+        and "歷年報酬跨seed完整統計" in multi_seed_source
+        and "_upgrade_derived_report_summary" in multi_seed_source
+        and "report_refreshed_at_utc" in multi_seed_source,
+    )
+
     add_check(
         results,
         "synthetic_breakout_quality",
