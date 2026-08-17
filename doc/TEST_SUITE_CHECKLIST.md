@@ -597,6 +597,7 @@
 | T340 | `validate_strategy_compare_config_driven_app_contract_case` Selection PIT consumer ownership／Gate FAIL status distinction regression | B189 |
 | T341 | `validate_strategy_compare_config_driven_app_contract_case` target-aware R-table rendering：不同continuous Target identity不互相比best/worst；同Target identity正常比較，actual realized-R仍跨arm比較 | B240 |
 | T342 | `validate_breakout_quality_mr13h_no_breach_target_contract_case` MR-13H Target-only change、scalar/vector parity、no-breach invariant、profile/reference、read-only audit metrics contract | B241 |
+| T343 | `validate_strategy_compare_config_driven_app_contract_case` / `validate_breakout_quality_strategy_readable_report_contract_case` Multi-seed robustness schema 9 canonical report reuse／report-only refresh contract | B193 |
 ## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。G 只記錄實際狀態變更；不得寫 `DONE -> DONE`、`PARTIAL -> PARTIAL`、`TODO -> TODO` 等 no-op transition。同日同 ID 若有多筆狀態變更，必須依實際演進排序；`NEW -> *` 只能出現在該 ID 首筆，且 `NEW -> PARTIAL` / `NEW -> DONE` 必須排在後續 `PARTIAL -> DONE` 或 `DONE -> PARTIAL` 之前。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄僅作最小必要的治理索引與人工說明。
