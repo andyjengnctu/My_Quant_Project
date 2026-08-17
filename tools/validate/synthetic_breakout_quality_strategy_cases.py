@@ -3421,7 +3421,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             "strategy_compare_multi_arm",
             project_root / "filters/breakout_quality/strategy_comparison.py",
             "strategy_comparison.md",
-            'render_title("策略績效比較")',
+            "render_strategy_aggregate_report",
         ),
         (
             "strategy_parameter_adaptation",
@@ -3494,7 +3494,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     optimizer_callbacks_source = (project_root / "services/optimizer/callbacks.py").read_text(encoding="utf-8")
     outer_roos_source = (project_root / "services/optimizer/outer_rolling_oos.py").read_text(encoding="utf-8")
     render_report_source = comparison_source[
-        comparison_source.index("def _render_report("):
+        comparison_source.index("def render_strategy_aggregate_report("):
         comparison_source.index("def _run_directory(")
     ]
     add_check(
@@ -3543,10 +3543,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         case_id,
         "multi_seed_robustness_reuses_strategy_compare_canonical_report_renderers_and_keeps_seed_extensions_separate",
         True,
-        "render_strategy_core_result_table" in multi_seed_source
-        and "render_strategy_r_analysis_table" in multi_seed_source
-        and "render_strategy_execution_table" in multi_seed_source
-        and "render_strategy_yearly_values_table" in multi_seed_source
+        "render_strategy_aggregate_report" in multi_seed_source
         and "common_strategy_report" in multi_seed_source
         and "RoMD完整統計" in multi_seed_source
         and "設定中的同seed contrasts" in multi_seed_source

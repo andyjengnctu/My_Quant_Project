@@ -1220,13 +1220,18 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and all(
             section in rendered_common_report and section in upgraded_common_report
             for section in (
-                "## 1. 核心策略結果",
-                "## 2. R 預測／轉化",
-                "## 3. 資金／執行",
-                "## 4. 年度結果",
-                "## 5. RoMD完整統計",
+                "策略績效比較",
+                "1. 核心策略結果",
+                "2. R 預測／轉化",
+                "3. 資金／執行",
+                "4. 年度結果",
+                "5. RoMD完整統計",
             )
-        ),
+        )
+        and "## " not in rendered_common_report
+        and "## " not in upgraded_common_report
+        and "render_strategy_aggregate_report(" in robustness_source
+        and "_print_report_tables(summary)" in robustness_source,
     )
 
     add_check(

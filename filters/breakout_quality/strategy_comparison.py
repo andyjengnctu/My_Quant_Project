@@ -920,12 +920,11 @@ def render_strategy_yearly_values_table(
     return render_table(("年度", *enabled_ids), rows)
 
 
-def _yearly_table(
+def _yearly_values_by_id(
     pair_payloads: dict[str, dict[str, Any]],
     *,
     settings: StrategyComparisonSettings,
-    target: str = "plain",
-) -> str:
+) -> dict[str, dict[int, float | None]]:
     enabled_ids = tuple(arm.arm_id for arm in settings.enabled_arms)
     by_id: dict[str, dict[int, float | None]] = {arm_id: {} for arm_id in enabled_ids}
     for pair in pair_payloads.values():
@@ -949,8 +948,19 @@ def _yearly_table(
             if on_arm is not None and on_arm.arm_id in by_id:
                 runtime_spec = _arm_runtime_spec(on_arm)
                 by_id[on_arm.arm_id][year] = row.get(runtime_spec["yearly_key"])
+    return by_id
+
+
+def _yearly_table(
+    pair_payloads: dict[str, dict[str, Any]],
+    *,
+    settings: StrategyComparisonSettings,
+    target: str = "plain",
+) -> str:
     return render_strategy_yearly_values_table(
-        by_id, settings=settings, target=target
+        _yearly_values_by_id(pair_payloads, settings=settings),
+        settings=settings,
+        target=target,
     )
 
 
@@ -969,6 +979,58 @@ def _comparison_period(pair_payloads: dict[str, dict[str, Any]]) -> Any:
     )
 
 
+def render_strategy_aggregate_report(
+    *,
+    settings: StrategyComparisonSettings,
+    comparison_period: Any,
+    fingerprint: str,
+    scenarios: dict[str, dict[str, Any]],
+    diagnostics: dict[str, Any],
+    yearly_by_id: dict[str, dict[int, Any]],
+    target: str = "plain",
+    title: str = "策略績效比較",
+    fingerprint_label: str = "Config fingerprint",
+    extra_metadata: tuple[tuple[object, object], ...] = (),
+) -> str:
+    """Render the canonical cross-arm Strategy Compare human report.
+
+    Selection PIT, Forward-OOS and Multi-seed robustness all consume this same
+    top-level renderer.  Callers may append method-specific sections after the
+    four canonical Strategy Compare sections, but must not reimplement them.
+    """
+
+    metadata_rows = (
+        ("期間", comparison_period),
+        ("Dataset", settings.dataset),
+        ("Param policy", settings.param_policy),
+        ("Max positions", settings.max_positions),
+        ("Rotation", settings.rotation),
+        (fingerprint_label, fingerprint),
+        ("比較設定", "config/strategy_compare.py"),
+        *tuple(extra_metadata),
+    )
+    return "\n\n".join(
+        (
+            render_title(title),
+            render_key_values(metadata_rows),
+            render_section("1. 核心策略結果"),
+            render_strategy_core_result_table(
+                scenarios, settings=settings, target=target
+            ),
+            render_section("2. R 預測／轉化"),
+            render_strategy_r_analysis_table(diagnostics, target=target),
+            render_section("3. 資金／執行"),
+            render_strategy_execution_table(
+                scenarios, settings=settings, target=target
+            ),
+            render_section("4. 年度結果"),
+            render_strategy_yearly_values_table(
+                yearly_by_id, settings=settings, target=target
+            ),
+        )
+    ).rstrip() + "\n"
+
+
 def _render_report(
     *,
     settings: StrategyComparisonSettings,
@@ -978,36 +1040,16 @@ def _render_report(
     diagnostics: dict[str, Any],
     target: str = "plain",
 ) -> str:
-    return "\n\n".join(
-        (
-            render_title("策略績效比較"),
-            render_key_values(
-                (
-                    ("期間", _comparison_period(pair_payloads)),
-                    ("Dataset", settings.dataset),
-                    ("Param policy", settings.param_policy),
-                    ("Max positions", settings.max_positions),
-                    ("Rotation", settings.rotation),
-                    ("Config fingerprint", status["config_fingerprint"]),
-                    ("比較設定", "config/strategy_compare.py"),
-                )
-            ),
-            render_section("1. 核心策略結果"),
-            _core_result_table(
-                scenarios, settings=settings, target=target
-            ),
-            render_section("2. R 預測／轉化"),
-            render_strategy_r_analysis_table(diagnostics, target=target),
-            render_section("3. 資金／執行"),
-            _execution_table(
-                scenarios, settings=settings, target=target
-            ),
-            render_section("4. 年度結果"),
-            _yearly_table(
-                pair_payloads, settings=settings, target=target
-            ),
-        )
-    ).rstrip() + "\n"
+    return render_strategy_aggregate_report(
+        settings=settings,
+        comparison_period=_comparison_period(pair_payloads),
+        fingerprint=str(status["config_fingerprint"]),
+        scenarios=scenarios,
+        diagnostics=diagnostics,
+        yearly_by_id=_yearly_values_by_id(pair_payloads, settings=settings),
+        target=target,
+    )
+
 
 
 def _run_directory(
@@ -1521,6 +1563,7 @@ __all__ = [
     "collect_artifact_status",
     "render_execution_plan",
     "render_status",
+    "render_strategy_aggregate_report",
     "run_strategy_comparison",
     "show_strategy_comparison_status",
 ]

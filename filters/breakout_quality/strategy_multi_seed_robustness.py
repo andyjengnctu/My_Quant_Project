@@ -62,6 +62,7 @@ from core.console_report import (
     console_color_enabled,
     paint,
     project_relative_display_path,
+    render_section,
     render_table,
     render_title,
 )
@@ -107,12 +108,7 @@ from filters.breakout_quality.strategy_comparison import (
     _find_reusable_baseline_source,
     _load_direct_selection_r,
     collect_artifact_status,
-    render_strategy_core_result_table,
-    render_strategy_execution_table,
-    render_strategy_yearly_values_table,
-)
-from filters.breakout_quality.strategy_compare_diagnostics import (
-    render_strategy_r_analysis_table,
+    render_strategy_aggregate_report,
 )
 from filters.breakout_quality.strategy_compare_reporting import capacity_summary
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
@@ -2307,20 +2303,6 @@ def _robustness_summary(
     return payload
 
 
-def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
-    def esc(value: Any) -> str:
-        return str(value).replace("|", "\\|").replace("\n", "<br>")
-
-    lines = [
-        "| " + " | ".join(esc(value) for value in headers) + " |",
-        "| " + " | ".join("---" for _ in headers) + " |",
-    ]
-    lines.extend(
-        "| " + " | ".join(esc(value) for value in row) + " |"
-        for row in rows
-    )
-    return "\n".join(lines)
-
 
 def _fmt(value: Any, *, digits: int = 2, suffix: str = "") -> str:
     if value is None or (isinstance(value, float) and not math.isfinite(value)):
@@ -2328,7 +2310,18 @@ def _fmt(value: Any, *, digits: int = 2, suffix: str = "") -> str:
     return f"{float(value):.{digits}f}{suffix}"
 
 
-def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
+def render_multi_seed_robustness_report(
+    summary: dict[str, Any],
+    *,
+    target: str = "markdown",
+) -> str:
+    """Render robustness using the canonical Strategy Compare report format.
+
+    Sections 1-4 come from the exact same top-level Strategy Compare renderer used
+    by Selection PIT and Forward-OOS.  Multi-seed-only evidence is appended from
+    section 5 onward.
+    """
+
     contract = dict(summary["contract"])
     settings = _report_settings_for_contract(
         contract, get_strategy_comparison_settings(str(contract["profile_id"]))
@@ -2340,8 +2333,36 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
         str(arm_id): {int(year): value for year, value in dict(values or {}).items()}
         for arm_id, values in dict(common.get("yearly_by_id") or {}).items()
     }
+    if not scenarios:
+        raise ValueError("robustness報表缺少canonical核心策略結果")
+    if not yearly_by_id:
+        raise ValueError("robustness報表缺少canonical年度結果")
 
-    romd_headers = ["比較對象", "N", "Mean", "Median", "Std", "CV", "Min", "P25", "P75", "Max", "勝Min", "勝Full"]
+    canonical = render_strategy_aggregate_report(
+        settings=settings,
+        comparison_period=dict(contract.get("comparison_period") or {}),
+        fingerprint=str(contract["fingerprint"]),
+        scenarios=scenarios,
+        diagnostics={"r_analysis": r_analysis},
+        yearly_by_id=yearly_by_id,
+        target=target,
+        title="策略績效比較",
+        fingerprint_label="Scientific fingerprint",
+        extra_metadata=(
+            ("比較階段", str(contract.get("label") or "Multiple-seed robustness")),
+            (
+                "Seeds",
+                f"{int(contract['seed_count'])}（deterministic generated；不作best-seed選擇）",
+            ),
+            (
+                "Report schema",
+                f"{int(summary['schema_version'])}（不影響scientific fingerprint）",
+            ),
+        ),
+    ).rstrip()
+
+    sections: list[str] = [canonical]
+
     romd_rows = []
     for row in summary["romd_statistics"]:
         n = int(row["n"])
@@ -2351,23 +2372,13 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
             "-" if row["beats_min_count"] is None else f"{row['beats_min_count']}/{n}",
             "-" if row["beats_full_count"] is None else f"{row['beats_full_count']}/{n}",
         ])
-
-    lines = [
-        f"# {contract.get('label') or 'Multiple-seed Robustness'}", "",
-        f"- Profile：`{contract['profile_id']}`",
-        f"- Seeds：`{contract['seed_count']}`（deterministic generated；不作best-seed選擇）",
-        f"- Scientific fingerprint：`{contract['fingerprint']}`",
-        f"- Report schema：`{summary['schema_version']}`（不影響scientific fingerprint）", "",
-        "## 1. 核心策略結果", "",
-        render_strategy_core_result_table(scenarios, settings=settings, target="markdown") if scenarios else "沒有可用的核心策略結果。", "",
-        "## 2. R 預測／轉化", "",
-        render_strategy_r_analysis_table({"r_analysis": r_analysis}, target="markdown") if r_analysis else "沒有可用的R預測／轉化診斷。", "",
-        "## 3. 資金／執行", "",
-        render_strategy_execution_table(scenarios, settings=settings, target="markdown") if scenarios else "沒有可用的資金／執行結果。", "",
-        "## 4. 年度結果", "",
-        render_strategy_yearly_values_table(yearly_by_id, settings=settings, target="markdown") if yearly_by_id else "沒有可用的年度結果。", "",
-        "## 5. RoMD完整統計", "", _markdown_table(romd_headers, romd_rows),
-    ]
+    sections.extend([
+        render_section("5. RoMD完整統計"),
+        render_table(
+            ["比較對象", "N", "Mean", "Median", "Std", "CV", "Min", "P25", "P75", "Max", "勝Min", "勝Full"],
+            romd_rows,
+        ),
+    ])
 
     paired = list(summary.get("paired_comparisons") or [])
     if not paired:
@@ -2387,33 +2398,38 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
 
     next_section = 6
     if paired:
-        lines += ["", f"## {next_section}. 設定中的同seed contrasts", ""]
+        sections.append(render_section(f"{next_section}. 設定中的同seed contrasts"))
+        paired_blocks: list[str] = []
         for item in paired:
             left = str(item.get("left") or "Left")
             right = str(item.get("right") or "Right")
-            lines += [f"### {right} − {left}", ""]
+            block: list[str] = [f"{right} − {left}"]
             description = str(item.get("description") or "").strip()
             if description:
-                lines += [f"- 用途：{description}"]
+                block.append(f"用途：{description}")
+
             same = item.get("romd_same_seed")
             if isinstance(same, dict):
                 n = int(same["n"])
-                lines += [
-                    f"- RoMD：{same['right']} > {same['left']} {same['right_gt_left_count']}/{n}；"
+                block.extend([
+                    f"RoMD：{same['right']} > {same['left']} {same['right_gt_left_count']}/{n}；"
                     f"{same['left']} > {same['right']} {same['left_gt_right_count']}/{n}；Tie {same['tie_count']}/{n}。",
-                    f"- ΔRoMD Mean {_fmt(same['right_minus_left_mean'])}；Median {_fmt(same['right_minus_left_median'])}；"
+                    f"ΔRoMD Mean {_fmt(same['right_minus_left_mean'])}；Median {_fmt(same['right_minus_left_median'])}；"
                     f"Std {_fmt(same['right_minus_left_std'])}；Min {_fmt(same['right_minus_left_min'])}；"
                     f"P25 {_fmt(same['right_minus_left_p25'])}；P75 {_fmt(same['right_minus_left_p75'])}；Max {_fmt(same['right_minus_left_max'])}。",
-                ]
+                ])
+
             direct_same = item.get("direct_selection_r_same_seed")
             if isinstance(direct_same, dict):
                 n = int(direct_same["n"])
-                lines += [
-                    f"- DL選擇R：{direct_same['right']} > {direct_same['left']} {direct_same['right_gt_left_count']}/{n}；"
+                block.extend([
+                    f"DL選擇R：{direct_same['right']} > {direct_same['left']} {direct_same['right_gt_left_count']}/{n}；"
                     f"{direct_same['left']} > {direct_same['right']} {direct_same['left_gt_right_count']}/{n}；Tie {direct_same['tie_count']}/{n}。",
-                    f"- ΔDL選擇R Mean {_fmt(direct_same['right_minus_left_mean'], suffix=' R')}；"
-                    f"Median {_fmt(direct_same['right_minus_left_median'], suffix=' R')}；Std {_fmt(direct_same['right_minus_left_std'], suffix=' R')}。",
-                ]
+                    f"ΔDL選擇R Mean {_fmt(direct_same['right_minus_left_mean'], suffix=' R')}；"
+                    f"Median {_fmt(direct_same['right_minus_left_median'], suffix=' R')}；"
+                    f"Std {_fmt(direct_same['right_minus_left_std'], suffix=' R')}。",
+                ])
+
             translation = item.get("selection_r_to_strategy")
             if isinstance(translation, dict):
                 pair_rows = []
@@ -2438,158 +2454,93 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
                         verdict,
                     ])
                 if pair_rows:
-                    lines += ["", _markdown_table(
-                        ["Seed", "ΔDL選擇R", "ΔReturn", "ΔMDD", "ΔRoMD", "ΔEV", "方向"], pair_rows
-                    )]
+                    block.extend([
+                        "",
+                        render_table(
+                            ["Seed", "ΔDL選擇R", "ΔReturn", "ΔMDD", "ΔRoMD", "ΔEV", "方向"],
+                            pair_rows,
+                        ),
+                    ])
                 positive_n = int(translation["selection_r_positive_count"])
                 translated_n = int(translation["selection_r_positive_romd_positive_count"])
-                lines += [
-                    f"- ΔDL選擇R>0：{positive_n}/{translation['n']}；其中ΔRoMD>0：{translated_n}/{positive_n if positive_n else 0}。",
-                    f"- 方向一致：{translation['sign_concordant_count']}/{translation['sign_non_tie_n']}；"
+                block.extend([
+                    f"ΔDL選擇R>0：{positive_n}/{translation['n']}；其中ΔRoMD>0："
+                    f"{translated_n}/{positive_n if positive_n else 0}。",
+                    f"方向一致：{translation['sign_concordant_count']}/{translation['sign_non_tie_n']}；"
                     f"方向相反：{translation['sign_discordant_count']}/{translation['sign_non_tie_n']}。",
-                    f"- Spearman(ΔDL選擇R, ΔRoMD)={_fmt(translation.get('selection_r_delta_vs_romd_spearman'), digits=3)}；"
+                    f"Spearman(ΔDL選擇R, ΔRoMD)={_fmt(translation.get('selection_r_delta_vs_romd_spearman'), digits=3)}；"
                     f"Spearman(ΔDL選擇R, ΔReturn)={_fmt(translation.get('selection_r_delta_vs_return_spearman'), digits=3)}。",
-                ]
+                ])
+
             compare = item.get("romd_distribution")
             if isinstance(compare, dict):
-                lines += [
-                    f"- Cross-seed P({compare['left']} > {compare['right']})="
-                    f"{float(compare['pairwise_left_gt_right_probability'])*100:.2f}%（{compare['pair_count']} pairs）。"
-                ]
+                block.append(
+                    f"Cross-seed P({compare['left']} > {compare['right']})="
+                    f"{float(compare['pairwise_left_gt_right_probability']) * 100:.2f}%"
+                    f"（{compare['pair_count']} pairs）。"
+                )
+
             annual_pair = list(item.get("yearly_same_seed") or [])
             if annual_pair:
                 pair_rows = [[
                     str(row["year"]), str(row["n"]), _fmt(row["right_minus_left_mean"], suffix="%"),
                     _fmt(row["right_minus_left_median"], suffix="%"), _fmt(row["right_minus_left_std"], suffix="%"),
-                    f"{row['right_gt_left_count']}/{row['n']}", f"{row['left_gt_right_count']}/{row['n']}", f"{row['tie_count']}/{row['n']}",
+                    f"{row['right_gt_left_count']}/{row['n']}", f"{row['left_gt_right_count']}/{row['n']}",
+                    f"{row['tie_count']}/{row['n']}",
                 ] for row in annual_pair]
-                lines += ["", _markdown_table(
-                    ["年度", "N", "Δ右-左 Mean", "Median", "Std", "右勝", "左勝", "Tie"], pair_rows
-                )]
-            lines += [""]
+                block.extend([
+                    "",
+                    render_table(
+                        ["年度", "N", "Δ右-左 Mean", "Median", "Std", "右勝", "左勝", "Tie"],
+                        pair_rows,
+                    ),
+                ])
+            paired_blocks.append("\n".join(block))
+        sections.append("\n\n".join(paired_blocks))
         next_section += 1
 
     yearly = list(summary.get("yearly_statistics") or [])
     if yearly:
-        lines += ["", f"## {next_section}. 歷年報酬跨seed完整統計", ""]
         rows = []
         for row in sorted(yearly, key=lambda x: (int(x["year"]), str(x["type"]), str(x["name"]))):
             rows.append([
-                str(row["year"]) + ("" if row.get("is_complete_year") else "*"), row["name"], row["type"], str(row["n"]),
-                _fmt(row["mean"], suffix="%"), _fmt(row["median"], suffix="%"), _fmt(row["std"], suffix="%"),
-                _fmt(row["min"], suffix="%"), _fmt(row["p25"], suffix="%"), _fmt(row["p75"], suffix="%"), _fmt(row["max"], suffix="%"),
+                str(row["year"]) + ("" if row.get("is_complete_year") else "*"),
+                row["name"], row["type"], str(row["n"]),
+                _fmt(row["mean"], suffix="%"), _fmt(row["median"], suffix="%"),
+                _fmt(row["std"], suffix="%"), _fmt(row["min"], suffix="%"),
+                _fmt(row["p25"], suffix="%"), _fmt(row["p75"], suffix="%"),
+                _fmt(row["max"], suffix="%"),
             ])
-        lines += [_markdown_table(["年度", "比較對象", "類型", "N", "Mean", "Median", "Std", "Min", "P25", "P75", "Max"], rows), "", "* 非完整年度。"]
+        sections.extend([
+            render_section(f"{next_section}. 歷年報酬跨seed完整統計"),
+            render_table(
+                ["年度", "比較對象", "類型", "N", "Mean", "Median", "Std", "Min", "P25", "P75", "Max"],
+                rows,
+            ) + "\n* 非完整年度。",
+        ])
         next_section += 1
 
     references = dict(contract.get("romd_reference_baselines") or {})
     min_name = str(dict(references.get("min") or {}).get("name") or "Min baseline")
     full_name = str(dict(references.get("full") or {}).get("name") or "Full baseline")
-    lines += ["", f"## {next_section}. 限制", "",
-        "- 前四張表直接重用Strategy Compare canonical metric registry與renderer；Multi-seed arm顯示per-seed canonical metric的Mean，Fixed arm顯示正式baseline值。",
-        "- 舊robustness工件若未永久保存model prediction／Future Target conversion欄位，report-only refresh會顯示`-`，不為補報表重訓或重跑strategy replay。",
-        "- resolved seeds只用於重現；不得挑best seed或依本報表組seed ensemble。",
-        f"- {full_name}／{min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一表。",
-        "- 同一DL source／seed只訓練一次，允許fan-out到不同runtime selector replay；此reuse不改變模型scientific condition。",
-        "- Selection PIT與Forward-OOS robustness均只評估既定scientific condition；不得依結果回頭調整training semantics。", ""]
-    return "\n".join(lines)
+    sections.extend([
+        render_section(f"{next_section}. 限制"),
+        "\n".join((
+            "- 前四張表直接重用Strategy Compare canonical aggregate renderer；Multi-seed arm顯示per-seed canonical metric的Mean，Fixed arm顯示正式baseline值。",
+            "- 舊robustness工件若未永久保存model prediction／Future Target conversion欄位，report-only refresh會顯示`-`，不為補報表重訓或重跑strategy replay。",
+            "- resolved seeds只用於重現；不得挑best seed或依本報表組seed ensemble。",
+            f"- {full_name}／{min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一表。",
+            "- 同一DL source／seed只訓練一次，允許fan-out到不同runtime selector replay；此reuse不改變模型scientific condition。",
+            "- Selection PIT與Forward-OOS robustness均只評估既定scientific condition；不得依結果回頭調整training semantics。",
+        )),
+    ])
+    return "\n\n".join(section for section in sections if section).rstrip() + "\n"
 
-
-def _color_delta(text: str, value: Any, *, preference: str = "higher") -> str:
-    return terminal_signal(text, signal_for_delta(value, preference=preference))
 
 
 def _print_report_tables(summary: dict[str, Any]) -> None:
-    color_enabled = console_color_enabled()
-    contract = dict(summary.get("contract") or {})
-    settings = _report_settings_for_contract(
-        contract, get_strategy_comparison_settings(str(contract["profile_id"]))
-    )
-    common = dict(summary.get("common_strategy_report") or {})
-    scenarios = dict(common.get("scenarios") or {})
-    r_analysis = list(common.get("r_analysis") or [])
-    yearly_by_id = {
-        str(arm_id): {int(year): value for year, value in dict(values or {}).items()}
-        for arm_id, values in dict(common.get("yearly_by_id") or {}).items()
-    }
+    print("\n" + render_multi_seed_robustness_report(summary, target="console").rstrip())
 
-    print("\n" + render_title(str(contract.get("label") or "Multiple-seed robustness")))
-    print("\n1. 核心策略結果")
-    print(render_strategy_core_result_table(scenarios, settings=settings) if scenarios else "沒有可用的核心策略結果。")
-    print("\n2. R 預測／轉化")
-    print(render_strategy_r_analysis_table({"r_analysis": r_analysis}) if r_analysis else "沒有可用的R預測／轉化診斷。")
-    print("\n3. 資金／執行")
-    print(render_strategy_execution_table(scenarios, settings=settings) if scenarios else "沒有可用的資金／執行結果。")
-    print("\n4. 年度結果")
-    print(render_strategy_yearly_values_table(yearly_by_id, settings=settings) if yearly_by_id else "沒有可用的年度結果。")
-
-    romd_rows = []
-    for row in summary["romd_statistics"]:
-        n = int(row["n"])
-        romd_rows.append([
-            row["name"], n, _fmt(row["mean"]), _fmt(row["median"]), _fmt(row["std"]),
-            _fmt(row["cv"]), _fmt(row["min"]), _fmt(row["p25"]), _fmt(row["p75"]), _fmt(row["max"]),
-            "-" if row["beats_min_count"] is None else f"{row['beats_min_count']}/{n}",
-            "-" if row["beats_full_count"] is None else f"{row['beats_full_count']}/{n}",
-        ])
-    print("\n5. RoMD完整統計")
-    print(render_table(["比較對象", "N", "Mean", "Median", "Std", "CV", "Min", "P25", "P75", "Max", "勝Min", "勝Full"], romd_rows))
-
-    paired = list(summary.get("paired_comparisons") or [])
-    if not paired:
-        same = summary.get("romd_same_seed_comparison")
-        if isinstance(same, dict):
-            paired = [{
-                "contrast_id": "legacy_default",
-                "left": same.get("left"), "right": same.get("right"),
-                "romd_same_seed": same,
-                "direct_selection_r_same_seed": summary.get("direct_selection_r_same_seed_comparison"),
-                "selection_r_to_strategy": summary.get("selection_r_to_strategy_same_seed_translation"),
-            }]
-    if paired:
-        print("\n6. 設定中的同seed contrasts")
-        for item in paired:
-            same = item.get("romd_same_seed")
-            if not isinstance(same, dict):
-                continue
-            n = int(same["n"])
-            delta = same["right_minus_left_mean"]
-            print(f"\n{same['right']} − {same['left']}")
-            print(
-                f"RoMD右勝左={same['right_gt_left_count']}/{n} | 左勝右={same['left_gt_right_count']}/{n} | "
-                f"Tie={same['tie_count']}/{n} | ΔRoMD Mean="
-                + _color_delta(_fmt(delta), delta)
-                + f" | Median {_fmt(same['right_minus_left_median'])} | Std {_fmt(same['right_minus_left_std'])}"
-            )
-            direct = item.get("direct_selection_r_same_seed")
-            if isinstance(direct, dict):
-                d = direct["right_minus_left_mean"]
-                print(
-                    f"DL選擇R右勝左={direct['right_gt_left_count']}/{direct['n']} | ΔMean="
-                    + _color_delta(_fmt(d, suffix=" R"), d)
-                )
-            translation = item.get("selection_r_to_strategy")
-            if isinstance(translation, dict):
-                positive_n = int(translation["selection_r_positive_count"])
-                translated_n = int(translation["selection_r_positive_romd_positive_count"])
-                print(
-                    f"ΔDL選擇R>0={positive_n}/{translation['n']} | 其中ΔRoMD>0="
-                    f"{translated_n}/{positive_n if positive_n else 0} | 方向一致="
-                    f"{translation['sign_concordant_count']}/{translation['sign_non_tie_n']}"
-                )
-
-    yearly = list(summary.get("yearly_statistics") or [])
-    if yearly:
-        print("\n7. 歷年報酬跨seed完整統計")
-        rows = []
-        for row in sorted(yearly, key=lambda x: (int(x["year"]), str(x["type"]), str(x["name"]))):
-            rows.append([
-                str(row["year"]) + ("" if row.get("is_complete_year") else "*"), row["name"], row["type"], row["n"],
-                _fmt(row["mean"], suffix="%"), _fmt(row["median"], suffix="%"), _fmt(row["std"], suffix="%"),
-                _fmt(row["min"], suffix="%"), _fmt(row["p25"], suffix="%"), _fmt(row["p75"], suffix="%"), _fmt(row["max"], suffix="%"),
-            ])
-        print(render_table(["年度", "比較對象", "類型", "N", "Mean", "Median", "Std", "Min", "P25", "P75", "Max"], rows))
-        print("* 非完整年度")
 
 
 def show_multi_seed_robustness_status(*, robustness_id: str | None = None) -> None:
@@ -2665,12 +2616,17 @@ def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None
             )
             _write_json(summary_path, upgraded)
             report.write_text(
-                render_multi_seed_robustness_report(upgraded),
+                render_multi_seed_robustness_report(upgraded, target="markdown"),
                 encoding="utf-8",
             )
-    if not report.is_file():
-        raise FileNotFoundError(f"最新robustness報表不存在: {report}")
-    print(report.read_text(encoding="utf-8"))
+    if not summary_path.is_file():
+        raise FileNotFoundError(f"最新robustness摘要不存在: {summary_path}")
+    summary = _read_json(summary_path)
+    report.write_text(
+        render_multi_seed_robustness_report(summary, target="markdown"),
+        encoding="utf-8",
+    )
+    _print_report_tables(summary)
 
 
 def _cleanup_unit_artifacts(
@@ -3293,7 +3249,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         )
         summary["elapsed_sec"] = round(time.perf_counter() - started_total, 3)
         _write_json(run_root / SUMMARY_FILENAME, summary)
-        report_text = render_multi_seed_robustness_report(summary)
+        report_text = render_multi_seed_robustness_report(summary, target="markdown")
         (run_root / REPORT_FILENAME).write_text(report_text, encoding="utf-8")
         manifest.update({
             "status": "COMPLETED",
