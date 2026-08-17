@@ -518,11 +518,15 @@ def run(args) -> int:
         "reason": "active research profile沒有設定reference target",
     }
     reference_raw_target = None
-    if research_spec.reference_profile_name:
+    evaluation_reference_profile = (
+        research_spec.evaluation_reference_profile_name
+        or research_spec.reference_profile_name
+    )
+    if evaluation_reference_profile:
         reference_bundle = load_daily_universal_ranker_data(
             filter_id=str(args.filter_id),
             model_architecture=str(args.model_architecture),
-            experiment_profile=str(research_spec.reference_profile_name),
+            experiment_profile=str(evaluation_reference_profile),
             preload_feature_bank=False,
             allow_stale_source=bool(args.allow_stale_source),
             project_root=PROJECT_ROOT,
@@ -558,7 +562,7 @@ def run(args) -> int:
         )
         reference_target_evaluation = {
             "available": True,
-            "reference_profile": str(research_spec.reference_profile_name),
+            "reference_profile": str(evaluation_reference_profile),
             "reference_target_id": str(reference_bundle.profile.continuous_target_id),
             "used_for_training_or_epoch_selection": False,
             "evaluated_after_checkpoint_write": True,

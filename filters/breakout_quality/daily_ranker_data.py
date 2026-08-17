@@ -15,16 +15,21 @@ import numpy as np
 import pandas as pd
 
 from config.breakout_quality import get_breakout_quality_experiment_profile
-from filters.breakout_quality.continuous_ranker_data import ContinuousRankerDataBundle
+from filters.breakout_quality.continuous_ranker_data import (
+    ContinuousRankerDataBundle,
+    build_same_date_percentile_targets,
+)
 from filters.breakout_quality.continuous_target import (
     DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
     DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
     DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+    DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
     DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
     StrategyAlignedContinuousTargetSpec,
     build_daily_full_horizon_opportunity_contract,
     build_daily_full_horizon_pure_mfe_contract,
     build_daily_full_horizon_low_adverse_contract,
+    build_daily_full_horizon_equal_rank_mfe_low_adverse_contract,
     build_daily_opportunity_no_time_contract,
 )
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
@@ -357,6 +362,35 @@ def _daily_targets_for_positions(
 
 
 
+def build_equal_rank_mfe_low_adverse_target(
+    favorable_r: np.ndarray,
+    adverse_r: np.ndarray,
+    valid_mask: np.ndarray,
+    group_dates: pd.Series | np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build MR-13N from fixed equal weights on same-date component percentiles."""
+
+    favorable = np.asarray(favorable_r, dtype=np.float64)
+    adverse = np.asarray(adverse_r, dtype=np.float64)
+    valid = np.asarray(valid_mask, dtype=bool)
+    if favorable.shape != adverse.shape or favorable.shape != valid.shape:
+        raise ValueError("MR-13N component target shape不一致")
+    mfe_percentile = build_same_date_percentile_targets(favorable, valid, group_dates)
+    low_adverse_percentile = build_same_date_percentile_targets(
+        -adverse,
+        valid,
+        group_dates,
+    )
+    composite = (
+        0.5 * mfe_percentile.astype(np.float64)
+        + 0.5 * low_adverse_percentile.astype(np.float64)
+    ).astype(np.float32)
+    composite[~valid] = np.nan
+    if bool(np.any(valid & ~np.isfinite(composite))):
+        raise ValueError("MR-13N equal-rank target產生non-finite value")
+    return composite, mfe_percentile, low_adverse_percentile
+
+
 def load_daily_universal_ranker_data(
     *,
     filter_id: str,
@@ -385,6 +419,7 @@ def load_daily_universal_ranker_data(
         DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
         DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
         DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+        DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
         DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
     }:
         raise ValueError(f"daily universal ranker target identity不一致: {target_id!r}")
@@ -518,13 +553,22 @@ def load_daily_universal_ranker_data(
             DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
             DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
             DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+            DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
         }:
             local_targets = np.full(len(local_positions), np.nan, dtype=np.float32)
             local_target_valid = np.zeros(len(local_positions), dtype=bool)
             target_complete = local_positions + int(spec.horizon_bars) < len(frame)
             if bool(target_complete.any()):
+                component_target_id = (
+                    DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID
+                    if target_id == DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID
+                    else target_id
+                )
                 completed_batch = compute_daily_opportunity_target_batch(
-                    frame, local_positions[target_complete], spec=spec, target_id=target_id
+                    frame,
+                    local_positions[target_complete],
+                    spec=spec,
+                    target_id=component_target_id,
                 )
                 completed_indexes = np.flatnonzero(target_complete)
                 local_targets[completed_indexes] = completed_batch.target_raw_r
@@ -668,6 +712,19 @@ def load_daily_universal_ranker_data(
     valid_opportunity_bar = np.concatenate(valid_opportunity_bar_chunks)
     valid_first_breach_bar = np.concatenate(valid_first_breach_bar_chunks)
     valid_minimum_low_return = np.concatenate(valid_minimum_low_return_chunks)
+    valid_mfe_percentile = None
+    valid_low_adverse_percentile = None
+    if target_id == DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID:
+        component_valid = np.ones(len(valid_targets), dtype=bool)
+        risk_budget_return = float(spec.risk_budget_return)
+        valid_targets, valid_mfe_percentile, valid_low_adverse_percentile = (
+            build_equal_rank_mfe_low_adverse_target(
+                np.asarray(valid_favorable, dtype=np.float64) / risk_budget_return,
+                np.asarray(valid_adverse, dtype=np.float64) / risk_budget_return,
+                component_valid,
+                valid_dates,
+            )
+        )
     context_width = len(RISK_GEOMETRY_CONTEXT_FEATURES) if use_risk_context else 0
     valid_context = np.concatenate(valid_context_chunks, axis=0)
 
@@ -737,6 +794,20 @@ def load_daily_universal_ranker_data(
             "target_minimum_low_return": minimum_low_return,
         }
     )
+    if target_id == DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID:
+        group_table["target_mfe_daily_percentile"] = np.concatenate(
+            [
+                np.asarray(valid_mfe_percentile, dtype=np.float32),
+                np.full(len(inference_dates), np.nan, dtype=np.float32),
+            ]
+        )
+        group_table["target_low_adverse_daily_percentile"] = np.concatenate(
+            [
+                np.asarray(valid_low_adverse_percentile, dtype=np.float32),
+                np.full(len(inference_dates), np.nan, dtype=np.float32),
+            ]
+        )
+        group_table["target_equal_rank_composite"] = raw_target
     feature_bank = LazyDailyFeatureBank(
         frames=tuple(frames),
         benchmark=benchmark,
@@ -754,6 +825,10 @@ def load_daily_universal_ranker_data(
         target_contract = build_daily_full_horizon_pure_mfe_contract(DEFAULT_LABEL_POLICY)
     elif target_id == DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID:
         target_contract = build_daily_full_horizon_low_adverse_contract(DEFAULT_LABEL_POLICY)
+    elif target_id == DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID:
+        target_contract = build_daily_full_horizon_equal_rank_mfe_low_adverse_contract(
+            DEFAULT_LABEL_POLICY
+        )
     else:
         target_contract = build_risk_target_contract(
             horizon_bars=int(spec.horizon_bars),
@@ -920,6 +995,7 @@ __all__ = [
     "DailyRankerSplit",
     "LazyDailyFeatureBank",
     "build_daily_ranker_split",
+    "build_equal_rank_mfe_low_adverse_target",
     "compute_daily_opportunity_target_batch",
     "load_daily_universal_ranker_data",
     "select_breakout_candidate_group_ids",

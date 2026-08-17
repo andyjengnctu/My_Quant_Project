@@ -34,6 +34,42 @@ class ContinuousRankerDataBundle:
     model_spec: Any
 
 
+def build_same_date_percentile_targets(
+    values: np.ndarray,
+    valid_mask: np.ndarray,
+    group_dates: pd.Series | np.ndarray,
+) -> np.ndarray:
+    """Return [0,1] average-rank percentiles using only values from the same date."""
+
+    target = np.asarray(values, dtype=np.float64)
+    valid = np.asarray(valid_mask, dtype=bool)
+    dates = pd.to_datetime(pd.Series(group_dates), errors="raise").dt.normalize()
+    if target.ndim != 1 or valid.ndim != 1 or target.shape != valid.shape or len(dates) != len(target):
+        raise ValueError("same-date percentile target input shape不一致")
+    result = np.full(target.shape, np.nan, dtype=np.float32)
+    work = pd.DataFrame(
+        {
+            "date": dates,
+            "target": target,
+            "group_index": np.arange(len(target), dtype=np.int64),
+        }
+    )
+    work = work[valid & np.isfinite(target)].copy()
+    for _date, day in work.groupby("date", sort=True):
+        count = int(len(day))
+        if count == 1:
+            percentile = np.array([0.5], dtype=np.float64)
+        else:
+            ranks = day["target"].rank(method="average").to_numpy(dtype=np.float64)
+            percentile = (ranks - 1.0) / float(count - 1)
+        result[day["group_index"].to_numpy(dtype=np.int64)] = percentile.astype(np.float32)
+    if bool(np.any(valid & ~np.isfinite(result))):
+        raise ValueError("valid target無法建立same-date percentile")
+    if bool(np.any(np.isfinite(result) & ((result < 0.0) | (result > 1.0)))):
+        raise ValueError("same-date percentile超出[0,1]")
+    return result
+
+
 def _validate_group_consistency(events: pd.DataFrame) -> None:
     required = {"ticker", "date", "group_index", "label_eval_end_date"}
     missing = sorted(required - set(events.columns))
@@ -162,4 +198,4 @@ def load_continuous_ranker_data(
     )
 
 
-__all__ = ["ContinuousRankerDataBundle", "load_continuous_ranker_data"]
+__all__ = ["ContinuousRankerDataBundle", "build_same_date_percentile_targets", "load_continuous_ranker_data"]

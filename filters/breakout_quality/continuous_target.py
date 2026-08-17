@@ -20,6 +20,7 @@ DAILY_OPPORTUNITY_NO_TIME_TARGET_ID = "daily_opportunity_no_time_r_v1"
 DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID = "daily_full_horizon_opportunity_r_v1"
 DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID = "daily_full_horizon_pure_mfe_r_v1"
 DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_low_adverse_r_v1"
+DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_equal_rank_mfe_low_adverse_v1"
 
 TARGET_RAW_FILENAME = "group_target_raw_r.npy"
 TARGET_FAVORABLE_RETURN_FILENAME = "group_favorable_return.npy"
@@ -421,6 +422,47 @@ def build_daily_full_horizon_low_adverse_contract(
         "split_derived_parameters": False,
         "oos_fitted_parameters": False,
     }
+
+def build_daily_full_horizon_equal_rank_mfe_low_adverse_contract(
+    policy: BreakoutQualityLabelPolicy,
+) -> dict[str, object]:
+    """Return the MR-13N fixed equal-rank MFE + low-adverse target contract."""
+
+    spec = StrategyAlignedContinuousTargetSpec.from_label_policy(policy)
+    return {
+        "schema_version": CONTINUOUS_TARGET_SCHEMA_VERSION,
+        "target_id": DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
+        "objective_family": "daily_cross_sectional_equal_rank_mfe_low_adverse",
+        "information_source": "fixed_future_high_low_path_plus_same_date_cross_section",
+        "sample_scope": "daily_eligible_stock_days",
+        "horizon_bars": int(spec.horizon_bars),
+        "risk_budget_return": float(spec.risk_budget_return),
+        "formula": (
+            "0.5 * same_date_percentile(full_horizon_favorable_return / risk_budget_return) "
+            "+ 0.5 * same_date_percentile(-adverse_to_peak_return / risk_budget_return)"
+        ),
+        "component_weights": {
+            "mfe_percentile": 0.5,
+            "low_adverse_percentile": 0.5,
+        },
+        "component_rank_method": "same_date_average_rank_scaled_to_0_1",
+        "peak_rule": "earliest maximum high across the complete fixed horizon",
+        "risk_rule": "risk-barrier touch is diagnostic only and never truncates the future path",
+        "adverse_scope": "worst low from horizon start through selected peak bar",
+        "higher_is_better": True,
+        "unit": "unitless_same_date_rank_composite",
+        "requires_breakout_event": False,
+        "requires_high_len": False,
+        "requires_breakout_level": False,
+        "requires_strategy_candidate_membership": False,
+        "time_penalty_included": False,
+        "normalization": "each component independently ranked within the same date before fixed equal weighting",
+        "clipping": "none",
+        "split_derived_parameters": False,
+        "oos_fitted_parameters": False,
+        "weight_tuning": "none",
+    }
+
 
 def build_daily_full_horizon_pure_mfe_contract(
     policy: BreakoutQualityLabelPolicy,
@@ -962,6 +1004,7 @@ __all__ = [
     "DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID",
     "DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID",
     "DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID",
+    "DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID",
     "DAILY_OPPORTUNITY_NO_TIME_TARGET_ID",
     "STRATEGY_ALIGNED_TARGET_ID",
     "STRATEGY_ALIGNED_NO_TIME_TARGET_ID",
@@ -981,6 +1024,7 @@ __all__ = [
     "build_daily_full_horizon_opportunity_contract",
     "build_daily_full_horizon_pure_mfe_contract",
     "build_daily_full_horizon_low_adverse_contract",
+    "build_daily_full_horizon_equal_rank_mfe_low_adverse_contract",
     "build_daily_opportunity_no_time_contract",
     "build_strategy_aligned_group_targets",
     "build_strategy_aligned_no_time_contract",

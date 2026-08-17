@@ -62,7 +62,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
-from filters.breakout_quality.continuous_ranker_data import source_data_end
+from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets, source_data_end
 from filters.breakout_quality.continuous_ranker_quality import (
     daily_top_k_metrics as shared_daily_top_k_metrics,
 )
@@ -362,29 +362,9 @@ def build_daily_percentile_targets(
     valid_mask: np.ndarray,
     group_dates: pd.Series | np.ndarray,
 ) -> np.ndarray:
-    """Return group-level [0,1] ranks using only same-date target values."""
+    """Compatibility façade for the canonical same-date percentile target helper."""
 
-    values = np.asarray(raw_target, dtype=np.float64)
-    valid = np.asarray(valid_mask, dtype=bool)
-    dates = pd.to_datetime(pd.Series(group_dates), errors="raise").dt.normalize()
-    if values.ndim != 1 or valid.ndim != 1 or values.shape != valid.shape or len(dates) != len(values):
-        raise ValueError("daily percentile target input shape不一致")
-    result = np.full(values.shape, np.nan, dtype=np.float32)
-    work = pd.DataFrame({"date": dates, "target": values, "group_index": np.arange(len(values))})
-    work = work[valid & np.isfinite(values)].copy()
-    for _date, day in work.groupby("date", sort=True):
-        count = int(len(day))
-        if count == 1:
-            percentile = np.array([0.5], dtype=np.float64)
-        else:
-            ranks = day["target"].rank(method="average").to_numpy(dtype=np.float64)
-            percentile = (ranks - 1.0) / float(count - 1)
-        result[day["group_index"].to_numpy(dtype=np.int64)] = percentile.astype(np.float32)
-    if bool(np.any(valid & ~np.isfinite(result))):
-        raise ValueError("valid continuous target無法建立daily percentile")
-    if bool(np.any(np.isfinite(result) & ((result < 0.0) | (result > 1.0)))):
-        raise ValueError("daily percentile超出[0,1]")
-    return result
+    return build_same_date_percentile_targets(raw_target, valid_mask, group_dates)
 
 
 def _group_ids_from_event_rows(event_group_index: np.ndarray, rows: np.ndarray, valid_mask: np.ndarray) -> np.ndarray:

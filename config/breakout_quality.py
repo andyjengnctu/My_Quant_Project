@@ -51,13 +51,14 @@ from config.execution_policy import (
 # - MR-13K daily-universal full-horizon pure-MFE full-list ranker: "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise"
 # - MR-13L daily-universal full-horizon decomposed MFE/adverse regression: "daily_universal_full_horizon_mfe_adverse_dual_mse"
 # - MR-13M daily-universal full-horizon low-adverse full-list ranker: "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
+# - MR-13N daily-universal full-horizon equal-rank MFE + low-adverse full-list ranker: "daily_universal_full_horizon_equal_rank_mfe_low_adverse_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_equal_rank_mfe_low_adverse_full_list_ndcg_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42
@@ -301,6 +302,9 @@ DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE = (
 )
 DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
+)
+DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_full_horizon_equal_rank_mfe_low_adverse_full_list_ndcg_pairwise"
 )
 DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_context_net_full_list_ndcg_pairwise"
@@ -934,6 +938,17 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     ),
+    DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_equal_rank_mfe_low_adverse_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    ),
     DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE,
         optimizer_name="adam",
@@ -1035,6 +1050,7 @@ class ContinuousRankerResearchSpec:
     score_semantic_id: str
     pairwise_reduction: str | None = None
     reference_profile_name: str | None = None
+    evaluation_reference_profile_name: str | None = None
     selection_pit_authorized: bool = True
 
     def __post_init__(self) -> None:
@@ -1067,14 +1083,17 @@ class ContinuousRankerResearchSpec:
             raise ValueError(
                 f"非pairwise profile不得指定pairwise reduction: {self.profile_name}"
             )
-        if self.reference_profile_name is not None:
-            reference = str(self.reference_profile_name).strip()
+        for reference_field in ("reference_profile_name", "evaluation_reference_profile_name"):
+            reference_value = getattr(self, reference_field)
+            if reference_value is None:
+                continue
+            reference = str(reference_value).strip()
             if reference not in _EXPERIMENT_PROFILES:
                 raise ValueError(
-                    f"continuous ranker reference profile不存在: {self.reference_profile_name}"
+                    f"continuous ranker {reference_field}不存在: {reference_value}"
                 )
             if reference == self.profile_name:
-                raise ValueError("continuous ranker reference profile不得等於自身")
+                raise ValueError(f"continuous ranker {reference_field}不得等於自身")
         for field_name in (
             "model_research_id",
             "experiment_name",
@@ -1102,6 +1121,7 @@ class ContinuousRankerResearchSpec:
             "score_semantic_id": self.score_semantic_id,
             "pairwise_reduction": self.pairwise_reduction,
             "reference_profile_name": self.reference_profile_name,
+            "evaluation_reference_profile_name": self.evaluation_reference_profile_name,
             "selection_pit_authorized": bool(self.selection_pit_authorized),
         }
 
@@ -1297,6 +1317,24 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days",
         score_semantic_id="daily_full_horizon_low_adverse_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=False,
+    ),
+    DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13N",
+        experiment_name="MR-13N Daily Universal Equal-rank MFE + Low-Adverse Ranker",
+        phase="13N",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="same_date_equal_weight_mean_of_mfe_percentile_and_low_adverse_percentile",
+        objective_description=(
+            "MR-13K Pure-MFE與MR-13M low-adverse兩個已證實可學component先各自轉為同日[0,1] percentile；"
+            "正式Target固定為兩者等權平均，不掃lambda；沿用full-list Delta-NDCG weighted RankNet。"
+            "MR-13H economic Target只在checkpoint後作reference evaluation，不參與training或epoch selection"
+        ),
+        metric_scope="all_stock_days",
+        score_semantic_id="daily_full_horizon_equal_rank_mfe_low_adverse",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        evaluation_reference_profile_name=DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         selection_pit_authorized=False,
     ),
     DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE: ContinuousRankerResearchSpec(
@@ -2120,6 +2158,7 @@ __all__ = [
     'DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE',
     'DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'ContinuousRankerResearchSpec',
