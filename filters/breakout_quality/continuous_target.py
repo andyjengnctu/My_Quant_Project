@@ -19,6 +19,7 @@ STRATEGY_ALIGNED_NO_TIME_TARGET_ID = "strategy_aligned_opportunity_no_time_r_v1"
 DAILY_OPPORTUNITY_NO_TIME_TARGET_ID = "daily_opportunity_no_time_r_v1"
 DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID = "daily_full_horizon_opportunity_r_v1"
 DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID = "daily_full_horizon_pure_mfe_r_v1"
+DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_low_adverse_r_v1"
 
 TARGET_RAW_FILENAME = "group_target_raw_r.npy"
 TARGET_FAVORABLE_RETURN_FILENAME = "group_favorable_return.npy"
@@ -348,6 +349,78 @@ def daily_full_horizon_pure_mfe_target_from_cached_path(
         first_risk_breach_bar=int(source.first_risk_breach_bar),
     )
 
+
+
+def daily_full_horizon_low_adverse_target_from_cached_path(
+    high_prices: np.ndarray,
+    low_prices: np.ndarray,
+    *,
+    anchor_price: float,
+    available_bars: int,
+    spec: StrategyAlignedContinuousTargetSpec,
+) -> StrategyAlignedContinuousTargetResult:
+    """Build the MR-13M path-safety target as negative adverse-to-peak R.
+
+    The selected peak is still the earliest maximum high across the complete fixed
+    horizon.  MFE is retained only to identify that peak; it contributes no reward
+    to the target.  Higher target values mean smaller adverse excursion on the path
+    required to reach the selected peak.
+    """
+
+    source = daily_full_horizon_opportunity_target_from_cached_path(
+        high_prices,
+        low_prices,
+        anchor_price=anchor_price,
+        available_bars=available_bars,
+        spec=spec,
+    )
+    if not source.valid:
+        return source
+    risk_budget = float(spec.risk_budget_return)
+    target_raw_r = -float(source.adverse_return_to_peak) / risk_budget
+    if not math.isfinite(target_raw_r):
+        return _invalid_result("non_finite_target")
+    return StrategyAlignedContinuousTargetResult(
+        valid=True,
+        reason="ok",
+        target_raw_r=float(target_raw_r),
+        favorable_return=float(source.favorable_return),
+        adverse_return_to_peak=float(source.adverse_return_to_peak),
+        opportunity_bar=int(source.opportunity_bar),
+        first_risk_breach_bar=int(source.first_risk_breach_bar),
+    )
+
+
+def build_daily_full_horizon_low_adverse_contract(
+    policy: BreakoutQualityLabelPolicy,
+) -> dict[str, object]:
+    """Return the MR-13M adverse-only path-safety target contract."""
+
+    spec = StrategyAlignedContinuousTargetSpec.from_label_policy(policy)
+    return {
+        "schema_version": CONTINUOUS_TARGET_SCHEMA_VERSION,
+        "target_id": DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+        "objective_family": "daily_cross_sectional_full_horizon_low_adverse",
+        "information_source": "fixed_future_high_low_path",
+        "sample_scope": "daily_eligible_stock_days",
+        "horizon_bars": int(spec.horizon_bars),
+        "risk_budget_return": float(spec.risk_budget_return),
+        "formula": "- adverse_return_required_to_reach_full_horizon_max_mfe_peak / risk_budget_return",
+        "peak_rule": "earliest maximum high across the complete fixed horizon; MFE only selects the peak",
+        "risk_rule": "risk-barrier touch is diagnostic only and never truncates the future path",
+        "adverse_scope": "worst low from horizon start through selected peak bar",
+        "higher_is_better": True,
+        "mfe_reward_included": False,
+        "requires_breakout_event": False,
+        "requires_high_len": False,
+        "requires_breakout_level": False,
+        "requires_strategy_candidate_membership": False,
+        "time_penalty_included": False,
+        "normalization": "fixed canonical risk-budget return used only as R scale",
+        "clipping": "none",
+        "split_derived_parameters": False,
+        "oos_fitted_parameters": False,
+    }
 
 def build_daily_full_horizon_pure_mfe_contract(
     policy: BreakoutQualityLabelPolicy,
@@ -888,6 +961,7 @@ __all__ = [
     "CONTINUOUS_TARGET_SCHEMA_VERSION",
     "DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID",
     "DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID",
+    "DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID",
     "DAILY_OPPORTUNITY_NO_TIME_TARGET_ID",
     "STRATEGY_ALIGNED_TARGET_ID",
     "STRATEGY_ALIGNED_NO_TIME_TARGET_ID",
@@ -906,6 +980,7 @@ __all__ = [
     "StrategyAlignedContinuousTargetSpec",
     "build_daily_full_horizon_opportunity_contract",
     "build_daily_full_horizon_pure_mfe_contract",
+    "build_daily_full_horizon_low_adverse_contract",
     "build_daily_opportunity_no_time_contract",
     "build_strategy_aligned_group_targets",
     "build_strategy_aligned_no_time_contract",
@@ -916,6 +991,7 @@ __all__ = [
     "resolve_continuous_target_dir",
     "daily_full_horizon_opportunity_target_from_cached_path",
     "daily_full_horizon_pure_mfe_target_from_cached_path",
+    "daily_full_horizon_low_adverse_target_from_cached_path",
     "daily_opportunity_no_time_target_from_cached_path",
     "strategy_aligned_target_from_cached_path",
 ]

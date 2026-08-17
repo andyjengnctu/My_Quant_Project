@@ -2282,14 +2282,14 @@ def validate_breakout_quality_mr13l_decomposed_component_contract_case(_base_par
         results,
         "synthetic_breakout_quality",
         case_id,
-        "mr13l_is_active_model_research_without_changing_production_workflow",
+        "mr13l_profile_is_registered_and_active_resolver_does_not_change_production_workflow",
         (
             DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
-            DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
             BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
         ),
         (
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            profile_l.name,
             active_research.experiment_profile,
             BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
         ),
@@ -2427,6 +2427,169 @@ def validate_breakout_quality_mr13l_decomposed_component_contract_case(_base_par
     )
 
     summary["model_research_id"] = spec_l.model_research_id
+    summary["active_model_research"] = active_research.experiment_profile
+    summary["training_performed"] = False
+    return results, summary
+
+
+def validate_breakout_quality_mr13m_low_adverse_ranker_contract_case(_base_params):
+    """Pin MR-13M as an adverse-only same-day pairwise path-safety experiment."""
+
+    case_id = "BREAKOUT_QUALITY_MR13M_LOW_ADVERSE_RANKER"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        get_breakout_quality_model_research_settings,
+    )
+    from filters.breakout_quality.continuous_target import (
+        DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+        build_daily_full_horizon_low_adverse_contract,
+        daily_full_horizon_low_adverse_target_from_cached_path,
+    )
+
+    profile_h = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    profile_m = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    spec_m = get_continuous_ranker_research_spec(
+        DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    active_research = get_breakout_quality_model_research_settings()
+
+    fixed_fields = (
+        "optimizer_name",
+        "training_sampling_mode",
+        "training_objective",
+        "loss_name",
+        "epoch_selection_metric",
+        "training_label_scope",
+        "training_sample_scope",
+        "model_architecture",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13m_profile_is_registered_and_active_resolver_does_not_change_production_workflow",
+        (
+            DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        ),
+        (
+            profile_m.name,
+            active_research.experiment_profile,
+            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13m_keeps_mr13h_training_contract_except_target_identity",
+        tuple(getattr(profile_h, field) for field in fixed_fields),
+        tuple(getattr(profile_m, field) for field in fixed_fields),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13m_identity_target_pairwise_semantics_and_pit_stage_are_explicit",
+        (
+            "MR-13M",
+            DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+            False,
+        ),
+        (
+            spec_m.model_research_id,
+            profile_m.continuous_target_id,
+            spec_m.pairwise_reduction,
+            bool(spec_m.selection_pit_authorized),
+        ),
+    )
+
+    target_spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
+    horizon = int(target_spec.horizon_bars)
+    highs = np.linspace(101.0, 120.0, horizon, dtype=np.float64)
+    lows = np.full(horizon, 98.0, dtype=np.float64)
+    lows[5] = 94.0
+    source = daily_full_horizon_opportunity_target_from_cached_path(
+        highs, lows, anchor_price=100.0, available_bars=horizon, spec=target_spec
+    )
+    adverse_only = daily_full_horizon_low_adverse_target_from_cached_path(
+        highs, lows, anchor_price=100.0, available_bars=horizon, spec=target_spec
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13m_reuses_exact_mr13h_peak_and_diagnostics_but_target_is_negative_adverse_r_only",
+        (
+            source.opportunity_bar,
+            source.first_risk_breach_bar,
+            round(float(source.favorable_return), 6),
+            round(float(source.adverse_return_to_peak), 6),
+            round(-float(source.adverse_return_to_peak) / float(target_spec.risk_budget_return), 6),
+        ),
+        (
+            adverse_only.opportunity_bar,
+            adverse_only.first_risk_breach_bar,
+            round(float(adverse_only.favorable_return), 6),
+            round(float(adverse_only.adverse_return_to_peak), 6),
+            round(float(adverse_only.target_raw_r), 6),
+        ),
+    )
+
+    dates = pd.date_range("2020-01-01", periods=horizon + 3, freq="D")
+    frame = pd.DataFrame(
+        {
+            "Open": np.full(len(dates), 100.0),
+            "High": np.concatenate(([100.0], highs, [102.0, 102.0])),
+            "Low": np.concatenate(([100.0], lows, [99.0, 99.0])),
+            "Close": np.full(len(dates), 100.0),
+            "Volume": np.full(len(dates), 1000.0),
+        },
+        index=dates,
+    )
+    batch = compute_daily_opportunity_target_batch(
+        frame,
+        np.asarray([0], dtype=np.int64),
+        spec=target_spec,
+        target_id=DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13m_vectorized_target_matches_scalar_negative_adverse_semantics",
+        round(float(adverse_only.target_raw_r), 6),
+        round(float(batch.target_raw_r[0]), 6),
+    )
+    contract = build_daily_full_horizon_low_adverse_contract(DEFAULT_LABEL_POLICY)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13m_contract_is_strategy_agnostic_and_excludes_mfe_reward",
+        (DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID, False, True, False, False),
+        (
+            contract["target_id"],
+            bool(contract["mfe_reward_included"]),
+            bool(contract["higher_is_better"]),
+            bool(contract["requires_strategy_candidate_membership"]),
+            "favorable_return /" in str(contract["formula"]),
+        ),
+    )
+
+    summary["model_research_id"] = spec_m.model_research_id
     summary["active_model_research"] = active_research.experiment_profile
     summary["training_performed"] = False
     return results, summary

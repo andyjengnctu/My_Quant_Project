@@ -50,13 +50,14 @@ from config.execution_policy import (
 # - MR-13H daily-universal full-horizon no-breach full-list ranker: "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise"
 # - MR-13K daily-universal full-horizon pure-MFE full-list ranker: "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise"
 # - MR-13L daily-universal full-horizon decomposed MFE/adverse regression: "daily_universal_full_horizon_mfe_adverse_dual_mse"
+# - MR-13M daily-universal full-horizon low-adverse full-list ranker: "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_mfe_adverse_dual_mse"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42
@@ -297,6 +298,9 @@ DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
 )
 DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE = (
     "daily_universal_full_horizon_mfe_adverse_dual_mse"
+)
+DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
 )
 DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_context_net_full_list_ndcg_pairwise"
@@ -919,6 +923,17 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     ),
+    DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_low_adverse_r_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    ),
     DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE,
         optimizer_name="adam",
@@ -1265,6 +1280,23 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days",
         score_semantic_id="daily_full_horizon_decomposed_opportunity_r",
         reference_profile_name=DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        selection_pit_authorized=False,
+    ),
+    DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13M",
+        experiment_name="MR-13M Daily Universal Full-horizon Low-Adverse Ranker",
+        phase="13M",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="same_date_all_stock_order_of_negative_daily_full_horizon_adverse_to_peak_r_v1",
+        objective_description=(
+            "MR-13H/13K相同40D full-horizon earliest-max-MFE peak與fixed R scale；"
+            "只以到達該peak前的adverse-to-peak R取負值作排序Target，越高代表path risk越小；"
+            "沿用full-list Delta-NDCG weighted RankNet，不加入MFE或strategy state"
+        ),
+        metric_scope="all_stock_days",
+        score_semantic_id="daily_full_horizon_low_adverse_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         selection_pit_authorized=False,
     ),
     DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE: ContinuousRankerResearchSpec(
@@ -2087,6 +2119,7 @@ __all__ = [
     'DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE',
+    'DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'ContinuousRankerResearchSpec',
