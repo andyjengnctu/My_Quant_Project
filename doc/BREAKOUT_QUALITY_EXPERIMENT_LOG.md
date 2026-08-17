@@ -9246,3 +9246,14 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 固定條件：daily eligible stock-days、300×10 stock+0050 input、`inception_time_v1`、40D horizon、Full-list Delta-NDCG weighted RankNet pairwise loss、mean-daily-Spearman epoch selection、all-label scope與Seed42全部沿用MR-13H。不得加入strategy state、K、R0、cash、holdings或cross-sectional architecture。
 - Label Audit已泛化為受控Target-pair contract：MR-13H vs MR-13E仍驗no-breach invariant；MR-13K vs MR-13H則驗selected peak/favorable/adverse/breach diagnostics完全相同，且Target delta=removed adverse R。Audit只讀、不訓練、不設GO/REJECT magic threshold。
 - Stage governance：MR-13K `selection_pit_authorized=False`，目前只允許`[1] 模型訓練 → [6] Target comparison`與`[1] 訓練目前模型 → Forward-OOS`。Forward結果出來後才決定PIT，不預先建立13K strategy arm。Production/runtime維持MR-13E C42/C44。
+
+### 2026-08-17 — MR-13K Target Audit + Seed42 Forward GO → Selection PIT authorized
+
+- 程式基準：`test-branch-1_20260817_161310_f873c12(1).zip`，SHA256=`589a2ec313e5bc399413c6a3fbe46f19752395378e782f8a76a9f856c96e910c`。本輪只推進research stage與current comparison matrix；不改MR-13K Target、architecture、loss、Seed、K/R0、exact solver或production C42/C44。
+- Target comparison正式結果：common stock-days=`1,578,349`、40D risk breach=`31.31%`、Target changed=`86.92%`、candidate-vs-MR-13H Daily rank correlation=`0.8609`、Top-10 overlap=`90.23%`、Mean abs delta=`0.3348R`。這符合pure-MFE移除adverse penalty造成大量數值改變、但大部分cross-sectional order仍保留的受控Label變化。
+- Seed42 Forward正式結果：selected epoch=`1`；all-stock OOS Daily/Global rho=`0.3833/0.2659`、Pair=`63.19%`、Top-K Lift=`+1.6401R`；breakout-candidate slice Daily rho=`0.3621`、Pair=`64.09%`。相對MR-13H Seed42 self-target `0.2332/58.04%`，MR-13K的learnability明顯提高。
+- 關鍵反證檢查：同一MR-13K Forward score對MR-13H reference Target仍有Daily rho=`0.2381`、Pair=`58.24%`，略高於MR-13H自身Seed42 Forward `0.2332/58.04%`。因此目前證據不支持「只是把Target變容易、同時犧牲原本opportunity ranking」這個解釋；但pure-MFE刻意忽略adverse path，是否轉成更好的portfolio economics仍只能由PIT strategy replay回答。
+- Decision：`MR-13K = FORWARD_OOS_MODEL_GO / SELECTION_PIT_AUTHORIZED`。`ContinuousRankerResearchSpec.selection_pit_authorized=True`，新增active `DL-CONT13K-PIT / SR-C53`。C53與C42固定完全相同historical Min params、all-off、K/R0、canonical sizing/cash/orderability/execution與`exact_branch_and_bound_v1`，唯一替換MR-13E PIT score為MR-13K PIT score；primary contrast=`C53-C42`。
+- Minimal-stage governance：MR-13H已以16-seed完整流程結案為`VALID_LABEL_SIMPLIFICATION / NOT_SELECTED_FOR_PROMOTION`，所以`CONT13H[_PIT] / C51 / C52`退出current config並移至historical compatibility。MR-13K尚無Selection strategy證據，因此不預先建立Forward strategy arm，也暫停Selection/Forward multi-seed robustness；先以C53回答pure-MFE是否能把更高ranking learnability轉成portfolio增量。
+- Production/runtime不變：Selection C42／Forward C44仍是current production candidate。下一步正式操作為`apps/research.py → [1] 模型訓練 → [2] 建立／更新 Selection PIT Scores`完成PIT與Model Gate；之後再到`[3] 策略組合比較`執行Selection PIT目前設定。合法完整PIT若Model Gate品質FAIL，依current研究治理以WARN揭露且C53仍可做受控strategy conversion；missing/invalid PIT仍BLOCK。
+

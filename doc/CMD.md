@@ -175,7 +175,7 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-MR-13E仍是production anchor。MR-13H已完成Selection/Forward 16-seed robustness並結案為`VALID_LABEL_SIMPLIFICATION / NOT_SELECTED_FOR_PROMOTION`：Selection平均RoMD `6.28 vs 5.98`略勝MR-13E，但Forward平均RoMD `10.32 vs 11.10`未延續。Model Research active profile現為MR-13K `daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise`；相對MR-13H唯一移除adverse-to-peak Target扣分，PIT尚未授權。正式順序先跑`[6] 比較目前 Target 與 reference Target`，再跑`[1] 訓練目前模型 → Forward-OOS模型報表`；Forward結果後才決定PIT。Production candidate仍固定C42/C44，R0維持。
+MR-13E仍是production anchor。MR-13H已完成Selection/Forward 16-seed robustness並結案為`VALID_LABEL_SIMPLIFICATION / NOT_SELECTED_FOR_PROMOTION`：Selection平均RoMD `6.28 vs 5.98`略勝MR-13E，但Forward平均RoMD `10.32 vs 11.10`未延續。Model Research active profile現為MR-13K `daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise`；相對MR-13H唯一移除adverse-to-peak Target扣分。Target comparison與Seed42 Forward已完成並取得Selection PIT GO：OOS Daily rho=`0.3833`、Pair=`63.19%`，對MR-13H reference Target仍有rho=`0.2381`、Pair=`58.24%`。正式下一步為`[1] 模型訓練 → [2] 建立／更新 Selection PIT Scores → PIT模型驗證`；PIT合法完成後再到`[3] 策略組合比較`執行Selection PIT目前設定，以C53對C42檢查pure-MFE的portfolio translation。MR-13K Forward strategy arm與multi-seed尚未授權；Production candidate固定C42/C44，R0維持。
 
 Active continuous model menu由config／research spec動態產生；MR-13K目前會額外顯示：
 

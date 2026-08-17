@@ -34,7 +34,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    print(f"[1/5] Repo root: {REPO_ROOT}")
+    print("[1/5] Repo root: .")
     run_cmd(["git", "rev-parse", "--show-toplevel"], "git rev-parse")
 
     staged_changes = False

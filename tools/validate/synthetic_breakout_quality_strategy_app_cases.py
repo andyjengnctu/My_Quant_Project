@@ -3567,7 +3567,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and c48_options.get("pareto_quality") == "score_sum_max_coverage_first"
         and c48_options.get("pareto_capital") == "canonical_reserved_cost_milli"
         and c48_options.get("selection_only") is True
-        and {"C32", "C23", "C42", "C51"}
+        and {"C32", "C23", "C42", "C53"}
         == {arm.arm_id for arm in selection_excess_settings.enabled_arms}
         and "C48-C42" not in {
             contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts
@@ -3579,57 +3579,51 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         },
     )
 
-    c51 = selection_excess_settings.arms["C51"]
-    c51_options = dict(c51.dl_runtime_options or {})
+    c53 = selection_excess_settings.arms["C53"]
+    c53_options = dict(c53.dl_runtime_options or {})
+    c51_historical = selection_excess_settings.arms["C51"]
+    c52_historical = selection_excess_settings.arms["C52"]
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "sr_c51_is_mr13h_source_only_exact_constrained_selection_arm_and_robustness_is_authorized",
+        "sr_c53_is_mr13k_source_only_exact_selection_arm_and_concluded_mr13h_is_historical",
         True,
-        c51.enabled
-        and c51.param_source == c42.param_source == "selection_min_roos"
-        and c51.rule_policy == c42.rule_policy == "all_off"
-        and c51.dl_id == "CONT13H_PIT"
-        and c51.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
-        and c51_options == c42_options
-        and c51.robustness_role == "off"
-        and {"C51-C42", "C51-C23", "C51-C32"}.issubset(
+        c53.enabled
+        and c53.param_source == c42.param_source == "selection_min_roos"
+        and c53.rule_policy == c42.rule_policy == "all_off"
+        and c53.dl_id == "CONT13K_PIT"
+        and c53.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+        and c53_options == c42_options
+        and c53.robustness_role == "off"
+        and {"C53-C42", "C53-C23", "C53-C32"}.issubset(
             {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
         )
-        and "C51" not in {
+        and "C53" not in {
             arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
         }
-        and "C51" in set(
-            strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit").stochastic_arm_ids
-        ),
+        and not c51_historical.enabled
+        and not c52_historical.enabled
+        and "CONT13H_PIT" in strategy_config.HISTORICAL_STRATEGY_DL_SOURCES
+        and "CONT13H" in strategy_config.HISTORICAL_STRATEGY_DL_SOURCES
+        and "C51" in strategy_config.HISTORICAL_STRATEGY_COMPARE_ARMS
+        and "C52" in strategy_config.HISTORICAL_STRATEGY_COMPARE_ARMS,
     )
 
-    forward_mr13h_settings = strategy_config.get_strategy_comparison_settings("forward_oos")
-    c44_current = forward_mr13h_settings.arms["C44"]
-    c52 = forward_mr13h_settings.arms["C52"]
-    c52_options = dict(c52.dl_runtime_options or {})
-    c44_current_options = dict(c44_current.dl_runtime_options or {})
-    forward_robustness_mr13h = strategy_config.get_strategy_multi_seed_robustness_settings("forward_oos")
-    selection_robustness_mr13h = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
+    forward_current_settings = strategy_config.get_strategy_comparison_settings("forward_oos")
+    c44_current = forward_current_settings.arms["C44"]
+    selection_robustness_staged = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
+    forward_robustness_staged = strategy_config.get_strategy_multi_seed_robustness_settings("forward_oos")
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "sr_c52_is_mr13h_source_only_forward_arm_and_both_stages_pair_same_seed_against_mr13e",
+        "mr13k_stage_stops_at_selection_single_seed_without_forward_or_multiseed_preauthorization",
         True,
-        c52.enabled
-        and c52.param_source == c44_current.param_source == "min_roos"
-        and c52.rule_policy == c44_current.rule_policy == "all_off"
-        and c52.dl_id == "CONT13H"
-        and c52.dl_runtime_mode == c44_current.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
-        and c52_options == c44_current_options
-        and c52.robustness_role == "off"
-        and {"C52-C44", "C52-C3", "C52-C1"}.issubset(
-            {contrast.contrast_id for contrast in forward_mr13h_settings.enabled_contrasts}
-        )
-        and tuple(selection_robustness_mr13h.stochastic_arm_ids) == ("C42", "C51")
-        and tuple(forward_robustness_mr13h.stochastic_arm_ids) == ("C44", "C52")
-        and tuple((item["left"], item["right"]) for item in selection_robustness_mr13h.paired_contrasts)
-            == (("C51", "C42"),)
-        and tuple((item["left"], item["right"]) for item in forward_robustness_mr13h.paired_contrasts)
-            == (("C52", "C44"),)
+        {"C1", "C3", "C44"} == {arm.arm_id for arm in forward_current_settings.enabled_arms}
+        and c44_current.enabled
+        and not selection_robustness_staged.enabled
+        and not forward_robustness_staged.enabled
+        and tuple(selection_robustness_staged.stochastic_arm_ids) == ("C42",)
+        and tuple(forward_robustness_staged.stochastic_arm_ids) == ("C44",)
+        and tuple(selection_robustness_staged.paired_contrasts) == ()
+        and tuple(forward_robustness_staged.paired_contrasts) == ()
         and strategy_config.get_strategy_runtime_integration_settings().selection_candidate_arm_id == "C42"
         and strategy_config.get_strategy_runtime_integration_settings().forward_candidate_arm_id == "C44",
     )

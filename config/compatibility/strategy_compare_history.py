@@ -959,6 +959,82 @@ HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({
     },
 })
 
+
+
+# 2026-08-17 MR-13H完整Selection/Forward 16-seed robustness結案：保留唯讀歷史重現 identity。
+HISTORICAL_STRATEGY_DL_SOURCES.update({
+    "CONT13H": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "continuous_ranker_oos",
+        "description": "MR-13H full-horizon no-breach frozen Forward-OOS score；研究已結案，只供歷史重現",
+        "forward_scores_builder": None,
+    },
+    "CONT13H_PIT": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": "MR-13H full-horizon no-breach Selection PIT score；研究已結案，只供歷史重現",
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
+})
+
+HISTORICAL_STRATEGY_COMPARE_ARMS.update({
+    "C51": {
+        "name": "Min MR-13H Constrained",
+        "description": (
+            "SR-C51 historical MR-13H Selection arm：與C42同historical Min params/all-off、K/R0、"
+            "canonical sizing/cash/orderability/execution與exact solver；只替換MR-13H PIT score"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13H_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C52": {
+        "name": "Min MR-13H Constrained",
+        "description": (
+            "SR-C52 historical MR-13H Forward arm：與C44同current Min params/all-off、K/R0、"
+            "canonical sizing/cash/orderability/execution與exact solver；只替換MR-13H Forward score"
+        ),
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13H",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": False,
+        },
+        "robustness_role": "off",
+    },
+})
+
+HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({
+    "C51-C42": {"left": "C51", "right": "C42", "description": "historical MR-13H Selection source-only contrast"},
+    "C51-C23": {"left": "C51", "right": "C23", "description": "historical MR-13H Selection相對Min ROOS"},
+    "C51-C32": {"left": "C51", "right": "C32", "description": "historical MR-13H Selection相對Full ROOS"},
+    "C52-C44": {"left": "C52", "right": "C44", "description": "historical MR-13H Forward source-only contrast"},
+    "C52-C3": {"left": "C52", "right": "C3", "description": "historical MR-13H Forward相對Min ROOS"},
+    "C52-C1": {"left": "C52", "right": "C1", "description": "historical MR-13H Forward相對Full ROOS"},
+})
+
 __all__ = [
     "HISTORICAL_STRATEGY_PARAM_SOURCES",
     "HISTORICAL_STRATEGY_DL_SOURCES",

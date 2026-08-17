@@ -2,11 +2,11 @@
 
 - imrove DL module
     - simply label
-        - remove -10%
         - the 40t day's R
+        - self learn the label days and input days
     - attention (cross-secction)
     - non breakout strategy
-    - 三大法人籌碼資訊
+    - 三大法人籌碼資訊/ EPS財報/ 基本面 
 
 - stablity test
     - multi seeds test

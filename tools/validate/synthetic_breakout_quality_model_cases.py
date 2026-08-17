@@ -2110,13 +2110,13 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
         results,
         "synthetic_breakout_quality",
         case_id,
-        "mr13k_is_target_only_change_from_mr13h_and_pit_starts_unauthorized",
+        "mr13k_is_target_only_change_from_mr13h_and_pit_is_authorized_after_forward_go",
         (
             tuple(getattr(profile_h, field) for field in fixed_fields),
             "MR-13K",
             DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
             DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-            False,
+            True,
         ),
         (
             tuple(getattr(profile_k, field) for field in fixed_fields),
