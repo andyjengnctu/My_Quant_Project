@@ -35,10 +35,15 @@ from filters.breakout_quality.profile_ranker_data import load_profile_continuous
 from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+    load_continuous_ranker_oos_score_table,
+    load_continuous_ranker_oos_score_table_from_path,
     load_selection_point_in_time_score_table,
     load_selection_point_in_time_score_table_from_path,
 )
-from filters.breakout_quality.strategy_compare_contracts import comparison_labels
+from filters.breakout_quality.strategy_compare_contracts import (
+    COMPARISON_MODE_SCORE_RANKING,
+    comparison_labels,
+)
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 
 
@@ -479,6 +484,46 @@ def _selection_target_lookup(
         "model_information_cutoff", "label", "target_raw_r", "target_available",
     ]].rename(columns={"date": "signal_date"})
 
+
+def _continuous_forward_target_lookup(
+    *, root: Path, filter_id: str, architecture: str, profile: str,
+    score_path_override: str | None = None,
+) -> pd.DataFrame:
+    """Build a post-replay diagnostic lookup from frozen Forward-OOS scores.
+
+    The Forward score artifact already embeds ``target_raw_r`` only for rows whose
+    future target is evaluable. Runtime ranking consumes ``model_score`` only; this
+    helper is called after replay and therefore cannot leak Future Target into
+    candidate ordering, sizing, or execution.
+    """
+
+    scores = (
+        load_continuous_ranker_oos_score_table_from_path(
+            str(score_path_override), str(profile)
+        )
+        if score_path_override not in (None, "")
+        else load_continuous_ranker_oos_score_table(
+            str(root), str(filter_id), str(architecture), str(profile)
+        )
+    ).reset_index()
+    required = {"ticker", "date", "group_index", "model_score", "target_raw_r"}
+    missing = sorted(required - set(scores.columns))
+    if missing:
+        raise ValueError(f"Forward-OOS diagnostic score table缺少欄位: {missing}")
+    scores["ticker"] = scores["ticker"].fillna("").astype(str).str.strip()
+    scores["date"] = pd.to_datetime(scores["date"], errors="raise").dt.strftime("%Y-%m-%d")
+    scores["breakout_quality_score"] = pd.to_numeric(
+        scores["model_score"], errors="raise"
+    ).astype(float)
+    scores["target_raw_r"] = pd.to_numeric(scores["target_raw_r"], errors="coerce")
+    scores["target_available"] = scores["target_raw_r"].map(math.isfinite)
+    if bool(scores.duplicated(["ticker", "date"]).any()):
+        raise ValueError("Forward-OOS diagnostic score同ticker/date必須唯一")
+    return scores[[
+        "ticker", "date", "group_index", "breakout_quality_score",
+        "target_raw_r", "target_available",
+    ]].rename(columns={"date": "signal_date"})
+
 def _load_isolated_selection_pit_contract(
     *, score_path: str, manifest_path: str, filter_id: str, model_architecture: str,
     experiment_profile: str, expected_seed: int | None,
@@ -887,6 +932,118 @@ def paired_trade_r_conversion_diagnostic(
         "future_target_used_for_runtime_sort": False,
     }
 
+
+
+def backfill_pair_selection_diagnostics(
+    payload: dict[str, Any],
+    *,
+    pair_dir: Path,
+    project_root: Path,
+    active_trades_filename: str = "score_ranking_trades.csv",
+) -> bool:
+    """Backfill post-replay Forward selection diagnostics from canonical sidecars.
+
+    This is primarily for cache reuse after the Forward diagnostic contract was
+    expanded. It never reruns portfolio replay and never feeds Future Target back
+    into runtime ranking.
+    """
+
+    metadata = dict(payload.get("metadata") or {})
+    if (
+        str(metadata.get("comparison_mode") or "") != COMPARISON_MODE_SCORE_RANKING
+        or str(metadata.get("score_source") or "") != SCORE_SOURCE_CONTINUOUS_RANKER_OOS
+    ):
+        return False
+    existing = dict(payload.get("selection_diagnostics") or {})
+    active_existing = dict(existing.get("score_ranking") or {})
+    if _finite(active_existing.get("orderable_score_coverage_rate")) is not None:
+        return False
+
+    score_path_raw = str(metadata.get("score_path") or "").strip()
+    profile = str(metadata.get("experiment_profile") or "").strip()
+    filter_id = str(metadata.get("filter_id") or "").strip()
+    architecture = str(metadata.get("model_architecture") or "").strip()
+    if not score_path_raw or not profile or not filter_id or not architecture:
+        return False
+    score_path = Path(score_path_raw)
+    if not score_path.is_absolute():
+        score_path = (Path(project_root) / score_path).resolve()
+    if not score_path.is_file():
+        return False
+
+    baseline_orderable_path = Path(pair_dir) / "no_filter_orderable_candidates.csv"
+    active_orderable_path = Path(pair_dir) / "score_ranking_orderable_candidates.csv"
+    baseline_selected_path = Path(pair_dir) / "no_filter_selected_buys.csv"
+    active_selected_path = Path(pair_dir) / "score_ranking_selected_buys.csv"
+    baseline_trades_path = Path(pair_dir) / "no_filter_trades.csv"
+    active_trades_path = Path(pair_dir) / str(active_trades_filename)
+    required_paths = (
+        baseline_orderable_path, active_orderable_path,
+        baseline_selected_path, active_selected_path,
+        baseline_trades_path, active_trades_path,
+    )
+    if not all(path.is_file() for path in required_paths):
+        return False
+
+    lookup = _continuous_forward_target_lookup(
+        root=Path(project_root),
+        filter_id=filter_id,
+        architecture=architecture,
+        profile=profile,
+        score_path_override=str(score_path),
+    )
+    baseline_diag, baseline_orderable_joined, baseline_selected_joined = (
+        _strategy_selection_diagnostics(
+            orderable=pd.read_csv(baseline_orderable_path, encoding="utf-8-sig"),
+            selected=pd.read_csv(baseline_selected_path, encoding="utf-8-sig"),
+            lookup=lookup,
+        )
+    )
+    active_diag, active_orderable_joined, active_selected_joined = (
+        _strategy_selection_diagnostics(
+            orderable=pd.read_csv(active_orderable_path, encoding="utf-8-sig"),
+            selected=pd.read_csv(active_selected_path, encoding="utf-8-sig"),
+            lookup=lookup,
+        )
+    )
+    delta_keys = set(baseline_diag) | set(active_diag)
+    diagnostic_delta = {}
+    for key in delta_keys:
+        left = _finite(active_diag.get(key))
+        right = _finite(baseline_diag.get(key))
+        diagnostic_delta[key] = None if left is None or right is None else left - right
+    diagnostics = {
+        "no_filter": baseline_diag,
+        "score_ranking": active_diag,
+        "score_ranking_minus_no_filter": diagnostic_delta,
+        "selection_r_conversion": paired_trade_r_conversion_diagnostic(
+            pd.read_csv(baseline_trades_path, encoding="utf-8-sig"),
+            pd.read_csv(active_trades_path, encoding="utf-8-sig"),
+            baseline_selected_joined,
+            active_selected_joined,
+        ),
+        "future_target_join_stage": "post_replay_offline_diagnostic_only",
+        "future_target_used_for_runtime_sort": False,
+    }
+    payload["selection_diagnostics"] = diagnostics
+
+    baseline_orderable_joined.to_csv(
+        Path(pair_dir) / "no_filter_orderable_target_diagnostics.csv",
+        index=False, encoding="utf-8-sig",
+    )
+    active_orderable_joined.to_csv(
+        Path(pair_dir) / "score_ranking_orderable_target_diagnostics.csv",
+        index=False, encoding="utf-8-sig",
+    )
+    baseline_selected_joined.to_csv(
+        Path(pair_dir) / "no_filter_selected_target_diagnostics.csv",
+        index=False, encoding="utf-8-sig",
+    )
+    active_selected_joined.to_csv(
+        Path(pair_dir) / "score_ranking_selected_target_diagnostics.csv",
+        index=False, encoding="utf-8-sig",
+    )
+    return True
 
 def backfill_pair_r_conversion_diagnostic(
     payload: dict[str, Any],

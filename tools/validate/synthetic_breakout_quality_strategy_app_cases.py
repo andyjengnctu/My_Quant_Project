@@ -3664,8 +3664,67 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     from filters.breakout_quality.strategy_compare_diagnostics import (
+        _continuous_forward_target_lookup,
+        _strategy_selection_diagnostics,
         render_strategy_r_analysis_table,
     )
+
+    with tempfile.TemporaryDirectory() as forward_diag_tmp:
+        forward_diag_score_path = Path(forward_diag_tmp) / "daily_ranker_oos_scores.csv.gz"
+        pd.DataFrame([
+            {
+                "ticker": "A", "date": "2021-01-04", "group_index": 1,
+                "target_raw_r": 2.0, "target_daily_percentile": 1.0, "model_score": 0.9,
+            },
+            {
+                "ticker": "B", "date": "2021-01-04", "group_index": 2,
+                "target_raw_r": 0.0, "target_daily_percentile": 0.5, "model_score": 0.2,
+            },
+        ]).to_csv(
+            forward_diag_score_path, index=False, encoding="utf-8-sig", compression="gzip"
+        )
+        forward_diag_lookup = _continuous_forward_target_lookup(
+            root=project_root,
+            filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            architecture="inception_time_v1",
+            profile=DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            score_path_override=str(forward_diag_score_path),
+        )
+        forward_diag_orderable = pd.DataFrame([
+            {
+                "ticker": "A", "trade_date": "2021-01-04", "signal_date": "2021-01-04",
+                "breakout_quality_score_date": "2021-01-04",
+                "breakout_quality_score": 0.9, "breakout_quality_score_available": True,
+            },
+            {
+                "ticker": "B", "trade_date": "2021-01-04", "signal_date": "2021-01-04",
+                "breakout_quality_score_date": "2021-01-04",
+                "breakout_quality_score": 0.2, "breakout_quality_score_available": True,
+            },
+        ])
+        forward_diag_selected = pd.DataFrame([
+            {"ticker": "A", "trade_date": "2021-01-04", "signal_date": "2021-01-04"},
+        ])
+        forward_diag_metrics, _, _ = _strategy_selection_diagnostics(
+            orderable=forward_diag_orderable,
+            selected=forward_diag_selected,
+            lookup=forward_diag_lookup,
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "forward_oos_strategy_report_joins_embedded_future_target_only_after_replay_for_selection_translation",
+        True,
+        math.isclose(float(forward_diag_metrics["orderable_score_coverage_rate"]), 1.0)
+        and math.isclose(float(forward_diag_metrics["selected_target_mean_r"]), 2.0)
+        and math.isclose(float(forward_diag_metrics["selected_target_percentile_mean"]), 1.0)
+        and math.isclose(float(forward_diag_metrics["target_top_k_retention_mean"]), 1.0)
+        and math.isclose(float(forward_diag_metrics["target_opportunity_gap_r_mean"]), 0.0)
+        and bool(forward_diag_metrics["future_target_used_for_runtime_sort"]) is False
+        and "score_source in {" in strategy_compare_source
+        and "SCORE_SOURCE_CONTINUOUS_RANKER_OOS" in strategy_compare_source
+        and "_continuous_forward_target_lookup(" in strategy_compare_source,
+    )
+
     target_aware_report = render_strategy_r_analysis_table({
         "r_analysis": [
             {

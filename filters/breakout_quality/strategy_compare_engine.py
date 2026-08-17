@@ -80,6 +80,7 @@ from filters.breakout_quality.strategy_compare_diagnostics import (
     _flatten_repair_mechanism_rows,
     _flatten_selector_trace_rows,
     _flatten_selected_buy_rows,
+    _continuous_forward_target_lookup,
     _load_isolated_selection_pit_contract,
     _selection_target_lookup,
     _strategy_selection_diagnostics,
@@ -944,15 +945,30 @@ def run_comparison(
                 encoding="utf-8-sig",
             )
         if (
-            score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+            score_source in {
+                SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+            }
             and bool(capture_selection_target_diagnostics)
         ):
-            lookup = _selection_target_lookup(
-                root=root, filter_id=filter_id, architecture=manifest_architecture,
-                profile=manifest_profile,
-                score_path_override=str(pit_contract.score_path),
-                manifest_path_override=str(pit_contract.manifest_path),
-            )
+            if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+                lookup = _selection_target_lookup(
+                    root=root, filter_id=filter_id, architecture=manifest_architecture,
+                    profile=manifest_profile,
+                    score_path_override=str(pit_contract.score_path),
+                    manifest_path_override=str(pit_contract.manifest_path),
+                )
+            else:
+                forward_score_path = (
+                    str(continuous_score_override["score_path"])
+                    if continuous_score_override is not None
+                    else str(continuous_contract.score_path)
+                )
+                lookup = _continuous_forward_target_lookup(
+                    root=root, filter_id=filter_id, architecture=manifest_architecture,
+                    profile=manifest_profile,
+                    score_path_override=forward_score_path,
+                )
             baseline_diag, baseline_orderable_joined, baseline_selected_joined = (
                 _strategy_selection_diagnostics(
                     orderable=baseline_orderable,

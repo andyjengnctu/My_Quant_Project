@@ -65,6 +65,7 @@ from filters.breakout_quality.strategy_compare_sources import (
 )
 from filters.breakout_quality.strategy_compare_diagnostics import (
     backfill_pair_r_conversion_diagnostic,
+    backfill_pair_selection_diagnostics,
     build_strategy_diagnostics,
     render_strategy_diagnostics_markdown,
     render_strategy_r_analysis_table,
@@ -1240,6 +1241,12 @@ def run_strategy_comparison(
                 ),
             })
             pair_payload["metadata"] = pair_metadata
+            backfill_pair_selection_diagnostics(
+                pair_payload,
+                pair_dir=pair_dir,
+                project_root=root,
+                active_trades_filename=runtime_spec["active_trades_filename"],
+            )
             backfill_pair_r_conversion_diagnostic(
                 pair_payload,
                 pair_dir=pair_dir,
