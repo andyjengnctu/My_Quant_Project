@@ -111,7 +111,7 @@ Audit也可直接由Research CLI子命令執行：
 python apps/research.py audit
 ```
 
-目前`config/audit.py`只保留仍待決策的`mr13e-minimum-repair-mechanism` formal Audit；它只讀既有Strategy Compare selector trace／repair-search certificate與共同daily target工件，用來區分minimum-repair loss的mechanism，不改selector、不train、不score、不replay。完成本次決策後，該Audit也應依臨時研究程式生命週期退役。
+目前`config/audit.py`只保留仍待決策的`AUD-mr13km-frozen-rank-fusion` formal Audit；它只讀MR-13K Pure-MFE與MR-13M Low-Adverse既有frozen Forward score，將K/M score各自轉成同日percentile後固定0.5/0.5融合；MR-13H economic truth直接取自MR-13K工件內已封存的`reference_target_raw_r`，不另要求MR-13H score檔。不train、不重跑score、不fit權重、不replay策略；取得一次GO/REJECT結果後依臨時研究程式生命週期退役。
 
 模型訓練與策略比較維持不同工作類型與service責任。正式策略組合比較可由主選單 `[3]` 進入，或執行：
 
@@ -175,9 +175,9 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-MR-13E仍是production anchor。MR-13H已完成Selection/Forward 16-seed robustness並結案為`VALID_LABEL_SIMPLIFICATION / NOT_SELECTED_FOR_PROMOTION`。MR-13K Pure-MFE已完成Seed42 Selection與Forward，ranking learnability明顯提高但兩段single-seed portfolio translation均低於MR-13E；其C42/C53與C44/C54 current 8-seed full-flow robustness仍由策略比較流程獨立完成後再整體結案。MR-13L dual raw-R MSE已在Forward model Gate REJECT；MR-13M則確認low-adverse path-risk本身具強Forward ranking signal但不單獨進PIT。Model Research active profile現為MR-13N `daily_universal_full_horizon_equal_rank_mfe_low_adverse_full_list_ndcg_pairwise`：同日先各自排名Pure-MFE與low-adverse，再固定0.5/0.5等權平均成unitless composite，沿用Full-list Delta-NDCG pairwise；不掃lambda。正式下一步只跑`[1] 訓練目前模型 → forward-OOS模型報表`；MR-13H economic Target只作checkpoint後reference evaluation，MR-13N `selection_pit_authorized=False`。Production candidate固定C42/C44，R0維持。
+MR-13E仍是production anchor。MR-13H已結案為`VALID_LABEL_SIMPLIFICATION / NOT_SELECTED_FOR_PROMOTION`。MR-13K Pure-MFE已完成Seed42 Selection與Forward，ranking learnability明顯提高但兩段single-seed portfolio translation均低於MR-13E；其C42/C53與C44/C54 current 8-seed full-flow robustness仍由策略比較流程獨立完成後再整體結案。MR-13L dual raw-R MSE已在Forward model Gate REJECT；MR-13M確認low-adverse path-risk本身具強Forward ranking signal但不單獨進PIT；MR-13N fixed equal-rank single-model composite也已在Forward REJECT（self-target Daily rho=`0.0150`、對MR-13H reference=`0.0053`）。目前正式下一步改由`[4] Audit／診斷 → [1] 執行目前 Audit 設定`跑一次`AUD-mr13km-frozen-rank-fusion`，不再重訓MR-13N。Production candidate固定C42/C44，R0維持。
 
-Active continuous model menu由config／research spec動態產生；MR-13N目前只顯示Forward模型研究入口，不顯示Selection PIT或Target comparison入口：
+Active continuous model menu由config／research spec動態產生；MR-13N目前仍保留read-only結果身份且不授權Selection PIT或Target comparison；其Forward已完成，不需再次訓練：
 
 ```text
 === Continuous DL 模型研究與驗證 ===
@@ -189,7 +189,7 @@ Active Profile：daily_universal_full_horizon_equal_rank_mfe_low_adverse_full_li
 [0]  返回
 ```
 
-MR-13N使用`evaluation_reference_profile_name`在frozen checkpoint後對MR-13H `MFE R - adverse R`補Reference Target OOS rho／Pair／Top-K；該reference不參與training或epoch selection，也不因為量綱不同而啟用`[6] Target comparison`。只有後續明確授權`selection_pit_authorized=True`時，選單才可出現`[2] 建立／更新 Selection PIT Scores`。
+MR-13N使用`evaluation_reference_profile_name`在frozen checkpoint後對MR-13H `MFE R - adverse R`補Reference Target OOS rho／Pair／Top-K；該reference不參與training或epoch selection，也不因為量綱不同而啟用`[6] Target comparison`。MR-13N Forward結果已REJECT，`selection_pit_authorized=False`維持；下一步由formal Audit直接讀既有MR-13K/MR-13M frozen score，MR-13H economic truth取自MR-13K工件內嵌reference target，不建立MR-13N PIT。
 
 
 ### A2 Realized Trade-path Label研究

@@ -9336,3 +9336,18 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Training contract：daily feature-eligible universe、300×10 lazy sequence、`inception_time_v1`、Adam、Full-list Delta-NDCG weighted RankNet、mean-daily-Spearman epoch selection、all-label scope與Seed42全部沿用MR-13H/K/M。pairwise training對MR-13N composite ordering本身學習；`MR-13H daily_full_horizon_opportunity_r_v1`只透過新增`evaluation_reference_profile_name`在checkpoint固定後作同一frozen score的reference OOS／breakout diagnostics，不進loss、gradient、early stopping或epoch selection，也不啟用Target comparison menu。
 - SSOT調整：same-date percentile計算抽到`filters/breakout_quality/continuous_ranker_data.py::build_same_date_percentile_targets()`；既有trainer API `build_daily_percentile_targets()`只作compatibility façade，MR-13N component rank與既有daily ranker percentile共用同一實作，避免排名口徑分叉。
 - Stage governance：`selection_pit_authorized=False`；目前只跑Seed42 Forward model Gate，不建立PIT、DL source或Strategy Compare arm，不改MR-13K current 8-seed robustness，也不改production MR-13E C42/C44。Forward審查同時看MR-13N self-target ranking與同一frozen score對MR-13H economic reference Target的Daily rho／Pair／Top-K；只有reference economic ordering形成可信增量才考慮PIT。
+
+### 2026-08-17 — MR-13N Seed42 Forward result → rejected at model Gate
+
+- 程式基準：`test-branch-1_20260817_230217_ea9903d.zip`，SHA256=`edf4033d43f3ecd60091198d4a6ad1c105f39d83c8eddfccd6aad96f46c2ba22`；fresh extraction=`/tmp/mqp13n_result`（僅GPT工作環境）。MR-13N維持MR-13H/K/M同一40D complete horizon、earliest max-MFE peak、daily feature-eligible universe、300×10 lazy sequence、InceptionTime與Full-list Delta-NDCG RankNet；Target固定=`0.5 × same-date MFE percentile + 0.5 × same-date low-adverse percentile`，無lambda/weight tuning。
+- Seed42 result：selected epoch=`2`；獨立Validation Daily rho=`0.0437`。Frozen Forward all-stock self-target Daily/Global rho=`0.0150/0.0114`、Pair=`50.53%`、Top10=`0.5039`、Bottom10=`0.4931`、Top-Bottom=`+0.0108`、Top-K Lift=`-0.0124`；breakout slice Daily/Global rho=`-0.0085/-0.0211`、Pair=`50.82%`、Top-K Lift=`+0.0038`。
+- Economic reference：同一frozen MR-13N score對MR-13H `MFE R - adverse R` reference Target只有Daily rho=`0.0053`、Pair=`50.25%`，沒有形成economic ordering。Target與trainer方向已核對：MFE percentile與`-adverse` percentile皆higher-is-better，固定0.5/0.5，故不是sign/percentile implementation bug。
+- Decision：`REJECTED_AT_FORWARD_MODEL_GATE / NO_PIT / NO_RUNTIME_DL_SOURCE`。不建立MR-13N PIT、不做Strategy Compare、不做multi-seed。此結果否決的是「讓單一模型直接學fixed equal-rank composite ordering」；尚不能單獨區分equal-rank Target geometry本身是否無效，或兩個各自可學task在single-model joint ordering中互相干擾。
+
+### 2026-08-17 — MR-13N closure → AUD-mr13km-frozen-rank-fusion implemented
+
+- 待決策問題：MR-13K Pure-MFE與MR-13M Low-Adverse各自Forward learnability很強，但MR-13N single-model equal-rank composite近似隨機。唯一仍會改變下一步的關鍵不確定性是：「若兩個expert分開學、只在checkpoint後把frozen scores放到共同same-date rank scale再固定等權融合，是否能恢復MR-13H economic ordering？」
+- Audit identity：`AUD-mr13km-frozen-rank-fusion`。只讀既有MR-13K與MR-13M `daily_ranker_oos_scores.csv.gz`；不訓練、不重跑score、不fit權重、不讀策略結果。MR-13K與MR-13M `model_score`各自以same-date average-rank percentile轉到[0,1]，固定`0.5/0.5`形成fusion score；economic truth直接使用MR-13K score工件內已在checkpoint後封存的MR-13H `reference_target_raw_r`，因此不另要求MR-13H score檔。
+- 同一Audit另外量測true MFE vs low-adverse Target relation、兩個frozen model score relation、true equal-rank Target vs MR-13H economic Target relation，用來區分「target geometry抵消」與「joint-learning task interference」。
+- Stop rule：只有當frozen fusion對MR-13H economic Target的Forward mean Daily Spearman、Pair concordance、Top-K Lift三項都嚴格高於MR-13K/MR-13M兩個single expert在各指標中的較佳值，才判`GO_MULTI_EXPERT_FUSION`；否則`REJECT_EQUAL_RANK_SCORE_FUSION`。不設新magic threshold，不掃權重。取得一次結果後即退役Audit implementation並把結果留Registry/Log。
+
