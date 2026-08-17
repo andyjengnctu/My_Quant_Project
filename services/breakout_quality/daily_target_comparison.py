@@ -33,6 +33,33 @@ REPORT_MARKDOWN_FILENAME = "daily_target_comparison.md"
 REPORT_BY_DATE_FILENAME = "daily_target_comparison_by_date.csv"
 
 
+def _pure_mfe_float32_relation_tolerance(
+    candidate_target_r: np.ndarray,
+    reference_target_r: np.ndarray,
+    adverse_return: np.ndarray,
+    *,
+    risk_budget_return: float,
+) -> np.ndarray:
+    """Return per-row tolerance implied only by persisted float32 quantization.
+
+    Daily targets/components are materialized as float32. MR-13K's exact
+    scientific relation is enforced before persistence by the canonical target
+    builders; this audit checks the persisted artifacts without pretending that
+    subtracting two independently rounded float32 targets is exact arithmetic.
+    """
+
+    risk_budget = float(risk_budget_return)
+    if not np.isfinite(risk_budget) or risk_budget <= 0.0:
+        raise ValueError("risk_budget_return必須是有限正數")
+    candidate32 = np.asarray(candidate_target_r, dtype=np.float32)
+    reference32 = np.asarray(reference_target_r, dtype=np.float32)
+    adverse32 = np.asarray(adverse_return, dtype=np.float32)
+    candidate_ulp = np.abs(np.spacing(candidate32)).astype(np.float64)
+    reference_ulp = np.abs(np.spacing(reference32)).astype(np.float64)
+    adverse_ulp_r = np.abs(np.spacing(adverse32)).astype(np.float64) / risk_budget
+    return candidate_ulp + reference_ulp + adverse_ulp_r + np.finfo(np.float32).eps
+
+
 def _controlled_profile_contract(profile) -> dict[str, object]:
     payload = dict(profile.as_manifest_payload())
     payload.pop("name", None)
@@ -421,13 +448,26 @@ def compare_daily_targets(
             raise ValueError("移除adverse penalty不得改變favorable component")
         if float((metrics.get("adverse_component_return") or {}).get("max_abs_component_delta") or 0.0) > 1e-7:
             raise ValueError("移除adverse penalty不得改變adverse diagnostic component")
-        expected_delta = (
-            rtable["target_adverse_return_to_peak"].to_numpy(dtype=np.float64)
-            / abs(float(DEFAULT_LABEL_POLICY.max_adverse_return))
+        risk_budget = abs(float(DEFAULT_LABEL_POLICY.max_adverse_return))
+        reference_adverse = rtable["target_adverse_return_to_peak"].to_numpy(dtype=np.float64)
+        expected_delta = reference_adverse / risk_budget
+        candidate_target = frame["candidate_target_r"].to_numpy(dtype=np.float64)
+        reference_target = frame["reference_target_r"].to_numpy(dtype=np.float64)
+        actual_delta = candidate_target - reference_target
+        tolerance = _pure_mfe_float32_relation_tolerance(
+            candidate_target,
+            reference_target,
+            reference_adverse,
+            risk_budget_return=risk_budget,
         )
-        actual_delta = frame["candidate_target_r"].to_numpy(dtype=np.float64) - frame["reference_target_r"].to_numpy(dtype=np.float64)
-        if not np.allclose(actual_delta, expected_delta, rtol=0.0, atol=2e-6):
-            raise ValueError("Pure-MFE target差值必須精確等於移除的adverse R penalty")
+        error = np.abs(actual_delta - expected_delta)
+        violated = error > tolerance
+        if bool(np.any(violated)):
+            worst = int(np.argmax(error - tolerance))
+            raise ValueError(
+                "Pure-MFE target差值不符合移除adverse R penalty的float32持久化契約；"
+                f"max_error={error[worst]:.9g}, allowed={tolerance[worst]:.9g}"
+            )
 
     root = Path(project_root)
     output_dir = (

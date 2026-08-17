@@ -2010,7 +2010,10 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
         ),
     )
 
-    from services.breakout_quality.daily_target_comparison import _comparison_metrics
+    from services.breakout_quality.daily_target_comparison import (
+        _comparison_metrics,
+        _pure_mfe_float32_relation_tolerance,
+    )
 
     audit_frame = pd.DataFrame(
         {
@@ -2134,6 +2137,31 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
             pure_contract["target_id"],
             bool(pure_contract["adverse_penalty_included"]),
             "adverse_return" in str(pure_contract["formula"]),
+        ),
+    )
+
+    persisted_candidate = np.asarray([500.0], dtype=np.float32).astype(np.float64)
+    persisted_reference = np.asarray([499.9], dtype=np.float32).astype(np.float64)
+    persisted_adverse = np.asarray([0.01], dtype=np.float32).astype(np.float64)
+    persisted_error = np.abs(
+        (persisted_candidate - persisted_reference)
+        - persisted_adverse / float(spec.risk_budget_return)
+    )
+    persisted_tolerance = _pure_mfe_float32_relation_tolerance(
+        persisted_candidate,
+        persisted_reference,
+        persisted_adverse,
+        risk_budget_return=float(spec.risk_budget_return),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13k_label_audit_accepts_only_float32_quantization_error_not_fixed_magic_tolerance",
+        (True, True),
+        (
+            bool(persisted_error[0] > 2e-6),
+            bool(persisted_error[0] <= persisted_tolerance[0]),
         ),
     )
 
