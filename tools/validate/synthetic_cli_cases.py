@@ -2469,13 +2469,14 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             "synthetic_quality" in markdown and "Objective" in markdown,
         )
 
-        pit_dir = (
-            simple_root / "outputs" / "filters" / "breakout_quality"
-            / "synthetic_quality" / BREAKOUT_QUALITY_MODEL_ARCHITECTURE
-            / STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE / "point_in_time"
+        pit_manifest_path = app_breakout_quality.resolve_selection_point_in_time_manifest_path(
+            simple_root,
+            "synthetic_quality",
+            BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
         )
-        pit_dir.mkdir(parents=True, exist_ok=True)
-        (pit_dir / "selection_point_in_time_manifest.json").write_text(
+        pit_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        pit_manifest_path.write_text(
             json.dumps(
                 {
                     "coverage": {

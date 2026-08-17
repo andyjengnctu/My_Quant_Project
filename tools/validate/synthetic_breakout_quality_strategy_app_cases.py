@@ -743,6 +743,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     robustness_source = robustness_path.read_text(encoding="utf-8")
     robustness_settings = strategy_config.get_strategy_multi_seed_robustness_settings()
     robustness_profiles = strategy_config.get_strategy_multi_seed_robustness_profiles()
+    configured_robustness_ids = set(strategy_config.STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES)
+    enabled_robustness_ids = {item["robustness_id"] for item in robustness_profiles}
+    expected_enabled_robustness_ids = {
+        robustness_id
+        for robustness_id, raw in strategy_config.STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES.items()
+        if bool(raw.get("enabled", True))
+    }
     selection_robustness = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
     robustness_profile = strategy_config.get_strategy_comparison_settings(
         robustness_settings.profile_id
@@ -767,7 +774,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "multi_seed_robustness_matrix_is_profile_config_driven_without_mutating_single_seed_arm_identity",
         True,
         robustness_path.is_file()
-        and {item["robustness_id"] for item in robustness_profiles} >= {"forward_oos", "selection_pit"}
+        and configured_robustness_ids >= {"forward_oos", "selection_pit"}
+        and enabled_robustness_ids == expected_enabled_robustness_ids
         and selection_robustness.profile_id == "selection_pit"
         and robustness_settings.profile_id in strategy_config.STRATEGY_COMPARE_PROFILES
         and robustness_settings.seed_count >= 2
