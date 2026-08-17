@@ -2469,6 +2469,47 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             "synthetic_quality" in markdown and "Objective" in markdown,
         )
 
+        pit_dir = (
+            simple_root / "outputs" / "filters" / "breakout_quality"
+            / "synthetic_quality" / BREAKOUT_QUALITY_MODEL_ARCHITECTURE
+            / STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE / "point_in_time"
+        )
+        pit_dir.mkdir(parents=True, exist_ok=True)
+        (pit_dir / "selection_point_in_time_manifest.json").write_text(
+            json.dumps(
+                {
+                    "coverage": {
+                        "scored_group_count": 778532,
+                        "expected_group_count": 778532,
+                        "coverage_rate": 1.0,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch.object(app_breakout_quality, "PROJECT_ROOT", simple_root):
+            pit_report_path, pit_console = _capture_stdout(
+                app_breakout_quality._emit_breakout_quality_simple_report,
+                "build-point-in-time-scores",
+                [
+                    "--filter-id", "synthetic_quality",
+                    "--model-architecture", BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+                    "--experiment-profile", STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+                ],
+                returncode=0,
+                elapsed_sec=0.5,
+            )
+        pit_markdown = pit_report_path.read_text(encoding="utf-8")
+        add_check(
+            results, "output_contract", case_id,
+            "breakout_quality_pit_build_simple_report_uses_manifest_coverage_before_audit_exists",
+            True,
+            "Score coverage" in pit_console
+            and "100.00%" in pit_console
+            and "778532" in pit_console
+            and "100.00%" in pit_markdown,
+        )
+
         compare_dir = (
             simple_root / "outputs" / "filters" / "breakout_quality"
             / "synthetic_quality" / "continuous_ranker_comparison"

@@ -648,6 +648,12 @@ def _simple_report_details(
         )
         payload = _safe_json_object(audit_json)
         coverage = dict(payload.get("score_coverage") or {})
+        if command == "build-point-in-time-scores" and not coverage:
+            pit_manifest = resolve_selection_point_in_time_manifest_path(
+                PROJECT_ROOT, filter_id, architecture, profile
+            )
+            manifest_payload = _safe_json_object(pit_manifest)
+            coverage = dict(manifest_payload.get("coverage") or {})
         decision = dict(payload.get("decision_contract") or {})
         primary_scope = str(decision.get("primary_metric_scope") or "pass_only_target")
         primary = dict((payload.get("metrics") or {}).get(primary_scope) or {})
