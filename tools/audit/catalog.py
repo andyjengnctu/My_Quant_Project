@@ -46,18 +46,6 @@ class AuditCatalogEntry:
 
 
 AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
-    # Only decision-relevant formal Audit handlers stay registered here.
-    "frozen_rank_fusion": AuditCatalogEntry(
-        audit_type="frozen_rank_fusion",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.frozen_rank_fusion",
-        mode="formal",
-        description="只讀融合MR-13K/MR-13M frozen Forward ranks並評估MR-13H economics",
-        read_only=True,
-        status_function="audit_status",
-        run_function="run_audit",
-    ),
-
     # Only genuinely supported diagnostic commands belong here.  Canonical
     # Dataset/Target/PIT builders live in services/ and are not research Audits.
     "regime": AuditCatalogEntry(

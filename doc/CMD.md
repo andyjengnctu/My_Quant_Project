@@ -111,7 +111,7 @@ Audit也可直接由Research CLI子命令執行：
 python apps/research.py audit
 ```
 
-目前`config/audit.py`只保留仍待決策的`AUD-mr13km-frozen-rank-fusion` formal Audit；它只讀MR-13K Pure-MFE與MR-13M Low-Adverse既有frozen Forward score，將K/M score各自轉成同日percentile後固定0.5/0.5融合；MR-13H economic truth直接取自MR-13K工件內已封存的`reference_target_raw_r`，不另要求MR-13H score檔。不train、不重跑score、不fit權重、不replay策略；取得一次GO/REJECT結果後依臨時研究程式生命週期退役。
+目前`config/audit.py`沒有啟用中的formal Audit；Research `[4] Audit／診斷`仍保留泛化入口，當沒有enabled definition時顯示停用狀態。最近一次`AUD-mr13km-frozen-rank-fusion`已於2026-08-18取得`REJECT_EQUAL_RANK_SCORE_FUSION`結果並依一次性研究生命週期退役；其identity與結果只保留於Registry／Experiment Log，不再留formal handler或dedicated synthetic。
 
 模型訓練與策略比較維持不同工作類型與service責任。正式策略組合比較可由主選單 `[3]` 進入，或執行：
 

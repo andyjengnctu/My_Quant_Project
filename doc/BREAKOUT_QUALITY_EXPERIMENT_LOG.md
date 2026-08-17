@@ -9351,3 +9351,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 同一Audit另外量測true MFE vs low-adverse Target relation、兩個frozen model score relation、true equal-rank Target vs MR-13H economic Target relation，用來區分「target geometry抵消」與「joint-learning task interference」。
 - Stop rule：只有當frozen fusion對MR-13H economic Target的Forward mean Daily Spearman、Pair concordance、Top-K Lift三項都嚴格高於MR-13K/MR-13M兩個single expert在各指標中的較佳值，才判`GO_MULTI_EXPERT_FUSION`；否則`REJECT_EQUAL_RANK_SCORE_FUSION`。不設新magic threshold，不掃權重。取得一次結果後即退役Audit implementation並把結果留Registry/Log。
 
+### 2026-08-18 — AUD-mr13km-frozen-rank-fusion result → fixed equal-rank expert fusion rejected
+
+- 程式基準：`test-branch-1_20260818_001037_841d25c.zip`，SHA256=`ae6c2327c0bc84bf2c757a3794cfeecb737ab4e6c74f09862c671ec0955dd1aa`；fresh extraction=`/tmp/mqp_fusion_audit`（僅GPT工作環境）。
+- Audit期間=`2021-01-04～2025-12-22`，Common rows=`608,204`；完全只讀既有MR-13K / MR-13M frozen Forward scores，不重訓、不fit權重、不重跑策略。
+- Economic-reference結果：MR-13K對MR-13H economic Target Daily rho/Pair/Top-K Lift/Top-Bottom=`0.2381/58.24%/+1.3117R/+1.4179R`；MR-13M=`-0.2382/41.73%/-0.7746R/-1.4914R`；固定`0.5/0.5` same-date rank fusion=`0.0056/50.12%/-0.2777R/-0.1403R`。依事前stop rule判定`REJECT_EQUAL_RANK_SCORE_FUSION`。
+- 機制判讀：true MFE vs true low-adverse component的mean Daily rho只有`-0.1261`，顯示真實component只存在輕度trade-off；但MR-13K vs MR-13M frozen score的mean Daily rho=`-0.8649`，代表兩個模型從現有300×10 sequence中抽到的「可預測部分」幾乎成為鏡像反向。與此同時，true equal-rank Target對MR-13H economic Target的mean Daily rho=`0.8537`，因此不能把MR-13N / frozen fusion失敗歸因於equal-rank economic geometry本身；失敗更精確地位於learned representation／predictable-component interaction。
+- Decision：不做fixed equal-rank multi-expert score fusion、不為13K/13M掃fusion weight，也不讓13N進PIT。下一個受控模型若繼續此主線，應避免再對兩個scalar expert score做線性加權；較乾淨的候選是假設「只在MFE與low-adverse同方向的Pareto-comparable pairs提供pairwise supervision」，直接學joint dominance，而非再選一個magnitude/rank mixing coefficient。此候選尚未建立MR identity，需另輪正式實作前再查Registry。
+- Lifecycle：Audit待決策問題已完全回答；`AUD-mr13km-frozen-rank-fusion`的formal config/catalog/implementation與dedicated synthetic依`PROJECT_SETTINGS C11`退役，結果只保留於Registry／Log。Generic Audit framework與research utilities仍保留。
+

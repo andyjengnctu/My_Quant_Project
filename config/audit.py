@@ -19,38 +19,7 @@ AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
 AUDIT_MODULES: dict[str, dict[str, Any]] = {
     "breakout_quality": {
         "enabled": True,
-        "audits": {
-            "AUD-mr13km-frozen-rank-fusion": {
-                "enabled": True,
-                "audit_type": "frozen_rank_fusion",
-                "description": (
-                    "只讀MR-13K Pure-MFE與MR-13M Low-Adverse frozen Forward scores；"
-                    "各自同日percentile後固定0.5/0.5融合，評估MR-13H economic Target"
-                ),
-                "source": {
-                    "filter_id": "breakout_quality_v1",
-                    "architecture": "inception_time_v1",
-                    "mfe_profile": "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise",
-                    "low_adverse_profile": "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise",
-                    "economic_reference_profile": "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise",
-                },
-                "dimensions": {
-                    "score_transform": "same_date_average_rank_percentile",
-                    "mfe_weight": 0.5,
-                    "low_adverse_weight": 0.5,
-                },
-                "outcomes": {
-                    "primary": (
-                        "MR-13H economic mean daily Spearman / Pair / Top-K Lift"
-                    ),
-                    "stop_rule": (
-                        "GO only if frozen fusion strictly exceeds the better MR-13K/MR-13M "
-                        "single expert on Daily rho, Pair and Top-K Lift; otherwise reject equal-rank score fusion"
-                    ),
-                },
-                "output_subdir": "breakout_quality/mr13km_frozen_rank_fusion",
-            },
-        },
+        "audits": {},
     },
 }
 
