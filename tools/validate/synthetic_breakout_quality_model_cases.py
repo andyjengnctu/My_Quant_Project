@@ -2248,6 +2248,189 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
     return results, summary
 
 
+
+def validate_breakout_quality_mr13l_decomposed_component_contract_case(_base_params):
+    """Pin MR-13L as primary two-component regression of the MR-13H target."""
+
+    case_id = "BREAKOUT_QUALITY_MR13L_DECOMPOSED_COMPONENT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
+        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
+        get_breakout_quality_model_research_settings,
+    )
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality import train_continuous_ranker as training_module
+
+    profile_h = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    profile_l = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE
+    )
+    spec_l = get_continuous_ranker_research_spec(
+        DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE
+    )
+    active_research = get_breakout_quality_model_research_settings()
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13l_is_active_model_research_without_changing_production_workflow",
+        (
+            DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
+            DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
+            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            active_research.experiment_profile,
+            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13l_keeps_mr13h_target_universe_and_architecture_but_changes_learning_formulation",
+        (
+            "MR-13L",
+            DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+            TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
+            "dual_mse_raw_r",
+            "mean_daily_spearman",
+            False,
+            profile_h.model_architecture,
+            profile_h.training_sample_scope,
+            profile_h.training_label_scope,
+        ),
+        (
+            spec_l.model_research_id,
+            spec_l.reference_profile_name,
+            profile_l.continuous_target_id,
+            profile_l.training_objective,
+            profile_l.loss_name,
+            profile_l.epoch_selection_metric,
+            bool(spec_l.selection_pit_authorized),
+            profile_l.model_architecture,
+            profile_l.training_sample_scope,
+            profile_l.training_label_scope,
+        ),
+    )
+
+    semantics = training_semantics(profile_l)
+    dual_contract = dict(semantics.get("dual_component_r_regression_contract") or {})
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13l_two_components_are_primary_equal_weight_raw_r_targets_without_auxiliary_lambda",
+        (
+            "mean_mse_over_two_primary_r_components",
+            "equal_by_mean_reduction_no_lambda",
+            "predicted_favorable_mfe_r_minus_predicted_adverse_to_peak_r",
+            None,
+            None,
+        ),
+        (
+            dual_contract.get("loss"),
+            dual_contract.get("component_weighting"),
+            dual_contract.get("runtime_score"),
+            semantics.get("pairwise_contract"),
+            semantics.get("raw_r_regression_contract"),
+        ),
+    )
+
+    # The decomposition is not a new economic target.  The two physical-R
+    # components must reconstruct the exact MR-13H scalar target row by row.
+    group_table = pd.DataFrame(
+        {
+            "target_adverse_r": [0.25, 1.10, 0.0],
+            "target_favorable_r": [1.75, 3.40, 0.80],
+        }
+    )
+    raw_target = np.asarray([1.50, 2.30, 0.80], dtype=np.float32)
+    percentile_target = np.asarray([0.2, 0.8, 0.5], dtype=np.float32)
+    component_target = training_module._training_target_for_profile(
+        profile_l, raw_target, percentile_target, group_table
+    )
+    reconstructed = component_target[:, LABEL_PASS] - component_target[:, LABEL_REJECT]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13l_component_targets_reconstruct_mr13h_scalar_target_exactly",
+        tuple(round(float(x), 6) for x in raw_target),
+        tuple(round(float(x), 6) for x in reconstructed.astype(np.float32)),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13l_component_target_output_order_matches_existing_two_neuron_identity",
+        ((0.25, 1.75), (1.10, 3.40), (0.0, 0.80)),
+        tuple(tuple(round(float(x), 6) for x in row) for row in component_target),
+    )
+
+    fake_logits = np.asarray([[0.4, 2.0], [1.2, 3.5]], dtype=np.float32)
+    with patch.object(
+        training_module,
+        "strict_parallel_batched_logits",
+        return_value=fake_logits,
+    ):
+        prediction = training_module.predict_dual_component_r(
+            None,
+            None,
+            np.empty((2, 1, 1), dtype=np.float32),
+            np.empty((2, 0), dtype=np.float32),
+            np.asarray([0, 1], dtype=np.int64),
+            batch_size=2,
+            plan=None,
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13l_runtime_score_is_only_predicted_mfe_minus_predicted_adverse",
+        (
+            (2.0, 3.5),
+            (0.4, 1.2),
+            (1.6, 2.3),
+        ),
+        (
+            tuple(round(float(x), 6) for x in prediction["predicted_favorable_r"]),
+            tuple(round(float(x), 6) for x in prediction["predicted_adverse_r"]),
+            tuple(round(float(x), 6) for x in prediction["model_score"]),
+        ),
+    )
+
+    model_source = read_source_text("filters/breakout_quality/models/inception_time.py")
+    train_source = read_source_text("services/breakout_quality/train_continuous_ranker.py")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13l_reuses_existing_two_output_architecture_and_is_not_rejected_auxiliary_head_pattern",
+        (True, True, False),
+        (
+            "nn.Linear(classifier_input, 2)" in model_source,
+            "F.mse_loss(logits.float(), target, reduction=\"mean\")" in train_source,
+            "auxiliary" in str(dual_contract).lower() or "lambda" in str(dual_contract.get("loss") or "").lower(),
+        ),
+    )
+
+    summary["model_research_id"] = spec_l.model_research_id
+    summary["active_model_research"] = active_research.experiment_profile
+    summary["training_performed"] = False
+    return results, summary
+
 def validate_breakout_quality_risk_normalized_13ij_contract_case(_base_params):
     """Pin MR-13I/J universal target/accounting/context attribution."""
 

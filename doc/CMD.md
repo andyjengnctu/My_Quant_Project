@@ -170,25 +170,27 @@ Breakout-quality 模型／Label／training／workflow設定只編輯 `config/bre
 目前模型研究與策略anchor設定為：
 
 ```python
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_mfe_adverse_dual_mse"
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-MR-13E仍是production anchor。MR-13H已完成Selection/Forward 16-seed robustness並結案為`VALID_LABEL_SIMPLIFICATION / NOT_SELECTED_FOR_PROMOTION`：Selection平均RoMD `6.28 vs 5.98`略勝MR-13E，但Forward平均RoMD `10.32 vs 11.10`未延續。Model Research active profile現為MR-13K `daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise`；相對MR-13H唯一移除adverse-to-peak Target扣分。Target comparison與Seed42 Forward已完成並取得Selection PIT GO：OOS Daily rho=`0.3833`、Pair=`63.19%`，對MR-13H reference Target仍有rho=`0.2381`、Pair=`58.24%`。正式下一步為`[1] 模型訓練 → [2] 建立／更新 Selection PIT Scores → PIT模型驗證`；PIT合法完成後再到`[3] 策略組合比較`執行Selection PIT目前設定，以C53對C42檢查pure-MFE的portfolio translation。MR-13K Forward strategy arm與multi-seed尚未授權；Production candidate固定C42/C44，R0維持。
+MR-13E仍是production anchor。MR-13H已完成Selection/Forward 16-seed robustness並結案為`VALID_LABEL_SIMPLIFICATION / NOT_SELECTED_FOR_PROMOTION`。MR-13K Pure-MFE已完成Seed42 Selection與Forward，ranking learnability明顯提高但兩段single-seed portfolio translation均低於MR-13E；其C42/C53與C44/C54 16-seed full-flow robustness仍由策略比較流程獨立完成後再整體結案。Model Research active profile現為MR-13L `daily_universal_full_horizon_mfe_adverse_dual_mse`：economic Target完全沿用MR-13H，將既有2-output InceptionTime head改作`MFE R`與`adverse-to-peak R`兩個primary raw-R regression outputs，loss為兩分量equal-mean MSE，正式score固定為`Predicted MFE R - Predicted adverse R`；沒有auxiliary loss或lambda。正式下一步只跑`[1] 訓練目前模型 → forward-OOS模型報表`；MR-13L `selection_pit_authorized=False`，Forward結果審查前不得建立PIT或strategy arm。Production candidate固定C42/C44，R0維持。
 
-Active continuous model menu由config／research spec動態產生；MR-13K目前會額外顯示：
+Active continuous model menu由config／research spec動態產生；MR-13L目前顯示模型研究入口但不顯示Selection PIT入口：
 
 ```text
 === Continuous DL 模型研究與驗證 ===
-Active Profile：daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise
+Active Profile：daily_universal_full_horizon_mfe_adverse_dual_mse
 [1]  訓練目前模型 → forward-OOS模型報表  (Enter)
 [3]  查看目前Workflow與工件狀態
+[4]  比較設定中的 Continuous Rankers
+[5]  準備策略比較所需模型工件
 [6]  比較目前 Target 與 reference Target
 [0]  返回
 ```
 
-`[6]`只讀canonical OHLCV與兩個daily Target，輸出`outputs/filters/breakout_quality/<filter_id>/daily_target_comparison/`的console摘要、Markdown、JSON與by-date CSV；除整體rank/overlap/breach統計外，也會依`config/breakout_quality.py`的barrier band比較門檻上下兩側的label cliff；不訓練、不fit、不建立PIT。
+MR-13L與reference MR-13H使用相同economic Target，所以`[6]`僅是identity/read-only一致性診斷，不是本輪必要步驟；正式下一步直接執行`[1]`。Forward報表除既有combined-score ranking metrics外，會額外顯示MFE與adverse兩個component的RMSE/MAE/bias/global rho/daily rho。只有後續明確授權`selection_pit_authorized=True`時，選單才可出現`[2] 建立／更新 Selection PIT Scores`。
 
 
 ### A2 Realized Trade-path Label研究

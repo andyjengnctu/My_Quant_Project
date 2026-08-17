@@ -4,6 +4,7 @@
     - simply label
         - the 40t day's R
         - self learn the label days and input days
+    - sell using score    
     - attention (cross-secction)
     - non breakout strategy
     - 三大法人籌碼資訊/ EPS財報/ 基本面 

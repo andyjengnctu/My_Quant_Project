@@ -16,6 +16,7 @@ import pandas as pd
 from config.breakout_quality import (
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
+    TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     get_continuous_ranker_research_spec,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
@@ -102,12 +103,69 @@ def _date_split_frame(
     return pd.DataFrame(rows)
 
 
+def _dual_component_metrics(
+    group_table: pd.DataFrame,
+    group_ids: np.ndarray,
+    predicted_favorable_r: np.ndarray,
+    predicted_adverse_r: np.ndarray,
+) -> dict:
+    """Evaluate MR-13L primary component heads without changing the composite Gate."""
+
+    ids = np.asarray(group_ids, dtype=np.int64)
+    favorable_pred = np.asarray(predicted_favorable_r, dtype=np.float64)
+    adverse_pred = np.asarray(predicted_adverse_r, dtype=np.float64)
+    if favorable_pred.shape != ids.shape or adverse_pred.shape != ids.shape:
+        raise ValueError("dual-component prediction length與group ids不一致")
+    favorable_true = pd.to_numeric(
+        group_table.iloc[ids]["target_favorable_r"], errors="coerce"
+    ).to_numpy(dtype=np.float64)
+    adverse_true = pd.to_numeric(
+        group_table.iloc[ids]["target_adverse_r"], errors="coerce"
+    ).to_numpy(dtype=np.float64)
+    dates = pd.to_datetime(group_table.iloc[ids]["date"], errors="raise").to_numpy()
+
+    def one_component(predicted: np.ndarray, actual: np.ndarray) -> dict:
+        valid = np.isfinite(predicted) & np.isfinite(actual)
+        if not bool(valid.any()):
+            return {
+                "count": 0,
+                "mse": None,
+                "mae": None,
+                "rmse": None,
+                "bias": None,
+                "global_spearman": None,
+                "mean_daily_spearman": None,
+            }
+        errors = predicted[valid] - actual[valid]
+        daily = ranker_api.daily_rank_metrics(
+            dates[valid], predicted[valid], actual[valid]
+        )
+        mse = float(np.mean(np.square(errors)))
+        return {
+            "count": int(valid.sum()),
+            "mse": mse,
+            "mae": float(np.mean(np.abs(errors))),
+            "rmse": float(np.sqrt(mse)),
+            "bias": float(np.mean(errors)),
+            "global_spearman": ranker_api.calculate_spearman(
+                predicted[valid], actual[valid]
+            ),
+            "mean_daily_spearman": daily.get("mean_daily_spearman"),
+        }
+
+    return {
+        "favorable_mfe_r": one_component(favorable_pred, favorable_true),
+        "adverse_to_peak_r": one_component(adverse_pred, adverse_true),
+    }
+
+
 def _render_markdown(payload: dict) -> str:
     def fmt(value, digits=4):
         return "-" if value is None else f"{float(value):.{digits}f}"
 
     objective = str(payload["training"].get("objective") or "")
     direct_r = objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+    dual_component_r = objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION
     source_dataset = dict(payload.get("source_dataset") or {})
     target_manifest = dict(payload.get("target_manifest") or {})
     lines = [
@@ -149,6 +207,33 @@ def _render_markdown(payload: dict) -> str:
                 f"| {fmt(reg.get('mae_raw_r'))} | {fmt(reg.get('rmse_raw_r'))} | {fmt(reg.get('bias_raw_r'))} "
                 f"| {fmt(reg.get('predicted_r_mean'))} | {fmt(reg.get('target_r_mean'))} |"
             )
+    if dual_component_r:
+        lines.extend([
+            "- Dual-component objective：兩個既有輸出分別為Predicted adverse-to-peak R與Predicted MFE R；"
+            "正式score固定為MFE R−adverse R；兩分量MSE採同一mean reduction，無auxiliary loss／lambda。",
+            "",
+            "## Dual Component Regression",
+            "",
+            "| Scope | Component | Groups | RMSE | MAE | Bias | Global rho | Daily rho |",
+            "|---|---|---:|---:|---:|---:|---:|---:|",
+        ])
+        component_eval = dict(payload.get("dual_component_evaluation") or {})
+        for scope_label, scope_key in (
+            ("Validation", "validation"),
+            ("Forward OOS", "oos"),
+            ("Breakout candidate slice", "breakout_candidate_oos"),
+        ):
+            scope = dict(component_eval.get(scope_key) or {})
+            for component_label, component_key in (
+                ("MFE", "favorable_mfe_r"),
+                ("Adverse", "adverse_to_peak_r"),
+            ):
+                row = dict(scope.get(component_key) or {})
+                lines.append(
+                    f"| {scope_label} | {component_label} | {int(row.get('count', 0) or 0):,} "
+                    f"| {fmt(row.get('rmse'))} | {fmt(row.get('mae'))} | {fmt(row.get('bias'))} "
+                    f"| {fmt(row.get('global_spearman'))} | {fmt(row.get('mean_daily_spearman'))} |"
+                )
     lines.extend([
         "",
         "## Ranking Diagnostics",
@@ -338,16 +423,47 @@ def run(args) -> int:
     )
     percentile_target[split.oos_ids] = oos_percentiles[split.oos_ids]
 
-    validation_scores = ranker_api.predict_scores(
-        torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
-        batch_size=int(args.evaluation_batch_size), plan=plan,
-        training_objective=bundle.profile.training_objective,
-    )
-    forward_scores = ranker_api.predict_scores(
-        torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
-        batch_size=int(args.evaluation_batch_size), plan=plan,
-        training_objective=bundle.profile.training_objective,
-    )
+    dual_component_evaluation = {}
+    validation_components = None
+    forward_components = None
+    if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
+        validation_components = ranker_api.predict_dual_component_r(
+            torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+        )
+        forward_components = ranker_api.predict_dual_component_r(
+            torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+        )
+        validation_scores = validation_components["model_score"]
+        forward_scores = forward_components["model_score"]
+        dual_component_evaluation["validation"] = _dual_component_metrics(
+            bundle.group_table,
+            split.validation_ids,
+            validation_components["predicted_favorable_r"],
+            validation_components["predicted_adverse_r"],
+        )
+        oos_positions = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
+        oos_component_positions = np.asarray(
+            [oos_positions[int(group_id)] for group_id in split.oos_ids], dtype=np.int64
+        )
+        dual_component_evaluation["oos"] = _dual_component_metrics(
+            bundle.group_table,
+            split.oos_ids,
+            forward_components["predicted_favorable_r"][oos_component_positions],
+            forward_components["predicted_adverse_r"][oos_component_positions],
+        )
+    else:
+        validation_scores = ranker_api.predict_scores(
+            torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+            training_objective=bundle.profile.training_objective,
+        )
+        forward_scores = ranker_api.predict_scores(
+            torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+            training_objective=bundle.profile.training_objective,
+        )
     score_by_group = np.full(len(bundle.group_table), np.nan, dtype=np.float32)
     score_by_group[forward_score_ids] = forward_scores
     oos_scores = score_by_group[split.oos_ids]
@@ -366,6 +482,20 @@ def run(args) -> int:
     candidate_ids = select_breakout_candidate_group_ids(
         bundle, split.oos_ids, allow_stale_source=bool(args.allow_stale_source)
     )
+    if forward_components is not None:
+        forward_position_by_group = {
+            int(group_id): pos for pos, group_id in enumerate(forward_score_ids)
+        }
+        candidate_positions = np.asarray(
+            [forward_position_by_group[int(group_id)] for group_id in candidate_ids],
+            dtype=np.int64,
+        )
+        dual_component_evaluation["breakout_candidate_oos"] = _dual_component_metrics(
+            bundle.group_table,
+            candidate_ids,
+            forward_components["predicted_favorable_r"][candidate_positions],
+            forward_components["predicted_adverse_r"][candidate_positions],
+        )
     candidate_metrics = (
         ranker_api.split_metrics(
             candidate_ids,
@@ -461,6 +591,10 @@ def run(args) -> int:
             forward_score_ids[evaluable_forward_mask]
         ]
     oos_frame["model_score"] = forward_scores
+    if forward_components is not None:
+        oos_frame["predicted_favorable_r"] = forward_components["predicted_favorable_r"]
+        oos_frame["predicted_adverse_r"] = forward_components["predicted_adverse_r"]
+        oos_frame["predicted_composite_r"] = forward_components["model_score"]
     if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
         oos_frame["predicted_r"] = forward_scores
     oos_frame.to_csv(score_path, index=False, encoding="utf-8-sig", compression="gzip")
@@ -497,11 +631,14 @@ def run(args) -> int:
             "model_score": (
                 "predicted_r_two_logit_margin"
                 if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                else "predicted_favorable_mfe_r_minus_predicted_adverse_to_peak_r"
+                if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION
                 else "softmax_pass_probability_monotonic_to_two_logit_margin"
             ),
             "batching": ranker_api.training_semantics(bundle.profile)["batching"],
             "pairwise_contract": ranker_api.training_semantics(bundle.profile)["pairwise_contract"],
             "raw_r_regression_contract": ranker_api.training_semantics(bundle.profile).get("raw_r_regression_contract"),
+            "dual_component_r_regression_contract": ranker_api.training_semantics(bundle.profile).get("dual_component_r_regression_contract"),
             "pairwise_reduction": research_spec.pairwise_reduction,
             "selected_epoch": selected_epoch,
             "epoch_selection_metric": bundle.profile.epoch_selection_metric,
@@ -513,6 +650,7 @@ def run(args) -> int:
         "split_metrics": split_metrics,
         "all_group_split_metrics": split_metrics,
         "reference_target_evaluation": reference_target_evaluation,
+        "dual_component_evaluation": dual_component_evaluation,
         "trade_alignment": {"available": False, "reason": "daily universal model先做模型本身驗證；未接策略trade attribution"},
         "target_manifest": bundle.target_manifest,
         "source_dataset": bundle.summary,

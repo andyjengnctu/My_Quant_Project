@@ -13,6 +13,7 @@ from typing import Any
 from config.breakout_quality import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     get_continuous_ranker_research_spec,
@@ -25,6 +26,20 @@ PAIRWISE_TRAINING_CONTRACT = {
     "model_margin": "pass_logit_minus_reject_logit",
     "batching": "whole_date_pack_no_date_split",
     "runtime_score": "softmax_pass_probability",
+}
+
+
+DUAL_COMPONENT_R_REGRESSION_TRAINING_CONTRACT = {
+    "sample_scope": "daily_eligible_stock_days",
+    "target": "daily_full_horizon_opportunity_r_v1_decomposed_components",
+    "prediction": {
+        "reject_output": "predicted_adverse_to_peak_r",
+        "pass_output": "predicted_favorable_mfe_r",
+    },
+    "loss": "mean_mse_over_two_primary_r_components",
+    "component_weighting": "equal_by_mean_reduction_no_lambda",
+    "runtime_score": "predicted_favorable_mfe_r_minus_predicted_adverse_to_peak_r",
+    "batching": "shuffled_unique_group_batches",
 }
 
 
@@ -60,6 +75,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "pairwise_contract": pairwise_contract,
             "listwise_contract": None,
             "raw_r_regression_contract": None,
+            "dual_component_r_regression_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING:
         return {
@@ -67,6 +83,16 @@ def training_semantics(profile) -> dict[str, Any]:
             "pairwise_contract": None,
             "listwise_contract": dict(LISTWISE_TRAINING_CONTRACT),
             "raw_r_regression_contract": None,
+            "dual_component_r_regression_contract": None,
+        }
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
+        contract = dict(DUAL_COMPONENT_R_REGRESSION_TRAINING_CONTRACT)
+        return {
+            "batching": contract["batching"],
+            "pairwise_contract": None,
+            "listwise_contract": None,
+            "raw_r_regression_contract": None,
+            "dual_component_r_regression_contract": contract,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
         contract = dict(RAW_R_REGRESSION_TRAINING_CONTRACT)
@@ -81,12 +107,14 @@ def training_semantics(profile) -> dict[str, Any]:
             "pairwise_contract": None,
             "listwise_contract": None,
             "raw_r_regression_contract": contract,
+            "dual_component_r_regression_contract": None,
         }
     return {
         "batching": "shuffled_unique_group_batches",
         "pairwise_contract": None,
         "listwise_contract": None,
         "raw_r_regression_contract": None,
+        "dual_component_r_regression_contract": None,
     }
 
 
@@ -125,6 +153,7 @@ def training_semantics_mismatches(profile, payload) -> list[str]:
 
 
 __all__ = [
+    "DUAL_COMPONENT_R_REGRESSION_TRAINING_CONTRACT",
     "LISTWISE_TRAINING_CONTRACT",
     "PAIRWISE_TRAINING_CONTRACT",
     "RAW_R_REGRESSION_TRAINING_CONTRACT",

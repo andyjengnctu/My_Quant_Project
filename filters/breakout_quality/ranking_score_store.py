@@ -21,6 +21,7 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
@@ -755,6 +756,27 @@ def load_continuous_ranker_oos_contract(
             raise ValueError("Continuous listwise ranker report batching contract不一致")
         if report_listwise != expected_listwise:
             raise ValueError("Continuous listwise ranker report listwise contract不一致")
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
+        expected_dual = dict(
+            expected_training_semantics.get("dual_component_r_regression_contract") or {}
+        )
+        report_dual = dict(
+            report_training.get("dual_component_r_regression_contract") or {}
+        )
+        semantic_mismatches = training_semantics_mismatches(profile, manifest_semantics)
+        if semantic_mismatches:
+            raise ValueError(
+                "Continuous dual-component ranker manifest training semantics不一致: "
+                + "; ".join(semantic_mismatches)
+            )
+        if str(report_training.get("batching") or "") != str(
+            expected_training_semantics.get("batching") or ""
+        ):
+            raise ValueError("Continuous dual-component ranker report batching contract不一致")
+        if report_dual != expected_dual:
+            raise ValueError(
+                "Continuous dual-component ranker report component contract不一致"
+            )
     target_id = str(manifest.get("continuous_target_id") or "")
     if not target_id:
         raise ValueError("Continuous ranker manifest缺少continuous_target_id")

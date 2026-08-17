@@ -699,6 +699,9 @@ def load_daily_universal_ranker_data(
     )
     favorable_return = np.concatenate([valid_favorable, np.full(len(inference_dates), np.nan, dtype=np.float32)])
     adverse_return = np.concatenate([valid_adverse, np.full(len(inference_dates), np.nan, dtype=np.float32)])
+    risk_budget_return = float(spec.risk_budget_return)
+    favorable_r = favorable_return / risk_budget_return
+    adverse_r = adverse_return / risk_budget_return
     opportunity_bar = np.concatenate([valid_opportunity_bar, np.full(len(inference_dates), -1, dtype=np.int16)])
     first_breach_bar = np.concatenate([valid_first_breach_bar, np.full(len(inference_dates), -1, dtype=np.int16)])
     minimum_low_return = np.concatenate([valid_minimum_low_return, np.full(len(inference_dates), np.nan, dtype=np.float32)])
@@ -718,6 +721,8 @@ def load_daily_universal_ranker_data(
             "label_eval_end_date": pd.to_datetime(label_end_dates),
             "target_favorable_return": favorable_return,
             "target_adverse_return_to_peak": adverse_return,
+            "target_favorable_r": favorable_r,
+            "target_adverse_r": adverse_r,
             "target_opportunity_bar": opportunity_bar,
             "target_first_risk_breach_bar": first_breach_bar,
             "target_minimum_low_return": minimum_low_return,

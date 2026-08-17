@@ -49,13 +49,14 @@ from config.execution_policy import (
 # - MR-13G daily-universal direct-R mean/MSE regression: "daily_universal_no_time_r_mse"
 # - MR-13H daily-universal full-horizon no-breach full-list ranker: "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise"
 # - MR-13K daily-universal full-horizon pure-MFE full-list ranker: "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise"
+# - MR-13L daily-universal full-horizon decomposed MFE/adverse regression: "daily_universal_full_horizon_mfe_adverse_dual_mse"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_mfe_adverse_dual_mse"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42
@@ -294,6 +295,9 @@ DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
 DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE = (
+    "daily_universal_full_horizon_mfe_adverse_dual_mse"
+)
 DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 
@@ -335,11 +339,13 @@ SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLE_SCOPES = (
 TRAINING_OBJECTIVE_BINARY_CLASSIFICATION = "binary_classification"
 TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION = "daily_percentile_regression"
 TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION = "daily_raw_r_regression"
+TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION = "daily_dual_component_r_regression"
 TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING = "daily_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING = "daily_listwise_ranking"
 CONTINUOUS_RANKER_TRAINING_OBJECTIVES = (
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
+    TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
 )
@@ -441,7 +447,13 @@ class BreakoutQualityExperimentProfile:
         elif self.training_objective in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
             if not str(self.continuous_target_id or "").strip():
                 raise ValueError("continuous ranker profile 必須指定 continuous_target_id")
-            if self.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+            if self.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
+                if self.loss_name != "dual_mse_raw_r":
+                    raise ValueError(
+                        "dual-component R regression必須使用 dual_mse_raw_r"
+                    )
+                expected_epoch_metric = "mean_daily_spearman"
+            elif self.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
                 allowed_losses = {"huber_raw_r", "mse_raw_r"}
                 if self.loss_name not in allowed_losses:
                     raise ValueError(
@@ -896,6 +908,17 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     ),
+    DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
+        continuous_target_id="daily_full_horizon_opportunity_r_v1",
+        loss_name="dual_mse_raw_r",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    ),
     DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE,
         optimizer_name="adam",
@@ -1226,6 +1249,23 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         reference_profile_name=DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         selection_pit_authorized=True,
+    ),
+    DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
+        model_research_id="MR-13L",
+        experiment_name="MR-13L Daily Universal Decomposed MFE-Adverse Regression",
+        phase="13L",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="daily_full_horizon_opportunity_r_v1_decomposed_into_favorable_r_and_adverse_to_peak_r",
+        objective_description=(
+            "MR-13H相同full-horizon target/universe/architecture；兩個既有輸出神經元分別直接預測"
+            "favorable MFE R與adverse-to-peak R，primary loss為兩分量等權MSE平均，"
+            "正式model score固定為Predicted MFE R - Predicted adverse R；不使用auxiliary loss、不調lambda"
+        ),
+        metric_scope="all_stock_days",
+        score_semantic_id="daily_full_horizon_decomposed_opportunity_r",
+        reference_profile_name=DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        selection_pit_authorized=False,
     ),
     DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE,
@@ -2029,6 +2069,7 @@ __all__ = [
     'TRAINING_OBJECTIVE_BINARY_CLASSIFICATION',
     'TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION',
     'TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION',
+    'TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION',
     'TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING',
     'TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING',
     'TRAINING_SAMPLING_ALL_EVENT_ROWS',
@@ -2045,6 +2086,7 @@ __all__ = [
     'DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE',
     'DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE',
     'DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'ContinuousRankerResearchSpec',

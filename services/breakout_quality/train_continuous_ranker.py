@@ -30,6 +30,7 @@ from config.breakout_quality import (
     TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
+    TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
@@ -908,6 +909,7 @@ def _train_epoch(
     if training_objective in {
         TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
         TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
+        TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     }:
         order = ids_all.copy()
         rng.shuffle(order)
@@ -965,6 +967,15 @@ def _train_epoch(
                 else:
                     raise ValueError(f"不支援的direct R regression loss: {loss_name!r}")
                 loss_weight = int(len(ids))
+            elif training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
+                if target.ndim != 2 or int(target.shape[1]) != 2:
+                    raise ValueError("dual-component R regression target必須為[N,2]")
+                # Existing two output neurons are reinterpreted only by this profile:
+                # LABEL_REJECT -> adverse-to-peak R, LABEL_PASS -> favorable MFE R.
+                # F.mse_loss(mean) gives both physical R components equal weight
+                # without an extra lambda or auxiliary-loss coefficient.
+                loss = F.mse_loss(logits.float(), target, reduction="mean")
+                loss_weight = int(len(ids))
             elif training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
                 margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
                 loss, supervision_count = _pairwise_logistic_loss(
@@ -1011,6 +1022,7 @@ def _train_epoch(
     if training_objective in {
         TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
         TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
+        TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     }:
         # Preserve historical scalar-regression reporting semantics exactly.
         return float(np.mean(losses))
@@ -1038,16 +1050,76 @@ def predict_scores(
         workers=1,
         execution_plan=plan,
     )
-    if training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+    if training_objective in {
+        TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
+        TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
+    }:
         return (logits[:, LABEL_PASS] - logits[:, LABEL_REJECT]).astype(np.float32)
     shifted = logits.astype(np.float64) - logits.max(axis=1, keepdims=True)
     exp = np.exp(shifted)
     return (exp[:, LABEL_PASS] / exp.sum(axis=1)).astype(np.float32)
 
 
-def _training_target_for_profile(profile, raw_target: np.ndarray, percentile_target: np.ndarray) -> np.ndarray:
+def predict_dual_component_r(
+    torch,
+    model,
+    feature_bank: np.ndarray,
+    group_context: np.ndarray,
+    group_ids: np.ndarray,
+    *,
+    batch_size: int,
+    plan,
+) -> dict[str, np.ndarray]:
+    """Return primary MR-13L component predictions in canonical R units."""
+
+    ids = np.asarray(group_ids, dtype=np.int64)
+    logits = strict_parallel_batched_logits(
+        torch,
+        model,
+        feature_bank,
+        group_context,
+        indices=ids,
+        batch_size=int(batch_size),
+        workers=1,
+        execution_plan=plan,
+    ).astype(np.float32)
+    if logits.ndim != 2 or int(logits.shape[1]) != 2:
+        raise ValueError("dual-component model output必須為[N,2]")
+    adverse_r = logits[:, LABEL_REJECT].astype(np.float32, copy=False)
+    favorable_r = logits[:, LABEL_PASS].astype(np.float32, copy=False)
+    return {
+        "predicted_favorable_r": favorable_r,
+        "predicted_adverse_r": adverse_r,
+        "model_score": (favorable_r - adverse_r).astype(np.float32, copy=False),
+    }
+
+
+def _training_target_for_profile(
+    profile,
+    raw_target: np.ndarray,
+    percentile_target: np.ndarray,
+    group_table: pd.DataFrame,
+) -> np.ndarray:
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
         return np.asarray(raw_target, dtype=np.float32)
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
+        required = ("target_adverse_r", "target_favorable_r")
+        missing = [column for column in required if column not in group_table.columns]
+        if missing:
+            raise ValueError(
+                "dual-component R regression缺少canonical component target columns: "
+                f"{missing}"
+            )
+        adverse = pd.to_numeric(group_table["target_adverse_r"], errors="coerce").to_numpy(dtype=np.float32)
+        favorable = pd.to_numeric(group_table["target_favorable_r"], errors="coerce").to_numpy(dtype=np.float32)
+        targets = np.column_stack([adverse, favorable]).astype(np.float32, copy=False)
+        valid = np.isfinite(targets).all(axis=1)
+        raw_valid = np.isfinite(np.asarray(raw_target, dtype=np.float32))
+        if not np.array_equal(valid, raw_valid):
+            raise ValueError(
+                "dual-component target-valid universe與composite raw target不一致"
+            )
+        return targets
     return np.asarray(percentile_target, dtype=np.float32)
 
 
@@ -1067,7 +1139,7 @@ def select_epoch(
 ) -> dict[str, Any]:
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
-    training_target = _training_target_for_profile(profile, raw_target, percentile_target)
+    training_target = _training_target_for_profile(profile, raw_target, percentile_target, group_table)
     raw_r_loss_name = (
         str(profile.loss_name)
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
@@ -1302,7 +1374,7 @@ def fit_final(
 ):
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
-    training_target = _training_target_for_profile(profile, raw_target, percentile_target)
+    training_target = _training_target_for_profile(profile, raw_target, percentile_target, group_table)
     raw_r_loss_name = (
         str(profile.loss_name)
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
