@@ -18,9 +18,11 @@ from config.breakout_quality import get_breakout_quality_experiment_profile
 from filters.breakout_quality.continuous_ranker_data import ContinuousRankerDataBundle
 from filters.breakout_quality.continuous_target import (
     DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
     DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
     StrategyAlignedContinuousTargetSpec,
     build_daily_full_horizon_opportunity_contract,
+    build_daily_full_horizon_pure_mfe_contract,
     build_daily_opportunity_no_time_contract,
 )
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
@@ -205,7 +207,8 @@ def compute_daily_opportunity_target_batch(
     ``daily_opportunity_no_time_r_v1`` keeps the historical adverse-first
     risk-barrier truncation. ``daily_full_horizon_opportunity_r_v1`` uses the
     same horizon/R scale/adverse-to-peak semantics but treats a barrier touch as
-    diagnostic only.
+    diagnostic only. ``daily_full_horizon_pure_mfe_r_v1`` keeps the same full
+    horizon and selected peak but does not deduct adverse-to-peak from target R.
     """
 
     source_positions = np.asarray(positions, dtype=np.int64)
@@ -225,6 +228,7 @@ def compute_daily_opportunity_target_batch(
     if target_id not in {
         DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
         DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
     }:
         raise ValueError(f"不支援的daily opportunity target: {target_id}")
 
@@ -303,7 +307,10 @@ def compute_daily_opportunity_target_batch(
         )
         selected_opportunity = best_zero + 1
 
-    selected_target = selected_favorable / risk_budget - selected_adverse / risk_budget
+    if target_id == DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID:
+        selected_target = selected_favorable / risk_budget
+    else:
+        selected_target = selected_favorable / risk_budget - selected_adverse / risk_budget
     target[valid_rows] = selected_target
     favorable[valid_rows] = selected_favorable
     adverse[valid_rows] = selected_adverse
@@ -369,6 +376,7 @@ def load_daily_universal_ranker_data(
     if target_id not in {
         DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
         DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
         DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
     }:
         raise ValueError(f"daily universal ranker target identity不一致: {target_id!r}")
@@ -497,7 +505,11 @@ def load_daily_universal_ranker_data(
         local_opportunity_bar = np.full(len(local_positions), -1, dtype=np.int16)
         local_first_breach_bar = np.full(len(local_positions), -1, dtype=np.int16)
         local_minimum_low_return = np.full(len(local_positions), np.nan, dtype=np.float32)
-        if target_id in {DAILY_OPPORTUNITY_NO_TIME_TARGET_ID, DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID}:
+        if target_id in {
+            DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
+            DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+            DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        }:
             local_targets = np.full(len(local_positions), np.nan, dtype=np.float32)
             local_target_valid = np.zeros(len(local_positions), dtype=bool)
             target_complete = local_positions + int(spec.horizon_bars) < len(frame)
@@ -724,6 +736,8 @@ def load_daily_universal_ranker_data(
         target_contract = build_daily_opportunity_no_time_contract(DEFAULT_LABEL_POLICY)
     elif target_id == DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID:
         target_contract = build_daily_full_horizon_opportunity_contract(DEFAULT_LABEL_POLICY)
+    elif target_id == DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID:
+        target_contract = build_daily_full_horizon_pure_mfe_contract(DEFAULT_LABEL_POLICY)
     else:
         target_contract = build_risk_target_contract(
             horizon_bars=int(spec.horizon_bars),

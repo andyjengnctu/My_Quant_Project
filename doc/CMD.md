@@ -170,18 +170,18 @@ Breakout-quality 模型／Label／training／workflow設定只編輯 `config/bre
 目前模型研究與策略anchor設定為：
 
 ```python
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise"
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-MR-13E已完成Selection/Forward exact K/R0策略驗證、8-seed robustness與Runtime Integration promotion；production仍固定MR-13E。Model Research active profile為MR-13H `daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise`；Label Audit、Seed42 Forward Model Gate、Selection PIT與C51 Selection strategy皆已完成。C51 Selection Return=`158.21%`、MDD=`19.64%`、RoMD=`8.06`，低於C42 `199.32%/19.88%/10.03`；依使用者決策不在此關提前淘汰，現新增C52 Forward source-only exact arm與兩stage same-generated-8-seed robustness。正式順序：先`[3] 策略組合比較 → [2] Forward-OOS策略比較`完成C52 single-seed，再用`[5] 一次執行全部 Multi-seed robustness`依序跑Selection PIT與Forward-OOS robustness，中間不再確認。Production candidate仍固定C42/C44；MR-13I/J risk-normalized/context路線已REJECT；R0維持。
+MR-13E仍是production anchor。MR-13H已完成Selection/Forward 16-seed robustness並結案為`VALID_LABEL_SIMPLIFICATION / NOT_SELECTED_FOR_PROMOTION`：Selection平均RoMD `6.28 vs 5.98`略勝MR-13E，但Forward平均RoMD `10.32 vs 11.10`未延續。Model Research active profile現為MR-13K `daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise`；相對MR-13H唯一移除adverse-to-peak Target扣分，PIT尚未授權。正式順序先跑`[6] 比較目前 Target 與 reference Target`，再跑`[1] 訓練目前模型 → Forward-OOS模型報表`；Forward結果後才決定PIT。Production candidate仍固定C42/C44，R0維持。
 
-Active continuous model menu由config／research spec動態產生；MR-13H目前會額外顯示：
+Active continuous model menu由config／research spec動態產生；MR-13K目前會額外顯示：
 
 ```text
 === Continuous DL 模型研究與驗證 ===
-Active Profile：daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise
+Active Profile：daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise
 [1]  訓練目前模型 → forward-OOS模型報表  (Enter)
 [3]  查看目前Workflow與工件狀態
 [6]  比較目前 Target 與 reference Target

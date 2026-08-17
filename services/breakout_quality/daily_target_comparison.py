@@ -18,6 +18,11 @@ from config.breakout_quality import (
     get_continuous_ranker_research_spec,
 )
 from filters.breakout_quality.daily_ranker_data import load_daily_universal_ranker_data
+from filters.breakout_quality.continuous_target import (
+    DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
+)
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from core.console_report import print_artifact_paths
@@ -50,6 +55,28 @@ def _validate_controlled_pair(candidate_profile: str, reference_profile: str) ->
         raise ValueError("daily target comparison pairwise reduction不一致")
 
 
+def _controlled_change_contract(candidate_target_id: str, reference_target_id: str) -> dict[str, object]:
+    pair = (str(candidate_target_id), str(reference_target_id))
+    if pair == (DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID, DAILY_OPPORTUNITY_NO_TIME_TARGET_ID):
+        return {
+            "change_id": "remove_first_risk_breach_path_truncation_only",
+            "description": "只移除 first risk-breach 對future path的截斷；horizon、R scale、adverse-to-peak與training profile固定。",
+            "enforce_no_breach_invariant": True,
+            "enforce_same_peak_components": False,
+        }
+    if pair == (DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID, DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID):
+        return {
+            "change_id": "remove_adverse_to_peak_penalty_only",
+            "description": "只移除 adverse-to-peak 的Target扣分；完整40D、earliest max-high、breach diagnostics、R scale與training profile固定。",
+            "enforce_no_breach_invariant": False,
+            "enforce_same_peak_components": True,
+        }
+    raise ValueError(
+        "daily target comparison尚未註冊此受控Target pair: "
+        f"candidate={candidate_target_id!r}, reference={reference_target_id!r}"
+    )
+
+
 def _top_overlap(left: np.ndarray, right: np.ndarray, k: int) -> float | None:
     size = min(int(k), len(left), len(right))
     if size < 1:
@@ -74,6 +101,8 @@ def _comparison_metrics(
         "reference_opportunity_bar",
         "candidate_opportunity_bar",
         "minimum_low_return",
+        "reference_adverse_return",
+        "candidate_adverse_return",
     }
     missing = sorted(required - set(frame.columns))
     if missing:
@@ -84,6 +113,9 @@ def _comparison_metrics(
     reference = frame["reference_target_r"].to_numpy(dtype=np.float64)
     candidate = frame["candidate_target_r"].to_numpy(dtype=np.float64)
     delta = candidate - reference
+    reference_adverse = frame["reference_adverse_return"].to_numpy(dtype=np.float64)
+    candidate_adverse = frame["candidate_adverse_return"].to_numpy(dtype=np.float64)
+    adverse_delta = candidate_adverse - reference_adverse
     breach = frame["first_risk_breach_bar"].to_numpy(dtype=np.int64) >= 1
     later_peak = (
         frame["candidate_opportunity_bar"].to_numpy(dtype=np.int64)
@@ -217,6 +249,11 @@ def _comparison_metrics(
             "p10": float(np.quantile(delta, 0.10)),
             "p90": float(np.quantile(delta, 0.90)),
         },
+        "adverse_component_return": {
+            "reference_mean": float(np.mean(reference_adverse)),
+            "candidate_mean": float(np.mean(candidate_adverse)),
+            "max_abs_component_delta": float(np.max(np.abs(adverse_delta))),
+        },
         "reference_target_r": {
             "mean": float(np.mean(reference)),
             "std": float(np.std(reference)),
@@ -258,7 +295,7 @@ def _render_markdown(payload: dict[str, object]) -> str:
         f"- Reference profile：`{payload['reference_profile']}`",
         f"- Reference target：`{payload['reference_target_id']}`",
         "- Boundary：read-only Label Audit；不訓練模型、不使用OOS結果做label fitting。",
-        "- Controlled change：只移除 first risk-breach 對future path的截斷；horizon、R scale、adverse-to-peak與training profile固定。",
+        f"- Controlled change：{payload['controlled_change_description']}",
         "",
         "## Core",
         "",
@@ -294,7 +331,7 @@ def _render_markdown(payload: dict[str, object]) -> str:
         f"| Candidate - Reference | {fmt(delta.get('mean'))} | - | {fmt(delta.get('p10'))} | {fmt(delta.get('median'))} | {fmt(delta.get('p90'))} |",
         "",
         f"- Mean absolute target delta：`{fmt(delta.get('mean_abs'))} R`",
-        "- 此報表不設自動GO/REJECT門檻；用途是先確認label簡化是否實質改變daily ranking與是否消除breach cliff。",
+        "- 此報表不設自動GO/REJECT門檻；用途是確認單一Label簡化對daily ranking與Target分布的實質影響。",
     ]
     return "\n".join(lines) + "\n"
 
@@ -348,6 +385,8 @@ def compare_daily_targets(
             "reference_opportunity_bar": rtable["target_opportunity_bar"].to_numpy(dtype=np.int16),
             "candidate_opportunity_bar": ctable["target_opportunity_bar"].to_numpy(dtype=np.int16),
             "minimum_low_return": rtable["target_minimum_low_return"].to_numpy(dtype=np.float32),
+            "reference_adverse_return": rtable["target_adverse_return_to_peak"].to_numpy(dtype=np.float32),
+            "candidate_adverse_return": ctable["target_adverse_return_to_peak"].to_numpy(dtype=np.float32),
         }
     )
     if not np.array_equal(
@@ -356,18 +395,41 @@ def compare_daily_targets(
     ):
         raise ValueError("candidate/reference first-risk-breach診斷不一致")
 
+    candidate_target = str(candidate.profile.continuous_target_id)
+    reference_target = str(reference.profile.continuous_target_id)
+    controlled_change = _controlled_change_contract(candidate_target, reference_target)
     metrics, daily = _comparison_metrics(
         frame,
         top_k=int(BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K),
         risk_barrier_return=-abs(float(DEFAULT_LABEL_POLICY.max_adverse_return)),
         barrier_band_return=float(BREAKOUT_QUALITY_TARGET_COMPARISON_BARRIER_BAND_RETURN),
     )
-    if float(metrics["no_breach_max_abs_target_delta_r"]) > 1e-6:
-        raise ValueError("No-breach samples的新舊target不應改變；受控實驗契約已破壞")
+    if bool(controlled_change["enforce_no_breach_invariant"]):
+        if float(metrics["no_breach_max_abs_target_delta_r"]) > 1e-6:
+            raise ValueError("No-breach samples的新舊target不應改變；受控實驗契約已破壞")
+    if bool(controlled_change["enforce_same_peak_components"]):
+        if not np.array_equal(
+            rtable["target_opportunity_bar"].to_numpy(dtype=np.int16),
+            ctable["target_opportunity_bar"].to_numpy(dtype=np.int16),
+        ):
+            raise ValueError("移除adverse penalty不得改變selected opportunity bar")
+        if not np.allclose(
+            rtable["target_favorable_return"].to_numpy(dtype=np.float64),
+            ctable["target_favorable_return"].to_numpy(dtype=np.float64),
+            rtol=0.0, atol=1e-7, equal_nan=True,
+        ):
+            raise ValueError("移除adverse penalty不得改變favorable component")
+        if float((metrics.get("adverse_component_return") or {}).get("max_abs_component_delta") or 0.0) > 1e-7:
+            raise ValueError("移除adverse penalty不得改變adverse diagnostic component")
+        expected_delta = (
+            rtable["target_adverse_return_to_peak"].to_numpy(dtype=np.float64)
+            / abs(float(DEFAULT_LABEL_POLICY.max_adverse_return))
+        )
+        actual_delta = frame["candidate_target_r"].to_numpy(dtype=np.float64) - frame["reference_target_r"].to_numpy(dtype=np.float64)
+        if not np.allclose(actual_delta, expected_delta, rtol=0.0, atol=2e-6):
+            raise ValueError("Pure-MFE target差值必須精確等於移除的adverse R penalty")
 
     root = Path(project_root)
-    candidate_target = str(candidate.profile.continuous_target_id)
-    reference_target = str(reference.profile.continuous_target_id)
     output_dir = (
         root
         / "outputs"
@@ -391,7 +453,8 @@ def compare_daily_targets(
         "candidate_target_id": candidate_target,
         "reference_profile": reference_profile,
         "reference_target_id": reference_target,
-        "controlled_change": "remove_first_risk_breach_path_truncation_only",
+        "controlled_change": str(controlled_change["change_id"]),
+        "controlled_change_description": str(controlled_change["description"]),
         "training_or_model_execution": False,
         "metrics": metrics,
         "artifacts": {

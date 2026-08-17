@@ -9236,3 +9236,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Backward compatibility：既有schema 8 completed run可由`seed_results.csv`、`seed_yearly_returns.csv`與`attribution_source/*.csv.gz`做report-only refresh；refresh path明確不得呼叫trainer或strategy replay。可由compact trades／daily capacity／execution重建的canonical metric直接回填；歷史run未保存的model prediction／Future Target conversion顯示`-`，不為補表重跑昂貴計算。
 - Forward future retention：新run在暫存continuous ranker report被cleanup前，只抽取既有OOS Daily/Global rho、Pair、Top/Bottom/Spread與Target identity寫進seed observation；不新增模型評估、不重建Future Target。Selection PIT若當輪沒有同等compact model audit來源則維持`-`。
 - Scientific decision不變：目前正在執行的MR-13H Selection/Forward 8-seed robustness應先完整跑完，不因本報表schema更新中斷或重跑；完成後套用本patch並開啟latest即可升級人讀報表。
+
+### 2026-08-17 — MR-13H full-flow closure → MR-13K Pure-MFE implementation
+
+- MR-13H已完成完整策略robustness，正式seed count=`16`。Selection 2014～2020：C42 MR-13E Mean Return/MDD/RoMD=`117.06%/19.69%/5.98`，C51 MR-13H=`123.45%/19.73%/6.28`；same-seed RoMD為13H勝`10/16`，DL選擇R為13H勝`13/16`。Forward 2021～2026-03-02：C44 MR-13E=`173.92%/15.89%/11.10`，C52 MR-13H=`171.21%/16.60%/10.32`；same-seed RoMD為13E勝`9/16`、13H勝`7/16`。
+- 決策：`MR-13H = VALID_LABEL_SIMPLIFICATION / NOT_SELECTED_FOR_PROMOTION`。移除first -10% breach truncation確實提高Seed42 Forward self-target predictability，但Selection小幅優勢未在Forward robustness延續，因此不取代MR-13E production anchor，不再增加13H seeds或調整selector。
+- 新實驗identity：`MR-13K / PROFILE-daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise / TARGET-daily_full_horizon_pure_mfe_r_v1`。Reference固定MR-13H。
+- MR-13K唯一scientific change：保留完整40D earliest maximum High、相同breach diagnostics與相同adverse-to-peak component計算，但Target不再扣除adverse；公式固定為`favorable_return / abs(max_adverse_return)`，目前canonical R scale仍為10%。因此candidate-reference Target差值必須逐筆精確等於MR-13H adverse R penalty。
+- 固定條件：daily eligible stock-days、300×10 stock+0050 input、`inception_time_v1`、40D horizon、Full-list Delta-NDCG weighted RankNet pairwise loss、mean-daily-Spearman epoch selection、all-label scope與Seed42全部沿用MR-13H。不得加入strategy state、K、R0、cash、holdings或cross-sectional architecture。
+- Label Audit已泛化為受控Target-pair contract：MR-13H vs MR-13E仍驗no-breach invariant；MR-13K vs MR-13H則驗selected peak/favorable/adverse/breach diagnostics完全相同，且Target delta=removed adverse R。Audit只讀、不訓練、不設GO/REJECT magic threshold。
+- Stage governance：MR-13K `selection_pit_authorized=False`，目前只允許`[1] 模型訓練 → [6] Target comparison`與`[1] 訓練目前模型 → Forward-OOS`。Forward結果出來後才決定PIT，不預先建立13K strategy arm。Production/runtime維持MR-13E C42/C44。

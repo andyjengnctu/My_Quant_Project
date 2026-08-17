@@ -27,9 +27,11 @@ from .synthetic_breakout_quality_support import (
     DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE,
     DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE,
     DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+    DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
     get_continuous_ranker_research_spec,
     DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
     DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
     STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
     STRATEGY_ALIGNED_TARGET_ID,
@@ -50,6 +52,7 @@ from .synthetic_breakout_quality_support import (
     add_check,
     ast,
     build_daily_full_horizon_opportunity_contract,
+    build_daily_full_horizon_pure_mfe_contract,
     build_daily_percentile_targets,
     build_file_manifest,
     build_strategy_aligned_group_targets,
@@ -67,6 +70,7 @@ from .synthetic_breakout_quality_support import (
     resolve_filter_artifact_paths,
     resolve_filter_model_output_dir,
     daily_full_horizon_opportunity_target_from_cached_path,
+    daily_full_horizon_pure_mfe_target_from_cached_path,
     daily_opportunity_no_time_target_from_cached_path,
     strategy_aligned_target_from_cached_path,
     tempfile,
@@ -2017,6 +2021,8 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
             "reference_opportunity_bar": [4, 3, 6, 7],
             "candidate_opportunity_bar": [4, 20, 6, 15],
             "minimum_low_return": [-0.095, -0.105, -0.05, -0.12],
+            "reference_adverse_return": [0.02, 0.10, 0.03, 0.10],
+            "candidate_adverse_return": [0.02, 0.10, 0.03, 0.10],
         }
     )
     metrics, _daily = _comparison_metrics(
@@ -2050,7 +2056,88 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
         ),
     )
 
-    summary["model_research_id"] = "MR-13H"
+    pure_mfe = daily_full_horizon_pure_mfe_target_from_cached_path(
+        highs,
+        lows,
+        anchor_price=100.0,
+        available_bars=horizon,
+        spec=spec,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13k_keeps_mr13h_peak_and_diagnostics_but_removes_exact_adverse_r_penalty",
+        (
+            new_target.opportunity_bar,
+            new_target.first_risk_breach_bar,
+            round(float(new_target.favorable_return), 6),
+            round(float(new_target.adverse_return_to_peak), 6),
+            round(float(new_target.adverse_return_to_peak) / float(spec.risk_budget_return), 6),
+        ),
+        (
+            pure_mfe.opportunity_bar,
+            pure_mfe.first_risk_breach_bar,
+            round(float(pure_mfe.favorable_return), 6),
+            round(float(pure_mfe.adverse_return_to_peak), 6),
+            round(float(pure_mfe.target_raw_r - new_target.target_raw_r), 6),
+        ),
+    )
+    pure_batch = compute_daily_opportunity_target_batch(
+        frame,
+        np.asarray([0], dtype=np.int64),
+        spec=spec,
+        target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13k_vectorized_pure_mfe_matches_scalar_semantics",
+        round(float(pure_mfe.target_raw_r), 6),
+        round(float(pure_batch.target_raw_r[0]), 6),
+    )
+    profile_k = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    spec_k = get_continuous_ranker_research_spec(
+        DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13k_is_target_only_change_from_mr13h_and_pit_starts_unauthorized",
+        (
+            tuple(getattr(profile_h, field) for field in fixed_fields),
+            "MR-13K",
+            DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+            False,
+        ),
+        (
+            tuple(getattr(profile_k, field) for field in fixed_fields),
+            spec_k.model_research_id,
+            spec_k.reference_profile_name,
+            profile_k.continuous_target_id,
+            bool(spec_k.selection_pit_authorized),
+        ),
+    )
+    pure_contract = build_daily_full_horizon_pure_mfe_contract(DEFAULT_LABEL_POLICY)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13k_contract_discloses_pure_mfe_without_adverse_penalty",
+        (DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID, False, False),
+        (
+            pure_contract["target_id"],
+            bool(pure_contract["adverse_penalty_included"]),
+            "adverse_return" in str(pure_contract["formula"]),
+        ),
+    )
+
+    summary["model_research_id"] = "MR-13H/MR-13K"
     summary["training_performed"] = False
     return results, summary
 
