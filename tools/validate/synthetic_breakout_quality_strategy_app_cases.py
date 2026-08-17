@@ -1234,6 +1234,23 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "_print_report_tables(summary)" in robustness_source,
     )
 
+    rendered_plain_report = robustness_module.render_multi_seed_robustness_report(
+        synthetic_summary, target="plain"
+    )
+    multi_seed_extension = rendered_common_report.split("5. RoMD完整統計", 1)[-1]
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_unique_sections_reuse_project_color_semantics_and_plain_fallback",
+        True,
+        "#188038" in multi_seed_extension
+        and "#C62828" in multi_seed_extension
+        and "<span" not in rendered_plain_report
+        and "ROBUSTNESS_ROMD_DISTRIBUTION_METRICS" in robustness_source
+        and "ROBUSTNESS_SEED_DELTA_METRICS" in robustness_source
+        and "best_worst_signals" in robustness_source
+        and "styled_signal" in robustness_source,
+    )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_work_artifacts_are_isolated_and_retention_is_config_driven_with_optional_compact_attribution",

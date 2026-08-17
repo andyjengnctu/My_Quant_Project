@@ -72,6 +72,10 @@ from core.report_metrics import (
     EXECUTION_STRATEGY_RESULT_METRICS,
     R_MODEL_PREDICTION_METRICS,
     R_SELECTION_TRANSLATION_METRICS,
+    ROBUSTNESS_ROMD_DISTRIBUTION_METRICS,
+    ROBUSTNESS_SEED_DELTA_METRICS,
+    ROBUSTNESS_YEARLY_DELTA_METRICS,
+    ROBUSTNESS_YEARLY_DISTRIBUTION_METRICS,
     TRADE_RESULT_METRICS,
 )
 from core.strategy_comparison import StrategyComparisonArm
@@ -99,7 +103,12 @@ from filters.breakout_quality.strategy_compare_engine import run_comparison
 from filters.breakout_quality.strategy_compare_replay import run_standalone_baseline
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
 from core.report_style import (
+    SIGNAL_NEGATIVE,
+    SIGNAL_POSITIVE,
+    SIGNAL_WARNING,
+    best_worst_signals,
     signal_for_delta,
+    styled_signal,
     terminal_signal,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
@@ -2310,6 +2319,57 @@ def _fmt(value: Any, *, digits: int = 2, suffix: str = "") -> str:
     return f"{float(value):.{digits}f}{suffix}"
 
 
+
+def _style_text(text: str, signal: str | None, *, target: str) -> str:
+    if not signal or text == "-":
+        return text
+    return styled_signal(text, signal, target=target)
+
+
+def _format_metric_value(value: Any, metric, *, target: str, signal: str | None = None) -> str:
+    text = _fmt(value, digits=int(metric.digits), suffix=str(metric.unit))
+    return _style_text(text, signal, target=target)
+
+
+def _distribution_signals(
+    rows: list[dict[str, Any]],
+    *,
+    metrics,
+    identity_key: str,
+) -> dict[str, dict[str, str]]:
+    return {
+        metric.key: best_worst_signals(
+            {str(row[identity_key]): row.get(metric.key) for row in rows},
+            preference=str(metric.preference),
+        )
+        for metric in metrics
+    }
+
+
+def _right_minus_left_signal(value: Any, *, preference: str) -> str | None:
+    if preference not in {"higher", "lower"}:
+        return None
+    return signal_for_delta(value, preference=preference)
+
+
+def _win_count_signals(right_count: int, left_count: int) -> tuple[str | None, str | None]:
+    if right_count == left_count:
+        return None, None
+    if right_count > left_count:
+        return SIGNAL_POSITIVE, SIGNAL_NEGATIVE
+    return SIGNAL_NEGATIVE, SIGNAL_POSITIVE
+
+
+def _direction_signal(selection_delta: float, romd_delta: float) -> str:
+    selection_signal = signal_for_delta(selection_delta, preference="higher")
+    romd_signal = signal_for_delta(romd_delta, preference="higher")
+    if selection_signal == SIGNAL_POSITIVE and romd_signal == SIGNAL_POSITIVE:
+        return SIGNAL_POSITIVE
+    if selection_signal == SIGNAL_NEGATIVE and romd_signal == SIGNAL_NEGATIVE:
+        return SIGNAL_NEGATIVE
+    return SIGNAL_WARNING
+
+
 def render_multi_seed_robustness_report(
     summary: dict[str, Any],
     *,
@@ -2363,15 +2423,57 @@ def render_multi_seed_robustness_report(
 
     sections: list[str] = [canonical]
 
-    romd_rows = []
-    for row in summary["romd_statistics"]:
+    romd_source_rows: list[dict[str, Any]] = []
+    for source in summary["romd_statistics"]:
+        row = dict(source)
         n = int(row["n"])
-        romd_rows.append([
-            row["name"], str(n), _fmt(row["mean"]), _fmt(row["median"]), _fmt(row["std"]),
-            _fmt(row["cv"]), _fmt(row["min"]), _fmt(row["p25"]), _fmt(row["p75"]), _fmt(row["max"]),
-            "-" if row["beats_min_count"] is None else f"{row['beats_min_count']}/{n}",
-            "-" if row["beats_full_count"] is None else f"{row['beats_full_count']}/{n}",
-        ])
+        row["beats_min_rate"] = (
+            None if row.get("beats_min_count") is None or n <= 0
+            else float(row["beats_min_count"]) / float(n)
+        )
+        row["beats_full_rate"] = (
+            None if row.get("beats_full_count") is None or n <= 0
+            else float(row["beats_full_count"]) / float(n)
+        )
+        romd_source_rows.append(row)
+    romd_signals = _distribution_signals(
+        romd_source_rows,
+        metrics=ROBUSTNESS_ROMD_DISTRIBUTION_METRICS,
+        identity_key="arm_id",
+    )
+    romd_rows = []
+    romd_metric_by_key = {metric.key: metric for metric in ROBUSTNESS_ROMD_DISTRIBUTION_METRICS}
+    for row in romd_source_rows:
+        n = int(row["n"])
+        arm_id = str(row["arm_id"])
+        metric_values = []
+        for key in ("mean", "median", "std", "cv", "min", "p25", "p75", "max"):
+            metric = romd_metric_by_key[key]
+            metric_values.append(
+                _format_metric_value(
+                    row.get(key),
+                    metric,
+                    target=target,
+                    signal=romd_signals.get(key, {}).get(arm_id),
+                )
+            )
+        beat_values = []
+        for count_key, rate_key in (
+            ("beats_min_count", "beats_min_rate"),
+            ("beats_full_count", "beats_full_rate"),
+        ):
+            if row.get(count_key) is None:
+                beat_values.append("-")
+                continue
+            text = f"{int(row[count_key])}/{n}"
+            beat_values.append(
+                _style_text(
+                    text,
+                    romd_signals.get(rate_key, {}).get(arm_id),
+                    target=target,
+                )
+            )
+        romd_rows.append([row["name"], str(n), *metric_values, *beat_values])
     sections.extend([
         render_section("5. RoMD完整統計"),
         render_table(
@@ -2411,28 +2513,77 @@ def render_multi_seed_robustness_report(
             same = item.get("romd_same_seed")
             if isinstance(same, dict):
                 n = int(same["n"])
+                right_signal, left_signal = _win_count_signals(
+                    int(same["right_gt_left_count"]),
+                    int(same["left_gt_right_count"]),
+                )
+                right_count_text = _style_text(
+                    f"{same['right_gt_left_count']}/{n}", right_signal, target=target
+                )
+                left_count_text = _style_text(
+                    f"{same['left_gt_right_count']}/{n}", left_signal, target=target
+                )
+                delta_parts = []
+                for label, key, preference in (
+                    ("Mean", "right_minus_left_mean", "higher"),
+                    ("Median", "right_minus_left_median", "higher"),
+                    ("Std", "right_minus_left_std", "neutral"),
+                    ("Min", "right_minus_left_min", "higher"),
+                    ("P25", "right_minus_left_p25", "higher"),
+                    ("P75", "right_minus_left_p75", "higher"),
+                    ("Max", "right_minus_left_max", "higher"),
+                ):
+                    value = same.get(key)
+                    signal = _right_minus_left_signal(value, preference=preference)
+                    delta_parts.append(
+                        f"{label} {_style_text(_fmt(value), signal, target=target)}"
+                    )
                 block.extend([
-                    f"RoMD：{same['right']} > {same['left']} {same['right_gt_left_count']}/{n}；"
-                    f"{same['left']} > {same['right']} {same['left_gt_right_count']}/{n}；Tie {same['tie_count']}/{n}。",
-                    f"ΔRoMD Mean {_fmt(same['right_minus_left_mean'])}；Median {_fmt(same['right_minus_left_median'])}；"
-                    f"Std {_fmt(same['right_minus_left_std'])}；Min {_fmt(same['right_minus_left_min'])}；"
-                    f"P25 {_fmt(same['right_minus_left_p25'])}；P75 {_fmt(same['right_minus_left_p75'])}；Max {_fmt(same['right_minus_left_max'])}。",
+                    f"RoMD：{same['right']} > {same['left']} {right_count_text}；"
+                    f"{same['left']} > {same['right']} {left_count_text}；Tie {same['tie_count']}/{n}。",
+                    "ΔRoMD " + "；".join(delta_parts) + "。",
                 ])
 
             direct_same = item.get("direct_selection_r_same_seed")
             if isinstance(direct_same, dict):
                 n = int(direct_same["n"])
+                right_signal, left_signal = _win_count_signals(
+                    int(direct_same["right_gt_left_count"]),
+                    int(direct_same["left_gt_right_count"]),
+                )
+                right_count_text = _style_text(
+                    f"{direct_same['right_gt_left_count']}/{n}", right_signal, target=target
+                )
+                left_count_text = _style_text(
+                    f"{direct_same['left_gt_right_count']}/{n}", left_signal, target=target
+                )
+                mean_text = _style_text(
+                    _fmt(direct_same.get("right_minus_left_mean"), suffix=" R"),
+                    _right_minus_left_signal(
+                        direct_same.get("right_minus_left_mean"), preference="higher"
+                    ),
+                    target=target,
+                )
+                median_text = _style_text(
+                    _fmt(direct_same.get("right_minus_left_median"), suffix=" R"),
+                    _right_minus_left_signal(
+                        direct_same.get("right_minus_left_median"), preference="higher"
+                    ),
+                    target=target,
+                )
                 block.extend([
-                    f"DL選擇R：{direct_same['right']} > {direct_same['left']} {direct_same['right_gt_left_count']}/{n}；"
-                    f"{direct_same['left']} > {direct_same['right']} {direct_same['left_gt_right_count']}/{n}；Tie {direct_same['tie_count']}/{n}。",
-                    f"ΔDL選擇R Mean {_fmt(direct_same['right_minus_left_mean'], suffix=' R')}；"
-                    f"Median {_fmt(direct_same['right_minus_left_median'], suffix=' R')}；"
+                    f"DL選擇R：{direct_same['right']} > {direct_same['left']} {right_count_text}；"
+                    f"{direct_same['left']} > {direct_same['right']} {left_count_text}；Tie {direct_same['tie_count']}/{n}。",
+                    f"ΔDL選擇R Mean {mean_text}；Median {median_text}；"
                     f"Std {_fmt(direct_same['right_minus_left_std'], suffix=' R')}。",
                 ])
 
             translation = item.get("selection_r_to_strategy")
             if isinstance(translation, dict):
                 pair_rows = []
+                delta_metric_by_key = {
+                    metric.key: metric for metric in ROBUSTNESS_SEED_DELTA_METRICS
+                }
                 for row in translation.get("seed_rows") or []:
                     selection_delta = float(row["right_minus_left_direct_selection_r"])
                     romd_delta = float(row["right_minus_left_return_over_max_drawdown"])
@@ -2444,14 +2595,34 @@ def render_multi_seed_robustness_report(
                         verdict = "ranking↓／RoMD↑"
                     else:
                         verdict = "ranking↓／RoMD↓"
+                    values = []
+                    for key in (
+                        "right_minus_left_direct_selection_r",
+                        "right_minus_left_total_return_pct",
+                        "right_minus_left_max_drawdown_pct",
+                        "right_minus_left_return_over_max_drawdown",
+                        "right_minus_left_expected_value_r",
+                    ):
+                        metric = delta_metric_by_key[key]
+                        value = row.get(key)
+                        values.append(
+                            _format_metric_value(
+                                value,
+                                metric,
+                                target=target,
+                                signal=_right_minus_left_signal(
+                                    value, preference=metric.preference
+                                ),
+                            )
+                        )
                     pair_rows.append([
                         f"S{int(row['seed_index'])}",
-                        _fmt(selection_delta, suffix=" R"),
-                        _fmt(row["right_minus_left_total_return_pct"], suffix="%"),
-                        _fmt(row["right_minus_left_max_drawdown_pct"], suffix="%"),
-                        _fmt(romd_delta),
-                        _fmt(row["right_minus_left_expected_value_r"], suffix=" R"),
-                        verdict,
+                        *values,
+                        _style_text(
+                            verdict,
+                            _direction_signal(selection_delta, romd_delta),
+                            target=target,
+                        ),
                     ])
                 if pair_rows:
                     block.extend([
@@ -2462,32 +2633,97 @@ def render_multi_seed_robustness_report(
                         ),
                     ])
                 positive_n = int(translation["selection_r_positive_count"])
+                total_n = int(translation["n"])
                 translated_n = int(translation["selection_r_positive_romd_positive_count"])
+                positive_signal = signal_for_delta(
+                    (float(positive_n) / float(total_n)) - 0.5,
+                    preference="higher",
+                ) if total_n > 0 else None
+                translated_signal = signal_for_delta(
+                    (float(translated_n) / float(positive_n)) - 0.5,
+                    preference="higher",
+                ) if positive_n > 0 else None
+                concordant_n = int(translation["sign_concordant_count"])
+                discordant_n = int(translation["sign_discordant_count"])
+                concordant_signal, discordant_signal = _win_count_signals(
+                    concordant_n, discordant_n
+                )
+                spearman_romd = translation.get("selection_r_delta_vs_romd_spearman")
+                spearman_return = translation.get("selection_r_delta_vs_return_spearman")
                 block.extend([
-                    f"ΔDL選擇R>0：{positive_n}/{translation['n']}；其中ΔRoMD>0："
-                    f"{translated_n}/{positive_n if positive_n else 0}。",
-                    f"方向一致：{translation['sign_concordant_count']}/{translation['sign_non_tie_n']}；"
-                    f"方向相反：{translation['sign_discordant_count']}/{translation['sign_non_tie_n']}。",
-                    f"Spearman(ΔDL選擇R, ΔRoMD)={_fmt(translation.get('selection_r_delta_vs_romd_spearman'), digits=3)}；"
-                    f"Spearman(ΔDL選擇R, ΔReturn)={_fmt(translation.get('selection_r_delta_vs_return_spearman'), digits=3)}。",
+                    f"ΔDL選擇R>0："
+                    f"{_style_text(f'{positive_n}/{total_n}', positive_signal, target=target)}；"
+                    f"其中ΔRoMD>0："
+                    f"{_style_text(f'{translated_n}/{positive_n if positive_n else 0}', translated_signal, target=target)}。",
+                    f"方向一致："
+                    f"{_style_text(f'{concordant_n}/{translation['sign_non_tie_n']}', concordant_signal, target=target)}；"
+                    f"方向相反："
+                    f"{_style_text(f'{discordant_n}/{translation['sign_non_tie_n']}', discordant_signal, target=target)}。",
+                    f"Spearman(ΔDL選擇R, ΔRoMD)="
+                    f"{_style_text(_fmt(spearman_romd, digits=3), _right_minus_left_signal(spearman_romd, preference='higher'), target=target)}；"
+                    f"Spearman(ΔDL選擇R, ΔReturn)="
+                    f"{_style_text(_fmt(spearman_return, digits=3), _right_minus_left_signal(spearman_return, preference='higher'), target=target)}。",
                 ])
 
             compare = item.get("romd_distribution")
             if isinstance(compare, dict):
+                probability = float(compare["pairwise_left_gt_right_probability"])
+                probability_text = _style_text(
+                    f"{probability * 100:.2f}%",
+                    signal_for_delta(probability - 0.5, preference="higher"),
+                    target=target,
+                )
                 block.append(
                     f"Cross-seed P({compare['left']} > {compare['right']})="
-                    f"{float(compare['pairwise_left_gt_right_probability']) * 100:.2f}%"
+                    f"{probability_text}"
                     f"（{compare['pair_count']} pairs）。"
                 )
 
             annual_pair = list(item.get("yearly_same_seed") or [])
             if annual_pair:
-                pair_rows = [[
-                    str(row["year"]), str(row["n"]), _fmt(row["right_minus_left_mean"], suffix="%"),
-                    _fmt(row["right_minus_left_median"], suffix="%"), _fmt(row["right_minus_left_std"], suffix="%"),
-                    f"{row['right_gt_left_count']}/{row['n']}", f"{row['left_gt_right_count']}/{row['n']}",
-                    f"{row['tie_count']}/{row['n']}",
-                ] for row in annual_pair]
+                yearly_delta_metric_by_key = {
+                    metric.key: metric for metric in ROBUSTNESS_YEARLY_DELTA_METRICS
+                }
+                pair_rows = []
+                for row in annual_pair:
+                    metric_values = []
+                    for key in (
+                        "right_minus_left_mean",
+                        "right_minus_left_median",
+                        "right_minus_left_std",
+                    ):
+                        metric = yearly_delta_metric_by_key[key]
+                        value = row.get(key)
+                        metric_values.append(
+                            _format_metric_value(
+                                value,
+                                metric,
+                                target=target,
+                                signal=_right_minus_left_signal(
+                                    value, preference=metric.preference
+                                ),
+                            )
+                        )
+                    right_signal, left_signal = _win_count_signals(
+                        int(row["right_gt_left_count"]),
+                        int(row["left_gt_right_count"]),
+                    )
+                    pair_rows.append([
+                        str(row["year"]),
+                        str(row["n"]),
+                        *metric_values,
+                        _style_text(
+                            f"{row['right_gt_left_count']}/{row['n']}",
+                            right_signal,
+                            target=target,
+                        ),
+                        _style_text(
+                            f"{row['left_gt_right_count']}/{row['n']}",
+                            left_signal,
+                            target=target,
+                        ),
+                        f"{row['tie_count']}/{row['n']}",
+                    ])
                 block.extend([
                     "",
                     render_table(
@@ -2495,6 +2731,7 @@ def render_multi_seed_robustness_report(
                         pair_rows,
                     ),
                 ])
+
             paired_blocks.append("\n".join(block))
         sections.append("\n\n".join(paired_blocks))
         next_section += 1
@@ -2502,15 +2739,39 @@ def render_multi_seed_robustness_report(
     yearly = list(summary.get("yearly_statistics") or [])
     if yearly:
         rows = []
-        for row in sorted(yearly, key=lambda x: (int(x["year"]), str(x["type"]), str(x["name"]))):
-            rows.append([
-                str(row["year"]) + ("" if row.get("is_complete_year") else "*"),
-                row["name"], row["type"], str(row["n"]),
-                _fmt(row["mean"], suffix="%"), _fmt(row["median"], suffix="%"),
-                _fmt(row["std"], suffix="%"), _fmt(row["min"], suffix="%"),
-                _fmt(row["p25"], suffix="%"), _fmt(row["p75"], suffix="%"),
-                _fmt(row["max"], suffix="%"),
-            ])
+        yearly_metric_by_key = {
+            metric.key: metric for metric in ROBUSTNESS_YEARLY_DISTRIBUTION_METRICS
+        }
+        yearly_by_year: dict[int, list[dict[str, Any]]] = {}
+        for source in yearly:
+            yearly_by_year.setdefault(int(source["year"]), []).append(dict(source))
+        for year in sorted(yearly_by_year):
+            year_rows = yearly_by_year[year]
+            year_signals = _distribution_signals(
+                year_rows,
+                metrics=ROBUSTNESS_YEARLY_DISTRIBUTION_METRICS,
+                identity_key="arm_id",
+            )
+            for row in sorted(year_rows, key=lambda x: (str(x["type"]), str(x["name"]))):
+                arm_id = str(row["arm_id"])
+                metric_values = []
+                for key in ("mean", "median", "std", "min", "p25", "p75", "max"):
+                    metric = yearly_metric_by_key[key]
+                    metric_values.append(
+                        _format_metric_value(
+                            row.get(key),
+                            metric,
+                            target=target,
+                            signal=year_signals.get(key, {}).get(arm_id),
+                        )
+                    )
+                rows.append([
+                    str(row["year"]) + ("" if row.get("is_complete_year") else "*"),
+                    row["name"],
+                    row["type"],
+                    str(row["n"]),
+                    *metric_values,
+                ])
         sections.extend([
             render_section(f"{next_section}. 歷年報酬跨seed完整統計"),
             render_table(
@@ -2527,6 +2788,7 @@ def render_multi_seed_robustness_report(
         render_section(f"{next_section}. 限制"),
         "\n".join((
             "- 前四張表直接重用Strategy Compare canonical aggregate renderer；Multi-seed arm顯示per-seed canonical metric的Mean，Fixed arm顯示正式baseline值。",
+            "- Multi-seed專屬分布表同樣使用core/report_style.py：有明確方向的metric在同欄可比較arm間只標綠＝最佳、紅＝最差、其餘白；same-seed右減左欄位則依共用metric direction判讀，ΔMDD採lower-is-better，N／Type／Tie等中性欄不硬判。",
             "- 舊robustness工件若未永久保存model prediction／Future Target conversion欄位，report-only refresh會顯示`-`，不為補報表重訓或重跑strategy replay。",
             "- resolved seeds只用於重現；不得挑best seed或依本報表組seed ensemble。",
             f"- {full_name}／{min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一表。",

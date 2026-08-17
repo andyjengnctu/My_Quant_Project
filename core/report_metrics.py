@@ -174,6 +174,47 @@ PAIR_MAIN_METRICS = (
 )
 
 
+# Multi-seed robustness extensions reuse the same ReportMetricSpec contract as
+# Strategy Compare. Distribution tables compare arms within the same metric
+# column; paired delta tables interpret an explicit right-minus-left delta.
+ROBUSTNESS_ROMD_DISTRIBUTION_METRICS = (
+    ReportMetricSpec("mean", "Mean", "", 2, "higher"),
+    ReportMetricSpec("median", "Median", "", 2, "higher"),
+    ReportMetricSpec("std", "Std", "", 2, "lower"),
+    ReportMetricSpec("cv", "CV", "", 2, "lower"),
+    ReportMetricSpec("min", "Min", "", 2, "higher"),
+    ReportMetricSpec("p25", "P25", "", 2, "higher"),
+    ReportMetricSpec("p75", "P75", "", 2, "higher"),
+    ReportMetricSpec("max", "Max", "", 2, "higher"),
+    ReportMetricSpec("beats_min_rate", "勝Min", "", 2, "higher"),
+    ReportMetricSpec("beats_full_rate", "勝Full", "", 2, "higher"),
+)
+
+ROBUSTNESS_SEED_DELTA_METRICS = (
+    ReportMetricSpec("right_minus_left_direct_selection_r", "ΔDL選擇R", " R", 2, "higher"),
+    ReportMetricSpec("right_minus_left_total_return_pct", "ΔReturn", "%", 2, "higher"),
+    ReportMetricSpec("right_minus_left_max_drawdown_pct", "ΔMDD", "%", 2, "lower"),
+    ReportMetricSpec("right_minus_left_return_over_max_drawdown", "ΔRoMD", "", 2, "higher"),
+    ReportMetricSpec("right_minus_left_expected_value_r", "ΔEV", " R", 2, "higher"),
+)
+
+ROBUSTNESS_YEARLY_DELTA_METRICS = (
+    ReportMetricSpec("right_minus_left_mean", "Δ右-左 Mean", "%", 2, "higher"),
+    ReportMetricSpec("right_minus_left_median", "Median", "%", 2, "higher"),
+    ReportMetricSpec("right_minus_left_std", "Std", "%", 2, "neutral"),
+)
+
+ROBUSTNESS_YEARLY_DISTRIBUTION_METRICS = (
+    ReportMetricSpec("mean", "Mean", "%", 2, "higher"),
+    ReportMetricSpec("median", "Median", "%", 2, "higher"),
+    ReportMetricSpec("std", "Std", "%", 2, "lower"),
+    ReportMetricSpec("min", "Min", "%", 2, "higher"),
+    ReportMetricSpec("p25", "P25", "%", 2, "higher"),
+    ReportMetricSpec("p75", "P75", "%", 2, "higher"),
+    ReportMetricSpec("max", "Max", "%", 2, "higher"),
+)
+
+
 __all__ = [
     "ReportMetricSpec",
     "RAnalysisMetricSpec",
@@ -188,4 +229,9 @@ __all__ = [
     "R_SELECTION_TRANSLATION_METRICS",
     "R_ANALYSIS_GROUPED_SECTIONS",
     "R_ANALYSIS_MERGED_METRICS",
+
+    "ROBUSTNESS_ROMD_DISTRIBUTION_METRICS",
+    "ROBUSTNESS_SEED_DELTA_METRICS",
+    "ROBUSTNESS_YEARLY_DELTA_METRICS",
+    "ROBUSTNESS_YEARLY_DISTRIBUTION_METRICS",
 ]
