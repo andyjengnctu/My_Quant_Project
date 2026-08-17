@@ -422,9 +422,9 @@ def compare_daily_targets(
     ):
         raise ValueError("candidate/reference first-risk-breach診斷不一致")
 
-    candidate_target = str(candidate.profile.continuous_target_id)
-    reference_target = str(reference.profile.continuous_target_id)
-    controlled_change = _controlled_change_contract(candidate_target, reference_target)
+    candidate_target_id = str(candidate.profile.continuous_target_id)
+    reference_target_id = str(reference.profile.continuous_target_id)
+    controlled_change = _controlled_change_contract(candidate_target_id, reference_target_id)
     metrics, daily = _comparison_metrics(
         frame,
         top_k=int(BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K),
@@ -451,12 +451,12 @@ def compare_daily_targets(
         risk_budget = abs(float(DEFAULT_LABEL_POLICY.max_adverse_return))
         reference_adverse = rtable["target_adverse_return_to_peak"].to_numpy(dtype=np.float64)
         expected_delta = reference_adverse / risk_budget
-        candidate_target = frame["candidate_target_r"].to_numpy(dtype=np.float64)
-        reference_target = frame["reference_target_r"].to_numpy(dtype=np.float64)
-        actual_delta = candidate_target - reference_target
+        candidate_target_values = frame["candidate_target_r"].to_numpy(dtype=np.float64)
+        reference_target_values = frame["reference_target_r"].to_numpy(dtype=np.float64)
+        actual_delta = candidate_target_values - reference_target_values
         tolerance = _pure_mfe_float32_relation_tolerance(
-            candidate_target,
-            reference_target,
+            candidate_target_values,
+            reference_target_values,
             reference_adverse,
             risk_budget_return=risk_budget,
         )
@@ -477,7 +477,7 @@ def compare_daily_targets(
         / "breakout_quality"
         / filter_id
         / "daily_target_comparison"
-        / f"{candidate_target}__vs__{reference_target}"
+        / f"{candidate_target_id}__vs__{reference_target_id}"
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / REPORT_JSON_FILENAME
@@ -490,9 +490,9 @@ def compare_daily_targets(
         "filter_id": filter_id,
         "model_architecture": model_architecture,
         "candidate_profile": candidate_profile,
-        "candidate_target_id": candidate_target,
+        "candidate_target_id": candidate_target_id,
         "reference_profile": reference_profile,
-        "reference_target_id": reference_target,
+        "reference_target_id": reference_target_id,
         "controlled_change": str(controlled_change["change_id"]),
         "controlled_change_description": str(controlled_change["description"]),
         "training_or_model_execution": False,

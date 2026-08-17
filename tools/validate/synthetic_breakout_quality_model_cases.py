@@ -2165,6 +2165,84 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
         ),
     )
 
+    candidate_profile_name = DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    reference_profile_name = DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    candidate_profile_obj = get_breakout_quality_experiment_profile(candidate_profile_name)
+    reference_profile_obj = get_breakout_quality_experiment_profile(reference_profile_name)
+    risk_budget = abs(float(DEFAULT_LABEL_POLICY.max_adverse_return))
+    audit_table = pd.DataFrame(
+        {
+            "ticker": ["A", "B"],
+            "date": pd.to_datetime(["2020-01-01", "2020-01-02"]),
+            "source_pos": [1, 2],
+            "label_eval_end_date": pd.to_datetime(["2020-02-28", "2020-02-28"]),
+            "target_first_risk_breach_bar": [-1, 5],
+            "target_opportunity_bar": [4, 7],
+            "target_minimum_low_return": [-0.02, -0.04],
+            "target_adverse_return_to_peak": [0.02, 0.04],
+            "target_favorable_return": [0.20, 0.30],
+        }
+    )
+    reference_raw = np.asarray(
+        [
+            0.20 / risk_budget - 0.02 / risk_budget,
+            0.30 / risk_budget - 0.04 / risk_budget,
+        ],
+        dtype=np.float32,
+    )
+    candidate_raw = np.asarray(
+        [0.20 / risk_budget, 0.30 / risk_budget],
+        dtype=np.float32,
+    )
+    candidate_data = SimpleNamespace(
+        profile=candidate_profile_obj,
+        group_table=audit_table.copy(),
+        raw_target=candidate_raw,
+        target_valid=np.ones(2, dtype=bool),
+    )
+    reference_data = SimpleNamespace(
+        profile=reference_profile_obj,
+        group_table=audit_table.copy(),
+        raw_target=reference_raw,
+        target_valid=np.ones(2, dtype=bool),
+    )
+    with tempfile.TemporaryDirectory() as audit_tmp:
+        from services.breakout_quality import daily_target_comparison as target_comparison_module
+
+        with patch.object(
+            target_comparison_module,
+            "load_daily_universal_ranker_data",
+            side_effect=[candidate_data, reference_data],
+        ):
+            audit_payload = target_comparison_module.compare_daily_targets(
+                filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+                candidate_profile=candidate_profile_name,
+                reference_profile=reference_profile_name,
+                allow_stale_source=False,
+                project_root=Path(audit_tmp),
+            )
+        audit_json = json.loads(
+            (
+                Path(audit_tmp)
+                / str(audit_payload["artifacts"]["json"])
+            ).read_text(encoding="utf-8")
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13k_label_audit_preserves_string_target_ids_through_numeric_relation_check_and_json_write",
+        (
+            DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+            DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+        ),
+        (
+            audit_json["candidate_target_id"],
+            audit_json["reference_target_id"],
+        ),
+    )
+
     summary["model_research_id"] = "MR-13H/MR-13K"
     summary["training_performed"] = False
     return results, summary
