@@ -9502,11 +9502,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Daily Universal實際training universe再核對：每檔股票必須有完整300-bar個股window，benchmark亦必須到第300個合法bar；不再使用optimizer `selection_start`作DL歷史下界。Target-valid training rows仍要求40D target完整成熟；inference-only rows不進gradient／validation／epoch selection。Extending fold final refit另要求`label_eval_end_date < score_start`，因此目前training object與PIT information-cutoff語意正確。
 - UI policy依使用者最新要求修正：Extending-Window Rolling／Fixed-Window Rolling兩個泛化工作類型入口固定顯示，不得因Active Profile未授權而隱藏；`selection_pit_authorized`仍是底層執行授權SSOT。未授權profile選入後只可明確BLOCKED／回報原因，不得建立Rolling工件，也不得由programmatic builder或audit繞過。
 
-## 2026-08-19 — Rolling complete-host prefetch correction for low GPU utilization
+## 2026-08-19 — Rolling execution correction: complete-host prefetch rollback + 2-fold process parallel
 
-- 使用者在`模型訓練 → 準備策略比較所需模型工件`執行MR-13E Extending-Window Rolling時，實際觀察GPU約50%、CPU約15%；當時fold_2016～2020已完成，正在fold_2021訓練。工作基準=`test-branch-1_20260819_002222_61be530.zip`，SHA256=`e847eb9791772ec75c08ed9750094227b7693cd44ad9a0dc789ef80ccafe006f`。
-- 根因定位於continuous-ranker feeding pipeline：既有`train_prefetch_batches=8 / train_prefetch_workers=4`確實會提前materialize並pin feature，但`group_context`與training target仍由主訓練執行緒在每個batch、開始目前GPU compute以前同步切片／轉tensor／pin memory。這是serial host-staging gap，會造成GPU等待，且不需要CPU總使用率高才會出現。
-- 修正：新增完整host-batch materialization，ordered prefetch workers現在同時準備`feature / context / target`且CUDA路徑全部先pin；主訓練執行緒只取得已準備host tensors，使用既有dedicated copy stream與`non_blocking=True`搬到GPU，N+1 H2D仍與N forward/backward重疊。feature-only compatibility helper保留並共用generic ordered-prefetch owner，避免兩套queue邏輯分叉。
-- Scientific contract不變：沒有調大batch、沒有改same-date batching、seed、optimizer step數、loss/reduction、target、architecture、mixed precision、deterministic algorithms或TF32；因此既有fold scientific identity與reuse contract不因本修正改變。這是execution-only engineering correction，不新增MR/SR identity。
-- GPT獨立驗證：serial與4-worker/8-depth prefetch對synthetic batch的IDs、feature、context、target逐值相同；CPU device iterator逐值相同；344個Python檔AST parse 0 error、裸`except:`=0、`outputs/`根目錄無散落檔案。未執行`apps/run_bundle.py`或`apps/test_suite.py`。
-
+- 第一版GPU feeding修補以`test-branch-1_20260819_002222_61be530.zip`為基準，把既有feature-only worker prefetch擴成`feature / context / target`完整host-batch prefetch。使用者套用後實際回報「感覺更慢」，因此該變更不再視為有效改善。
+- 重新檢查控制流後確認負優化原因：device iterator在yield目前batch前會先呼叫`stage_next()`；完整host-batch版本的`stage_next()`必須等待ordered worker的`future.result()`完成全部feature/context/target materialization與pin。當N+1尚未ready時，這個等待發生在N開始GPU compute之前，反而把更重的host staging拉進critical path。原本feature-only queue的future較輕，較不容易造成相同阻塞。
+- Decision：`COMPLETE_HOST_PREFETCH_REJECTED_BY_RUNTIME_OBSERVATION / ROLLED_BACK`。`services/breakout_quality/train_continuous_ranker.py`恢復原本feature-only ordered prefetch；`train_prefetch_batches=8 / train_prefetch_workers=4`、pinned feature、context/target主執行緒staging、dedicated CUDA copy stream與non-blocking H2D維持。沒有改batch membership/order、same-date grouping、seed、optimizer step、loss、target、architecture、deterministic algorithms或TF32。
+- 使用者接著授權不同Rolling folds平行執行。實作新增`BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_WORKERS=2`：父程序先完成所有fold的REUSE／checkpoint-rescore／legacy migration判定，只把真正缺少的fold交給`spawn`獨立process；每個process各自初始化dataset provider、PyTorch/CUDA、seed、model與optimizer，且只寫自己的`fold_YYYY.../`目錄。完成後父程序重新以既有fingerprint/hash reuse validator讀回fold，再依原fold順序aggregate。
+- Fold process count只屬execution設定，**不進fold scientific fingerprint**；`fold-workers=1`可回到原serial語意。若parallel worker失敗，aggregate不產生；其他已完整寫出且hash合法的fold保留供resume。
+- Nested parallelism guard：Strategy Compare Multi-seed robustness本身已有`gpu_train_workers=2`外層trainer平行，因此其PIT trainer固定由config傳`fold-workers=1`，避免2個seed trainer各自再開2-fold造成4個CUDA processes互搶。
+- 本輪程式基準=`test-branch-1_20260819_011641_b24c3a5.zip`，SHA256=`357c5c38107e2e2e4af0eb82a37143336340946171bcd7f42f7a7095ebd985cb`。此為execution-only engineering change，不新增MR/SR identity；實際RTX 5080 wall-clock改善仍以使用者下一次Rolling執行為準，不預先宣稱加速幅度。

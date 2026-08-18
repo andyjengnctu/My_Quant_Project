@@ -251,6 +251,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             settings.point_in_time_score_start_date,
             settings.point_in_time_fold_months,
             settings.point_in_time_inner_validation_months,
+            workflow_config.BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_WORKERS,
         ),
         (
             parsed.filter_id,
@@ -260,6 +261,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             parsed.score_start_date,
             parsed.fold_months,
             parsed.inner_validation_months,
+            parsed.fold_workers,
         ),
     )
 
@@ -1122,6 +1124,16 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         project_root / "services" / "breakout_quality" / "point_in_time_scores.py"
     ).read_text(encoding="utf-8")
     pit_builder_tree = ast.parse(pit_builder_source)
+    fold_contract_source = pit_builder_source[
+        pit_builder_source.index("def _fold_contract_payload"):
+        pit_builder_source.index("def _validate_minimum_counts")
+    ]
+    robustness_source = (
+        project_root / "filters" / "breakout_quality" / "strategy_multi_seed_robustness.py"
+    ).read_text(encoding="utf-8")
+    strategy_compare_config_source = (
+        project_root / "config" / "strategy_compare.py"
+    ).read_text(encoding="utf-8")
     pit_builder_call_keywords = {
         node.func.id: {keyword.arg for keyword in node.keywords if keyword.arg}
         for node in ast.walk(pit_builder_tree)
@@ -1147,6 +1159,24 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
                 "_migrate_compatible_legacy_fold", set()
             ),
         ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_missing_folds_use_configured_spawn_process_parallelism",
+        True,
+        parsed.fold_workers == 2
+        and 'mp.get_context("spawn")' in pit_builder_source
+        and "ProcessPoolExecutor(" in pit_builder_source
+        and "initializer=_init_parallel_fold_worker" in pit_builder_source
+        and '"expected_fingerprint": fold_fingerprints[index]' in pit_builder_source
+        and "Parallel PIT fold完成後工件未通過reuse/hash驗證" in pit_builder_source
+        and "fold_workers" not in fold_contract_source
+        and "STRATEGY_COMPARE_ROBUSTNESS_PIT_FOLD_WORKERS_PER_TRAINER = 1"
+        in strategy_compare_config_source
+        and '"--fold-workers", str(int(STRATEGY_COMPARE_ROBUSTNESS_PIT_FOLD_WORKERS_PER_TRAINER))'
+        in robustness_source,
     )
     add_check(
         results,

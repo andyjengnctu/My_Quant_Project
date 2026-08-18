@@ -837,43 +837,6 @@ def _materialize_feature_batch(
     return torch.from_numpy(features).pin_memory()
 
 
-def _iter_ordered_prefetched_batches(
-    batches: list[np.ndarray],
-    materialize,
-    *,
-    prefetch_batches: int,
-    prefetch_workers: int,
-    thread_name_prefix: str,
-):
-    """Prefetch arbitrary batch materialization while preserving exact order."""
-
-    depth = int(prefetch_batches)
-    worker_count = max(1, int(prefetch_workers))
-    if depth <= 0 or len(batches) <= 1:
-        for ids in batches:
-            yield ids, materialize(ids)
-        return
-
-    queue_depth = min(depth, len(batches))
-    with ThreadPoolExecutor(
-        max_workers=min(worker_count, queue_depth),
-        thread_name_prefix=str(thread_name_prefix),
-    ) as executor:
-        pending = deque(
-            (batches[index], executor.submit(materialize, batches[index]))
-            for index in range(queue_depth)
-        )
-        next_index = queue_depth
-        while pending:
-            ids, future = pending.popleft()
-            value = future.result()
-            if next_index < len(batches):
-                next_ids = batches[next_index]
-                pending.append((next_ids, executor.submit(materialize, next_ids)))
-                next_index += 1
-            yield ids, value
-
-
 def _iter_materialized_feature_batches(
     feature_bank,
     batches: list[np.ndarray],
@@ -883,84 +846,56 @@ def _iter_materialized_feature_batches(
     torch=None,
     pin_memory: bool = False,
 ):
-    """Materialize feature-only batches; retained for compatibility diagnostics."""
+    """Materialize training batches concurrently while preserving exact batch order."""
 
-    def materialize(ids: np.ndarray):
-        return _materialize_feature_batch(
-            feature_bank, ids, torch=torch, pin_memory=bool(pin_memory)
-        )
+    depth = int(prefetch_batches)
+    worker_count = max(1, int(prefetch_workers))
+    if depth <= 0 or len(batches) <= 1:
+        for ids in batches:
+            yield ids, _materialize_feature_batch(
+                feature_bank, ids, torch=torch, pin_memory=bool(pin_memory)
+            )
+        return
 
-    yield from _iter_ordered_prefetched_batches(
-        batches,
-        materialize,
-        prefetch_batches=int(prefetch_batches),
-        prefetch_workers=int(prefetch_workers),
+    queue_depth = min(depth, len(batches))
+    with ThreadPoolExecutor(
+        max_workers=min(worker_count, queue_depth),
         thread_name_prefix="continuous-ranker-prefetch",
-    )
-
-
-def _materialize_training_host_batch(
-    feature_bank,
-    group_context: np.ndarray,
-    percentile_target: np.ndarray,
-    ids: np.ndarray,
-    *,
-    torch=None,
-    pin_memory: bool = False,
-):
-    """Materialize one complete host batch without changing row identity or order.
-
-    Feature, context, and target staging are intentionally grouped here so CUDA
-    prefetch workers can prepare all host-side inputs before the training thread needs
-    the batch.  This is execution-only acceleration; scientific batching semantics are
-    unchanged.
-    """
-
-    normalized_ids = np.asarray(ids, dtype=np.int64)
-    features = np.asarray(feature_bank[normalized_ids], dtype=np.float32)
-    context = np.asarray(group_context[normalized_ids], dtype=np.float32)
-    target = np.asarray(percentile_target[normalized_ids], dtype=np.float32)
-    if not bool(pin_memory):
-        return features, context, target
-    if torch is None:
-        raise ValueError("pin_memory=True時必須提供torch")
-    return (
-        torch.from_numpy(features).pin_memory(),
-        torch.from_numpy(context).pin_memory(),
-        torch.from_numpy(target).pin_memory(),
-    )
-
-
-def _iter_materialized_training_host_batches(
-    feature_bank,
-    group_context: np.ndarray,
-    percentile_target: np.ndarray,
-    batches: list[np.ndarray],
-    *,
-    prefetch_batches: int,
-    prefetch_workers: int = 1,
-    torch=None,
-    pin_memory: bool = False,
-):
-    """Prefetch complete host batches concurrently while preserving exact order."""
-
-    def materialize(ids: np.ndarray):
-        return _materialize_training_host_batch(
-            feature_bank,
-            group_context,
-            percentile_target,
-            ids,
-            torch=torch,
-            pin_memory=bool(pin_memory),
+    ) as executor:
+        pending = deque(
+            (
+                batches[index],
+                executor.submit(
+                    _materialize_feature_batch,
+                    feature_bank,
+                    batches[index],
+                    torch=torch,
+                    pin_memory=bool(pin_memory),
+                ),
+            )
+            for index in range(queue_depth)
         )
+        next_index = queue_depth
+        while pending:
+            ids, future = pending.popleft()
+            features = future.result()
+            if next_index < len(batches):
+                next_ids = batches[next_index]
+                pending.append(
+                    (
+                        next_ids,
+                        executor.submit(
+                            _materialize_feature_batch,
+                            feature_bank,
+                            next_ids,
+                            torch=torch,
+                            pin_memory=bool(pin_memory),
+                        ),
+                    )
+                )
+                next_index += 1
+            yield ids, features
 
-    yield from _iter_ordered_prefetched_batches(
-        batches,
-        materialize,
-        prefetch_batches=int(prefetch_batches),
-        prefetch_workers=int(prefetch_workers),
-        thread_name_prefix="continuous-ranker-host-prefetch",
-    )
 
 def _iter_device_training_batches(
     torch,
@@ -973,18 +908,16 @@ def _iter_device_training_batches(
     prefetch_batches: int,
     prefetch_workers: int,
 ):
-    """Yield device-ready batches with complete host staging prefetched.
+    """Yield device-ready batches; CUDA overlaps pinned H2D for N+1 with compute of N.
 
-    CUDA overlaps pinned H2D for N+1 with compute of N.  Batch identity, consumption
-    order, same-date grouping, optimizer steps, and loss semantics are unchanged.
+    Batch identity and consumption order are unchanged.  Only feature materialization,
+    pinned host staging, and host-to-device transfer are pipelined.
     """
 
     use_cuda = str(getattr(plan, "device_type", "")) == "cuda"
-    host_iter = iter(
-        _iter_materialized_training_host_batches(
+    cpu_iter = iter(
+        _iter_materialized_feature_batches(
             feature_bank,
-            group_context,
-            percentile_target,
             batches,
             prefetch_batches=int(prefetch_batches),
             prefetch_workers=int(prefetch_workers),
@@ -993,10 +926,14 @@ def _iter_device_training_batches(
         )
     )
     if not use_cuda:
-        for ids, (features_cpu, context_cpu, target_cpu) in host_iter:
-            xb = torch.from_numpy(features_cpu).to(plan.device)
-            cb = torch.from_numpy(context_cpu).to(plan.device)
-            target = torch.from_numpy(target_cpu).to(plan.device)
+        for ids, batch_features in cpu_iter:
+            xb = torch.from_numpy(batch_features).to(plan.device)
+            cb = torch.from_numpy(
+                np.asarray(group_context[ids], dtype=np.float32)
+            ).to(plan.device)
+            target = torch.from_numpy(
+                np.asarray(percentile_target[ids], dtype=np.float32)
+            ).to(plan.device)
             yield ids, xb, cb, target
         return
 
@@ -1005,22 +942,24 @@ def _iter_device_training_batches(
 
     def stage_next():
         try:
-            ids, host_batch = next(host_iter)
+            ids, features_cpu = next(cpu_iter)
         except StopIteration:
             return None
-        features_cpu, context_cpu, target_cpu = host_batch
-        if not all(
-            isinstance(value, torch.Tensor)
-            for value in (features_cpu, context_cpu, target_cpu)
-        ):
-            raise TypeError("CUDA host prefetch必須回傳pinned torch tensors")
+        if not isinstance(features_cpu, torch.Tensor):
+            features_cpu = torch.from_numpy(features_cpu).pin_memory()
+        context_cpu = torch.from_numpy(
+            np.asarray(group_context[ids], dtype=np.float32)
+        ).pin_memory()
+        target_cpu = torch.from_numpy(
+            np.asarray(percentile_target[ids], dtype=np.float32)
+        ).pin_memory()
         with torch.cuda.stream(copy_stream):
             xb = features_cpu.to(plan.device, non_blocking=True)
             cb = context_cpu.to(plan.device, non_blocking=True)
             target = target_cpu.to(plan.device, non_blocking=True)
-        # Keep pinned host buffers alive until their asynchronous copies are known to
-        # have completed.
-        return ids, xb, cb, target, host_batch
+        # Keep pinned host buffers alive until the copy stream is synchronized by the
+        # consumer on the next iteration.
+        return ids, xb, cb, target, (features_cpu, context_cpu, target_cpu)
 
     staged = stage_next()
     while staged is not None:
@@ -1029,8 +968,8 @@ def _iter_device_training_batches(
         xb.record_stream(compute_stream)
         cb.record_stream(compute_stream)
         target.record_stream(compute_stream)
-        # Host materialization/pinning for N+1 has already happened in the prefetch
-        # workers.  The training thread only enqueues its H2D copy before yielding N.
+        # Stage N+1 before yielding N so the dedicated copy stream can overlap with
+        # the forward/backward compute performed by the consumer.
         staged = stage_next()
         yield ids, xb, cb, target
 

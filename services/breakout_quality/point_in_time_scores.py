@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import multiprocessing as mp
 import json
 import math
 import shutil
 import time
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_ALLOW_TF32,
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES,
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS,
+    BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_WORKERS,
     BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
     BREAKOUT_QUALITY_DEFAULT_EPOCHS,
     BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
@@ -152,6 +155,12 @@ def parse_args(argv=None) -> argparse.Namespace:
         default=BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS,
         help="CPU feature materialization workers；只影響feeding效能",
     )
+    parser.add_argument(
+        "--fold-workers",
+        type=int,
+        default=BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_WORKERS,
+        help="Rolling缺少fold的獨立process平行數；1表示串行，只影響execution",
+    )
     parser.add_argument("--lr", type=float, default=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE)
     parser.add_argument(
         "--weight-decay", type=float, default=BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY
@@ -247,6 +256,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("train-prefetch-batches必須>=0")
     if int(getattr(args, "train_prefetch_workers", BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS)) < 1:
         raise ValueError("train-prefetch-workers必須>=1")
+    if int(getattr(args, "fold_workers", BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_WORKERS)) < 1:
+        raise ValueError("fold-workers必須>=1")
     if float(args.lr) <= 0.0 or float(args.weight_decay) < 0.0:
         raise ValueError("learning rate必須>0，weight decay必須>=0")
     if float(args.gradient_clip_norm) < 0.0:
@@ -1183,6 +1194,97 @@ def _train_fold(
     return frame, manifest
 
 
+_PARALLEL_FOLD_WORKER_STATE: dict[str, Any] | None = None
+
+
+def _init_parallel_fold_worker(args_payload: dict[str, Any]) -> None:
+    """Initialize one isolated Rolling fold process and its CUDA/runtime state."""
+
+    args = argparse.Namespace(**dict(args_payload))
+    _validate_args(args)
+    settings = get_breakout_quality_workflow_settings(
+        experiment_profile=str(args.experiment_profile)
+    )
+    if not settings.rolling_authorized:
+        raise ValueError(
+            f"目前profile未授權Rolling PIT scores: {args.experiment_profile}"
+        )
+    bundle = load_continuous_ranker_data(
+        filter_id=args.filter_id,
+        model_architecture=args.model_architecture,
+        experiment_profile=args.experiment_profile,
+        preload_feature_bank=bool(args.preload_feature_bank),
+        allow_stale_source=bool(args.allow_stale_source),
+        project_root=PROJECT_ROOT,
+        progress_callback=None,
+    )
+    torch, plan = resolve_ranker_execution_plan(args)
+    global _PARALLEL_FOLD_WORKER_STATE
+    _PARALLEL_FOLD_WORKER_STATE = {
+        "args": args,
+        "settings": settings,
+        "bundle": bundle,
+        "torch": torch,
+        "plan": plan,
+    }
+
+
+def _run_parallel_fold_task(task: dict[str, Any]) -> dict[str, Any]:
+    """Train exactly one fold inside an initialized process and persist its fold artifacts."""
+
+    state = _PARALLEL_FOLD_WORKER_STATE
+    if state is None:
+        raise RuntimeError("parallel fold worker尚未初始化")
+    args = state["args"]
+    settings = state["settings"]
+    bundle = state["bundle"]
+    torch = state["torch"]
+    plan = state["plan"]
+    fold = {
+        "fold_id": str(task["fold_id"]),
+        "score_start": pd.Timestamp(str(task["score_start"])).normalize(),
+        "score_end": pd.Timestamp(str(task["score_end"])).normalize(),
+    }
+    ids = _fold_group_ids(
+        bundle,
+        fold,
+        validation_months=int(args.inner_validation_months),
+        train_window_months=(
+            None if args.train_window_months is None else int(args.train_window_months)
+        ),
+    )
+    _validate_minimum_counts(settings, str(fold["fold_id"]), ids)
+    fold_contract = _fold_contract_payload(args, bundle, fold, ids)
+    fingerprint = _json_fingerprint(fold_contract)
+    expected_fingerprint = str(task["expected_fingerprint"])
+    if fingerprint != expected_fingerprint:
+        raise RuntimeError(
+            "parallel fold reconstructed contract fingerprint不一致: "
+            f"fold={fold['fold_id']} expected={expected_fingerprint} actual={fingerprint}"
+        )
+    started = time.perf_counter()
+    frame, manifest = _train_fold(
+        args,
+        bundle,
+        fold,
+        ids,
+        fold_contract,
+        fingerprint,
+        torch=torch,
+        plan=plan,
+    )
+    epoch_selection = dict(manifest.get("epoch_selection") or {})
+    return {
+        "fold_id": str(fold["fold_id"]),
+        "selected_epoch": int(manifest["selected_epoch"]),
+        "validation_mean_daily_spearman": float(
+            epoch_selection.get("best_validation_mean_daily_spearman")
+        ),
+        "score_count": int(len(frame)),
+        "elapsed_sec": float(time.perf_counter() - started),
+    }
+
+
 def _combined_validation(
     combined: pd.DataFrame,
     bundle,
@@ -1490,9 +1592,19 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
     rescored_checkpoint_fold_count = 0
     built_fold_count = 0
     fold_progress = InlineProgress()
+    fold_results: list[tuple[pd.DataFrame, dict[str, Any]] | None] = [None] * len(folds)
+    fold_contracts: list[dict[str, Any]] = []
+    fold_fingerprints: list[str] = []
+    missing_fold_indexes: list[int] = []
+
+    # Resolve all reuse/migration decisions in the parent first.  Parallel workers are
+    # only allowed to train folds that genuinely remain missing, so completed artifacts
+    # retain the exact same resume semantics as serial execution.
     for fold_index, (fold, ids) in enumerate(zip(folds, fold_details), start=1):
         fold_contract = _fold_contract_payload(args, bundle, fold, ids)
         fingerprint = _json_fingerprint(fold_contract)
+        fold_contracts.append(fold_contract)
+        fold_fingerprints.append(fingerprint)
         fold_dir = _point_in_time_fold_dir_for_args(args, str(fold["fold_id"]))
         reused = (
             _load_reusable_fold(
@@ -1527,7 +1639,7 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
             )
             migrated = reused is not None
         if reused is not None:
-            frame, manifest = reused
+            fold_results[fold_index - 1] = reused
             if rescored_checkpoint:
                 rescored_checkpoint_fold_count += 1
             elif migrated:
@@ -1552,18 +1664,110 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
                         bold=True,
                     )
                 )
-        else:
-            if bool(args.checkpoint_only):
-                raise RuntimeError(
-                    "checkpoint-only PIT重建無法完成；fold缺少可重用score/checkpoint或identity不相容: "
-                    f"{fold['fold_id']}。Strategy Compare不得因此訓練模型；"
-                    "請由模型訓練工作類型的『準備策略比較所需模型工件』補齊PIT fold。"
-                )
-            built_fold_count += 1
+            continue
+        if bool(args.checkpoint_only):
+            raise RuntimeError(
+                "checkpoint-only PIT重建無法完成；fold缺少可重用score/checkpoint或identity不相容: "
+                f"{fold['fold_id']}。Strategy Compare不得因此訓練模型；"
+                "請由模型訓練工作類型的『準備策略比較所需模型工件』補齊PIT fold。"
+            )
+        missing_fold_indexes.append(fold_index - 1)
+
+    built_fold_count = int(len(missing_fold_indexes))
+    requested_fold_workers = int(
+        getattr(args, "fold_workers", BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_WORKERS)
+    )
+    effective_fold_workers = min(requested_fold_workers, max(1, len(missing_fold_indexes)))
+
+    if missing_fold_indexes and effective_fold_workers > 1:
+        print(
+            paint("PIT fold parallel", "cyan", enabled=color_enabled, bold=True)
+            + f" | workers={effective_fold_workers}"
+            + f" | missing_folds={len(missing_fold_indexes)}"
+            + " | mode=spawn-process",
+            flush=True,
+        )
+        args_payload = dict(vars(args))
+        task_queue = iter(missing_fold_indexes)
+        mp_context = mp.get_context("spawn")
+        with ProcessPoolExecutor(
+            max_workers=effective_fold_workers,
+            mp_context=mp_context,
+            initializer=_init_parallel_fold_worker,
+            initargs=(args_payload,),
+        ) as executor:
+            pending: dict[Any, int] = {}
+
+            def submit_next() -> bool:
+                try:
+                    index = next(task_queue)
+                except StopIteration:
+                    return False
+                fold = folds[index]
+                task = {
+                    "fold_id": str(fold["fold_id"]),
+                    "score_start": str(pd.Timestamp(fold["score_start"]).date()),
+                    "score_end": str(pd.Timestamp(fold["score_end"]).date()),
+                    "expected_fingerprint": fold_fingerprints[index],
+                }
+                future = executor.submit(_run_parallel_fold_task, task)
+                pending[future] = index
+                return True
+
+            for _ in range(effective_fold_workers):
+                if not submit_next():
+                    break
+
+            try:
+                while pending:
+                    done, _not_done = wait(tuple(pending), return_when=FIRST_COMPLETED)
+                    for future in done:
+                        index = pending.pop(future)
+                        fold = folds[index]
+                        try:
+                            summary = future.result()
+                        except Exception as exc:
+                            for queued in pending:
+                                queued.cancel()
+                            raise RuntimeError(
+                                f"Parallel PIT fold訓練失敗: {fold['fold_id']}"
+                            ) from exc
+                        fold_dir = _point_in_time_fold_dir_for_args(
+                            args, str(fold["fold_id"])
+                        )
+                        built = _load_reusable_fold(
+                            fold_dir=fold_dir,
+                            expected_fingerprint=fold_fingerprints[index],
+                            fold_contract=fold_contracts[index],
+                        )
+                        if built is None:
+                            raise RuntimeError(
+                                "Parallel PIT fold完成後工件未通過reuse/hash驗證: "
+                                f"{fold['fold_id']}"
+                            )
+                        fold_results[index] = built
+                        fold_progress.print_line(
+                            paint(str(fold["fold_id"]), "cyan", enabled=color_enabled, bold=True)
+                            + " "
+                            + paint("完成", "green", enabled=color_enabled, bold=True)
+                            + f" | best epoch={int(summary['selected_epoch'])}"
+                            + f" | val rho={float(summary['validation_mean_daily_spearman']):.4f}"
+                            + f" | score={int(summary['score_count']):,}"
+                            + f" | {format_elapsed(float(summary['elapsed_sec']))}"
+                        )
+                        submit_next()
+            except Exception:
+                for queued in pending:
+                    queued.cancel()
+                raise
+    elif missing_fold_indexes:
+        for index in missing_fold_indexes:
+            fold = folds[index]
+            ids = fold_details[index]
             fold_started = time.perf_counter()
             if compact_console:
                 fold_progress.update(
-                    f"PIT fold {fold_index}/{len(folds)} | {fold['fold_id']} | 訓練並評分"
+                    f"PIT fold {index + 1}/{len(folds)} | {fold['fold_id']} | 訓練並評分"
                 )
             else:
                 print(
@@ -1578,11 +1782,12 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
                 bundle,
                 fold,
                 ids,
-                fold_contract,
-                fingerprint,
+                fold_contracts[index],
+                fold_fingerprints[index],
                 torch=torch,
                 plan=plan,
             )
+            fold_results[index] = (frame, manifest)
             if compact_console:
                 epoch_selection = dict(manifest.get("epoch_selection") or {})
                 fold_progress.print_line(
@@ -1594,6 +1799,13 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
                     + f" | score={len(frame):,}"
                     + f" | {format_elapsed(time.perf_counter() - fold_started)}"
                 )
+
+    for index, (fold, ids) in enumerate(zip(folds, fold_details)):
+        result = fold_results[index]
+        if result is None:
+            raise RuntimeError(f"PIT fold缺少完成結果: {fold['fold_id']}")
+        frame, manifest = result
+        fold_contract = fold_contracts[index]
         score_frames.append(frame)
         fold_manifests.append(manifest)
         coverage_rows.append(
@@ -1726,6 +1938,14 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
             "per_score_fold_information_cutoff_required": True,
             "frozen_forward_required": False,
         },
+        "fold_execution": {
+            "requested_workers": int(requested_fold_workers),
+            "effective_workers": int(effective_fold_workers),
+            "process_start_method": (
+                "spawn" if missing_fold_indexes and effective_fold_workers > 1 else "serial"
+            ),
+            "execution_only_not_in_fold_fingerprint": True,
+        },
         "artifacts": {
             "scores": build_file_manifest(score_path),
             "coverage": build_file_manifest(coverage_path),
@@ -1802,6 +2022,7 @@ def build_selection_point_in_time_scores(
     train_window_months: int | None = None,
     seed: int | None = None,
     resume: bool | None = None,
+    fold_workers: int | None = None,
     checkpoint_only: bool = False,
     plan_only: bool = False,
     point_in_time_dir_override: str | None = None,
@@ -1833,6 +2054,8 @@ def build_selection_point_in_time_scores(
         argv.extend(["--seed", str(int(seed))])
     if resume is not None:
         argv.append("--resume" if bool(resume) else "--no-resume")
+    if fold_workers is not None:
+        argv.extend(["--fold-workers", str(int(fold_workers))])
     if checkpoint_only:
         argv.append("--checkpoint-only")
     if plan_only:

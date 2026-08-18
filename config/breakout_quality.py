@@ -181,6 +181,7 @@ BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES = 0  # 訓練時預先準備後續 batch
 BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK = True  # 訓練與分數匯出前將去重 feature bank 與小型事件陣列載入 RAM；資料值與列順序不變。
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES = 8  # Continuous/daily ranker CPU feature feeding queue；只預先物化後續batch，不改batch order、loss或optimizer step。
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS = 4  # CPU feature materialization workers；結果仍按原batch順序消費，僅提升GPU feeding。
+BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_WORKERS = 2  # Rolling不同fold以獨立process平行；1表示串行。只影響execution，不進fold scientific identity。
 
 
 # =============================================================================
@@ -2175,6 +2176,7 @@ __all__ = [
     'BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS',
+    'BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_WORKERS',
     'BREAKOUT_QUALITY_EXTRA_HIGH_LENS',
     'BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA',
     'BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE',

@@ -610,11 +610,8 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     )
     from services.breakout_quality.train_continuous_ranker import (
         _iter_materialized_feature_batches,
-        _iter_materialized_training_host_batches,
     )
     synthetic_feature_bank = np.arange(96, dtype=np.float32).reshape(16, 2, 3)
-    synthetic_group_context = np.arange(64, dtype=np.float32).reshape(16, 4)
-    synthetic_target = np.linspace(0.0, 1.0, 16, dtype=np.float32)
     synthetic_batches = [
         np.asarray([5, 1, 9], dtype=np.int64),
         np.asarray([2, 7], dtype=np.int64),
@@ -633,26 +630,6 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             prefetch_workers=BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS,
         )
     )
-    serial_host_batches = list(
-        _iter_materialized_training_host_batches(
-            synthetic_feature_bank,
-            synthetic_group_context,
-            synthetic_target,
-            synthetic_batches,
-            prefetch_batches=0,
-            prefetch_workers=1,
-        )
-    )
-    prefetched_host_batches = list(
-        _iter_materialized_training_host_batches(
-            synthetic_feature_bank,
-            synthetic_group_context,
-            synthetic_target,
-            synthetic_batches,
-            prefetch_batches=BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES,
-            prefetch_workers=BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS,
-        )
-    )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "continuous_ranker_multiworker_prefetch_preserves_exact_batch_identity_and_values",
@@ -662,15 +639,6 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and len(serial_batches) == len(prefetched_batches)
         and all(np.array_equal(a[0], b[0]) for a, b in zip(serial_batches, prefetched_batches))
         and all(np.array_equal(a[1], b[1]) for a, b in zip(serial_batches, prefetched_batches))
-        and len(serial_host_batches) == len(prefetched_host_batches)
-        and all(
-            np.array_equal(a_ids, b_ids)
-            and all(np.array_equal(a_value, b_value) for a_value, b_value in zip(a_values, b_values))
-            for (a_ids, a_values), (b_ids, b_values)
-            in zip(serial_host_batches, prefetched_host_batches)
-        )
-        and "_iter_materialized_training_host_batches" in ranker_source
-        and "continuous-ranker-host-prefetch" in ranker_source
         and "torch.cuda.Stream" in ranker_source
         and "non_blocking=True" in ranker_source
         and ".pin_memory()" in ranker_source,
