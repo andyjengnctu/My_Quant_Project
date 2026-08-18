@@ -168,26 +168,28 @@ Breakout-quality 模型／Label／training／workflow設定只編輯 `config/bre
 目前模型研究與策略anchor設定為：
 
 ```python
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_equal_rank_mfe_low_adverse_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise"
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-MR-13E仍是production anchor。C56 Seed42 Forward已證明`MR-13K primary + MR-13M same-day residual safety`能明顯改善C54的MDD/RoMD/Win/EV，但尚未足以promotion。依2026-08-18使用者決策，先把C56完整測完：Current Selection=`C32/C23/C42/C57`，Current Forward=`C1/C3/C44/C56`；C57是C56的PIT counterpart。Selection/Forward 8-seed robustness各只測C57/C56 stochastic，C54/C55不同行；每個seed必須同seed建立13K與13M兩個runtime sources。MR-13M的Selection PIT授權只供C57 secondary use，不代表standalone promotion。Production candidate固定C42/C44；Plan C-M延後到C56 full-flow結案後。後續順序以`doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`為準，`doc/ToDo.md`只屬使用者私人筆記。
+MR-13E仍是production／reference anchor；current Extending-Window Rolling研究使用MR-13K作primary upside ranking、MR-13M作residual-safety secondary source，策略arms為`C58/C59/C60`。模型訓練的單一Active Profile因此設為MR-13K；`[5] 準備策略比較所需模型工件`再依current Strategy Compare config準備／重用MR-13E、MR-13K、MR-13M三個模型來源。Current Extending robustness預設4 seeds；production identity仍保留既有C42/C44，未經Rolling evidence與明確promotion decision不得自動切換。後續順序以`doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`為準，`doc/ToDo.md`只屬使用者私人筆記。
 
-Active continuous model menu由config／research spec動態產生；MR-13O目前只授權Seed42 Forward model Gate：
+Active continuous model menu由config／research spec動態產生；目前MR-13K會顯示：
 
 ```text
 === Continuous DL 模型研究與驗證 ===
-Active Profile：daily_universal_full_horizon_pareto_mfe_low_adverse_pairwise
-[1]  訓練目前模型 → forward-OOS模型報表  (Enter)
-[3]  查看目前Workflow與工件狀態
-[4]  比較設定中的 Continuous Rankers
+Active Profile：daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise
+[1]  Pre-Test｜單模型快速驗證  (Enter)
+[2]  Extending-Window Rolling 模型驗證
+[3]  Fixed-Window Rolling 模型驗證
+[4]  查看目前Workflow與工件狀態
 [5]  準備策略比較所需模型工件
+[6]  比較目前 Target 與 reference Target
 [0]  返回
 ```
 
-MR-13O沿用MR-13H `daily_full_horizon_opportunity_r_v1`作economic result truth，但training target不是該scalar R；trainer會從同一canonical stock-day rows建立`[MFE percentile, low-adverse percentile]`，僅strict Pareto-comparable pairs進`pairwise_logistic` loss。Epoch selection固定看`mean_daily_pareto_pair_concordance`，global Pareto concordance只作tie-break；MR-13H economic Daily rho／Pair／Top-K只能在候選checkpoint評估中作描述性 model-gate evidence，不能參與選模。`selection_pit_authorized=False`，因此目前沒有`[2] Selection PIT`；也沒有新增scalar Target identity，所以不顯示`[6] Target comparison`。
+MR-13O已於Forward model Gate結案為`REJECTED / NO PIT`，不再作Active Profile。它沿用MR-13H `daily_full_horizon_opportunity_r_v1`作economic result truth，但training target不是該scalar R；trainer會從同一canonical stock-day rows建立`[MFE percentile, low-adverse percentile]`，僅strict Pareto-comparable pairs進`pairwise_logistic` loss。Epoch selection固定看`mean_daily_pareto_pair_concordance`，global Pareto concordance只作tie-break；MR-13H economic Daily rho／Pair／Top-K只能在候選checkpoint評估中作描述性 model-gate evidence，不能參與選模。`selection_pit_authorized=False`；若為歷史重現手動切回MR-13O，Extending／Fixed工作類型入口仍固定顯示，但選入後會明確BLOCKED且不得建立Rolling工件。MR-13O沒有新增scalar Target identity，所以不顯示`[6] Target comparison`。
 
 Forward console／簡易報表除既有economic ranking品質外，MR-13O會額外顯示Validation／Forward／breakout的Pareto pair concordance與comparable-pair coverage。若Pareto supervision本身學不到（接近隨機），此Target-formulation直接在model gate停止；若Pareto可學但economic ordering仍不改善，表示joint dominance supervision與最終economic ordering仍有落差，也不應直接進PIT。只有兩層證據都形成可信增量，才另輪授權Selection PIT。
 ### Current Rolling 驗證順序（2026-08-18 current）

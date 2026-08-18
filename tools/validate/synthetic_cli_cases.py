@@ -545,7 +545,7 @@ def validate_dataset_cli_contract_case(_base_params):
             "BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE",
             DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
         ),
-        patch("builtins.input", side_effect=["0"]),
+        patch("builtins.input", side_effect=["2"]),
     ):
         rejected_profile_settings = app_breakout_quality.get_breakout_quality_model_research_settings()
         rejected_rc, rejected_text = _capture_stdout(
@@ -560,14 +560,15 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "rejected_no_pit_profile_hides_extending_and_fixed_rolling_but_keeps_pretest",
-        (0, False, True, False),
+        "rejected_no_pit_profile_keeps_rolling_menu_visible_and_blocks_at_execution_boundary",
+        (0, False, True, True, False),
         (
             rejected_rc,
             rejected_profile_settings.rolling_authorized,
             "[1]  Pre-Test｜單模型快速驗證  (Enter)" in rejected_text
-            and "Extending-Window Rolling 模型驗證" not in rejected_text
-            and "Fixed-Window Rolling 模型驗證" not in rejected_text,
+            and "[2]  Extending-Window Rolling 模型驗證" in rejected_text
+            and "[3]  Fixed-Window Rolling 模型驗證" in rejected_text,
+            "尚未授權Rolling PIT" in rejected_text,
             "Extending-Window Rolling Scores" in rejected_status_text
             or "Extending-Window Rolling 模型驗證" in rejected_status_text,
         ),

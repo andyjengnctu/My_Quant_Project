@@ -3279,7 +3279,7 @@ def validate_breakout_quality_mr13o_pareto_pairwise_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "mr13o_profile_is_registered_active_research_and_production_workflow_remains_unchanged",
+        "mr13o_profile_remains_registered_while_active_research_returns_to_current_rolling_primary_and_production_workflow_remains_unchanged",
         (
             DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
             BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,

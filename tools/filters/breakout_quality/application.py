@@ -2996,20 +2996,12 @@ def _interactive_model_research(program_name: str) -> int:
         )
 
     while True:
-        comparison_settings = get_breakout_quality_continuous_ranker_comparison_settings()
         research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
         print(render_menu_item(1, "Pre-Test｜單模型快速驗證", default=True))
-        pit_authorized = bool(settings.rolling_authorized)
-        pit_gate_batch = (
-            _continuous_pit_gate_batch_for_active(settings)
-            if pit_authorized
-            else None
-        )
-        if pit_authorized:
-            print(render_menu_item(2, "Extending-Window Rolling 模型驗證"))
-            print(render_menu_item(3, "Fixed-Window Rolling 模型驗證"))
+        print(render_menu_item(2, "Extending-Window Rolling 模型驗證"))
+        print(render_menu_item(3, "Fixed-Window Rolling 模型驗證"))
         print(render_menu_item(4, "查看目前Workflow與工件狀態"))
         _comparisons, strategy_model_sources = _strategy_compare_required_model_sources()
         if strategy_model_sources:
@@ -3027,9 +3019,9 @@ def _interactive_model_research(program_name: str) -> int:
             return 0
         if choice == "1":
             return _interactive_continuous_full_train(program_name, settings)
-        if choice == "2" and pit_authorized:
+        if choice == "2":
             return _interactive_continuous_pit_validation(program_name, settings)
-        if choice == "3" and pit_authorized:
+        if choice == "3":
             return _interactive_continuous_stability_validation(program_name, settings)
         if choice == "4":
             _print_workflow_status(settings)
