@@ -2031,7 +2031,7 @@ def _print_workflow_status(settings=None) -> None:
         )
     grouped_status.append(
         (
-            "Legacy Full Model / Frozen Forward",
+            "Pre-Test Model / OOS",
             (
                 status_paths["Full model"],
                 status_paths["Full model manifest"],
@@ -2417,7 +2417,7 @@ def _interactive_continuous_full_train(program_name: str, settings) -> int:
         print(
             "\n即將執行：確認canonical Dataset來源 → 建立daily stock-day index／target "
             "→ 以Selection內Inner Validation選epoch → 完整Selection重訓 "
-            "→ checkpoint後評估全市場與breakout-candidate forward OOS。"
+            "→ checkpoint後評估全市場與breakout-candidate 2021+ Pre-Test OOS。"
         )
         print("Daily feature採lazy materialization；不建立expanded 300×10 daily feature artifact。")
     else:
@@ -2429,7 +2429,7 @@ def _interactive_continuous_full_train(program_name: str, settings) -> int:
         f"Profile={profile.name}｜Objective={profile.training_objective}｜"
         f"Loss={profile.loss_name}｜Epoch metric={profile.epoch_selection_metric}"
     )
-    print("本流程不執行策略比較；模型完成後請另開 apps/research.py compare。")
+    print("此為Pre-Test研究Gate：不取代正式Rolling evidence；模型完成後可直接執行Pre-Test策略比較。")
     if not _prompt_bool("確認開始", True):
         print("已取消。")
         return 0
@@ -3000,7 +3000,8 @@ def _interactive_model_research(program_name: str) -> int:
         research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
-        print(render_menu_item(1, "Extending-Window Rolling 模型驗證", default=True))
+        print(render_menu_item(1, "Pre-Test｜單模型快速驗證", default=True))
+        print(render_menu_item(2, "Extending-Window Rolling 模型驗證"))
         pit_authorized = bool(
             settings.supports_point_in_time_scores and research_spec.selection_pit_authorized
         )
@@ -3010,8 +3011,8 @@ def _interactive_model_research(program_name: str) -> int:
             else None
         )
         if settings.supports_point_in_time_scores:
-            print(render_menu_item(2, "Fixed-Window Rolling 模型驗證"))
-        print(render_menu_item(3, "查看目前Workflow與工件狀態"))
+            print(render_menu_item(3, "Fixed-Window Rolling 模型驗證"))
+        print(render_menu_item(4, "查看目前Workflow與工件狀態"))
         _comparisons, strategy_model_sources = _strategy_compare_required_model_sources()
         if strategy_model_sources:
             print(render_menu_item(5, "準備策略比較所需模型工件"))
@@ -3027,10 +3028,12 @@ def _interactive_model_research(program_name: str) -> int:
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         if choice == "1":
+            return _interactive_continuous_full_train(program_name, settings)
+        if choice == "2":
             return _interactive_continuous_pit_validation(program_name, settings)
-        if choice == "2" and settings.supports_point_in_time_scores:
+        if choice == "3" and settings.supports_point_in_time_scores:
             return _interactive_continuous_stability_validation(program_name, settings)
-        if choice == "3":
+        if choice == "4":
             _print_workflow_status(settings)
             continue
         if choice == "5" and strategy_model_sources:

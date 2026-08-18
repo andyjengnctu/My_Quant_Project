@@ -961,7 +961,12 @@ def build_daily_ranker_split(bundle: ContinuousRankerDataBundle, *, inner_valida
         bundle.group_table["label_eval_end_date"], errors="raise"
     ).dt.normalize()
     policy = bundle.outer_policy
-    selection_start = pd.Timestamp(str(policy["selection_start_date"]))
+    # Daily Universal Pre-Test must use every legally feature-complete historical
+    # stock-day available before the frozen OOS cutoff.  The old optimizer
+    # selection_start is an optimizer research boundary, not a DL data boundary.
+    selection_start = pd.Timestamp(
+        str(bundle.summary.get("training_universe_start_date") or policy["selection_start_date"])
+    ).normalize()
     selection_end = pd.Timestamp(str(policy["selection_end_date"]))
     oos_start = pd.Timestamp(str(policy["oos_start_date"]))
     oos_end = pd.Timestamp(str(policy["effective_oos_end_date"]))

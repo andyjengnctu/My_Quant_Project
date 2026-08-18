@@ -33,6 +33,7 @@ import pandas as pd
 from config.breakout_quality import (
     BREAKOUT_QUALITY_ALLOW_TF32,
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES,
+    BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS,
     BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
     BREAKOUT_QUALITY_DEFAULT_EPOCHS,
     BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
@@ -845,6 +846,7 @@ def _continuous_training_defaults_snapshot() -> dict[str, Any]:
         "batch_size": int(BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE),
         "evaluation_batch_size": int(BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE),
         "train_prefetch_batches": int(BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES),
+        "train_prefetch_workers": int(BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS),
         "learning_rate": float(BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE),
         "weight_decay": float(BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY),
         "gradient_clip_norm": float(BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM),

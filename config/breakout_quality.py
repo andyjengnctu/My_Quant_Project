@@ -179,7 +179,8 @@ BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS = True  # 固定 PyTorch deterministic
 BREAKOUT_QUALITY_ALLOW_TF32 = False  # 保持跨裝置數值契約；不使用 TF32。
 BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES = 0  # 訓練時預先準備後續 batches 的數量；RAM preload 開啟時預設 0，慢速磁碟可自行調高；不改 batch 順序或 optimizer 更新。
 BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK = True  # 訓練與分數匯出前將去重 feature bank 與小型事件陣列載入 RAM；資料值與列順序不變。
-BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES = 2  # Continuous/daily ranker CPU feature feeding pipeline；只預先物化後續batch，不改batch order、loss或optimizer step。
+BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES = 8  # Continuous/daily ranker CPU feature feeding queue；只預先物化後續batch，不改batch order、loss或optimizer step。
+BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS = 4  # CPU feature materialization workers；結果仍按原batch順序消費，僅提升GPU feeding。
 
 
 # =============================================================================
@@ -211,22 +212,22 @@ BREAKOUT_QUALITY_PRETRAINING_STRIDE = 5  # Dataset sampling設定；每個ticker
 # Fixed-Window Rolling 是獨立診斷：相同annual refit，但限制完整fit history為固定
 # calendar window，專門檢查不同年代在較一致資訊長度下的learnability。它使用
 # 獨立工件路徑，不覆寫Extending-Window Rolling。
-BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE = "2015-01-01"
+BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE = "2016-01-01"
 # Strategy/reporting只從此日期起視為正式operational evidence；更早的合法fold可保留
 # 作模型warm-up與coverage，但不強迫策略比較納入。
-BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE = "2015-01-01"
-# "auto" = score到目前Dataset可評分的最新stock-day；None只供legacy重現，仍代表
-# canonical outer-policy Selection end。
-BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE: str | None = "auto"
+BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE = "2016-01-01"
+# Current formal Rolling只使用10個完整年度fold：2016～2025；不納入2026 partial fold。
+# "auto"仍保留為可設定值，供未來明確擴展到最新可評分stock-day。
+BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE: str | None = "2025-12-31"
 BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_MONTHS = 12
 BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS = 24
 # None = expanding history；正整數 = 完整fit history固定最近N個calendar months，
 # 且必須大於inner validation months。Operational固定為None。
 BREAKOUT_QUALITY_POINT_IN_TIME_TRAIN_WINDOW_MONTHS: int | None = None
-# Stability第一版使用10年固定history；此值是config而非validator magic constant。
+# Fixed-Window Rolling使用10年固定history；此值是config而非validator magic constant。
 BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS = 120
-BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE = "2015-01-01"
-BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE = "auto"
+BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE = "2016-01-01"
+BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE = "2025-12-31"
 BREAKOUT_QUALITY_POINT_IN_TIME_MIN_TRAIN_GROUPS = 20
 BREAKOUT_QUALITY_POINT_IN_TIME_MIN_VALIDATION_GROUPS = 20
 BREAKOUT_QUALITY_POINT_IN_TIME_MIN_SCORE_GROUPS = 1
@@ -2162,6 +2163,7 @@ __all__ = [
     'BREAKOUT_QUALITY_PRETRAINING_TEMPORAL_UNIT',
     'BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES',
+    'BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS',
     'BREAKOUT_QUALITY_EXTRA_HIGH_LENS',
     'BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA',
     'BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE',

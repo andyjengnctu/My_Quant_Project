@@ -604,6 +604,46 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         / "models"
         / "inception_time.py"
     ).read_text(encoding="utf-8")
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS,
+        BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES,
+    )
+    from services.breakout_quality.train_continuous_ranker import (
+        _iter_materialized_feature_batches,
+    )
+    synthetic_feature_bank = np.arange(96, dtype=np.float32).reshape(16, 2, 3)
+    synthetic_batches = [
+        np.asarray([5, 1, 9], dtype=np.int64),
+        np.asarray([2, 7], dtype=np.int64),
+        np.asarray([11, 12, 13, 14], dtype=np.int64),
+    ]
+    serial_batches = list(
+        _iter_materialized_feature_batches(
+            synthetic_feature_bank, synthetic_batches,
+            prefetch_batches=0, prefetch_workers=1,
+        )
+    )
+    prefetched_batches = list(
+        _iter_materialized_feature_batches(
+            synthetic_feature_bank, synthetic_batches,
+            prefetch_batches=BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES,
+            prefetch_workers=BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS,
+        )
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "continuous_ranker_multiworker_prefetch_preserves_exact_batch_identity_and_values",
+        True,
+        BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES == 8
+        and BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS == 4
+        and len(serial_batches) == len(prefetched_batches)
+        and all(np.array_equal(a[0], b[0]) for a, b in zip(serial_batches, prefetched_batches))
+        and all(np.array_equal(a[1], b[1]) for a, b in zip(serial_batches, prefetched_batches))
+        and "torch.cuda.Stream" in ranker_source
+        and "non_blocking=True" in ranker_source
+        and ".pin_memory()" in ranker_source,
+    )
+
     add_check(
         results,
         "synthetic_breakout_quality",

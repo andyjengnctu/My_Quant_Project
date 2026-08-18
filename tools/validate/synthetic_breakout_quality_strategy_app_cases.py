@@ -368,9 +368,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         tuple(item["profile_id"] for item in menu_profiles)
         == tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS)
-        and tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS) == ("extending_window_rolling",)
-        and len(menu_labels) == 1
-        and "Extending-Window Rolling" in menu_labels[0]
+        and tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS) == ("pre_test", "extending_window_rolling")
+        and len(menu_labels) == 2
+        and "Pre-Test" in menu_labels[0]
+        and "Extending-Window Rolling" in menu_labels[1]
         and all("MR-" not in label for label in menu_labels),
     )
     active_arm_ids = {
@@ -1675,33 +1676,19 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "請先由Strategy Compare正式前置建立" not in robustness_source,
     )
 
-    with tempfile.TemporaryDirectory() as tmp:
-        period_root = Path(tmp)
-        (period_root / "dataset_summary.json").write_text(
-            json.dumps({"dataset": robustness_profile.dataset, "source_data_date_range": {"end": "2026-03-02"}}),
-            encoding="utf-8",
-        )
-        stale_status = {
-            "comparison_period": {"start": "2021-01-01", "end": "2025-12-22"}
-        }
-        with patch.object(
-            robustness_module, "resolve_filter_output_dir", return_value=period_root
-        ), patch.object(
-            robustness_module, "resolve_breakout_quality_outer_policy",
-            return_value={"oos_start_date": "2021-01-01", "effective_oos_end_date": "2026-03-02"},
-        ):
-            derived_start, derived_end = robustness_module._comparison_period_from_upstream(
-                robustness_profile, robustness_stochastic, stale_status
-            )
+    configured_start, configured_end = robustness_module._comparison_period_from_upstream(
+        robustness_profile, robustness_stochastic, {}
+    )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "multi_seed_forward_period_is_derived_from_dataset_policy_not_current_canonical_score_tail",
+        "multi_seed_period_honors_explicit_current_profile_window_before_dataset_tail_fallback",
         True,
-        derived_start == "2021-01-01"
-        and derived_end == "2026-03-02",
+        configured_start == str(pd.Timestamp(str(robustness_profile.start_date)).date())
+        and configured_end == str(pd.Timestamp(str(robustness_profile.end_date)).date()),
     )
 
     dataset_profile_mismatch_rejected = False
+    fallback_profile = replace(robustness_profile, start_date=None, end_date=None)
     with tempfile.TemporaryDirectory() as tmp:
         period_root = Path(tmp)
         (period_root / "dataset_summary.json").write_text(
@@ -1713,13 +1700,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ):
             try:
                 robustness_module._comparison_period_from_upstream(
-                    robustness_profile, robustness_stochastic, {}
+                    fallback_profile, robustness_stochastic, {}
                 )
             except RuntimeError:
                 dataset_profile_mismatch_rejected = True
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "multi_seed_forward_period_rejects_dataset_profile_mismatch",
+        "multi_seed_dataset_tail_fallback_rejects_dataset_profile_mismatch",
         True,
         dataset_profile_mismatch_rejected,
     )

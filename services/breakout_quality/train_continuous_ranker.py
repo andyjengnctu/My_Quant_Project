@@ -53,6 +53,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES,
+    BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS,
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K,
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_BOUNDARY_WIDTH,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
@@ -172,6 +173,12 @@ def parse_args(argv=None):
         type=int,
         default=BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES,
         help="預先物化後續continuous-ranker training batches；0 表示關閉",
+    )
+    parser.add_argument(
+        "--train-prefetch-workers",
+        type=int,
+        default=BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS,
+        help="continuous-ranker CPU feature materialization workers；只影響feeding效能",
     )
     parser.add_argument("--lr", type=float, default=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE)
     parser.add_argument("--weight-decay", type=float, default=BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY)
@@ -300,6 +307,8 @@ def validate_args(args) -> None:
         raise ValueError("epochs>=1、batch-size>=2、evaluation-batch-size>=1")
     if int(args.train_prefetch_batches) < 0:
         raise ValueError("train-prefetch-batches必須 >=0")
+    if int(getattr(args, "train_prefetch_workers", BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS)) < 1:
+        raise ValueError("train-prefetch-workers必須 >=1")
     if float(args.lr) <= 0.0 or float(args.weight_decay) < 0.0:
         raise ValueError("learning rate必須>0，weight decay必須>=0")
     if float(args.gradient_clip_norm) < 0.0:
@@ -813,8 +822,19 @@ def _pairwise_logistic_loss(
     return torch.stack(day_losses).mean(), int(ranked_date_count)
 
 
-def _materialize_feature_batch(feature_bank, ids: np.ndarray) -> np.ndarray:
-    return np.asarray(feature_bank[np.asarray(ids, dtype=np.int64)], dtype=np.float32)
+def _materialize_feature_batch(
+    feature_bank,
+    ids: np.ndarray,
+    *,
+    torch=None,
+    pin_memory: bool = False,
+):
+    features = np.asarray(feature_bank[np.asarray(ids, dtype=np.int64)], dtype=np.float32)
+    if not bool(pin_memory):
+        return features
+    if torch is None:
+        raise ValueError("pin_memory=True時必須提供torch")
+    return torch.from_numpy(features).pin_memory()
 
 
 def _iter_materialized_feature_batches(
@@ -822,28 +842,36 @@ def _iter_materialized_feature_batches(
     batches: list[np.ndarray],
     *,
     prefetch_batches: int,
+    prefetch_workers: int = 1,
+    torch=None,
+    pin_memory: bool = False,
 ):
-    """Materialize batches in-order while one CPU worker runs ahead of the GPU.
-
-    The worker only reads the feature bank.  Batch identity/order and optimizer
-    updates remain identical to the non-prefetch path.
-    """
+    """Materialize training batches concurrently while preserving exact batch order."""
 
     depth = int(prefetch_batches)
+    worker_count = max(1, int(prefetch_workers))
     if depth <= 0 or len(batches) <= 1:
         for ids in batches:
-            yield ids, _materialize_feature_batch(feature_bank, ids)
+            yield ids, _materialize_feature_batch(
+                feature_bank, ids, torch=torch, pin_memory=bool(pin_memory)
+            )
         return
 
     queue_depth = min(depth, len(batches))
     with ThreadPoolExecutor(
-        max_workers=1,
+        max_workers=min(worker_count, queue_depth),
         thread_name_prefix="continuous-ranker-prefetch",
     ) as executor:
         pending = deque(
             (
                 batches[index],
-                executor.submit(_materialize_feature_batch, feature_bank, batches[index]),
+                executor.submit(
+                    _materialize_feature_batch,
+                    feature_bank,
+                    batches[index],
+                    torch=torch,
+                    pin_memory=bool(pin_memory),
+                ),
             )
             for index in range(queue_depth)
         )
@@ -860,11 +888,90 @@ def _iter_materialized_feature_batches(
                             _materialize_feature_batch,
                             feature_bank,
                             next_ids,
+                            torch=torch,
+                            pin_memory=bool(pin_memory),
                         ),
                     )
                 )
                 next_index += 1
             yield ids, features
+
+
+def _iter_device_training_batches(
+    torch,
+    feature_bank,
+    group_context: np.ndarray,
+    percentile_target: np.ndarray,
+    batches: list[np.ndarray],
+    *,
+    plan,
+    prefetch_batches: int,
+    prefetch_workers: int,
+):
+    """Yield device-ready batches; CUDA overlaps pinned H2D for N+1 with compute of N.
+
+    Batch identity and consumption order are unchanged.  Only feature materialization,
+    pinned host staging, and host-to-device transfer are pipelined.
+    """
+
+    use_cuda = str(getattr(plan, "device_type", "")) == "cuda"
+    cpu_iter = iter(
+        _iter_materialized_feature_batches(
+            feature_bank,
+            batches,
+            prefetch_batches=int(prefetch_batches),
+            prefetch_workers=int(prefetch_workers),
+            torch=torch if use_cuda else None,
+            pin_memory=use_cuda,
+        )
+    )
+    if not use_cuda:
+        for ids, batch_features in cpu_iter:
+            xb = torch.from_numpy(batch_features).to(plan.device)
+            cb = torch.from_numpy(
+                np.asarray(group_context[ids], dtype=np.float32)
+            ).to(plan.device)
+            target = torch.from_numpy(
+                np.asarray(percentile_target[ids], dtype=np.float32)
+            ).to(plan.device)
+            yield ids, xb, cb, target
+        return
+
+    copy_stream = torch.cuda.Stream(device=plan.device)
+    compute_stream = torch.cuda.current_stream(device=plan.device)
+
+    def stage_next():
+        try:
+            ids, features_cpu = next(cpu_iter)
+        except StopIteration:
+            return None
+        if not isinstance(features_cpu, torch.Tensor):
+            features_cpu = torch.from_numpy(features_cpu).pin_memory()
+        context_cpu = torch.from_numpy(
+            np.asarray(group_context[ids], dtype=np.float32)
+        ).pin_memory()
+        target_cpu = torch.from_numpy(
+            np.asarray(percentile_target[ids], dtype=np.float32)
+        ).pin_memory()
+        with torch.cuda.stream(copy_stream):
+            xb = features_cpu.to(plan.device, non_blocking=True)
+            cb = context_cpu.to(plan.device, non_blocking=True)
+            target = target_cpu.to(plan.device, non_blocking=True)
+        # Keep pinned host buffers alive until the copy stream is synchronized by the
+        # consumer on the next iteration.
+        return ids, xb, cb, target, (features_cpu, context_cpu, target_cpu)
+
+    staged = stage_next()
+    while staged is not None:
+        compute_stream.wait_stream(copy_stream)
+        ids, xb, cb, target, _host_refs = staged
+        xb.record_stream(compute_stream)
+        cb.record_stream(compute_stream)
+        target.record_stream(compute_stream)
+        # Stage N+1 before yielding N so the dedicated copy stream can overlap with
+        # the forward/backward compute performed by the consumer.
+        staged = stage_next()
+        yield ids, xb, cb, target
 
 
 def _listnet_top_one_loss(torch, margins, targets, dates) -> tuple[Any | None, int]:
@@ -917,6 +1024,7 @@ def _train_epoch(
     plan,
     grad_scaler,
     prefetch_batches: int = 0,
+    prefetch_workers: int = 1,
     pairwise_reduction: str = CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     raw_r_loss_name: str | None = None,
     raw_r_huber_delta_r: float | None = None,
@@ -955,16 +1063,18 @@ def _train_epoch(
     import torch.nn.functional as F
     group_dates_series = pd.Series(group_dates)
 
-    for ids, batch_features in _iter_materialized_feature_batches(
+    for ids, xb, cb, target in _iter_device_training_batches(
+        torch,
         feature_bank,
+        group_context,
+        percentile_target,
         batches,
+        plan=plan,
         prefetch_batches=int(prefetch_batches),
+        prefetch_workers=int(prefetch_workers),
     ):
         if len(ids) == 0:
             continue
-        xb = torch.from_numpy(batch_features).to(plan.device)
-        cb = torch.from_numpy(np.asarray(group_context[ids], dtype=np.float32)).to(plan.device)
-        target = torch.from_numpy(np.asarray(percentile_target[ids], dtype=np.float32)).to(plan.device)
         optimizer.zero_grad(set_to_none=True)
         with autocast_context(torch, plan):
             logits = model(xb, cb)
@@ -1331,6 +1441,7 @@ def select_epoch(
             plan=plan,
             grad_scaler=grad_scaler,
             prefetch_batches=int(args.train_prefetch_batches),
+            prefetch_workers=int(getattr(args, "train_prefetch_workers", BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS)),
             pairwise_reduction=(
                 research_spec.pairwise_reduction
                 or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
@@ -1606,6 +1717,7 @@ def fit_final(
             plan=plan,
             grad_scaler=grad_scaler,
             prefetch_batches=int(args.train_prefetch_batches),
+            prefetch_workers=int(getattr(args, "train_prefetch_workers", BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS)),
             pairwise_reduction=(
                 research_spec.pairwise_reduction
                 or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR

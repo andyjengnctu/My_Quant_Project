@@ -37,7 +37,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 43
+STRATEGY_COMPARE_SCHEMA_VERSION = 44
 
 # =============================================================================
 # 1. 常用設定
@@ -46,9 +46,9 @@ STRATEGY_COMPARE_SCHEMA_VERSION = 43
 #    繼承 config/breakout_quality.py 的 BreakoutQualityWorkflowSettings SSOT。
 # =============================================================================
 
-STRATEGY_COMPARE_DEFAULT_PROFILE = "extending_window_rolling"
+STRATEGY_COMPARE_DEFAULT_PROFILE = "pre_test"
 # 主互動選單只暴露泛化工作階段；研究 profile identity 留在 config/報表。
-STRATEGY_COMPARE_MENU_PROFILE_IDS = ("extending_window_rolling",)
+STRATEGY_COMPARE_MENU_PROFILE_IDS = ("pre_test", "extending_window_rolling")
 STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE = "extending_window_rolling"
 STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT = 4
 STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED = 20260810
@@ -96,16 +96,32 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_RESIDUAL_SAFETY_CONSTRAINED = "Min MR-1
 # Strategy Compare以研究階段profile隔離設定與輸出；App只顯示泛化階段名稱，
 # arms／contrasts／period／output namespace全部由本檔驅動。
 STRATEGY_COMPARE_PROFILES = {
+    "pre_test": {
+        "label": "Pre-Test 策略比較",
+        "description": (
+            "單模型快速研究Gate：沿用原本full-Selection refit後的2021+ continuous-ranker OOS scores，"
+            "快速比較DL-off Min ROOS、MR-13E reference與目前B2 candidate。只決定是否值得進正式Rolling，"
+            "不得取代2016～2025十fold Extending-Window evidence。"
+        ),
+        "display_alignment_group": "pre_test_strategy_compare",
+        "display_alignment_arm_ids": ("C3", "C44", "C56"),
+        "start_date": None,
+        "end_date": None,
+        "output_root": "outputs/strategy_compare/pre_test",
+        "reuse_output_roots": ("outputs/strategy_compare/forward_oos",),
+        "arm_ids": ("C3", "C44", "C56"),
+        "contrast_ids": ("C44-C3", "C56-C44", "C56-C3"),
+    },
     "extending_window_rolling": {
         "label": "Extending-Window Rolling 策略比較",
         "description": (
-            "2015→目前可驗證歷史的單一PIT-safe operational chain；DL使用expanding history + "
+            "2016→2025十個完整年度fold的單一PIT-safe operational chain；DL使用expanding history + "
             "annual refit，策略Min ROOS沿用各時期當時合法rolling params。2021不再形成evaluation policy斷點。"
         ),
         "display_alignment_group": "operational_strategy_compare",
         "display_alignment_arm_ids": ("C58", "C59", "C60"),
-        "start_date": None,
-        "end_date": None,
+        "start_date": "2016-01-01",
+        "end_date": "2025-12-31",
         "output_root": "outputs/strategy_compare/extending_window_rolling",
         "reuse_output_roots": (
             "outputs/strategy_compare/selection_pit",
@@ -266,7 +282,7 @@ STRATEGY_PARAM_SOURCES = {
             "active_params/{param_filename}"
         ),
         "description": (
-            "Extending-Window 2015→current Min ROOS；stitch既有2014-2020 historical P2與2021+ "
+            "Extending-Window 2016→2025 Min ROOS；stitch既有2014-2020 historical P2與2021+ "
             "current P2 rolling schedules；只在兩段rolling/search contract一致時建立，不重新最佳化。"
         ),
         "identity_manifest_path": (
@@ -430,7 +446,7 @@ STRATEGY_DL_SOURCES = {
         "experiment_profile": "daily_universal_no_time_full_list_ndcg_pairwise",
         "threshold": None,
         "score_source": "selection_point_in_time",
-        "description": "MR-13E Extending-Window Rolling PIT-safe score；expanding history + annual refit，2015→current。",
+        "description": "MR-13E Extending-Window Rolling PIT-safe score；expanding history + annual refit，2016→2025。",
         "forward_scores_builder": {
             "enabled": True,
             "builder_type": "selection_pit_from_existing_folds",
@@ -569,7 +585,7 @@ STRATEGY_DL_SOURCES = {
 STRATEGY_COMPARE_ARMS = {
     "C58": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_ROOS,
-        "description": "Extending-Window 2015→current stitched Min ROOS rolling params；rules全關；DL-off baseline",
+        "description": "Extending-Window 2016→2025 stitched Min ROOS rolling params；rules全關；DL-off baseline",
         "param_source": "operational_min_roos",
         "rule_policy": "all_off",
         "dl_enabled": False,

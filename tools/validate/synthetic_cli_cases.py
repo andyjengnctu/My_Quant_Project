@@ -370,7 +370,7 @@ def validate_dataset_cli_contract_case(_base_params):
         True,
         (
             [item["command"] for item in interactive_commands]
-            == ["prepare-continuous-target", "build-point-in-time-scores", "audit-point-in-time-scores"]
+            == ["prepare-continuous-target", "train-continuous-ranker"]
             and interactive_commands[0]["args"]
             == [
                 "--filter-id",
@@ -378,36 +378,23 @@ def validate_dataset_cli_contract_case(_base_params):
                 "--target-id",
                 model_research_settings.continuous_target_id,
             ]
-            and interactive_commands[1]["args"][:6]
+            and interactive_commands[1]["args"]
             == [
-                "--filter-id",
-                model_research_settings.filter_id,
-                "--model-architecture",
-                model_research_settings.model_architecture,
-                "--experiment-profile",
-                model_research_settings.experiment_profile,
+                "--filter-id", model_research_settings.filter_id,
+                "--model-architecture", model_research_settings.model_architecture,
+                "--experiment-profile", model_research_settings.experiment_profile,
+                "--seed", str(model_research_settings.seed),
             ]
-            and interactive_commands[2]["args"]
-            == [
-                "--filter-id",
-                model_research_settings.filter_id,
-                "--model-architecture",
-                model_research_settings.model_architecture,
-                "--experiment-profile",
-                model_research_settings.experiment_profile,
-            ]
-            and all(
-                item["compact_console"] == "1"
-                for item in interactive_commands
-            )
+            and interactive_commands[0]["compact_console"] == "1"
             and interactive_text.count("[Dataset]") == 0
             and "偵測到 PIT 模型所需 Dataset 尚未就緒" not in interactive_text
             and "[rebuild]" not in interactive_text
             and "[relabel]" not in interactive_text
             and "=== Continuous DL 模型研究與驗證 ===" in interactive_text
-            and "[1]  Extending-Window Rolling 模型驗證  (Enter)" in interactive_text
-            and "[2]  Fixed-Window Rolling 模型驗證" in interactive_text
-            and "[3]  查看目前Workflow與工件狀態" in interactive_text
+            and "[1]  Pre-Test｜單模型快速驗證  (Enter)" in interactive_text
+            and "[2]  Extending-Window Rolling 模型驗證" in interactive_text
+            and "[3]  Fixed-Window Rolling 模型驗證" in interactive_text
+            and "[4]  查看目前Workflow與工件狀態" in interactive_text
             and f"[4]  {configured_ranker_menu_label}" not in interactive_text
             and "MR-12A/B/C" not in interactive_text
             and "Audit／診斷" not in interactive_text
@@ -509,7 +496,7 @@ def validate_dataset_cli_contract_case(_base_params):
     with (
         patch("builtins.input", side_effect=[""]),
         patch(
-            "tools.filters.breakout_quality.application._interactive_continuous_pit_validation",
+            "tools.filters.breakout_quality.application._interactive_continuous_full_train",
             return_value=47,
         ) as continuous_train_route,
     ):
@@ -520,7 +507,7 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_continuous_model_menu_default_routes_to_extending_window_rolling",
+        "breakout_quality_continuous_model_menu_default_routes_to_pre_test",
         (47, 1),
         (continuous_default_rc, continuous_train_route.call_count),
     )
@@ -545,8 +532,9 @@ def validate_dataset_cli_contract_case(_base_params):
         (0, True, True),
         (
             no_pit_rc,
-            "[2]  Fixed-Window Rolling 模型驗證" in no_pit_text,
-            "[1]  Extending-Window Rolling 模型驗證  (Enter)" in no_pit_text,
+            "[3]  Fixed-Window Rolling 模型驗證" in no_pit_text,
+            "[1]  Pre-Test｜單模型快速驗證  (Enter)" in no_pit_text
+            and "[2]  Extending-Window Rolling 模型驗證" in no_pit_text,
         ),
     )
 
@@ -607,7 +595,7 @@ def validate_dataset_cli_contract_case(_base_params):
             current_model_settings.is_continuous_ranker
             and "Workflow 狀態" in rendered_status
             and "Continuous Target" in rendered_status
-            and "Legacy Full Model / Frozen Forward" in rendered_status
+            and "Pre-Test Model / OOS" in rendered_status
             and pit_status_ok
         )
     add_check(

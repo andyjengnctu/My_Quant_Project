@@ -9465,3 +9465,23 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Daily Universal dataset修正：training universe不再繼承optimizer historical `selection_start`（舊policy導致2011人為截斷）；shared最早下界由benchmark完整feature-window日期自動推導，個股仍各自要求完整feature window。此項改變training-data semantics，因此舊2014～2020 PIT folds只保留historical evidence，不直接REUSE為新Extending-Window模型。
 - Current Strategy Compare profile identity=`extending_window_rolling`，schema=`43`，arms仍=`C58/C59/C60`；robustness default改為`seed_count=4 / seed_generator_seed=20260810`。互動選單移除「一次執行全部 Multi-seed robustness」，只保留current profile自己的robustness入口。
 - Frozen Forward、舊Selection PIT、既有Cxx/MRxx數值與ID全部保留，不改寫歷史；production C42/C44不因本輪framework correction自動切換。
+
+
+## 2026-08-18 — Rolling score years narrowed to 2016–2025 (10 full folds)
+
+- Decision: current `Extending-Window Rolling` and `Fixed-Window Rolling` formal score period is `2016-01-01～2025-12-31`, exactly 10 complete annual folds.
+- Rationale: 10 complete annual folds are sufficient for the current research gate; the partial 2026 fold is excluded from formal Rolling evidence, and 2015 is intentionally not required despite being data-feasible.
+- Extending semantics are unchanged: the 2016 fold may use every legal, target-matured historical training sample available before 2016; the score start does not truncate training history.
+- Fixed semantics are unchanged: the 2016 fold uses the configured 120M history window (`2006-01-01～2015-12-31`) with the existing inner-validation/PIT legality contract.
+- Strategy Compare period is aligned to the same `2016-01-01～2025-12-31` range.
+- This is an evaluation-window governance change only; it does not alter target, architecture, loss, selector mathematics, production identity, or legacy historical artifacts.
+
+
+## 2026-08-18 — Pre-Test Gate + Rolling GPU-feeding acceleration
+
+- 使用者決策：新模型／策略調整的第一次驗證不得先強迫跑完10個annual folds。模型選單恢復原本單模型設計並正式命名`Pre-Test｜單模型快速驗證`：以所有合法historical daily samples做Selection內inner validation／epoch selection與完整Selection refit，再只讀2021+ OOS。此結果只作快速research Gate，不是正式Rolling evidence。
+- Strategy Compare新增`pre_test` profile並置於主選單第一項；直接REUSE單模型OOS scores，current quick matrix使用既有C3/C44/C56 controlled semantics。Pre-Test只決定是否值得投入正式Rolling，不新增production identity、不做robustness、不取代C58/C59/C60。Strategy schema=`44`。
+- 正式Rolling仍固定`2016-01-01～2025-12-31`，Extending與Fixed各10個完整年度fold；Fixed history=`120M`。Robustness default仍`4 seeds / generator 20260810`。
+- Daily Universal Pre-Test split修正：selection start不再讀optimizer `selection_start_date`，改讀dataset `training_universe_start_date`，使單模型Pre-Test與Extending都能使用所有合法早期feature-complete history。
+- Rolling execution acceleration：continuous-ranker default `train_prefetch_batches=8`、`train_prefetch_workers=4`；CUDA training用pinned host tensors、non-blocking H2D與dedicated copy stream預載下一batch，使N+1 transfer可與N compute overlap。batch identity/order、same-date batching、seed、optimizer steps、loss、deterministic algorithms、TF32與scientific target均不改。
+- Decision：`PRE_TEST_GATE_ADDED / ROLLING_EXECUTION_ACCELERATION_IMPLEMENTED / SCIENTIFIC_SEMANTICS_UNCHANGED`。

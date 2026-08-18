@@ -20,6 +20,7 @@ from core.display_common import InlineProgress, format_elapsed
 from config.breakout_quality import (
     BREAKOUT_QUALITY_ALLOW_TF32,
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES,
+    BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS,
     BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
     BREAKOUT_QUALITY_DEFAULT_EPOCHS,
     BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
@@ -145,6 +146,12 @@ def parse_args(argv=None) -> argparse.Namespace:
         default=BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES,
         help="預先materialize後續訓練batches；0表示關閉，不改batch順序",
     )
+    parser.add_argument(
+        "--train-prefetch-workers",
+        type=int,
+        default=BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS,
+        help="CPU feature materialization workers；只影響feeding效能",
+    )
     parser.add_argument("--lr", type=float, default=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE)
     parser.add_argument(
         "--weight-decay", type=float, default=BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY
@@ -238,6 +245,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("epochs>=1、batch-size>=2、evaluation-batch-size>=1")
     if int(args.train_prefetch_batches) < 0:
         raise ValueError("train-prefetch-batches必須>=0")
+    if int(getattr(args, "train_prefetch_workers", BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS)) < 1:
+        raise ValueError("train-prefetch-workers必須>=1")
     if float(args.lr) <= 0.0 or float(args.weight_decay) < 0.0:
         raise ValueError("learning rate必須>0，weight decay必須>=0")
     if float(args.gradient_clip_norm) < 0.0:
@@ -631,6 +640,7 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
             "batch_size": int(args.batch_size),
             "evaluation_batch_size": int(args.evaluation_batch_size),
             "train_prefetch_batches": int(args.train_prefetch_batches),
+            "train_prefetch_workers": int(getattr(args, "train_prefetch_workers", BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS)),
             "learning_rate": float(args.lr),
             "weight_decay": float(args.weight_decay),
             "gradient_clip_norm": float(args.gradient_clip_norm),
