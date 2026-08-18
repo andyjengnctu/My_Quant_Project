@@ -89,7 +89,7 @@ python apps/research.py compare robustness run
 python apps/research.py compare robustness latest
 ```
 
-`run`會依`config/strategy_compare.py`對應robustness profile的`stochastic_arm_ids`，以deterministic generated seeds逐一建立隔離模型／score並做final strategy replay；`fixed_arm_ids`只計算一次。robustness membership與single-seed arm `robustness_role`分離，啟用[3]/[4]不得改寫[1]/[2] scientific identity。GPU training queue與CPU replay queue依config worker數重疊。checkpoint、full score與完整replay tree仍依retention清除；`keep_attribution_source=true`時會在清除前只永久抽取active `trades/equity/daily_capacity/selected_buys/execution`的gzip compact attribution source；`execution`只保存entry execution的qty、risk-budget、actual initial risk與binding診斷，不保存完整orderable universe。舊completed robustness若scientific observation已存在但compact source缺失，再次`run`會顯示`REBUILD ATTRIBUTION`，使用完全相同scientific fingerprint／resolved seeds重建缺失工件，compact unit先以`PENDING`落盤，並驗證selected epoch／fold count、正式策略metrics與逐年報酬與既有observation一致；既有model/score SHA可得時亦須一致，全部通過後才標記`VERIFIED`供resume/Audit使用。程序若在驗證前中止，PENDING unit下次不得列READY；整個流程不建立新的scientific結果。
+`run`會依`config/strategy_compare.py`對應robustness profile的`stochastic_arm_ids`，以deterministic generated seeds逐一建立隔離模型／score並做final strategy replay；`fixed_arm_ids`只計算一次。對C56/C57這種dual-model arm，每個seed會用同一seed建立primary與secondary兩個source（Selection=`CONT13K_PIT + CONT13M_PIT`；Forward=`CONT13K + CONT13M`），兩者都READY後才做該seed唯一一次strategy replay；不得只vary primary而固定secondary。robustness membership與single-seed arm `robustness_role`分離，啟用[3]/[4]不得改寫[1]/[2] scientific identity。GPU training queue與CPU replay queue依config worker數重疊。checkpoint、full score與完整replay tree仍依retention清除；`keep_attribution_source=true`時會在清除前只永久抽取active `trades/equity/daily_capacity/selected_buys/execution`的gzip compact attribution source；`execution`只保存entry execution的qty、risk-budget、actual initial risk與binding診斷，不保存完整orderable universe。舊completed robustness若scientific observation已存在但compact source缺失，再次`run`會顯示`REBUILD ATTRIBUTION`，使用完全相同scientific fingerprint／resolved seeds重建缺失工件，compact unit先以`PENDING`落盤，並驗證selected epoch／fold count、正式策略metrics與逐年報酬與既有observation一致；既有model/score SHA可得時亦須一致，全部通過後才標記`VERIFIED`供resume/Audit使用。程序若在驗證前中止，PENDING unit下次不得列READY；整個流程不建立新的scientific結果。
 
 Robustness報表前四區與一般Selection PIT／Forward-OOS Strategy Compare共用同一canonical metric registry與renderer；Multi-seed專屬的RoMD分布、same-seed contrasts、seed-by-seed delta與跨seed年度統計保留在後段。`latest`若偵測到舊report schema，會直接以既有`seed_results.csv`、`seed_yearly_returns.csv`與compact attribution source做report-only refresh並覆寫同run的summary/report；此refresh不得呼叫trainer、score builder或strategy replay，因此已完成或正在執行中的scientific run不需為報表格式更新重跑。舊run當時未永久保存的per-seed model prediction／Future Target conversion欄位會顯示`-`；未來新run會在清理暫存model report前保留可直接取用的小型canonical model metrics。
 
@@ -175,7 +175,7 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-MR-13E仍是production anchor。MR-13K Pure-MFE已完成Seed42 Selection與Forward，ranking learnability提高但兩段single-seed portfolio translation均低於MR-13E；C42/C53與C44/C54 current 8-seed robustness仍獨立完成。MR-13M確認low-adverse path-risk具強Forward ranking signal；MR-13L/N/O與fixed 50/50 frozen fusion均已REJECT，Target／pair-definition路線停止。C55 raw MR-13M safety floor已完成且因upside犧牲過大停止；Current Forward新增Plan B2 `C56 = MR-13K primary objective + MR-13M same-day rank residual safety floor`，只跑Seed42 Forward且不加入robustness；Production candidate固定C42/C44。後續待研究順序以`doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`為準，`doc/ToDo.md`只屬使用者私人筆記。
+MR-13E仍是production anchor。C56 Seed42 Forward已證明`MR-13K primary + MR-13M same-day residual safety`能明顯改善C54的MDD/RoMD/Win/EV，但尚未足以promotion。依2026-08-18使用者決策，先把C56完整測完：Current Selection=`C32/C23/C42/C57`，Current Forward=`C1/C3/C44/C56`；C57是C56的PIT counterpart。Selection/Forward 8-seed robustness各只測C57/C56 stochastic，C54/C55不同行；每個seed必須同seed建立13K與13M兩個runtime sources。MR-13M的Selection PIT授權只供C57 secondary use，不代表standalone promotion。Production candidate固定C42/C44；Plan C-M延後到C56 full-flow結案後。後續順序以`doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`為準，`doc/ToDo.md`只屬使用者私人筆記。
 
 Active continuous model menu由config／research spec動態產生；MR-13O目前只授權Seed42 Forward model Gate：
 
@@ -192,6 +192,16 @@ Active Profile：daily_universal_full_horizon_pareto_mfe_low_adverse_pairwise
 MR-13O沿用MR-13H `daily_full_horizon_opportunity_r_v1`作economic result truth，但training target不是該scalar R；trainer會從同一canonical stock-day rows建立`[MFE percentile, low-adverse percentile]`，僅strict Pareto-comparable pairs進`pairwise_logistic` loss。Epoch selection固定看`mean_daily_pareto_pair_concordance`，global Pareto concordance只作tie-break；MR-13H economic Daily rho／Pair／Top-K只能在候選checkpoint評估中作描述性 model-gate evidence，不能參與選模。`selection_pit_authorized=False`，因此目前沒有`[2] Selection PIT`；也沒有新增scalar Target identity，所以不顯示`[6] Target comparison`。
 
 Forward console／簡易報表除既有economic ranking品質外，MR-13O會額外顯示Validation／Forward／breakout的Pareto pair concordance與comparable-pair coverage。若Pareto supervision本身學不到（接近隨機），此Target-formulation直接在model gate停止；若Pareto可學但economic ordering仍不改善，表示joint dominance supervision與最終economic ordering仍有落差，也不應直接進PIT。只有兩層證據都形成可信增量，才另輪授權Selection PIT。
+### C56 full-flow 完整驗證順序（2026-08-18 current）
+
+1. `apps/research.py → [1] 模型訓練 → [5] 準備策略比較所需模型工件`：補齊／重用Selection所需`CONT13K_PIT`與`CONT13M_PIT`。Strategy Compare本身不得checkpoint-only重建PIT。
+2. `apps/research.py → [3] 策略組合比較 → [1] Selection PIT 策略比較 → [1]`：執行C57 single-seed Selection；C54/C55不在此stage。
+3. `apps/research.py → [3] → [3] Selection PIT Multi-seed robustness`：fixed=C32/C23，stochastic只=C57；8 seeds，每seed同 seed訓練13K PIT＋13M PIT。
+4. `apps/research.py → [3] → [4] Forward-OOS Multi-seed robustness`：fixed=C1/C3，stochastic只=C56；8 seeds，每seed同 seed訓練13K＋13M。Seed42 C56 Forward既有正式pair可REUSE，不需重跑C54/C55。
+5. 也可在Selection single-seed完成後使用 `[5] 一次執行全部 Multi-seed robustness` 串行完成第3、4步。
+
+本輪完整測試的判定只看C57/C56自身跨期與跨seed分布；C54/C55歷史結果可作背景證據，但不再佔用本輪training/replay units。
+
 ### Continuous Target自動準備
 
 主選單會自動執行；CLI-only入口如下：

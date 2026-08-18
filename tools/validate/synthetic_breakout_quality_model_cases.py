@@ -2506,7 +2506,7 @@ def validate_breakout_quality_mr13m_low_adverse_ranker_contract_case(_base_param
             "MR-13M",
             DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
             CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-            False,
+            True,
         ),
         (
             spec_m.model_research_id,

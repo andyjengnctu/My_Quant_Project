@@ -167,6 +167,7 @@ def _resolved_ranking_options(
     source = settings.dl_sources[safety_dl_id]
     safety_override = dict((continuous_score_overrides or {}).get(safety_dl_id) or {})
     options.update({
+        "safety_filter_id": str(source.filter_id),
         "safety_score_source": str(source.score_source),
         "safety_model_architecture": str(source.model_architecture),
         "safety_experiment_profile": str(source.experiment_profile),
@@ -174,6 +175,11 @@ def _resolved_ranking_options(
             None
             if not safety_override.get("score_path")
             else str(safety_override["score_path"])
+        ),
+        "safety_score_manifest_path_override": (
+            None
+            if not safety_override.get("manifest_path")
+            else str(safety_override["manifest_path"])
         ),
     })
     return options

@@ -920,10 +920,19 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                     raise ValueError(f"arm {key} safety_dl_id不得與primary dl_id相同")
                 primary_source = settings.dl_sources[arm.dl_id]
                 safety_source = settings.dl_sources[safety_dl_id]
-                if primary_source.score_source != "continuous_ranker_oos" or safety_source.score_source != "continuous_ranker_oos":
-                    raise ValueError(f"arm {key} dual-model safety目前只允許Forward continuous_ranker_oos sources")
-                if options.get("selection_only") is not False:
-                    raise ValueError(f"arm {key} dual-model safety第一階段必須selection_only=False")
+                allowed_safety_sources = {"selection_point_in_time", "continuous_ranker_oos"}
+                if (
+                    primary_source.score_source not in allowed_safety_sources
+                    or safety_source.score_source != primary_source.score_source
+                ):
+                    raise ValueError(
+                        f"arm {key} dual-model safety primary/secondary必須使用同階段PIT或Forward score source"
+                    )
+                expected_selection_only = primary_source.score_source == "selection_point_in_time"
+                if options.get("selection_only") is not expected_selection_only:
+                    raise ValueError(
+                        f"arm {key} dual-model safety selection_only與score source階段不一致"
+                    )
                 if any(
                     str(options.get(name) or '').strip()
                     for name in (

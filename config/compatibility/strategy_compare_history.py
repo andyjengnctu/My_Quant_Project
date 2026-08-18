@@ -1035,6 +1035,88 @@ HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({
     "C52-C1": {"left": "C52", "right": "C1", "description": "historical MR-13H Forward相對Full ROOS"},
 })
 
+
+# 2026-08-18 C56 full-flow獨立驗證：C53/C54/C55與其舊對照退出current matrix，保留唯讀歷史identity。
+HISTORICAL_STRATEGY_COMPARE_ARMS.update({'C53': {'name': 'Min MR-13K Constrained',
+         'description': 'Selection PIT MR-13K controlled arm：與C42完全相同historical Min params/all-off、K/R0、canonical '
+                        'sizing/cash/orderability/execution與exact branch-and-bound；唯一scientific change是DL '
+                        'source由MR-13E PIT替換為MR-13K PIT',
+         'param_source': 'selection_min_roos',
+         'rule_policy': 'all_off',
+         'dl_enabled': True,
+         'dl_id': 'CONT13K_PIT',
+         'dl_runtime_mode': 'resource-aware-continuous-score-constrained-optimal',
+         'dl_runtime_options': {'preserve_k_r0': True,
+                                'constrained_solver': 'exact_branch_and_bound_v1',
+                                'selection_only': True},
+         'robustness_role': 'off'},
+ 'C54': {'name': 'Min MR-13K Constrained',
+         'description': 'Forward-OOS MR-13K controlled arm：與C44完全相同current Min params/all-off、K/R0、canonical '
+                        'sizing/cash/orderability/execution與exact branch-and-bound；唯一scientific change是DL '
+                        'source由MR-13E Forward替換為MR-13K Forward',
+         'param_source': 'min_roos',
+         'rule_policy': 'all_off',
+         'dl_enabled': True,
+         'dl_id': 'CONT13K',
+         'dl_runtime_mode': 'resource-aware-continuous-score-constrained-optimal',
+         'dl_runtime_options': {'preserve_k_r0': True,
+                                'constrained_solver': 'exact_branch_and_bound_v1',
+                                'selection_only': False},
+         'robustness_role': 'off'},
+ 'C55': {'name': 'Min MR-13K + MR-13M Safety',
+         'description': 'Forward-only Plan B controlled arm：完全沿用C54的Min params/all-off、K/R0、canonical '
+                        'sizing/cash/orderability/execution與MR-13K primary score objective；額外要求選中basket的MR-13M score '
+                        'coverage與score-sum不得低於同日DL-off Min ROOS baseline。MR-13M只作hard safety '
+                        'floor，不與MR-13K加權、不新增numeric threshold。',
+         'param_source': 'min_roos',
+         'rule_policy': 'all_off',
+         'dl_enabled': True,
+         'dl_id': 'CONT13K',
+         'dl_runtime_mode': 'resource-aware-continuous-score-safety-constrained-optimal',
+         'dl_runtime_options': {'preserve_k_r0': True,
+                                'constrained_solver': 'exact_branch_and_bound_v1',
+                                'selection_only': False,
+                                'safety_dl_id': 'CONT13M',
+                                'safety_constraint': 'baseline_coverage_and_score_sum_floor_v1'},
+         'robustness_role': 'off'}})
+
+HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({'C53-C42': {'left': 'C53',
+             'right': 'C42',
+             'description': '同Min/K/R0/exact/cash/execution下只將MR-13E PIT替換為MR-13K PIT，隔離pure-MFE '
+                            'Target模型本身的Selection策略轉化效果'},
+ 'C53-C23': {'left': 'C53',
+             'right': 'C23',
+             'description': 'Selection PIT MR-13K exact constrained相對DL-off Min ROOS的策略經濟效果'},
+ 'C53-C32': {'left': 'C53',
+             'right': 'C32',
+             'description': 'Selection PIT MR-13K exact constrained相對Full ROOS的整體策略結果；不是單一參數效果'},
+ 'C54-C44': {'left': 'C54',
+             'right': 'C44',
+             'description': '同Min/K/R0/exact/cash/execution下只將MR-13E Forward替換為MR-13K Forward，隔離pure-MFE '
+                            'Target模型本身的Forward策略轉化效果'},
+ 'C54-C3': {'left': 'C54',
+            'right': 'C3',
+            'description': 'Forward-OOS MR-13K exact constrained相對DL-off Min ROOS的策略經濟效果'},
+ 'C54-C1': {'left': 'C54',
+            'right': 'C1',
+            'description': 'Forward-OOS MR-13K exact constrained相對Full ROOS的整體策略結果；不是單一參數效果'},
+ 'C55-C54': {'left': 'C55',
+             'right': 'C54',
+             'description': 'Plan B primary contrast：同MR-13K objective/K/R0/exact/cash/execution下，只新增MR-13M '
+                            'baseline-relative safety floor，隔離dual-model safety constraint的Forward策略效果'},
+ 'C55-C44': {'left': 'C55',
+             'right': 'C44',
+             'description': 'Plan B dual-model Forward相對production MR-13E exact constrained reference的整體策略結果'},
+ 'C55-C3': {'left': 'C55', 'right': 'C3', 'description': 'Plan B dual-model Forward相對DL-off Min ROOS的策略經濟效果'},
+ 'C55-C1': {'left': 'C55', 'right': 'C1', 'description': 'Plan B dual-model Forward相對Full ROOS的整體策略結果；不是單一參數效果'},
+ 'C56-C54': {'left': 'C56',
+             'right': 'C54',
+             'description': 'Plan B2 primary contrast：同MR-13K objective/K/R0/exact/cash/execution下，只新增MR-13M same-day '
+                            'rank residual safety floor，隔離conditional residual safety的Forward策略效果'},
+ 'C56-C55': {'left': 'C56',
+             'right': 'C55',
+             'description': 'Plan B2相對C55 raw-safety hard floor：比較residualizing 13M是否能保留更多13K upside'}})
+
 __all__ = [
     "HISTORICAL_STRATEGY_PARAM_SOURCES",
     "HISTORICAL_STRATEGY_DL_SOURCES",

@@ -2681,14 +2681,16 @@ def _strategy_compare_required_model_sources():
     }
     comparisons = []
     dedup: dict[tuple[str, str, str, str], tuple[str, object]] = {}
+    from filters.breakout_quality.strategy_compare_dl_artifacts import (
+        resolve_required_artifact_sources,
+    )
+
     for profile in get_strategy_comparison_profiles():
         comparison = get_strategy_comparison_settings(profile["profile_id"])
         comparisons.append(comparison)
-        required_ids = {
-            str(arm.dl_id)
-            for arm in comparison.enabled_arms
-            if arm.dl_enabled and arm.dl_id
-        }
+        _required_params, required_ids, _runtime_required = resolve_required_artifact_sources(
+            comparison
+        )
         for dl_id in comparison.dl_sources:
             if dl_id not in required_ids:
                 continue

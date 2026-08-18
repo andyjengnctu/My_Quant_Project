@@ -364,28 +364,50 @@ def resolve_breakout_quality_candidate_rank(
             )
         options = dict(context.ranking_options or {})
         safety_dl_id = str(options.get("safety_dl_id") or "").strip()
+        safety_filter_id = str(options.get("safety_filter_id") or "").strip()
         safety_profile = str(options.get("safety_experiment_profile") or "").strip()
         safety_architecture = str(options.get("safety_model_architecture") or "").strip()
         safety_source = str(options.get("safety_score_source") or "").strip()
-        if safety_dl_id or safety_profile or safety_architecture or safety_source:
-            if not all((safety_dl_id, safety_profile, safety_architecture, safety_source)):
+        if safety_dl_id or safety_filter_id or safety_profile or safety_architecture or safety_source:
+            if not all((safety_dl_id, safety_filter_id, safety_profile, safety_architecture, safety_source)):
                 raise ValueError("dual-model safety ranking options缺少完整secondary source identity")
-            if safety_source != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
-                raise ValueError("dual-model safety source目前只支援continuous_ranker_oos")
             safety_score_path_override = str(
                 options.get("safety_score_path_override") or ""
             ).strip()
-            safety_payload = lookup_continuous_ranker_oos_candidate_score(
-                project_root=root,
-                ticker=str(ticker),
-                signal_date=lookup_date,
-                filter_id=str(filter_id),
-                model_architecture=safety_architecture,
-                experiment_profile=safety_profile,
-                score_path_override=(
-                    None if not safety_score_path_override else safety_score_path_override
-                ),
-            )
+            safety_manifest_path_override = str(
+                options.get("safety_score_manifest_path_override") or ""
+            ).strip()
+            if safety_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+                safety_payload = lookup_continuous_ranker_oos_candidate_score(
+                    project_root=root,
+                    ticker=str(ticker),
+                    signal_date=lookup_date,
+                    filter_id=safety_filter_id,
+                    model_architecture=safety_architecture,
+                    experiment_profile=safety_profile,
+                    score_path_override=(
+                        None if not safety_score_path_override else safety_score_path_override
+                    ),
+                )
+            elif safety_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+                safety_payload = lookup_selection_point_in_time_candidate_score(
+                    project_root=root,
+                    ticker=str(ticker),
+                    signal_date=lookup_date,
+                    filter_id=safety_filter_id,
+                    model_architecture=safety_architecture,
+                    experiment_profile=safety_profile,
+                    score_path_override=(
+                        None if not safety_score_path_override else safety_score_path_override
+                    ),
+                    manifest_path_override=(
+                        None if not safety_manifest_path_override else safety_manifest_path_override
+                    ),
+                )
+            else:
+                raise ValueError(
+                    "dual-model safety source只支援selection_point_in_time或continuous_ranker_oos"
+                )
             payload = dict(payload)
             payload.update({
                 "safety_dl_id": safety_dl_id,

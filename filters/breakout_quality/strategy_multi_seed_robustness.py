@@ -114,6 +114,7 @@ from core.report_style import (
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from filters.breakout_quality.strategy_comparison import (
     _arm_runtime_spec,
+    _resolved_ranking_options,
     _find_reusable_baseline_source,
     _load_direct_selection_r,
     collect_artifact_status,
@@ -136,7 +137,7 @@ LATEST_FILENAME = "latest.json"
 ATTRIBUTION_SOURCE_DIRNAME = "attribution_source"
 ATTRIBUTION_SOURCE_SCHEMA_VERSION = 2
 ROBUSTNESS_SCHEMA_VERSION = 9
-ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 1
+ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 2
 TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
 MEAN_METRICS: tuple[tuple[str, str, str], ...] = (
@@ -487,19 +488,48 @@ def _required_parameter_sources(
     return tuple(sorted({arm.param_source for arm in (*fixed_arms, *stochastic_arms)}))
 
 
+def _arm_training_dl_ids(settings, arm: StrategyComparisonArm) -> tuple[str, ...]:
+    """Return every stochastic model source that must share the arm seed.
+
+    Dual-model safety arms are a single scientific strategy unit.  Their primary
+    opportunity source and secondary safety source must therefore be trained with
+    the same generated seed; fixing the secondary model at Seed42 would only test
+    partial robustness of the arm.
+    """
+
+    primary = str(arm.dl_id or "").strip()
+    if not primary:
+        raise ValueError(f"stochastic arm缺少dl_id: {arm.arm_id}")
+    source_ids = [primary]
+    safety_dl_id = str(dict(arm.dl_runtime_options or {}).get("safety_dl_id") or "").strip()
+    if safety_dl_id:
+        if safety_dl_id not in settings.dl_sources:
+            raise ValueError(f"stochastic arm引用不存在的safety_dl_id: {arm.arm_id}/{safety_dl_id}")
+        source_ids.append(safety_dl_id)
+    unique = tuple(dict.fromkeys(source_ids))
+    score_sources = {str(settings.dl_sources[dl_id].score_source) for dl_id in unique}
+    expected = "selection_point_in_time" if settings.profile_id == "selection_pit" else "continuous_ranker_oos"
+    if score_sources != {expected}:
+        raise ValueError(
+            "stochastic arm的primary/secondary score source與robustness階段不一致: "
+            f"arm={arm.arm_id}, expected={expected}, actual={sorted(score_sources)}"
+        )
+    return unique
+
+
 def _training_source_groups(
     stochastic_arms: tuple[StrategyComparisonArm, ...],
+    *,
+    settings,
 ) -> tuple[tuple[str, tuple[tuple[int, StrategyComparisonArm], ...]], ...]:
     groups: dict[str, list[tuple[int, StrategyComparisonArm]]] = {}
     order: list[str] = []
     for arm_order, arm in enumerate(stochastic_arms, start=1):
-        dl_id = str(arm.dl_id or "").strip()
-        if not dl_id:
-            raise ValueError(f"stochastic arm缺少dl_id: {arm.arm_id}")
-        if dl_id not in groups:
-            groups[dl_id] = []
-            order.append(dl_id)
-        groups[dl_id].append((arm_order, arm))
+        for dl_id in _arm_training_dl_ids(settings, arm):
+            if dl_id not in groups:
+                groups[dl_id] = []
+                order.append(dl_id)
+            groups[dl_id].append((arm_order, arm))
     return tuple((dl_id, tuple(groups[dl_id])) for dl_id in order)
 
 
@@ -554,8 +584,8 @@ def _model_upstream_rows(settings, stochastic_arms) -> tuple[list[tuple[str, str
     rows: list[tuple[str, str, str]] = []
     blockers: list[str] = []
     seen: set[tuple[str, str]] = set()
-    for arm in stochastic_arms:
-        dl = settings.dl_sources[str(arm.dl_id)]
+    for dl_id, _arm_entries in _training_source_groups(tuple(stochastic_arms), settings=settings):
+        dl = settings.dl_sources[str(dl_id)]
         key = (str(dl.filter_id), str(dl.experiment_profile))
         if key in seen:
             continue
@@ -604,13 +634,14 @@ def _comparison_period_from_upstream(settings, stochastic_arms, status: dict[str
         return str(start.date()), str(end.date())
 
     runtime_periods: list[tuple[pd.Timestamp, pd.Timestamp]] = []
-    seen_filters: set[str] = set()
-    for arm in stochastic_arms:
-        dl = settings.dl_sources[str(arm.dl_id)]
+    seen_sources: set[tuple[str, str]] = set()
+    for dl_id, _arm_entries in _training_source_groups(tuple(stochastic_arms), settings=settings):
+        dl = settings.dl_sources[str(dl_id)]
         filter_id = str(dl.filter_id)
-        if filter_id in seen_filters:
+        source_key = (filter_id, str(dl.experiment_profile))
+        if source_key in seen_sources:
             continue
-        seen_filters.add(filter_id)
+        seen_sources.add(source_key)
         dataset = resolve_dataset_paths(
             resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
         )
@@ -715,7 +746,7 @@ def _render_robustness_execution_plan(
             arm.name,
             f"{cfg.seed_count}個deterministic generated seeds；isolated canonical trainer + same strategy replay；若scientific observation已完成但compact attribution缺少，僅重建同一observation的歸因工件",
         ))
-    training_sources = _training_source_groups(tuple(stochastic_arms))
+    training_sources = _training_source_groups(tuple(stochastic_arms), settings=settings)
     pit_workload_lines: list[str] = [
         f"模型訓練單元       ：{cfg.seed_count * len(training_sources)}（{len(training_sources)} unique DL sources × {cfg.seed_count} seeds）",
         f"策略Replay單元     ：{cfg.seed_count * len(stochastic_arms)}（{len(stochastic_arms)} stochastic arms × {cfg.seed_count} seeds）",
@@ -877,6 +908,27 @@ def build_multi_seed_robustness_contract(
         }
         for key, spec in reference_baselines.items()
     }
+    def source_contract(dl_id: str) -> dict[str, Any]:
+        source = settings.dl_sources[str(dl_id)]
+        return {
+            "dl_id": source.dl_id,
+            "filter_id": source.filter_id,
+            "model_architecture": source.model_architecture,
+            "experiment_profile": source.experiment_profile,
+            "threshold": source.threshold,
+            "score_source": source.score_source,
+            "experiment_profile_manifest": get_breakout_quality_experiment_profile(
+                source.experiment_profile
+            ).as_manifest_payload(),
+            "point_in_time_training_policy": (
+                _point_in_time_training_policy_snapshot(
+                    experiment_profile=source.experiment_profile
+                )
+                if str(source.score_source) == "selection_point_in_time"
+                else None
+            ),
+        }
+
     scientific = {
         "scientific_contract_version": ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION,
         "robustness_id": robustness.robustness_id,
@@ -899,17 +951,14 @@ def build_multi_seed_robustness_contract(
         ],
         "stochastic_arms": [
             {
-                "arm_id": arm.arm_id, "param_source": arm.param_source, "rule_policy": arm.rule_policy,
-                "dl_id": arm.dl_id, "dl_runtime_mode": arm.dl_runtime_mode,
+                "arm_id": arm.arm_id,
+                "param_source": arm.param_source,
+                "rule_policy": arm.rule_policy,
+                "dl_id": arm.dl_id,
+                "dl_runtime_mode": arm.dl_runtime_mode,
                 "dl_runtime_options": dict(arm.dl_runtime_options or {}),
-                "dl_source": {
-                    "dl_id": settings.dl_sources[str(arm.dl_id)].dl_id,
-                    "filter_id": settings.dl_sources[str(arm.dl_id)].filter_id,
-                    "model_architecture": settings.dl_sources[str(arm.dl_id)].model_architecture,
-                    "experiment_profile": settings.dl_sources[str(arm.dl_id)].experiment_profile,
-                    "threshold": settings.dl_sources[str(arm.dl_id)].threshold,
-                    "score_source": settings.dl_sources[str(arm.dl_id)].score_source,
-                },
+                # Keep the historical primary-only fields for old report readers.
+                "dl_source": source_contract(str(arm.dl_id)),
                 "experiment_profile": get_breakout_quality_experiment_profile(
                     settings.dl_sources[str(arm.dl_id)].experiment_profile
                 ).as_manifest_payload(),
@@ -920,6 +969,10 @@ def build_multi_seed_robustness_contract(
                     if str(settings.dl_sources[str(arm.dl_id)].score_source) == "selection_point_in_time"
                     else None
                 ),
+                "runtime_dl_sources": [
+                    source_contract(dl_id)
+                    for dl_id in _arm_training_dl_ids(settings, arm)
+                ],
             }
             for arm in stochastic
         ],
@@ -1055,7 +1108,9 @@ def _write_compact_attribution_source(
             "fold_count": job.get("fold_count"),
             "model_sha256": str(job.get("model_sha256") or "") or None,
             "score_sha256": str(job.get("score_sha256") or "") or None,
+            "runtime_source_identity_sha256": str(job.get("runtime_source_identity_sha256") or "") or None,
         },
+        "runtime_training_identities": dict(job.get("runtime_source_identities") or {}),
         "scientific_observation_validation": {
             "status": "PENDING",
             "verified_at_utc": None,
@@ -1236,7 +1291,7 @@ def _validate_rebuilt_observation(
             return ""
         return str(value).strip().lower()
 
-    for key in ("model_sha256", "score_sha256"):
+    for key in ("model_sha256", "score_sha256", "runtime_source_identity_sha256"):
         left = optional_hash(existing_row.get(key))
         right = optional_hash(rebuilt.get(key))
         if left and left != right:
@@ -1324,10 +1379,10 @@ def _resolved_period(settings, status: dict[str, Any]) -> tuple[str, str]:
 
 
 def _validate_training_artifacts(
-    *, arm: StrategyComparisonArm, seed: int, model_dir: Path, research_dir: Path, settings,
+    *, arm: StrategyComparisonArm, dl_id: str, seed: int, model_dir: Path, research_dir: Path, settings,
     comparison_start: str, comparison_end: str,
 ) -> dict[str, Any]:
-    dl = settings.dl_sources[str(arm.dl_id)]
+    dl = settings.dl_sources[str(dl_id)]
     if str(dl.score_source) == "selection_point_in_time":
         score = model_dir / SELECTION_POINT_IN_TIME_SCORE_FILENAME
         manifest_path = model_dir / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
@@ -1425,10 +1480,10 @@ def _validate_training_artifacts(
 
 
 def _training_command(
-    *, arm: StrategyComparisonArm, seed: int, model_dir: Path, research_dir: Path, settings,
+    *, arm: StrategyComparisonArm, dl_id: str, seed: int, model_dir: Path, research_dir: Path, settings,
     comparison_start: str, comparison_end: str,
 ) -> list[str]:
-    dl = settings.dl_sources[str(arm.dl_id)]
+    dl = settings.dl_sources[str(dl_id)]
     if str(dl.score_source) == "selection_point_in_time":
         return [
             sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores",
@@ -1477,7 +1532,8 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     model_dir = Path(job["model_dir"]).resolve()
     research_dir = Path(job["research_dir"]).resolve()
     train_log_path = research_dir / "train.log"
-    dl = settings.dl_sources[str(arm.dl_id)]
+    dl_id = str(job["dl_id"])
+    dl = settings.dl_sources[dl_id]
     is_selection_pit = str(dl.score_source) == "selection_point_in_time"
     started = time.perf_counter()
     artifacts = None
@@ -1485,6 +1541,7 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         try:
             artifacts = _validate_training_artifacts(
                 arm=arm,
+                dl_id=dl_id,
                 seed=seed,
                 model_dir=model_dir,
                 research_dir=research_dir,
@@ -1529,6 +1586,7 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         proc = subprocess.Popen(
             _training_command(
                 arm=arm,
+                dl_id=dl_id,
                 seed=seed,
                 model_dir=model_dir,
                 research_dir=research_dir,
@@ -1562,6 +1620,7 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         )
     artifacts = _validate_training_artifacts(
         arm=arm,
+        dl_id=dl_id,
         seed=seed,
         model_dir=model_dir,
         research_dir=research_dir,
@@ -1589,7 +1648,7 @@ def _training_units(
     reuse_completed: bool,
 ) -> deque[dict[str, Any]]:
     units: deque[dict[str, Any]] = deque()
-    source_groups = _training_source_groups(stochastic_arms)
+    source_groups = _training_source_groups(stochastic_arms, settings=settings)
     for seed_order, seed in enumerate(seeds, start=1):
         for source_order, (dl_id, arm_entries) in enumerate(source_groups, start=1):
             replay_entries = tuple(
@@ -1627,9 +1686,8 @@ def _format_elapsed(seconds: float) -> str:
 
 
 def _pit_saved_fold_progress(meta: dict[str, Any]) -> tuple[int, int] | None:
-    arm: StrategyComparisonArm = meta["arm"]
     settings = meta["settings"]
-    dl = settings.dl_sources[str(arm.dl_id)]
+    dl = settings.dl_sources[str(meta["dl_id"])]
     if str(dl.score_source) != "selection_point_in_time":
         return None
     workflow = get_breakout_quality_workflow_settings(
@@ -1808,21 +1866,38 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     all_off = arm.rule_policy == "all_off"
     started = time.perf_counter(); runtime_spec = _arm_runtime_spec(arm)
     is_selection = str(dl.score_source) == "selection_point_in_time"
+    score_overrides = {
+        str(key): dict(value or {})
+        for key, value in dict(job.get("score_overrides") or {}).items()
+    }
+    primary_override = dict(score_overrides.get(str(arm.dl_id)) or {})
     payload = run_comparison(
         project_root=PROJECT_ROOT, dataset=settings.dataset, params_path=str(job["params_path"]),
         param_policy=settings.param_policy, max_positions=settings.max_positions,
         enable_rotation=settings.rotation == "on", comparison_mode=runtime_spec["comparison_mode"],
-        ranking_policy=runtime_spec["ranking_policy"], ranking_options=dict(arm.dl_runtime_options or {}),
+        ranking_policy=runtime_spec["ranking_policy"], ranking_options=_resolved_ranking_options(
+            settings,
+            arm,
+            continuous_score_overrides=score_overrides,
+        ),
         optional_entry_filter_policy=(OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF if all_off else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT),
         filter_id=dl.filter_id, score_source=dl.score_source, model_architecture=dl.model_architecture,
         experiment_profile=dl.experiment_profile, threshold=dl.threshold, output_dir_override=pair_dir,
         comparison_start_date=start, comparison_end_date=end, quiet=True,
         shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None),
         baseline_reuse_dir=baseline_dir,
-        continuous_score_path_override=(None if is_selection else str(job["score_path"])),
-        continuous_score_execution_start_override=(None if is_selection else str(job["score_execution_start"])),
-        selection_pit_score_path_override=(str(job["score_path"]) if is_selection else None),
-        selection_pit_manifest_path_override=(str(job["score_manifest_path"]) if is_selection else None),
+        continuous_score_path_override=(
+            None if is_selection else str(primary_override.get("score_path") or job["score_path"])
+        ),
+        continuous_score_execution_start_override=(
+            None if is_selection else str(primary_override.get("execution_start") or job["score_execution_start"])
+        ),
+        selection_pit_score_path_override=(
+            str(primary_override.get("score_path") or job["score_path"]) if is_selection else None
+        ),
+        selection_pit_manifest_path_override=(
+            str(primary_override.get("manifest_path") or job["score_manifest_path"]) if is_selection else None
+        ),
         selection_pit_expected_seed_override=(int(job["seed"]) if is_selection else None),
         capture_execution_diagnostics=bool(job.get("keep_attribution_source")),
         # Multi-seed robustness只需要策略績效、trade-set與compact attribution。
@@ -1844,6 +1919,7 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         "replay_elapsed_sec": round(time.perf_counter() - started, 3),
         "model_sha256": str(job.get("model_sha256") or "") or None,
         "score_sha256": str(job.get("score_sha256") or "") or None,
+        "runtime_source_identity_sha256": str(job.get("runtime_source_identity_sha256") or "") or None,
         **{key: metrics.get(key) for _label, key, _unit in MEAN_METRICS},
         **{key: metrics.get(key) for key in COMMON_STRATEGY_REPORT_METRIC_KEYS},
         **{key: model_prediction.get(key) for key in (*MODEL_PREDICTION_METRIC_KEYS, "continuous_target_id")},
@@ -3116,7 +3192,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         for row in rows
     }
     total_units = len(stochastic_arms) * len(seeds)
-    training_sources = _training_source_groups(stochastic_arms)
+    training_sources = _training_source_groups(stochastic_arms, settings=settings)
     training_unit_count = len(training_sources) * len(seeds)
     done_units = len(completed)
     print("\n" + render_title("Multiple-seed robustness 執行"))
@@ -3177,6 +3253,8 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             "research_dir": Path(str(meta["research_dir"])),
             "score_source": str(settings.dl_sources[str(meta["dl_id"])].score_source),
         })
+    trained_artifacts: dict[tuple[str, int], dict[str, Any]] = {}
+    queued_replay_units: set[tuple[str, int]] = set()
 
     for seed_order, seed in enumerate(seeds, start=1):
         for arm_order, arm in enumerate(stochastic_arms, start=1):
@@ -3317,12 +3395,106 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         if ready_replays or replay_futures:
             write_progress_manifest()
 
+    def queue_replay_if_ready(
+        *,
+        arm_order: int,
+        arm: StrategyComparisonArm,
+        seed: int,
+        seed_order: int,
+    ) -> None:
+        unit_identity = (arm.arm_id, int(seed))
+        if unit_identity in completed or unit_identity in queued_replay_units:
+            return
+        required_dl_ids = _arm_training_dl_ids(settings, arm)
+        source_keys = tuple((dl_id, int(seed)) for dl_id in required_dl_ids)
+        if any(key not in trained_artifacts for key in source_keys):
+            return
+        baseline_dir = baseline_by_group.get((arm.param_source, arm.rule_policy))
+        if not baseline_dir:
+            raise RuntimeError(
+                f"stochastic arm找不到同參數fixed baseline: {arm.param_source}/{arm.rule_policy}"
+            )
+        source_artifacts = {
+            dl_id: dict(trained_artifacts[(dl_id, int(seed))])
+            for dl_id in required_dl_ids
+        }
+        primary = source_artifacts[str(arm.dl_id)]
+        runtime_source_identities = {
+            dl_id: {
+                "selected_epoch": int(artifacts.get("selected_epoch", 0) or 0),
+                "fold_count": artifacts.get("fold_count"),
+                "model_sha256": str(artifacts.get("model_sha256") or "") or None,
+                "score_sha256": str(artifacts.get("score_sha256") or "") or None,
+                "score_available_from": str(artifacts.get("score_available_from") or "") or None,
+                "score_available_through": str(artifacts.get("score_available_through") or "") or None,
+            }
+            for dl_id, artifacts in source_artifacts.items()
+        }
+        score_overrides = {
+            dl_id: {
+                "score_path": str(artifacts["score"]),
+                "manifest_path": (
+                    None if not artifacts.get("manifest") else str(artifacts["manifest"])
+                ),
+                "execution_start": str(artifacts.get("score_execution_start") or ""),
+            }
+            for dl_id, artifacts in source_artifacts.items()
+        }
+        unit = _unit_key(arm.arm_id, int(seed))
+        pair_dir = run_root / "work" / "replay" / unit
+        result_path = run_root / "work" / "results" / f"{unit}.json"
+        replay_job = {
+            "profile_id": settings.profile_id,
+            "arm_id": arm.arm_id,
+            "arm_order": int(arm_order),
+            "seed": int(seed),
+            "seed_order": int(seed_order),
+            "params_path": str(resolved_params[arm.param_source]),
+            "comparison_start": comparison_start,
+            "comparison_end": comparison_end,
+            "baseline_dir": baseline_dir,
+            "score_path": primary["score"],
+            "score_manifest_path": primary.get("manifest"),
+            "score_execution_start": primary["score_execution_start"],
+            "score_overrides": score_overrides,
+            "selected_epoch": primary["selected_epoch"],
+            "fold_count": primary.get("fold_count"),
+            "training_elapsed_sec": float(sum(
+                float(artifacts.get("training_elapsed_sec", 0.0) or 0.0)
+                for artifacts in source_artifacts.values()
+            )),
+            "model_sha256": primary.get("model_sha256"),
+            "score_sha256": primary.get("score_sha256"),
+            "runtime_source_identities": runtime_source_identities,
+            "runtime_source_identity_sha256": canonical_json_sha256(runtime_source_identities),
+            "model_prediction_metrics": dict(primary.get("model_prediction_metrics") or {}),
+            "pair_dir": str(pair_dir),
+            "result_path": str(result_path),
+            "scientific_fingerprint": str(contract["fingerprint"]),
+            "robustness_id": cfg.robustness_id,
+            "keep_replay_details": cfg.keep_replay_details,
+            "keep_attribution_source": cfg.keep_attribution_source,
+            "attribution_dir": str(_attribution_unit_dir(run_root, arm.arm_id, int(seed))),
+        }
+        ready_replays.append((
+            replay_job,
+            {
+                "arm_id": arm.arm_id,
+                "name": arm.name,
+                "seed": int(seed),
+                "seed_order": int(seed_order),
+                "arm_order": int(arm_order),
+            },
+        ))
+        queued_replay_units.add(unit_identity)
+
     def harvest_trainings() -> None:
         finished = [future for future in training_futures if future.done()]
         for future in finished:
             meta = training_futures.pop(future)
             trained = future.result()
             artifacts = dict(trained["artifacts"])
+            trained_artifacts[(str(meta["dl_id"]), int(meta["seed"]))] = artifacts
             tag = "[TRAIN REUSE]" if trained["reused"] else "[TRAIN DONE]"
             progress.print_line(
                 paint(tag, "green", enabled=color_enabled, bold=True)
@@ -3333,51 +3505,12 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
                 + f"| elapsed={_format_elapsed(artifacts.get('training_elapsed_sec', trained['wall_elapsed_sec']))}"
             )
             for arm_order, arm in meta["replay_arms"]:
-                baseline_dir = baseline_by_group.get((arm.param_source, arm.rule_policy))
-                if not baseline_dir:
-                    raise RuntimeError(
-                        f"stochastic arm找不到同參數fixed baseline: {arm.param_source}/{arm.rule_policy}"
-                    )
-                unit = _unit_key(arm.arm_id, int(meta["seed"]))
-                pair_dir = run_root / "work" / "replay" / unit
-                result_path = run_root / "work" / "results" / f"{unit}.json"
-                replay_job = {
-                    "profile_id": settings.profile_id,
-                    "arm_id": arm.arm_id,
-                    "arm_order": int(arm_order),
-                    "seed": int(meta["seed"]),
-                    "seed_order": int(meta["seed_order"]),
-                    "params_path": str(resolved_params[arm.param_source]),
-                    "comparison_start": comparison_start,
-                    "comparison_end": comparison_end,
-                    "baseline_dir": baseline_dir,
-                    "score_path": artifacts["score"],
-                    "score_manifest_path": artifacts.get("manifest"),
-                    "score_execution_start": artifacts["score_execution_start"],
-                    "selected_epoch": artifacts["selected_epoch"],
-                    "fold_count": artifacts.get("fold_count"),
-                    "training_elapsed_sec": artifacts["training_elapsed_sec"],
-                    "model_sha256": artifacts.get("model_sha256"),
-                    "score_sha256": artifacts.get("score_sha256"),
-                    "model_prediction_metrics": dict(artifacts.get("model_prediction_metrics") or {}),
-                    "pair_dir": str(pair_dir),
-                    "result_path": str(result_path),
-                    "scientific_fingerprint": str(contract["fingerprint"]),
-                    "robustness_id": cfg.robustness_id,
-                    "keep_replay_details": cfg.keep_replay_details,
-                    "keep_attribution_source": cfg.keep_attribution_source,
-                    "attribution_dir": str(_attribution_unit_dir(run_root, arm.arm_id, int(meta["seed"]))),
-                }
-                ready_replays.append((
-                    replay_job,
-                    {
-                        "arm_id": arm.arm_id,
-                        "name": arm.name,
-                        "seed": int(meta["seed"]),
-                        "seed_order": int(meta["seed_order"]),
-                        "arm_order": int(arm_order),
-                    },
-                ))
+                queue_replay_if_ready(
+                    arm_order=int(arm_order),
+                    arm=arm,
+                    seed=int(meta["seed"]),
+                    seed_order=int(meta["seed_order"]),
+                )
         if finished:
             write_progress_manifest()
 
