@@ -1143,9 +1143,9 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         all(
             text in report_markdown
             for text in (
-                "# Breakout Quality Selection Point-in-time 模型評估報表",
+                "# Breakout Quality Rolling Point-in-time 模型評估報表",
                 "## 2. 核心排序能力",
-                "## 3. 年度穩定性（PASS-only）",
+                "## 3. 年度穩定性（",
                 "## 4. Fold 分布與漂移",
                 "## 7. 研究邊界與下一步",
                 "## 8. 工件",

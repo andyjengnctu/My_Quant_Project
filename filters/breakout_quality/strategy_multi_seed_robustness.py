@@ -2464,8 +2464,8 @@ def render_multi_seed_robustness_report(
     """Render robustness using the canonical Strategy Compare report format.
 
     Sections 1-4 come from the exact same top-level Strategy Compare renderer used
-    by Selection PIT and Forward-OOS.  Multi-seed-only evidence is appended from
-    section 5 onward.
+    by the configured comparison profile.  Multi-seed-only evidence is appended
+    from section 5 onward.
     """
 
     contract = dict(summary["contract"])
@@ -2883,7 +2883,7 @@ def render_multi_seed_robustness_report(
                 else f"- {min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一表；本profile未設定Full reference。"
             ),
             "- 同一DL source／seed只訓練一次，允許fan-out到不同runtime selector replay；此reuse不改變模型scientific condition。",
-            "- Selection PIT與Forward-OOS robustness均只評估既定scientific condition；不得依結果回頭調整training semantics。",
+            "- Operational Rolling robustness只評估config既定scientific condition；不得依結果回頭調整training semantics或使用future fold結果擬合當下模型。",
         )),
     ])
     return "\n\n".join(section for section in sections if section).rstrip() + "\n"

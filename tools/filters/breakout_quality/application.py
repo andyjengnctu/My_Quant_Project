@@ -2031,7 +2031,7 @@ def _print_workflow_status(settings=None) -> None:
         )
     grouped_status.append(
         (
-            "Full Model / Forward OOS",
+            "Legacy Full Model / Frozen Forward",
             (
                 status_paths["Full model"],
                 status_paths["Full model manifest"],
@@ -3000,7 +3000,7 @@ def _interactive_model_research(program_name: str) -> int:
         research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
-        print(render_menu_item(1, "Operational Rolling 模型驗證  (Enter)", default=True))
+        print(render_menu_item(1, "Operational Rolling 模型驗證", default=True))
         pit_authorized = bool(
             settings.supports_point_in_time_scores and research_spec.selection_pit_authorized
         )

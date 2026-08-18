@@ -339,7 +339,7 @@ def validate_dataset_cli_contract_case(_base_params):
     ):
         model_research_settings = app_breakout_quality.get_breakout_quality_model_research_settings()
         with (
-            patch("builtins.input", side_effect=["2", ""]),
+            patch("builtins.input", side_effect=["1", ""]),
             patch("tools.filters.breakout_quality.application._print_workflow_status"),
             patch(
                 "tools.filters.breakout_quality.application._run_command",
@@ -405,10 +405,10 @@ def validate_dataset_cli_contract_case(_base_params):
             and "[rebuild]" not in interactive_text
             and "[relabel]" not in interactive_text
             and "=== Continuous DL 模型研究與驗證 ===" in interactive_text
-            and "[1]  訓練目前模型 → forward-OOS模型報表  (Enter)" in interactive_text
-            and "[2]  建立／更新 Selection PIT Scores → PIT模型驗證" in interactive_text
+            and "[1]  Operational Rolling 模型驗證  (Enter)" in interactive_text
+            and "[2]  Fixed-Window Stability 模型驗證" in interactive_text
             and "[3]  查看目前Workflow與工件狀態" in interactive_text
-            and f"[4]  {configured_ranker_menu_label}" in interactive_text
+            and f"[4]  {configured_ranker_menu_label}" not in interactive_text
             and "MR-12A/B/C" not in interactive_text
             and "Audit／診斷" not in interactive_text
             and "策略組合比較" not in interactive_text
@@ -441,7 +441,7 @@ def validate_dataset_cli_contract_case(_base_params):
     ):
         comparison_settings = app_breakout_quality.get_breakout_quality_model_research_settings()
         with (
-            patch("builtins.input", side_effect=["4"]),
+            patch("builtins.input", side_effect=["0"]),
             patch(
                 "tools.filters.breakout_quality.application._run_command",
                 side_effect=_record_comparison_command,
@@ -455,20 +455,14 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_continuous_menu_option_4_routes_read_only_ranker_comparison",
-        (0, [(
-            "compare-continuous-rankers",
-            [
-                "--filter-id", comparison_settings.filter_id,
-                "--model-architecture", comparison_settings.model_architecture,
-            ],
-            "apps/research.py model",
-        )], True),
+        "breakout_quality_legacy_ranker_comparison_is_not_exposed_in_current_operational_model_menu",
+        (0, [], True),
         (
             comparison_rc,
             comparison_commands,
-            f"[4]  {configured_comparison_menu_label}" in comparison_text
-            and "MR-12A/B/C" not in comparison_text,
+            f"[4]  {configured_comparison_menu_label}" not in comparison_text
+            and "Operational Rolling 模型驗證" in comparison_text
+            and "Fixed-Window Stability 模型驗證" in comparison_text,
         ),
     )
 
@@ -515,7 +509,7 @@ def validate_dataset_cli_contract_case(_base_params):
     with (
         patch("builtins.input", side_effect=[""]),
         patch(
-            "tools.filters.breakout_quality.application._interactive_continuous_full_train",
+            "tools.filters.breakout_quality.application._interactive_continuous_pit_validation",
             return_value=47,
         ) as continuous_train_route,
     ):
@@ -526,7 +520,7 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_continuous_model_menu_default_routes_to_full_train",
+        "breakout_quality_continuous_model_menu_default_routes_to_operational_rolling",
         (47, 1),
         (continuous_default_rc, continuous_train_route.call_count),
     )
@@ -547,12 +541,12 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_model_menu_shows_pit_when_active_profile_supports_it",
+        "breakout_quality_model_menu_shows_operational_and_stability_when_active_profile_supports_rolling_pit",
         (0, True, True),
         (
             no_pit_rc,
-            "[2]  建立／更新 Selection PIT Scores → PIT模型驗證" in no_pit_text,
-            "[1]  訓練目前模型 → forward-OOS模型報表  (Enter)" in no_pit_text,
+            "[2]  Fixed-Window Stability 模型驗證" in no_pit_text,
+            "[1]  Operational Rolling 模型驗證  (Enter)" in no_pit_text,
         ),
     )
 
@@ -599,15 +593,21 @@ def validate_dataset_cli_contract_case(_base_params):
         )
     else:
         pit_status_ok = (
-            ("PIT Scores" in rendered_status and "PIT 模型驗證" in rendered_status)
+            (
+                "Operational Rolling Scores" in rendered_status
+                and "Operational Rolling 模型驗證" in rendered_status
+            )
             if current_model_settings.supports_point_in_time_scores
-            else ("PIT Scores" not in rendered_status and "PIT 模型驗證" not in rendered_status)
+            else (
+                "Operational Rolling Scores" not in rendered_status
+                and "Operational Rolling 模型驗證" not in rendered_status
+            )
         )
         workflow_status_contract_ok = (
             current_model_settings.is_continuous_ranker
             and "Workflow 狀態" in rendered_status
             and "Continuous Target" in rendered_status
-            and "Full Model / Forward OOS" in rendered_status
+            and "Legacy Full Model / Frozen Forward" in rendered_status
             and pit_status_ok
         )
     add_check(
@@ -944,7 +944,12 @@ def validate_dataset_cli_contract_case(_base_params):
     menu_profile_count = len(menu_profiles)
     strategy_profile_count = len(strategy_profiles)
     robustness_profile_count = len(robustness_profiles)
-    strategy_status_choice = menu_profile_count + robustness_profile_count + 3
+    integration_enabled = bool(
+        app_strategy_compare.get_strategy_runtime_integration_settings().enabled
+    )
+    strategy_status_choice = (
+        menu_profile_count + robustness_profile_count + (3 if integration_enabled else 2)
+    )
     with (
         patch("builtins.input", side_effect=[str(strategy_status_choice), "0"]),
         patch("apps.research.show_strategy_comparison_status") as compare_status,
@@ -958,7 +963,7 @@ def validate_dataset_cli_contract_case(_base_params):
         "cli_contract",
         case_id,
         "strategy_compare_interactive_menu_is_profile_driven",
-        (0, strategy_profile_count, robustness_profile_count),
+        (0, menu_profile_count, robustness_profile_count),
         (
             strategy_menu_rc,
             compare_status.call_count,

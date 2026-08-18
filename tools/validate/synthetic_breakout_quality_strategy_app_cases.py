@@ -368,7 +368,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         tuple(item["profile_id"] for item in menu_profiles)
         == tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS)
-        and menu_labels == ("Selection PIT 策略比較", "Forward-OOS 策略比較")
+        and tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS) == ("operational_rolling",)
+        and len(menu_labels) == 1
+        and "Operational Rolling" in menu_labels[0]
         and all("MR-" not in label for label in menu_labels),
     )
     active_arm_ids = {
@@ -577,11 +579,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         all(token in app_source for token in (
             "執行目前比較設定", "查看設定、工件與預計動作", "config/strategy_compare.py",
-            "get_strategy_comparison_profiles", "查看全部階段設定與工件狀態",
+            "get_strategy_comparison_profiles", "查看目前Framework設定與工件狀態",
         ))
         and "C1" not in app_source and "TP1" not in app_source
         and '"strategy-compare"' not in model_app_source
-        and "策略績效驗證" not in model_app_source,
+        and "run_strategy_comparison" not in model_app_source,
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -655,16 +657,23 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "model_work_type_prepares_all_configured_forward_oos_sources_without_strategy_compare_training",
         True,
-        bool(required_forward_oos_source_ids)
-        and "_strategy_compare_required_model_sources" in model_app_source
+        "_strategy_compare_required_model_sources" in model_app_source
         and "SCORE_SOURCE_CONTINUOUS_RANKER_OOS" in model_prepare_source
         and "load_continuous_ranker_oos_contract" in model_prepare_source
         and "rebuild_forward_oos_scores_from_frozen_checkpoint" in model_prepare_source
         and '"train-continuous-ranker"' in model_prepare_source
-        and "Forward-OOS policy：REUSE" in model_prepare_source
-        and "Forward-OOS policy：模型工作類型修復" in model_prepare_source
-        and "先重用frozen checkpoint" in model_prepare_source
-        and "才重建完整模型工件" in model_prepare_source
+        and (
+            not required_forward_oos_source_ids
+            or all(
+                token in model_prepare_source
+                for token in (
+                    "Forward-OOS policy：REUSE",
+                    "Forward-OOS policy：模型工作類型修復",
+                    "先重用frozen checkpoint",
+                    "才重建完整模型工件",
+                )
+            )
+        )
         and "train-continuous-ranker" not in preparation_source
         and "模型訓練工作類型執行「準備策略比較所需模型工件」" in preparation_source,
     )
@@ -756,7 +765,6 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         for robustness_id, raw in strategy_config.STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES.items()
         if bool(raw.get("enabled", True))
     }
-    selection_robustness = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
     robustness_profile = strategy_config.get_strategy_comparison_settings(
         robustness_settings.profile_id
     )
@@ -780,9 +788,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "multi_seed_robustness_matrix_is_profile_config_driven_without_mutating_single_seed_arm_identity",
         True,
         robustness_path.is_file()
-        and configured_robustness_ids >= {"forward_oos", "selection_pit"}
-        and enabled_robustness_ids == expected_enabled_robustness_ids
-        and selection_robustness.profile_id == "selection_pit"
+        and "operational_rolling" in configured_robustness_ids
+        and enabled_robustness_ids == expected_enabled_robustness_ids == {"operational_rolling"}
+        and robustness_settings.robustness_id == "operational_rolling"
+        and robustness_settings.profile_id == "operational_rolling"
         and robustness_settings.profile_id in strategy_config.STRATEGY_COMPARE_PROFILES
         and robustness_settings.seed_count >= 2
         and 1 <= robustness_settings.gpu_train_workers <= 2
@@ -793,10 +802,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and all(
             arm.dl_enabled
             and robustness_profile.dl_sources[str(arm.dl_id)].score_source
-            == "continuous_ranker_oos"
+            == "selection_point_in_time"
             for arm in robustness_stochastic
         )
-        and set(reference_matches) == {"min", "full"}
+        and set(reference_matches) == {"min"}
         and all(len(matches) == 1 for matches in reference_matches.values())
         and "romd_reference_baselines" in config_source
         and "fixed_arm_ids" in config_source
@@ -830,9 +839,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "selected_best_seed" not in robustness_source.lower(),
     )
 
+    shared_source_arm = robustness_profile.arms["C59"]
     shared_dl_stochastic = (
-        replace(robustness_profile.arms["C36"], enabled=True),
-        replace(robustness_profile.arms["C44"], enabled=True),
+        replace(shared_source_arm, arm_id="SYN_SHARED_A", enabled=True),
+        replace(shared_source_arm, arm_id="SYN_SHARED_B", enabled=True),
     )
     source_groups = robustness_module._training_source_groups(shared_dl_stochastic, settings=robustness_profile)
     dedupe_seeds = (101, 202)
@@ -881,76 +891,39 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "training_cleanup_targets" in robustness_source,
     )
 
-    stage_robustness_contracts = {}
-    for robustness_id, expected_stochastic, expected_pairs in (
-        (
-            "selection_pit",
-            ("C57",),
-            (),
-        ),
-        (
-            "forward_oos",
-            ("C56",),
-            (),
-        ),
-    ):
-        stage_cfg = strategy_config.get_strategy_multi_seed_robustness_settings(robustness_id)
-        stage_profile = strategy_config.get_strategy_comparison_settings(stage_cfg.profile_id)
-        stage_stochastic = tuple(
-            stage_profile.arms[arm_id] for arm_id in stage_cfg.stochastic_arm_ids
-        )
-        stage_groups = robustness_module._training_source_groups(stage_stochastic, settings=stage_profile)
-        stage_units = list(robustness_module._training_units(
-            seeds=dedupe_seeds, stochastic_arms=stage_stochastic, settings=stage_profile,
-            completed=set(), model_root=Path(f"/tmp/{robustness_id}_models"),
-            run_root=Path(f"/tmp/{robustness_id}_run"),
-            comparison_start="2021-01-01", comparison_end="2025-12-31", reuse_completed=True,
-        ))
-        stage_robustness_contracts[robustness_id] = (
-            tuple(arm.arm_id for arm in stage_stochastic),
-            tuple((str(item["left"]), str(item["right"])) for item in stage_cfg.paired_contrasts),
-            len(stage_groups),
-            len(stage_units),
-            sum(len(unit["replay_arms"]) for unit in stage_units),
-        )
+    operational_groups = robustness_module._training_source_groups(
+        robustness_stochastic, settings=robustness_profile
+    )
+    operational_units = list(robustness_module._training_units(
+        seeds=dedupe_seeds, stochastic_arms=robustness_stochastic, settings=robustness_profile,
+        completed=set(), model_root=Path("/tmp/operational_rolling_models"),
+        run_root=Path("/tmp/operational_rolling_run"),
+        comparison_start="2021-01-01", comparison_end="2025-12-31", reuse_completed=True,
+    ))
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "multi_seed_dual_model_stage_profiles_train_both_same_seed_sources_before_single_strategy_replay",
+        "multi_seed_operational_dual_model_profile_trains_both_same_seed_sources_before_single_strategy_replay",
         True,
-        all(
-            stage_robustness_contracts[stage_id][0] == expected_stochastic
-            and stage_robustness_contracts[stage_id][1] == expected_pairs
-            and stage_robustness_contracts[stage_id][2] == 2
-            and stage_robustness_contracts[stage_id][3]
-                == 2 * len(dedupe_seeds)
-            for stage_id, expected_stochastic, expected_pairs in (
-                ("selection_pit", ("C57",), ()),
-                ("forward_oos", ("C56",), ()),
-            )
-        )
+        tuple(arm.arm_id for arm in robustness_stochastic) == ("C60",)
+        and tuple((str(item["left"]), str(item["right"])) for item in robustness_settings.paired_contrasts) == ()
+        and len(operational_groups) == 2
+        and len(operational_units) == 2 * len(dedupe_seeds)
+        and sum(len(unit["replay_arms"]) for unit in operational_units) == 2 * len(dedupe_seeds)
         and "queue_replay_if_ready" in robustness_source
         and "trained_artifacts" in robustness_source
         and "_arm_training_dl_ids" in robustness_source,
     )
-    selection_single = strategy_config.get_strategy_comparison_settings("selection_pit")
-    forward_single = strategy_config.get_strategy_comparison_settings("forward_oos")
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "multi_seed_activation_is_decoupled_from_single_seed_arm_roles_and_uses_only_current_profile_arms",
+        "multi_seed_activation_is_decoupled_from_single_seed_arm_roles_and_uses_only_current_operational_profile_arms",
         True,
-        strategy_config.STRATEGY_COMPARE_SCHEMA_VERSION >= 1
+        strategy_config.STRATEGY_COMPARE_SCHEMA_VERSION >= 42
         and all(
-            selection_single.arms[arm_id].robustness_role == "off"
-            for arm_id in selection_robustness.stochastic_arm_ids
-        )
-        and all(
-            forward_single.arms[arm_id].robustness_role == "off"
+            robustness_profile.arms[arm_id].robustness_role == "off"
             for arm_id in robustness_settings.stochastic_arm_ids
         )
-        and set(selection_robustness.fixed_arm_ids + selection_robustness.stochastic_arm_ids)
-            <= {arm.arm_id for arm in selection_single.enabled_arms}
         and set(robustness_settings.fixed_arm_ids + robustness_settings.stochastic_arm_ids)
-            <= {arm.arm_id for arm in forward_single.enabled_arms},
+            <= {arm.arm_id for arm in robustness_profile.enabled_arms},
     )
 
     synthetic_period = {"start": "2001-01-01", "end": "2001-12-31"}
@@ -1007,10 +980,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         }
 
     min_reference_arm = reference_matches["min"][0]
-    full_reference_arm = reference_matches["full"][0]
+    full_reference_matches = reference_matches.get("full", ())
+    full_reference_arm = full_reference_matches[0] if full_reference_matches else None
     fixed_results = {}
     for fixed_order, arm in enumerate(robustness_fixed, start=1):
-        if arm.arm_id == full_reference_arm.arm_id:
+        if full_reference_arm is not None and arm.arm_id == full_reference_arm.arm_id:
             romd, total_return = 7.0, 120.0
         elif arm.arm_id == min_reference_arm.arm_id:
             romd, total_return = 6.0, 90.0
@@ -1165,9 +1139,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_report_uses_mean_for_all_strategy_metrics_and_full_romd_distribution_with_fixed_baselines",
         True,
-        math.isclose(mean_by_arm[full_reference_arm.arm_id]["return_over_max_drawdown"], 7.0)
-        and math.isclose(mean_by_arm[min_reference_arm.arm_id]["return_over_max_drawdown"], 6.0)
-        and romd_by_arm[full_reference_arm.arm_id]["std"] is None
+        math.isclose(mean_by_arm[min_reference_arm.arm_id]["return_over_max_drawdown"], 6.0)
         and romd_by_arm[min_reference_arm.arm_id]["std"] is None
         and stochastic_distribution_ok
         and all(
@@ -1179,20 +1151,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                     stochastic_expected_mean[arm.arm_id] + 1.0,
                 )
             )
-            and romd_by_arm[arm.arm_id]["beats_full_count"]
-            == sum(
-                value > 7.0
-                for value in (
-                    stochastic_expected_mean[arm.arm_id] - 1.0,
-                    stochastic_expected_mean[arm.arm_id] + 1.0,
-                )
-            )
+            and romd_by_arm[arm.arm_id]["beats_full_count"] is None
             for arm in robustness_stochastic
         )
         and synthetic_summary["contract"]["romd_reference_baselines"]["min"]["arm_id"]
         == min_reference_arm.arm_id
-        and synthetic_summary["contract"]["romd_reference_baselines"]["full"]["arm_id"]
-        == full_reference_arm.arm_id
+        and "full" not in synthetic_summary["contract"]["romd_reference_baselines"]
         and paired_comparisons_ok
         and legacy_pair_fields_ok
         and len(synthetic_summary["yearly_statistics"]) >= len(robustness_fixed) * 2 + len(robustness_stochastic) * 2
@@ -1655,35 +1619,37 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         arm.param_source for arm in (*robustness_fixed, *robustness_stochastic)
     })
     parameter_only_prepare_ok = False
-    if len(configured_required_sources) >= 2:
-        build_source, reuse_source = configured_required_sources[:2]
+    if configured_required_sources:
+        build_source = configured_required_sources[0]
+        reuse_sources = configured_required_sources[1:]
+        first_actions = [
+            StrategyPreparationAction(
+                action_id=f"param:{build_source}", artifact_key=f"param:{build_source}",
+                action="BUILD", builder_type="synthetic_builder", description="build", path="models/build.json",
+            )
+        ]
+        first_actions.extend(
+            StrategyPreparationAction(
+                action_id=f"param:{source_id}", artifact_key=f"param:{source_id}",
+                action="REUSE", builder_type=None, description="reuse", path=f"models/{source_id}.json",
+            )
+            for source_id in reuse_sources
+        )
+        first_actions.append(dl_blocked)
+        second_actions = [
+            StrategyPreparationAction(
+                action_id=f"param:{source_id}", artifact_key=f"param:{source_id}",
+                action="REUSE", builder_type=None, description="reuse",
+                path=("models/build.json" if source_id == build_source else f"models/{source_id}.json"),
+            )
+            for source_id in configured_required_sources
+        ]
+        second_actions.append(dl_blocked)
         first_plan = StrategyPreparationPlan(
-            overall_status="BLOCKED",
-            actions=(
-                StrategyPreparationAction(
-                    action_id=f"param:{build_source}", artifact_key=f"param:{build_source}",
-                    action="BUILD", builder_type="synthetic_builder", description="build", path="models/build.json",
-                ),
-                StrategyPreparationAction(
-                    action_id=f"param:{reuse_source}", artifact_key=f"param:{reuse_source}",
-                    action="REUSE", builder_type=None, description="reuse", path="models/reuse.json",
-                ),
-                dl_blocked,
-            ),
+            overall_status="BLOCKED", actions=tuple(first_actions),
         )
         second_plan = StrategyPreparationPlan(
-            overall_status="BLOCKED",
-            actions=(
-                StrategyPreparationAction(
-                    action_id=f"param:{build_source}", artifact_key=f"param:{build_source}",
-                    action="REUSE", builder_type=None, description="reuse", path="models/build.json",
-                ),
-                StrategyPreparationAction(
-                    action_id=f"param:{reuse_source}", artifact_key=f"param:{reuse_source}",
-                    action="REUSE", builder_type=None, description="reuse", path="models/reuse.json",
-                ),
-                dl_blocked,
-            ),
+            overall_status="BLOCKED", actions=tuple(second_actions),
         )
         prep_calls = []
         with patch.object(
@@ -1693,7 +1659,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             prepared = preparation_module.prepare_strategy_parameter_artifacts(
                 settings=fake_settings,
                 status={"preparation_plan": first_plan},
-                required_source_ids=(build_source, reuse_source),
+                required_source_ids=tuple(configured_required_sources),
                 status_refresher=lambda: {"preparation_plan": second_plan},
             )
         parameter_only_prepare_ok = (
@@ -1816,17 +1782,18 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         robustness_module, "build_source_data_inventory",
         return_value={"dataset": "synthetic-full", "inventory": "same"},
     ):
+        operational_param_key = f"param:{robustness_fixed[0].param_source}"
         fingerprint_base = robustness_module.build_multi_seed_robustness_contract(
             comparison_period={"start": "2021-01-01", "end": "2025-12-22"},
-            artifact_identities={"param:full_roos": {"sha256": "a"}, "param:min_roos": {"sha256": "b"}},
+            artifact_identities={operational_param_key: {"sha256": "a"}},
         )["fingerprint"]
         fingerprint_period = robustness_module.build_multi_seed_robustness_contract(
             comparison_period={"start": "2021-01-01", "end": "2026-01-31"},
-            artifact_identities={"param:full_roos": {"sha256": "a"}, "param:min_roos": {"sha256": "b"}},
+            artifact_identities={operational_param_key: {"sha256": "a"}},
         )["fingerprint"]
         fingerprint_param = robustness_module.build_multi_seed_robustness_contract(
             comparison_period={"start": "2021-01-01", "end": "2025-12-22"},
-            artifact_identities={"param:full_roos": {"sha256": "changed"}, "param:min_roos": {"sha256": "b"}},
+            artifact_identities={operational_param_key: {"sha256": "changed"}},
         )["fingerprint"]
         with patch.object(
             robustness_module, "BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE",
@@ -1834,7 +1801,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ):
             fingerprint_training = robustness_module.build_multi_seed_robustness_contract(
                 comparison_period={"start": "2021-01-01", "end": "2025-12-22"},
-                artifact_identities={"param:full_roos": {"sha256": "a"}, "param:min_roos": {"sha256": "b"}},
+                artifact_identities={operational_param_key: {"sha256": "a"}},
             )["fingerprint"]
         display_only_settings = replace(
             robustness_settings,
@@ -1849,7 +1816,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ):
             fingerprint_display_only = robustness_module.build_multi_seed_robustness_contract(
                 comparison_period={"start": "2021-01-01", "end": "2025-12-22"},
-                artifact_identities={"param:full_roos": {"sha256": "a"}, "param:min_roos": {"sha256": "b"}},
+                artifact_identities={operational_param_key: {"sha256": "a"}},
             )["fingerprint"]
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -3861,52 +3828,48 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c54_options = dict(c54_current.dl_runtime_options or {})
     c55_options = dict(c55_current.dl_runtime_options or {})
     c56_options = dict(c56_current.dl_runtime_options or {})
-    selection_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
-    forward_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("forward_oos")
+    operational_current_settings = strategy_config.get_strategy_comparison_settings("operational_rolling")
+    c58_current = operational_current_settings.arms["C58"]
+    c59_current = operational_current_settings.arms["C59"]
+    c60_current = operational_current_settings.arms["C60"]
+    c60_options = dict(c60_current.dl_runtime_options or {})
+    operational_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("operational_rolling")
+    selection_robustness_legacy = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
+    forward_robustness_legacy = strategy_config.get_strategy_multi_seed_robustness_settings("forward_oos")
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "c56_full_flow_is_current_dual_model_research_line_with_same_seed_two_source_robustness",
+        "operational_c60_is_current_dual_model_research_line_while_c56_c57_full_flow_is_legacy",
         True,
-        {"C1", "C3", "C44", "C56"}
-        == {arm.arm_id for arm in forward_current_settings.enabled_arms}
+        {"C58", "C59", "C60"}
+        == {arm.arm_id for arm in operational_current_settings.enabled_arms}
+        and c58_current.enabled and not c58_current.dl_enabled
+        and c59_current.enabled and c59_current.dl_id == "CONT13E_ROLL"
+        and c60_current.enabled
+        and c60_current.param_source == c58_current.param_source == c59_current.param_source == "operational_min_roos"
+        and c60_current.rule_policy == c58_current.rule_policy == c59_current.rule_policy == "all_off"
+        and c60_current.dl_id == "CONT13K_ROLL"
+        and c60_current.dl_runtime_mode == "resource-aware-continuous-score-residual-safety-constrained-optimal"
+        and c60_options.get("safety_dl_id") == "CONT13M_ROLL"
+        and c60_options.get("safety_constraint") == "baseline_residual_coverage_and_score_sum_floor_v1"
+        and c60_options.get("safety_residualization") == "same_day_rank_ols_v1"
+        and c60_options.get("preserve_k_r0") is True
+        and c60_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+        and c60_options.get("selection_only") is True
+        and {"C59-C58", "C60-C58", "C60-C59"}
+        == {contrast.contrast_id for contrast in operational_current_settings.enabled_contrasts}
+        and operational_robustness_active.enabled
+        and tuple(operational_robustness_active.fixed_arm_ids) == ("C58",)
+        and tuple(operational_robustness_active.stochastic_arm_ids) == ("C60",)
+        and tuple(operational_robustness_active.paired_contrasts) == ()
+        and not selection_robustness_legacy.enabled
+        and not forward_robustness_legacy.enabled
+        and c56_current.enabled
         and c44_current.enabled
         and not c54_current.enabled
         and not c55_current.enabled
-        and c54_current.param_source == c44_current.param_source == "min_roos"
-        and c54_current.rule_policy == c44_current.rule_policy == "all_off"
-        and c54_current.dl_id == "CONT13K"
-        and c54_current.dl_runtime_mode == c44_current.dl_runtime_mode
-        == "resource-aware-continuous-score-constrained-optimal"
-        and c54_options == c44_options
-        and c55_current.dl_id == "CONT13K"
-        and c55_current.dl_runtime_mode == "resource-aware-continuous-score-safety-constrained-optimal"
-        and c55_options.get("safety_dl_id") == "CONT13M"
-        and c56_current.enabled
-        and c56_current.param_source == c44_current.param_source == "min_roos"
-        and c56_current.rule_policy == c44_current.rule_policy == "all_off"
-        and c56_current.dl_id == "CONT13K"
-        and c56_current.dl_runtime_mode == "resource-aware-continuous-score-residual-safety-constrained-optimal"
-        and c56_options.get("safety_dl_id") == "CONT13M"
-        and c56_options.get("safety_constraint") == "baseline_residual_coverage_and_score_sum_floor_v1"
-        and c56_options.get("safety_residualization") == "same_day_rank_ols_v1"
-        and c56_options.get("preserve_k_r0") is True
-        and c56_options.get("constrained_solver") == "exact_branch_and_bound_v1"
-        and c56_options.get("selection_only") is False
-        and {"C56-C44", "C56-C3", "C56-C1"}.issubset(
-            {contrast.contrast_id for contrast in forward_current_settings.enabled_contrasts}
-        )
-        and selection_robustness_active.enabled
-        and forward_robustness_active.enabled
-        and tuple(selection_robustness_active.fixed_arm_ids) == ("C32", "C23")
-        and tuple(forward_robustness_active.fixed_arm_ids) == ("C1", "C3")
-        and tuple(selection_robustness_active.stochastic_arm_ids) == ("C57",)
-        and tuple(forward_robustness_active.stochastic_arm_ids) == ("C56",)
-        and tuple(selection_robustness_active.paired_contrasts) == ()
-        and tuple(forward_robustness_active.paired_contrasts) == ()
-        and selection_robustness_active.seed_count == forward_robustness_active.seed_count
+        and operational_robustness_active.seed_count
         == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT == 8
-        and selection_robustness_active.seed_generator_seed
-        == forward_robustness_active.seed_generator_seed
+        and operational_robustness_active.seed_generator_seed
         == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED == 20260810
         and strategy_config.get_strategy_runtime_integration_settings().selection_candidate_arm_id == "C42"
         and strategy_config.get_strategy_runtime_integration_settings().forward_candidate_arm_id == "C44",
@@ -5665,13 +5628,14 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         ),
     )
 
+    forward_settings = strategy_config.get_strategy_comparison_settings("forward_oos")
     c1, c3, c20, c29, c30, c31 = (
-        settings.arms["C1"], settings.arms["C3"], settings.arms["C20"],
-        settings.arms["C29"], settings.arms["C30"], settings.arms["C31"],
+        forward_settings.arms["C1"], forward_settings.arms["C3"], forward_settings.arms["C20"],
+        forward_settings.arms["C29"], forward_settings.arms["C30"], forward_settings.arms["C31"],
     )
-    forward_source = settings.dl_sources["CONT13A"]
+    forward_source = forward_settings.dl_sources["CONT13A"]
     active_contrasts = tuple(
-        item.contrast_id for item in settings.enabled_contrasts
+        item.contrast_id for item in forward_settings.enabled_contrasts
     )
     configured_forward_arms = tuple(
         strategy_config.STRATEGY_COMPARE_PROFILES["forward_oos"]["arm_ids"]
@@ -5683,7 +5647,7 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         results, "synthetic_breakout_quality", case_id,
         "forward_oos_profile_honors_config_and_freezes_min_mr12b_mr13a_runtime_identity",
         True,
-        {arm.arm_id for arm in settings.enabled_arms} == set(configured_forward_arms)
+        {arm.arm_id for arm in forward_settings.enabled_arms} == set(configured_forward_arms)
         and set(active_contrasts) == set(configured_forward_contrasts)
         and (c20.param_source, c20.rule_policy, c20.dl_id, c20.dl_runtime_mode)
         == (
@@ -5706,7 +5670,7 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         True,
         c1.param_source == "full_roos" and not c1.dl_enabled
         and c3.param_source == "min_roos" and not c3.dl_enabled
-        and settings.start_date is None and settings.end_date is None,
+        and forward_settings.start_date is None and forward_settings.end_date is None,
     )
 
     project_root = Path(__file__).resolve().parents[2]
@@ -5884,10 +5848,10 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "runtime_integration_gate_freezes_pre_promotion_anchor_after_workflow_go",
+        "runtime_integration_legacy_gate_is_disabled_after_framework_migration_while_anchor_identity_is_preserved",
         True,
         (
-            cfg.enabled
+            not cfg.enabled
             and runtime["experiment_profile"] == workflow.experiment_profile
             and cfg.comparison_anchor_experiment_profile != workflow.experiment_profile
             and cfg.selection_profile_id == "selection_pit"
