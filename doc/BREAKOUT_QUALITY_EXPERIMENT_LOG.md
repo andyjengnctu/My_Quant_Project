@@ -9404,3 +9404,21 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 新增`doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`，專門管理尚待嘗試／條件式研究的順序、待決策問題、前置條件與stop rule；Registry仍管identity/status，Experiment Log仍管已執行證據。
 - `doc/PROJECT_SETTINGS.md`新增硬規則：`doc/ToDo.md`是使用者私人筆記；除非使用者當輪明確要求，GPT不得主動讀取、引用、依賴或用其決定下一步。Breakout-quality規劃在讀完Registry與Experiment Log後，必須再讀Research Queue，且開始實作／取得結果／改優先序／結案都要同輪更新。
 - Current Queue：1) Plan B C55 Forward；2) Plan A MR-13H Target + parameter-free path-dynamics representation；3) 若Plan A失敗才考慮cross-sectional/market-state representation；4) MR-13K vs MR-13E current 8-seed robustness獨立完成。
+
+### 2026-08-18 — SR-C55 Forward result → raw MR-13M safety floor stops; B2 residual-safety selected
+
+- 程式／結果基準：`test-branch-1_20260818_131753_116a310.zip`，SHA256=`aa725f0dca960a0b3285343f87dafe3cf04abc987df085f8be235e9b2092a2fe`。Forward期間=`2021-01-01～2026-03-02`。
+- C55相對C54：Return=`97.87% vs 168.67%`、MDD=`12.03% vs 19.95%`、RoMD=`8.13 vs 8.45`、Annual=`14.15% vs 21.12%`、Win Rate=`44.69% vs 42.55%`、Payoff=`2.77 vs 3.41`、EV=`0.75R vs 0.80R`。年度2022由`-12.07%`改善為`+0.38%`，但2023由`110.58%`降為`29.41%`。
+- Selection-translation diagnostic同方向：C55 Target mean R=`0.74R`、Target percentile=`0.398`、Top-K=`7.47%`，均低於C54的`1.01R/0.486/8.32%`；Average exposure近似`92.32% vs 92.96%`，因此不是單純資金沒投出去，而是raw 13M basket floor改變membership後把部分高-upside winners一併排除。
+- Decision：`SR-C55 = RESULT_AVAILABLE / STOP_RAW_SAFETY_FLOOR / NO_SELECTION_PIT / ROBUSTNESS_OFF`。13M確實有降path-risk效果，但直接要求整basket raw safety不低於Min baseline過硬；不建立13M Selection PIT，不做C55 robustness。
+- 下一個最小controlled strategy experiment改為Plan B2：保留13K作唯一objective，先在同日候選橫截面把13M相對13K正常反向關係residualize，只用「同upside條件下異常安全／危險」的Residual Safety作baseline-relative hard floor。
+
+### 2026-08-18 — Plan B2 `SR-C56` implemented: MR-13K objective + same-day conditional residual MR-13M safety
+
+- 新identity：`SR-C56`，Forward-only。未新增MR、未重訓13K/13M；primary=`DL-CONT13K`，secondary=`DL-CONT13M`。
+- Controlled contract：與C54完全共用`min_roos / all_off / K / R0 / canonical sizing / cash / orderability / execution / exact_branch_and_bound_v1`。唯一新增Residual Safety floor；13K score-sum仍是唯一exact objective。
+- Residualization=`same_day_rank_ols_v1`：每個交易日只使用當日orderable candidate rows上已存在、PIT-safe的frozen 13K/13M scores；兩軸各自用average-rank percentile轉到`[0,1]`，再以含intercept OLS fit `M_pct = a + b*K_pct`。每支股票`Residual Safety = M_pct - (a+b*K_pct)`。沒有future MFE/adverse Target、跨日fit、rolling window、lambda、absolute safety threshold或score fusion。
+- Hard floor=`baseline_residual_coverage_and_score_sum_floor_v1`：同日C3 DL-off Min ROOS baseline basket的Residual Safety covered count與sum形成floor；C56 exact search在完整candidate universe中維持同K/R0/canonical cash feasibility，所有合法basket必須不低於floor，之後仍只最大化13K score objective。
+- Runtime/provenance：新增`resource-aware-continuous-score-residual-safety-constrained-optimal` mode/policy；`CONT13M`仍進required artifacts、pinned runtime path與pair-cache identity。Daily diagnostics保存residual fit pair count/slope/intercept、safety score mode、floor/binding/violation與safety-pruned states。
+- Synthetic：`validate_strategy_compare_config_driven_app_contract_case`擴充至135 checks且0 FAIL；新小型case先用production residualizer建立exhaustive oracle，再驗證C56 membership精確等於Residual-floor下13K objective global optimum，且高13K但異常危險candidate可被排除、同upside較安全candidate可保留。Current Forward=`C1/C3/C44/C54/C55/C56`；robustness仍只`C42/C53`與`C44/C54`，production仍C42/C44。
+- Stage：`IMPLEMENTED / FORWARD_RESULT_PENDING / NO_SELECTION_PIT / ROBUSTNESS_OFF`。Primary contrast=`C56-C54`；`C56-C55`只回答residualizing raw 13M是否能保留更多13K upside。若Forward仍顯著犧牲Payoff/Return或RoMD無改善，停止selection-level 13K/13M hard-floor整合並轉Plan C-M conditional model。

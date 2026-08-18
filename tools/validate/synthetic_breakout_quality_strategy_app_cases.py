@@ -2298,6 +2298,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         reorder_candidates_for_resource_aware_quality,
         select_resource_aware_action_candidates,
     )
+    from core.portfolio_entry_selection_common import (
+        _decorate_same_day_rank_residual_safety_scores,
+    )
     from core.portfolio_entry_selection_max_dl import (
         build_max_dl_repair_mechanism_diagnostic,
         _excess_alpha_basket_quality_key,
@@ -3268,6 +3271,115 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == ["S1", "S2"],
     )
 
+    residual_safety_policy = "resource-aware-continuous-score-residual-safety-constrained-optimal"
+    residual_seed = (
+        ("B1", 100.0, 1200, 0.10, 0.60),
+        ("B2", 100.0, 1100, 0.20, 0.55),
+        ("K1", 100.0, 1300, 0.99, 0.20),
+        ("K2", 100.0, 1200, 0.98, 0.25),
+        ("S1", 100.0, 1300, 0.90, 0.60),
+        ("S2", 100.0, 1200, 0.85, 0.55),
+    )
+    residual_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score, residual_safety_policy, safety_score=safety_score
+        )
+        for ticker, price, qty, score, safety_score in residual_seed
+    ]
+    residual_oracle_rows, residual_fit = _decorate_same_day_rank_residual_safety_scores(
+        residual_rows
+    )
+    residual_baseline = _simulate_reserved_candidate_order(
+        residual_oracle_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=2,
+        params=resource_params,
+    )
+    residual_order, residual_diag = reorder_candidates_for_resource_aware_quality(
+        residual_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=resource_params,
+    )
+    residual_action = select_resource_aware_action_candidates(
+        residual_order, residual_diag
+    )
+    residual_result = _simulate_reserved_candidate_order(
+        residual_action,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=2,
+        params=resource_params,
+    )
+    residual_base_rank = {id(row): idx for idx, row in enumerate(residual_oracle_rows)}
+    residual_floor_rows = list(residual_baseline["selected_rows"] or [])
+    residual_floor_count = sum(
+        int(row.get("breakout_quality_residual_safety_score_available", False))
+        for row in residual_floor_rows
+    )
+    residual_floor_sum = sum(
+        float(row.get("breakout_quality_residual_safety_score") or 0.0)
+        for row in residual_floor_rows
+        if row.get("breakout_quality_residual_safety_score_available", False)
+    )
+    residual_brute_best = None
+    residual_brute_key = None
+    for combo in itertools.combinations(residual_oracle_rows, 2):
+        combo_order = _max_dl_execution_order(combo, base_rank=residual_base_rank)
+        combo_result = _simulate_reserved_candidate_order(
+            combo_order,
+            available_cash=350_000.0,
+            sizing_equity=2_000_000.0,
+            free_slots=2,
+            params=resource_params,
+        )
+        if (
+            combo_result["selected_count"] != 2
+            or combo_result["reserved_cost_milli"] < residual_baseline["reserved_cost_milli"]
+        ):
+            continue
+        selected = list(combo_result["selected_rows"] or [])
+        residual_count = sum(
+            int(row.get("breakout_quality_residual_safety_score_available", False))
+            for row in selected
+        )
+        residual_sum = sum(
+            float(row.get("breakout_quality_residual_safety_score") or 0.0)
+            for row in selected
+            if row.get("breakout_quality_residual_safety_score_available", False)
+        )
+        if residual_count < residual_floor_count or residual_sum + 1e-12 < residual_floor_sum:
+            continue
+        combo_key = _max_dl_basket_quality_key(selected, base_rank=residual_base_rank)
+        if residual_brute_key is None or combo_key > residual_brute_key:
+            residual_brute_key = combo_key
+            residual_brute_best = combo_result
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "dual_model_residual_safety_uses_same_day_rank_ols_floor_and_preserves_primary_exact_objective",
+        True,
+        residual_diag.get("basket_objective") == "score"
+        and residual_diag.get("safety_score_mode") == "residual"
+        and residual_diag.get("safety_floor_contract") == "baseline_residual_coverage_and_score_sum_floor_v1"
+        and residual_diag.get("residual_safety_transform") == "same_day_rank_ols_v1"
+        and int(residual_diag.get("residual_safety_fit_pair_count", 0)) == 6
+        and math.isclose(
+            float(residual_diag.get("residual_safety_fit_slope")),
+            float(residual_fit.get("residual_safety_fit_slope")),
+            rel_tol=0.0, abs_tol=1e-12,
+        )
+        and residual_diag.get("safety_floor_violation") is False
+        and residual_diag.get("constrained_solver_optimality_certified") is True
+        and residual_brute_best is not None
+        and [row["ticker"] for row in residual_result["selected_rows"]]
+        == [row["ticker"] for row in residual_brute_best["selected_rows"]]
+        and "K1" in [row["ticker"] for row in residual_result["selected_rows"]]
+        and "S1" in [row["ticker"] for row in residual_result["selected_rows"]],
+    )
+
     score_no_r0_rows = [
         _resource_candidate_fixed(
             ticker, price, qty, score,
@@ -3727,16 +3839,18 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c44_current = forward_current_settings.arms["C44"]
     c54_current = forward_current_settings.arms["C54"]
     c55_current = forward_current_settings.arms["C55"]
+    c56_current = forward_current_settings.arms["C56"]
     c44_options = dict(c44_current.dl_runtime_options or {})
     c54_options = dict(c54_current.dl_runtime_options or {})
     c55_options = dict(c55_current.dl_runtime_options or {})
+    c56_options = dict(c56_current.dl_runtime_options or {})
     selection_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
     forward_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("forward_oos")
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "mr13k_full_forward_and_multiseed_research_matrix_is_source_only_and_keeps_runtime_candidates_frozen",
         True,
-        {"C1", "C3", "C44", "C54", "C55"}
+        {"C1", "C3", "C44", "C54", "C55", "C56"}
         == {arm.arm_id for arm in forward_current_settings.enabled_arms}
         and c44_current.enabled
         and c54_current.enabled
@@ -3759,7 +3873,19 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and c55_options.get("constrained_solver") == "exact_branch_and_bound_v1"
         and c55_options.get("selection_only") is False
         and c55_current.robustness_role == "off"
-        and {"C54-C44", "C54-C3", "C54-C1", "C55-C54", "C55-C44", "C55-C3", "C55-C1"}.issubset(
+        and c56_current.enabled
+        and c56_current.param_source == c54_current.param_source
+        and c56_current.rule_policy == c54_current.rule_policy
+        and c56_current.dl_id == c54_current.dl_id == "CONT13K"
+        and c56_current.dl_runtime_mode == "resource-aware-continuous-score-residual-safety-constrained-optimal"
+        and c56_options.get("safety_dl_id") == "CONT13M"
+        and c56_options.get("safety_constraint") == "baseline_residual_coverage_and_score_sum_floor_v1"
+        and c56_options.get("safety_residualization") == "same_day_rank_ols_v1"
+        and c56_options.get("preserve_k_r0") is True
+        and c56_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+        and c56_options.get("selection_only") is False
+        and c56_current.robustness_role == "off"
+        and {"C54-C44", "C54-C3", "C54-C1", "C55-C54", "C55-C44", "C55-C3", "C55-C1", "C56-C54", "C56-C55", "C56-C44", "C56-C3", "C56-C1"}.issubset(
             {contrast.contrast_id for contrast in forward_current_settings.enabled_contrasts}
         )
         and selection_robustness_active.enabled
@@ -3798,6 +3924,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "CONT13M": {"score_path": "models/pinned_cont13m_forward.csv.gz"}
         },
     )
+    c56_pinned_options = _resolved_ranking_options(
+        forward_current_settings,
+        c56_current,
+        continuous_score_overrides={
+            "CONT13M": {"score_path": "models/pinned_cont13m_forward.csv.gz"}
+        },
+    )
     c55_reuse_source = reuse_path.read_text(encoding="utf-8")
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -3811,6 +3944,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
         and c55_pinned_options.get("safety_score_path_override")
         == "models/pinned_cont13m_forward.csv.gz"
+        and c56_pinned_options.get("safety_score_source") == "continuous_ranker_oos"
+        and c56_pinned_options.get("safety_score_path_override")
+        == "models/pinned_cont13m_forward.csv.gz"
+        and c56_pinned_options.get("safety_residualization") == "same_day_rank_ols_v1"
         and '"safety_dl_source"' in c55_reuse_source
         and "safety_artifact_names" in c55_reuse_source
         and '"forward_scores"' in c55_reuse_source,
@@ -3838,8 +3975,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             score_source="continuous_ranker_oos",
             model_architecture="inception_time_v1",
             experiment_profile="daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise",
-            ranking_policy="resource-aware-continuous-score-safety-constrained-optimal",
-            ranking_options=c55_pinned_options,
+            ranking_policy="resource-aware-continuous-score-residual-safety-constrained-optimal",
+            ranking_options=c56_pinned_options,
             score_path_override="models/pinned_cont13k_forward.csv.gz",
         ):
             c55_runtime_payload = breakout_runtime.resolve_breakout_quality_candidate_rank(
@@ -3851,7 +3988,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "c55_runtime_looks_up_primary_and_secondary_frozen_scores_with_separate_pinned_paths",
+        "c56_runtime_looks_up_primary_and_secondary_frozen_scores_with_separate_pinned_paths",
         True,
         len(c55_runtime_lookup_calls) == 2
         and c55_runtime_lookup_calls[0].get("score_path_override")

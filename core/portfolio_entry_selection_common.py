@@ -74,6 +74,117 @@ def _selected_continuous_safety_score_metrics(result):
     }
 
 
+def _candidate_continuous_residual_safety_score(candidate_row):
+    if not bool(candidate_row.get('breakout_quality_residual_safety_score_available', False)):
+        return None
+    score = candidate_row.get('breakout_quality_residual_safety_score')
+    try:
+        numeric_score = float(score)
+    except (TypeError, ValueError):
+        return None
+    if numeric_score != numeric_score or not math.isfinite(numeric_score):
+        return None
+    return numeric_score
+
+
+def _selected_continuous_residual_safety_score_metrics(result):
+    scores = [
+        score
+        for row in result.get('selected_rows', [])
+        if (score := _candidate_continuous_residual_safety_score(row)) is not None
+    ]
+    return {
+        'scored_count': int(len(scores)),
+        'score_sum': float(sum(scores)),
+        'score_mean': (None if not scores else float(sum(scores) / len(scores))),
+    }
+
+
+def _average_rank_percentiles(values):
+    """Return deterministic average-rank percentiles in [0, 1]."""
+
+    items = list(enumerate(float(v) for v in values))
+    if not items:
+        return []
+    if len(items) == 1:
+        return [0.5]
+    ordered = sorted(items, key=lambda item: (item[1], item[0]))
+    out = [0.0] * len(items)
+    pos = 0
+    denominator = float(len(items) - 1)
+    while pos < len(ordered):
+        end = pos + 1
+        value = ordered[pos][1]
+        while end < len(ordered) and ordered[end][1] == value:
+            end += 1
+        average_zero_based_rank = (float(pos) + float(end - 1)) / 2.0
+        percentile = average_zero_based_rank / denominator
+        for offset in range(pos, end):
+            out[ordered[offset][0]] = float(percentile)
+        pos = end
+    return out
+
+
+def _decorate_same_day_rank_residual_safety_scores(rows):
+    """Residualize frozen MR-13M safety against frozen MR-13K score cross-sectionally.
+
+    Only decision-time model scores are used.  Both axes are first transformed to
+    same-day average-rank percentiles, then OLS with an intercept fits safety-rank on
+    primary-rank across rows that have both scores.  The residual is therefore the
+    amount of path-safety that is better/worse than expected for the same upside
+    condition, without using any future target or fitted cross-day parameter.
+    """
+
+    decorated = [dict(row) for row in list(rows or [])]
+    paired = []
+    primary = []
+    safety = []
+    for idx, row in enumerate(decorated):
+        primary_score = _candidate_continuous_score(row)
+        safety_score = _candidate_continuous_safety_score(row)
+        if primary_score is None or safety_score is None:
+            row['breakout_quality_residual_safety_score'] = None
+            row['breakout_quality_residual_safety_score_available'] = False
+            continue
+        paired.append(idx)
+        primary.append(float(primary_score))
+        safety.append(float(safety_score))
+
+    primary_pct = _average_rank_percentiles(primary)
+    safety_pct = _average_rank_percentiles(safety)
+    if paired:
+        x_mean = float(sum(primary_pct) / len(primary_pct))
+        y_mean = float(sum(safety_pct) / len(safety_pct))
+        denominator = float(sum((x - x_mean) ** 2 for x in primary_pct))
+        slope = (
+            0.0
+            if denominator <= 1e-15
+            else float(sum((x - x_mean) * (y - y_mean) for x, y in zip(primary_pct, safety_pct)) / denominator)
+        )
+        intercept = float(y_mean - slope * x_mean)
+    else:
+        x_mean = y_mean = slope = intercept = 0.0
+
+    for local_idx, row_idx in enumerate(paired):
+        expected = float(intercept + slope * primary_pct[local_idx])
+        residual = float(safety_pct[local_idx] - expected)
+        row = decorated[row_idx]
+        row['breakout_quality_primary_score_percentile'] = float(primary_pct[local_idx])
+        row['breakout_quality_safety_score_percentile'] = float(safety_pct[local_idx])
+        row['breakout_quality_expected_safety_percentile'] = expected
+        row['breakout_quality_residual_safety_score'] = residual
+        row['breakout_quality_residual_safety_score_available'] = True
+
+    return decorated, {
+        'residual_safety_fit_pair_count': int(len(paired)),
+        'residual_safety_fit_slope': float(slope),
+        'residual_safety_fit_intercept': float(intercept),
+        'residual_safety_primary_percentile_mean': float(x_mean),
+        'residual_safety_secondary_percentile_mean': float(y_mean),
+        'residual_safety_transform': 'same_day_rank_ols_v1',
+    }
+
+
 def _selected_continuous_score_metrics(result):
     scores = [
         score

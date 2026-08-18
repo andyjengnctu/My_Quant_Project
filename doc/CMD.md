@@ -175,7 +175,7 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-MR-13E仍是production anchor。MR-13K Pure-MFE已完成Seed42 Selection與Forward，ranking learnability提高但兩段single-seed portfolio translation均低於MR-13E；C42/C53與C44/C54 current 8-seed robustness仍獨立完成。MR-13M確認low-adverse path-risk具強Forward ranking signal；MR-13L/N/O與fixed 50/50 frozen fusion均已REJECT，Target／pair-definition路線停止。Current Forward新增Plan B `C55 = MR-13K primary objective + MR-13M baseline-relative safety floor`，只跑Seed42 Forward且不加入robustness；Production candidate固定C42/C44。後續待研究順序以`doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`為準，`doc/ToDo.md`只屬使用者私人筆記。
+MR-13E仍是production anchor。MR-13K Pure-MFE已完成Seed42 Selection與Forward，ranking learnability提高但兩段single-seed portfolio translation均低於MR-13E；C42/C53與C44/C54 current 8-seed robustness仍獨立完成。MR-13M確認low-adverse path-risk具強Forward ranking signal；MR-13L/N/O與fixed 50/50 frozen fusion均已REJECT，Target／pair-definition路線停止。C55 raw MR-13M safety floor已完成且因upside犧牲過大停止；Current Forward新增Plan B2 `C56 = MR-13K primary objective + MR-13M same-day rank residual safety floor`，只跑Seed42 Forward且不加入robustness；Production candidate固定C42/C44。後續待研究順序以`doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`為準，`doc/ToDo.md`只屬使用者私人筆記。
 
 Active continuous model menu由config／research spec動態產生；MR-13O目前只授權Seed42 Forward model Gate：
 

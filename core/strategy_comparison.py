@@ -43,6 +43,9 @@ STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL = (
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL = (
     'resource-aware-continuous-score-safety-constrained-optimal'
 )
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL = (
+    'resource-aware-continuous-score-residual-safety-constrained-optimal'
+)
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL = (
     'resource-aware-continuous-score-no-r0-constrained-optimal'
 )
@@ -67,6 +70,7 @@ SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
@@ -891,13 +895,24 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                     raise ValueError(f"arm {key} Score constrained必須preserve_k_r0=True")
                 if options.get("constrained_solver") != "exact_branch_and_bound_v1":
                     raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
-            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL:
+            if arm.dl_runtime_mode in {
+                STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
+                STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
+            }:
                 if options.get("preserve_k_r0") is not True:
                     raise ValueError(f"arm {key} Score+Safety constrained必須preserve_k_r0=True")
                 if options.get("constrained_solver") != "exact_branch_and_bound_v1":
                     raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
-                if options.get("safety_constraint") != "baseline_coverage_and_score_sum_floor_v1":
+                expected_constraint = (
+                    "baseline_residual_coverage_and_score_sum_floor_v1"
+                    if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL
+                    else "baseline_coverage_and_score_sum_floor_v1"
+                )
+                if options.get("safety_constraint") != expected_constraint:
                     raise ValueError(f"arm {key} safety_constraint contract不支援")
+                if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL:
+                    if options.get("safety_residualization") != "same_day_rank_ols_v1":
+                        raise ValueError(f"arm {key} residual safety必須使用same_day_rank_ols_v1")
                 safety_dl_id = str(options.get("safety_dl_id") or "").strip()
                 if not safety_dl_id or safety_dl_id not in settings.dl_sources:
                     raise ValueError(f"arm {key} 必須指定合法safety_dl_id")

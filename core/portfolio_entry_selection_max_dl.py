@@ -6,7 +6,9 @@ from core.exact_accounting import calc_planned_initial_risk_from_prices_milli
 from core.portfolio_entry_selection_common import (
     _candidate_continuous_score,
     _candidate_continuous_safety_score,
+    _candidate_continuous_residual_safety_score,
     _selected_continuous_safety_score_metrics,
+    _selected_continuous_residual_safety_score_metrics,
     _resource_aware_diag_from_result,
     _simulate_reserved_candidate_order,
 )
@@ -904,6 +906,8 @@ def _reorder_resource_aware_continuous_constrained_optimal(
     objective_mode,
     preserve_reserve_floor=True,
     preserve_baseline_safety_floor=False,
+    safety_score_mode='raw',
+    safety_floor_contract=None,
 ):
     """Exactly maximize one frozen DL objective under canonical K/cash feasibility.
 
@@ -925,7 +929,19 @@ def _reorder_resource_aware_continuous_constrained_optimal(
     reserve_floor_milli = (
         int(baseline['reserved_cost_milli']) if preserve_reserve_floor else 0
     )
-    baseline_safety = _selected_continuous_safety_score_metrics(baseline)
+    if safety_score_mode not in {'raw', 'residual'}:
+        raise ValueError(f'不支援的safety_score_mode={safety_score_mode!r}')
+    safety_metric_fn = (
+        _selected_continuous_residual_safety_score_metrics
+        if safety_score_mode == 'residual'
+        else _selected_continuous_safety_score_metrics
+    )
+    safety_candidate_fn = (
+        _candidate_continuous_residual_safety_score
+        if safety_score_mode == 'residual'
+        else _candidate_continuous_safety_score
+    )
+    baseline_safety = safety_metric_fn(baseline)
     safety_floor_coverage = (
         int(baseline_safety['scored_count']) if preserve_baseline_safety_floor else 0
     )
@@ -934,7 +950,7 @@ def _reorder_resource_aware_continuous_constrained_optimal(
     )
 
     def safety_metrics(result):
-        return _selected_continuous_safety_score_metrics(result)
+        return safety_metric_fn(result)
 
     def safety_floor_satisfied(result):
         if not preserve_baseline_safety_floor:
@@ -1054,7 +1070,7 @@ def _reorder_resource_aware_continuous_constrained_optimal(
                 else float(expected_excess_r) * float(risk_milli)
             )
 
-        safety_score = _candidate_continuous_safety_score(row)
+        safety_score = safety_candidate_fn(row)
         standalone.append({
             'orderable': True,
             'reserve_upper_milli': int(single_result['reserved_cost_milli']),
@@ -1367,9 +1383,10 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         'constrained_solver_safety_pruned_states': int(safety_pruned_states),
         'safety_floor_enabled': bool(preserve_baseline_safety_floor),
         'safety_floor_contract': (
-            'baseline_coverage_and_score_sum_floor_v1'
+            str(safety_floor_contract or 'baseline_coverage_and_score_sum_floor_v1')
             if preserve_baseline_safety_floor else None
         ),
+        'safety_score_mode': str(safety_score_mode),
         'baseline_safety_scored_count': int(baseline_safety['scored_count']),
         'selected_safety_scored_count': int(selected_safety['scored_count']),
         'baseline_safety_score_sum': float(baseline_safety['score_sum']),
@@ -1468,6 +1485,33 @@ def _reorder_resource_aware_continuous_score_safety_constrained_optimal(
     )
     diag = dict(diag)
     diag['selector'] = 'continuous-score-safety-constrained-optimal'
+    return order, diag
+
+def _reorder_resource_aware_continuous_score_residual_safety_constrained_optimal(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    order, diag = _reorder_resource_aware_continuous_constrained_optimal(
+        rows,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=free_slots,
+        params=params,
+        baseline=baseline,
+        default_diag=default_diag,
+        objective_mode='score',
+        preserve_baseline_safety_floor=True,
+        safety_score_mode='residual',
+        safety_floor_contract='baseline_residual_coverage_and_score_sum_floor_v1',
+    )
+    diag = dict(diag)
+    diag['selector'] = 'continuous-score-residual-safety-constrained-optimal'
     return order, diag
 
 def _reorder_resource_aware_continuous_score_no_r0_constrained_optimal(
