@@ -381,7 +381,7 @@ def _collect_expected_r_calibration_status(
                 f"Expected-PnL calibration builder要求runtime/fit為同一frozen ranker identity: "
                 f"{arm.arm_id}/{arm.dl_id}/{fit_dl_id}"
             )
-        if settings.profile_id in {"selection_pit", "operational_rolling"} and runtime_dl.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+        if settings.profile_id in {"selection_pit", "extending_window_rolling"} and runtime_dl.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
             raise ValueError(f"Selection Expected-PnL runtime必須使用Selection PIT score: {arm.arm_id}")
         if settings.profile_id == "forward_oos" and runtime_dl.score_source != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
             raise ValueError(f"Forward Expected-PnL runtime必須使用frozen OOS score: {arm.arm_id}")
@@ -390,7 +390,7 @@ def _collect_expected_r_calibration_status(
         runtime_sha = str((artifact_identities.get(runtime_score_key) or {}).get("sha256") or "")
         fit_sha = str((artifact_identities.get(fit_score_key) or {}).get("sha256") or "")
         expected_selection_start = (
-            settings.start_date if settings.profile_id in {"selection_pit", "operational_rolling"} else None
+            settings.start_date if settings.profile_id in {"selection_pit", "extending_window_rolling"} else None
         )
         expected_forward_cutoff = (
             (runtime_periods.get(arm.dl_id) or (None, None))[0]
@@ -696,7 +696,7 @@ def _collect_parameter_artifact_status(
                 (
                     (
                         (
-                            "合併既有historical/current Min ROOS為Operational rolling schedule"
+                            "合併既有historical/current Min ROOS為Extending-Window rolling schedule"
                             if builder is not None and builder.builder_type == "operational_min_roos_stitch"
                             else "建立／接續Selection historical Min ROOS單階段rolling參數"
                         )

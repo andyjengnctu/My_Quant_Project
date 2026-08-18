@@ -9456,3 +9456,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - New current Strategy identities：`C58`=Operational Min ROOS baseline；`C59`=Operational MR-13E exact reference；`C60`=Operational MR-13K + MR-13M Residual Safety exact。Current schema=`42`。Legacy C42/C44/C53/C54/C55/C56/C57 IDs/results保留；C42/C44 production identity不因migration自動改變。
 - Robustness governance：legacy C56/C57 Selection/Frozen full-flow robustness停止，因其不再回答current deployment問題。先完成Seed42 Operational C58/C59/C60與Fixed-Window Stability；只有Operational結果仍會影響GO/REJECT時，才對C60做8-seed Operational robustness（`seed_count=8`、generator=`20260810`）。Stability先Seed42，必要才multi-seed。
 - Decision：`EVALUATION_FRAMEWORK_MIGRATED / LEGACY_RESULTS_PRESERVED / NEW_OPERATIONAL_RESULTS_PENDING`。同一舊stage內controlled contrasts仍有效；任何以Selection-vs-Frozen直接證明temporal learnability的舊強結論降級為policy-confounded historical interpretation。下一步先完成Operational Rolling model artifacts與C58/C59/C60 strategy replay，再做Fixed-Window Stability；之後才恢復Plan C-M等模型研究。
+
+
+## 2026-08-18 — Evaluation Framework final naming/data-boundary correction
+
+- 使用者最終決策：current framework正式命名為 **Extending-Window Rolling** 與 **Fixed-Window Rolling**；不再使用Operational Rolling／Fixed-Window Stability作current人讀名稱。
+- 兩條current rolling evidence正式score起點統一為`2015-01-01`。Fixed-Window Rolling維持`120M` train history、`24M` inner validation、`12M` score/refit cadence；2015是本次實際`tw_stock_data_vip`資料下第一個完整120M window從年初即具benchmark 300-bar feature history的年度。
+- Daily Universal dataset修正：training universe不再繼承optimizer historical `selection_start`（舊policy導致2011人為截斷）；shared最早下界由benchmark完整feature-window日期自動推導，個股仍各自要求完整feature window。此項改變training-data semantics，因此舊2014～2020 PIT folds只保留historical evidence，不直接REUSE為新Extending-Window模型。
+- Current Strategy Compare profile identity=`extending_window_rolling`，schema=`43`，arms仍=`C58/C59/C60`；robustness default改為`seed_count=4 / seed_generator_seed=20260810`。互動選單移除「一次執行全部 Multi-seed robustness」，只保留current profile自己的robustness入口。
+- Frozen Forward、舊Selection PIT、既有Cxx/MRxx數值與ID全部保留，不改寫歷史；production C42/C44不因本輪framework correction自動切換。

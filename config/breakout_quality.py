@@ -203,18 +203,18 @@ BREAKOUT_QUALITY_PRETRAINING_STRIDE = 5  # Dataset sampling設定；每個ticker
 # 9. Rolling point-in-time evaluation contract
 # =============================================================================
 
-# Operational Rolling 是正式主要評估：使用當時所有合法歷史資料（expanding）
+# Extending-Window Rolling 是正式主要評估：使用當時所有合法歷史資料（expanding）
 # 並按固定score fold cadence重新選epoch／refit，再只評分下一段。每筆score都必須
 # 滿足label completion < score_start；不再以2014-2020 Selection / 2021+ Frozen
 # Forward的人為年代切割定義OOS。
 #
-# Stability Rolling 是獨立診斷：相同annual refit，但限制完整fit history為固定
+# Fixed-Window Rolling 是獨立診斷：相同annual refit，但限制完整fit history為固定
 # calendar window，專門檢查不同年代在較一致資訊長度下的learnability。它使用
-# 獨立工件路徑，不覆寫Operational Rolling。
-BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE = "2014-01-01"
+# 獨立工件路徑，不覆寫Extending-Window Rolling。
+BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE = "2015-01-01"
 # Strategy/reporting只從此日期起視為正式operational evidence；更早的合法fold可保留
 # 作模型warm-up與coverage，但不強迫策略比較納入。
-BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE = "2014-01-01"
+BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE = "2015-01-01"
 # "auto" = score到目前Dataset可評分的最新stock-day；None只供legacy重現，仍代表
 # canonical outer-policy Selection end。
 BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE: str | None = "auto"
@@ -225,7 +225,7 @@ BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS = 24
 BREAKOUT_QUALITY_POINT_IN_TIME_TRAIN_WINDOW_MONTHS: int | None = None
 # Stability第一版使用10年固定history；此值是config而非validator magic constant。
 BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS = 120
-BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE = "2014-01-01"
+BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE = "2015-01-01"
 BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE = "auto"
 BREAKOUT_QUALITY_POINT_IN_TIME_MIN_TRAIN_GROUPS = 20
 BREAKOUT_QUALITY_POINT_IN_TIME_MIN_VALIDATION_GROUPS = 20

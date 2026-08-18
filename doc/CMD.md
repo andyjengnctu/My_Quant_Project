@@ -119,26 +119,23 @@ python apps/research.py audit
 python apps/research.py compare
 ```
 
-CLI亦可明確指定階段：
+Current CLI profile：
 
 ```bash
-python apps/research.py compare selection_pit status
-python apps/research.py compare forward_oos status
+python apps/research.py compare extending_window_rolling status
 ```
 
 ```text
 === 策略組合比較 ===
-[1]  Selection PIT 策略比較  (Enter)
-[2]  Forward-OOS 策略比較
-[3]  Selection PIT Multi-seed robustness
-[4]  Forward-OOS Multi-seed robustness
-[5]  一次執行全部 Multi-seed robustness
-[6]  Runtime 整合 Gate
-[7]  查看全部階段設定與工件狀態
+[1]  Extending-Window Rolling 策略比較  (Enter)
+[2]  Extending-Window Rolling Multi-seed robustness
+[3]  查看目前Framework設定與工件狀態
 [0]  返回
 ```
 
-進入任一階段後，第二層選單固定為：
+若未來重新啟用Runtime整合Gate，該項目由config動態插入，不固定選單號碼。已移除「一次執行全部 Multi-seed robustness」入口。
+
+進入策略比較後，第二層選單固定為：
 
 ```text
 [1]  執行目前比較設定  (Enter)
@@ -146,7 +143,7 @@ python apps/research.py compare forward_oos status
 [0]  返回
 ```
 
-兩階段由`config/strategy_compare.py`的profiles驅動並長期共存；Selection固定使用historical PIT／historical active params與`outputs/strategy_compare/selection_pit/`，Forward-OOS使用frozen forward score／forward active params與`outputs/strategy_compare/forward_oos/`。不得為了切換階段重寫同一組enabled arms或共用`latest/`。兩profile可依config唯讀掃描舊`outputs/strategy_compare/runs/`重用既有pair，但新輸出不寫回舊root。
+Current Extending-Window Rolling自2015起，以完整合法歷史的expanding training + annual PIT-safe refit形成單一策略績效主線；Fixed-Window Rolling屬模型研究選單中的120M歷史穩定性診斷，不建立第二套Strategy Compare truth。舊Selection PIT／Frozen Forward profile與工件只供歷史解讀／重現，不暴露於current主選單。
 
 目前比較profiles、比較對象、參數來源、DL來源、差異比較與前置建立政策全部條列於`config/strategy_compare.py`；每個profile用`arm_ids`／`contrast_ids`決定當階段啟用集合，arm／contrast定義本身仍可保留歷史項目，不存在代表整套實驗的`ACTIVE_STRATEGY_COMPARISON_ID`。同一param source／rule policy使用一個共用DL-off基準，可同時掛多個DL-on模型；各DL-on arm可獨立開關，執行引擎會逐一與同一基準形成controlled pair，並驗證重複基準結果一致。選擇一般Strategy Compare執行後，App先顯示`READY／PREPARABLE／BLOCKED`依賴計畫並只確認一次；對可由既有正式工件確定產生的缺件，依config自動重用、重建或接續，包括既有模型的forward-OOS scores與比較所需的策略參數。App不建立Label、不選模型、不訓練模型權重；Selection PIT scores／manifest／audit與PIT Model Gate一律由`[1] 模型訓練`工作類型建立／更新，Strategy Compare缺少或identity/coverage不合法時直接BLOCKED並導向該正式入口，不做checkpoint-only PIT重建或重跑Audit。執行前會由全部啟用DL runtime工件解析共同比較期間，先驗證Full／Min／Min-DL rolling active params是否完整覆蓋；Min ROOS固定使用forward P2 DL-off-trained工件，不得使用只涵蓋Selection的歷史Label teacher params。若forward scores建立後才得知正式期間，App會重新規劃下一波前置並自動建立／接續缺少或過期的P2／P3，全部READY後才開始第一組replay。DL-aware參數必須與訓練時相同的DL版本配對：TP1-trained只允許TP1-on，A9-trained只允許A9-on；跨版本runtime組合在config驗證階段直接拒絕。A9 P3使用獨立`p3_dl_on_trained/A9/`工件，不覆蓋TP1 P3。console／報表採簡稱`Min ROOS`、`Min ROOS: TP1-on`、`Min ROOS: A9-on`、`Min-TP1 ROOS`、`Min-TP1 ROOS: DL-on`、`Min-A9 ROOS`、`Min-A9 ROOS: DL-on`。報表的`同參數DL選擇R`只在相同`param_source`與`rule_policy`的arms間具共同attribution基準；跨參數contrast的`Δ同參數DL選擇R`固定顯示`-`。預設`reuse_completed_results=True`與`reuse_shared_baseline=True`：選單的執行計畫會把replay identity與目前工件SHA完全一致的既有arm顯示為`REUSE`，只有新／失效arm顯示`RUN`；同一param/rules群組的DL-off baseline最多執行一次。例如新增MR-12B的C19/C20時，若C3/C17/C18已有compatible正式結果，計畫應直接重用C3/C17/C18，只執行C19/C20，再組合全部contrasts。修改contrast或報表說明不會使cache失效；param、model、manifest、forward score、期間或runtime contract任何一項改變都必須重新replay。
 
@@ -192,15 +189,14 @@ Active Profile：daily_universal_full_horizon_pareto_mfe_low_adverse_pairwise
 MR-13O沿用MR-13H `daily_full_horizon_opportunity_r_v1`作economic result truth，但training target不是該scalar R；trainer會從同一canonical stock-day rows建立`[MFE percentile, low-adverse percentile]`，僅strict Pareto-comparable pairs進`pairwise_logistic` loss。Epoch selection固定看`mean_daily_pareto_pair_concordance`，global Pareto concordance只作tie-break；MR-13H economic Daily rho／Pair／Top-K只能在候選checkpoint評估中作描述性 model-gate evidence，不能參與選模。`selection_pit_authorized=False`，因此目前沒有`[2] Selection PIT`；也沒有新增scalar Target identity，所以不顯示`[6] Target comparison`。
 
 Forward console／簡易報表除既有economic ranking品質外，MR-13O會額外顯示Validation／Forward／breakout的Pareto pair concordance與comparable-pair coverage。若Pareto supervision本身學不到（接近隨機），此Target-formulation直接在model gate停止；若Pareto可學但economic ordering仍不改善，表示joint dominance supervision與最終economic ordering仍有落差，也不應直接進PIT。只有兩層證據都形成可信增量，才另輪授權Selection PIT。
-### C56 full-flow 完整驗證順序（2026-08-18 current）
+### Current Rolling 驗證順序（2026-08-18 current）
 
-1. `apps/research.py → [1] 模型訓練 → [5] 準備策略比較所需模型工件`：補齊／重用Selection所需`CONT13K_PIT`與`CONT13M_PIT`。Strategy Compare本身不得checkpoint-only重建PIT。
-2. `apps/research.py → [3] 策略組合比較 → [1] Selection PIT 策略比較 → [1]`：執行C57 single-seed Selection；C54/C55不在此stage。
-3. `apps/research.py → [3] → [3] Selection PIT Multi-seed robustness`：fixed=C32/C23，stochastic只=C57；8 seeds，每seed同 seed訓練13K PIT＋13M PIT。
-4. `apps/research.py → [3] → [4] Forward-OOS Multi-seed robustness`：fixed=C1/C3，stochastic只=C56；8 seeds，每seed同 seed訓練13K＋13M。Seed42 C56 Forward既有正式pair可REUSE，不需重跑C54/C55。
-5. 也可在Selection single-seed完成後使用 `[5] 一次執行全部 Multi-seed robustness` 串行完成第3、4步。
+1. `apps/research.py → [1] 模型訓練 → [1] Extending-Window Rolling 模型驗證`：2015起使用完整合法歷史、annual refit；舊PIT folds因training universe語意已修正，不直接當current REUSE。
+2. `apps/research.py → [1] 模型訓練 → [2] Fixed-Window Rolling 模型驗證`：2015起固定120M history、annual refit，作歷史learnability診斷。
+3. `apps/research.py → [1] 模型訓練 → [5] 準備策略比較所需模型工件`：準備Extending-Window current sources。
+4. `apps/research.py → [3] 策略組合比較 → [1] Extending-Window Rolling 策略比較`：執行C58/C59/C60。
+5. 若Seed42結果仍有決策價值，再執行`[2] Extending-Window Rolling Multi-seed robustness`；預設4 seeds。沒有combined robustness入口。
 
-本輪完整測試的判定只看C57/C56自身跨期與跨seed分布；C54/C55歷史結果可作背景證據，但不再佔用本輪training/replay units。
 
 ### Continuous Target自動準備
 

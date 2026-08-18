@@ -391,6 +391,23 @@ def build_equal_rank_mfe_low_adverse_target(
     return composite, mfe_percentile, low_adverse_percentile
 
 
+def resolve_daily_training_universe_start(
+    benchmark_index: pd.DatetimeIndex,
+    *,
+    feature_window_bars: int,
+) -> pd.Timestamp:
+    """Return the earliest benchmark date with a complete causal feature window."""
+
+    bars = int(feature_window_bars)
+    if bars < 1:
+        raise ValueError("feature_window_bars必須>=1")
+    normalized = pd.DatetimeIndex(benchmark_index).normalize()
+    first_pos = bars - 1
+    if len(normalized) <= first_pos:
+        raise ValueError("daily ranker benchmark不足以形成完整feature window")
+    return pd.Timestamp(normalized[first_pos]).normalize()
+
+
 def load_daily_universal_ranker_data(
     *,
     filter_id: str,
@@ -445,7 +462,6 @@ def load_daily_universal_ranker_data(
         root,
         source_data_end_date=_source_data_end(summary),
     )
-    sample_start = pd.Timestamp(str(outer_policy["selection_start_date"]))
     sample_end = pd.Timestamp(str(outer_policy["effective_oos_end_date"]))
 
     csv_inputs, _duplicate_lines = discover_dataset_csv_inputs(root, dataset_profile)
@@ -460,6 +476,16 @@ def load_daily_universal_ranker_data(
     )
     benchmark = load_dataset_frame(benchmark_path, benchmark_ticker, min_rows=min_rows)
     benchmark_index = pd.DatetimeIndex(benchmark.index).normalize()
+    first_pos = int(DEFAULT_LABEL_POLICY.feature_window_bars) - 1
+    # Daily Universal training universe must not inherit the optimizer's historical
+    # selection_start cutoff.  The earliest legal stock-day is data-driven: both the
+    # stock and benchmark must already have a complete feature window.  Per-stock
+    # first_pos filtering below enforces the stock side; this benchmark date enforces
+    # the shared market sequence side.
+    sample_start = resolve_daily_training_universe_start(
+        benchmark_index,
+        feature_window_bars=int(DEFAULT_LABEL_POLICY.feature_window_bars),
+    )
     if bool(extend_score_eligibility_to_source_tail):
         source_tail = pd.Timestamp(benchmark_index.max()).normalize()
         if source_tail > sample_end:
@@ -518,7 +544,6 @@ def load_daily_universal_ranker_data(
                 progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
             continue
 
-        first_pos = int(DEFAULT_LABEL_POLICY.feature_window_bars) - 1
         if len(frame) <= first_pos:
             skipped_tickers += 1
             if progress_callback is not None:
@@ -852,6 +877,7 @@ def load_daily_universal_ranker_data(
         "risk_param_coverage_start": (
             None if risk_schedule is None else min(item.start_date for item in risk_schedule).date().isoformat()
         ),
+        "training_universe_start_date": str(pd.Timestamp(sample_start).date()),
     }
     daily_summary = {
         "filter_id": filter_id,
@@ -873,6 +899,7 @@ def load_daily_universal_ranker_data(
             None if risk_schedule is None else min(item.start_date for item in risk_schedule).date().isoformat()
         ),
         "score_eligibility_extended_to_source_tail": bool(extend_score_eligibility_to_source_tail),
+        "training_universe_start_date": str(pd.Timestamp(sample_start).date()),
         "score_eligibility_end_date": str(pd.Timestamp(sample_end).date()),
     }
     # ``events`` is retained only for the shared bundle interface; one row now equals one
@@ -998,5 +1025,6 @@ __all__ = [
     "build_equal_rank_mfe_low_adverse_target",
     "compute_daily_opportunity_target_batch",
     "load_daily_universal_ranker_data",
+    "resolve_daily_training_universe_start",
     "select_breakout_candidate_group_ids",
 ]

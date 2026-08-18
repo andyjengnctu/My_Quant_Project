@@ -1959,17 +1959,17 @@ def _print_workflow_status(settings=None) -> None:
     if settings.supports_point_in_time_scores:
         base_rows.extend((
             (
-                "Operational Rolling Period",
+                "Extending-Window Rolling Period",
                 f"{'auto（最早合法）' if str(settings.point_in_time_score_start_date).lower() == 'auto' else settings.point_in_time_score_start_date} ～ "
                 f"{settings.point_in_time_score_end_date or 'Legacy Selection end'}",
             ),
             (
-                "Operational Fold／Validation",
+                "Extending-Window Fold／Validation",
                 f"{settings.point_in_time_fold_months}／"
                 f"{settings.point_in_time_inner_validation_months} months",
             ),
             (
-                "Operational Evidence Start",
+                "Extending-Window Evidence Start",
                 settings.point_in_time_coverage_reference_start_date,
             ),
         ))
@@ -2043,11 +2043,11 @@ def _print_workflow_status(settings=None) -> None:
     if settings.supports_point_in_time_scores:
         grouped_status.extend((
             (
-                "Operational Rolling Scores",
+                "Extending-Window Rolling Scores",
                 (status_paths["PIT scores"], status_paths["PIT manifest"], status_paths["PIT coverage"]),
             ),
             (
-                "Operational Rolling 模型驗證",
+                "Extending-Window Rolling 模型驗證",
                 (status_paths["PIT audit JSON"], status_paths["PIT audit Markdown"]),
             ),
         ))
@@ -2457,7 +2457,7 @@ def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
         return 0
     _print_workflow_status(settings)
     if not _prompt_bool(
-        "確認前置Dataset／Target來源後，建立／更新Operational Rolling Scores並執行模型驗證",
+        "確認前置Dataset／Target來源後，建立／更新Extending-Window Rolling Scores並執行模型驗證",
         True,
     ):
         return 0
@@ -2486,7 +2486,7 @@ def _run_continuous_pit_profile(
     print(
         "\n"
         + render_title(
-            f"Operational Rolling Model Gate | {model_id} | {settings.experiment_profile}"
+            f"Extending-Window Rolling Model Gate | {model_id} | {settings.experiment_profile}"
         )
     )
     code = _prepare_continuous_research_inputs(program_name, settings)
@@ -2534,13 +2534,13 @@ def _interactive_continuous_stability_validation(program_name: str, settings) ->
     )
     stability_dir = (
         model_output_dir
-        / "stability_rolling"
+        / "fixed_window_rolling"
         / f"fixed_{int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS)}m"
     )
     print(
         "\n"
         + render_title(
-            f"Fixed-Window Stability | {settings.experiment_profile} | "
+            f"Fixed-Window Rolling | {settings.experiment_profile} | "
             f"{int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS)} months"
         )
     )
@@ -2555,7 +2555,7 @@ def _interactive_continuous_stability_validation(program_name: str, settings) ->
             )
         )
     )
-    if not _prompt_bool("確認建立／更新Fixed-Window Stability工件", True):
+    if not _prompt_bool("確認建立／更新Fixed-Window Rolling工件", True):
         return 0
     code = _prepare_continuous_research_inputs(program_name, settings)
     if code != 0:
@@ -3000,7 +3000,7 @@ def _interactive_model_research(program_name: str) -> int:
         research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
-        print(render_menu_item(1, "Operational Rolling 模型驗證", default=True))
+        print(render_menu_item(1, "Extending-Window Rolling 模型驗證", default=True))
         pit_authorized = bool(
             settings.supports_point_in_time_scores and research_spec.selection_pit_authorized
         )
@@ -3010,7 +3010,7 @@ def _interactive_model_research(program_name: str) -> int:
             else None
         )
         if settings.supports_point_in_time_scores:
-            print(render_menu_item(2, "Fixed-Window Stability 模型驗證"))
+            print(render_menu_item(2, "Fixed-Window Rolling 模型驗證"))
         print(render_menu_item(3, "查看目前Workflow與工件狀態"))
         _comparisons, strategy_model_sources = _strategy_compare_required_model_sources()
         if strategy_model_sources:

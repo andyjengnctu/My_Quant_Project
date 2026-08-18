@@ -405,8 +405,8 @@ def validate_dataset_cli_contract_case(_base_params):
             and "[rebuild]" not in interactive_text
             and "[relabel]" not in interactive_text
             and "=== Continuous DL 模型研究與驗證 ===" in interactive_text
-            and "[1]  Operational Rolling 模型驗證  (Enter)" in interactive_text
-            and "[2]  Fixed-Window Stability 模型驗證" in interactive_text
+            and "[1]  Extending-Window Rolling 模型驗證  (Enter)" in interactive_text
+            and "[2]  Fixed-Window Rolling 模型驗證" in interactive_text
             and "[3]  查看目前Workflow與工件狀態" in interactive_text
             and f"[4]  {configured_ranker_menu_label}" not in interactive_text
             and "MR-12A/B/C" not in interactive_text
@@ -461,8 +461,8 @@ def validate_dataset_cli_contract_case(_base_params):
             comparison_rc,
             comparison_commands,
             f"[4]  {configured_comparison_menu_label}" not in comparison_text
-            and "Operational Rolling 模型驗證" in comparison_text
-            and "Fixed-Window Stability 模型驗證" in comparison_text,
+            and "Extending-Window Rolling 模型驗證" in comparison_text
+            and "Fixed-Window Rolling 模型驗證" in comparison_text,
         ),
     )
 
@@ -520,7 +520,7 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_continuous_model_menu_default_routes_to_operational_rolling",
+        "breakout_quality_continuous_model_menu_default_routes_to_extending_window_rolling",
         (47, 1),
         (continuous_default_rc, continuous_train_route.call_count),
     )
@@ -545,8 +545,8 @@ def validate_dataset_cli_contract_case(_base_params):
         (0, True, True),
         (
             no_pit_rc,
-            "[2]  Fixed-Window Stability 模型驗證" in no_pit_text,
-            "[1]  Operational Rolling 模型驗證  (Enter)" in no_pit_text,
+            "[2]  Fixed-Window Rolling 模型驗證" in no_pit_text,
+            "[1]  Extending-Window Rolling 模型驗證  (Enter)" in no_pit_text,
         ),
     )
 
@@ -594,13 +594,13 @@ def validate_dataset_cli_contract_case(_base_params):
     else:
         pit_status_ok = (
             (
-                "Operational Rolling Scores" in rendered_status
-                and "Operational Rolling 模型驗證" in rendered_status
+                "Extending-Window Rolling Scores" in rendered_status
+                and "Extending-Window Rolling 模型驗證" in rendered_status
             )
             if current_model_settings.supports_point_in_time_scores
             else (
-                "Operational Rolling Scores" not in rendered_status
-                and "Operational Rolling 模型驗證" not in rendered_status
+                "Extending-Window Rolling Scores" not in rendered_status
+                and "Extending-Window Rolling 模型驗證" not in rendered_status
             )
         )
         workflow_status_contract_ok = (
@@ -948,7 +948,7 @@ def validate_dataset_cli_contract_case(_base_params):
         app_strategy_compare.get_strategy_runtime_integration_settings().enabled
     )
     strategy_status_choice = (
-        menu_profile_count + robustness_profile_count + (3 if integration_enabled else 2)
+        menu_profile_count + robustness_profile_count + (2 if integration_enabled else 1)
     )
     with (
         patch("builtins.input", side_effect=[str(strategy_status_choice), "0"]),
@@ -971,31 +971,14 @@ def validate_dataset_cli_contract_case(_base_params):
         ),
     )
 
-    combined_robustness_calls = []
-
-    def _record_combined_robustness_run(*, robustness_id, confirm):
-        combined_robustness_calls.append((str(robustness_id), bool(confirm)))
-        return {}
-
-    combined_robustness_choice = menu_profile_count + robustness_profile_count + 1
-    with (
-        patch("builtins.input", side_effect=[str(combined_robustness_choice), "0"]),
-        patch(
-            "filters.breakout_quality.strategy_multi_seed_robustness.run_multi_seed_robustness",
-            side_effect=_record_combined_robustness_run,
-        ),
-    ):
-        combined_menu_rc = app_strategy_compare._strategy_compare_menu()
+    app_source = Path(app_strategy_compare.__file__).read_text(encoding="utf-8")
     add_check(
         results,
         "cli_contract",
         case_id,
-        "strategy_compare_combined_robustness_menu_runs_all_enabled_profiles_without_midrun_confirmation",
-        (
-            0,
-            [(str(item["robustness_id"]), False) for item in robustness_profiles],
-        ),
-        (combined_menu_rc, combined_robustness_calls),
+        "strategy_compare_menu_has_no_combined_multi_seed_robustness_entry",
+        False,
+        "一次執行全部 Multi-seed robustness" in app_source,
     )
 
     robustness_calls = []

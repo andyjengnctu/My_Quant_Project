@@ -510,7 +510,7 @@ def _arm_training_dl_ids(settings, arm: StrategyComparisonArm) -> tuple[str, ...
     score_sources = {str(settings.dl_sources[dl_id].score_source) for dl_id in unique}
     expected = (
         "selection_point_in_time"
-        if settings.profile_id in {"selection_pit", "operational_rolling"}
+        if settings.profile_id in {"selection_pit", "extending_window_rolling"}
         else "continuous_ranker_oos"
     )
     if score_sources != {expected}:
@@ -755,7 +755,7 @@ def _render_robustness_execution_plan(
         f"模型訓練單元       ：{cfg.seed_count * len(training_sources)}（{len(training_sources)} unique DL sources × {cfg.seed_count} seeds）",
         f"策略Replay單元     ：{cfg.seed_count * len(stochastic_arms)}（{len(stochastic_arms)} stochastic arms × {cfg.seed_count} seeds）",
     ]
-    if settings.profile_id in {"selection_pit", "operational_rolling"} and start is not None and end is not None:
+    if settings.profile_id in {"selection_pit", "extending_window_rolling"} and start is not None and end is not None:
         fold_counts = []
         for dl_id, _arm_entries in training_sources:
             dl = settings.dl_sources[str(dl_id)]
@@ -2883,7 +2883,7 @@ def render_multi_seed_robustness_report(
                 else f"- {min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一表；本profile未設定Full reference。"
             ),
             "- 同一DL source／seed只訓練一次，允許fan-out到不同runtime selector replay；此reuse不改變模型scientific condition。",
-            "- Operational Rolling robustness只評估config既定scientific condition；不得依結果回頭調整training semantics或使用future fold結果擬合當下模型。",
+            "- Extending-Window Rolling robustness只評估config既定scientific condition；不得依結果回頭調整training semantics或使用future fold結果擬合當下模型。",
         )),
     ])
     return "\n\n".join(section for section in sections if section).rstrip() + "\n"

@@ -2243,6 +2243,22 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
         ),
     )
 
+    from filters.breakout_quality.daily_ranker_data import (
+        resolve_daily_training_universe_start,
+    )
+    benchmark_dates = pd.date_range("2004-01-01", periods=305, freq="D")
+    resolved_training_start = resolve_daily_training_universe_start(
+        benchmark_dates, feature_window_bars=300
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "daily_universal_training_start_is_data_driven_by_complete_benchmark_feature_window",
+        pd.Timestamp(benchmark_dates[299]).normalize(),
+        resolved_training_start,
+    )
+
     summary["model_research_id"] = "MR-13H/MR-13K"
     summary["training_performed"] = False
     return results, summary

@@ -368,9 +368,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         tuple(item["profile_id"] for item in menu_profiles)
         == tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS)
-        and tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS) == ("operational_rolling",)
+        and tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS) == ("extending_window_rolling",)
         and len(menu_labels) == 1
-        and "Operational Rolling" in menu_labels[0]
+        and "Extending-Window Rolling" in menu_labels[0]
         and all("MR-" not in label for label in menu_labels),
     )
     active_arm_ids = {
@@ -788,10 +788,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "multi_seed_robustness_matrix_is_profile_config_driven_without_mutating_single_seed_arm_identity",
         True,
         robustness_path.is_file()
-        and "operational_rolling" in configured_robustness_ids
-        and enabled_robustness_ids == expected_enabled_robustness_ids == {"operational_rolling"}
-        and robustness_settings.robustness_id == "operational_rolling"
-        and robustness_settings.profile_id == "operational_rolling"
+        and "extending_window_rolling" in configured_robustness_ids
+        and enabled_robustness_ids == expected_enabled_robustness_ids == {"extending_window_rolling"}
+        and robustness_settings.robustness_id == "extending_window_rolling"
+        and robustness_settings.profile_id == "extending_window_rolling"
         and robustness_settings.profile_id in strategy_config.STRATEGY_COMPARE_PROFILES
         and robustness_settings.seed_count >= 2
         and 1 <= robustness_settings.gpu_train_workers <= 2
@@ -896,8 +896,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
     operational_units = list(robustness_module._training_units(
         seeds=dedupe_seeds, stochastic_arms=robustness_stochastic, settings=robustness_profile,
-        completed=set(), model_root=Path("/tmp/operational_rolling_models"),
-        run_root=Path("/tmp/operational_rolling_run"),
+        completed=set(), model_root=Path("/tmp/extending_window_rolling_models"),
+        run_root=Path("/tmp/extending_window_rolling_run"),
         comparison_start="2021-01-01", comparison_end="2025-12-31", reuse_completed=True,
     ))
     add_check(
@@ -3828,12 +3828,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c54_options = dict(c54_current.dl_runtime_options or {})
     c55_options = dict(c55_current.dl_runtime_options or {})
     c56_options = dict(c56_current.dl_runtime_options or {})
-    operational_current_settings = strategy_config.get_strategy_comparison_settings("operational_rolling")
+    operational_current_settings = strategy_config.get_strategy_comparison_settings("extending_window_rolling")
     c58_current = operational_current_settings.arms["C58"]
     c59_current = operational_current_settings.arms["C59"]
     c60_current = operational_current_settings.arms["C60"]
     c60_options = dict(c60_current.dl_runtime_options or {})
-    operational_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("operational_rolling")
+    operational_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("extending_window_rolling")
     selection_robustness_legacy = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
     forward_robustness_legacy = strategy_config.get_strategy_multi_seed_robustness_settings("forward_oos")
     add_check(
@@ -3868,7 +3868,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and not c54_current.enabled
         and not c55_current.enabled
         and operational_robustness_active.seed_count
-        == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT == 8
+        == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT == 4
         and operational_robustness_active.seed_generator_seed
         == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED == 20260810
         and strategy_config.get_strategy_runtime_integration_settings().selection_candidate_arm_id == "C42"

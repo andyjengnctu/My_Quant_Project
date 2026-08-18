@@ -1,9 +1,9 @@
 """目前正式 Strategy Compare 設定。
 
-Active framework以Operational Rolling作唯一策略績效主線：expanding history、
+Active framework以Extending-Window Rolling作唯一策略績效主線：expanding history、
 每個PIT fold重新選epoch/refit，再評分下一段。舊Selection PIT／Frozen Forward
 profiles保留作歷史工件解讀／重現，但不再暴露於主選單或作current Gate。
-Fixed-Window Stability屬模型穩定性診斷，不建立另一套production strategy truth。
+Fixed-Window Rolling屬模型穩定性診斷，不建立另一套production strategy truth。
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 42
+STRATEGY_COMPARE_SCHEMA_VERSION = 43
 
 # =============================================================================
 # 1. 常用設定
@@ -46,11 +46,11 @@ STRATEGY_COMPARE_SCHEMA_VERSION = 42
 #    繼承 config/breakout_quality.py 的 BreakoutQualityWorkflowSettings SSOT。
 # =============================================================================
 
-STRATEGY_COMPARE_DEFAULT_PROFILE = "operational_rolling"
+STRATEGY_COMPARE_DEFAULT_PROFILE = "extending_window_rolling"
 # 主互動選單只暴露泛化工作階段；研究 profile identity 留在 config/報表。
-STRATEGY_COMPARE_MENU_PROFILE_IDS = ("operational_rolling",)
-STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE = "operational_rolling"
-STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT = 8
+STRATEGY_COMPARE_MENU_PROFILE_IDS = ("extending_window_rolling",)
+STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE = "extending_window_rolling"
+STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT = 4
 STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED = 20260810
 STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS = 2
 STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS = 1
@@ -96,17 +96,17 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_RESIDUAL_SAFETY_CONSTRAINED = "Min MR-1
 # Strategy Compare以研究階段profile隔離設定與輸出；App只顯示泛化階段名稱，
 # arms／contrasts／period／output namespace全部由本檔驅動。
 STRATEGY_COMPARE_PROFILES = {
-    "operational_rolling": {
-        "label": "Operational Rolling 策略比較",
+    "extending_window_rolling": {
+        "label": "Extending-Window Rolling 策略比較",
         "description": (
-            "2014→目前可驗證歷史的單一PIT-safe operational chain；DL使用expanding history + "
+            "2015→目前可驗證歷史的單一PIT-safe operational chain；DL使用expanding history + "
             "annual refit，策略Min ROOS沿用各時期當時合法rolling params。2021不再形成evaluation policy斷點。"
         ),
         "display_alignment_group": "operational_strategy_compare",
         "display_alignment_arm_ids": ("C58", "C59", "C60"),
         "start_date": None,
         "end_date": None,
-        "output_root": "outputs/strategy_compare/operational_rolling",
+        "output_root": "outputs/strategy_compare/extending_window_rolling",
         "reuse_output_roots": (
             "outputs/strategy_compare/selection_pit",
             "outputs/strategy_compare/forward_oos",
@@ -159,10 +159,10 @@ STRATEGY_COMPARE_PROFILES = {
 # stochastic/fixed比較對象由robustness profile顯式指定；
 # robustness orchestration不得改動單次Strategy Compare arm identity/fingerprint。
 STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
-    "operational_rolling": {
-        "label": "Operational Rolling Multi-seed robustness",
+    "extending_window_rolling": {
+        "label": "Extending-Window Rolling Multi-seed robustness",
         "enabled": True,
-        "profile_id": "operational_rolling",
+        "profile_id": "extending_window_rolling",
         "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
         "seed_generator_seed": STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED,
         "gpu_train_workers": STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS,
@@ -181,8 +181,8 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "fixed_arm_ids": ("C58",),
         "stochastic_arm_ids": ("C60",),
         "paired_contrasts": (),
-        "output_root": "outputs/strategy_compare/robustness/operational_rolling",
-        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/operational_rolling",
+        "output_root": "outputs/strategy_compare/robustness/extending_window_rolling",
+        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window_rolling",
     },
     "selection_pit": {
         "label": "Selection PIT Multi-seed robustness (Legacy)",
@@ -266,7 +266,7 @@ STRATEGY_PARAM_SOURCES = {
             "active_params/{param_filename}"
         ),
         "description": (
-            "Operational 2014→current Min ROOS；stitch既有2014-2020 historical P2與2021+ "
+            "Extending-Window 2015→current Min ROOS；stitch既有2014-2020 historical P2與2021+ "
             "current P2 rolling schedules；只在兩段rolling/search contract一致時建立，不重新最佳化。"
         ),
         "identity_manifest_path": (
@@ -430,7 +430,7 @@ STRATEGY_DL_SOURCES = {
         "experiment_profile": "daily_universal_no_time_full_list_ndcg_pairwise",
         "threshold": None,
         "score_source": "selection_point_in_time",
-        "description": "MR-13E Operational Rolling PIT-safe score；expanding history + annual refit，2014→current。",
+        "description": "MR-13E Extending-Window Rolling PIT-safe score；expanding history + annual refit，2015→current。",
         "forward_scores_builder": {
             "enabled": True,
             "builder_type": "selection_pit_from_existing_folds",
@@ -443,7 +443,7 @@ STRATEGY_DL_SOURCES = {
         "experiment_profile": "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise",
         "threshold": None,
         "score_source": "selection_point_in_time",
-        "description": "MR-13K Operational Rolling PIT-safe pure-MFE score；expanding history + annual refit。",
+        "description": "MR-13K Extending-Window Rolling PIT-safe pure-MFE score；expanding history + annual refit。",
         "forward_scores_builder": {
             "enabled": True,
             "builder_type": "selection_pit_from_existing_folds",
@@ -456,7 +456,7 @@ STRATEGY_DL_SOURCES = {
         "experiment_profile": "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise",
         "threshold": None,
         "score_source": "selection_point_in_time",
-        "description": "MR-13M Operational Rolling PIT-safe low-adverse score；只作C60 residual-safety secondary source。",
+        "description": "MR-13M Extending-Window Rolling PIT-safe low-adverse score；只作C60 residual-safety secondary source。",
         "forward_scores_builder": {
             "enabled": True,
             "builder_type": "selection_pit_from_existing_folds",
@@ -569,7 +569,7 @@ STRATEGY_DL_SOURCES = {
 STRATEGY_COMPARE_ARMS = {
     "C58": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_ROOS,
-        "description": "Operational 2014→current stitched Min ROOS rolling params；rules全關；DL-off baseline",
+        "description": "Extending-Window 2015→current stitched Min ROOS rolling params；rules全關；DL-off baseline",
         "param_source": "operational_min_roos",
         "rule_policy": "all_off",
         "dl_enabled": False,
@@ -579,7 +579,7 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C59": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED,
-        "description": "Operational Rolling MR-13E exact constrained；每個score fold只用當時已成熟歷史訓練。",
+        "description": "Extending-Window Rolling MR-13E exact constrained；每個score fold只用當時已成熟歷史訓練。",
         "param_source": "operational_min_roos",
         "rule_policy": "all_off",
         "dl_enabled": True,
@@ -595,7 +595,7 @@ STRATEGY_COMPARE_ARMS = {
     "C60": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_RESIDUAL_SAFETY_CONSTRAINED,
         "description": (
-            "Operational Rolling B2：MR-13K primary + MR-13M same-day rank OLS residual-safety floor；"
+            "Extending-Window Rolling B2：MR-13K primary + MR-13M same-day rank OLS residual-safety floor；"
             "兩個score都由同一日期前已成熟資料的PIT-safe annual-refit model產生。"
         ),
         "param_source": "operational_min_roos",
@@ -750,9 +750,9 @@ STRATEGY_COMPARE_ARMS = {
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
-    "C59-C58": {"left": "C59", "right": "C58", "description": "Operational Rolling MR-13E相對同期間DL-off Min ROOS的增量策略效果"},
-    "C60-C58": {"left": "C60", "right": "C58", "description": "Operational Rolling B2相對同期間DL-off Min ROOS的增量策略效果"},
-    "C60-C59": {"left": "C60", "right": "C59", "description": "Operational Rolling B2相對MR-13E production reference語意的同政策比較"},
+    "C59-C58": {"left": "C59", "right": "C58", "description": "Extending-Window Rolling MR-13E相對同期間DL-off Min ROOS的增量策略效果"},
+    "C60-C58": {"left": "C60", "right": "C58", "description": "Extending-Window Rolling B2相對同期間DL-off Min ROOS的增量策略效果"},
+    "C60-C59": {"left": "C60", "right": "C59", "description": "Extending-Window Rolling B2相對MR-13E production reference語意的同政策比較"},
     "C42-C23": {"left": "C42", "right": "C23", "description": "Selection PIT frozen MR-13E score exact constrained optimum相對DL-off Min ROOS的策略經濟效果"},
     "C42-C32": {"left": "C42", "right": "C32", "description": "Selection PIT active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
     "C57-C42": {"left": "C57", "right": "C42", "description": "C56 full-flow Selection primary contrast：同historical Min/K/R0/exact/cash/execution下，以MR-13K PIT primary + MR-13M PIT residual safety對production MR-13E exact reference"},
@@ -946,7 +946,7 @@ def get_strategy_multi_seed_robustness_settings(
     }
     expected_score_source = (
         "selection_point_in_time"
-        if settings.profile_id in {"selection_pit", "operational_rolling"}
+        if settings.profile_id in {"selection_pit", "extending_window_rolling"}
         else "continuous_ranker_oos"
     )
     if score_sources != {expected_score_source}:
