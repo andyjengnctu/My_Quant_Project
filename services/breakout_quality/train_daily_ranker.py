@@ -17,6 +17,7 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
+    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     get_continuous_ranker_research_spec,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
@@ -234,6 +235,29 @@ def _render_markdown(payload: dict) -> str:
                     f"| {fmt(row.get('rmse'))} | {fmt(row.get('mae'))} | {fmt(row.get('bias'))} "
                     f"| {fmt(row.get('global_spearman'))} | {fmt(row.get('mean_daily_spearman'))} |"
                 )
+    pareto_eval = dict(payload.get("pareto_pair_evaluation") or {})
+    if pareto_eval:
+        lines.extend([
+            "",
+            "## Pareto Supervision Diagnostics",
+            "",
+            "| Scope | Groups | Comparable pairs | Comparable rate | Daily Pareto | Global Pareto |",
+            "|---|---:|---:|---:|---:|---:|",
+        ])
+        for label, key in (
+            ("Validation", "validation"),
+            ("Forward OOS", "oos"),
+            ("Breakout candidate slice", "breakout_candidate_oos"),
+        ):
+            row = dict(pareto_eval.get(key) or {})
+            rate = row.get("comparable_pair_rate")
+            lines.append(
+                f"| {label} | {int(row.get('group_count', 0) or 0):,} "
+                f"| {int(row.get('comparable_pair_count', 0) or 0):,} "
+                f"| {'-' if rate is None else f'{float(rate)*100:.2f}%'} "
+                f"| {fmt(row.get('mean_daily_pareto_pair_concordance'))} "
+                f"| {fmt(row.get('global_pareto_pair_concordance'))} |"
+            )
     lines.extend([
         "",
         "## Ranking Diagnostics",
@@ -513,6 +537,35 @@ def run(args) -> int:
         )
     )
 
+    pareto_pair_evaluation = {}
+    if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
+        pareto_pair_evaluation = {
+            "validation": ranker_api.pareto_pair_concordance_metrics(
+                split.validation_ids, bundle.group_table, bundle.raw_target, validation_scores
+            ),
+            "oos": ranker_api.pareto_pair_concordance_metrics(
+                split.oos_ids, bundle.group_table, bundle.raw_target, oos_scores
+            ),
+            "breakout_candidate_oos": (
+                ranker_api.pareto_pair_concordance_metrics(
+                    candidate_ids,
+                    bundle.group_table,
+                    bundle.raw_target,
+                    score_by_group[candidate_ids],
+                )
+                if len(candidate_ids) >= 2
+                else {
+                    "group_count": int(len(candidate_ids)),
+                    "comparable_pair_count": 0,
+                    "all_pair_count": 0,
+                    "comparable_pair_rate": None,
+                    "rankable_date_count": 0,
+                    "mean_daily_pareto_pair_concordance": None,
+                    "global_pareto_pair_concordance": None,
+                }
+            ),
+        }
+
     reference_target_evaluation = {
         "available": False,
         "reason": "active research profile沒有設定reference target",
@@ -655,6 +708,7 @@ def run(args) -> int:
         "all_group_split_metrics": split_metrics,
         "reference_target_evaluation": reference_target_evaluation,
         "dual_component_evaluation": dual_component_evaluation,
+        "pareto_pair_evaluation": pareto_pair_evaluation,
         "trade_alignment": {"available": False, "reason": "daily universal model先做模型本身驗證；未接策略trade attribution"},
         "target_manifest": bundle.target_manifest,
         "source_dataset": bundle.summary,
@@ -740,10 +794,19 @@ def run(args) -> int:
             f"selected_epoch={selected_epoch} | {primary} "
             f"| MAE={_fmt_metric(regression.get('mae_raw_r'))}R | bias={_fmt_metric(regression.get('bias_raw_r'))}R"
         )
-    print(
-        f"OOS daily rho={_fmt_metric(oos_metrics.get('mean_daily_spearman'))} | "
-        f"pair={_fmt_metric(oos_metrics.get('pairwise_concordance'))}"
-    )
+    if pareto_pair_evaluation:
+        pareto_oos = dict(pareto_pair_evaluation.get("oos") or {})
+        print(
+            f"OOS Pareto={_fmt_metric(pareto_oos.get('mean_daily_pareto_pair_concordance'))} "
+            f"| comparable={int(pareto_oos.get('comparable_pair_count', 0) or 0):,} "
+            f"| economic rho={_fmt_metric(oos_metrics.get('mean_daily_spearman'))} "
+            f"| economic pair={_fmt_metric(oos_metrics.get('pairwise_concordance'))}"
+        )
+    else:
+        print(
+            f"OOS daily rho={_fmt_metric(oos_metrics.get('mean_daily_spearman'))} | "
+            f"pair={_fmt_metric(oos_metrics.get('pairwise_concordance'))}"
+        )
     print(
         f"breakout candidate slice: groups={candidate_metrics['group_count']:,} | "
         f"daily rho={_fmt_metric(candidate_metrics.get('mean_daily_spearman'))} | "

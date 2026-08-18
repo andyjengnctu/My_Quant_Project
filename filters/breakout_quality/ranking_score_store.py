@@ -20,6 +20,7 @@ import pandas as pd
 from config.breakout_quality import (
     CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
@@ -714,7 +715,10 @@ def load_continuous_ranker_oos_contract(
 
     expected_training_semantics = training_semantics(profile)
     manifest_semantics = dict(manifest.get("training_semantics") or {})
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
+    if profile.training_objective in {
+        TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
+    }:
         expected_pairwise = dict(
             expected_training_semantics.get("pairwise_contract") or {}
         )

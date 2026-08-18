@@ -472,10 +472,25 @@ def _simple_report_details(
         training = dict(payload.get("training") or {})
         epoch_selection = dict(training.get("epoch_selection") or {})
         metrics = dict(payload.get("split_metrics") or {})
+        selection_pareto = epoch_selection.get(
+            "best_validation_mean_daily_pareto_pair_concordance"
+        )
         rows.extend(
             [
                 ("Selected epoch", training.get("selected_epoch")),
-                ("選模 Validation rho", _fmt_simple_metric(epoch_selection.get("best_validation_mean_daily_spearman"))),
+                *(
+                    [
+                        ("選模 Validation Pareto", _fmt_simple_metric(selection_pareto)),
+                        (
+                            "選模 epoch Economic rho",
+                            _fmt_simple_metric(epoch_selection.get("best_validation_mean_daily_spearman")),
+                        ),
+                    ]
+                    if selection_pareto is not None
+                    else [
+                        ("選模 Validation rho", _fmt_simple_metric(epoch_selection.get("best_validation_mean_daily_spearman")))
+                    ]
+                ),
                 ("重訓後原 Validation rho", _fmt_simple_metric((metrics.get("validation") or {}).get("mean_daily_spearman"))),
                 ("Forward OOS rho", _fmt_simple_metric((metrics.get("oos") or {}).get("mean_daily_spearman"))),
                 *(
@@ -497,6 +512,28 @@ def _simple_report_details(
                 ),
             ]
         )
+        pareto_eval = dict(payload.get("pareto_pair_evaluation") or {})
+        if pareto_eval:
+            rows.extend(
+                [
+                    (
+                        "Forward OOS Pareto",
+                        _fmt_simple_metric(
+                            (pareto_eval.get("oos") or {}).get(
+                                "mean_daily_pareto_pair_concordance"
+                            )
+                        ),
+                    ),
+                    (
+                        "Breakout slice Pareto",
+                        _fmt_simple_metric(
+                            (pareto_eval.get("breakout_candidate_oos") or {}).get(
+                                "mean_daily_pareto_pair_concordance"
+                            )
+                        ),
+                    ),
+                ]
+            )
         dual_component_eval = dict(payload.get("dual_component_evaluation") or {})
         oos_components = dict(dual_component_eval.get("oos") or {})
         if oos_components:

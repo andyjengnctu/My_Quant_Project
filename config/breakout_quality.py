@@ -52,13 +52,14 @@ from config.execution_policy import (
 # - MR-13L daily-universal full-horizon decomposed MFE/adverse regression: "daily_universal_full_horizon_mfe_adverse_dual_mse"
 # - MR-13M daily-universal full-horizon low-adverse full-list ranker: "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
 # - MR-13N daily-universal full-horizon equal-rank MFE + low-adverse full-list ranker: "daily_universal_full_horizon_equal_rank_mfe_low_adverse_full_list_ndcg_pairwise"
+# - MR-13O daily-universal full-horizon Pareto-dominance pairwise ranker: "daily_universal_full_horizon_pareto_mfe_low_adverse_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_equal_rank_mfe_low_adverse_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_pareto_mfe_low_adverse_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42
@@ -306,6 +307,9 @@ DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
 DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_full_horizon_equal_rank_mfe_low_adverse_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE = (
+    "daily_universal_full_horizon_pareto_mfe_low_adverse_pairwise"
+)
 DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 
@@ -349,12 +353,14 @@ TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION = "daily_percentile_regression"
 TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION = "daily_raw_r_regression"
 TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION = "daily_dual_component_r_regression"
 TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING = "daily_pairwise_ranking"
+TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING = "daily_pareto_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING = "daily_listwise_ranking"
 CONTINUOUS_RANKER_TRAINING_OBJECTIVES = (
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
 )
 SUPPORTED_BREAKOUT_QUALITY_TRAINING_OBJECTIVES = (
@@ -477,6 +483,7 @@ class BreakoutQualityExperimentProfile:
                 expected_loss = {
                     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION: "mse",
                     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING: "pairwise_logistic",
+                    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING: "pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: "listnet_top_one_cross_entropy",
                 }[self.training_objective]
                 if self.loss_name != expected_loss:
@@ -484,7 +491,11 @@ class BreakoutQualityExperimentProfile:
                         "continuous ranker loss與training objective不一致: "
                         f"objective={self.training_objective}, expected={expected_loss}, actual={self.loss_name}"
                     )
-                expected_epoch_metric = "mean_daily_spearman"
+                expected_epoch_metric = (
+                    "mean_daily_pareto_pair_concordance"
+                    if self.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING
+                    else "mean_daily_spearman"
+                )
             if self.epoch_selection_metric != expected_epoch_metric:
                 raise ValueError(
                     "continuous ranker epoch selection與training objective不一致: "
@@ -949,6 +960,17 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     ),
+    DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_opportunity_r_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_pareto_pair_concordance",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    ),
     DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE,
         optimizer_name="adam",
@@ -1029,11 +1051,13 @@ CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR = "equal_pair_weight"
 CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED = "target_gap_weighted_within_date"
 CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE = "upper_tail_relevance_weighted"
 CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG = "full_list_delta_ndcg_weighted"
+CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE = "pareto_dominance_equal_pair"
 SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS = (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
 )
 
 
@@ -1074,11 +1098,24 @@ class ContinuousRankerResearchSpec:
                 "continuous ranker trainer family與training sample scope不一致: "
                 f"profile={self.profile_name}, expected={expected_family}, actual={self.trainer_family}"
             )
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
+        if profile.training_objective in {
+            TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+            TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
+        }:
             if self.pairwise_reduction not in SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS:
                 raise ValueError(
                     f"pairwise profile必須指定合法pairwise reduction: {self.profile_name}"
                 )
+            if (
+                profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING
+                and self.pairwise_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE
+            ):
+                raise ValueError("Pareto pairwise profile必須使用pareto_dominance_equal_pair")
+            if (
+                profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING
+                and self.pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE
+            ):
+                raise ValueError("scalar pairwise profile不得使用Pareto dominance pair scope")
         elif self.pairwise_reduction is not None:
             raise ValueError(
                 f"非pairwise profile不得指定pairwise reduction: {self.profile_name}"
@@ -1335,6 +1372,26 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         score_semantic_id="daily_full_horizon_equal_rank_mfe_low_adverse",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         evaluation_reference_profile_name=DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        selection_pit_authorized=False,
+    ),
+    DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
+        model_research_id="MR-13O",
+        experiment_name="MR-13O Daily Universal Pareto MFE + Low-Adverse Pairwise Ranker",
+        phase="13O",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "same_date_strict_pareto_dominance_pairs_over_mfe_percentile_and_low_adverse_percentile; "
+            "economic_target_remains_daily_full_horizon_opportunity_r_v1"
+        ),
+        objective_description=(
+            "同日只有當一個stock-day在MFE percentile與low-adverse percentile兩者都嚴格高於另一個stock-day時才提供RankNet supervision；"
+            "兩component互有優劣的trade-off pair完全排除。pair等權，不使用MFE/adverse混合係數；"
+            "epoch selection只依Validation mean daily Pareto pair concordance，MR-13H economic R不參與選模"
+        ),
+        metric_scope="all_stock_days",
+        score_semantic_id="daily_full_horizon_pareto_dominance_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
         selection_pit_authorized=False,
     ),
     DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE: ContinuousRankerResearchSpec(
@@ -2141,6 +2198,7 @@ __all__ = [
     'TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION',
     'TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION',
     'TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING',
+    'TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING',
     'TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING',
     'TRAINING_SAMPLING_ALL_EVENT_ROWS',
     'TRAINING_SAMPLING_UNIQUE_TICKER_DATE',
@@ -2159,6 +2217,7 @@ __all__ = [
     'DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE',
     'DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'ContinuousRankerResearchSpec',
@@ -2168,6 +2227,7 @@ __all__ = [
     'CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED',
     'CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE',
     'CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG',
+    'CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE',
     'SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS',
     'get_continuous_ranker_research_spec',
     'SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES',

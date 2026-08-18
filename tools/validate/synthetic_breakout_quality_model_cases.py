@@ -3161,11 +3161,16 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
             "SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES" in continuous_source,
         ),
     )
+    from config.breakout_quality import TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING
+
     pairwise_specs = [
         get_continuous_ranker_research_spec(name)
         for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
         if get_breakout_quality_experiment_profile(name).training_objective
-        == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING
+        in {
+            TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+            TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
+        }
     ]
     non_default_owners = {}
     for spec in pairwise_specs:
@@ -3181,4 +3186,173 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
         True,
         all(owners and len(owners) == len(set(owners)) for owners in non_default_owners.values()),
     )
+    return results, summary
+
+
+def validate_breakout_quality_mr13o_pareto_pairwise_contract_case(_base_params):
+    """Pin MR-13O as strict Pareto-dominance pairwise supervision without a mixing weight."""
+
+    case_id = "BREAKOUT_QUALITY_MR13O_PARETO_PAIRWISE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
+        get_breakout_quality_model_research_settings,
+    )
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality import ranker_training as ranker_api
+
+    profile_h = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    profile_o = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE
+    )
+    spec_o = get_continuous_ranker_research_spec(
+        DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE
+    )
+    active_research = get_breakout_quality_model_research_settings()
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13o_profile_is_registered_active_research_and_production_workflow_remains_unchanged",
+        (
+            DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        ),
+        (
+            profile_o.name,
+            active_research.experiment_profile,
+            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        ),
+    )
+    fixed_fields = (
+        "optimizer_name",
+        "training_sampling_mode",
+        "continuous_target_id",
+        "loss_name",
+        "training_label_scope",
+        "training_sample_scope",
+        "model_architecture",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13o_keeps_mr13h_economic_target_architecture_and_data_contract",
+        tuple(getattr(profile_h, field) for field in fixed_fields),
+        tuple(getattr(profile_o, field) for field in fixed_fields),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13o_identity_objective_epoch_metric_pair_scope_and_pit_stage_are_explicit",
+        (
+            "MR-13O",
+            TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
+            "mean_daily_pareto_pair_concordance",
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+            False,
+        ),
+        (
+            spec_o.model_research_id,
+            profile_o.training_objective,
+            profile_o.epoch_selection_metric,
+            spec_o.pairwise_reduction,
+            bool(spec_o.selection_pit_authorized),
+        ),
+    )
+
+    dates = pd.to_datetime(["2020-01-02"] * 4)
+    group_table = pd.DataFrame(
+        {
+            "date": dates,
+            "target_favorable_r": [5.0, 3.0, 4.0, 2.0],
+            "target_adverse_r": [0.2, 0.8, 1.5, 0.1],
+        }
+    )
+    economic_target = np.asarray([4.8, 2.2, 2.5, 1.9], dtype=np.float32)
+    components = ranker_api.build_pareto_component_percentile_targets(
+        group_table, economic_target
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13o_component_targets_are_same_date_mfe_and_low_adverse_percentiles",
+        (
+            (1.0, 0.333333, 0.666667, 0.0),
+            (0.666667, 0.333333, 0.0, 1.0),
+        ),
+        (
+            tuple(round(float(x), 6) for x in components[:, 0]),
+            tuple(round(float(x), 6) for x in components[:, 1]),
+        ),
+    )
+
+    correct = ranker_api.pareto_pair_concordance_metrics(
+        np.arange(4, dtype=np.int64),
+        group_table,
+        economic_target,
+        np.asarray([0.9, 0.2, 0.1, 0.99], dtype=np.float32),
+    )
+    reversed_result = ranker_api.pareto_pair_concordance_metrics(
+        np.arange(4, dtype=np.int64),
+        group_table,
+        economic_target,
+        np.asarray([0.0, 0.8, 0.7, 0.99], dtype=np.float32),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13o_only_strict_dominance_pairs_count_and_tradeoff_pairs_are_ignored",
+        (2, 6, round(2 / 6, 6), 1.0, 0.0),
+        (
+            int(correct["comparable_pair_count"]),
+            int(correct["all_pair_count"]),
+            round(float(correct["comparable_pair_rate"]), 6),
+            round(float(correct["mean_daily_pareto_pair_concordance"]), 6),
+            round(float(reversed_result["mean_daily_pareto_pair_concordance"]), 6),
+        ),
+    )
+
+    semantics = training_semantics(profile_o)
+    pairwise = dict(semantics.get("pairwise_contract") or {})
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr13o_training_semantics_have_no_mfe_adverse_mix_weight",
+        (
+            "same_date_strict_pareto_dominance_pairs",
+            ["same_date_mfe_percentile", "same_date_low_adverse_percentile"],
+            "excluded_no_gradient",
+            "excluded_no_gradient",
+            "mean_daily_pareto_pair_concordance",
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+        ),
+        (
+            pairwise.get("pair_scope"),
+            pairwise.get("target_components"),
+            pairwise.get("tradeoff_pair_handling"),
+            pairwise.get("tie_handling"),
+            pairwise.get("epoch_selection"),
+            pairwise.get("pair_weighting"),
+        ),
+    )
+
+    summary["model_research_id"] = spec_o.model_research_id
+    summary["active_model_research"] = active_research.experiment_profile
+    summary["training_performed"] = False
     return results, summary

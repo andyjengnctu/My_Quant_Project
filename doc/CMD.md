@@ -175,13 +175,13 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-MR-13E仍是production anchor。MR-13H已結案為`VALID_LABEL_SIMPLIFICATION / NOT_SELECTED_FOR_PROMOTION`。MR-13K Pure-MFE已完成Seed42 Selection與Forward，ranking learnability明顯提高但兩段single-seed portfolio translation均低於MR-13E；其C42/C53與C44/C54 current 8-seed full-flow robustness仍由策略比較流程獨立完成後再整體結案。MR-13L dual raw-R MSE已在Forward model Gate REJECT；MR-13M確認low-adverse path-risk本身具強Forward ranking signal但不單獨進PIT；MR-13N fixed equal-rank single-model composite也已在Forward REJECT（self-target Daily rho=`0.0150`、對MR-13H reference=`0.0053`）。目前正式下一步改由`[4] Audit／診斷 → [1] 執行目前 Audit 設定`跑一次`AUD-mr13km-frozen-rank-fusion`，不再重訓MR-13N。Production candidate固定C42/C44，R0維持。
+MR-13E仍是production anchor。MR-13H已結案為`VALID_LABEL_SIMPLIFICATION / NOT_SELECTED_FOR_PROMOTION`。MR-13K Pure-MFE已完成Seed42 Selection與Forward，ranking learnability明顯提高但兩段single-seed portfolio translation均低於MR-13E；其C42/C53與C44/C54 current 8-seed full-flow robustness仍由策略比較流程獨立完成後再整體結案。MR-13L dual raw-R MSE已在Forward REJECT；MR-13M確認low-adverse path-risk本身具強Forward ranking signal但不單獨進PIT；MR-13N fixed equal-rank single-model composite與後續fixed 50/50 frozen fusion也都已REJECT。Active Model Research現為MR-13O Pareto-dominance pairwise，只教同日MFE與low-adverse兩component都同方向支配的pairs，trade-off/tie pairs完全排除；Production candidate固定C42/C44，R0維持。
 
-Active continuous model menu由config／research spec動態產生；MR-13N目前仍保留read-only結果身份且不授權Selection PIT或Target comparison；其Forward已完成，不需再次訓練：
+Active continuous model menu由config／research spec動態產生；MR-13O目前只授權Seed42 Forward model Gate：
 
 ```text
 === Continuous DL 模型研究與驗證 ===
-Active Profile：daily_universal_full_horizon_equal_rank_mfe_low_adverse_full_list_ndcg_pairwise
+Active Profile：daily_universal_full_horizon_pareto_mfe_low_adverse_pairwise
 [1]  訓練目前模型 → forward-OOS模型報表  (Enter)
 [3]  查看目前Workflow與工件狀態
 [4]  比較設定中的 Continuous Rankers
@@ -189,26 +189,9 @@ Active Profile：daily_universal_full_horizon_equal_rank_mfe_low_adverse_full_li
 [0]  返回
 ```
 
-MR-13N使用`evaluation_reference_profile_name`在frozen checkpoint後對MR-13H `MFE R - adverse R`補Reference Target OOS rho／Pair／Top-K；該reference不參與training或epoch selection，也不因為量綱不同而啟用`[6] Target comparison`。MR-13N Forward結果已REJECT，`selection_pit_authorized=False`維持；下一步由formal Audit直接讀既有MR-13K/MR-13M frozen score，MR-13H economic truth取自MR-13K工件內嵌reference target，不建立MR-13N PIT。
+MR-13O沿用MR-13H `daily_full_horizon_opportunity_r_v1`作economic result truth，但training target不是該scalar R；trainer會從同一canonical stock-day rows建立`[MFE percentile, low-adverse percentile]`，僅strict Pareto-comparable pairs進`pairwise_logistic` loss。Epoch selection固定看`mean_daily_pareto_pair_concordance`，global Pareto concordance只作tie-break；MR-13H economic Daily rho／Pair／Top-K只能在候選checkpoint評估中作描述性 model-gate evidence，不能參與選模。`selection_pit_authorized=False`，因此目前沒有`[2] Selection PIT`；也沒有新增scalar Target identity，所以不顯示`[6] Target comparison`。
 
-
-### A2 Realized Trade-path Label研究
-
-新Label以一個原始breakout event的完整生命週期為單位。初次`Low > orig_limit`只把事件留在pending／continuation，不下REJECT；後續回到原始limit成交後，直接重用正式initial stop、trailing、indicator exit與費稅帳務，只有終局`realized_net_r > 0`標PASS，其餘已成交完整交易標REJECT。新setup覆蓋舊延續訊號、shadow completion／invalidation、資料結尾仍未成交或成交後尚未結算者標INVALID並排除Binary訓練。同一ticker/date group只讓當日A2 active `high_len`事件取得有效Label，其餘high_len rows保持INVALID。Feature snapshot固定原始signal date，不因延續等待日重建。
-
-選單`[1]  ...  (Enter)`會自動執行等價於：
-
-```powershell
-python apps/research.py model build-trade-path-labels `
-  --dataset full `
-  --filter-id breakout_quality_a2_trade_path_v1 `
-  --resume
-```
-
-Builder先以2014～2020 Selection rolling基準建立rules全關／DL關的risk-only A2 teacher，再合併既有2021～2026 P2 active params。每個Label日期只能使用當時已生效teacher params；衍生Dataset沿用9A 300×10 feature bank，但以獨立filter目錄保存Label、events與summary。
-
-確認新模型Prediction報表後，正式策略比較使用`apps/research.py`的`[3] 策略組合比較`與`config/strategy_compare.py`。舊Old／New專用Trade-path Gate已於Legacy Cleanup Batch 7退役；既有歷史結果與科學判定保留在Experiment Registry／Experiment Log，不再保留獨立可執行CLI。Label建立、模型訓練與forward-OOS score產生仍由上述正式模型流程負責。
-
+Forward console／簡易報表除既有economic ranking品質外，MR-13O會額外顯示Validation／Forward／breakout的Pareto pair concordance與comparable-pair coverage。若Pareto supervision本身學不到（接近隨機），此Target-formulation直接在model gate停止；若Pareto可學但economic ordering仍不改善，表示joint dominance supervision與最終economic ordering仍有落差，也不應直接進PIT。只有兩層證據都形成可信增量，才另輪授權Selection PIT。
 ### Continuous Target自動準備
 
 主選單會自動執行；CLI-only入口如下：

@@ -15,6 +15,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     get_continuous_ranker_research_spec,
 )
@@ -66,10 +67,24 @@ LISTWISE_TRAINING_CONTRACT = {
 def training_semantics(profile) -> dict[str, Any]:
     """Return canonical artifact semantics for one continuous-ranker profile."""
 
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
+    if profile.training_objective in {
+        TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
+    }:
         spec = get_continuous_ranker_research_spec(profile.name)
         pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
         pairwise_contract["pair_weighting"] = str(spec.pairwise_reduction)
+        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
+            pairwise_contract.update({
+                "pair_scope": "same_date_strict_pareto_dominance_pairs",
+                "target_components": [
+                    "same_date_mfe_percentile",
+                    "same_date_low_adverse_percentile",
+                ],
+                "tradeoff_pair_handling": "excluded_no_gradient",
+                "tie_handling": "excluded_no_gradient",
+                "epoch_selection": "mean_daily_pareto_pair_concordance",
+            })
         return {
             "batching": pairwise_contract["batching"],
             "pairwise_contract": pairwise_contract,

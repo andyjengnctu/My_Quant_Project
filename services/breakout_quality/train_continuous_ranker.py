@@ -23,6 +23,7 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
@@ -32,6 +33,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
@@ -655,6 +657,10 @@ def _pairwise_logistic_loss(
     full-list NDCG change caused by swapping the pair at the current predicted positions.
     Raw 0～1 daily percentiles are the DCG gains and every rank position participates;
     there is no @K cutoff, gain exponent, boundary, threshold, or mixing coefficient.
+    MR-13O receives a two-column target ``[MFE percentile, low-adverse percentile]``
+    and keeps only strict Pareto-dominance pairs: both component differences must have
+    the same non-zero sign. Trade-off or tied pairs receive no supervision and every
+    comparable pair has equal weight.
     """
 
     import torch.nn.functional as F
@@ -664,6 +670,7 @@ def _pairwise_logistic_loss(
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
     }:
         raise ValueError(f"不支援的pairwise reduction: {reduction!r}")
 
@@ -680,6 +687,34 @@ def _pairwise_logistic_loss(
         day_margin = margins.index_select(0, pos)
         day_target = targets.index_select(0, pos)
         margin_diff = day_margin[:, None] - day_margin[None, :]
+        if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE:
+            if day_target.ndim != 2 or int(day_target.shape[1]) != 2:
+                raise ValueError("Pareto pairwise target必須為[N,2] component percentiles")
+            component_diff = day_target[:, None, :] - day_target[None, :, :]
+            item_count = int(day_target.shape[0])
+            upper = torch.triu(
+                torch.ones((item_count, item_count), dtype=torch.bool, device=day_target.device),
+                diagonal=1,
+            )
+            positive = (component_diff[:, :, 0] > 0) & (component_diff[:, :, 1] > 0)
+            negative = (component_diff[:, :, 0] < 0) & (component_diff[:, :, 1] < 0)
+            comparable = upper & (positive | negative)
+            count = int(comparable.sum().item())
+            if count == 0:
+                continue
+            signs = torch.where(
+                positive[comparable],
+                torch.ones(count, dtype=day_margin.dtype, device=day_margin.device),
+                -torch.ones(count, dtype=day_margin.dtype, device=day_margin.device),
+            )
+            losses = F.softplus(-signs * margin_diff[comparable])
+            pair_losses.append(losses)
+            pair_count += count
+            ranked_date_count += 1
+            continue
+
+        if day_target.ndim != 1:
+            raise ValueError("scalar pairwise target必須為一維")
         target_diff = day_target[:, None] - day_target[None, :]
         upper = torch.triu(
             torch.ones_like(target_diff, dtype=torch.bool), diagonal=1
@@ -749,7 +784,10 @@ def _pairwise_logistic_loss(
         pair_losses.append(losses * weights)
         day_losses.append(weights)
 
-    if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR:
+    if reduction in {
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+    }:
         if not pair_losses:
             return None, 0
         return torch.cat(pair_losses).mean(), int(pair_count)
@@ -899,6 +937,7 @@ def _train_epoch(
         ]
     elif training_objective in {
         TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     }:
         batches = _date_coherent_batches(
@@ -956,7 +995,10 @@ def _train_epoch(
                 # without an extra lambda or auxiliary-loss coefficient.
                 loss = F.mse_loss(logits.float(), target, reduction="mean")
                 loss_weight = int(len(ids))
-            elif training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
+            elif training_objective in {
+                TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+                TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
+            }:
                 margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
                 loss, supervision_count = _pairwise_logistic_loss(
                     torch,
@@ -1074,12 +1116,122 @@ def predict_dual_component_r(
     }
 
 
+def build_pareto_component_percentile_targets(
+    group_table: pd.DataFrame,
+    raw_target: np.ndarray,
+) -> np.ndarray:
+    """Return MR-13O [MFE percentile, low-adverse percentile] supervision targets."""
+
+    required = ("target_favorable_r", "target_adverse_r", "date")
+    missing = [column for column in required if column not in group_table.columns]
+    if missing:
+        raise ValueError(f"Pareto pairwise缺少canonical component columns: {missing}")
+    raw = np.asarray(raw_target, dtype=np.float32)
+    valid = np.isfinite(raw)
+    favorable = pd.to_numeric(
+        group_table["target_favorable_r"], errors="coerce"
+    ).to_numpy(dtype=np.float64)
+    adverse = pd.to_numeric(
+        group_table["target_adverse_r"], errors="coerce"
+    ).to_numpy(dtype=np.float64)
+    component_valid = valid & np.isfinite(favorable) & np.isfinite(adverse)
+    if not np.array_equal(component_valid, valid):
+        raise ValueError("Pareto component-valid universe與economic target-valid universe不一致")
+    mfe_percentile = build_same_date_percentile_targets(
+        favorable, valid, group_table["date"]
+    )
+    low_adverse_percentile = build_same_date_percentile_targets(
+        -adverse, valid, group_table["date"]
+    )
+    targets = np.column_stack([mfe_percentile, low_adverse_percentile]).astype(
+        np.float32, copy=False
+    )
+    if bool(np.any(valid & ~np.isfinite(targets).all(axis=1))):
+        raise ValueError("Pareto component percentile target產生non-finite value")
+    return targets
+
+
+def pareto_pair_concordance_metrics(
+    group_ids: np.ndarray,
+    group_table: pd.DataFrame,
+    raw_target: np.ndarray,
+    scores: np.ndarray,
+) -> dict[str, Any]:
+    """Measure score ordering only on strict same-date Pareto-comparable pairs."""
+
+    ids = np.asarray(group_ids, dtype=np.int64)
+    score = np.asarray(scores, dtype=np.float64)
+    if len(ids) != len(score):
+        raise ValueError("Pareto metric group_ids與scores長度不一致")
+    if len(ids) == 0:
+        return {
+            "group_count": 0,
+            "comparable_pair_count": 0,
+            "all_pair_count": 0,
+            "comparable_pair_rate": None,
+            "rankable_date_count": 0,
+            "mean_daily_pareto_pair_concordance": None,
+            "global_pareto_pair_concordance": None,
+        }
+    component = build_pareto_component_percentile_targets(group_table, raw_target)[ids]
+    dates = pd.to_datetime(group_table.iloc[ids]["date"], errors="raise").dt.normalize().to_numpy()
+    valid = np.isfinite(component).all(axis=1) & np.isfinite(score)
+    component = component[valid]
+    score = score[valid]
+    dates = dates[valid]
+    daily_values: list[float] = []
+    correct_sum = 0.0
+    comparable_total = 0
+    all_pair_total = 0
+    for date_value in pd.unique(dates):
+        positions = np.flatnonzero(dates == date_value)
+        n = int(len(positions))
+        if n < 2:
+            continue
+        all_pair_total += n * (n - 1) // 2
+        target = component[positions]
+        day_score = score[positions]
+        diff = target[:, None, :] - target[None, :, :]
+        upper = np.triu(np.ones((n, n), dtype=bool), k=1)
+        positive = (diff[:, :, 0] > 0.0) & (diff[:, :, 1] > 0.0)
+        negative = (diff[:, :, 0] < 0.0) & (diff[:, :, 1] < 0.0)
+        comparable = upper & (positive | negative)
+        count = int(np.count_nonzero(comparable))
+        if count == 0:
+            continue
+        score_diff = day_score[:, None] - day_score[None, :]
+        signs = np.where(positive[comparable], 1.0, -1.0)
+        ordered = signs * score_diff[comparable]
+        correct = np.where(ordered > 0.0, 1.0, np.where(ordered < 0.0, 0.0, 0.5))
+        day_value = float(np.mean(correct))
+        daily_values.append(day_value)
+        correct_sum += float(np.sum(correct))
+        comparable_total += count
+    return {
+        "group_count": int(np.count_nonzero(valid)),
+        "comparable_pair_count": int(comparable_total),
+        "all_pair_count": int(all_pair_total),
+        "comparable_pair_rate": (
+            None if all_pair_total < 1 else float(comparable_total / all_pair_total)
+        ),
+        "rankable_date_count": int(len(daily_values)),
+        "mean_daily_pareto_pair_concordance": (
+            None if not daily_values else float(np.mean(daily_values))
+        ),
+        "global_pareto_pair_concordance": (
+            None if comparable_total < 1 else float(correct_sum / comparable_total)
+        ),
+    }
+
+
 def _training_target_for_profile(
     profile,
     raw_target: np.ndarray,
     percentile_target: np.ndarray,
     group_table: pd.DataFrame,
 ) -> np.ndarray:
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
+        return build_pareto_component_percentile_targets(group_table, raw_target)
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
         return np.asarray(raw_target, dtype=np.float32)
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
@@ -1145,6 +1297,8 @@ def select_epoch(
     best_validation_huber = math.inf
     best_validation_mse_raw_r = math.inf
     best_validation_mae = math.inf
+    best_pareto_concordance = -math.inf
+    best_global_pareto_concordance = -math.inf
     epochs_without_improvement = 0
     history: list[dict[str, Any]] = []
     compact_console = compact_console_enabled()
@@ -1154,6 +1308,8 @@ def select_epoch(
             if raw_r_loss_name == "huber_raw_r"
             else "Validation MSE raw R"
             if raw_r_loss_name == "mse_raw_r"
+            else "Validation mean daily Pareto pair concordance"
+            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING
             else "Validation mean daily Spearman"
         )
         print(f"\nEpoch選擇（依{label}）")
@@ -1233,6 +1389,21 @@ def select_epoch(
         if daily_spearman is None or not math.isfinite(float(daily_spearman)):
             raise ValueError("continuous model validation mean daily Spearman不可用")
         validation_mse = float(validation_metrics["mse_vs_daily_percentile"])
+        validation_pareto_metrics = None
+        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
+            validation_pareto_metrics = pareto_pair_concordance_metrics(
+                validation_ids, group_table, raw_target, validation_scores
+            )
+            pareto_daily = validation_pareto_metrics.get(
+                "mean_daily_pareto_pair_concordance"
+            )
+            pareto_global = validation_pareto_metrics.get(
+                "global_pareto_pair_concordance"
+            )
+            if pareto_daily is None or not math.isfinite(float(pareto_daily)):
+                raise ValueError("Pareto validation mean daily pair concordance不可用")
+            if pareto_global is None or not math.isfinite(float(pareto_global)):
+                raise ValueError("Pareto validation global pair concordance不可用")
 
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
             regression = dict(validation_metrics.get("raw_r_regression") or {})
@@ -1264,18 +1435,43 @@ def select_epoch(
             validation_huber = None
             validation_mse_raw_r = None
             validation_mae = None
-            improved = (
-                float(daily_spearman) > best_daily_spearman + float(args.early_stopping_min_delta)
-                or (
-                    math.isclose(float(daily_spearman), best_daily_spearman, rel_tol=0.0, abs_tol=1e-12)
-                    and validation_mse < best_validation_mse
+            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
+                pareto_daily = float(
+                    validation_pareto_metrics["mean_daily_pareto_pair_concordance"]
                 )
-            )
+                pareto_global = float(
+                    validation_pareto_metrics["global_pareto_pair_concordance"]
+                )
+                improved = (
+                    pareto_daily
+                    > best_pareto_concordance + float(args.early_stopping_min_delta)
+                    or (
+                        math.isclose(
+                            pareto_daily, best_pareto_concordance, rel_tol=0.0, abs_tol=1e-12
+                        )
+                        and pareto_global > best_global_pareto_concordance
+                    )
+                )
+            else:
+                improved = (
+                    float(daily_spearman) > best_daily_spearman + float(args.early_stopping_min_delta)
+                    or (
+                        math.isclose(float(daily_spearman), best_daily_spearman, rel_tol=0.0, abs_tol=1e-12)
+                        and validation_mse < best_validation_mse
+                    )
+                )
 
         if improved:
             best_epoch = int(epoch)
             best_daily_spearman = float(daily_spearman)
             best_validation_mse = validation_mse
+            if validation_pareto_metrics is not None:
+                best_pareto_concordance = float(
+                    validation_pareto_metrics["mean_daily_pareto_pair_concordance"]
+                )
+                best_global_pareto_concordance = float(
+                    validation_pareto_metrics["global_pareto_pair_concordance"]
+                )
             if validation_mse_raw_r is not None:
                 best_validation_mse_raw_r = float(validation_mse_raw_r)
                 best_validation_mae = float(validation_mae)
@@ -1290,6 +1486,7 @@ def select_epoch(
             "batch_loss": float(batch_loss),
             "inner_train_metrics": train_metrics,
             "inner_validation_metrics": validation_metrics,
+            "inner_validation_pareto_metrics": validation_pareto_metrics,
             "elapsed_sec": round(float(elapsed), 3),
             "is_best_epoch": bool(improved),
         })
@@ -1303,6 +1500,13 @@ def select_epoch(
                 print(
                     f"  Epoch {epoch:>3}/{int(args.epochs)} | {loss_text} | Val MAE {float(validation_mae):.4f}R "
                     f"| Val Daily Spearman {float(daily_spearman):.4f} | {elapsed:.1f}s{marker}"
+                )
+            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
+                print(
+                    f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
+                    f"| Val Pareto {float(validation_pareto_metrics['mean_daily_pareto_pair_concordance']):.4f} "
+                    f"| Val Economic rho {float(daily_spearman):.4f} "
+                    f"| {elapsed:.1f}s{marker}"
                 )
             elif bool(evaluate_train_metrics):
                 print(
@@ -1323,6 +1527,12 @@ def select_epoch(
     return {
         "best_epoch": int(best_epoch),
         "best_validation_mean_daily_spearman": float(best_daily_spearman),
+        "best_validation_mean_daily_pareto_pair_concordance": (
+            None if not math.isfinite(best_pareto_concordance) else float(best_pareto_concordance)
+        ),
+        "best_validation_global_pareto_pair_concordance": (
+            None if not math.isfinite(best_global_pareto_concordance) else float(best_global_pareto_concordance)
+        ),
         "best_validation_mse": float(best_validation_mse),
         "best_validation_huber_raw_r": (
             None if not math.isfinite(best_validation_huber) else float(best_validation_huber)
@@ -2100,6 +2310,8 @@ def main(argv=None) -> int:
 __all__ = [
     "RANKER_SCHEMA_VERSION",
     "build_daily_percentile_targets",
+    "build_pareto_component_percentile_targets",
+    "pareto_pair_concordance_metrics",
     "main",
     "parse_args",
     "run",
