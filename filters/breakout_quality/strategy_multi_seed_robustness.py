@@ -55,7 +55,6 @@ from config.breakout_quality import (
     get_breakout_quality_workflow_settings,
 )
 from config.strategy_compare import (
-    STRATEGY_COMPARE_ROBUSTNESS_PIT_FOLD_WORKERS_PER_TRAINER,
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_settings,
 )
@@ -1501,7 +1500,6 @@ def _training_command(
             "--score-start-date", str(comparison_start),
             "--score-end-date", str(comparison_end),
             "--point-in-time-dir-override", str(model_dir.resolve()),
-            "--fold-workers", str(int(STRATEGY_COMPARE_ROBUSTNESS_PIT_FOLD_WORKERS_PER_TRAINER)),
         ]
     return [
         sys.executable, "-m", "tools.filters.breakout_quality.train_continuous_ranker",

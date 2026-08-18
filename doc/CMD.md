@@ -202,7 +202,7 @@ Forward console／簡易報表除既有economic ranking品質外，MR-13O會額�
 6. `apps/research.py → [3] 策略組合比較 → [2] Extending-Window Rolling 策略比較`：正式執行C58/C59/C60。
 7. 若正式Rolling Seed42結果仍有決策價值，再執行`[3] Extending-Window Rolling Multi-seed robustness`；預設4 seeds。沒有combined robustness入口。
 
-Continuous-ranker / Rolling CUDA feeding的current execution default為`train_prefetch_batches=8`、`train_prefetch_workers=4`，維持feature-only ordered prefetch，並使用pinned feature + non-blocking H2D + dedicated CUDA copy stream；complete-host prefetch因實機更慢已回退。Rolling缺少fold另以`fold_workers=2`的spawn獨立process平行執行；已完成fold仍先REUSE，`fold_workers=1`可恢復serial。Multi-seed robustness已有外層GPU trainer平行，因此其nested PIT固定使用1個fold worker。以上都只改execution，不改fold scientific identity或optimizer semantics。
+Continuous-ranker / Rolling CUDA feeding的current execution default為`train_prefetch_batches=8`、`train_prefetch_workers=4`，維持feature-only ordered prefetch，並使用pinned feature + non-blocking H2D + dedicated CUDA copy stream。complete-host prefetch與同張GPU的2-fold process parallel都已因使用者實機觀察更慢而退役；Rolling回到單fold串行，已完成且identity/hash合法的fold仍照原resume contract先REUSE。這些execution決策都不改fold scientific identity或optimizer semantics。
 
 
 ### Continuous Target自動準備

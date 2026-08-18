@@ -379,7 +379,7 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 - 同一policy/期間內controlled contrasts仍可使用；跨Selection/Frozen的直接差值不再單獨證明temporal stability/learnability，因training-data maturity、refit policy與market period同時不同。
 - Existing 2014～2020 expanding PIT folds contract相容時直接REUSE；首次延伸canonical aggregate至2021+前保留`legacy_selection_snapshot/`。Fixed Stability使用獨立artifact path與fixed-window fingerprint。
 - Current Strategy Compare主選單=`Pre-Test(C3/C44/C56) → Extending(C58/C59/C60)`，schema=44；current robustness只針對Extending-Window，預設4 seeds，legacy C56/C57 full-flow robustness取消。Production C42/C44保持不變直到明確promotion。
-- 2026-08-19 Rolling execution correction：complete-host worker prefetch因使用者實機觀察更慢而REJECT並回退原feature-only ordered prefetch；原因是device iterator在yield N前會先等待N+1 `future.result()`，擴大host materialization反而可能進critical path。Current Rolling新增config-driven `fold_workers=2`，只對真正缺少fold以`spawn`獨立process平行；父程序先做REUSE／migration，worker各自持有CUDA/RNG/model且只寫隔離fold目錄，完成後再以原fingerprint/hash validator讀回並按年份aggregate。Fold workers不進scientific fingerprint；Multi-seed robustness外層已有2個GPU trainer，因此其nested PIT固定由config傳`fold_workers=1`避免過度平行。此為execution-only修正，不新增MR/SR identity。
+- 2026-08-19 Rolling execution correction：complete-host worker prefetch先因使用者實機觀察更慢而REJECT並回退原feature-only ordered prefetch；其後曾加入同張GPU的2-fold `spawn` process parallelism。使用者第二次實機回報該方案「更慢、VRAM用滿、GPU約40%」，因此cross-fold process parallelism同樣判定`REJECTED_BY_RUNTIME_OBSERVATION / ROLLED_BACK`並物理移除專屬config／CLI／worker／synthetic；Current Rolling回到單fold串行＋feature-only ordered prefetch。兩次皆為execution-only工程負結果，不新增MR/SR identity，也不改既有fold scientific fingerprint／resume合法性。
 
 ## 10. Registry 維護契約
 
