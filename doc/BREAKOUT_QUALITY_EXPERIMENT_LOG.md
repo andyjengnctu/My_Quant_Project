@@ -9501,3 +9501,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Current framework需要的Rolling模型來源是MR-13E reference、MR-13K primary、MR-13M residual-safety secondary；MR-13O已於2026-08-18 `REJECTED_AT_FORWARD_MODEL_GATE / NO_PIT`，因此不再適合作為`apps/research.py → 模型訓練`的Active Profile。Active model-research profile改回MR-13K `daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise`；production workflow identity仍固定MR-13E，不因本修正切換。
 - Daily Universal實際training universe再核對：每檔股票必須有完整300-bar個股window，benchmark亦必須到第300個合法bar；不再使用optimizer `selection_start`作DL歷史下界。Target-valid training rows仍要求40D target完整成熟；inference-only rows不進gradient／validation／epoch selection。Extending fold final refit另要求`label_eval_end_date < score_start`，因此目前training object與PIT information-cutoff語意正確。
 - UI policy依使用者最新要求修正：Extending-Window Rolling／Fixed-Window Rolling兩個泛化工作類型入口固定顯示，不得因Active Profile未授權而隱藏；`selection_pit_authorized`仍是底層執行授權SSOT。未授權profile選入後只可明確BLOCKED／回報原因，不得建立Rolling工件，也不得由programmatic builder或audit繞過。
+
+## 2026-08-19 — Rolling complete-host prefetch correction for low GPU utilization
+
+- 使用者在`模型訓練 → 準備策略比較所需模型工件`執行MR-13E Extending-Window Rolling時，實際觀察GPU約50%、CPU約15%；當時fold_2016～2020已完成，正在fold_2021訓練。工作基準=`test-branch-1_20260819_002222_61be530.zip`，SHA256=`e847eb9791772ec75c08ed9750094227b7693cd44ad9a0dc789ef80ccafe006f`。
+- 根因定位於continuous-ranker feeding pipeline：既有`train_prefetch_batches=8 / train_prefetch_workers=4`確實會提前materialize並pin feature，但`group_context`與training target仍由主訓練執行緒在每個batch、開始目前GPU compute以前同步切片／轉tensor／pin memory。這是serial host-staging gap，會造成GPU等待，且不需要CPU總使用率高才會出現。
+- 修正：新增完整host-batch materialization，ordered prefetch workers現在同時準備`feature / context / target`且CUDA路徑全部先pin；主訓練執行緒只取得已準備host tensors，使用既有dedicated copy stream與`non_blocking=True`搬到GPU，N+1 H2D仍與N forward/backward重疊。feature-only compatibility helper保留並共用generic ordered-prefetch owner，避免兩套queue邏輯分叉。
+- Scientific contract不變：沒有調大batch、沒有改same-date batching、seed、optimizer step數、loss/reduction、target、architecture、mixed precision、deterministic algorithms或TF32；因此既有fold scientific identity與reuse contract不因本修正改變。這是execution-only engineering correction，不新增MR/SR identity。
+- GPT獨立驗證：serial與4-worker/8-depth prefetch對synthetic batch的IDs、feature、context、target逐值相同；CPU device iterator逐值相同；344個Python檔AST parse 0 error、裸`except:`=0、`outputs/`根目錄無散落檔案。未執行`apps/run_bundle.py`或`apps/test_suite.py`。
+
