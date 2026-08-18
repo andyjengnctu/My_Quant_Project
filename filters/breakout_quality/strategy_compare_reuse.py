@@ -14,6 +14,7 @@ from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
     StrategyComparisonArm,
     StrategyComparisonSettings,
     StrategyPreparationAction,
@@ -118,6 +119,22 @@ def _pair_cache_fingerprint_from_payload(
         artifact_keys.extend(
             f"dl:{dl_id}:{name}" for name in dl_artifact_names
         )
+    safety_dl_id = ""
+    safety_dl_payload = {}
+    if str(on_arm_payload.get("dl_runtime_mode") or "") == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL:
+        safety_dl_id = str(
+            dict(on_arm_payload.get("dl_runtime_options") or {}).get("safety_dl_id") or ""
+        ).strip()
+        safety_dl_payload = dict(dl_sources.get(safety_dl_id) or {})
+        if safety_dl_id:
+            safety_artifact_names = (
+                ("manifest", "audit", "forward_scores")
+                if str(safety_dl_payload.get("score_source") or "") == "selection_point_in_time"
+                else ("model", "manifest", "forward_scores")
+            )
+            artifact_keys.extend(
+                f"dl:{safety_dl_id}:{name}" for name in safety_artifact_names
+            )
     selected_artifacts = {
         key: artifact_identities.get(key)
         for key in sorted(set(artifact_keys))
@@ -145,6 +162,17 @@ def _pair_cache_fingerprint_from_payload(
             "threshold": dl_payload.get("threshold"),
             "score_source": dl_payload.get("score_source"),
         },
+        "safety_dl_source": (
+            {
+                "dl_id": safety_dl_id,
+                "filter_id": safety_dl_payload.get("filter_id"),
+                "model_architecture": safety_dl_payload.get("model_architecture"),
+                "experiment_profile": safety_dl_payload.get("experiment_profile"),
+                "threshold": safety_dl_payload.get("threshold"),
+                "score_source": safety_dl_payload.get("score_source"),
+            }
+            if safety_dl_id else None
+        ),
         "off_arm": _replay_arm_contract(off_arm_payload),
         "on_arm": _replay_arm_contract(on_arm_payload),
         "artifact_identities": selected_artifacts,

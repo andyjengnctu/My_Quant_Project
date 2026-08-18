@@ -1,6 +1,7 @@
 ## Going
 
 - imrove DL module
+    - use dual models (MFA, MEA ) in strategy
     - simply label
         - the 40t day's R
         - self learn the label days and input days

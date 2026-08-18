@@ -189,6 +189,35 @@ def capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
             frame.get("Resource_Aware_Constrained_Feasible_Baskets", pd.Series(0, index=frame.index)),
             errors="coerce",
         ).fillna(0)
+        constrained_safety_pruned = pd.to_numeric(
+            frame.get("Resource_Aware_Constrained_Safety_Pruned_States", pd.Series(0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0)
+        safety_floor_enabled = frame.get(
+            "Resource_Aware_Safety_Floor_Enabled", pd.Series(False, index=frame.index)
+        ).fillna(False).astype(bool)
+        baseline_safety_scored = pd.to_numeric(
+            frame.get("Resource_Aware_Baseline_Safety_Scored", pd.Series(0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0)
+        selected_safety_scored = pd.to_numeric(
+            frame.get("Resource_Aware_Selected_Safety_Scored", pd.Series(0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0)
+        baseline_safety_sum = pd.to_numeric(
+            frame.get("Resource_Aware_Baseline_Safety_Score_Sum", pd.Series(0.0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0.0)
+        selected_safety_sum = pd.to_numeric(
+            frame.get("Resource_Aware_Selected_Safety_Score_Sum", pd.Series(0.0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0.0)
+        safety_floor_binding = frame.get(
+            "Resource_Aware_Safety_Floor_Binding", pd.Series(False, index=frame.index)
+        ).fillna(False).astype(bool)
+        safety_floor_violation = frame.get(
+            "Resource_Aware_Safety_Floor_Violation", pd.Series(False, index=frame.index)
+        ).fillna(False).astype(bool)
         selection_mask = mode == "dl-selection"
         summary.update({
             "resource_aware_dl_selection_days": int(selection_mask.sum()),
@@ -243,6 +272,12 @@ def capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
             "resource_aware_constrained_search_states": int(constrained_states.sum()),
             "resource_aware_constrained_pruned_states": int(constrained_pruned.sum()),
             "resource_aware_constrained_feasible_baskets": int(constrained_feasible.sum()),
+            "resource_aware_constrained_safety_pruned_states": int(constrained_safety_pruned.sum()),
+            "resource_aware_safety_floor_enabled_days": int(safety_floor_enabled.sum()),
+            "resource_aware_safety_floor_binding_days": int((safety_floor_enabled & safety_floor_binding).sum()),
+            "resource_aware_safety_floor_violation_days": int((safety_floor_enabled & safety_floor_violation).sum()),
+            "resource_aware_safety_coverage_delta": int((selected_safety_scored - baseline_safety_scored).sum()),
+            "resource_aware_safety_score_sum_gain": float((selected_safety_sum - baseline_safety_sum).sum()),
         })
     return summary
 

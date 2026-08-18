@@ -16,6 +16,7 @@ from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
     StrategyComparisonSettings,
     StrategyPreparationAction,
 )
@@ -103,6 +104,19 @@ def resolve_required_artifact_sources(
     }
     runtime_required_dl_sources = set(required_dl_sources)
     for arm in settings.enabled_arms:
+        if (
+            arm.dl_runtime_mode
+            == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL
+        ):
+            safety_dl_id = str(
+                dict(arm.dl_runtime_options or {}).get("safety_dl_id") or ""
+            ).strip()
+            if not safety_dl_id or safety_dl_id not in settings.dl_sources:
+                raise ValueError(
+                    f"dual-model safety arm缺少合法safety_dl_id: {arm.arm_id}"
+                )
+            required_dl_sources.add(safety_dl_id)
+            runtime_required_dl_sources.add(safety_dl_id)
         if (
             arm.dl_runtime_mode
             == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT

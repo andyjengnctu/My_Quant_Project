@@ -28,6 +28,7 @@ from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
@@ -144,6 +145,34 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 
+
+
+
+def _resolved_ranking_options(
+    settings: StrategyComparisonSettings,
+    arm: StrategyComparisonArm,
+    *,
+    continuous_score_overrides: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    options = dict(arm.dl_runtime_options or {})
+    if arm.dl_runtime_mode != STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL:
+        return options
+    safety_dl_id = str(options.get("safety_dl_id") or "").strip()
+    if not safety_dl_id or safety_dl_id not in settings.dl_sources:
+        raise ValueError(f"dual-model safety arm缺少合法safety_dl_id: {arm.arm_id}")
+    source = settings.dl_sources[safety_dl_id]
+    safety_override = dict((continuous_score_overrides or {}).get(safety_dl_id) or {})
+    options.update({
+        "safety_score_source": str(source.score_source),
+        "safety_model_architecture": str(source.model_architecture),
+        "safety_experiment_profile": str(source.experiment_profile),
+        "safety_score_path_override": (
+            None
+            if not safety_override.get("score_path")
+            else str(safety_override["score_path"])
+        ),
+    })
+    return options
 
 
 
@@ -775,6 +804,7 @@ def _resource_aware_table(
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
@@ -856,6 +886,7 @@ def _selector_timing_table(
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
@@ -1320,7 +1351,11 @@ def run_strategy_comparison(
             ranking_policy=runtime_spec["ranking_policy"],
             ranking_options=(
                 {
-                    **dict(on_arm.dl_runtime_options or {}),
+                    **_resolved_ranking_options(
+                        settings,
+                        on_arm,
+                        continuous_score_overrides=(status.get("continuous_score_overrides") or {}),
+                    ),
                     **(
                         {
                             "expected_r_calibration_path": str(

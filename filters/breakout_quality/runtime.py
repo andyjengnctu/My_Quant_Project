@@ -363,6 +363,40 @@ def resolve_breakout_quality_candidate_rank(
                 score_path_override=context.score_path_override,
             )
         options = dict(context.ranking_options or {})
+        safety_dl_id = str(options.get("safety_dl_id") or "").strip()
+        safety_profile = str(options.get("safety_experiment_profile") or "").strip()
+        safety_architecture = str(options.get("safety_model_architecture") or "").strip()
+        safety_source = str(options.get("safety_score_source") or "").strip()
+        if safety_dl_id or safety_profile or safety_architecture or safety_source:
+            if not all((safety_dl_id, safety_profile, safety_architecture, safety_source)):
+                raise ValueError("dual-model safety ranking options缺少完整secondary source identity")
+            if safety_source != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+                raise ValueError("dual-model safety source目前只支援continuous_ranker_oos")
+            safety_score_path_override = str(
+                options.get("safety_score_path_override") or ""
+            ).strip()
+            safety_payload = lookup_continuous_ranker_oos_candidate_score(
+                project_root=root,
+                ticker=str(ticker),
+                signal_date=lookup_date,
+                filter_id=str(filter_id),
+                model_architecture=safety_architecture,
+                experiment_profile=safety_profile,
+                score_path_override=(
+                    None if not safety_score_path_override else safety_score_path_override
+                ),
+            )
+            payload = dict(payload)
+            payload.update({
+                "safety_dl_id": safety_dl_id,
+                "safety_score": safety_payload.get("score"),
+                "safety_available": bool(safety_payload.get("available", False)),
+                "safety_unavailable_reason": str(safety_payload.get("unavailable_reason") or ""),
+                "safety_score_date": str(safety_payload.get("score_date") or ""),
+                "safety_score_source": str(safety_payload.get("score_source") or ""),
+                "safety_model_architecture": safety_architecture,
+                "safety_experiment_profile": safety_profile,
+            })
         calibration_path = str(options.get("expected_r_calibration_path") or "").strip()
         excess_calibration_path = str(
             options.get("expected_excess_r_calibration_path") or ""

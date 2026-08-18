@@ -40,6 +40,9 @@ STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTI
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL = (
     'resource-aware-continuous-score-constrained-optimal'
 )
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL = (
+    'resource-aware-continuous-score-safety-constrained-optimal'
+)
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL = (
     'resource-aware-continuous-score-no-r0-constrained-optimal'
 )
@@ -63,6 +66,7 @@ SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
@@ -887,6 +891,34 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                     raise ValueError(f"arm {key} Score constrained必須preserve_k_r0=True")
                 if options.get("constrained_solver") != "exact_branch_and_bound_v1":
                     raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
+            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL:
+                if options.get("preserve_k_r0") is not True:
+                    raise ValueError(f"arm {key} Score+Safety constrained必須preserve_k_r0=True")
+                if options.get("constrained_solver") != "exact_branch_and_bound_v1":
+                    raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
+                if options.get("safety_constraint") != "baseline_coverage_and_score_sum_floor_v1":
+                    raise ValueError(f"arm {key} safety_constraint contract不支援")
+                safety_dl_id = str(options.get("safety_dl_id") or "").strip()
+                if not safety_dl_id or safety_dl_id not in settings.dl_sources:
+                    raise ValueError(f"arm {key} 必須指定合法safety_dl_id")
+                if safety_dl_id == arm.dl_id:
+                    raise ValueError(f"arm {key} safety_dl_id不得與primary dl_id相同")
+                primary_source = settings.dl_sources[arm.dl_id]
+                safety_source = settings.dl_sources[safety_dl_id]
+                if primary_source.score_source != "continuous_ranker_oos" or safety_source.score_source != "continuous_ranker_oos":
+                    raise ValueError(f"arm {key} dual-model safety目前只允許Forward continuous_ranker_oos sources")
+                if options.get("selection_only") is not False:
+                    raise ValueError(f"arm {key} dual-model safety第一階段必須selection_only=False")
+                if any(
+                    str(options.get(name) or '').strip()
+                    for name in (
+                        'expected_excess_r_fit_dl_id',
+                        'expected_excess_r_calibration_method',
+                        'expected_r_fit_dl_id',
+                        'expected_r_calibration_method',
+                    )
+                ):
+                    raise ValueError(f"arm {key} Score+Safety constrained不得依賴Expected-R/Excess-R calibration")
             if arm.dl_runtime_mode in {
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,

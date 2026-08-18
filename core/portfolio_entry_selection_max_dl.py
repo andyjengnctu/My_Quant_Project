@@ -5,6 +5,8 @@ from core.exact_accounting import calc_planned_initial_risk_from_prices_milli
 
 from core.portfolio_entry_selection_common import (
     _candidate_continuous_score,
+    _candidate_continuous_safety_score,
+    _selected_continuous_safety_score_metrics,
     _resource_aware_diag_from_result,
     _simulate_reserved_candidate_order,
 )
@@ -901,6 +903,7 @@ def _reorder_resource_aware_continuous_constrained_optimal(
     default_diag,
     objective_mode,
     preserve_reserve_floor=True,
+    preserve_baseline_safety_floor=False,
 ):
     """Exactly maximize one frozen DL objective under canonical K/cash feasibility.
 
@@ -922,6 +925,26 @@ def _reorder_resource_aware_continuous_constrained_optimal(
     reserve_floor_milli = (
         int(baseline['reserved_cost_milli']) if preserve_reserve_floor else 0
     )
+    baseline_safety = _selected_continuous_safety_score_metrics(baseline)
+    safety_floor_coverage = (
+        int(baseline_safety['scored_count']) if preserve_baseline_safety_floor else 0
+    )
+    safety_floor_score_sum = (
+        float(baseline_safety['score_sum']) if preserve_baseline_safety_floor else 0.0
+    )
+
+    def safety_metrics(result):
+        return _selected_continuous_safety_score_metrics(result)
+
+    def safety_floor_satisfied(result):
+        if not preserve_baseline_safety_floor:
+            return True
+        metrics = safety_metrics(result)
+        return (
+            int(metrics['scored_count']) >= int(safety_floor_coverage)
+            and float(metrics['score_sum']) + 1e-12 >= float(safety_floor_score_sum)
+        )
+
     base_rank = {id(row): idx for idx, row in enumerate(candidates)}
     seed_source = (
         'c35-feasible-ascent'
@@ -949,7 +972,10 @@ def _reorder_resource_aware_continuous_constrained_optimal(
             default_diag=default_diag,
             objective_mode=objective_mode,
         )
-        if not bool(seed_diag.get('max_dl_eligible', False)):
+        if (
+            not bool(seed_diag.get('max_dl_eligible', False))
+            and not preserve_baseline_safety_floor
+        ):
             out = dict(seed_diag)
             out.update({
                 'selector': selector_name,
@@ -998,6 +1024,8 @@ def _reorder_resource_aware_continuous_constrained_optimal(
                 'reserve_upper_milli': 0,
                 'coverage_upper': 0,
                 'objective_upper': 0.0,
+                'safety_coverage_upper': 0,
+                'safety_score_upper': 0.0,
             })
             continue
 
@@ -1026,6 +1054,7 @@ def _reorder_resource_aware_continuous_constrained_optimal(
                 else float(expected_excess_r) * float(risk_milli)
             )
 
+        safety_score = _candidate_continuous_safety_score(row)
         standalone.append({
             'orderable': True,
             'reserve_upper_milli': int(single_result['reserved_cost_milli']),
@@ -1033,17 +1062,23 @@ def _reorder_resource_aware_continuous_constrained_optimal(
             # Zero is a valid optimistic replacement for a negative contribution:
             # exact K may force negatives, so ignoring them only loosens the bound.
             'objective_upper': max(0.0, float(raw_value)),
+            'safety_coverage_upper': int(safety_score is not None),
+            'safety_score_upper': (0.0 if safety_score is None else float(safety_score)),
         })
 
     n = len(candidates)
     suffix_orderable = [0] * (n + 1)
     suffix_coverage = [0] * (n + 1)
+    suffix_safety_coverage = [0] * (n + 1)
     for idx in range(n - 1, -1, -1):
         suffix_orderable[idx] = suffix_orderable[idx + 1] + int(
             standalone[idx]['orderable']
         )
         suffix_coverage[idx] = suffix_coverage[idx + 1] + int(
             standalone[idx]['coverage_upper']
+        )
+        suffix_safety_coverage[idx] = suffix_safety_coverage[idx + 1] + int(
+            standalone[idx]['safety_coverage_upper']
         )
 
     if preserve_reserve_floor:
@@ -1063,26 +1098,33 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         seed_basket = list(seed_ranked[:target_count])
 
     incumbent_order, incumbent_result = evaluate_basket(seed_basket)
-    if not _max_dl_basket_is_feasible(
-        incumbent_result,
-        target_count=target_count,
-        reserve_floor_milli=reserve_floor_milli,
+    if (
+        not _max_dl_basket_is_feasible(
+            incumbent_result,
+            target_count=target_count,
+            reserve_floor_milli=reserve_floor_milli,
+        )
+        or not safety_floor_satisfied(incumbent_result)
     ):
         incumbent_order, incumbent_result = evaluate_basket(
             list(baseline.get('selected_rows') or [])
         )
-    if not _max_dl_basket_is_feasible(
-        incumbent_result,
-        target_count=target_count,
-        reserve_floor_milli=reserve_floor_milli,
+    if (
+        not _max_dl_basket_is_feasible(
+            incumbent_result,
+            target_count=target_count,
+            reserve_floor_milli=reserve_floor_milli,
+        )
+        or not safety_floor_satisfied(incumbent_result)
     ):
-        raise RuntimeError('constrained solver無法取得同objective可行incumbent')
+        raise RuntimeError('constrained solver無法取得符合K/R0/safety的可行incumbent')
     best_basket = list(incumbent_order)
     best_result = incumbent_result
     best_key = basket_quality_key(best_result)
 
     search_states = 0
     pruned_states = 0
+    safety_pruned_states = 0
     feasible_baskets = 1
 
     def current_objective_summary(result):
@@ -1149,6 +1191,19 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         )
         return float(current_total) + float(sum(values[:need]))
 
+    def optimistic_safety_upper(idx, need, current_total):
+        if need <= 0:
+            return float(current_total)
+        values = sorted(
+            (
+                float(standalone[pos]['safety_score_upper'])
+                for pos in range(idx, n)
+                if standalone[pos]['orderable']
+            ),
+            reverse=True,
+        )
+        return float(current_total) + float(sum(values[:need]))
+
     empty_result = _simulate_reserved_candidate_order(
         [],
         available_cash=available_cash,
@@ -1159,7 +1214,7 @@ def _reorder_resource_aware_continuous_constrained_optimal(
 
     def visit(idx, basket, result, coverage, objective_total):
         nonlocal best_basket, best_result, best_key
-        nonlocal search_states, pruned_states, feasible_baskets
+        nonlocal search_states, pruned_states, safety_pruned_states, feasible_baskets
         search_states += 1
         selected_count = int(result['selected_count'])
         need = int(target_count - selected_count)
@@ -1167,6 +1222,10 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         if need == 0:
             if int(result['reserved_cost_milli']) < reserve_floor_milli:
                 pruned_states += 1
+                return
+            if not safety_floor_satisfied(result):
+                pruned_states += 1
+                safety_pruned_states += 1
                 return
             feasible_baskets += 1
             quality = basket_quality_key(result)
@@ -1184,6 +1243,22 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         ) < reserve_floor_milli:
             pruned_states += 1
             return
+
+        if preserve_baseline_safety_floor:
+            current_safety = safety_metrics(result)
+            max_safety_coverage = int(current_safety['scored_count']) + min(
+                int(need), int(suffix_safety_coverage[idx])
+            )
+            if max_safety_coverage < int(safety_floor_coverage):
+                pruned_states += 1
+                safety_pruned_states += 1
+                return
+            if optimistic_safety_upper(
+                idx, need, float(current_safety['score_sum'])
+            ) + 1e-12 < float(safety_floor_score_sum):
+                pruned_states += 1
+                safety_pruned_states += 1
+                return
 
         max_coverage = int(coverage) + min(int(need), int(suffix_coverage[idx]))
         if max_coverage < int(best_key[0]):
@@ -1215,12 +1290,15 @@ def _reorder_resource_aware_continuous_constrained_optimal(
     empty_coverage, empty_total = current_objective_summary(empty_result)
     visit(0, [], empty_result, empty_coverage, empty_total)
 
-    if not _max_dl_basket_is_feasible(
-        best_result,
-        target_count=target_count,
-        reserve_floor_milli=reserve_floor_milli,
+    if (
+        not _max_dl_basket_is_feasible(
+            best_result,
+            target_count=target_count,
+            reserve_floor_milli=reserve_floor_milli,
+        )
+        or not safety_floor_satisfied(best_result)
     ):
-        raise RuntimeError('constrained solver結束後沒有合法K/R0 basket')
+        raise RuntimeError('constrained solver結束後沒有合法K/R0/safety basket')
 
     basket_order = _max_dl_execution_order(best_basket, base_rank=base_rank)
     basket_ids = {id(row) for row in basket_order}
@@ -1243,6 +1321,17 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         1 for row in best_result['selected_rows'] if id(row) not in baseline_ids
     )
     seed_trace = dict(seed_diag.get('_selector_trace_baskets') or {})
+    selected_safety = safety_metrics(best_result)
+    safety_floor_binding = bool(
+        preserve_baseline_safety_floor
+        and int(selected_safety['scored_count']) == int(safety_floor_coverage)
+        and math.isclose(
+            float(selected_safety['score_sum']),
+            float(safety_floor_score_sum),
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+    )
     out = _resource_aware_diag_from_result(
         default_diag,
         baseline,
@@ -1275,6 +1364,20 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         'constrained_solver_search_states': int(search_states),
         'constrained_solver_pruned_states': int(pruned_states),
         'constrained_solver_feasible_baskets': int(feasible_baskets),
+        'constrained_solver_safety_pruned_states': int(safety_pruned_states),
+        'safety_floor_enabled': bool(preserve_baseline_safety_floor),
+        'safety_floor_contract': (
+            'baseline_coverage_and_score_sum_floor_v1'
+            if preserve_baseline_safety_floor else None
+        ),
+        'baseline_safety_scored_count': int(baseline_safety['scored_count']),
+        'selected_safety_scored_count': int(selected_safety['scored_count']),
+        'baseline_safety_score_sum': float(baseline_safety['score_sum']),
+        'selected_safety_score_sum': float(selected_safety['score_sum']),
+        'baseline_safety_score_mean': baseline_safety['score_mean'],
+        'selected_safety_score_mean': selected_safety['score_mean'],
+        'safety_floor_binding': bool(safety_floor_binding),
+        'safety_floor_violation': bool(not safety_floor_satisfied(best_result)),
         'constrained_solver_seed_source': seed_source,
         'constrained_solver_seed_repair_evaluations': int(
             seed_diag.get('max_dl_repair_evaluations', 0) or 0
@@ -1294,6 +1397,8 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         raise RuntimeError('constrained solver未維持同參數baseline K')
     if preserve_reserve_floor and int(best_result['reserved_cost_milli']) < reserve_floor_milli:
         raise RuntimeError('constrained solver輸出低於同參數baseline R0')
+    if preserve_baseline_safety_floor and not safety_floor_satisfied(best_result):
+        raise RuntimeError('constrained solver輸出低於同參數baseline safety floor')
     return final_order, out
 
 
@@ -1339,6 +1444,31 @@ def _reorder_resource_aware_continuous_score_constrained_optimal(
         default_diag=default_diag,
         objective_mode='score',
     )
+
+def _reorder_resource_aware_continuous_score_safety_constrained_optimal(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    order, diag = _reorder_resource_aware_continuous_constrained_optimal(
+        rows,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=free_slots,
+        params=params,
+        baseline=baseline,
+        default_diag=default_diag,
+        objective_mode='score',
+        preserve_baseline_safety_floor=True,
+    )
+    diag = dict(diag)
+    diag['selector'] = 'continuous-score-safety-constrained-optimal'
+    return order, diag
 
 def _reorder_resource_aware_continuous_score_no_r0_constrained_optimal(
     rows,

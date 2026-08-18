@@ -48,6 +48,32 @@ def _candidate_continuous_score(candidate_row):
     return numeric_score
 
 
+def _candidate_continuous_safety_score(candidate_row):
+    if not bool(candidate_row.get('breakout_quality_safety_score_available', False)):
+        return None
+    score = candidate_row.get('breakout_quality_safety_score')
+    try:
+        numeric_score = float(score)
+    except (TypeError, ValueError):
+        return None
+    if numeric_score != numeric_score or not math.isfinite(numeric_score):
+        return None
+    return numeric_score
+
+
+def _selected_continuous_safety_score_metrics(result):
+    scores = [
+        score
+        for row in result.get('selected_rows', [])
+        if (score := _candidate_continuous_safety_score(row)) is not None
+    ]
+    return {
+        'scored_count': int(len(scores)),
+        'score_sum': float(sum(scores)),
+        'score_mean': (None if not scores else float(sum(scores) / len(scores))),
+    }
+
+
 def _selected_continuous_score_metrics(result):
     scores = [
         score

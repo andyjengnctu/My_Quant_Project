@@ -83,6 +83,10 @@ def _candidate_replay_snapshot(candidate, *, fallback_trade_date, is_orderable):
         "breakout_quality_score": _optional_float(row.get("breakout_quality_score")),
         "breakout_quality_score_date": str(row.get("breakout_quality_score_date") or ""),
         "breakout_quality_score_source": str(row.get("breakout_quality_score_source") or ""),
+        "breakout_quality_safety_score": _optional_float(row.get("breakout_quality_safety_score")),
+        "breakout_quality_safety_score_available": bool(row.get("breakout_quality_safety_score_available", False)),
+        "breakout_quality_safety_score_date": str(row.get("breakout_quality_safety_score_date") or ""),
+        "breakout_quality_safety_score_source": str(row.get("breakout_quality_safety_score_source") or ""),
         "breakout_quality_ranking_policy": str(
             row.get("breakout_quality_ranking_policy") or "score"
         ),

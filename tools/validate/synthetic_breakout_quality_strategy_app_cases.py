@@ -391,6 +391,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         if bool(strategy_config.STRATEGY_COMPARE_ARMS[arm_id].get("dl_enabled"))
     }
     active_dl_ids.discard("")
+    active_dl_ids.update(
+        str(dict(strategy_config.STRATEGY_COMPARE_ARMS[arm_id].get("dl_runtime_options") or {}).get("safety_dl_id") or "")
+        for arm_id in active_arm_ids
+        if dict(strategy_config.STRATEGY_COMPARE_ARMS[arm_id].get("dl_runtime_options") or {}).get("safety_dl_id")
+    )
+    active_dl_ids.discard("")
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "strategy_compare_active_and_historical_catalogs_are_physically_separated",
@@ -2382,7 +2388,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
 
     def _resource_candidate_fixed(
-        ticker, price, qty, score, policy, expected_r=None, expected_excess_r=None
+        ticker, price, qty, score, policy, expected_r=None, expected_excess_r=None, safety_score=None
     ):
         cost_milli = build_buy_ledger_from_price(price, qty, resource_params)["net_buy_total_milli"]
         rank_payload = {"available": True, "score": score}
@@ -2416,6 +2422,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "use_breakout_quality_ranking": True,
             "breakout_quality_ranking_policy": policy,
             "breakout_quality_score": score,
+            "breakout_quality_safety_score": (None if safety_score is None else float(safety_score)),
+            "breakout_quality_safety_score_available": bool(safety_score is not None),
             "breakout_quality_rank": rank_payload,
         }
 
@@ -3161,6 +3169,105 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == [row["ticker"] for row in score_brute_best["selected_rows"]],
     )
 
+    dual_safety_policy = "resource-aware-continuous-score-safety-constrained-optimal"
+    dual_safety_seed = (
+        ("B1", 100.0, 1200, 0.10, 0.80),
+        ("B2", 100.0, 1100, 0.20, 0.70),
+        ("K1", 100.0, 1300, 0.99, 0.20),
+        ("K2", 100.0, 1200, 0.98, 0.30),
+        ("S1", 100.0, 1300, 0.90, 0.90),
+        ("S2", 100.0, 1200, 0.85, 0.80),
+    )
+    dual_safety_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score, dual_safety_policy, safety_score=safety_score
+        )
+        for ticker, price, qty, score, safety_score in dual_safety_seed
+    ]
+    dual_safety_baseline = _simulate_reserved_candidate_order(
+        dual_safety_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=2,
+        params=resource_params,
+    )
+    dual_safety_order, dual_safety_diag = reorder_candidates_for_resource_aware_quality(
+        dual_safety_rows,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=resource_params,
+    )
+    dual_safety_action = select_resource_aware_action_candidates(
+        dual_safety_order, dual_safety_diag
+    )
+    dual_safety_result = _simulate_reserved_candidate_order(
+        dual_safety_action,
+        available_cash=350_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=2,
+        params=resource_params,
+    )
+    dual_base_rank = {id(row): idx for idx, row in enumerate(dual_safety_rows)}
+    dual_floor_count = sum(
+        int(row.get("breakout_quality_safety_score_available", False))
+        for row in dual_safety_baseline["selected_rows"]
+    )
+    dual_floor_sum = sum(
+        float(row.get("breakout_quality_safety_score") or 0.0)
+        for row in dual_safety_baseline["selected_rows"]
+        if row.get("breakout_quality_safety_score_available", False)
+    )
+    dual_brute_best = None
+    dual_brute_key = None
+    for combo in itertools.combinations(dual_safety_rows, 2):
+        combo_order = _max_dl_execution_order(combo, base_rank=dual_base_rank)
+        combo_result = _simulate_reserved_candidate_order(
+            combo_order,
+            available_cash=350_000.0,
+            sizing_equity=2_000_000.0,
+            free_slots=2,
+            params=resource_params,
+        )
+        if (
+            combo_result["selected_count"] != 2
+            or combo_result["reserved_cost_milli"] < dual_safety_baseline["reserved_cost_milli"]
+        ):
+            continue
+        selected = list(combo_result["selected_rows"] or [])
+        safety_count = sum(
+            int(row.get("breakout_quality_safety_score_available", False))
+            for row in selected
+        )
+        safety_sum = sum(
+            float(row.get("breakout_quality_safety_score") or 0.0)
+            for row in selected
+            if row.get("breakout_quality_safety_score_available", False)
+        )
+        if safety_count < dual_floor_count or safety_sum + 1e-12 < dual_floor_sum:
+            continue
+        combo_key = _max_dl_basket_quality_key(selected, base_rank=dual_base_rank)
+        if dual_brute_key is None or combo_key > dual_brute_key:
+            dual_brute_key = combo_key
+            dual_brute_best = combo_result
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "dual_model_safety_exact_solver_preserves_baseline_safety_floor_and_maximizes_primary_score_without_weighting",
+        True,
+        dual_safety_diag.get("basket_objective") == "score"
+        and dual_safety_diag.get("safety_floor_enabled") is True
+        and dual_safety_diag.get("safety_floor_contract") == "baseline_coverage_and_score_sum_floor_v1"
+        and dual_safety_diag.get("safety_floor_violation") is False
+        and dual_safety_diag.get("constrained_solver_optimality_certified") is True
+        and dual_safety_diag.get("selected_safety_scored_count") >= dual_safety_diag.get("baseline_safety_scored_count")
+        and float(dual_safety_diag.get("selected_safety_score_sum")) + 1e-12 >= float(dual_safety_diag.get("baseline_safety_score_sum"))
+        and dual_brute_best is not None
+        and [row["ticker"] for row in dual_safety_result["selected_rows"]]
+        == [row["ticker"] for row in dual_brute_best["selected_rows"]]
+        == ["S1", "S2"],
+    )
+
     score_no_r0_rows = [
         _resource_candidate_fixed(
             ticker, price, qty, score,
@@ -3619,15 +3726,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     forward_current_settings = strategy_config.get_strategy_comparison_settings("forward_oos")
     c44_current = forward_current_settings.arms["C44"]
     c54_current = forward_current_settings.arms["C54"]
+    c55_current = forward_current_settings.arms["C55"]
     c44_options = dict(c44_current.dl_runtime_options or {})
     c54_options = dict(c54_current.dl_runtime_options or {})
+    c55_options = dict(c55_current.dl_runtime_options or {})
     selection_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
     forward_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("forward_oos")
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "mr13k_full_forward_and_multiseed_research_matrix_is_source_only_and_keeps_runtime_candidates_frozen",
         True,
-        {"C1", "C3", "C44", "C54"}
+        {"C1", "C3", "C44", "C54", "C55"}
         == {arm.arm_id for arm in forward_current_settings.enabled_arms}
         and c44_current.enabled
         and c54_current.enabled
@@ -3639,7 +3748,18 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == "resource-aware-continuous-score-constrained-optimal"
         and c54_options == c44_options
         and c54_current.robustness_role == c44_current.robustness_role == "off"
-        and {"C54-C44", "C54-C3", "C54-C1"}.issubset(
+        and c55_current.enabled
+        and c55_current.param_source == c54_current.param_source
+        and c55_current.rule_policy == c54_current.rule_policy
+        and c55_current.dl_id == c54_current.dl_id == "CONT13K"
+        and c55_current.dl_runtime_mode == "resource-aware-continuous-score-safety-constrained-optimal"
+        and c55_options.get("safety_dl_id") == "CONT13M"
+        and c55_options.get("safety_constraint") == "baseline_coverage_and_score_sum_floor_v1"
+        and c55_options.get("preserve_k_r0") is True
+        and c55_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+        and c55_options.get("selection_only") is False
+        and c55_current.robustness_role == "off"
+        and {"C54-C44", "C54-C3", "C54-C1", "C55-C54", "C55-C44", "C55-C3", "C55-C1"}.issubset(
             {contrast.contrast_id for contrast in forward_current_settings.enabled_contrasts}
         )
         and selection_robustness_active.enabled
@@ -3662,6 +3782,88 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and strategy_config.get_strategy_runtime_integration_settings().selection_candidate_arm_id == "C42"
         and strategy_config.get_strategy_runtime_integration_settings().forward_candidate_arm_id == "C44",
     )
+
+    from filters.breakout_quality.strategy_compare_dl_artifacts import (
+        resolve_required_artifact_sources,
+    )
+    from filters.breakout_quality.strategy_comparison import _resolved_ranking_options
+
+    _, c55_required_dl, c55_runtime_dl = resolve_required_artifact_sources(
+        forward_current_settings
+    )
+    c55_pinned_options = _resolved_ranking_options(
+        forward_current_settings,
+        c55_current,
+        continuous_score_overrides={
+            "CONT13M": {"score_path": "models/pinned_cont13m_forward.csv.gz"}
+        },
+    )
+    c55_reuse_source = reuse_path.read_text(encoding="utf-8")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "c55_secondary_dl_is_required_pinned_and_part_of_pair_cache_identity",
+        True,
+        {"CONT13E", "CONT13K", "CONT13M"}.issubset(c55_required_dl)
+        and {"CONT13E", "CONT13K", "CONT13M"}.issubset(c55_runtime_dl)
+        and c55_pinned_options.get("safety_score_source") == "continuous_ranker_oos"
+        and c55_pinned_options.get("safety_model_architecture") == "inception_time_v1"
+        and c55_pinned_options.get("safety_experiment_profile")
+        == "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
+        and c55_pinned_options.get("safety_score_path_override")
+        == "models/pinned_cont13m_forward.csv.gz"
+        and '"safety_dl_source"' in c55_reuse_source
+        and "safety_artifact_names" in c55_reuse_source
+        and '"forward_scores"' in c55_reuse_source,
+    )
+
+    from filters.breakout_quality import runtime as breakout_runtime
+    c55_runtime_lookup_calls = []
+
+    def _fake_c55_lookup(**kwargs):
+        c55_runtime_lookup_calls.append(dict(kwargs))
+        return {
+            "available": True,
+            "score": 0.75 if len(c55_runtime_lookup_calls) == 1 else 0.25,
+            "score_date": str(kwargs.get("signal_date")),
+            "score_source": "continuous_ranker_oos",
+            "unavailable_reason": "",
+        }
+
+    with patch.object(
+        breakout_runtime,
+        "lookup_continuous_ranker_oos_candidate_score",
+        side_effect=_fake_c55_lookup,
+    ):
+        with breakout_runtime.breakout_quality_ranking_source_context(
+            score_source="continuous_ranker_oos",
+            model_architecture="inception_time_v1",
+            experiment_profile="daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise",
+            ranking_policy="resource-aware-continuous-score-safety-constrained-optimal",
+            ranking_options=c55_pinned_options,
+            score_path_override="models/pinned_cont13k_forward.csv.gz",
+        ):
+            c55_runtime_payload = breakout_runtime.resolve_breakout_quality_candidate_rank(
+                ticker="2330",
+                signal_date="2025-01-02",
+                information_date="2025-01-02",
+                high_len=60,
+                project_root=str(project_root),
+            )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "c55_runtime_looks_up_primary_and_secondary_frozen_scores_with_separate_pinned_paths",
+        True,
+        len(c55_runtime_lookup_calls) == 2
+        and c55_runtime_lookup_calls[0].get("score_path_override")
+        == "models/pinned_cont13k_forward.csv.gz"
+        and c55_runtime_lookup_calls[1].get("score_path_override")
+        == "models/pinned_cont13m_forward.csv.gz"
+        and math.isclose(float(c55_runtime_payload.get("score")), 0.75)
+        and math.isclose(float(c55_runtime_payload.get("safety_score")), 0.25)
+        and c55_runtime_payload.get("safety_available") is True
+        and c55_runtime_payload.get("safety_dl_id") == "CONT13M",
+    )
+
 
     from filters.breakout_quality.strategy_compare_diagnostics import (
         _continuous_forward_target_lookup,

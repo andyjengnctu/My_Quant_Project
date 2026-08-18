@@ -12,6 +12,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
@@ -46,6 +47,7 @@ from core.portfolio_entry_selection_max_dl import (
     _reorder_resource_aware_continuous_max_dl_feasible_ascent,
     _reorder_resource_aware_continuous_excess_alpha_constrained_optimal,
     _reorder_resource_aware_continuous_score_constrained_optimal,
+    _reorder_resource_aware_continuous_score_safety_constrained_optimal,
     _reorder_resource_aware_continuous_score_no_r0_constrained_optimal,
     _reorder_resource_aware_continuous_score_capital_no_r0_constrained_optimal,
     _reorder_resource_aware_continuous_score_capital_pareto_no_r0_constrained_optimal,
@@ -107,6 +109,8 @@ def reorder_candidates_for_resource_aware_quality(
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT
         else 'continuous-excess-alpha-constrained-optimal'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL
+        else 'continuous-score-safety-constrained-optimal'
+        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL
         else 'continuous-score-constrained-optimal'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL
         else 'continuous-score-no-r0-constrained-optimal'
@@ -210,6 +214,17 @@ def reorder_candidates_for_resource_aware_quality(
         return finish(order, diag)
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL:
         order, diag = _reorder_resource_aware_continuous_score_constrained_optimal(
+            rows,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=free_slots,
+            params=params,
+            baseline=baseline,
+            default_diag=default_diag,
+        )
+        return finish(order, diag)
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL:
+        order, diag = _reorder_resource_aware_continuous_score_safety_constrained_optimal(
             rows,
             available_cash=available_cash,
             sizing_equity=sizing_equity,

@@ -212,6 +212,24 @@ def _make_candidate_row(
             '' if normalized_quality_rank is None
             else str(normalized_quality_rank.get('score_source') or '')
         ),
+        'breakout_quality_safety_score': (
+            None
+            if normalized_quality_rank is None
+            or not bool(normalized_quality_rank.get('safety_available', False))
+            else normalized_quality_rank.get('safety_score')
+        ),
+        'breakout_quality_safety_score_available': bool(
+            normalized_quality_rank is not None
+            and normalized_quality_rank.get('safety_available', False)
+        ),
+        'breakout_quality_safety_score_date': (
+            '' if normalized_quality_rank is None
+            else str(normalized_quality_rank.get('safety_score_date') or '')
+        ),
+        'breakout_quality_safety_score_source': (
+            '' if normalized_quality_rank is None
+            else str(normalized_quality_rank.get('safety_score_source') or '')
+        ),
         'breakout_quality_rank': (
             None if normalized_quality_rank is None else dict(normalized_quality_rank)
         ),
