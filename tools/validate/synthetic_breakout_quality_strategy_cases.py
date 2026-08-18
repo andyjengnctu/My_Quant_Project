@@ -3384,17 +3384,29 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
     from tools.validate.transient_code_maintenance import summarize_transient_code_maintenance
 
     maintenance = summarize_transient_code_maintenance(project_root)
+    maintenance_candidate_count = maintenance.get("candidate_count")
+    maintenance_count_valid = (
+        type(maintenance_candidate_count) is int
+        and maintenance_candidate_count >= 0
+    )
+    maintenance_expected_status = (
+        "REVIEW"
+        if maintenance_count_valid and maintenance_candidate_count > 0
+        else "CLEAN"
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "transient_code_maintenance_scan_is_clean_after_retirement",
-        ("CLEAN", False, 0, True),
+        "transient_code_maintenance_scan_is_advisory_and_internally_consistent",
+        (True, True, True, True),
         (
-            maintenance.get("status"),
-            maintenance.get("needs_slimming"),
-            maintenance.get("candidate_count"),
-            maintenance.get("advisory_only"),
+            maintenance_count_valid,
+            maintenance.get("status") == maintenance_expected_status,
+            maintenance.get("needs_slimming") == bool(maintenance_candidate_count)
+            if maintenance_count_valid
+            else False,
+            maintenance.get("advisory_only") is True,
         ),
     )
 

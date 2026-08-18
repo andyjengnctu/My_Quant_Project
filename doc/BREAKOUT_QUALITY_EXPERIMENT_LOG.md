@@ -32,7 +32,7 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260818_093930_b85e2a7.zip`，SHA256 `1440af84f94c1e5a90d39d4ff2ae0f2d5516620ae69c16596e3bb233a464a3ff`。此基準已含MR-13O Pareto-dominance pairwise實作；本輪formal bundle只發現已退役`frozen_rank_fusion.py`實體檔未刪除，屬工程清理殘留，不改研究語意。 |
+| 基準 ZIP | `test-branch-1_20260818_095238_0411892.zip`，SHA256 `0eabe9a0e414e367755ea2924f807bff78198966b8277bca03a96796f8eba689`。此基準已含MR-13O Pareto-dominance pairwise實作；formal bundle再次只因已退役`frozen_rank_fusion.py`仍存在而回報maintenance `REVIEW`。同輪確認該maintenance scan依`PROJECT_SETTINGS C12`必須維持advisory-only，不能單獨成為formal blocker；研究語意不變。 |
 | SHA256／最新結果 | MR-13E仍是production anchor。MR-13M已確認low-adverse path-risk具強Forward learnability：OOS Daily rho=`0.3558`、Pair=`62.75%`、breakout Daily rho=`0.3388`；MR-13N equal-rank single-model formulation已以OOS Daily rho=`0.0150`、Pair=`50.53%` REJECT。其後一次性MR-13K/M frozen 50/50 fusion亦以economic Daily rho=`0.0056`、Pair=`50.12%` REJECT並退役。MR-13O目前只授權Seed42 Forward model Gate，尚無結果；MR-13K current 8-seed Selection/Forward strategy robustness仍獨立繼續。 |
 | 程式版本範圍 | Active sequence architecture仍為`inception_time_v1`；目前config選定的Model Research profile=`daily_universal_full_horizon_pareto_mfe_low_adverse_pairwise / MR-13O`，`selection_pit_authorized=False`，只授權Seed42 Forward model Gate；production workflow profile仍為`daily_universal_no_time_full_list_ndcg_pairwise / MR-13E`。MR-13K C42/C53與C44/C54 current 8-seed robustness是獨立strategy evaluation。 |
 | Policy 預設 | filter=`breakout_quality_v1`、architecture=`inception_time_v1`、Seed=`42`；Model Research profile=`daily_universal_full_horizon_pareto_mfe_low_adverse_pairwise`；Production workflow profile=`daily_universal_no_time_full_list_ndcg_pairwise`。PIT score start=`auto`、fold=`12` months、inner validation=`24` months；MR-13O research-spec固定`selection_pit_authorized=False`。 |
@@ -9376,3 +9376,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Formal evidence：`test-branch-1_20260818_093930_b85e2a7.zip`（SHA256=`1440af84f94c1e5a90d39d4ff2ae0f2d5516620ae69c16596e3bb233a464a3ff`）搭配`to_chatgpt_bundle_20260818_094117_3c749020.zip`（SHA256=`a8e0b15562f9b4dfbbb5517e84551115bfe1364b8b8e264e87ddc36085e096a5`）。Formal quick gate／chain checks／ML smoke均PASS；consistency唯一FAIL為`transient_code_maintenance_scan_is_clean_after_retirement`，meta quality只因同一synthetic failure連鎖FAIL。
 - 根因：一次性`AUD-mr13km-frozen-rank-fusion`已在config/catalog/dedicated synthetic與Registry／Log正式退役，但先前交付要求另外刪除的`tools/audit/breakout_quality/frozen_rank_fusion.py`實體檔仍存在。全專案Python引用檢查確認已無任何runtime／active Audit／synthetic import依賴該模組；formal meta-quality瘦身掃描因此正確把它列為唯一stale module。
 - 修正：刪除上述已退役實體檔；不修改MR-13O target、loss、pair contract、epoch selection、MR-13K robustness或production C42/C44。另同步本文件2.1 current summary至實際MR-13O active config，避免current SSOT停留在MR-13M。
+
+### 2026-08-18 — MR-13O formal closure：maintenance REVIEW 改回 advisory-only contract
+
+- Formal evidence：`test-branch-1_20260818_095238_0411892.zip`（SHA256=`0eabe9a0e414e367755ea2924f807bff78198966b8277bca03a96796f8eba689`）搭配`to_chatgpt_bundle_20260818_095432_93f61d6d.zip`（SHA256=`2507ec899c1553de9e9f65469904d8ce6af6deb9c27016c1154a2bf99dfb0462`）。Formal quick gate／chain checks／ML smoke皆PASS；consistency唯一FAIL仍為`transient_code_maintenance_scan_is_clean_after_retirement`，meta quality只因同一synthetic failure使`coverage_synthetic_suite_runs_successfully`連鎖FAIL。
+- 根因分成兩層：(1) 已結案的一次性`tools/audit/breakout_quality/frozen_rank_fusion.py`實體檔仍存在，maintenance scan正確回`REVIEW`且列出1個stale candidate；依C11該檔仍應實際刪除。(2) synthetic卻把maintenance狀態硬編成必須`CLEAN/False/0`，使advisory `REVIEW`反過來成為formal blocker，直接違反`PROJECT_SETTINGS C12`與Checklist B190/B198既有契約。
+- 修正：`validate_breakout_quality_legacy_research_cleanup_contract_case`不再要求當前maintenance candidate count必須為0，而改驗證scanner內部一致性：`candidate_count`為非負整數、`status`與count一致、`needs_slimming`與count一致、`advisory_only=True`。因此`CLEAN`與`REVIEW`都屬合法maintenance結果；formal仍可驗證scanner契約，但不再把維護建議當第二套阻擋Gate。
+- Lifecycle仍維持：`frozen_rank_fusion.py`已無runtime／active Audit／dedicated synthetic引用，使用者端仍應依交付命令刪除該實體檔；本次不把刪檔責任改成validator自動刪除，也不修改MR-13O Target／Pareto loss／epoch selection、MR-13K 8-seed robustness或production C42/C44。
+
