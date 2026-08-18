@@ -30,6 +30,9 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS,
+    BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE,
+    BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE,
+    BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS,
 )
 from config.breakout_quality import (
     get_breakout_quality_continuous_ranker_pit_gate_settings,
@@ -1956,22 +1959,22 @@ def _print_workflow_status(settings=None) -> None:
     if settings.supports_point_in_time_scores:
         base_rows.extend((
             (
-                "PIT Score Period",
+                "Operational Rolling Period",
                 f"{'auto（最早合法）' if str(settings.point_in_time_score_start_date).lower() == 'auto' else settings.point_in_time_score_start_date} ～ "
-                f"{settings.point_in_time_score_end_date or 'Selection end'}",
+                f"{settings.point_in_time_score_end_date or 'Legacy Selection end'}",
             ),
             (
-                "PIT Fold／Validation",
+                "Operational Fold／Validation",
                 f"{settings.point_in_time_fold_months}／"
                 f"{settings.point_in_time_inner_validation_months} months",
             ),
             (
-                "PIT Coverage Reference",
+                "Operational Evidence Start",
                 settings.point_in_time_coverage_reference_start_date,
             ),
         ))
     else:
-        base_rows.append(("PIT", "目前Active Profile未啟用；先完成forward-OOS模型Gate"))
+        base_rows.append(("Rolling PIT", "目前Active Profile未啟用rolling PIT"))
     print(render_key_values(base_rows))
     model_artifacts = resolve_filter_artifact_paths(
         PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
@@ -2040,11 +2043,11 @@ def _print_workflow_status(settings=None) -> None:
     if settings.supports_point_in_time_scores:
         grouped_status.extend((
             (
-                "PIT Scores",
+                "Operational Rolling Scores",
                 (status_paths["PIT scores"], status_paths["PIT manifest"], status_paths["PIT coverage"]),
             ),
             (
-                "PIT 模型驗證",
+                "Operational Rolling 模型驗證",
                 (status_paths["PIT audit JSON"], status_paths["PIT audit Markdown"]),
             ),
         ))
@@ -2450,11 +2453,11 @@ def _interactive_continuous_full_train(program_name: str, settings) -> int:
 
 def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
     if not settings.supports_point_in_time_scores:
-        print("目前Active Profile尚未啟用PIT；先完成forward-OOS模型Gate。")
+        print("目前Active Profile尚未啟用Rolling PIT。")
         return 0
     _print_workflow_status(settings)
     if not _prompt_bool(
-        "確認前置Dataset／Target來源後，建立／更新PIT Scores並執行模型驗證",
+        "確認前置Dataset／Target來源後，建立／更新Operational Rolling Scores並執行模型驗證",
         True,
     ):
         return 0
@@ -2483,7 +2486,7 @@ def _run_continuous_pit_profile(
     print(
         "\n"
         + render_title(
-            f"Selection PIT Model Gate | {model_id} | {settings.experiment_profile}"
+            f"Operational Rolling Model Gate | {model_id} | {settings.experiment_profile}"
         )
     )
     code = _prepare_continuous_research_inputs(program_name, settings)
@@ -2500,6 +2503,8 @@ def _run_continuous_pit_profile(
     ]
     if settings.point_in_time_score_end_date:
         build_args.extend(["--score-end-date", settings.point_in_time_score_end_date])
+    if settings.point_in_time_train_window_months is not None:
+        build_args.extend(["--train-window-months", str(settings.point_in_time_train_window_months)])
     build_args.append("--resume" if settings.point_in_time_resume else "--no-resume")
     with _compact_console_scope():
         code = _run_command(
@@ -2518,6 +2523,67 @@ def _run_continuous_pit_profile(
                 program_name=program_name,
             )
         )
+
+
+def _interactive_continuous_stability_validation(program_name: str, settings) -> int:
+    if not settings.supports_point_in_time_scores:
+        print("目前Active Profile尚未啟用Rolling PIT。")
+        return 0
+    model_output_dir = resolve_filter_model_output_dir(
+        PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
+    )
+    stability_dir = (
+        model_output_dir
+        / "stability_rolling"
+        / f"fixed_{int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS)}m"
+    )
+    print(
+        "\n"
+        + render_title(
+            f"Fixed-Window Stability | {settings.experiment_profile} | "
+            f"{int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS)} months"
+        )
+    )
+    print(
+        render_key_values(
+            (
+                ("用途", "控制calendar history長度，檢查不同年代learnability；不是production strategy truth"),
+                ("Score period", f"{BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE} ～ {BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE}"),
+                ("Train window", f"{int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS)} months fixed"),
+                ("Refit cadence", f"{int(settings.point_in_time_fold_months)} months"),
+                ("Output", project_relative_display_path(stability_dir, project_root=PROJECT_ROOT)),
+            )
+        )
+    )
+    if not _prompt_bool("確認建立／更新Fixed-Window Stability工件", True):
+        return 0
+    code = _prepare_continuous_research_inputs(program_name, settings)
+    if code != 0:
+        return int(code)
+    build_args = [
+        "--filter-id", settings.filter_id,
+        "--model-architecture", settings.model_architecture,
+        "--experiment-profile", settings.experiment_profile,
+        "--score-start-date", str(BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE),
+        "--score-end-date", str(BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE),
+        "--fold-months", str(settings.point_in_time_fold_months),
+        "--inner-validation-months", str(settings.point_in_time_inner_validation_months),
+        "--train-window-months", str(int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS)),
+        "--seed", str(settings.seed),
+        "--point-in-time-dir-override", str(stability_dir),
+        "--resume",
+    ]
+    audit_args = [
+        "--filter-id", settings.filter_id,
+        "--model-architecture", settings.model_architecture,
+        "--experiment-profile", settings.experiment_profile,
+        "--point-in-time-dir-override", str(stability_dir),
+    ]
+    with _compact_console_scope():
+        code = _run_command("build-point-in-time-scores", build_args, program_name=program_name)
+        if code != 0:
+            return int(code)
+        return int(_run_command("audit-point-in-time-scores", audit_args, program_name=program_name))
 
 
 def _fmt_pit_metric(value, *, percent: bool = False) -> str:
@@ -2934,7 +3000,7 @@ def _interactive_model_research(program_name: str) -> int:
         research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
-        print(render_menu_item(1, "訓練目前模型 → forward-OOS模型報表", default=True))
+        print(render_menu_item(1, "Operational Rolling 模型驗證  (Enter)", default=True))
         pit_authorized = bool(
             settings.supports_point_in_time_scores and research_spec.selection_pit_authorized
         )
@@ -2943,16 +3009,9 @@ def _interactive_model_research(program_name: str) -> int:
             if pit_authorized
             else None
         )
-        if pit_authorized:
-            pit_label = (
-                "建立／更新設定中的 Selection PIT Scores → PIT模型比較"
-                if pit_gate_batch is not None
-                else "建立／更新 Selection PIT Scores → PIT模型驗證"
-            )
-            print(render_menu_item(2, pit_label))
+        if settings.supports_point_in_time_scores:
+            print(render_menu_item(2, "Fixed-Window Stability 模型驗證"))
         print(render_menu_item(3, "查看目前Workflow與工件狀態"))
-        if comparison_settings.enabled:
-            print(render_menu_item(4, comparison_settings.menu_label))
         _comparisons, strategy_model_sources = _strategy_compare_required_model_sources()
         if strategy_model_sources:
             print(render_menu_item(5, "準備策略比較所需模型工件"))
@@ -2968,27 +3027,12 @@ def _interactive_model_research(program_name: str) -> int:
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         if choice == "1":
-            return _interactive_continuous_full_train(program_name, settings)
-        if choice == "2" and pit_authorized:
-            if pit_gate_batch is not None:
-                return _interactive_continuous_pit_gate_batch(
-                    program_name, pit_gate_batch
-                )
             return _interactive_continuous_pit_validation(program_name, settings)
+        if choice == "2" and settings.supports_point_in_time_scores:
+            return _interactive_continuous_stability_validation(program_name, settings)
         if choice == "3":
             _print_workflow_status(settings)
             continue
-        if choice == "4" and comparison_settings.enabled:
-            return int(
-                _run_command(
-                    "compare-continuous-rankers",
-                    [
-                        "--filter-id", settings.filter_id,
-                        "--model-architecture", settings.model_architecture,
-                    ],
-                    program_name=program_name,
-                )
-            )
         if choice == "5" and strategy_model_sources:
             return int(_prepare_strategy_compare_model_artifacts(program_name))
         if choice == "6" and research_spec.reference_profile_name:

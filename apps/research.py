@@ -230,7 +230,7 @@ def _strategy_runtime_integration_menu() -> int:
 
 
 def _show_all_strategy_comparison_status() -> None:
-    for profile in get_strategy_comparison_profiles():
+    for profile in get_strategy_comparison_menu_profiles():
         settings = get_strategy_comparison_settings(profile["profile_id"])
         print(f"\n--- {settings.profile_label} ---")
         try:
@@ -261,10 +261,17 @@ def _strategy_compare_menu() -> int:
         combined_robustness_choice = robustness_start + len(robustness_profiles)
         print(render_menu_item(combined_robustness_choice, "一次執行全部 Multi-seed robustness"))
         integration_cfg = get_strategy_runtime_integration_settings()
-        integration_choice = combined_robustness_choice + 1
-        print(render_menu_item(integration_choice, integration_cfg.label))
-        status_choice = integration_choice + 1
-        print(render_menu_item(status_choice, "查看全部階段設定與工件狀態"))
+        integration_choice = (
+            combined_robustness_choice + 1 if integration_cfg.enabled else None
+        )
+        if integration_choice is not None:
+            print(render_menu_item(integration_choice, integration_cfg.label))
+        status_choice = (
+            combined_robustness_choice + 1
+            if integration_choice is None
+            else integration_choice + 1
+        )
+        print(render_menu_item(status_choice, "查看目前Framework設定與工件狀態"))
         print(render_menu_item(0, "返回"))
         try:
             raw = input("👉 請選擇：").strip().lower()
@@ -288,7 +295,7 @@ def _strategy_compare_menu() -> int:
                 _run_all_strategy_multi_seed_robustness()
             except (FileNotFoundError, RuntimeError, ValueError) as exc:
                 print(f"[錯誤] {type(exc).__name__}: {exc}")
-        elif numeric == integration_choice:
+        elif integration_choice is not None and numeric == integration_choice:
             _strategy_runtime_integration_menu()
         elif numeric == status_choice:
             _show_all_strategy_comparison_status()

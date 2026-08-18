@@ -17,18 +17,21 @@
 
 | 優先序 | 方案／待決策問題 | 狀態 | 固定條件 | 成功／停止條件 | 下一步 |
 |---:|---|---|---|---|---|
-| 1 | **C56 full-flow completion**：先完整驗證B2 residual-safety策略，而不是直接進Plan C-M。Selection使用`C57`作C56的PIT counterpart；Forward使用`C56`。 | **ACTIVE / USER_PRIORITY** | Selection primary=`CONT13K_PIT`、secondary=`CONT13M_PIT`；Forward primary=`CONT13K`、secondary=`CONT13M`。兩stage都固定Min/all-off、K/R0、exact/cash/execution、`same_day_rank_ols_v1` residual safety。8-seed robustness每個generated seed必須同seed訓練13K與13M兩個source，再做一次C57/C56 replay；`seed_count=8`、generator=`20260810`。C54/C55不進本輪stochastic matrix。Production仍C42/C44。 | 先完成Selection PIT single-seed，再完成Selection與Forward各8-seed C56 full-flow distribution；不得以Seed42 Forward單點直接promotion，也不得因結果後調residual threshold/權重。完成後再判定C56是否只保留research evidence、是否值得後續strategy gate。 | 先在模型研究選單準備Selection所需`CONT13K_PIT + CONT13M_PIT`；再跑Selection PIT C57；最後跑兩stage C56-only robustness。 |
-| 2 | **Plan C-M：13K PIT-safe upside context → Conditional Low-Adverse model**。問題：已知upside condition後，第二模型能否學出「同樣高upside中誰較不會先跌」？ | **PLANNED / AFTER_C56_FULL_FLOW** | Stage-1 13K context必須cross-fitted/PIT-safe，建議同日percentile；Stage-2仍看原sequence，Target固定MR-13M low-adverse，與MR-13M source-only比較。不得把full-fit 13K score回灌training rows。 | Conditional adverse ranking需明顯優於MR-13M，且後續strategy conversion能保留13K upside；否則停止stacking。 | C56完整驗證結案後才開始；開始實作時才建立新的model/profile identity。 |
-| 3 | **Plan A：MR-13H economic Target + parameter-free path-dynamics input representation**。問題：原300×10是否缺少joint MFE/path-risk表示？ | **PLANNED** | Target固定MR-13H `MFE-adverse`、InceptionTime family、Full-list pairwise、Seed42；只新增無可調窗口的causal path primitives。 | Forward rho/Pair/Top-K與breakout slice同方向明顯勝MR-13H才進PIT；近似或更差即停止簡單path primitives。 | Plan C-M之後；開始時才建立新ARCH/MR identity。 |
-| 4 | **Plan B3：13K confidence boundary + 13M tie-break**。問題：13M只在13K自身不確定時介入，能否保留明確winner？ | **CONDITIONAL** | 不使用固定score-gap magic threshold；優先以既有multi-seed rank stability/confidence定義邊界。 | 只有能建立無調參confidence contract才GO。 | 需先完成C56/13K相關robustness證據。 |
-| 5 | **Plan C-K：13M PIT-safe safety context → Conditional MFE model**。 | **CONDITIONAL** | Stage-1 13M context須PIT-safe；Stage-2 Target固定Pure MFE，與MR-13K source-only比較。 | 只有C-M未解決且仍有conditional-stacking價值時才做。 | 排在C-M後。 |
-| 6 | **13M → Position Sizing**。13K決定買誰，13M只決定risk allocation。 | **CONDITIONAL** | 不改membership；會改canonical 1% sizing，因此屬較大策略變因。 | 只有selection-level整合不足且仍需利用13M降MDD時才做。 | 後做。 |
-| 7 | **Regime-dependent 13K / 13M gating**。 | **CONDITIONAL** | 需先有causal、非績效調參的market-state gate。 | 只有前述方法不足時才考慮。 | 後做。 |
-| 8 | **Cross-sectional / market-state representation**。 | **CONDITIONAL** | 不重跑已淘汰的單純architecture橫向搜尋。 | 只有Plan A證明簡單path representation不足時才GO。 | 最後的representation升級方向。 |
+| 1 | **Evaluation Framework Migration / Operational Rolling**：建立2014→目前單一expanding、annual PIT-safe refit chain，取代active Selection/Frozen二分。 | **ACTIVE / USER_PRIORITY** | Existing 2014～2020 expanding PIT folds contract相容即REUSE；2021+以同一fold/inner-validation/refit legality延伸。Operational strategy params只stitch既有合法P2 schedules，不重做跨期optimizer。Current arms=`C58/C59/C60`，production仍C42/C44。 | Seed42 Operational artifacts與C58/C59/C60能完整跑通且每foldinformation cutoff、parameter schedule、primary/secondary source均PIT-safe；若contract不相容則fail-fast，不得用legacy Frozen score補洞。 | 先準備`CONT13E_ROLL / CONT13K_ROLL / CONT13M_ROLL`與`P2_OPERATIONAL`，再跑Operational Strategy Compare。 |
+| 2 | **Fixed-Window Stability**：控制歷史長度後檢查MR-13E/K/M跨年代learnability是否穩定。 | **PLANNED / AFTER_OPERATIONAL** | Fixed train window=`120M`、score fold=`12M`、inner validation=`24M`、Seed42；輸出與Operational隔離。報表必須保留train span/groups/tickers與score groups。 | 若固定window後各年代ranking/strategy方向仍有顯著結構差異，才判定可能有regime learnability；若差異大幅縮小，則舊Selection/Frozen差異主要是data maturity/policy confounder。 | Operational Seed42完成後執行model Stability；第一版不做multi-seed。 |
+| 3 | **Operational Rolling C60 Multi-seed robustness**。 | **CONDITIONAL** | fixed=`C58`、stochastic=`C60`；每seed同時建立13K/13M Operational sources；`seed_count=8`、generator=`20260810`。不跑Legacy C56/C57 Frozen/Selection robustness。 | 只有Seed42 Operational結果仍足以改變B2 GO/REJECT或promotion判斷才執行；否則停止節省算力。 | 依項目1結果決定。 |
+| 4 | **Plan C-M：13K PIT-safe upside context → Conditional Low-Adverse model**。 | **PLANNED / AFTER_FRAMEWORK_MIGRATION** | Stage-1 13K context必須rolling cross-fitted/PIT-safe，同日percentile；Stage-2 Target固定MR-13M low-adverse。不得把full-fit score回灌training rows。 | Conditional adverse ranking需明顯優於MR-13M，且Operational strategy conversion保留13K upside；否則停止stacking。 | 新evaluation framework完成最小驗證後才開始並分配新MR identity。 |
+| 5 | **Plan A：MR-13H economic Target + parameter-free path-dynamics representation**。 | **PLANNED** | Target固定MR-13H、InceptionTime family、Full-list pairwise、Seed42；只改causal path primitives。 | Operational model metrics同方向明顯勝reference才進strategy；否則停止。 | Plan C-M之後。 |
+| 6 | **Plan B3：13K confidence boundary + 13M tie-break**。 | **CONDITIONAL** | 不用magic score-gap；優先用Operational multi-seed rank stability。 | 只有能建立無調參confidence contract才GO。 | 後做。 |
+| 7 | **Plan C-K：13M PIT-safe safety context → Conditional MFE model**。 | **CONDITIONAL** | Stage-1 13M context須rolling PIT-safe；Stage-2 Target固定Pure MFE。 | 只有C-M未解決且仍有conditional-stacking價值時做。 | C-M後。 |
+| 8 | **13M sizing / regime gating / cross-sectional representation**。 | **CONDITIONAL** | 保持一次只改一個主要研究維度。 | 只有前述較小變更不足且新證據可能改變決策時才展開。 | 最後。 |
 
-### 2.1 最近完成且有正向證據
+### 2.1 Framework migration對既有研究的處理
 
-- **Plan B2 / `SR-C56` Seed42 Forward：RESULT_AVAILABLE / FORWARD GO / NOT PROMOTED**。C56=`148.34% Return / 12.86% MDD / 11.53 RoMD / 47.90% Win Rate / 1.14R EV`；相對C54保留約`87.9%` Return，同時MDD `-7.09pp`、RoMD `+3.08`、Win Rate `+5.35pp`、EV `+0.34R`，並明顯優於C55 raw-safety。此結果只確認Residual Safety有portfolio conversion價值；依2026-08-18使用者決策，C56現在重新開啟為**full-flow validation**，先補Selection PIT與兩stage同seed雙source 8-seed robustness，再進Plan C-M。
+- 2014～2020既有Selection PIT annual folds不丟棄，重新分類為historical expanding annual-refit evidence；contract相容時直接成為Operational前半段。
+- 2021～2026既有Frozen Forward Cxx/MRxx結果、reports、manifests與ID永久保留為`LEGACY_FROZEN_FORWARD / HISTORICAL_EVIDENCE`，但不再是current Gate或robustness。
+- C57 Seed42 historical PIT與C56 Seed42 Legacy Frozen結果都保留；原本「先完成C56/C57兩stage robustness」的Queue項目因evaluation-policy migration而**CLOSED / SUPERSEDED**，不是因策略結果被否定。
+- 同stage controlled contrasts仍可引用；跨Selection/Frozen的直接差值不得再單獨解讀為temporal stability/learnability。
 
 ## 3. 已停止的相鄰方向（不得重新包裝成新項目）
 

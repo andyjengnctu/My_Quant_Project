@@ -285,13 +285,12 @@ def validate_strategy_multi_seed_robustness_settings(
         raise ValueError("multi-seed robustness console_mode只支援compact/verbose")
     if float(settings.progress_interval_seconds) <= 0:
         raise ValueError("multi-seed robustness progress_interval_seconds必須>0")
-    required_reference_keys = {"min", "full"}
     configured_reference_keys = {
         str(key).strip() for key in settings.romd_reference_baselines
     }
-    if configured_reference_keys != required_reference_keys:
+    if "min" not in configured_reference_keys or not configured_reference_keys.issubset({"min", "full"}):
         raise ValueError(
-            "multi-seed robustness romd_reference_baselines必須定義min/full兩個語意基準"
+            "multi-seed robustness romd_reference_baselines必須至少定義min；full為可選語意基準"
         )
     for key, raw in settings.romd_reference_baselines.items():
         spec = dict(raw or {})
@@ -645,6 +644,14 @@ def _validate_builder(
         for option_name in ("resume", "build_binary_pit", "binary_pit_resume", "quiet"):
             if option_name in builder.options and not isinstance(builder.options[option_name], bool):
                 raise ValueError(f"{field_name}.{option_name}必須是bool")
+    if builder.builder_type == "operational_min_roos_stitch":
+        for option_name in ("historical_params_path", "current_params_path", "output_relative_dir"):
+            value = str(builder.options.get(option_name) or "").strip()
+            if not value:
+                raise ValueError(f"{field_name}.{option_name}不可空白")
+            _validate_relative_path(value, field_name=f"{field_name}.{option_name}")
+        if "quiet" in builder.options and not isinstance(builder.options["quiet"], bool):
+            raise ValueError(f"{field_name}.quiet必須是bool")
     if builder.builder_type == "selection_historical_p2":
         if str(builder.options.get("parameter_set") or "").lower() != "p2_history":
             raise ValueError(f"{field_name}.parameter_set必須是p2_history")
@@ -735,6 +742,7 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
             field_name=f"parameter_sources[{key}].builder",
             allowed_types={
                 "binary_dl_min_roos_rolling",
+                "operational_min_roos_stitch",
                 "selection_historical_p2",
                 "selection_historical_full_roos",
             },

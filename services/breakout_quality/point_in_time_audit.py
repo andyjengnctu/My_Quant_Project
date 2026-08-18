@@ -1,4 +1,4 @@
-"""Audit Selection point-in-time continuous-ranker predictive ordering."""
+"""Audit Rolling point-in-time continuous-ranker predictive ordering."""
 
 from __future__ import annotations
 
@@ -28,6 +28,11 @@ from filters.breakout_quality.contract import (
     LABEL_REJECT,
 )
 from filters.breakout_quality.paths import (
+    SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
+    SELECTION_POINT_IN_TIME_AUDIT_MARKDOWN_FILENAME,
+    SELECTION_POINT_IN_TIME_COVERAGE_FILENAME,
+    SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+    SELECTION_POINT_IN_TIME_SCORE_FILENAME,
     resolve_filter_output_dir,
     resolve_filter_point_in_time_fold_dir,
     resolve_selection_point_in_time_audit_json_path,
@@ -84,7 +89,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     settings = get_breakout_quality_workflow_settings()
     parser = argparse.ArgumentParser(
         description=(
-            "驗證Selection point-in-time Score對continuous target的排序能力；"
+            "驗證Rolling point-in-time Score對continuous target的排序能力；"
             "不執行策略optimizer，不以actual selected R作主要否決依據。"
         )
     )
@@ -95,6 +100,11 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--orderable-candidates",
         default=None,
         help="選填orderable candidate CSV；未指定時自動尋找既有Selection realization工件",
+    )
+    parser.add_argument(
+        "--point-in-time-dir-override",
+        default=None,
+        help="指定隔離Rolling PIT根目錄；供Fixed-Window Stability audit使用",
     )
     parser.add_argument(
         "--allow-stale-source",
@@ -114,19 +124,46 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _pit_artifact_paths(args) -> dict[str, Path]:
+    override = str(args.point_in_time_dir_override or "").strip()
+    if override:
+        base = Path(override)
+        if not base.is_absolute():
+            base = PROJECT_ROOT / base
+        return {
+            "score": base / SELECTION_POINT_IN_TIME_SCORE_FILENAME,
+            "coverage": base / SELECTION_POINT_IN_TIME_COVERAGE_FILENAME,
+            "manifest": base / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+            "audit_json": base / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
+            "audit_markdown": base / SELECTION_POINT_IN_TIME_AUDIT_MARKDOWN_FILENAME,
+        }
+    return {
+        "score": resolve_selection_point_in_time_score_path(
+            PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
+        ),
+        "coverage": resolve_selection_point_in_time_coverage_path(
+            PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
+        ),
+        "manifest": resolve_selection_point_in_time_manifest_path(
+            PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
+        ),
+        "audit_json": resolve_selection_point_in_time_audit_json_path(
+            PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
+        ),
+        "audit_markdown": resolve_selection_point_in_time_audit_markdown_path(
+            PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
+        ),
+    }
+
+
 def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
-    score_path = resolve_selection_point_in_time_score_path(
-        PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
-    )
-    coverage_path = resolve_selection_point_in_time_coverage_path(
-        PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
-    )
-    manifest_path = resolve_selection_point_in_time_manifest_path(
-        PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
-    )
+    paths = _pit_artifact_paths(args)
+    score_path = paths["score"]
+    coverage_path = paths["coverage"]
+    manifest_path = paths["manifest"]
     if not score_path.is_file() or not manifest_path.is_file():
         raise FileNotFoundError(
-            "找不到Selection point-in-time score工件；請先執行 build-point-in-time-scores"
+            "找不到Rolling point-in-time score工件；請先執行 build-point-in-time-scores"
         )
     manifest = _read_json(manifest_path)
     expected_identity = {
@@ -137,39 +174,43 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
     actual_identity = {key: str(manifest.get(key, "")) for key in expected_identity}
     if actual_identity != expected_identity:
         raise ValueError(
-            "Selection PIT manifest identity與CLI不一致: "
+            "Rolling PIT manifest identity與CLI不一致: "
             f"expected={expected_identity}, actual={actual_identity}"
         )
     if (
         int(manifest.get("schema_version", -1)) != POINT_IN_TIME_SCHEMA_VERSION
         or manifest.get("status") != "BUILT"
     ):
-        raise ValueError("Selection PIT manifest schema/status不支援")
+        raise ValueError("Rolling PIT manifest schema/status不支援")
     if manifest.get("score_column") != "breakout_quality_score":
-        raise ValueError("Selection PIT manifest score column不一致")
+        raise ValueError("Rolling PIT manifest score column不一致")
     lookahead = manifest.get("lookahead_contract") or {}
     if not bool(lookahead.get("every_score_uses_model_not_trained_on_scored_event")):
-        raise ValueError("Selection PIT manifest未宣告未見事件評分契約")
+        raise ValueError("Rolling PIT manifest未宣告未見事件評分契約")
     if not bool(lookahead.get("training_requires_label_eval_end_before_score_start")):
-        raise ValueError("Selection PIT manifest未宣告label completion cutoff")
+        raise ValueError("Rolling PIT manifest未宣告label completion cutoff")
     if bool(lookahead.get("oos_rows_or_target_statistics_used_for_training_or_epoch_selection")):
-        raise ValueError("Selection PIT manifest宣告使用OOS訓練或選epoch")
+        raise ValueError("Rolling PIT manifest宣告使用OOS訓練或選epoch")
     if bool(lookahead.get("future_target_in_score_table")):
-        raise ValueError("Selection PIT manifest宣告Score表包含Future Target")
+        raise ValueError("Rolling PIT manifest宣告Score表包含Future Target")
     runtime_eligibility = manifest.get("runtime_eligibility") or {}
-    if bool(runtime_eligibility.get("eligible")):
-        raise ValueError("Selection PIT builder工件不得在模型audit前標記為策略可用")
-    if not bool(runtime_eligibility.get("not_eligible_for_forward_oos_runtime")):
-        raise ValueError("Selection PIT工件必須明確禁止forward-OOS runtime")
+    legacy_runtime_contract = bool(
+        runtime_eligibility.get("not_eligible_for_forward_oos_runtime")
+    )
+    rolling_runtime_contract = bool(
+        runtime_eligibility.get("per_score_fold_information_cutoff_required")
+    )
+    if not (legacy_runtime_contract or rolling_runtime_contract):
+        raise ValueError("Rolling PIT manifest缺少可驗證的runtime information-cutoff契約")
 
     artifacts = manifest.get("artifacts") or {}
     if build_file_manifest(score_path) != artifacts.get("scores"):
-        raise ValueError("Selection point-in-time score hash與manifest不一致")
+        raise ValueError("Rolling point-in-time score hash與manifest不一致")
     if artifacts.get("coverage") is not None:
         if not coverage_path.is_file():
-            raise FileNotFoundError(f"Selection PIT coverage工件不存在: {coverage_path}")
+            raise FileNotFoundError(f"Rolling PIT coverage工件不存在: {coverage_path}")
         if build_file_manifest(coverage_path) != artifacts.get("coverage"):
-            raise ValueError("Selection point-in-time coverage hash與manifest不一致")
+            raise ValueError("Rolling point-in-time coverage hash與manifest不一致")
 
     frame = pd.read_csv(
         score_path,
@@ -190,7 +231,7 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
     }
     missing = sorted(required - set(frame.columns))
     if missing:
-        raise ValueError(f"Selection PIT score缺少欄位: {missing}")
+        raise ValueError(f"Rolling PIT score缺少欄位: {missing}")
     forbidden = sorted(
         column
         for column in frame.columns
@@ -198,7 +239,7 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
         or column.startswith("future_")
     )
     if forbidden:
-        raise ValueError(f"Selection PIT runtime score表不得包含Future Target欄位: {forbidden}")
+        raise ValueError(f"Rolling PIT runtime score表不得包含Future Target欄位: {forbidden}")
 
     frame = frame.copy()
     frame["ticker"] = frame["ticker"].astype(str)
@@ -212,80 +253,85 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
         frame["model_information_cutoff"], errors="raise"
     ).dt.normalize()
     if bool(frame["group_index"].duplicated().any()):
-        raise ValueError("Selection PIT score group_index重複")
+        raise ValueError("Rolling PIT score group_index重複")
     if bool(frame.duplicated(["ticker", "date"]).any()):
-        raise ValueError("Selection PIT score ticker/date重複")
+        raise ValueError("Rolling PIT score ticker/date重複")
     if not np.isfinite(frame["breakout_quality_score"]).all():
-        raise ValueError("Selection PIT score含非有限值")
+        raise ValueError("Rolling PIT score含非有限值")
     if bool(
         (
             (frame["breakout_quality_score"] < 0.0)
             | (frame["breakout_quality_score"] > 1.0)
         ).any()
     ):
-        raise ValueError("Selection PIT score超出[0,1]")
+        raise ValueError("Rolling PIT score超出[0,1]")
     if bool((frame["model_information_cutoff"] >= frame["date"]).any()):
-        raise ValueError("Selection PIT score存在information cutoff未早於score date")
+        raise ValueError("Rolling PIT score存在information cutoff未早於score date")
 
     score_period = manifest.get("score_period") or {}
     score_start = pd.Timestamp(score_period.get("start"))
     score_end = pd.Timestamp(score_period.get("end"))
     if pd.isna(score_start) or pd.isna(score_end) or score_start > score_end:
-        raise ValueError("Selection PIT manifest score period無效")
+        raise ValueError("Rolling PIT manifest score period無效")
     if bool(((frame["date"] < score_start) | (frame["date"] > score_end)).any()):
-        raise ValueError("Selection PIT score日期超出manifest score period")
+        raise ValueError("Rolling PIT score日期超出manifest score period")
 
     fold_records = manifest.get("folds")
     if not isinstance(fold_records, list) or not fold_records:
-        raise ValueError("Selection PIT manifest缺少fold records")
+        raise ValueError("Rolling PIT manifest缺少fold records")
     if int(manifest.get("fold_count", -1)) != len(fold_records):
-        raise ValueError("Selection PIT manifest fold_count不一致")
+        raise ValueError("Rolling PIT manifest fold_count不一致")
     fold_ids = [str(item.get("fold_id") or "").strip() for item in fold_records]
     if any(not fold_id for fold_id in fold_ids) or len(set(fold_ids)) != len(fold_ids):
-        raise ValueError("Selection PIT manifest fold_id重複或空白")
+        raise ValueError("Rolling PIT manifest fold_id重複或空白")
     fold_contract = dict(zip(fold_ids, fold_records))
     if set(frame["fold_id"].unique()) != set(fold_contract):
-        raise ValueError("Selection PIT score fold集合與manifest不一致")
+        raise ValueError("Rolling PIT score fold集合與manifest不一致")
     for fold_id, fold_frame in frame.groupby("fold_id", sort=False):
         record = fold_contract[fold_id]
         expected_count = int((record.get("group_counts") or {}).get("score", -1))
         if len(fold_frame) != expected_count:
-            raise ValueError(f"Selection PIT {fold_id} score count與manifest不一致")
+            raise ValueError(f"Rolling PIT {fold_id} score count與manifest不一致")
         expected_cutoff = pd.Timestamp(record.get("model_information_cutoff"))
         if set(fold_frame["model_information_cutoff"].unique()) != {expected_cutoff}:
-            raise ValueError(f"Selection PIT {fold_id} information cutoff與manifest不一致")
+            raise ValueError(f"Rolling PIT {fold_id} information cutoff與manifest不一致")
         periods = record.get("planned_periods") or {}
         fold_start = pd.Timestamp(periods.get("score_start"))
         fold_end = pd.Timestamp(periods.get("score_end"))
         if bool(((fold_frame["date"] < fold_start) | (fold_frame["date"] > fold_end)).any()):
-            raise ValueError(f"Selection PIT {fold_id} score日期超出fold期間")
-        fold_dir = resolve_filter_point_in_time_fold_dir(
-            PROJECT_ROOT,
-            args.filter_id,
-            fold_id,
-            args.model_architecture,
-            args.experiment_profile,
+            raise ValueError(f"Rolling PIT {fold_id} score日期超出fold期間")
+        override = str(args.point_in_time_dir_override or "").strip()
+        fold_dir = (
+            (_pit_artifact_paths(args)["manifest"].parent / "folds" / fold_id)
+            if override
+            else resolve_filter_point_in_time_fold_dir(
+                PROJECT_ROOT,
+                args.filter_id,
+                fold_id,
+                args.model_architecture,
+                args.experiment_profile,
+            )
         )
         fold_manifest_path = fold_dir / FOLD_MANIFEST_FILENAME
         checkpoint_path = fold_dir / DEFAULT_MODEL_FILENAME
         fold_score_path = fold_dir / FOLD_SCORE_FILENAME
         if build_file_manifest(fold_manifest_path) != record.get("fold_manifest"):
-            raise ValueError(f"Selection PIT {fold_id} fold manifest hash不一致")
+            raise ValueError(f"Rolling PIT {fold_id} fold manifest hash不一致")
         fold_artifacts = record.get("artifacts") or {}
         if build_file_manifest(checkpoint_path) != fold_artifacts.get("checkpoint"):
-            raise ValueError(f"Selection PIT {fold_id} checkpoint hash不一致")
+            raise ValueError(f"Rolling PIT {fold_id} checkpoint hash不一致")
         if build_file_manifest(fold_score_path) != fold_artifacts.get("scores"):
-            raise ValueError(f"Selection PIT {fold_id} fold score hash不一致")
+            raise ValueError(f"Rolling PIT {fold_id} fold score hash不一致")
 
     coverage = manifest.get("coverage") or {}
     if int(coverage.get("scored_group_count", -1)) != len(frame):
-        raise ValueError("Selection PIT scored_group_count與score rows不一致")
+        raise ValueError("Rolling PIT scored_group_count與score rows不一致")
     if int(coverage.get("duplicate_group_count", -1)) != 0:
-        raise ValueError("Selection PIT manifest宣告存在duplicate groups")
+        raise ValueError("Rolling PIT manifest宣告存在duplicate groups")
     if int(coverage.get("missing_group_count", -1)) != 0:
-        raise ValueError("Selection PIT manifest宣告存在missing groups")
+        raise ValueError("Rolling PIT manifest宣告存在missing groups")
     if int(coverage.get("extra_group_count", -1)) != 0:
-        raise ValueError("Selection PIT manifest宣告存在extra groups")
+        raise ValueError("Rolling PIT manifest宣告存在extra groups")
     return frame, manifest
 
 
@@ -1070,10 +1116,10 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     coverage = payload.get("score_coverage") or {}
 
     lines = [
-        "# Breakout Quality Selection Point-in-time 模型評估報表",
+        "# Breakout Quality Rolling Point-in-time 模型評估報表",
         "",
-        "> 本報表只評估 Selection point-in-time Score 對 Future Target 的離線排序能力。",
-        "> 未執行策略 optimizer、未使用 Future Target 作 runtime buy-sort，也不代表正式 OOS 部署資格。",
+        "> 本報表只評估 Rolling point-in-time Score 對 Future Target 的離線排序能力。",
+        "> 未執行策略 optimizer、未使用 Future Target 作 runtime buy-sort；OOS合法性由每個score fold的information cutoff決定。",
         "",
         "## 1. 執行設定與資料範圍",
         "",
@@ -1089,6 +1135,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         f"| Score period | `{payload['score_period']['start']} ~ {payload['score_period']['end']}` |",
         f"| PIT folds | `{workflow.get('fold_count', '-')}` |",
         f"| Fold／Validation | `{workflow.get('fold_months', '-')}／{workflow.get('inner_validation_months', '-')} months` |",
+        f"| Evaluation policy | `{(workflow.get('evaluation_policy') or {}).get('mode', '-')}`；train window=`{(workflow.get('evaluation_policy') or {}).get('train_window_months', 'expanding')}` |",
         f"| Score coverage | `{int(coverage.get('scored_group_count', 0)):,}/{int(coverage.get('expected_group_count', 0)):,}`（{_fmt_percent(coverage.get('coverage_rate'))}） |",
         "",
         "## 2. 核心排序能力",
@@ -1216,7 +1263,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             "- Actual selected R 不作本階段主要否決依據。",
             "- 策略 optimizer：**未執行**。",
             "- Future Target runtime sort：**未使用**。",
-            "- Forward-OOS runtime：本 PIT 工件**不可直接使用**。",
+            "- OOS legality：以每個score fold的information cutoff為準，不要求Frozen Forward。",
             "- 只有本報表顯示多數年度具有穩定正向排序能力後，才進入策略績效驗證。",
             "",
             "## 8. 工件",
@@ -1349,30 +1396,12 @@ def _run_point_in_time_scores_audit(args: argparse.Namespace) -> int:
         target_id=str(bundle.profile.continuous_target_id),
     )
     score_period = dict(manifest.get("score_period") or {})
-    output_json = resolve_selection_point_in_time_audit_json_path(
-        PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
-    )
-    output_markdown = resolve_selection_point_in_time_audit_markdown_path(
-        PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
-    )
-    score_path = resolve_selection_point_in_time_score_path(
-        PROJECT_ROOT,
-        args.filter_id,
-        args.model_architecture,
-        args.experiment_profile,
-    )
-    manifest_path = resolve_selection_point_in_time_manifest_path(
-        PROJECT_ROOT,
-        args.filter_id,
-        args.model_architecture,
-        args.experiment_profile,
-    )
-    coverage_path = resolve_selection_point_in_time_coverage_path(
-        PROJECT_ROOT,
-        args.filter_id,
-        args.model_architecture,
-        args.experiment_profile,
-    )
+    paths = _pit_artifact_paths(args)
+    output_json = paths["audit_json"]
+    output_markdown = paths["audit_markdown"]
+    score_path = paths["score"]
+    manifest_path = paths["manifest"]
+    coverage_path = paths["coverage"]
     target_manifest_path = (
         resolve_continuous_target_dir(
             PROJECT_ROOT,
@@ -1419,6 +1448,11 @@ def _run_point_in_time_scores_audit(args: argparse.Namespace) -> int:
             "fold_months": manifest.get("fold_months"),
             "inner_validation_months": manifest.get("inner_validation_months"),
             "selection_period": manifest.get("selection_period"),
+            "available_history_period": manifest.get("available_history_period"),
+            "evaluation_policy": manifest.get("evaluation_policy") or {
+                "mode": "legacy_expanding_annual_refit",
+                "train_window_months": None,
+            },
             "torch_execution": manifest.get("torch_execution"),
             "elapsed_sec": manifest.get("elapsed_sec"),
         },
@@ -1484,6 +1518,7 @@ def audit_selection_point_in_time_scores(
     model_architecture: str,
     experiment_profile: str,
     orderable_candidates: str | None = None,
+    point_in_time_dir_override: str | None = None,
     allow_stale_source: bool = False,
 ) -> int:
     """Programmatic PIT audit service used by formal artifact workflows."""
@@ -1495,6 +1530,8 @@ def audit_selection_point_in_time_scores(
     ]
     if orderable_candidates is not None:
         argv.extend(["--orderable-candidates", str(orderable_candidates)])
+    if point_in_time_dir_override is not None:
+        argv.extend(["--point-in-time-dir-override", str(point_in_time_dir_override)])
     if allow_stale_source:
         argv.append("--allow-stale-source")
     return _run_point_in_time_scores_audit(parse_args(argv))

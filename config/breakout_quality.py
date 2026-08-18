@@ -200,20 +200,33 @@ BREAKOUT_QUALITY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 BREAKOUT_QUALITY_PRETRAINING_STRIDE = 5  # Dataset sampling設定；每個ticker在Selection endpoint每5個交易日建立一窗。
 
 # =============================================================================
-# 9. Selection point-in-time score contract
+# 9. Rolling point-in-time evaluation contract
 # =============================================================================
 
-# These settings are used only when the selected experiment profile is a continuous ranker.
-# Use "auto" to resolve the earliest legal monthly score start from the current Dataset,
-# Continuous Target, inner-validation window, and minimum group-count contract.
-# None for the end date means use the canonical Selection end from the outer split policy.
-BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE = "auto"
-# Strategy adaptation compares the extended PIT history against this prior official start.
-# It is only a coverage reference, not a lower bound for model training or scoring.
+# Operational Rolling 是正式主要評估：使用當時所有合法歷史資料（expanding）
+# 並按固定score fold cadence重新選epoch／refit，再只評分下一段。每筆score都必須
+# 滿足label completion < score_start；不再以2014-2020 Selection / 2021+ Frozen
+# Forward的人為年代切割定義OOS。
+#
+# Stability Rolling 是獨立診斷：相同annual refit，但限制完整fit history為固定
+# calendar window，專門檢查不同年代在較一致資訊長度下的learnability。它使用
+# 獨立工件路徑，不覆寫Operational Rolling。
+BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE = "2014-01-01"
+# Strategy/reporting只從此日期起視為正式operational evidence；更早的合法fold可保留
+# 作模型warm-up與coverage，但不強迫策略比較納入。
 BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE = "2014-01-01"
-BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE: str | None = None
+# "auto" = score到目前Dataset可評分的最新stock-day；None只供legacy重現，仍代表
+# canonical outer-policy Selection end。
+BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE: str | None = "auto"
 BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_MONTHS = 12
 BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS = 24
+# None = expanding history；正整數 = 完整fit history固定最近N個calendar months，
+# 且必須大於inner validation months。Operational固定為None。
+BREAKOUT_QUALITY_POINT_IN_TIME_TRAIN_WINDOW_MONTHS: int | None = None
+# Stability第一版使用10年固定history；此值是config而非validator magic constant。
+BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS = 120
+BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE = "2014-01-01"
+BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE = "auto"
 BREAKOUT_QUALITY_POINT_IN_TIME_MIN_TRAIN_GROUPS = 20
 BREAKOUT_QUALITY_POINT_IN_TIME_MIN_VALIDATION_GROUPS = 20
 BREAKOUT_QUALITY_POINT_IN_TIME_MIN_SCORE_GROUPS = 1
@@ -1697,6 +1710,7 @@ class BreakoutQualityWorkflowSettings:
     point_in_time_score_end_date: str | None
     point_in_time_fold_months: int
     point_in_time_inner_validation_months: int
+    point_in_time_train_window_months: int | None
     point_in_time_min_train_groups: int
     point_in_time_min_validation_groups: int
     point_in_time_min_score_groups: int
@@ -1750,6 +1764,11 @@ class BreakoutQualityWorkflowSettings:
                 "fold_months": int(self.point_in_time_fold_months),
                 "inner_validation_months": int(
                     self.point_in_time_inner_validation_months
+                ),
+                "train_window_months": (
+                    None
+                    if self.point_in_time_train_window_months is None
+                    else int(self.point_in_time_train_window_months)
                 ),
                 "min_train_groups": int(self.point_in_time_min_train_groups),
                 "min_validation_groups": int(
@@ -1838,6 +1857,19 @@ def get_breakout_quality_workflow_settings(
         raise ValueError("point-in-time fold months 必須 >= 1")
     if int(BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS) < 1:
         raise ValueError("point-in-time inner validation months 必須 >= 1")
+    if BREAKOUT_QUALITY_POINT_IN_TIME_TRAIN_WINDOW_MONTHS is not None:
+        if int(BREAKOUT_QUALITY_POINT_IN_TIME_TRAIN_WINDOW_MONTHS) <= int(
+            BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS
+        ):
+            raise ValueError(
+                "point-in-time fixed train window必須大於inner validation months"
+            )
+    if int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS) <= int(
+        BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS
+    ):
+        raise ValueError(
+            "stability fixed train window必須大於inner validation months"
+        )
     if min(
         int(BREAKOUT_QUALITY_POINT_IN_TIME_MIN_TRAIN_GROUPS),
         int(BREAKOUT_QUALITY_POINT_IN_TIME_MIN_VALIDATION_GROUPS),
@@ -1968,6 +2000,11 @@ def get_breakout_quality_workflow_settings(
         point_in_time_fold_months=int(BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_MONTHS),
         point_in_time_inner_validation_months=int(
             BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS
+        ),
+        point_in_time_train_window_months=(
+            None
+            if BREAKOUT_QUALITY_POINT_IN_TIME_TRAIN_WINDOW_MONTHS is None
+            else int(BREAKOUT_QUALITY_POINT_IN_TIME_TRAIN_WINDOW_MONTHS)
         ),
         point_in_time_min_train_groups=int(
             BREAKOUT_QUALITY_POINT_IN_TIME_MIN_TRAIN_GROUPS

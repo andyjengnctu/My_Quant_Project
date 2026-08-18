@@ -508,7 +508,11 @@ def _arm_training_dl_ids(settings, arm: StrategyComparisonArm) -> tuple[str, ...
         source_ids.append(safety_dl_id)
     unique = tuple(dict.fromkeys(source_ids))
     score_sources = {str(settings.dl_sources[dl_id].score_source) for dl_id in unique}
-    expected = "selection_point_in_time" if settings.profile_id == "selection_pit" else "continuous_ranker_oos"
+    expected = (
+        "selection_point_in_time"
+        if settings.profile_id in {"selection_pit", "operational_rolling"}
+        else "continuous_ranker_oos"
+    )
     if score_sources != {expected}:
         raise ValueError(
             "stochastic arm的primary/secondary score source與robustness階段不一致: "
@@ -751,7 +755,7 @@ def _render_robustness_execution_plan(
         f"模型訓練單元       ：{cfg.seed_count * len(training_sources)}（{len(training_sources)} unique DL sources × {cfg.seed_count} seeds）",
         f"策略Replay單元     ：{cfg.seed_count * len(stochastic_arms)}（{len(stochastic_arms)} stochastic arms × {cfg.seed_count} seeds）",
     ]
-    if settings.profile_id == "selection_pit" and start is not None and end is not None:
+    if settings.profile_id in {"selection_pit", "operational_rolling"} and start is not None and end is not None:
         fold_counts = []
         for dl_id, _arm_entries in training_sources:
             dl = settings.dl_sources[str(dl_id)]
@@ -2306,8 +2310,10 @@ def _robustness_summary(
     references = dict(contract.get("romd_reference_baselines") or {})
     min_baseline = fixed_by_arm_id.get(str(dict(references.get("min") or {}).get("arm_id") or ""))
     full_baseline = fixed_by_arm_id.get(str(dict(references.get("full") or {}).get("arm_id") or ""))
-    if min_baseline is None or full_baseline is None:
-        raise ValueError("multi-seed summary缺少config指定的Min/Full fixed baseline")
+    if min_baseline is None:
+        raise ValueError("multi-seed summary缺少config指定的Min fixed baseline")
+    if "full" in references and full_baseline is None:
+        raise ValueError("multi-seed summary缺少config指定的Full fixed baseline")
 
     romd_rows: list[dict[str, Any]] = []
     for row in mean_rows:
@@ -2331,7 +2337,11 @@ def _robustness_summary(
             **stats,
             "cv": (None if math.isclose(mean, 0.0, abs_tol=1e-12) else float(float(stats["std"]) / abs(mean))),
             "beats_min_count": int(np.sum(values > float(min_baseline["return_over_max_drawdown"]))),
-            "beats_full_count": int(np.sum(values > float(full_baseline["return_over_max_drawdown"]))),
+            "beats_full_count": (
+                None
+                if full_baseline is None
+                else int(np.sum(values > float(full_baseline["return_over_max_drawdown"])))
+            ),
         })
 
     yearly_statistics: list[dict[str, Any]] = []
@@ -2867,7 +2877,11 @@ def render_multi_seed_robustness_report(
             "- Multi-seed專屬分布表同樣使用core/report_style.py：有明確方向的metric在同欄可比較arm間只標綠＝最佳、紅＝最差、其餘白；same-seed右減左欄位則依共用metric direction判讀，ΔMDD採lower-is-better，N／Type／Tie等中性欄不硬判。",
             "- 舊robustness工件若未永久保存model prediction／Future Target conversion欄位，report-only refresh會顯示`-`，不為補報表重訓或重跑strategy replay。",
             "- resolved seeds只用於重現；不得挑best seed或依本報表組seed ensemble。",
-            f"- {full_name}／{min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一表。",
+            (
+                f"- {full_name}／{min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一表。"
+                if "full" in references
+                else f"- {min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一表；本profile未設定Full reference。"
+            ),
             "- 同一DL source／seed只訓練一次，允許fan-out到不同runtime selector replay；此reuse不改變模型scientific condition。",
             "- Selection PIT與Forward-OOS robustness均只評估既定scientific condition；不得依結果回頭調整training semantics。",
         )),

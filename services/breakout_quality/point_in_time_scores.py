@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import math
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -99,7 +100,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser = argparse.ArgumentParser(
         description=(
-            "以expanding-window folds建立Selection point-in-time continuous-ranker scores；"
+            "以rolling point-in-time folds建立continuous-ranker scores；"
+            "Operational使用expanding history，Stability可指定fixed history；"
             "每個fold只用score period以前且label已完成的資料訓練。"
         )
     )
@@ -120,6 +122,15 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--inner-validation-months",
         type=int,
         default=settings.point_in_time_inner_validation_months,
+    )
+    parser.add_argument(
+        "--train-window-months",
+        type=int,
+        default=settings.point_in_time_train_window_months,
+        help=(
+            "完整fit history長度（月）；省略表示expanding history。"
+            "固定窗口必須大於inner-validation-months。"
+        ),
     )
     parser.add_argument("--epochs", type=int, default=BREAKOUT_QUALITY_DEFAULT_EPOCHS)
     parser.add_argument("--batch-size", type=int, default=BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE)
@@ -220,6 +231,9 @@ def _validate_args(args: argparse.Namespace) -> None:
     # profile and model spec are validated by the shared continuous-ranker pipeline.
     if int(args.fold_months) < 1 or int(args.inner_validation_months) < 1:
         raise ValueError("fold-months與inner-validation-months必須>=1")
+    if args.train_window_months is not None:
+        if int(args.train_window_months) <= int(args.inner_validation_months):
+            raise ValueError("fixed train-window-months必須大於inner-validation-months")
     if int(args.epochs) < 1 or int(args.batch_size) < 2 or int(args.evaluation_batch_size) < 1:
         raise ValueError("epochs>=1、batch-size>=2、evaluation-batch-size>=1")
     if int(args.train_prefetch_batches) < 0:
@@ -482,13 +496,19 @@ def _resolve_score_start(
             }
         )
     raise ValueError(
-        "無法在Selection內找到符合目前PIT最小group契約的score start；"
-        f"selection={selection_start.date()}~{score_end.date()}, "
+        "無法在可用歷史內找到符合目前PIT最小group契約的score start；"
+        f"available={selection_start.date()}~{score_end.date()}, "
         f"last_failures={rejected[-1] if rejected else None}"
     )
 
 
-def _fold_group_ids(bundle, fold: dict[str, Any], *, validation_months: int) -> dict[str, Any]:
+def _fold_group_ids(
+    bundle,
+    fold: dict[str, Any],
+    *,
+    validation_months: int,
+    train_window_months: int | None = None,
+) -> dict[str, Any]:
     group_dates = pd.to_datetime(bundle.group_table["date"], errors="raise").dt.normalize()
     label_end_dates = pd.to_datetime(
         bundle.group_table["label_eval_end_date"], errors="raise"
@@ -496,21 +516,33 @@ def _fold_group_ids(bundle, fold: dict[str, Any], *, validation_months: int) -> 
     score_start = pd.Timestamp(fold["score_start"])
     score_end = pd.Timestamp(fold["score_end"])
     validation_start = (score_start - pd.DateOffset(months=int(validation_months))).normalize()
+    history_start = (
+        None
+        if train_window_months is None
+        else (score_start - pd.DateOffset(months=int(train_window_months))).normalize()
+    )
 
     scoped_target = build_training_scope_mask(bundle)
+    history_mask = np.ones(len(group_dates), dtype=bool)
+    if history_start is not None:
+        history_mask &= (group_dates >= history_start).to_numpy(dtype=bool)
+
     train_mask = (
         scoped_target
+        & history_mask
         & (group_dates < validation_start).to_numpy(dtype=bool)
         & (label_end_dates < validation_start).to_numpy(dtype=bool)
     )
     validation_mask = (
         scoped_target
+        & history_mask
         & (group_dates >= validation_start).to_numpy(dtype=bool)
         & (group_dates < score_start).to_numpy(dtype=bool)
         & (label_end_dates < score_start).to_numpy(dtype=bool)
     )
     final_mask = (
         scoped_target
+        & history_mask
         & (group_dates < score_start).to_numpy(dtype=bool)
         & (label_end_dates < score_start).to_numpy(dtype=bool)
     )
@@ -524,6 +556,7 @@ def _fold_group_ids(bundle, fold: dict[str, Any], *, validation_months: int) -> 
         "final_ids": np.flatnonzero(final_mask).astype(np.int64),
         "score_ids": np.flatnonzero(score_mask).astype(np.int64),
         "validation_start": validation_start,
+        "history_start": history_start,
     }
     if np.intersect1d(ids["train_ids"], ids["validation_ids"]).size:
         raise ValueError(f"{fold['fold_id']} train/validation group重疊")
@@ -628,6 +661,11 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
         },
     }
 
+    if args.train_window_months is not None:
+        payload["training_settings"]["train_window_months"] = int(args.train_window_months)
+        payload["planned_periods"]["history_start"] = str(
+            pd.Timestamp(ids["history_start"]).date()
+        )
     if (
         str(bundle.profile.training_sample_scope)
         == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
@@ -1293,15 +1331,28 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
     selection_end = _iso_timestamp(
         bundle.outer_policy.get("selection_end_date"), field_name="selection_end_date"
     )
-    score_end = (
+    outer_oos_end_raw = bundle.outer_policy.get("effective_oos_end_date") or bundle.outer_policy.get("oos_end_date")
+    available_end = (
         selection_end
-        if args.score_end_date is None or str(args.score_end_date).strip() == ""
-        else _iso_timestamp(args.score_end_date, field_name="score_end_date")
+        if outer_oos_end_raw in {None, ""}
+        else _iso_timestamp(outer_oos_end_raw, field_name="oos_end_date")
     )
-    if not selection_start <= score_end <= selection_end:
+    raw_score_end = str(args.score_end_date or "").strip().lower()
+    if raw_score_end in {"", "none"}:
+        # Legacy reproduction: historical callers that omitted score_end retain the
+        # former Selection-bound behavior.  Operational config explicitly uses auto.
+        score_end = selection_end
+        score_end_mode = "legacy_selection_end"
+    elif raw_score_end == AUTO_SCORE_START_VALUE:
+        score_end = available_end
+        score_end_mode = "auto_available_end"
+    else:
+        score_end = _iso_timestamp(args.score_end_date, field_name="score_end_date")
+        score_end_mode = "configured"
+    if not selection_start <= score_end <= available_end:
         raise ValueError(
-            "PIT score end必須位於Selection內: "
-            f"selection={selection_start.date()}~{selection_end.date()}, "
+            "PIT score end必須位於目前可驗證歷史內: "
+            f"available={selection_start.date()}~{available_end.date()}, "
             f"score_end={score_end.date()}"
         )
     if str(args.score_start_date or "").strip().lower() == AUTO_SCORE_START_VALUE:
@@ -1315,10 +1366,10 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
         fold_months=int(args.fold_months),
         validation_months=int(args.inner_validation_months),
     )
-    if not selection_start <= score_start <= score_end <= selection_end:
+    if not selection_start <= score_start <= score_end <= available_end:
         raise ValueError(
-            "PIT score期間必須完整位於Selection內: "
-            f"selection={selection_start.date()}~{selection_end.date()}, "
+            "PIT score期間必須完整位於目前可驗證歷史內: "
+            f"available={selection_start.date()}~{available_end.date()}, "
             f"score={score_start.date()}~{score_end.date()}"
         )
 
@@ -1336,7 +1387,14 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
     folds = _build_fold_periods(score_start, score_end, fold_months=int(args.fold_months))
     print(f"[PIT plan] 建立 {len(folds)} 個fold的合法 train/validation/score partitions...", flush=True)
     fold_details = [
-        _fold_group_ids(bundle, fold, validation_months=int(args.inner_validation_months))
+        _fold_group_ids(
+            bundle,
+            fold,
+            validation_months=int(args.inner_validation_months),
+            train_window_months=(
+                None if args.train_window_months is None else int(args.train_window_months)
+            ),
+        )
         for fold in folds
     ]
     for fold, ids in zip(folds, fold_details):
@@ -1534,6 +1592,35 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
     score_path = _selection_point_in_time_score_path_for_args(args)
     coverage_path = _selection_point_in_time_coverage_path_for_args(args)
     manifest_path = _selection_point_in_time_manifest_path_for_args(args)
+
+    # Evaluation-framework migration: when the canonical expanding PIT aggregate is
+    # first extended beyond the historical Selection boundary, preserve the old
+    # combined aggregate before refreshing it. Individual fold directories are
+    # already immutable/reusable, but this snapshot keeps the pre-migration
+    # top-level score/coverage/manifest directly inspectable as historical evidence.
+    if (
+        not str(getattr(args, "point_in_time_dir_override", "") or "").strip()
+        and args.train_window_months is None
+        and score_end > selection_end
+        and manifest_path.exists()
+    ):
+        try:
+            existing_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing_manifest = {}
+        existing_end_raw = str(
+            dict(existing_manifest.get("score_period") or {}).get("end") or ""
+        ).strip()
+        existing_end = pd.Timestamp(existing_end_raw) if existing_end_raw else None
+        if existing_end is not None and existing_end <= selection_end:
+            snapshot_dir = point_in_time_dir / "legacy_selection_snapshot"
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
+            for source_path in (score_path, coverage_path, manifest_path):
+                if source_path.exists():
+                    target_path = snapshot_dir / source_path.name
+                    if not target_path.exists():
+                        shutil.copy2(source_path, target_path)
+
     combined.to_csv(score_path, index=False, encoding="utf-8-sig")
     pd.DataFrame(coverage_rows).to_csv(coverage_path, index=False, encoding="utf-8-sig")
 
@@ -1553,15 +1640,33 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
             "end": str(score_end.date()),
         },
         "score_start_resolution": score_start_resolution,
+        "evaluation_policy": {
+            "mode": (
+                "expanding_annual_refit"
+                if args.train_window_months is None
+                else "fixed_window_annual_refit"
+            ),
+            "train_window_months": (
+                None if args.train_window_months is None else int(args.train_window_months)
+            ),
+            "refit_score_fold_months": int(args.fold_months),
+            "score_end_resolution": score_end_mode,
+            "information_cutoff_is_per_fold": True,
+        },
         "fold_identity": {
             "schema": "score_period_dates",
             "format": "fold_YYYYMMDD_YYYYMMDD",
             "stable_when_earlier_folds_are_added": True,
             "legacy_fold_migration_supported": True,
         },
+        # Kept for old readers; no longer defines the active OOS boundary.
         "selection_period": {
             "start": str(selection_start.date()),
             "end": str(selection_end.date()),
+        },
+        "available_history_period": {
+            "start": str(selection_start.date()),
+            "end": str(available_end.date()),
         },
         "fold_months": int(args.fold_months),
         "inner_validation_months": int(args.inner_validation_months),
@@ -1578,10 +1683,11 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
             "future_target_in_score_table": False,
         },
         "runtime_eligibility": {
-            "eligible_scope": "selection_model_validation_only",
-            "eligible": False,
+            "eligible_scope": "point_in_time_strategy_replay",
+            "eligible": True,
             "strategy_use_requires_model_validation": True,
-            "not_eligible_for_forward_oos_runtime": True,
+            "per_score_fold_information_cutoff_required": True,
+            "frozen_forward_required": False,
         },
         "artifacts": {
             "scores": build_file_manifest(score_path),
@@ -1656,6 +1762,7 @@ def build_selection_point_in_time_scores(
     score_end_date: str | None = None,
     fold_months: int | None = None,
     inner_validation_months: int | None = None,
+    train_window_months: int | None = None,
     seed: int | None = None,
     resume: bool | None = None,
     checkpoint_only: bool = False,
@@ -1683,6 +1790,8 @@ def build_selection_point_in_time_scores(
         argv.extend(["--fold-months", str(int(fold_months))])
     if inner_validation_months is not None:
         argv.extend(["--inner-validation-months", str(int(inner_validation_months))])
+    if train_window_months is not None:
+        argv.extend(["--train-window-months", str(int(train_window_months))])
     if seed is not None:
         argv.extend(["--seed", str(int(seed))])
     if resume is not None:

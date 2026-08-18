@@ -10,6 +10,7 @@ parameter set is replayed once with the binary filter off (A) and once on (B).
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -137,6 +138,9 @@ def _full_roos_trainable_fields() -> tuple[str, ...]:
 FULL_ROOS_SEARCH_FIELDS = _full_roos_trainable_fields()
 SELECTION_FULL_ROOS_RELATIVE_DIR = Path(
     "models/research/breakout_quality/strategy_compare/selection_full_roos"
+)
+OPERATIONAL_MIN_ROOS_RELATIVE_DIR = Path(
+    "models/research/breakout_quality/strategy_compare/operational_min_roos"
 )
 
 
@@ -1192,6 +1196,178 @@ def prepare_selection_historical_p2_params(
         training_dl_enabled=False,
         binary_pit=None,
     )
+
+
+def prepare_operational_min_roos_params(
+    *,
+    project_root=PROJECT_ROOT,
+    param_policy: str,
+    historical_params_path: str,
+    current_params_path: str,
+    output_relative_dir: str | Path = OPERATIONAL_MIN_ROOS_RELATIVE_DIR,
+    quiet: bool = False,
+):
+    """Stitch existing PIT-safe Min ROOS schedules into one operational chain.
+
+    This is a migration builder, not an optimizer.  It preserves the parameter
+    decisions that were actually available in each historical regime and refuses
+    to combine sources whose rolling cadence/search contract is incompatible.
+    """
+
+    root = Path(project_root).resolve()
+
+    def resolve(raw: str) -> Path:
+        path = Path(str(raw))
+        return path if path.is_absolute() else root / path
+
+    historical_path = resolve(historical_params_path)
+    current_path = resolve(current_params_path)
+    if not historical_path.is_file() or not current_path.is_file():
+        missing = [
+            str(path) for path in (historical_path, current_path) if not path.is_file()
+        ]
+        raise FileNotFoundError(
+            "Operational Min ROOS stitch缺少既有source: " + ", ".join(missing)
+        )
+
+    historical_payload = _load_json(historical_path)
+    current_payload = _load_json(current_path)
+    if not isinstance(historical_payload, dict) or not isinstance(current_payload, dict):
+        raise ValueError("Operational Min ROOS source必須是合法JSON object")
+    historical_source = _load_param_source(historical_path)
+    current_source = _load_param_source(current_path)
+    historical_policy = _validate_requested_param_policy(historical_source, str(param_policy))
+    current_policy = _validate_requested_param_policy(current_source, str(param_policy))
+    for label, policy in (("historical", historical_policy), ("current", current_policy)):
+        if int(policy.get("member_count_min") or 0) != 1 or int(policy.get("member_count_max") or 0) != 1:
+            raise ValueError(f"Operational Min ROOS {label} source每個effective date必須恰有1個member")
+
+    historical_meta = dict(historical_payload.get("meta") or {})
+    current_meta = dict(current_payload.get("meta") or {})
+    for field in ("train_window_months", "oos_horizon_months"):
+        if int(historical_meta.get(field) or 0) != int(current_meta.get(field) or 0):
+            raise ValueError(
+                "Operational Min ROOS兩段rolling contract不一致: "
+                f"{field}={historical_meta.get(field)!r}/{current_meta.get(field)!r}"
+            )
+    if str(historical_meta.get("window_mode") or "fixed") != str(current_meta.get("window_mode") or "fixed"):
+        raise ValueError("Operational Min ROOS兩段window_mode不一致")
+
+    def validate_adaptation(label: str, payload: dict[str, Any]) -> None:
+        adaptation = dict(payload.get("breakout_quality_param_adaptation") or {})
+        if adaptation:
+            if list(adaptation.get("search_fields") or []) != list(MIN_ROOS_SEARCH_FIELDS):
+                raise ValueError(f"Operational Min ROOS {label} search_fields不一致")
+            if bool(adaptation.get("training_dl_enabled")):
+                raise ValueError(f"Operational Min ROOS {label}不得以DL訓練參數")
+            if str(adaptation.get("fixed_rule_contract") or "") != "all_rule_filters_off":
+                raise ValueError(f"Operational Min ROOS {label} rule contract不一致")
+
+    validate_adaptation("historical", historical_payload)
+    validate_adaptation("current", current_payload)
+
+    historical_mapping = dict(historical_payload.get("params_ensemble_by_effective_date") or {})
+    current_mapping = dict(current_payload.get("params_ensemble_by_effective_date") or {})
+    if not historical_mapping or not current_mapping:
+        raise ValueError("Operational Min ROOS source缺少params_ensemble_by_effective_date")
+    historical_last = pd.Timestamp(str(historical_meta.get("last_oos_date"))).to_period("M").start_time
+    current_last = pd.Timestamp(str(current_meta.get("last_oos_date"))).to_period("M").start_time
+    if pd.isna(historical_last) or pd.isna(current_last) or current_last <= historical_last:
+        raise ValueError("Operational Min ROOS source period不合法")
+    transition = (historical_last + pd.DateOffset(months=1)).normalize()
+
+    combined: dict[str, Any] = {}
+    for date_text, members in historical_mapping.items():
+        date = pd.Timestamp(str(date_text)).normalize()
+        if date < transition:
+            combined[date.strftime("%Y-%m-%d")] = copy.deepcopy(members)
+    for date_text, members in current_mapping.items():
+        date = pd.Timestamp(str(date_text)).normalize()
+        if date >= transition:
+            combined[date.strftime("%Y-%m-%d")] = copy.deepcopy(members)
+    if not combined:
+        raise ValueError("Operational Min ROOS stitch沒有可用effective dates")
+
+    horizon = int(historical_meta.get("oos_horizon_months") or 0)
+    observed = tuple(sorted(pd.Timestamp(value).normalize() for value in combined))
+    expected = []
+    cursor = observed[0]
+    while cursor <= observed[-1]:
+        expected.append(cursor)
+        cursor = (cursor + pd.DateOffset(months=horizon)).normalize()
+    if tuple(expected) != observed:
+        raise ValueError(
+            "Operational Min ROOS stitch effective-date chain有缺口: "
+            f"observed={[x.strftime('%Y-%m-%d') for x in observed]}"
+        )
+
+    output_dir = Path(output_relative_dir)
+    if not output_dir.is_absolute():
+        output_dir = root / output_dir
+    params_path = output_dir / "active_params" / "roos_base_best.json"
+    manifest_path = output_dir / "operational_stitch_manifest.json"
+    historical_sha = compute_file_sha256(historical_path)
+    current_sha = compute_file_sha256(current_path)
+
+    payload = copy.deepcopy(historical_payload)
+    payload["params_ensemble_by_effective_date"] = {
+        key: combined[key] for key in sorted(combined)
+    }
+    meta = dict(payload.get("meta") or {})
+    meta.update(
+        {
+            "window_mode": str(historical_meta.get("window_mode") or "fixed"),
+            "first_oos_date": observed[0].strftime("%Y-%m-%d"),
+            "last_oos_date": observed[-1].strftime("%Y-%m-%d"),
+            "train_window_months": int(historical_meta.get("train_window_months") or 0),
+            "oos_horizon_months": horizon,
+            "operational_stitch_transition": transition.strftime("%Y-%m-%d"),
+        }
+    )
+    payload["meta"] = meta
+    payload["breakout_quality_param_adaptation"] = _min_roos_adaptation_contract(
+        arm_id="P2_OPERATIONAL", training_dl_enabled=False
+    )
+    summary = dict(payload.get("summary") or {})
+    summary["folds"] = len(combined)
+    summary["operational_stitch"] = True
+    payload["summary"] = summary
+    _write_json(params_path, payload)
+
+    manifest = {
+        "schema_version": 1,
+        "status": "READY",
+        "builder_type": "operational_min_roos_stitch",
+        "arm_id": "P2_OPERATIONAL",
+        "training_dl_enabled": False,
+        "search_fields": list(MIN_ROOS_SEARCH_FIELDS),
+        "param_policy": str(param_policy),
+        "transition_date": transition.strftime("%Y-%m-%d"),
+        "coverage_start": observed[0].strftime("%Y-%m-%d"),
+        "coverage_end": observed[-1].strftime("%Y-%m-%d"),
+        "source_artifacts": {
+            "historical": {
+                "path": project_relative_display_path(historical_path, project_root=root),
+                "sha256": historical_sha,
+            },
+            "current": {
+                "path": project_relative_display_path(current_path, project_root=root),
+                "sha256": current_sha,
+            },
+        },
+        "output_params": {
+            "path": project_relative_display_path(params_path, project_root=root),
+            "sha256": compute_file_sha256(params_path),
+        },
+    }
+    _write_json(manifest_path, manifest)
+    if not quiet:
+        print(
+            "Operational Min ROOS schedule已合法stitch "
+            f"| {manifest['coverage_start']}~{manifest['coverage_end']} "
+            f"| transition={manifest['transition_date']} | folds={len(combined)}"
+        )
+    return {"params_path": params_path, "manifest_path": manifest_path, "summary": manifest}
 
 
 def _build_selection_full_roos_schedule_contract(

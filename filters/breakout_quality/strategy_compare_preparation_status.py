@@ -262,6 +262,14 @@ def _validate_param_training_identity(
     builder = source.builder
     if builder is not None and builder.enabled:
         options = dict(builder.options)
+        if builder.builder_type == "operational_min_roos_stitch":
+            if str(payload.get("builder_type") or "") != "operational_min_roos_stitch":
+                return False, "OPERATIONAL_STITCH_IDENTITY_MISMATCH", manifest_path
+            if str(payload.get("arm_id") or "") != "P2_OPERATIONAL":
+                return False, "OPERATIONAL_STITCH_ARM_MISMATCH", manifest_path
+            if list(payload.get("search_fields") or []) != list(MIN_ROOS_SEARCH_FIELDS):
+                return False, "MIN_ROOS_SEARCH_FIELDS_MISMATCH", manifest_path
+            return True, "READY", manifest_path
         expected_parameter_set = str(options.get("parameter_set") or "").upper()
         if expected_parameter_set and str(payload.get("arm_id") or "").upper() != expected_parameter_set:
             return False, "PARAMETER_SET_IDENTITY_MISMATCH", manifest_path
@@ -373,7 +381,7 @@ def _collect_expected_r_calibration_status(
                 f"Expected-PnL calibration builder要求runtime/fit為同一frozen ranker identity: "
                 f"{arm.arm_id}/{arm.dl_id}/{fit_dl_id}"
             )
-        if settings.profile_id == "selection_pit" and runtime_dl.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+        if settings.profile_id in {"selection_pit", "operational_rolling"} and runtime_dl.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
             raise ValueError(f"Selection Expected-PnL runtime必須使用Selection PIT score: {arm.arm_id}")
         if settings.profile_id == "forward_oos" and runtime_dl.score_source != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
             raise ValueError(f"Forward Expected-PnL runtime必須使用frozen OOS score: {arm.arm_id}")
@@ -382,7 +390,7 @@ def _collect_expected_r_calibration_status(
         runtime_sha = str((artifact_identities.get(runtime_score_key) or {}).get("sha256") or "")
         fit_sha = str((artifact_identities.get(fit_score_key) or {}).get("sha256") or "")
         expected_selection_start = (
-            settings.start_date if settings.profile_id == "selection_pit" else None
+            settings.start_date if settings.profile_id in {"selection_pit", "operational_rolling"} else None
         )
         expected_forward_cutoff = (
             (runtime_periods.get(arm.dl_id) or (None, None))[0]
@@ -687,12 +695,18 @@ def _collect_parameter_artifact_status(
             description = (
                 (
                     (
-                        "建立／接續Selection historical Min ROOS單階段rolling參數"
-                        if builder is not None and builder.builder_type == "selection_historical_p2"
+                        (
+                            "合併既有historical/current Min ROOS為Operational rolling schedule"
+                            if builder is not None and builder.builder_type == "operational_min_roos_stitch"
+                            else "建立／接續Selection historical Min ROOS單階段rolling參數"
+                        )
+                        if builder is not None and builder.builder_type in {
+                            "operational_min_roos_stitch", "selection_historical_p2"
+                        }
                         else "建立／接續Selection historical Full ROOS rolling參數"
                     )
                     if builder is not None and builder.builder_type in {
-                        "selection_historical_p2", "selection_historical_full_roos"
+                        "operational_min_roos_stitch", "selection_historical_p2", "selection_historical_full_roos"
                     }
                     else "執行或接續config指定的策略參數訓練"
                 )
