@@ -1746,6 +1746,15 @@ class BreakoutQualityWorkflowSettings:
             in SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLE_SCOPES
         )
 
+    @property
+    def rolling_authorized(self) -> bool:
+        """Whether this research profile is allowed to build current Rolling evidence."""
+
+        if not self.supports_point_in_time_scores:
+            return False
+        spec = get_continuous_ranker_research_spec(self.experiment_profile)
+        return bool(spec.selection_pit_authorized)
+
     def as_manifest_payload(self) -> dict[str, Any]:
         payload = {
             "filter_id": self.filter_id,
@@ -1756,7 +1765,9 @@ class BreakoutQualityWorkflowSettings:
             "training_label_scope": self.training_label_scope,
             "seed": int(self.seed),
             "point_in_time": {
-                "enabled": bool(self.supports_point_in_time_scores),
+                "enabled": bool(self.rolling_authorized),
+                "structurally_supported": bool(self.supports_point_in_time_scores),
+                "research_authorized": bool(self.rolling_authorized),
                 "score_start_date": self.point_in_time_score_start_date,
                 "coverage_reference_start_date": (
                     self.point_in_time_coverage_reference_start_date
@@ -2066,8 +2077,8 @@ class BreakoutQualityContinuousRankerPITGateSettings:
                     f"{model_id} != {spec.model_research_id}"
                 )
             workflow = get_breakout_quality_workflow_settings(experiment_profile=profile_name)
-            if not workflow.supports_point_in_time_scores:
-                raise ValueError(f"PIT Gate profile尚未啟用PIT: {profile_name}")
+            if not workflow.rolling_authorized:
+                raise ValueError(f"PIT Gate profile尚未授權Rolling PIT: {profile_name}")
             contract = (
                 workflow.filter_id,
                 workflow.model_architecture,

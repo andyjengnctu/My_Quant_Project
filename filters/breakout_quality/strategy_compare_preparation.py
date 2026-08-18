@@ -19,7 +19,7 @@ from filters.breakout_quality.strategy_compare_preparation_status import (
     resolve_param_source_path,
 )
 from filters.breakout_quality.strategy_param_training import (
-    prepare_operational_min_roos_params,
+    prepare_extending_min_roos_params,
     prepare_selection_historical_full_roos_params,
     prepare_selection_historical_p2_params,
     prepare_strategy_parameter_source,
@@ -55,14 +55,14 @@ def _execute_preparation_action(
             preload_feature_bank=bool(options.get("preload_feature_bank", True)),
         )
         return
-    if action.builder_type == "operational_min_roos_stitch":
+    if action.builder_type == "extending_min_roos_stitch":
         _kind, source_id = action.artifact_key.split(":", 1)
         source = settings.parameter_sources[source_id]
         builder = source.builder
         if builder is None:
             raise RuntimeError(f"參數來源builder設定不完整: {source_id}")
         options = dict(builder.options)
-        prepare_operational_min_roos_params(
+        prepare_extending_min_roos_params(
             project_root=root,
             param_policy=settings.param_policy,
             historical_params_path=str(options["historical_params_path"]),

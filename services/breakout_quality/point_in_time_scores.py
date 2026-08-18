@@ -267,6 +267,15 @@ def _iso_timestamp(value: Any, *, field_name: str) -> pd.Timestamp:
     return result
 
 
+def _resolve_training_universe_start(bundle, *, selection_start: pd.Timestamp) -> pd.Timestamp:
+    """Resolve the actual model-history lower bound independently of optimizer selection policy."""
+
+    raw = dict(getattr(bundle, "summary", {}) or {}).get("training_universe_start_date")
+    if raw in {None, ""}:
+        return pd.Timestamp(selection_start).normalize()
+    return _iso_timestamp(raw, field_name="training_universe_start_date")
+
+
 def _json_fingerprint(payload: dict[str, Any]) -> str:
     encoded = json.dumps(
         payload,
@@ -591,6 +600,12 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
     validation_ids = ids["validation_ids"]
     score_ids = ids["score_ids"]
     cutoff = label_end_dates.iloc[final_ids].max()
+    outer_selection_start = _iso_timestamp(
+        bundle.outer_policy.get("selection_start_date"), field_name="selection_start_date"
+    )
+    training_universe_start = _resolve_training_universe_start(
+        bundle, selection_start=outer_selection_start
+    )
 
     def observed_range(group_ids: np.ndarray) -> dict[str, str | None]:
         if len(group_ids) == 0:
@@ -670,6 +685,14 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
             "oos_used_for_training_or_epoch_selection": False,
         },
     }
+
+    if (
+        str(bundle.profile.training_sample_scope)
+        == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    ):
+        payload["source_contract"]["training_universe_start_date"] = str(
+            training_universe_start.date()
+        )
 
     if args.train_window_months is not None:
         payload["training_settings"]["train_window_months"] = int(args.train_window_months)
@@ -1295,9 +1318,9 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
     settings = get_breakout_quality_workflow_settings(
         experiment_profile=str(args.experiment_profile)
     )
-    if not settings.supports_point_in_time_scores:
+    if not settings.rolling_authorized:
         raise ValueError(
-            f"目前profile未啟用PIT scores: {args.experiment_profile}"
+            f"目前profile未授權Rolling PIT scores: {args.experiment_profile}"
         )
     started = time.perf_counter()
     color_enabled = console_color_enabled()
@@ -1337,6 +1360,9 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
     )
     selection_start = _iso_timestamp(
         bundle.outer_policy.get("selection_start_date"), field_name="selection_start_date"
+    )
+    training_universe_start = _resolve_training_universe_start(
+        bundle, selection_start=selection_start
     )
     selection_end = _iso_timestamp(
         bundle.outer_policy.get("selection_end_date"), field_name="selection_end_date"
@@ -1675,9 +1701,10 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
             "end": str(selection_end.date()),
         },
         "available_history_period": {
-            "start": str(selection_start.date()),
+            "start": str(training_universe_start.date()),
             "end": str(available_end.date()),
         },
+        "training_universe_start_date": str(training_universe_start.date()),
         "fold_months": int(args.fold_months),
         "inner_validation_months": int(args.inner_validation_months),
         "seed": int(args.seed),

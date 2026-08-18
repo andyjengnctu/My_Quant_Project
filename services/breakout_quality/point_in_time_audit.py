@@ -1283,9 +1283,9 @@ def _run_point_in_time_scores_audit(args: argparse.Namespace) -> int:
     settings = get_breakout_quality_workflow_settings(
         experiment_profile=str(args.experiment_profile)
     )
-    if not settings.supports_point_in_time_scores:
+    if not settings.rolling_authorized:
         raise ValueError(
-            f"目前profile未啟用PIT scores: {args.experiment_profile}"
+            f"目前profile未授權Rolling PIT scores: {args.experiment_profile}"
         )
     score_frame, manifest = _validate_score_artifacts(args)
     bundle = load_continuous_ranker_data(

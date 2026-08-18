@@ -37,7 +37,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 44
+STRATEGY_COMPARE_SCHEMA_VERSION = 45
 
 # =============================================================================
 # 1. 常用設定
@@ -118,7 +118,7 @@ STRATEGY_COMPARE_PROFILES = {
             "2016→2025十個完整年度fold的單一PIT-safe operational chain；DL使用expanding history + "
             "annual refit，策略Min ROOS沿用各時期當時合法rolling params。2021不再形成evaluation policy斷點。"
         ),
-        "display_alignment_group": "operational_strategy_compare",
+        "display_alignment_group": "extending_strategy_compare",
         "display_alignment_arm_ids": ("C58", "C59", "C60"),
         "start_date": "2016-01-01",
         "end_date": "2025-12-31",
@@ -192,7 +192,7 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
         "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
         "romd_reference_baselines": {
-            "min": {"param_source": "operational_min_roos", "rule_policy": "all_off"},
+            "min": {"param_source": "extending_min_roos", "rule_policy": "all_off"},
         },
         "fixed_arm_ids": ("C58",),
         "stochastic_arm_ids": ("C60",),
@@ -276,9 +276,9 @@ STRATEGY_COMPARE_PREPARATION = {
 # =============================================================================
 
 STRATEGY_PARAM_SOURCES = {
-    "operational_min_roos": {
+    "extending_min_roos": {
         "path_template": (
-            "models/research/breakout_quality/strategy_compare/operational_min_roos/"
+            "models/research/breakout_quality/strategy_compare/extending_min_roos/"
             "active_params/{param_filename}"
         ),
         "description": (
@@ -286,14 +286,14 @@ STRATEGY_PARAM_SOURCES = {
             "current P2 rolling schedules；只在兩段rolling/search contract一致時建立，不重新最佳化。"
         ),
         "identity_manifest_path": (
-            "models/research/breakout_quality/strategy_compare/operational_min_roos/"
-            "operational_stitch_manifest.json"
+            "models/research/breakout_quality/strategy_compare/extending_min_roos/"
+            "extending_stitch_manifest.json"
         ),
         "trained_with_dl_id": None,
         "artifact_contract": {
             "breakout_quality_param_adaptation": {
                 "mode": "min_roos_training",
-                "parameter_set": "P2_OPERATIONAL",
+                "parameter_set": "P2_EXTENDING",
                 "search_fields": [
                     "high_len", "atr_len", "atr_buy_tol", "atr_times_init", "atr_times_trail"
                 ],
@@ -303,7 +303,7 @@ STRATEGY_PARAM_SOURCES = {
         },
         "builder": {
             "enabled": True,
-            "builder_type": "operational_min_roos_stitch",
+            "builder_type": "extending_min_roos_stitch",
             "options": {
                 "historical_params_path": (
                     "models/research/breakout_quality/trade_path_label/a2_teacher_params/"
@@ -314,7 +314,7 @@ STRATEGY_PARAM_SOURCES = {
                     "risk_only_rolling/p2_dl_off_trained/active_params/roos_base_best.json"
                 ),
                 "output_relative_dir": (
-                    "models/research/breakout_quality/strategy_compare/operational_min_roos"
+                    "models/research/breakout_quality/strategy_compare/extending_min_roos"
                 ),
                 "quiet": False,
             },
@@ -586,7 +586,7 @@ STRATEGY_COMPARE_ARMS = {
     "C58": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_ROOS,
         "description": "Extending-Window 2016→2025 stitched Min ROOS rolling params；rules全關；DL-off baseline",
-        "param_source": "operational_min_roos",
+        "param_source": "extending_min_roos",
         "rule_policy": "all_off",
         "dl_enabled": False,
         "dl_id": None,
@@ -596,7 +596,7 @@ STRATEGY_COMPARE_ARMS = {
     "C59": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED,
         "description": "Extending-Window Rolling MR-13E exact constrained；每個score fold只用當時已成熟歷史訓練。",
-        "param_source": "operational_min_roos",
+        "param_source": "extending_min_roos",
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "CONT13E_ROLL",
@@ -614,7 +614,7 @@ STRATEGY_COMPARE_ARMS = {
             "Extending-Window Rolling B2：MR-13K primary + MR-13M same-day rank OLS residual-safety floor；"
             "兩個score都由同一日期前已成熟資料的PIT-safe annual-refit model產生。"
         ),
-        "param_source": "operational_min_roos",
+        "param_source": "extending_min_roos",
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "CONT13K_ROLL",

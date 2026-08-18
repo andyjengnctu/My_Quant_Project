@@ -262,11 +262,11 @@ def _validate_param_training_identity(
     builder = source.builder
     if builder is not None and builder.enabled:
         options = dict(builder.options)
-        if builder.builder_type == "operational_min_roos_stitch":
-            if str(payload.get("builder_type") or "") != "operational_min_roos_stitch":
-                return False, "OPERATIONAL_STITCH_IDENTITY_MISMATCH", manifest_path
-            if str(payload.get("arm_id") or "") != "P2_OPERATIONAL":
-                return False, "OPERATIONAL_STITCH_ARM_MISMATCH", manifest_path
+        if builder.builder_type == "extending_min_roos_stitch":
+            if str(payload.get("builder_type") or "") != "extending_min_roos_stitch":
+                return False, "EXTENDING_STITCH_IDENTITY_MISMATCH", manifest_path
+            if str(payload.get("arm_id") or "") != "P2_EXTENDING":
+                return False, "EXTENDING_STITCH_ARM_MISMATCH", manifest_path
             if list(payload.get("search_fields") or []) != list(MIN_ROOS_SEARCH_FIELDS):
                 return False, "MIN_ROOS_SEARCH_FIELDS_MISMATCH", manifest_path
             return True, "READY", manifest_path
@@ -697,16 +697,16 @@ def _collect_parameter_artifact_status(
                     (
                         (
                             "合併既有historical/current Min ROOS為Extending-Window rolling schedule"
-                            if builder is not None and builder.builder_type == "operational_min_roos_stitch"
+                            if builder is not None and builder.builder_type == "extending_min_roos_stitch"
                             else "建立／接續Selection historical Min ROOS單階段rolling參數"
                         )
                         if builder is not None and builder.builder_type in {
-                            "operational_min_roos_stitch", "selection_historical_p2"
+                            "extending_min_roos_stitch", "selection_historical_p2"
                         }
                         else "建立／接續Selection historical Full ROOS rolling參數"
                     )
                     if builder is not None and builder.builder_type in {
-                        "operational_min_roos_stitch", "selection_historical_p2", "selection_historical_full_roos"
+                        "extending_min_roos_stitch", "selection_historical_p2", "selection_historical_full_roos"
                     }
                     else "執行或接續config指定的策略參數訓練"
                 )

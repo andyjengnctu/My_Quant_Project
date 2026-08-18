@@ -55,6 +55,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         _migrate_compatible_legacy_fold,
         _rescore_daily_fold_from_compatible_checkpoint,
         _resolve_score_start,
+        _resolve_training_universe_start,
         _validate_score_frame,
         parse_args as parse_point_in_time_args,
     )
@@ -101,6 +102,20 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "point_in_time_group_consistency_accepts_all_missing_terminal_label_end",
         True,
         all_missing_label_end_accepted,
+    )
+
+    synthetic_history_bundle = SimpleNamespace(
+        summary={"training_universe_start_date": "2004-09-08"}
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "rolling_available_history_start_uses_data_driven_training_universe_not_optimizer_selection_start",
+        pd.Timestamp("2004-09-08"),
+        _resolve_training_universe_start(
+            synthetic_history_bundle, selection_start=pd.Timestamp("2011-01-01")
+        ),
     )
 
     event_profile = get_breakout_quality_experiment_profile(
@@ -651,7 +666,10 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "model_spec": {"architecture": "inception_time_v1"},
         "experiment_settings": {"training_sample_scope": "daily_eligible_stock_days"},
         "training_settings": {"epochs_max": 200},
-        "source_contract": {"target_contract": {"target_id": "daily_opportunity_no_time_r_v1"}},
+        "source_contract": {
+            "target_contract": {"target_id": "daily_opportunity_no_time_r_v1"},
+            "training_universe_start_date": "2004-09-08",
+        },
         "lookahead_contract": {"score_period_used_for_training_or_epoch_selection": False},
     }
     expanded_score_contract = json.loads(json.dumps(training_contract))
@@ -671,6 +689,26 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             ),
             _fold_training_contract_is_compatible(
                 training_contract, expected_contract=changed_training_contract
+            ),
+        ),
+    )
+
+    legacy_cutoff_contract = json.loads(json.dumps(training_contract))
+    legacy_cutoff_contract["source_contract"].pop("training_universe_start_date", None)
+    changed_universe_contract = json.loads(json.dumps(training_contract))
+    changed_universe_contract["source_contract"]["training_universe_start_date"] = "2011-01-01"
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "daily_pit_fold_reuse_rejects_missing_or_old_training_universe_identity",
+        (False, False),
+        (
+            _fold_training_contract_is_compatible(
+                legacy_cutoff_contract, expected_contract=training_contract
+            ),
+            _fold_training_contract_is_compatible(
+                changed_universe_contract, expected_contract=training_contract
             ),
         ),
     )

@@ -1956,7 +1956,7 @@ def _print_workflow_status(settings=None) -> None:
             f"不支援的 workflow training objective: {settings.training_objective!r}"
         )
     base_rows.append(("Continuous Target", settings.continuous_target_id))
-    if settings.supports_point_in_time_scores:
+    if settings.rolling_authorized:
         base_rows.extend((
             (
                 "Extending-Window Rolling Period",
@@ -1974,7 +1974,7 @@ def _print_workflow_status(settings=None) -> None:
             ),
         ))
     else:
-        base_rows.append(("Rolling PIT", "目前Active Profile未啟用rolling PIT"))
+        base_rows.append(("Rolling PIT", "目前Active Profile未授權current Rolling"))
     print(render_key_values(base_rows))
     model_artifacts = resolve_filter_artifact_paths(
         PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
@@ -2040,7 +2040,7 @@ def _print_workflow_status(settings=None) -> None:
             ),
         )
     )
-    if settings.supports_point_in_time_scores:
+    if settings.rolling_authorized:
         grouped_status.extend((
             (
                 "Extending-Window Rolling Scores",
@@ -2452,8 +2452,8 @@ def _interactive_continuous_full_train(program_name: str, settings) -> int:
 
 
 def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
-    if not settings.supports_point_in_time_scores:
-        print("目前Active Profile尚未啟用Rolling PIT。")
+    if not settings.rolling_authorized:
+        print("目前Active Profile尚未授權Rolling PIT。")
         return 0
     _print_workflow_status(settings)
     if not _prompt_bool(
@@ -2526,8 +2526,8 @@ def _run_continuous_pit_profile(
 
 
 def _interactive_continuous_stability_validation(program_name: str, settings) -> int:
-    if not settings.supports_point_in_time_scores:
-        print("目前Active Profile尚未啟用Rolling PIT。")
+    if not settings.rolling_authorized:
+        print("目前Active Profile尚未授權Rolling PIT。")
         return 0
     model_output_dir = resolve_filter_model_output_dir(
         PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
@@ -2896,9 +2896,9 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
             raise ValueError(
                 f"不支援的Strategy Compare model score source: {source.score_source!r}"
             )
-        if not workflow.supports_point_in_time_scores:
+        if not workflow.rolling_authorized:
             raise ValueError(
-                f"設定的Selection PIT source未啟用PIT workflow: {dl_id}"
+                f"設定的Rolling PIT source未授權current Rolling workflow: {dl_id}"
             )
 
         code = _prepare_strategy_compare_model_upstream(
@@ -3001,16 +3001,14 @@ def _interactive_model_research(program_name: str) -> int:
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
         print(render_menu_item(1, "Pre-Test｜單模型快速驗證", default=True))
-        print(render_menu_item(2, "Extending-Window Rolling 模型驗證"))
-        pit_authorized = bool(
-            settings.supports_point_in_time_scores and research_spec.selection_pit_authorized
-        )
+        pit_authorized = bool(settings.rolling_authorized)
         pit_gate_batch = (
             _continuous_pit_gate_batch_for_active(settings)
             if pit_authorized
             else None
         )
-        if settings.supports_point_in_time_scores:
+        if pit_authorized:
+            print(render_menu_item(2, "Extending-Window Rolling 模型驗證"))
             print(render_menu_item(3, "Fixed-Window Rolling 模型驗證"))
         print(render_menu_item(4, "查看目前Workflow與工件狀態"))
         _comparisons, strategy_model_sources = _strategy_compare_required_model_sources()
@@ -3029,9 +3027,9 @@ def _interactive_model_research(program_name: str) -> int:
             return 0
         if choice == "1":
             return _interactive_continuous_full_train(program_name, settings)
-        if choice == "2":
+        if choice == "2" and pit_authorized:
             return _interactive_continuous_pit_validation(program_name, settings)
-        if choice == "3" and settings.supports_point_in_time_scores:
+        if choice == "3" and pit_authorized:
             return _interactive_continuous_stability_validation(program_name, settings)
         if choice == "4":
             _print_workflow_status(settings)

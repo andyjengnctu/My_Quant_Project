@@ -3821,6 +3821,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c60_current = operational_current_settings.arms["C60"]
     c60_options = dict(c60_current.dl_runtime_options or {})
     operational_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("extending_window_rolling")
+    extending_param_source = operational_current_settings.parameter_sources["extending_min_roos"]
+    extending_param_builder = extending_param_source.builder
     selection_robustness_legacy = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
     forward_robustness_legacy = strategy_config.get_strategy_multi_seed_robustness_settings("forward_oos")
     add_check(
@@ -3832,7 +3834,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and c58_current.enabled and not c58_current.dl_enabled
         and c59_current.enabled and c59_current.dl_id == "CONT13E_ROLL"
         and c60_current.enabled
-        and c60_current.param_source == c58_current.param_source == c59_current.param_source == "operational_min_roos"
+        and c60_current.param_source == c58_current.param_source == c59_current.param_source == "extending_min_roos"
+        and extending_param_builder is not None
+        and extending_param_builder.builder_type == "extending_min_roos_stitch"
+        and dict(extending_param_builder.options).get("output_relative_dir")
+            == "models/research/breakout_quality/strategy_compare/extending_min_roos"
+        and extending_param_source.identity_manifest_path.endswith("extending_stitch_manifest.json")
+        and dict(extending_param_source.artifact_contract.get("breakout_quality_param_adaptation") or {}).get("parameter_set")
+            == "P2_EXTENDING"
         and c60_current.rule_policy == c58_current.rule_policy == c59_current.rule_policy == "all_off"
         and c60_current.dl_id == "CONT13K_ROLL"
         and c60_current.dl_runtime_mode == "resource-aware-continuous-score-residual-safety-constrained-optimal"

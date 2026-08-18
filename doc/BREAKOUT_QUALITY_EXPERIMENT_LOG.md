@@ -9485,3 +9485,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Daily Universal Pre-Test split修正：selection start不再讀optimizer `selection_start_date`，改讀dataset `training_universe_start_date`，使單模型Pre-Test與Extending都能使用所有合法早期feature-complete history。
 - Rolling execution acceleration：continuous-ranker default `train_prefetch_batches=8`、`train_prefetch_workers=4`；CUDA training用pinned host tensors、non-blocking H2D與dedicated copy stream預載下一batch，使N+1 transfer可與N compute overlap。batch identity/order、same-date batching、seed、optimizer steps、loss、deterministic algorithms、TF32與scientific target均不改。
 - Decision：`PRE_TEST_GATE_ADDED / ROLLING_EXECUTION_ACCELERATION_IMPLEMENTED / SCIENTIFIC_SEMANTICS_UNCHANGED`。
+
+
+## 2026-08-18 — Rolling authorization / history identity / Extending P2 engineering correction
+
+- 性質：evaluation-framework infrastructure bug fix；不新增MR/SR scientific identity，不改模型數學、Target、策略solver或production promotion。
+- Rolling authorization：workflow新增單一`rolling_authorized` SSOT=`supports_point_in_time_scores AND research_spec.selection_pit_authorized`；model menu、workflow status、Extending/Fixed builders、PIT audit與Strategy prerequisite preparation全部共用。MR-13O維持`REJECTED_AT_FORWARD_MODEL_GATE / NO_PIT`，不得顯示或執行Rolling。
+- Training history manifest：Daily Universal current Rolling的`available_history_period.start`改用data-driven `training_universe_start_date`，不再使用optimizer `selection_start_date`。
+- Fold reuse：`source_contract.training_universe_start_date`正式進fold fingerprint／compatibility contract；舊2011-cutoff fold因缺少或不同此欄位必須重建，不得誤REUSE。
+- Extending parameter identity：current `operational_min_roos / P2_OPERATIONAL / operational_min_roos_stitch / operational_stitch_manifest.json`全面更名為`extending_min_roos / P2_EXTENDING / extending_min_roos_stitch / extending_stitch_manifest.json`；新路徑=`models/research/breakout_quality/strategy_compare/extending_min_roos/`。歷史Log中的舊名稱保留原始證據語意。Strategy Compare schema `44 → 45`。
+- Binary menu regression guard：Binary submenu仍固定`[1] 建立新Label → 重新訓練 → 模型預測報表`為Enter default；Rolling authorization不得影響Binary route。

@@ -24,6 +24,7 @@ from config.breakout_quality import (
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
+    DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
 )
 from .checks import add_check
 
@@ -538,6 +539,40 @@ def validate_dataset_cli_contract_case(_base_params):
         ),
     )
 
+    with (
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE",
+            DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
+        ),
+        patch("builtins.input", side_effect=["0"]),
+    ):
+        rejected_profile_settings = app_breakout_quality.get_breakout_quality_model_research_settings()
+        rejected_rc, rejected_text = _capture_stdout(
+            app_breakout_quality._interactive_model_research,
+            "apps/research.py model",
+        )
+        rejected_status_out = StringIO()
+        with redirect_stdout(rejected_status_out):
+            app_breakout_quality._print_workflow_status(rejected_profile_settings)
+        rejected_status_text = rejected_status_out.getvalue()
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "rejected_no_pit_profile_hides_extending_and_fixed_rolling_but_keeps_pretest",
+        (0, False, True, False),
+        (
+            rejected_rc,
+            rejected_profile_settings.rolling_authorized,
+            "[1]  Pre-Test｜單模型快速驗證  (Enter)" in rejected_text
+            and "Extending-Window Rolling 模型驗證" not in rejected_text
+            and "Fixed-Window Rolling 模型驗證" not in rejected_text,
+            "Extending-Window Rolling Scores" in rejected_status_text
+            or "Extending-Window Rolling 模型驗證" in rejected_status_text,
+        ),
+    )
+
     research_app = importlib.import_module("apps.research")
     with (
         patch("builtins.input", side_effect=["4", "0", "0"]),
@@ -585,7 +620,7 @@ def validate_dataset_cli_contract_case(_base_params):
                 "Extending-Window Rolling Scores" in rendered_status
                 and "Extending-Window Rolling 模型驗證" in rendered_status
             )
-            if current_model_settings.supports_point_in_time_scores
+            if current_model_settings.rolling_authorized
             else (
                 "Extending-Window Rolling Scores" not in rendered_status
                 and "Extending-Window Rolling 模型驗證" not in rendered_status
@@ -821,6 +856,31 @@ def validate_dataset_cli_contract_case(_base_params):
             binary_rc,
             binary_route.call_count,
             binary_route.call_args.kwargs.get("workflow_settings"),
+        ),
+    )
+
+    with (
+        patch("builtins.input", side_effect=[""]),
+        patch(
+            "tools.filters.breakout_quality.application._interactive_trade_path_train_and_report",
+            return_value=43,
+        ) as binary_default_route,
+    ):
+        binary_default_rc, binary_default_text = _capture_stdout(
+            app_breakout_quality._interactive_binary_model_research,
+            "apps/research.py model",
+            workflow_settings=binary_model_research_settings,
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "binary_model_menu_enter_default_remains_new_label_train_route",
+        (43, 1, True),
+        (
+            binary_default_rc,
+            binary_default_route.call_count,
+            "[1]  建立新Label → 重新訓練 → 模型預測報表  (Enter)" in binary_default_text,
         ),
     )
 
