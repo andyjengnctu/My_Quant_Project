@@ -17,15 +17,18 @@
 
 | 優先序 | 方案／待決策問題 | 狀態 | 固定條件 | 成功／停止條件 | 下一步 |
 |---:|---|---|---|---|---|
-| 1 | **Plan B2 / `SR-C56`：MR-13K primary + MR-13M conditional Residual Safety**。問題：C55 raw safety floor雖降MDD卻大幅犧牲upside；扣除13K與13M近鏡像的正常關係後，剩餘「同upside條件下異常安全」訊號能否改善13K strategy translation？ | **ACTIVE / Forward-only** | C54的Min/all-off、K/R0、cash/sizing/orderability/execution、CONT13K objective、exact B&B全部固定；當日orderable候選內K/M score各自轉average-rank percentile，以含intercept OLS `M_pct~K_pct`取得Residual Safety；C3 baseline residual coverage+sum作floor。無future Target、跨日fit、lambda、absolute threshold。 | **GO**：相對C54保留大部分Return/Payoff，同時Win Rate/EV/RoMD或MDD與選股轉換有可信改善；並應明顯優於C55的upside犧牲。**STOP**：仍明顯犧牲Return/Payoff、RoMD無改善或Residual floor幾乎無增量。 | 先只跑Seed42 Forward `C56-C54`，並以`C56-C55`確認residualization是否改善raw floor；不加入robustness/production。 |
-| 2 | **Plan C-M：13K PIT-safe upside context → Conditional Low-Adverse model**。問題：已知upside condition後，第二模型能否學出「同樣高upside中誰較不會先跌」？ | **PLANNED** | Stage-1 13K context必須cross-fitted/PIT-safe，建議同日percentile；Stage-2仍看原sequence，Target固定MR-13M low-adverse，與MR-13M source-only比較。 | Conditional adverse ranking需明顯優於MR-13M且後續strategy conversion可保留13K upside；否則停止stacking。 | B2完成後優先於其他新模型整合方案。 |
-| 3 | **Plan A：MR-13H economic Target + parameter-free path-dynamics input representation**。問題：原300×10是否缺少joint MFE/path-risk表示？ | **PLANNED** | Target固定MR-13H `MFE-adverse`、InceptionTime family、Full-list pairwise、Seed42；只新增無可調窗口的causal path primitives。 | Forward rho/Pair/Top-K與breakout slice同方向明顯勝MR-13H才進PIT；近似或更差即停止簡單path primitives。 | Plan C-M之後；開始時才建立新ARCH/MR identity。 |
-| 4 | **Plan B3：13K confidence boundary + 13M tie-break**。問題：13M只在13K自身不確定時介入，能否保留明確winner？ | **CONDITIONAL** | 不使用固定score-gap magic threshold；優先以既有multi-seed rank stability/confidence定義邊界。 | 只有能建立無調參confidence contract才GO。 | 需先完成13K robustness證據。 |
-| 5 | **Plan C-K：13M PIT-safe safety context → Conditional MFE model**。 | **CONDITIONAL** | Stage-1 13M context須PIT-safe；Stage-2 Target固定Pure MFE，與MR-13K source-only比較。 | 只有C-M未解決且仍有conditional-stacking價值時才做。 | 排在C-M後。 |
-| 6 | **13M → Position Sizing**。13K決定買誰，13M只決定risk allocation。 | **CONDITIONAL** | 不改membership；會改canonical 1% sizing，因此屬較大策略變因。 | 只有selection-level整合不足且仍需利用13M降MDD時才做。 | 後做。 |
-| 7 | **Regime-dependent 13K / 13M gating**。 | **CONDITIONAL** | 需先有causal、非績效調參的market-state gate。 | 只有前述方法不足時才考慮。 | 後做。 |
-| 8 | **Cross-sectional / market-state representation**。 | **CONDITIONAL** | 不重跑已淘汰的單純architecture橫向搜尋。 | 只有Plan A證明簡單path representation不足時才GO。 | 最後的representation升級方向。 |
-| — | **MR-13K vs MR-13E exact 8-seed robustness**：Selection `C42/C53`、Forward `C44/C54`。 | **ACTIVE / independent** | `seed_count=8`、generator=`20260810`；不挑best、不ensemble；production仍C42/C44。 | 完成paired robustness後結案13K source-only路線。 | 可與B2獨立執行，C55/C56不得加入robustness matrix。 |
+| 1 | **Plan C-M：13K PIT-safe upside context → Conditional Low-Adverse model**。問題：已知upside condition後，第二模型能否學出「同樣高upside中誰較不會先跌」？ | **PLANNED / NEXT** | Stage-1 13K context必須cross-fitted/PIT-safe，建議同日percentile；Stage-2仍看原sequence，Target固定MR-13M low-adverse，與MR-13M source-only比較。不得把full-fit 13K score回灌training rows。 | Conditional adverse ranking需明顯優於MR-13M，且後續strategy conversion能保留13K upside；否則停止stacking。 | 下一個主線；開始實作時才建立新的model/profile identity。 |
+| 2 | **Plan A：MR-13H economic Target + parameter-free path-dynamics input representation**。問題：原300×10是否缺少joint MFE/path-risk表示？ | **PLANNED** | Target固定MR-13H `MFE-adverse`、InceptionTime family、Full-list pairwise、Seed42；只新增無可調窗口的causal path primitives。 | Forward rho/Pair/Top-K與breakout slice同方向明顯勝MR-13H才進PIT；近似或更差即停止簡單path primitives。 | Plan C-M之後；開始時才建立新ARCH/MR identity。 |
+| 3 | **Plan B3：13K confidence boundary + 13M tie-break**。問題：13M只在13K自身不確定時介入，能否保留明確winner？ | **CONDITIONAL** | 不使用固定score-gap magic threshold；優先以既有multi-seed rank stability/confidence定義邊界。 | 只有能建立無調參confidence contract才GO。 | 需先完成13K robustness證據。 |
+| 4 | **Plan C-K：13M PIT-safe safety context → Conditional MFE model**。 | **CONDITIONAL** | Stage-1 13M context須PIT-safe；Stage-2 Target固定Pure MFE，與MR-13K source-only比較。 | 只有C-M未解決且仍有conditional-stacking價值時才做。 | 排在C-M後。 |
+| 5 | **13M → Position Sizing**。13K決定買誰，13M只決定risk allocation。 | **CONDITIONAL** | 不改membership；會改canonical 1% sizing，因此屬較大策略變因。 | 只有selection-level整合不足且仍需利用13M降MDD時才做。 | 後做。 |
+| 6 | **Regime-dependent 13K / 13M gating**。 | **CONDITIONAL** | 需先有causal、非績效調參的market-state gate。 | 只有前述方法不足時才考慮。 | 後做。 |
+| 7 | **Cross-sectional / market-state representation**。 | **CONDITIONAL** | 不重跑已淘汰的單純architecture橫向搜尋。 | 只有Plan A證明簡單path representation不足時才GO。 | 最後的representation升級方向。 |
+| — | **MR-13K vs MR-13E exact 8-seed robustness**：Selection `C42/C53`、Forward `C44/C54`。 | **ACTIVE / independent** | `seed_count=8`、generator=`20260810`；不挑best、不ensemble；production仍C42/C44。 | 完成paired robustness後結案13K source-only路線。 | 可與Plan C-M獨立執行，C55/C56不得加入robustness matrix。 |
+
+### 2.1 最近完成且有正向證據
+
+- **Plan B2 / `SR-C56`：CLOSED / FORWARD GO / NOT PROMOTED**。Seed42 Forward C56=`148.34% Return / 12.86% MDD / 11.53 RoMD / 47.90% Win Rate / 1.14R EV`；相對C54保留約`87.9%` Return，同時MDD `-7.09pp`、RoMD `+3.08`、Win Rate `+5.35pp`、EV `+0.34R`，並明顯優於C55 raw-safety。B2已證明Residual Safety具有portfolio conversion價值；但仍低於production C44的Return/RoMD且只有Seed42 Forward證據，因此不promotion、不加入current robustness，研究主線轉Plan C-M。
 
 ## 3. 已停止的相鄰方向（不得重新包裝成新項目）
 

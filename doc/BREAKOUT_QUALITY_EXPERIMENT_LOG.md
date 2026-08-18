@@ -9422,3 +9422,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Runtime/provenance：新增`resource-aware-continuous-score-residual-safety-constrained-optimal` mode/policy；`CONT13M`仍進required artifacts、pinned runtime path與pair-cache identity。Daily diagnostics保存residual fit pair count/slope/intercept、safety score mode、floor/binding/violation與safety-pruned states。
 - Synthetic：`validate_strategy_compare_config_driven_app_contract_case`擴充至135 checks且0 FAIL；新小型case先用production residualizer建立exhaustive oracle，再驗證C56 membership精確等於Residual-floor下13K objective global optimum，且高13K但異常危險candidate可被排除、同upside較安全candidate可保留。Current Forward=`C1/C3/C44/C54/C55/C56`；robustness仍只`C42/C53`與`C44/C54`，production仍C42/C44。
 - Stage：`IMPLEMENTED / FORWARD_RESULT_PENDING / NO_SELECTION_PIT / ROBUSTNESS_OFF`。Primary contrast=`C56-C54`；`C56-C55`只回答residualizing raw 13M是否能保留更多13K upside。若Forward仍顯著犧牲Payoff/Return或RoMD無改善，停止selection-level 13K/13M hard-floor整合並轉Plan C-M conditional model。
+
+
+### 2026-08-18 — SR-C56 Seed42 Forward result → residual safety works; B2 strategy-layer concept GO, no production promotion
+
+- 結果來源：Forward-OOS run fingerprint=`0ed9def6972c`，期間=`2021-01-01～2026-03-02`；current arms=`C1/C3/C44/C54/C55/C56`。C56實際RUN，C1/C44/C54/C55合法REUSE。
+- C56相對C54：Return=`148.34% vs 168.67%`（保留約`87.9%`）、MDD=`12.86% vs 19.95%`（`-7.09pp`）、RoMD=`11.53 vs 8.45`（`+3.08`）、Annual=`19.29% vs 21.12%`、Worst Full Year=`-3.19% vs -12.07%`、Win Rate=`47.90% vs 42.55%`（`+5.35pp`）、Payoff=`2.90 vs 3.41`、EV=`1.14R vs 0.80R`（`+0.34R`）、Trades=`309 vs 329`、Average Exposure=`92.98% vs 92.96%`。因此改善不是靠降低資金使用，而是membership/path-quality改變。
+- C56相對C55 raw-safety：Return=`148.34% vs 97.87%`、MDD=`12.86% vs 12.03%`、RoMD=`11.53 vs 8.13`、Win Rate=`47.90% vs 44.69%`、Payoff=`2.90 vs 2.77`、EV=`1.14R vs 0.75R`。Residualizing 13M明顯修復C55把高-upside winner一併排除的問題，只用約`+0.83pp` MDD換回大量Return與RoMD。
+- Conversion diagnostic：C56 `DL選擇R=+1.27R`、`RCE=+21.81%`，相對C54的`-87.57R/-60.07%`大幅改善；但Pure-MFE Target mean/percentile=`0.88R/0.440`仍低於C54的`1.01R/0.486`。這表示Residual Safety的價值主要不是把13K Pure-MFE Target本身推得更高，而是改善13K未刻畫的path／realized conversion。
+- 年度：C56相對C54在2021、2022、2024、2026較好，2023顯著少賺（`63.45% vs 110.58%`），2025亦較弱；因此B2形成可信的upside-vs-path-risk trade-off，而不是全面支配C54。
+- Decision：`SR-C56 = RESULT_AVAILABLE / FORWARD_GO_STRATEGY_LAYER_CONCEPT_CONFIRMED / NOT_PROMOTED / NO_SELECTION_PIT / ROBUSTNESS_OFF`。B2待決策問題已回答「YES」：同upside條件下的Residual Safety有實際portfolio conversion價值；但C56仍低於production C44的Return/RoMD（C44=`214.29%/14.17`），且只有Seed42 Forward證據，因此不改production C42/C44、不加入current 8-seed robustness。下一主線依Research Queue轉Plan C-M：13K PIT-safe upside context → Conditional Low-Adverse model。
