@@ -262,13 +262,56 @@ def _validate_param_training_identity(
     builder = source.builder
     if builder is not None and builder.enabled:
         options = dict(builder.options)
-        if builder.builder_type == "extending_min_roos_stitch":
-            if str(payload.get("builder_type") or "") != "extending_min_roos_stitch":
+        if builder.builder_type in {"extending_min_roos_stitch", "extending_full_roos_stitch"}:
+            is_full = builder.builder_type == "extending_full_roos_stitch"
+            expected_arm_id = "P4_EXTENDING" if is_full else "P2_EXTENDING"
+            expected_search_fields = FULL_ROOS_SEARCH_FIELDS if is_full else MIN_ROOS_SEARCH_FIELDS
+            if str(payload.get("builder_type") or "") != builder.builder_type:
                 return False, "EXTENDING_STITCH_IDENTITY_MISMATCH", manifest_path
-            if str(payload.get("arm_id") or "") != "P2_EXTENDING":
+            if str(payload.get("arm_id") or "") != expected_arm_id:
                 return False, "EXTENDING_STITCH_ARM_MISMATCH", manifest_path
-            if list(payload.get("search_fields") or []) != list(MIN_ROOS_SEARCH_FIELDS):
-                return False, "MIN_ROOS_SEARCH_FIELDS_MISMATCH", manifest_path
+            if list(payload.get("search_fields") or []) != list(expected_search_fields):
+                return False, (
+                    "FULL_ROOS_SEARCH_FIELDS_MISMATCH" if is_full
+                    else "MIN_ROOS_SEARCH_FIELDS_MISMATCH"
+                ), manifest_path
+            if str(payload.get("param_policy") or "") != str(settings.param_policy):
+                return False, "EXTENDING_STITCH_PARAM_POLICY_MISMATCH", manifest_path
+
+            filename = str(PARAM_POLICY_SPECS[str(settings.param_policy)]["filename"])
+            source_artifacts = dict(payload.get("source_artifacts") or {})
+            for label, option_name in (
+                ("historical", "historical_params_path"),
+                ("current", "current_params_path"),
+            ):
+                raw_path = str(options.get(option_name) or "")
+                configured_path = _resolve_relative_path(
+                    root, raw_path.format(param_filename=filename)
+                )
+                if not configured_path.is_file():
+                    return False, f"EXTENDING_STITCH_SOURCE_MISSING:{label}", manifest_path
+                recorded = dict(source_artifacts.get(label) or {})
+                if str(recorded.get("sha256") or "") != compute_file_sha256(configured_path):
+                    return False, f"EXTENDING_STITCH_SOURCE_HASH_MISMATCH:{label}", manifest_path
+
+            output_path = resolve_param_source_path(root, settings, source_id)
+            if not output_path.is_file():
+                return False, "EXTENDING_STITCH_OUTPUT_MISSING", manifest_path
+            output_record = dict(payload.get("output_params") or {})
+            if str(output_record.get("sha256") or "") != compute_file_sha256(output_path):
+                return False, "EXTENDING_STITCH_OUTPUT_HASH_MISMATCH", manifest_path
+            try:
+                output_source = _load_param_source(output_path)
+                actual_start, actual_end = get_active_param_ensemble_date_range(
+                    output_source["payload"]
+                )
+            except (OSError, RuntimeError, ValueError, KeyError, TypeError):
+                return False, "EXTENDING_STITCH_OUTPUT_INVALID", manifest_path
+            if (
+                str(payload.get("coverage_start") or "") != actual_start
+                or str(payload.get("coverage_end") or "") != actual_end
+            ):
+                return False, "EXTENDING_STITCH_COVERAGE_MISMATCH", manifest_path
             return True, "READY", manifest_path
         expected_parameter_set = str(options.get("parameter_set") or "").upper()
         if expected_parameter_set and str(payload.get("arm_id") or "").upper() != expected_parameter_set:
@@ -698,15 +741,20 @@ def _collect_parameter_artifact_status(
                         (
                             "合併既有historical/current Min ROOS為Extending-Window rolling schedule"
                             if builder is not None and builder.builder_type == "extending_min_roos_stitch"
-                            else "建立／接續Selection historical Min ROOS單階段rolling參數"
+                            else (
+                                "合併既有historical/current Full ROOS為Extending-Window rolling schedule"
+                                if builder is not None and builder.builder_type == "extending_full_roos_stitch"
+                                else "建立／接續Selection historical Min ROOS單階段rolling參數"
+                            )
                         )
                         if builder is not None and builder.builder_type in {
-                            "extending_min_roos_stitch", "selection_historical_p2"
+                            "extending_min_roos_stitch", "extending_full_roos_stitch", "selection_historical_p2"
                         }
                         else "建立／接續Selection historical Full ROOS rolling參數"
                     )
                     if builder is not None and builder.builder_type in {
-                        "extending_min_roos_stitch", "selection_historical_p2", "selection_historical_full_roos"
+                        "extending_min_roos_stitch", "extending_full_roos_stitch",
+                        "selection_historical_p2", "selection_historical_full_roos"
                     }
                     else "執行或接續config指定的策略參數訓練"
                 )

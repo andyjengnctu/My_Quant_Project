@@ -31,6 +31,7 @@ from config.training_policy import (
     SELECTION_POLICY_PARAM_SPECS,
 )
 from core.file_integrity import canonical_json_sha256 as _canonical_hash
+from core.active_param_ensemble import get_active_param_ensemble_date_range
 from core.dataset_profiles import get_dataset_dir
 from core.model_paths import resolve_models_dir
 from core.runtime_utils import get_taipei_now
@@ -141,6 +142,9 @@ SELECTION_FULL_ROOS_RELATIVE_DIR = Path(
 )
 EXTENDING_MIN_ROOS_RELATIVE_DIR = Path(
     "models/research/breakout_quality/strategy_compare/extending_min_roos"
+)
+EXTENDING_FULL_ROOS_RELATIVE_DIR = Path(
+    "models/research/breakout_quality/strategy_compare/extending_full_roos"
 )
 
 
@@ -1198,70 +1202,89 @@ def prepare_selection_historical_p2_params(
     )
 
 
-def prepare_extending_min_roos_params(
+def _prepare_extending_roos_params(
     *,
-    project_root=PROJECT_ROOT,
+    project_root,
     param_policy: str,
     historical_params_path: str,
     current_params_path: str,
-    output_relative_dir: str | Path = EXTENDING_MIN_ROOS_RELATIVE_DIR,
-    quiet: bool = False,
+    output_relative_dir: str | Path,
+    display_name: str,
+    builder_type: str,
+    parameter_set: str,
+    search_fields: tuple[str, ...],
+    output_adaptation: dict[str, Any],
+    required_fixed_rule_contract: str | None,
+    quiet: bool,
 ):
-    """Stitch existing PIT-safe Min ROOS schedules into one Extending-Window chain.
-
-    This is a migration builder, not an optimizer.  It preserves the parameter
-    decisions that were actually available in each historical regime and refuses
-    to combine sources whose rolling cadence/search contract is incompatible.
-    """
+    """Stitch two existing PIT-safe rolling parameter schedules without re-optimizing."""
 
     root = Path(project_root).resolve()
+    policy_spec = PARAM_POLICY_SPECS.get(str(param_policy))
+    if policy_spec is None:
+        raise ValueError(f"Extending {display_name}不支援param_policy: {param_policy}")
+    param_filename = str(policy_spec["filename"])
 
     def resolve(raw: str) -> Path:
-        path = Path(str(raw))
+        rendered = str(raw).format(param_filename=param_filename)
+        path = Path(rendered)
         return path if path.is_absolute() else root / path
 
     historical_path = resolve(historical_params_path)
     current_path = resolve(current_params_path)
     if not historical_path.is_file() or not current_path.is_file():
         missing = [
-            str(path) for path in (historical_path, current_path) if not path.is_file()
+            project_relative_display_path(path, project_root=root)
+            for path in (historical_path, current_path)
+            if not path.is_file()
         ]
         raise FileNotFoundError(
-            "Extending Min ROOS stitch缺少既有source: " + ", ".join(missing)
+            f"Extending {display_name} stitch缺少既有source: " + ", ".join(missing)
         )
 
     historical_payload = _load_json(historical_path)
     current_payload = _load_json(current_path)
     if not isinstance(historical_payload, dict) or not isinstance(current_payload, dict):
-        raise ValueError("Extending Min ROOS source必須是合法JSON object")
+        raise ValueError(f"Extending {display_name} source必須是合法JSON object")
     historical_source = _load_param_source(historical_path)
     current_source = _load_param_source(current_path)
     historical_policy = _validate_requested_param_policy(historical_source, str(param_policy))
     current_policy = _validate_requested_param_policy(current_source, str(param_policy))
     for label, policy in (("historical", historical_policy), ("current", current_policy)):
         if int(policy.get("member_count_min") or 0) != 1 or int(policy.get("member_count_max") or 0) != 1:
-            raise ValueError(f"Extending Min ROOS {label} source每個effective date必須恰有1個member")
+            raise ValueError(
+                f"Extending {display_name} {label} source每個effective date必須恰有1個member"
+            )
 
     historical_meta = dict(historical_payload.get("meta") or {})
     current_meta = dict(current_payload.get("meta") or {})
     for field in ("train_window_months", "oos_horizon_months"):
         if int(historical_meta.get(field) or 0) != int(current_meta.get(field) or 0):
             raise ValueError(
-                "Extending Min ROOS兩段rolling contract不一致: "
+                f"Extending {display_name}兩段rolling contract不一致: "
                 f"{field}={historical_meta.get(field)!r}/{current_meta.get(field)!r}"
             )
     if str(historical_meta.get("window_mode") or "fixed") != str(current_meta.get("window_mode") or "fixed"):
-        raise ValueError("Extending Min ROOS兩段window_mode不一致")
+        raise ValueError(f"Extending {display_name}兩段window_mode不一致")
 
     def validate_adaptation(label: str, payload: dict[str, Any]) -> None:
         adaptation = dict(payload.get("breakout_quality_param_adaptation") or {})
-        if adaptation:
-            if list(adaptation.get("search_fields") or []) != list(MIN_ROOS_SEARCH_FIELDS):
-                raise ValueError(f"Extending Min ROOS {label} search_fields不一致")
-            if bool(adaptation.get("training_dl_enabled")):
-                raise ValueError(f"Extending Min ROOS {label}不得以DL訓練參數")
-            if str(adaptation.get("fixed_rule_contract") or "") != "all_rule_filters_off":
-                raise ValueError(f"Extending Min ROOS {label} rule contract不一致")
+        if not adaptation:
+            return
+        actual_fields = list(adaptation.get("search_fields") or [])
+        if actual_fields and actual_fields != list(search_fields):
+            raise ValueError(f"Extending {display_name} {label} search_fields不一致")
+        if bool(adaptation.get("training_dl_enabled")):
+            raise ValueError(f"Extending {display_name} {label}不得以DL訓練參數")
+        if required_fixed_rule_contract is not None:
+            actual_rule_contract = str(adaptation.get("fixed_rule_contract") or "")
+            if actual_rule_contract and actual_rule_contract != required_fixed_rule_contract:
+                raise ValueError(f"Extending {display_name} {label} rule contract不一致")
+        if display_name == "Full ROOS":
+            actual_search_hash = str(adaptation.get("search_space_sha256") or "")
+            expected_search_hash = _canonical_hash(BREAKOUT_OPTIMIZER_SEARCH_SPACE)
+            if actual_search_hash and actual_search_hash != expected_search_hash:
+                raise ValueError(f"Extending Full ROOS {label} search-space identity不一致")
 
     validate_adaptation("historical", historical_payload)
     validate_adaptation("current", current_payload)
@@ -1269,12 +1292,30 @@ def prepare_extending_min_roos_params(
     historical_mapping = dict(historical_payload.get("params_ensemble_by_effective_date") or {})
     current_mapping = dict(current_payload.get("params_ensemble_by_effective_date") or {})
     if not historical_mapping or not current_mapping:
-        raise ValueError("Extending Min ROOS source缺少params_ensemble_by_effective_date")
-    historical_last = pd.Timestamp(str(historical_meta.get("last_oos_date"))).to_period("M").start_time
-    current_last = pd.Timestamp(str(current_meta.get("last_oos_date"))).to_period("M").start_time
-    if pd.isna(historical_last) or pd.isna(current_last) or current_last <= historical_last:
-        raise ValueError("Extending Min ROOS source period不合法")
-    transition = (historical_last + pd.DateOffset(months=1)).normalize()
+        raise ValueError(f"Extending {display_name} source缺少params_ensemble_by_effective_date")
+
+    historical_coverage_start, historical_coverage_end = get_active_param_ensemble_date_range(
+        historical_payload
+    )
+    current_coverage_start, current_coverage_end = get_active_param_ensemble_date_range(
+        current_payload
+    )
+    historical_end = pd.Timestamp(historical_coverage_end).normalize()
+    current_start = pd.Timestamp(current_coverage_start).normalize()
+    current_end = pd.Timestamp(current_coverage_end).normalize()
+    if (
+        pd.isna(historical_end)
+        or pd.isna(current_start)
+        or pd.isna(current_end)
+        or current_end <= historical_end
+    ):
+        raise ValueError(f"Extending {display_name} source period不合法")
+    transition = (historical_end.to_period("M").start_time + pd.DateOffset(months=1)).normalize()
+    if current_start > transition:
+        raise ValueError(
+            f"Extending {display_name}兩段coverage有缺口: "
+            f"historical_end={historical_coverage_end}, current_start={current_coverage_start}"
+        )
 
     combined: dict[str, Any] = {}
     for date_text, members in historical_mapping.items():
@@ -1286,9 +1327,11 @@ def prepare_extending_min_roos_params(
         if date >= transition:
             combined[date.strftime("%Y-%m-%d")] = copy.deepcopy(members)
     if not combined:
-        raise ValueError("Extending Min ROOS stitch沒有可用effective dates")
+        raise ValueError(f"Extending {display_name} stitch沒有可用effective dates")
 
     horizon = int(historical_meta.get("oos_horizon_months") or 0)
+    if horizon < 1:
+        raise ValueError(f"Extending {display_name} oos_horizon_months必須>=1")
     observed = tuple(sorted(pd.Timestamp(value).normalize() for value in combined))
     expected = []
     cursor = observed[0]
@@ -1297,14 +1340,14 @@ def prepare_extending_min_roos_params(
         cursor = (cursor + pd.DateOffset(months=horizon)).normalize()
     if tuple(expected) != observed:
         raise ValueError(
-            "Extending Min ROOS stitch effective-date chain有缺口: "
+            f"Extending {display_name} stitch effective-date chain有缺口: "
             f"observed={[x.strftime('%Y-%m-%d') for x in observed]}"
         )
 
     output_dir = Path(output_relative_dir)
     if not output_dir.is_absolute():
         output_dir = root / output_dir
-    params_path = output_dir / "active_params" / "roos_base_best.json"
+    params_path = output_dir / "active_params" / param_filename
     manifest_path = output_dir / "extending_stitch_manifest.json"
     historical_sha = compute_file_sha256(historical_path)
     current_sha = compute_file_sha256(current_path)
@@ -1313,38 +1356,128 @@ def prepare_extending_min_roos_params(
     payload["params_ensemble_by_effective_date"] = {
         key: combined[key] for key in sorted(combined)
     }
+
+    def stitch_optional_mapping(field_name: str) -> None:
+        historical_values = historical_payload.get(field_name)
+        current_values = current_payload.get(field_name)
+        if not isinstance(historical_values, dict) and not isinstance(current_values, dict):
+            return
+        merged: dict[str, Any] = {}
+        for raw_key, raw_value in dict(historical_values or {}).items():
+            try:
+                key_date = pd.Timestamp(str(raw_key)).normalize()
+            except (TypeError, ValueError):
+                continue
+            if key_date < transition:
+                merged[str(raw_key)] = copy.deepcopy(raw_value)
+        for raw_key, raw_value in dict(current_values or {}).items():
+            try:
+                key_date = pd.Timestamp(str(raw_key)).normalize()
+            except (TypeError, ValueError):
+                continue
+            if key_date >= transition:
+                merged[str(raw_key)] = copy.deepcopy(raw_value)
+        if merged:
+            payload[field_name] = merged
+
+    stitch_optional_mapping("params_by_effective_date")
+
+    historical_by_year = historical_payload.get("params_by_oos_year")
+    current_by_year = current_payload.get("params_by_oos_year")
+    if isinstance(historical_by_year, dict) or isinstance(current_by_year, dict):
+        stitched_by_year: dict[str, Any] = {}
+        for raw_year, raw_value in dict(historical_by_year or {}).items():
+            try:
+                year = int(str(raw_year)[:4])
+            except (TypeError, ValueError):
+                continue
+            if year < int(transition.year):
+                stitched_by_year[str(raw_year)] = copy.deepcopy(raw_value)
+        for raw_year, raw_value in dict(current_by_year or {}).items():
+            try:
+                year = int(str(raw_year)[:4])
+            except (TypeError, ValueError):
+                continue
+            if year >= int(transition.year):
+                stitched_by_year[str(raw_year)] = copy.deepcopy(raw_value)
+        if stitched_by_year:
+            payload["params_by_oos_year"] = stitched_by_year
+
+    historical_folds = [
+        copy.deepcopy(item) for item in list(historical_payload.get("folds") or [])
+        if isinstance(item, dict)
+    ]
+    current_folds = [
+        copy.deepcopy(item) for item in list(current_payload.get("folds") or [])
+        if isinstance(item, dict)
+    ]
+    if historical_folds or current_folds:
+        stitched_folds: list[dict[str, Any]] = []
+        for item in historical_folds:
+            raw_start = item.get("effective_start") or item.get("oos_start_date")
+            if raw_start and pd.Timestamp(str(raw_start)).normalize() < transition:
+                stitched_folds.append(item)
+        for item in current_folds:
+            raw_start = item.get("effective_start") or item.get("oos_start_date")
+            if raw_start and pd.Timestamp(str(raw_start)).normalize() >= transition:
+                stitched_folds.append(item)
+        stitched_folds.sort(
+            key=lambda item: pd.Timestamp(
+                str(item.get("effective_start") or item.get("oos_start_date"))
+            ).normalize()
+        )
+        payload["folds"] = stitched_folds
+
     meta = dict(payload.get("meta") or {})
     meta.update(
         {
             "window_mode": str(historical_meta.get("window_mode") or "fixed"),
-            "first_oos_date": observed[0].strftime("%Y-%m-%d"),
-            "last_oos_date": observed[-1].strftime("%Y-%m-%d"),
+            "first_oos_date": str(
+                historical_meta.get("first_oos_date")
+                or observed[0].strftime("%Y-%m-%d")
+            ),
+            "last_oos_date": str(current_meta.get("last_oos_date") or current_coverage_end),
             "train_window_months": int(historical_meta.get("train_window_months") or 0),
             "oos_horizon_months": horizon,
             "extending_stitch_transition": transition.strftime("%Y-%m-%d"),
         }
     )
     payload["meta"] = meta
-    payload["breakout_quality_param_adaptation"] = _min_roos_adaptation_contract(
-        arm_id="P2_EXTENDING", training_dl_enabled=False
-    )
+    payload["breakout_quality_param_adaptation"] = copy.deepcopy(output_adaptation)
     summary = dict(payload.get("summary") or {})
-    summary["folds"] = len(combined)
-    summary["extending_stitch"] = True
+    summary.update(
+        {
+            "folds": len(combined),
+            "oos_period": f"{historical_coverage_start}~{current_coverage_end}",
+            "oos_start_date": historical_coverage_start,
+            "oos_end_date": current_coverage_end,
+            "extending_stitch": True,
+        }
+    )
     payload["summary"] = summary
+    stitched_coverage_start, stitched_coverage_end = get_active_param_ensemble_date_range(payload)
+    if (
+        stitched_coverage_start != historical_coverage_start
+        or stitched_coverage_end != current_coverage_end
+    ):
+        raise RuntimeError(
+            f"Extending {display_name} stitch輸出coverage與source contract不一致: "
+            f"stitched={stitched_coverage_start}~{stitched_coverage_end}, "
+            f"expected={historical_coverage_start}~{current_coverage_end}"
+        )
     _write_json(params_path, payload)
 
     manifest = {
         "schema_version": 1,
         "status": "READY",
-        "builder_type": "extending_min_roos_stitch",
-        "arm_id": "P2_EXTENDING",
+        "builder_type": str(builder_type),
+        "arm_id": str(parameter_set),
         "training_dl_enabled": False,
-        "search_fields": list(MIN_ROOS_SEARCH_FIELDS),
+        "search_fields": list(search_fields),
         "param_policy": str(param_policy),
         "transition_date": transition.strftime("%Y-%m-%d"),
-        "coverage_start": observed[0].strftime("%Y-%m-%d"),
-        "coverage_end": observed[-1].strftime("%Y-%m-%d"),
+        "coverage_start": stitched_coverage_start,
+        "coverage_end": stitched_coverage_end,
         "source_artifacts": {
             "historical": {
                 "path": project_relative_display_path(historical_path, project_root=root),
@@ -1363,11 +1496,73 @@ def prepare_extending_min_roos_params(
     _write_json(manifest_path, manifest)
     if not quiet:
         print(
-            "Extending Min ROOS schedule已合法stitch "
+            f"Extending {display_name} schedule已合法stitch "
             f"| {manifest['coverage_start']}~{manifest['coverage_end']} "
             f"| transition={manifest['transition_date']} | folds={len(combined)}"
         )
     return {"params_path": params_path, "manifest_path": manifest_path, "summary": manifest}
+
+
+def prepare_extending_min_roos_params(
+    *,
+    project_root=PROJECT_ROOT,
+    param_policy: str,
+    historical_params_path: str,
+    current_params_path: str,
+    output_relative_dir: str | Path = EXTENDING_MIN_ROOS_RELATIVE_DIR,
+    quiet: bool = False,
+):
+    """Stitch existing PIT-safe Min ROOS schedules into one Extending-Window chain."""
+
+    return _prepare_extending_roos_params(
+        project_root=project_root,
+        param_policy=param_policy,
+        historical_params_path=historical_params_path,
+        current_params_path=current_params_path,
+        output_relative_dir=output_relative_dir,
+        display_name="Min ROOS",
+        builder_type="extending_min_roos_stitch",
+        parameter_set="P2_EXTENDING",
+        search_fields=MIN_ROOS_SEARCH_FIELDS,
+        output_adaptation=_min_roos_adaptation_contract(
+            arm_id="P2_EXTENDING", training_dl_enabled=False
+        ),
+        required_fixed_rule_contract="all_rule_filters_off",
+        quiet=quiet,
+    )
+
+
+def prepare_extending_full_roos_params(
+    *,
+    project_root=PROJECT_ROOT,
+    param_policy: str,
+    historical_params_path: str,
+    current_params_path: str,
+    output_relative_dir: str | Path = EXTENDING_FULL_ROOS_RELATIVE_DIR,
+    quiet: bool = False,
+):
+    """Stitch historical/current Full ROOS schedules for current Extending comparison."""
+
+    return _prepare_extending_roos_params(
+        project_root=project_root,
+        param_policy=param_policy,
+        historical_params_path=historical_params_path,
+        current_params_path=current_params_path,
+        output_relative_dir=output_relative_dir,
+        display_name="Full ROOS",
+        builder_type="extending_full_roos_stitch",
+        parameter_set="P4_EXTENDING",
+        search_fields=FULL_ROOS_SEARCH_FIELDS,
+        output_adaptation={
+            "mode": "extending_full_roos_stitch",
+            "parameter_set": "P4_EXTENDING",
+            "training_dl_enabled": False,
+            "search_fields": list(FULL_ROOS_SEARCH_FIELDS),
+            "search_space_sha256": _canonical_hash(BREAKOUT_OPTIMIZER_SEARCH_SPACE),
+        },
+        required_fixed_rule_contract=None,
+        quiet=quiet,
+    )
 
 
 def _build_selection_full_roos_schedule_contract(

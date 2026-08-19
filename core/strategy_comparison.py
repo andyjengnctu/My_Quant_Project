@@ -644,7 +644,7 @@ def _validate_builder(
         for option_name in ("resume", "build_binary_pit", "binary_pit_resume", "quiet"):
             if option_name in builder.options and not isinstance(builder.options[option_name], bool):
                 raise ValueError(f"{field_name}.{option_name}必須是bool")
-    if builder.builder_type == "extending_min_roos_stitch":
+    if builder.builder_type in {"extending_min_roos_stitch", "extending_full_roos_stitch"}:
         for option_name in ("historical_params_path", "current_params_path", "output_relative_dir"):
             value = str(builder.options.get(option_name) or "").strip()
             if not value:
@@ -743,6 +743,7 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
             allowed_types={
                 "binary_dl_min_roos_rolling",
                 "extending_min_roos_stitch",
+                "extending_full_roos_stitch",
                 "selection_historical_p2",
                 "selection_historical_full_roos",
             },

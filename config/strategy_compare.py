@@ -37,7 +37,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 45
+STRATEGY_COMPARE_SCHEMA_VERSION = 46
 
 # =============================================================================
 # 1. 常用設定
@@ -100,26 +100,30 @@ STRATEGY_COMPARE_PROFILES = {
         "label": "Pre-Test 策略比較",
         "description": (
             "單模型快速研究Gate：沿用原本full-Selection refit後的2021+ continuous-ranker OOS scores，"
-            "快速比較DL-off Min ROOS、MR-13E reference與目前B2 candidate。只決定是否值得進正式Rolling，"
+            "固定比較Full ROOS、Min ROOS、MR-13E reference與目前B2 candidate。只決定是否值得進正式Rolling，"
             "不得取代2016～2025十fold Extending-Window evidence。"
         ),
         "display_alignment_group": "pre_test_strategy_compare",
-        "display_alignment_arm_ids": ("C3", "C44", "C56"),
+        "display_alignment_arm_ids": ("C1", "C3", "C44", "C56"),
         "start_date": None,
         "end_date": None,
         "output_root": "outputs/strategy_compare/pre_test",
         "reuse_output_roots": ("outputs/strategy_compare/forward_oos",),
-        "arm_ids": ("C3", "C44", "C56"),
-        "contrast_ids": ("C44-C3", "C56-C44", "C56-C3"),
+        "arm_ids": ("C1", "C3", "C44", "C56"),
+        "contrast_ids": (
+            "C1-C3", "C44-C3", "C44-C1",
+            "C56-C44", "C56-C3", "C56-C1",
+        ),
     },
     "extending_window_rolling": {
         "label": "Extending-Window Rolling 策略比較",
         "description": (
             "2016→2025十個完整年度fold的單一PIT-safe operational chain；DL使用expanding history + "
-            "annual refit，策略Min ROOS沿用各時期當時合法rolling params。2021不再形成evaluation policy斷點。"
+            "annual refit；Full／Min ROOS都沿用各時期當時合法rolling params形成共同策略體系基準。"
+            "2021不再形成evaluation policy斷點。"
         ),
         "display_alignment_group": "extending_strategy_compare",
-        "display_alignment_arm_ids": ("C58", "C59", "C60"),
+        "display_alignment_arm_ids": ("C61", "C58", "C59", "C60"),
         "start_date": "2016-01-01",
         "end_date": "2025-12-31",
         "output_root": "outputs/strategy_compare/extending_window_rolling",
@@ -127,8 +131,11 @@ STRATEGY_COMPARE_PROFILES = {
             "outputs/strategy_compare/selection_pit",
             "outputs/strategy_compare/forward_oos",
         ),
-        "arm_ids": ("C58", "C59", "C60"),
-        "contrast_ids": ("C59-C58", "C60-C58", "C60-C59"),
+        "arm_ids": ("C61", "C58", "C59", "C60"),
+        "contrast_ids": (
+            "C61-C58", "C59-C58", "C59-C61",
+            "C60-C58", "C60-C61", "C60-C59",
+        ),
     },
     # Legacy evaluation policies retained only for historical replay / artifact interpretation.
     "selection_pit": {
@@ -307,14 +314,51 @@ STRATEGY_PARAM_SOURCES = {
             "options": {
                 "historical_params_path": (
                     "models/research/breakout_quality/trade_path_label/a2_teacher_params/"
-                    "p2_dl_off_trained/active_params/roos_base_best.json"
+                    "p2_dl_off_trained/active_params/{param_filename}"
                 ),
                 "current_params_path": (
                     "models/research/breakout_quality/binary_dl_filter_param_adaptation/"
-                    "risk_only_rolling/p2_dl_off_trained/active_params/roos_base_best.json"
+                    "risk_only_rolling/p2_dl_off_trained/active_params/{param_filename}"
                 ),
                 "output_relative_dir": (
                     "models/research/breakout_quality/strategy_compare/extending_min_roos"
+                ),
+                "quiet": False,
+            },
+        },
+    },
+    "extending_full_roos": {
+        "path_template": (
+            "models/research/breakout_quality/strategy_compare/extending_full_roos/"
+            "active_params/{param_filename}"
+        ),
+        "description": (
+            "Extending-Window 2016→2025 Full ROOS；stitch既有2014-2020 historical P4與2021+ "
+            "canonical Full rolling schedules；只在rolling/search contract一致時建立，不重新最佳化。"
+        ),
+        "identity_manifest_path": (
+            "models/research/breakout_quality/strategy_compare/extending_full_roos/"
+            "extending_stitch_manifest.json"
+        ),
+        "trained_with_dl_id": None,
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "mode": "extending_full_roos_stitch",
+                "parameter_set": "P4_EXTENDING",
+                "training_dl_enabled": False,
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "extending_full_roos_stitch",
+            "options": {
+                "historical_params_path": (
+                    "models/research/breakout_quality/strategy_compare/selection_full_roos/"
+                    "active_params/{param_filename}"
+                ),
+                "current_params_path": "models/{param_filename}",
+                "output_relative_dir": (
+                    "models/research/breakout_quality/strategy_compare/extending_full_roos"
                 ),
                 "quiet": False,
             },
@@ -583,6 +627,18 @@ STRATEGY_DL_SOURCES = {
 # arm definition 本身不再保存第二份 enabled 狀態。
 
 STRATEGY_COMPARE_ARMS = {
+    "C61": {
+        "name": STRATEGY_COMPARE_DISPLAY_FULL_ROOS,
+        "description": (
+            "Extending-Window 2016→2025 stitched Full ROOS rolling params；formal rules；DL-off baseline"
+        ),
+        "param_source": "extending_full_roos",
+        "rule_policy": "formal",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
     "C58": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_ROOS,
         "description": "Extending-Window 2016→2025 stitched Min ROOS rolling params；rules全關；DL-off baseline",
@@ -766,8 +822,11 @@ STRATEGY_COMPARE_ARMS = {
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
+    "C61-C58": {"left": "C61", "right": "C58", "description": "Extending-Window Rolling Full ROOS相對同期間Min ROOS的完整策略體系差異；不是單一參數效果"},
     "C59-C58": {"left": "C59", "right": "C58", "description": "Extending-Window Rolling MR-13E相對同期間DL-off Min ROOS的增量策略效果"},
+    "C59-C61": {"left": "C59", "right": "C61", "description": "Extending-Window Rolling MR-13E Min策略相對同期間Full ROOS的整體策略結果；不是單一DL效果"},
     "C60-C58": {"left": "C60", "right": "C58", "description": "Extending-Window Rolling B2相對同期間DL-off Min ROOS的增量策略效果"},
+    "C60-C61": {"left": "C60", "right": "C61", "description": "Extending-Window Rolling B2 Min策略相對同期間Full ROOS的整體策略結果；不是單一DL效果"},
     "C60-C59": {"left": "C60", "right": "C59", "description": "Extending-Window Rolling B2相對MR-13E production reference語意的同政策比較"},
     "C42-C23": {"left": "C42", "right": "C23", "description": "Selection PIT frozen MR-13E score exact constrained optimum相對DL-off Min ROOS的策略經濟效果"},
     "C42-C32": {"left": "C42", "right": "C32", "description": "Selection PIT active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},

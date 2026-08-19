@@ -9512,3 +9512,26 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 第二個Decision：`TWO_FOLD_SAME_GPU_PROCESS_PARALLEL_REJECTED_BY_RUNTIME_OBSERVATION / ROLLED_BACK`。Current Rolling物理移除`BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_WORKERS`、`--fold-workers`、parallel fold worker/ProcessPool、Multi-seed nested guard與其專屬synthetic；回到原serial fold loop。已完成且identity/hash合法的fold仍沿用原本REUSE/resume contract，不重訓；fold scientific identity沒有改變。
 - Current execution truth：**單fold串行 + feature-only ordered prefetch**。後續若再做performance engineering，優先以單fold wall-clock與可量測的profiler證據定位，而不是再疊同GPU跨foldprocess concurrency。
 - 本次第二次負結果基準=`test-branch-1_20260819_015247_27f52f0.zip`，SHA256=`ca0a11ef6d17a3c3a8f9afeabe3afd21d9f6b4ecc8e2eb01f7a1358af1a044bf`。本節只記execution engineering evidence，不新增MR/SR identity。
+
+### 2026-08-19 — Extending Min ROOS stitch coverage/replan bug closure
+
+- 性質：Strategy Compare deterministic prerequisite bug fix；不新增MR/DL/SR/PARAM identity，不改optimizer、策略參數值、模型、Target或replay數學。
+- 實機症狀：`Extending-Window Rolling 策略比較`第一次plan為`BUILD param:extending_min_roos`；stitch顯示成功後refresh卻把同一artifact判成`REBUILD`，第二次builder後因仍非READY而報`重新規劃後沒有可執行且依賴已就緒的動作`。
+- 根因：`prepare_extending_min_roos_params()`只替換`params_ensemble_by_effective_date`，但輸出仍繼承historical source的`summary.oos_period/oos_end_date`與`folds`。manifest的`coverage_end`又錯用最後effective-start，而不是active-param schedule真正effective-end；因此console可顯示到2026，但`get_active_param_ensemble_date_range()`實際只解析到historical 2020尾端，preflight正確產生`PARAM_PERIOD_MISMATCH`。
+- 修正：stitch以兩個source的canonical active-param coverage計算transition與總coverage；同步stitch current/historical fold metadata與可用effective mapping；`summary.oos_start_date/oos_end_date/oos_period`改寫為真正combined coverage；寫檔前以`get_active_param_ensemble_date_range()`做self-check；manifest coverage固定使用同一canonical range。
+- Identity guard：`extending_stitch_manifest.json`現在另外驗證`param_policy`、historical/current source SHA、output params SHA與manifest coverage；任一上游P2 source改變時必須`REBUILD`，不得誤REUSE舊stitch。
+- 獨立最小案例：舊版builder manifest宣稱`2014-01-01~2026-01-01`但canonical schedule range實際為`2014-01-01~2020-12-31`，comparison 2016～2025因此`PARAM_PERIOD_MISMATCH`；修正後同案例canonical range=`2014-01-01~2026-12-31`且artifact/identity皆`READY`，改動current source後identity正確變成`EXTENDING_STITCH_SOURCE_HASH_MISMATCH:current`。
+- Decision：`BUG_FIXED / STITCH_SELF_VALIDATING / UPSTREAM_HASH_PINNED / SCIENTIFIC_SEMANTICS_UNCHANGED`。
+
+### 2026-08-19 — Current Strategy Compare恢復Full ROOS comparator
+
+- 性質：evaluation-framework comparison-matrix correction；不改模型、Target、optimizer數學、replay/execution semantics或production identity。
+- 使用者回報：current `策略組合比較`只剩Min ROOS、MR-13E與MR-13K+MR-13M，原Full ROOS比較不見。程式核對確認Full artifacts/legacy identities並未刪除；遺失發生在framework migration後current profile membership：`pre_test`只列`C3/C44/C56`，`extending_window_rolling`只列`C58/C59/C60`。
+- Pre-Test修正：直接恢復既有2021+ frozen OOS `C1 Full ROOS`，current quick matrix固定為`C1/C3/C44/C56`；Full只作DL-off完整策略體系baseline，不改C44/C56既有DL語意。
+- Extending修正：不能把2021+ `C1`硬套到2016～2025，因此新增`SR-C61 / Extending-Window Rolling Full ROOS baseline`與`PARAM-P4-EXTENDING`。後者只將既有2014～2020 historical `PARAM-P4 / selection_full_roos`與2021+ canonical Full rolling schedule依canonical coverage transition stitch；formal rules、DL-off，不以後段結果重新最佳化前段。Current matrix固定=`C61/C58/C59/C60`。
+- Full stitch與前一輪Min stitch共用同一self-validating SSOT：stitch effective-date mappings/folds/summary period，寫檔後以`get_active_param_ensemble_date_range()`驗證真正coverage；manifest pin historical/current source SHA、output SHA、param policy與coverage。`extending_min_roos`來源path同時改為依`param_policy`渲染`{param_filename}`，避免把`roos_base_best.json`硬編碼成唯一policy。
+- Current contrasts新增Full-relative人讀比較：`C61-C58`、`C59-C61`、`C60-C61`；既有Min-relative與B2-vs-MR13E contrasts保留。Current multi-seed robustness不變，仍固定`C58`、stochastic=`C60`；C61不進stochastic training。
+- Strategy Compare schema=`45 → 46`。Production仍`C42/C44`，本輪不作promotion。
+- 獨立synthetic驗證：Min與Full stitched schedule都可得到canonical `2014-01-01～2026-12-31`、artifact=`READY`、identity=`READY`；Extending current arms解析=`C61/C58/C59/C60`，Pre-Test=`C1/C3/C44/C56`。
+- Decision：`FULL_ROOS_COMPARATOR_RESTORED / PIT_SAFE_EXTENDING_FULL_BASELINE_IMPLEMENTED / RESULT_PENDING / PRODUCTION_UNCHANGED`。
+

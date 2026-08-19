@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import io
+import json
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -118,6 +119,213 @@ def append_strategy_compare_preparation_contract_checks(
             call.kwargs["action"].artifact_key
             for call in mocked_prepare_action.call_args_list
         ] == ["dl:TP1:forward_scores", "param:min_roos"],
+    )
+
+    from config.strategy_compare import get_strategy_comparison_settings
+    from core.active_param_ensemble import (
+        ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
+        get_active_param_ensemble_date_range,
+    )
+    from filters.breakout_quality.strategy_compare_preparation_status import (
+        _validate_param_artifact,
+        _validate_param_training_identity,
+        resolve_param_source_path,
+    )
+    from filters.breakout_quality.strategy_param_training import (
+        FULL_ROOS_SEARCH_FIELDS,
+        MIN_ROOS_SEARCH_FIELDS,
+        prepare_extending_full_roos_params,
+        prepare_extending_min_roos_params,
+    )
+
+    extending_settings = get_strategy_comparison_settings("extending_window_rolling")
+    extending_source = extending_settings.parameter_sources["extending_min_roos"]
+    extending_options = dict(extending_source.builder.options)
+    extending_full_source = extending_settings.parameter_sources["extending_full_roos"]
+    extending_full_options = dict(extending_full_source.builder.options)
+    param_filename = "roos_base_best.json"
+
+    def _render_param_path(raw: str) -> str:
+        return str(raw).format(param_filename=param_filename)
+
+    def _synthetic_min_roos_payload(first_year: int, last_year: int) -> dict[str, Any]:
+        mapping: dict[str, Any] = {}
+        simple_mapping: dict[str, Any] = {}
+        folds: list[dict[str, Any]] = []
+        params = {
+            "high_len": 60,
+            "atr_len": 14,
+            "atr_buy_tol": 1.5,
+            "atr_times_init": 2.0,
+            "atr_times_trail": 3.0,
+        }
+        for year in range(first_year, last_year + 1):
+            effective_start = f"{year}-01-01"
+            effective_end = f"{year}-12-31"
+            mapping[effective_start] = [{"params": dict(params)}]
+            simple_mapping[effective_start] = dict(params)
+            folds.append({
+                "effective_start": effective_start,
+                "effective_end": effective_end,
+                "oos_start_date": effective_start,
+                "oos_end_date": effective_end,
+            })
+        return {
+            "schema_type": ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
+            "schema_version": 1,
+            "mode": "rolling",
+            "selector": "base_finalist_best",
+            "random_seed_ensemble": {"seed_count": 1, "min_agree": 1},
+            "meta": {
+                "window_mode": "fixed",
+                "first_oos_date": f"{first_year}-01-01",
+                "last_oos_date": f"{last_year}-12-31",
+                "train_window_months": 120,
+                "oos_horizon_months": 12,
+            },
+            "summary": {
+                "folds": last_year - first_year + 1,
+                "oos_period": f"{first_year}-01-01~{last_year}-12-31",
+            },
+            "params_ensemble_by_effective_date": mapping,
+            "params_by_effective_date": simple_mapping,
+            "folds": folds,
+            "breakout_quality_param_adaptation": {
+                "mode": "min_roos_training",
+                "parameter_set": "P2",
+                "search_fields": list(MIN_ROOS_SEARCH_FIELDS),
+                "fixed_rule_contract": "all_rule_filters_off",
+                "training_dl_enabled": False,
+            },
+        }
+
+    with tempfile.TemporaryDirectory() as extending_temp:
+        extending_root = Path(extending_temp)
+        historical_path = extending_root / _render_param_path(extending_options["historical_params_path"])
+        current_path = extending_root / _render_param_path(extending_options["current_params_path"])
+        historical_path.parent.mkdir(parents=True, exist_ok=True)
+        current_path.parent.mkdir(parents=True, exist_ok=True)
+        historical_path.write_text(
+            json.dumps(_synthetic_min_roos_payload(2014, 2020)), encoding="utf-8"
+        )
+        current_path.write_text(
+            json.dumps(_synthetic_min_roos_payload(2021, 2026)), encoding="utf-8"
+        )
+        prepare_extending_min_roos_params(
+            project_root=extending_root,
+            param_policy=extending_settings.param_policy,
+            historical_params_path=str(extending_options["historical_params_path"]),
+            current_params_path=str(extending_options["current_params_path"]),
+            output_relative_dir=str(extending_options["output_relative_dir"]),
+            quiet=True,
+        )
+        extending_output = resolve_param_source_path(
+            extending_root, extending_settings, "extending_min_roos"
+        )
+        extending_payload = json.loads(extending_output.read_text(encoding="utf-8"))
+        extending_range = get_active_param_ensemble_date_range(extending_payload)
+        extending_artifact_ready, extending_artifact_status, _policy = _validate_param_artifact(
+            extending_output,
+            param_policy=extending_settings.param_policy,
+            comparison_start=extending_settings.start_date,
+            comparison_end=extending_settings.end_date,
+            artifact_contract=dict(extending_source.artifact_contract),
+        )
+        extending_identity_ready, extending_identity_status, _manifest_path = (
+            _validate_param_training_identity(
+                root=extending_root,
+                settings=extending_settings,
+                source_id="extending_min_roos",
+            )
+        )
+        current_payload = json.loads(current_path.read_text(encoding="utf-8"))
+        current_payload["meta"]["synthetic_source_change"] = True
+        current_path.write_text(json.dumps(current_payload), encoding="utf-8")
+        stale_identity_ready, stale_identity_status, _stale_manifest = (
+            _validate_param_training_identity(
+                root=extending_root,
+                settings=extending_settings,
+                source_id="extending_min_roos",
+            )
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "extending_min_roos_stitch_preserves_true_coverage_and_self_validates",
+        True,
+        extending_range == ("2014-01-01", "2026-12-31")
+        and extending_artifact_ready
+        and extending_artifact_status == "READY"
+        and extending_identity_ready
+        and extending_identity_status == "READY"
+        and not stale_identity_ready
+        and stale_identity_status == "EXTENDING_STITCH_SOURCE_HASH_MISMATCH:current",
+    )
+
+
+    def _synthetic_full_roos_payload(first_year: int, last_year: int) -> dict[str, Any]:
+        payload = _synthetic_min_roos_payload(first_year, last_year)
+        payload["breakout_quality_param_adaptation"] = {
+            "mode": "selection_full_roos_training",
+            "parameter_set": "P4_HISTORY",
+            "search_fields": list(FULL_ROOS_SEARCH_FIELDS),
+            "training_dl_enabled": False,
+        }
+        return payload
+
+    with tempfile.TemporaryDirectory() as full_temp:
+        full_root = Path(full_temp)
+        historical_full_path = full_root / _render_param_path(
+            extending_full_options["historical_params_path"]
+        )
+        current_full_path = full_root / _render_param_path(
+            extending_full_options["current_params_path"]
+        )
+        historical_full_path.parent.mkdir(parents=True, exist_ok=True)
+        current_full_path.parent.mkdir(parents=True, exist_ok=True)
+        historical_full_path.write_text(
+            json.dumps(_synthetic_full_roos_payload(2014, 2020)), encoding="utf-8"
+        )
+        current_full_path.write_text(
+            json.dumps(_synthetic_full_roos_payload(2021, 2026)), encoding="utf-8"
+        )
+        prepare_extending_full_roos_params(
+            project_root=full_root,
+            param_policy=extending_settings.param_policy,
+            historical_params_path=str(extending_full_options["historical_params_path"]),
+            current_params_path=str(extending_full_options["current_params_path"]),
+            output_relative_dir=str(extending_full_options["output_relative_dir"]),
+            quiet=True,
+        )
+        full_output = resolve_param_source_path(
+            full_root, extending_settings, "extending_full_roos"
+        )
+        full_payload = json.loads(full_output.read_text(encoding="utf-8"))
+        full_range = get_active_param_ensemble_date_range(full_payload)
+        full_artifact_ready, full_artifact_status, _full_policy = _validate_param_artifact(
+            full_output,
+            param_policy=extending_settings.param_policy,
+            comparison_start=extending_settings.start_date,
+            comparison_end=extending_settings.end_date,
+            artifact_contract=dict(extending_full_source.artifact_contract),
+        )
+        full_identity_ready, full_identity_status, _full_manifest = (
+            _validate_param_training_identity(
+                root=full_root,
+                settings=extending_settings,
+                source_id="extending_full_roos",
+            )
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "extending_full_roos_stitch_restores_current_full_baseline_with_pit_safe_coverage",
+        True,
+        full_range == ("2014-01-01", "2026-12-31")
+        and full_artifact_ready
+        and full_artifact_status == "READY"
+        and full_identity_ready
+        and full_identity_status == "READY"
+        and dict(full_payload.get("breakout_quality_param_adaptation") or {}).get("parameter_set")
+            == "P4_EXTENDING",
     )
 
     dependency_reuse = StrategyPreparationAction(

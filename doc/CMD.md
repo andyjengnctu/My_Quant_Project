@@ -173,7 +173,7 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-MR-13E仍是production／reference anchor；current Extending-Window Rolling研究使用MR-13K作primary upside ranking、MR-13M作residual-safety secondary source，策略arms為`C58/C59/C60`。模型訓練的單一Active Profile因此設為MR-13K；`[5] 準備策略比較所需模型工件`再依current Strategy Compare config準備／重用MR-13E、MR-13K、MR-13M三個模型來源。Current Extending robustness預設4 seeds；production identity仍保留既有C42/C44，未經Rolling evidence與明確promotion decision不得自動切換。後續順序以`doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`為準，`doc/ToDo.md`只屬使用者私人筆記。
+MR-13E仍是production／reference anchor；current Extending-Window Rolling研究使用MR-13K作primary upside ranking、MR-13M作residual-safety secondary source。策略比較固定保留Full/Min兩個DL-off策略體系基準：`C61 Full ROOS / C58 Min ROOS / C59 MR-13E / C60 MR-13K+MR-13M`。模型訓練的單一Active Profile設為MR-13K；`[5] 準備策略比較所需模型工件`依current Strategy Compare config準備／重用MR-13E、MR-13K、MR-13M三個模型來源。Current Extending robustness預設4 seeds且仍只以C58對C60作current robustness；production identity保留既有C42/C44，未經Rolling evidence與明確promotion decision不得自動切換。後續順序以`doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`為準，`doc/ToDo.md`只屬使用者私人筆記。
 
 Active continuous model menu由config／research spec動態產生；目前MR-13K會顯示：
 
@@ -195,11 +195,11 @@ Forward console／簡易報表除既有economic ranking品質外，MR-13O會額�
 ### Current Rolling 驗證順序（2026-08-18 current）
 
 1. `apps/research.py → [1] 模型訓練 → [1] Pre-Test｜單模型快速驗證`：沿用原本單模型流程；所有合法歷史→2020 Selection refit，2021+只作快速OOS研究Gate。
-2. `apps/research.py → [3] 策略組合比較 → [1] Pre-Test 策略比較`：直接REUSE單模型OOS scores，快速比較DL-off/reference/current candidate；只決定是否值得進Rolling。
+2. `apps/research.py → [3] 策略組合比較 → [1] Pre-Test 策略比較`：直接REUSE單模型OOS scores，固定比較`Full ROOS / Min ROOS / MR-13E / MR-13K+MR-13M`；只決定是否值得進Rolling。
 3. `apps/research.py → [1] 模型訓練 → [2] Extending-Window Rolling 模型驗證`：2016～2025共10個完整年度fold，使用完整合法歷史、annual refit。
 4. `apps/research.py → [1] 模型訓練 → [3] Fixed-Window Rolling 模型驗證`：2016～2025固定120M history、annual refit，作歷史learnability診斷。
 5. `apps/research.py → [1] 模型訓練 → [5] 準備策略比較所需模型工件`：準備Pre-Test與Extending current sources。
-6. `apps/research.py → [3] 策略組合比較 → [2] Extending-Window Rolling 策略比較`：正式執行C58/C59/C60。
+6. `apps/research.py → [3] 策略組合比較 → [2] Extending-Window Rolling 策略比較`：正式執行`C61 Full ROOS / C58 Min ROOS / C59 MR-13E / C60 MR-13K+MR-13M`。`C61`使用既有historical/current Full rolling schedules stitch出的`P4_EXTENDING`，不重新最佳化。
 7. 若正式Rolling Seed42結果仍有決策價值，再執行`[3] Extending-Window Rolling Multi-seed robustness`；預設4 seeds。沒有combined robustness入口。
 
 Continuous-ranker / Rolling CUDA feeding的current execution default為`train_prefetch_batches=8`、`train_prefetch_workers=4`，維持feature-only ordered prefetch，並使用pinned feature + non-blocking H2D + dedicated CUDA copy stream。complete-host prefetch與同張GPU的2-fold process parallel都已因使用者實機觀察更慢而退役；Rolling回到單fold串行，已完成且identity/hash合法的fold仍照原resume contract先REUSE。這些execution決策都不改fold scientific identity或optimizer semantics。

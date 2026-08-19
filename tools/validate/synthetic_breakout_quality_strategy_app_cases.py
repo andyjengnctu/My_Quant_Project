@@ -3816,6 +3816,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c55_options = dict(c55_current.dl_runtime_options or {})
     c56_options = dict(c56_current.dl_runtime_options or {})
     operational_current_settings = strategy_config.get_strategy_comparison_settings("extending_window_rolling")
+    c61_current = operational_current_settings.arms["C61"]
     c58_current = operational_current_settings.arms["C58"]
     c59_current = operational_current_settings.arms["C59"]
     c60_current = operational_current_settings.arms["C60"]
@@ -3823,14 +3824,19 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     operational_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("extending_window_rolling")
     extending_param_source = operational_current_settings.parameter_sources["extending_min_roos"]
     extending_param_builder = extending_param_source.builder
+    extending_full_source = operational_current_settings.parameter_sources["extending_full_roos"]
+    extending_full_builder = extending_full_source.builder
     selection_robustness_legacy = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
     forward_robustness_legacy = strategy_config.get_strategy_multi_seed_robustness_settings("forward_oos")
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "operational_c60_is_current_dual_model_research_line_while_c56_c57_full_flow_is_legacy",
         True,
-        {"C58", "C59", "C60"}
+        {"C61", "C58", "C59", "C60"}
         == {arm.arm_id for arm in operational_current_settings.enabled_arms}
+        and c61_current.enabled and not c61_current.dl_enabled
+        and c61_current.param_source == "extending_full_roos"
+        and c61_current.rule_policy == "formal"
         and c58_current.enabled and not c58_current.dl_enabled
         and c59_current.enabled and c59_current.dl_id == "CONT13E_ROLL"
         and c60_current.enabled
@@ -3842,6 +3848,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and extending_param_source.identity_manifest_path.endswith("extending_stitch_manifest.json")
         and dict(extending_param_source.artifact_contract.get("breakout_quality_param_adaptation") or {}).get("parameter_set")
             == "P2_EXTENDING"
+        and extending_full_builder is not None
+        and extending_full_builder.builder_type == "extending_full_roos_stitch"
+        and dict(extending_full_builder.options).get("output_relative_dir")
+            == "models/research/breakout_quality/strategy_compare/extending_full_roos"
+        and extending_full_source.identity_manifest_path.endswith("extending_stitch_manifest.json")
+        and dict(extending_full_source.artifact_contract.get("breakout_quality_param_adaptation") or {}).get("parameter_set")
+            == "P4_EXTENDING"
         and c60_current.rule_policy == c58_current.rule_policy == c59_current.rule_policy == "all_off"
         and c60_current.dl_id == "CONT13K_ROLL"
         and c60_current.dl_runtime_mode == "resource-aware-continuous-score-residual-safety-constrained-optimal"
@@ -3851,7 +3864,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and c60_options.get("preserve_k_r0") is True
         and c60_options.get("constrained_solver") == "exact_branch_and_bound_v1"
         and c60_options.get("selection_only") is True
-        and {"C59-C58", "C60-C58", "C60-C59"}
+        and {"C61-C58", "C59-C58", "C59-C61", "C60-C58", "C60-C61", "C60-C59"}
         == {contrast.contrast_id for contrast in operational_current_settings.enabled_contrasts}
         and operational_robustness_active.enabled
         and tuple(operational_robustness_active.fixed_arm_ids) == ("C58",)
