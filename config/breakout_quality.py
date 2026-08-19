@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 from config.breakout_policy import (
@@ -219,7 +220,31 @@ BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE = "2016-01-01"
 # Current formal Rolling只使用10個完整年度fold：2016～2025；不納入2026 partial fold。
 # "auto"仍保留為可設定值，供未來明確擴展到最新可評分stock-day。
 BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE: str | None = "2025-12-31"
-BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_MONTHS = 12
+
+# Current Rolling Test只保留兩種執行深度；兩者都完整覆蓋相同score period，
+# 唯一差別是score/refit cadence。Fast用兩個60M OOS blocks作快速Gate；
+# Overnight用12M annual folds作完整Rolling evidence。
+BREAKOUT_QUALITY_ROLLING_TEST_MODES = {
+    "fast": {
+        "label": "Fast Test",
+        "fold_months": 60,
+        "fold_anchor_date": "2016-01-01",
+        # Fast aggregate必須隔離，不能覆寫既有12M canonical PIT。
+        "point_in_time_dirname": "point_in_time_fast_60m",
+    },
+    "overnight": {
+        "label": "Overnight Test",
+        "fold_months": 12,
+        "fold_anchor_date": None,
+        # None = 沿用既有canonical point_in_time路徑，讓已完成12M folds直接REUSE。
+        "point_in_time_dirname": None,
+    },
+}
+BREAKOUT_QUALITY_DEFAULT_ROLLING_TEST_MODE = "fast"
+# Backward-compatible canonical PIT cadence；current Overnight Test由同一設定衍生。
+BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_MONTHS = int(
+    BREAKOUT_QUALITY_ROLLING_TEST_MODES["overnight"]["fold_months"]
+)
 BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS = 24
 # None = expanding history；正整數 = 完整fit history固定最近N個calendar months，
 # 且必須大於inner validation months。Operational固定為None。
@@ -1679,6 +1704,69 @@ def get_breakout_quality_continuous_ranker_comparison_settings(
 
 
 @dataclass(frozen=True)
+class BreakoutQualityRollingTestModeSettings:
+    mode_id: str
+    label: str
+    fold_months: int
+    fold_anchor_date: str | None
+    point_in_time_dirname: str | None
+
+
+def get_breakout_quality_rolling_test_modes() -> tuple[BreakoutQualityRollingTestModeSettings, ...]:
+    rows: list[BreakoutQualityRollingTestModeSettings] = []
+    seen: set[str] = set()
+    for mode_id, raw in dict(BREAKOUT_QUALITY_ROLLING_TEST_MODES).items():
+        normalized_id = str(mode_id).strip()
+        if not normalized_id or normalized_id in seen:
+            raise ValueError(f"Rolling Test mode id空白或重複: {mode_id!r}")
+        label = str(dict(raw).get("label") or "").strip()
+        fold_months = int(dict(raw).get("fold_months", 0) or 0)
+        anchor_raw = dict(raw).get("fold_anchor_date")
+        fold_anchor_date = None if anchor_raw in (None, "") else str(anchor_raw).strip()
+        if fold_anchor_date is not None:
+            try:
+                date.fromisoformat(fold_anchor_date)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Rolling Test fold_anchor_date必須是YYYY-MM-DD: {fold_anchor_date!r}"
+                ) from exc
+        dirname_raw = dict(raw).get("point_in_time_dirname")
+        dirname = None if dirname_raw in (None, "") else str(dirname_raw).strip()
+        if not label:
+            raise ValueError(f"Rolling Test mode label不可空白: {normalized_id}")
+        if fold_months < 1:
+            raise ValueError(f"Rolling Test fold_months必須>=1: {normalized_id}")
+        if dirname is not None and (Path(dirname).name != dirname or dirname in {".", ".."}):
+            raise ValueError(f"Rolling Test point_in_time_dirname必須是安全單一資料夾名稱: {dirname!r}")
+        rows.append(
+            BreakoutQualityRollingTestModeSettings(
+                mode_id=normalized_id,
+                label=label,
+                fold_months=fold_months,
+                fold_anchor_date=fold_anchor_date,
+                point_in_time_dirname=dirname,
+            )
+        )
+        seen.add(normalized_id)
+    if len(rows) < 2:
+        raise ValueError("Rolling Test至少需要兩種執行深度")
+    default_mode = str(BREAKOUT_QUALITY_DEFAULT_ROLLING_TEST_MODE).strip()
+    if default_mode not in seen:
+        raise ValueError(f"Rolling Test default mode不存在: {default_mode!r}")
+    return tuple(rows)
+
+
+def get_breakout_quality_rolling_test_mode(
+    mode_id: str | None = None,
+) -> BreakoutQualityRollingTestModeSettings:
+    selected = str(mode_id or BREAKOUT_QUALITY_DEFAULT_ROLLING_TEST_MODE).strip()
+    for item in get_breakout_quality_rolling_test_modes():
+        if item.mode_id == selected:
+            return item
+    raise ValueError(f"未知Rolling Test mode: {selected!r}")
+
+
+@dataclass(frozen=True)
 class BreakoutQualityRollingTimingSettings:
     experiment_profile: str
     seed: int
@@ -2389,6 +2477,7 @@ __all__ = [
     'BREAKOUT_QUALITY_STRATEGY_SCORE_SOURCE',
     'BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE',
     'BreakoutQualityContinuousRankerComparisonSettings',
+    'BreakoutQualityRollingTestModeSettings',
     'BreakoutQualityRollingTimingSettings',
     'BreakoutQualityWorkflowSettings',
     'SUPPORTED_WORKFLOW_SCORE_SOURCES',
@@ -2404,6 +2493,8 @@ __all__ = [
     'WORKFLOW_STRATEGY_MODE_HARD_FILTER',
     'WORKFLOW_STRATEGY_MODE_SCORE_RANKING',
     'get_breakout_quality_continuous_ranker_comparison_settings',
+    'get_breakout_quality_rolling_test_modes',
+    'get_breakout_quality_rolling_test_mode',
     'get_breakout_quality_rolling_timing_settings',
     'get_breakout_quality_workflow_settings',
     'BreakoutQualityContinuousRankerPITGateSettings',

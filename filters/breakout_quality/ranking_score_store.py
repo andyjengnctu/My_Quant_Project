@@ -40,6 +40,9 @@ from filters.breakout_quality.continuous_target import (
 )
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
 from filters.breakout_quality.paths import (
+    SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
+    SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+    SELECTION_POINT_IN_TIME_SCORE_FILENAME,
     resolve_filter_artifact_paths,
     resolve_filter_model_output_dir,
     resolve_selection_point_in_time_audit_json_path,
@@ -273,19 +276,28 @@ def load_selection_point_in_time_ranking_contract(
     experiment_profile: str,
     *,
     require_model_validation_pass: bool = True,
+    point_in_time_dir_override: str | Path | None = None,
 ) -> SelectionPointInTimeRankingContract:
     """Validate the PIT bundle; optionally allow inspection of a completed FAIL gate."""
 
     root = Path(project_root).resolve()
-    score_path = resolve_selection_point_in_time_score_path(
-        root, filter_id, model_architecture, experiment_profile
-    ).resolve()
-    manifest_path = resolve_selection_point_in_time_manifest_path(
-        root, filter_id, model_architecture, experiment_profile
-    ).resolve()
-    audit_path = resolve_selection_point_in_time_audit_json_path(
-        root, filter_id, model_architecture, experiment_profile
-    ).resolve()
+    override_raw = None if point_in_time_dir_override in (None, "") else Path(point_in_time_dir_override)
+    if override_raw is not None:
+        base = override_raw if override_raw.is_absolute() else root / override_raw
+        base = base.resolve()
+        score_path = (base / SELECTION_POINT_IN_TIME_SCORE_FILENAME).resolve()
+        manifest_path = (base / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME).resolve()
+        audit_path = (base / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME).resolve()
+    else:
+        score_path = resolve_selection_point_in_time_score_path(
+            root, filter_id, model_architecture, experiment_profile
+        ).resolve()
+        manifest_path = resolve_selection_point_in_time_manifest_path(
+            root, filter_id, model_architecture, experiment_profile
+        ).resolve()
+        audit_path = resolve_selection_point_in_time_audit_json_path(
+            root, filter_id, model_architecture, experiment_profile
+        ).resolve()
     for label, path in (
         ("Selection PIT score", score_path),
         ("Selection PIT manifest", manifest_path),

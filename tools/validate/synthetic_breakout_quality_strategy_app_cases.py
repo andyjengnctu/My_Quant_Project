@@ -368,10 +368,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         tuple(item["profile_id"] for item in menu_profiles)
         == tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS)
-        and tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS) == ("pre_test", "extending_window_rolling")
+        and tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS)
+        == ("extending_window_rolling_fast", "extending_window_rolling")
         and len(menu_labels) == 2
-        and "Pre-Test" in menu_labels[0]
-        and "Extending-Window Rolling" in menu_labels[1]
+        and "Fast Test" in menu_labels[0]
+        and "Overnight Test" in menu_labels[1]
         and all("MR-" not in label for label in menu_labels),
     )
     active_arm_ids = {
@@ -676,7 +677,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             )
         )
         and "train-continuous-ranker" not in preparation_source
-        and "模型訓練工作類型執行「準備策略比較所需模型工件」" in preparation_source,
+        and "準備策略比較所需模型工件" in preparation_source,
     )
     selection_min_roos_source = settings.parameter_sources.get("selection_min_roos")
     add_check(

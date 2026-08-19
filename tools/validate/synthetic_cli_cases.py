@@ -340,7 +340,7 @@ def validate_dataset_cli_contract_case(_base_params):
     ):
         model_research_settings = app_breakout_quality.get_breakout_quality_model_research_settings()
         with (
-            patch("builtins.input", side_effect=["1", ""]),
+            patch("builtins.input", side_effect=["1", "", ""]),
             patch("tools.filters.breakout_quality.application._print_workflow_status"),
             patch(
                 "tools.filters.breakout_quality.application._run_command",
@@ -370,33 +370,20 @@ def validate_dataset_cli_contract_case(_base_params):
         "breakout_quality_continuous_model_research_menu_route_uses_isolated_profile",
         True,
         (
-            [item["command"] for item in interactive_commands]
-            == ["prepare-continuous-target", "train-continuous-ranker"]
-            and interactive_commands[0]["args"]
-            == [
-                "--filter-id",
-                model_research_settings.filter_id,
-                "--target-id",
-                model_research_settings.continuous_target_id,
-            ]
-            and interactive_commands[1]["args"]
-            == [
-                "--filter-id", model_research_settings.filter_id,
-                "--model-architecture", model_research_settings.model_architecture,
-                "--experiment-profile", model_research_settings.experiment_profile,
-                "--seed", str(model_research_settings.seed),
-            ]
-            and interactive_commands[0]["compact_console"] == "1"
+            "build-point-in-time-scores" in [item["command"] for item in interactive_commands]
+            and "audit-point-in-time-scores" in [item["command"] for item in interactive_commands]
+            and any("--fold-months" in item["args"] and "60" in item["args"] for item in interactive_commands if item["command"] == "build-point-in-time-scores")
+            and all(item["compact_console"] == "1" for item in interactive_commands)
             and interactive_text.count("[Dataset]") == 0
             and "偵測到 PIT 模型所需 Dataset 尚未就緒" not in interactive_text
             and "[rebuild]" not in interactive_text
             and "[relabel]" not in interactive_text
             and "=== Continuous DL 模型研究與驗證 ===" in interactive_text
-            and "[1]  Pre-Test｜單模型快速驗證  (Enter)" in interactive_text
-            and "[2]  Extending-Window Rolling 模型驗證" in interactive_text
-            and "[3]  Fixed-Window Rolling 模型驗證" in interactive_text
-            and "[4]  查看目前Workflow與工件狀態" in interactive_text
-            and "[7]  Timing Mode｜Rolling 訓練前後比較" in interactive_text
+            and "[1]  Extending-Window Rolling Test  (Enter)" in interactive_text
+            and "[2]  Fixed-Window Rolling Stability Test" in interactive_text
+            and "[3]  查看目前Workflow與工件狀態" in interactive_text
+            and "[6]  Timing Mode｜Rolling 訓練前後比較" in interactive_text
+            and "Fast Test | 60M" in interactive_text
             and f"[4]  {configured_ranker_menu_label}" not in interactive_text
             and "MR-12A/B/C" not in interactive_text
             and "Audit／診斷" not in interactive_text
@@ -450,15 +437,15 @@ def validate_dataset_cli_contract_case(_base_params):
             comparison_rc,
             comparison_commands,
             f"[4]  {configured_comparison_menu_label}" not in comparison_text
-            and "Extending-Window Rolling 模型驗證" in comparison_text
-            and "Fixed-Window Rolling 模型驗證" in comparison_text,
+            and "Extending-Window Rolling Test" in comparison_text
+            and "Fixed-Window Rolling Stability Test" in comparison_text,
         ),
     )
 
     with (
-        patch("builtins.input", side_effect=["5"]),
+        patch("builtins.input", side_effect=["4"]),
         patch(
-            "tools.filters.breakout_quality.application._prepare_strategy_compare_model_artifacts",
+            "tools.filters.breakout_quality.application._interactive_prepare_strategy_compare_model_artifacts",
             return_value=59,
         ) as strategy_model_prepare,
     ):
@@ -475,12 +462,12 @@ def validate_dataset_cli_contract_case(_base_params):
         (
             strategy_model_prepare_rc,
             strategy_model_prepare.call_count,
-            "[5]  準備策略比較所需模型工件" in strategy_model_prepare_text,
+            "[4]  準備策略比較所需模型工件" in strategy_model_prepare_text,
         ),
     )
 
     with (
-        patch("builtins.input", side_effect=["7"]),
+        patch("builtins.input", side_effect=["6"]),
         patch(
             "tools.filters.breakout_quality.application._interactive_rolling_timing_mode",
             return_value=61,
@@ -499,7 +486,7 @@ def validate_dataset_cli_contract_case(_base_params):
         (
             rolling_timing_rc,
             rolling_timing_menu.call_count,
-            "[7]  Timing Mode｜Rolling 訓練前後比較" in rolling_timing_text,
+            "[6]  Timing Mode｜Rolling 訓練前後比較" in rolling_timing_text,
         ),
     )
 
@@ -558,7 +545,7 @@ def validate_dataset_cli_contract_case(_base_params):
     with (
         patch("builtins.input", side_effect=[""]),
         patch(
-            "tools.filters.breakout_quality.application._interactive_continuous_full_train",
+            "tools.filters.breakout_quality.application._interactive_continuous_pit_validation",
             return_value=47,
         ) as continuous_train_route,
     ):
@@ -569,7 +556,7 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_continuous_model_menu_default_routes_to_pre_test",
+        "breakout_quality_continuous_model_menu_default_routes_to_extending_rolling_test",
         (47, 1),
         (continuous_default_rc, continuous_train_route.call_count),
     )
@@ -594,9 +581,9 @@ def validate_dataset_cli_contract_case(_base_params):
         (0, True, True),
         (
             no_pit_rc,
-            "[3]  Fixed-Window Rolling 模型驗證" in no_pit_text,
-            "[1]  Pre-Test｜單模型快速驗證  (Enter)" in no_pit_text
-            and "[2]  Extending-Window Rolling 模型驗證" in no_pit_text,
+            "[2]  Fixed-Window Rolling Stability Test" in no_pit_text,
+            "[1]  Extending-Window Rolling Test  (Enter)" in no_pit_text
+            and "[2]  Fixed-Window Rolling Stability Test" in no_pit_text,
         ),
     )
 
@@ -626,13 +613,12 @@ def validate_dataset_cli_contract_case(_base_params):
         (
             rejected_rc,
             rejected_profile_settings.rolling_authorized,
-            "[1]  Pre-Test｜單模型快速驗證  (Enter)" in rejected_text
-            and "[2]  Extending-Window Rolling 模型驗證" in rejected_text
-            and "[3]  Fixed-Window Rolling 模型驗證" in rejected_text
-            and "[7]  Timing Mode｜Rolling 訓練前後比較" in rejected_text,
+            "[1]  Extending-Window Rolling Test  (Enter)" in rejected_text
+            and "[2]  Fixed-Window Rolling Stability Test" in rejected_text
+            and "[6]  Timing Mode｜Rolling 訓練前後比較" in rejected_text,
             "尚未授權Rolling PIT" in rejected_text,
-            "Extending-Window Rolling Scores" in rejected_status_text
-            or "Extending-Window Rolling 模型驗證" in rejected_status_text,
+            "Extending Fast Test Scores" in rejected_status_text
+            or "Extending-Window Rolling Test" in rejected_status_text,
         ),
     )
 
@@ -680,20 +666,20 @@ def validate_dataset_cli_contract_case(_base_params):
     else:
         pit_status_ok = (
             (
-                "Extending-Window Rolling Scores" in rendered_status
-                and "Extending-Window Rolling 模型驗證" in rendered_status
+                "Extending Fast Test Scores" in rendered_status
+                and "Extending Overnight Test Scores" in rendered_status
             )
             if current_model_settings.rolling_authorized
             else (
-                "Extending-Window Rolling Scores" not in rendered_status
-                and "Extending-Window Rolling 模型驗證" not in rendered_status
+                "Extending Fast Test Scores" not in rendered_status
+                and "Extending Overnight Test Scores" not in rendered_status
             )
         )
         workflow_status_contract_ok = (
             current_model_settings.is_continuous_ranker
             and "Workflow 狀態" in rendered_status
             and "Continuous Target" in rendered_status
-            and "Pre-Test Model / OOS" in rendered_status
+            and "Legacy Frozen Model / OOS" in rendered_status
             and pit_status_ok
         )
     add_check(

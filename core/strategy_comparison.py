@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 import hashlib
 import json
 from pathlib import Path
@@ -147,6 +148,9 @@ class StrategyDLSource:
     description: str
     score_source: str = "canonical_runtime"
     forward_scores_builder: StrategyArtifactBuilder | None = None
+    point_in_time_fold_months: int | None = None
+    point_in_time_fold_anchor_date: str | None = None
+    point_in_time_dirname: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -162,6 +166,13 @@ class StrategyDLSource:
                 if self.forward_scores_builder is None
                 else self.forward_scores_builder.as_dict()
             ),
+            "point_in_time_fold_months": (
+                None
+                if self.point_in_time_fold_months is None
+                else int(self.point_in_time_fold_months)
+            ),
+            "point_in_time_fold_anchor_date": self.point_in_time_fold_anchor_date,
+            "point_in_time_dirname": self.point_in_time_dirname,
         }
 
 
@@ -790,6 +801,23 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
         elif source.score_source == "selection_point_in_time":
             if source.threshold is not None:
                 raise ValueError(f"Selection PIT continuous DL source不得設定binary threshold: {key}")
+            if source.point_in_time_fold_months is not None and int(source.point_in_time_fold_months) < 1:
+                raise ValueError(f"Selection PIT fold months必須>=1: {key}")
+            anchor = (
+                None
+                if source.point_in_time_fold_anchor_date in (None, "")
+                else str(source.point_in_time_fold_anchor_date).strip()
+            )
+            if anchor is not None:
+                try:
+                    date.fromisoformat(anchor)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Selection PIT fold anchor必須是YYYY-MM-DD: {key}/{anchor!r}"
+                    ) from exc
+            dirname = None if source.point_in_time_dirname in (None, "") else str(source.point_in_time_dirname).strip()
+            if dirname is not None and (Path(dirname).name != dirname or dirname in {".", ".."}):
+                raise ValueError(f"Selection PIT dirname必須是安全單一資料夾名稱: {key}/{dirname!r}")
             if (
                 source.forward_scores_builder is not None
                 and source.forward_scores_builder.builder_type
@@ -800,6 +828,12 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 )
         else:
             raise ValueError(f"DL source score_source不支援: {key}/{source.score_source}")
+        if source.score_source != "selection_point_in_time" and (
+            source.point_in_time_fold_months is not None
+            or source.point_in_time_fold_anchor_date not in (None, "")
+            or source.point_in_time_dirname not in (None, "")
+        ):
+            raise ValueError(f"非Selection PIT source不得設定Rolling mode欄位: {key}")
         _validate_builder(
             source.forward_scores_builder,
             field_name=f"dl_sources[{key}].forward_scores_builder",

@@ -37,6 +37,8 @@ from config.breakout_quality import (
 from config.breakout_quality import (
     get_breakout_quality_continuous_ranker_pit_gate_settings,
     get_breakout_quality_model_research_settings,
+    get_breakout_quality_rolling_test_mode,
+    get_breakout_quality_rolling_test_modes,
     get_breakout_quality_rolling_timing_settings,
     get_breakout_quality_workflow_settings,
 )
@@ -710,14 +712,28 @@ def _simple_report_details(
         candidate = output_dir / "continuous_ranker_comparison.md"
         detail_report = candidate if candidate.is_file() else None
     elif command in {"build-point-in-time-scores", "audit-point-in-time-scores"}:
-        audit_json = resolve_selection_point_in_time_audit_json_path(
-            PROJECT_ROOT, filter_id, architecture, profile
+        pit_override_raw = _cli_option_value(args, "--point-in-time-dir-override", None)
+        pit_override = (
+            None
+            if pit_override_raw in (None, "")
+            else Path(str(pit_override_raw)).resolve()
+        )
+        audit_json = (
+            pit_override / "selection_point_in_time_audit.json"
+            if pit_override is not None
+            else resolve_selection_point_in_time_audit_json_path(
+                PROJECT_ROOT, filter_id, architecture, profile
+            )
         )
         payload = _safe_json_object(audit_json)
         coverage = dict(payload.get("score_coverage") or {})
         if command == "build-point-in-time-scores" and not coverage:
-            pit_manifest = resolve_selection_point_in_time_manifest_path(
-                PROJECT_ROOT, filter_id, architecture, profile
+            pit_manifest = (
+                pit_override / "selection_point_in_time_manifest.json"
+                if pit_override is not None
+                else resolve_selection_point_in_time_manifest_path(
+                    PROJECT_ROOT, filter_id, architecture, profile
+                )
             )
             manifest_payload = _safe_json_object(pit_manifest)
             coverage = dict(manifest_payload.get("coverage") or {})
@@ -737,8 +753,12 @@ def _simple_report_details(
                 ("Global rho", _fmt_simple_metric(primary.get("global_spearman"))),
             ]
         )
-        candidate = resolve_selection_point_in_time_audit_markdown_path(
-            PROJECT_ROOT, filter_id, architecture, profile
+        candidate = (
+            pit_override / "selection_point_in_time_audit.md"
+            if pit_override is not None
+            else resolve_selection_point_in_time_audit_markdown_path(
+                PROJECT_ROOT, filter_id, architecture, profile
+            )
         )
         detail_report = candidate if candidate.is_file() else None
     elif command in {"report", "workflow"}:
@@ -2021,19 +2041,25 @@ def _print_workflow_status(settings=None) -> None:
         )
     base_rows.append(("Continuous Target", settings.continuous_target_id))
     if settings.rolling_authorized:
+        rolling_modes = get_breakout_quality_rolling_test_modes()
         base_rows.extend((
             (
-                "Extending-Window Rolling Period",
+                "Rolling Score Period",
                 f"{'auto（最早合法）' if str(settings.point_in_time_score_start_date).lower() == 'auto' else settings.point_in_time_score_start_date} ～ "
                 f"{settings.point_in_time_score_end_date or 'Legacy Selection end'}",
             ),
             (
-                "Extending-Window Fold／Validation",
-                f"{settings.point_in_time_fold_months}／"
+                "Rolling Test Modes",
+                " / ".join(
+                    f"{mode.label}={int(mode.fold_months)}M" for mode in rolling_modes
+                ),
+            ),
+            (
+                "Inner Validation",
                 f"{settings.point_in_time_inner_validation_months} months",
             ),
             (
-                "Extending-Window Evidence Start",
+                "Evidence Start",
                 settings.point_in_time_coverage_reference_start_date,
             ),
         ))
@@ -2067,21 +2093,6 @@ def _print_workflow_status(settings=None) -> None:
             settings.filter_id,
             target_id=str(settings.continuous_target_id),
         ) / TARGET_AUDIT_MARKDOWN_FILENAME,
-        "PIT scores": resolve_selection_point_in_time_score_path(
-            PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
-        ),
-        "PIT manifest": resolve_selection_point_in_time_manifest_path(
-            PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
-        ),
-        "PIT coverage": resolve_selection_point_in_time_coverage_path(
-            PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
-        ),
-        "PIT audit JSON": resolve_selection_point_in_time_audit_json_path(
-            PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
-        ),
-        "PIT audit Markdown": resolve_selection_point_in_time_audit_markdown_path(
-            PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
-        ),
     }
     grouped_status = [
         ("Dataset", (status_paths["Dataset summary"],)),
@@ -2095,7 +2106,7 @@ def _print_workflow_status(settings=None) -> None:
         )
     grouped_status.append(
         (
-            "Pre-Test Model / OOS",
+            "Legacy Frozen Model / OOS",
             (
                 status_paths["Full model"],
                 status_paths["Full model manifest"],
@@ -2105,16 +2116,36 @@ def _print_workflow_status(settings=None) -> None:
         )
     )
     if settings.rolling_authorized:
-        grouped_status.extend((
-            (
-                "Extending-Window Rolling Scores",
-                (status_paths["PIT scores"], status_paths["PIT manifest"], status_paths["PIT coverage"]),
-            ),
-            (
-                "Extending-Window Rolling 模型驗證",
-                (status_paths["PIT audit JSON"], status_paths["PIT audit Markdown"]),
-            ),
-        ))
+        for mode in get_breakout_quality_rolling_test_modes():
+            extending_dir = _rolling_mode_point_in_time_dir(
+                settings, mode, fixed_window=False
+            )
+            if extending_dir is None:
+                extending_dir = resolve_filter_model_output_dir(
+                    PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
+                ) / "point_in_time"
+            fixed_dir = _rolling_mode_point_in_time_dir(
+                settings, mode, fixed_window=True
+            )
+            assert fixed_dir is not None
+            for prefix, base in (("Extending", extending_dir), ("Fixed", fixed_dir)):
+                grouped_status.extend((
+                    (
+                        f"{prefix} {mode.label} Scores",
+                        (
+                            base / "selection_point_in_time_scores.csv",
+                            base / "selection_point_in_time_manifest.json",
+                            base / "selection_point_in_time_coverage.csv",
+                        ),
+                    ),
+                    (
+                        f"{prefix} {mode.label} Model Gate",
+                        (
+                            base / "selection_point_in_time_audit.json",
+                            base / "selection_point_in_time_audit.md",
+                        ),
+                    ),
+                ))
     status_rows = []
     for label, paths in grouped_status:
         existing = sum(path.is_file() for path in paths)
@@ -2515,23 +2546,105 @@ def _interactive_continuous_full_train(program_name: str, settings) -> int:
     )
 
 
-def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
+def _rolling_mode_point_in_time_dir(settings, mode, *, fixed_window: bool) -> Path | None:
+    model_output_dir = resolve_filter_model_output_dir(
+        PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
+    )
+    if fixed_window:
+        base = (
+            model_output_dir
+            / "fixed_window_rolling"
+            / f"fixed_{int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS)}m"
+        )
+        if mode.point_in_time_dirname in (None, ""):
+            return base
+        return base / str(mode.point_in_time_dirname)
+    if mode.point_in_time_dirname in (None, ""):
+        return None
+    return model_output_dir / str(mode.point_in_time_dirname)
+
+
+def _render_rolling_mode_line(index: int, mode, *, default: bool = False) -> str:
+    return render_menu_item(
+        index,
+        f"{mode.label} | {int(mode.fold_months)}M",
+        default=default,
+    )
+
+
+def _interactive_continuous_rolling_test(
+    program_name: str, settings, *, fixed_window: bool
+) -> int:
     if not settings.rolling_authorized:
         print("目前Active Profile尚未授權Rolling PIT。")
         return 0
-    _print_workflow_status(settings)
-    if not _prompt_bool(
-        "確認前置Dataset／Target來源後，建立／更新Extending-Window Rolling Scores並執行模型驗證",
-        True,
-    ):
-        return 0
-    spec = get_continuous_ranker_research_spec(settings.experiment_profile)
-    return _run_continuous_pit_profile(
-        program_name,
-        model_id=spec.model_research_id,
-        profile_name=settings.experiment_profile,
+    modes = get_breakout_quality_rolling_test_modes()
+    title = (
+        "Fixed-Window Rolling Stability Test"
+        if fixed_window
+        else "Extending-Window Rolling Test"
     )
+    while True:
+        print(f"\n=== {title} ===")
+        for index, mode in enumerate(modes, start=1):
+            print(_render_rolling_mode_line(index, mode, default=index == 1))
+        status_choice = len(modes) + 1
+        print(render_menu_item(status_choice, "查看設定與工件狀態"))
+        print(render_menu_item(0, "返回"))
+        try:
+            raw_choice = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            return 0
+        choice = "1" if raw_choice == "" else raw_choice
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        try:
+            numeric = int(choice)
+        except ValueError:
+            print("無效選項，請重新輸入。")
+            continue
+        if 1 <= numeric <= len(modes):
+            mode = modes[numeric - 1]
+            _print_workflow_status(settings)
+            purpose = (
+                "固定calendar train history的歷史learnability診斷"
+                if fixed_window
+                else "expanding history的主要Rolling研究Gate"
+            )
+            print(
+                render_key_values(
+                    (
+                        ("Mode", mode.label),
+                        ("Score/refit cadence", f"{int(mode.fold_months)} months"),
+                        (
+                            "Score period",
+                            f"{BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE if fixed_window else settings.point_in_time_score_start_date} ～ "
+                            f"{BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE if fixed_window else settings.point_in_time_score_end_date}",
+                        ),
+                        ("用途", purpose),
+                    )
+                )
+            )
+            if not _prompt_bool(f"確認執行{mode.label}", True):
+                continue
+            spec = get_continuous_ranker_research_spec(settings.experiment_profile)
+            return _run_continuous_pit_profile(
+                program_name,
+                model_id=spec.model_research_id,
+                profile_name=settings.experiment_profile,
+                mode=mode,
+                fixed_window=fixed_window,
+            )
+        if numeric == status_choice:
+            _print_workflow_status(settings)
+            continue
+        print("無效選項，請重新輸入。")
 
+
+def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
+    return _interactive_continuous_rolling_test(
+        program_name, settings, fixed_window=False
+    )
 
 
 def _continuous_pit_gate_batch_for_active(settings):
@@ -2545,31 +2658,64 @@ def _run_continuous_pit_profile(
     *,
     model_id: str,
     profile_name: str,
+    mode=None,
+    fixed_window: bool = False,
 ) -> int:
     settings = get_breakout_quality_workflow_settings(experiment_profile=profile_name)
+    selected_mode = mode or get_breakout_quality_rolling_test_mode("overnight")
+    pit_dir_override = _rolling_mode_point_in_time_dir(
+        settings, selected_mode, fixed_window=fixed_window
+    )
+    window_label = "Fixed-Window" if fixed_window else "Extending-Window"
     print(
         "\n"
         + render_title(
-            f"Extending-Window Rolling Model Gate | {model_id} | {settings.experiment_profile}"
+            f"{window_label} Rolling {selected_mode.label} | {model_id} | {settings.experiment_profile}"
         )
     )
     code = _prepare_continuous_research_inputs(program_name, settings)
     if code != 0:
         return int(code)
+    score_start = (
+        str(BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE)
+        if fixed_window
+        else settings.point_in_time_score_start_date
+    )
+    score_end = (
+        str(BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE)
+        if fixed_window
+        else settings.point_in_time_score_end_date
+    )
     build_args = [
         "--filter-id", settings.filter_id,
         "--model-architecture", settings.model_architecture,
         "--experiment-profile", settings.experiment_profile,
-        "--score-start-date", settings.point_in_time_score_start_date,
-        "--fold-months", str(settings.point_in_time_fold_months),
+        "--score-start-date", str(score_start),
+        "--fold-months", str(int(selected_mode.fold_months)),
         "--inner-validation-months", str(settings.point_in_time_inner_validation_months),
         "--seed", str(settings.seed),
     ]
-    if settings.point_in_time_score_end_date:
-        build_args.extend(["--score-end-date", settings.point_in_time_score_end_date])
-    if settings.point_in_time_train_window_months is not None:
-        build_args.extend(["--train-window-months", str(settings.point_in_time_train_window_months)])
+    if selected_mode.fold_anchor_date is not None:
+        build_args.extend(["--fold-anchor-date", str(selected_mode.fold_anchor_date)])
+    if score_end:
+        build_args.extend(["--score-end-date", str(score_end)])
+    train_window = (
+        int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS)
+        if fixed_window
+        else settings.point_in_time_train_window_months
+    )
+    if train_window is not None:
+        build_args.extend(["--train-window-months", str(int(train_window))])
+    if pit_dir_override is not None:
+        build_args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
     build_args.append("--resume" if settings.point_in_time_resume else "--no-resume")
+    audit_args = [
+        "--filter-id", settings.filter_id,
+        "--model-architecture", settings.model_architecture,
+        "--experiment-profile", settings.experiment_profile,
+    ]
+    if pit_dir_override is not None:
+        audit_args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
     with _compact_console_scope():
         code = _run_command(
             "build-point-in-time-scores", build_args, program_name=program_name
@@ -2578,76 +2724,15 @@ def _run_continuous_pit_profile(
             return int(code)
         return int(
             _run_command(
-                "audit-point-in-time-scores",
-                [
-                    "--filter-id", settings.filter_id,
-                    "--model-architecture", settings.model_architecture,
-                    "--experiment-profile", settings.experiment_profile,
-                ],
-                program_name=program_name,
+                "audit-point-in-time-scores", audit_args, program_name=program_name
             )
         )
 
 
 def _interactive_continuous_stability_validation(program_name: str, settings) -> int:
-    if not settings.rolling_authorized:
-        print("目前Active Profile尚未授權Rolling PIT。")
-        return 0
-    model_output_dir = resolve_filter_model_output_dir(
-        PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
+    return _interactive_continuous_rolling_test(
+        program_name, settings, fixed_window=True
     )
-    stability_dir = (
-        model_output_dir
-        / "fixed_window_rolling"
-        / f"fixed_{int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS)}m"
-    )
-    print(
-        "\n"
-        + render_title(
-            f"Fixed-Window Rolling | {settings.experiment_profile} | "
-            f"{int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS)} months"
-        )
-    )
-    print(
-        render_key_values(
-            (
-                ("用途", "控制calendar history長度，檢查不同年代learnability；不是production strategy truth"),
-                ("Score period", f"{BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE} ～ {BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE}"),
-                ("Train window", f"{int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS)} months fixed"),
-                ("Refit cadence", f"{int(settings.point_in_time_fold_months)} months"),
-                ("Output", project_relative_display_path(stability_dir, project_root=PROJECT_ROOT)),
-            )
-        )
-    )
-    if not _prompt_bool("確認建立／更新Fixed-Window Rolling工件", True):
-        return 0
-    code = _prepare_continuous_research_inputs(program_name, settings)
-    if code != 0:
-        return int(code)
-    build_args = [
-        "--filter-id", settings.filter_id,
-        "--model-architecture", settings.model_architecture,
-        "--experiment-profile", settings.experiment_profile,
-        "--score-start-date", str(BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE),
-        "--score-end-date", str(BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE),
-        "--fold-months", str(settings.point_in_time_fold_months),
-        "--inner-validation-months", str(settings.point_in_time_inner_validation_months),
-        "--train-window-months", str(int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS)),
-        "--seed", str(settings.seed),
-        "--point-in-time-dir-override", str(stability_dir),
-        "--resume",
-    ]
-    audit_args = [
-        "--filter-id", settings.filter_id,
-        "--model-architecture", settings.model_architecture,
-        "--experiment-profile", settings.experiment_profile,
-        "--point-in-time-dir-override", str(stability_dir),
-    ]
-    with _compact_console_scope():
-        code = _run_command("build-point-in-time-scores", build_args, program_name=program_name)
-        if code != 0:
-            return int(code)
-        return int(_run_command("audit-point-in-time-scores", audit_args, program_name=program_name))
 
 
 def _fmt_pit_metric(value, *, percent: bool = False) -> str:
@@ -2797,11 +2882,11 @@ def _prepare_strategy_compare_model_upstream(
     )
 
 
-def _strategy_compare_required_model_sources():
-    """Resolve model sources required by every configured Strategy Compare profile."""
+def _strategy_compare_required_model_sources(profile_ids: tuple[str, ...] | None = None):
+    """Resolve model sources required by the selected current Strategy Compare modes."""
 
     from config.strategy_compare import (
-        get_strategy_comparison_profiles,
+        get_strategy_comparison_menu_profiles,
         get_strategy_comparison_settings,
     )
 
@@ -2809,14 +2894,22 @@ def _strategy_compare_required_model_sources():
         SCORE_SOURCE_SELECTION_POINT_IN_TIME,
         SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     }
+    selected_profile_ids = (
+        tuple(str(value) for value in profile_ids)
+        if profile_ids is not None
+        else tuple(
+            str(profile["profile_id"])
+            for profile in get_strategy_comparison_menu_profiles()
+        )
+    )
     comparisons = []
-    dedup: dict[tuple[str, str, str, str], tuple[str, object]] = {}
+    dedup: dict[tuple[object, ...], tuple[str, object]] = {}
     from filters.breakout_quality.strategy_compare_dl_artifacts import (
         resolve_required_artifact_sources,
     )
 
-    for profile in get_strategy_comparison_profiles():
-        comparison = get_strategy_comparison_settings(profile["profile_id"])
+    for profile_id in selected_profile_ids:
+        comparison = get_strategy_comparison_settings(profile_id)
         comparisons.append(comparison)
         _required_params, required_ids, _runtime_required = resolve_required_artifact_sources(
             comparison
@@ -2832,22 +2925,60 @@ def _strategy_compare_required_model_sources():
                 str(source.model_architecture),
                 str(source.experiment_profile),
                 str(source.score_source),
+                source.point_in_time_fold_months,
+                source.point_in_time_fold_anchor_date,
+                source.point_in_time_dirname,
             )
             dedup.setdefault(key, (dl_id, source))
     return tuple(comparisons), tuple(dedup.values())
 
 
-def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
-    """Prepare every configured Strategy Compare model source in the model-training work type.
+def _interactive_prepare_strategy_compare_model_artifacts(program_name: str) -> int:
+    from config.strategy_compare import get_strategy_rolling_test_modes
 
-    This workflow owns model training, so it may prepare Dataset/Target inputs and train
-    missing Forward-OOS continuous models or missing/incompatible Selection PIT folds.
-    Ready Forward-OOS model/report/score contracts are reused.  Selection PIT uses
-    ``resume`` so compatible folds are reused and only missing/incompatible folds train.
-    Strategy Compare itself remains unable to train model weights.
+    modes = get_strategy_rolling_test_modes()
+    while True:
+        print("\n=== 準備策略比較所需模型工件 ===")
+        for index, mode in enumerate(modes, start=1):
+            print(
+                render_menu_item(
+                    index,
+                    f"{mode['label']} | {int(mode['fold_months'])}M",
+                    default=index == 1,
+                )
+            )
+        print(render_menu_item(0, "返回"))
+        try:
+            raw = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            return 0
+        choice = "1" if raw == "" else raw
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        try:
+            numeric = int(choice)
+        except ValueError:
+            print("無效選項，請重新輸入。")
+            continue
+        if 1 <= numeric <= len(modes):
+            mode = modes[numeric - 1]
+            return _prepare_strategy_compare_model_artifacts(
+                program_name, profile_ids=(str(mode["profile_id"]),)
+            )
+        print("無效選項，請重新輸入。")
+
+
+def _prepare_strategy_compare_model_artifacts(
+    program_name: str, *, profile_ids: tuple[str, ...] | None = None
+) -> int:
+    """Prepare model artifacts for the selected current Rolling Test mode(s).
+
+    Fast/Overnight share the canonical trainer and model identities but use different
+    PIT fold cadences and aggregate paths.  Strategy Compare itself remains unable to
+    train model weights.
     """
 
-    comparisons, sources = _strategy_compare_required_model_sources()
+    comparisons, sources = _strategy_compare_required_model_sources(profile_ids)
     if not sources:
         print("目前策略比較設定沒有需要準備的模型工件。")
         return 0
@@ -2883,6 +3014,7 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
         )
 
         if source.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+            # Legacy-only compatibility path; current Fast/Overnight profiles use PIT.
             try:
                 load_continuous_ranker_oos_contract(
                     PROJECT_ROOT,
@@ -2890,11 +3022,7 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
                     str(source.model_architecture),
                     str(source.experiment_profile),
                 )
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                print(
-                    "  Forward-OOS policy：模型工作類型修復缺少／不相容的Forward工件"
-                    f" | reason={type(exc).__name__}"
-                )
+            except (OSError, ValueError, KeyError, TypeError):
                 code = _prepare_strategy_compare_model_upstream(
                     program_name,
                     workflow=workflow,
@@ -2902,58 +3030,20 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
                 )
                 if code != 0:
                     return int(code)
-                score_only_error = None
-                try:
-                    from tools.filters.breakout_quality.rebuild_forward_oos_scores import (
-                        rebuild_forward_oos_scores_from_frozen_checkpoint,
-                    )
-
-                    print(
-                        "  Forward-OOS repair：先重用frozen checkpoint，只重建future-independent score universe"
-                    )
-                    rebuild_forward_oos_scores_from_frozen_checkpoint(
-                        project_root=PROJECT_ROOT,
-                        filter_id=str(source.filter_id),
-                        model_architecture=str(source.model_architecture),
-                        experiment_profile=str(source.experiment_profile),
-                        seed=int(workflow.seed),
-                    )
-                    load_continuous_ranker_oos_contract(
-                        PROJECT_ROOT,
-                        str(source.filter_id),
-                        str(source.model_architecture),
-                        str(source.experiment_profile),
-                    )
-                except (OSError, ValueError, KeyError, TypeError, RuntimeError) as rebuild_exc:
-                    score_only_error = rebuild_exc
-                if score_only_error is not None:
-                    print(
-                        "  Forward-OOS repair：frozen checkpoint不可安全重用，才重建完整模型工件"
-                        f" | reason={type(score_only_error).__name__}"
-                    )
-                    code = _run_command(
-                        "train-continuous-ranker",
-                        [
-                            "--filter-id", str(source.filter_id),
-                            "--model-architecture", str(source.model_architecture),
-                            "--experiment-profile", str(source.experiment_profile),
-                            "--seed", str(workflow.seed),
-                        ],
-                        program_name=program_name,
-                    )
-                    if code != 0:
-                        return int(code)
-                # The training command is the canonical producer for the frozen
-                # Forward-OOS model when score-only checkpoint reuse is unsafe.
-                # Revalidate instead of accepting either repair path alone.
-                load_continuous_ranker_oos_contract(
-                    PROJECT_ROOT,
-                    str(source.filter_id),
-                    str(source.model_architecture),
-                    str(source.experiment_profile),
+                code = _run_command(
+                    "train-continuous-ranker",
+                    [
+                        "--filter-id", str(source.filter_id),
+                        "--model-architecture", str(source.model_architecture),
+                        "--experiment-profile", str(source.experiment_profile),
+                        "--seed", str(workflow.seed),
+                    ],
+                    program_name=program_name,
                 )
+                if code != 0:
+                    return int(code)
             else:
-                print("  Forward-OOS policy：REUSE 已完成且identity一致的模型／report／scores")
+                print("  Frozen compatibility policy：REUSE 已完成且identity一致的模型／report／scores")
             continue
 
         if source.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
@@ -2973,22 +3063,50 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
         if code != 0:
             return int(code)
 
+        fold_months = int(
+            source.point_in_time_fold_months
+            if source.point_in_time_fold_months is not None
+            else workflow.point_in_time_fold_months
+        )
+        pit_dir_override = None
+        if source.point_in_time_dirname not in (None, ""):
+            pit_dir_override = (
+                resolve_filter_model_output_dir(
+                    PROJECT_ROOT,
+                    str(source.filter_id),
+                    str(source.model_architecture),
+                    str(source.experiment_profile),
+                )
+                / str(source.point_in_time_dirname)
+            )
         build_args = [
             "--filter-id", str(source.filter_id),
             "--model-architecture", str(source.model_architecture),
             "--experiment-profile", str(source.experiment_profile),
             "--score-start-date", str(workflow.point_in_time_score_start_date),
-            "--fold-months", str(workflow.point_in_time_fold_months),
+            "--fold-months", str(fold_months),
             "--inner-validation-months", str(workflow.point_in_time_inner_validation_months),
             "--seed", str(workflow.seed),
             "--resume",
         ]
+        if source.point_in_time_fold_anchor_date not in (None, ""):
+            build_args.extend(
+                ["--fold-anchor-date", str(source.point_in_time_fold_anchor_date)]
+            )
         if workflow.point_in_time_score_end_date:
             build_args.extend(
                 ["--score-end-date", str(workflow.point_in_time_score_end_date)]
             )
+        if pit_dir_override is not None:
+            build_args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
         print(
-            "  PIT policy：resume existing folds；缺少／不相容fold由模型訓練工作類型補訓"
+            f"  PIT policy：{fold_months}M cadence"
+            + (
+                ""
+                if source.point_in_time_fold_anchor_date in (None, "")
+                else f"；anchor={source.point_in_time_fold_anchor_date}"
+            )
+            + "；resume existing folds；缺少／不相容fold才補訓"
         )
         from tools.filters.breakout_quality.build_point_in_time_scores import (
             build_selection_point_in_time_scores,
@@ -3009,10 +3127,18 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
                     if not workflow.point_in_time_score_end_date
                     else str(workflow.point_in_time_score_end_date)
                 ),
-                fold_months=int(workflow.point_in_time_fold_months),
+                fold_months=fold_months,
+                fold_anchor_date=(
+                    None
+                    if source.point_in_time_fold_anchor_date in (None, "")
+                    else str(source.point_in_time_fold_anchor_date)
+                ),
                 inner_validation_months=int(workflow.point_in_time_inner_validation_months),
                 seed=int(workflow.seed),
                 resume=True,
+                point_in_time_dir_override=(
+                    None if pit_dir_override is None else str(pit_dir_override)
+                ),
             )
             if code != 0:
                 return int(code)
@@ -3027,11 +3153,16 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
                 "--model-architecture", str(source.model_architecture),
                 "--experiment-profile", str(source.experiment_profile),
             ]
+            if pit_dir_override is not None:
+                audit_args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
             stage_started = time.perf_counter()
             code = audit_selection_point_in_time_scores(
                 filter_id=str(source.filter_id),
                 model_architecture=str(source.model_architecture),
                 experiment_profile=str(source.experiment_profile),
+                point_in_time_dir_override=(
+                    None if pit_dir_override is None else str(pit_dir_override)
+                ),
             )
             if code != 0:
                 return int(code)
@@ -3123,16 +3254,15 @@ def _interactive_model_research(program_name: str) -> int:
         research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
-        print(render_menu_item(1, "Pre-Test｜單模型快速驗證", default=True))
-        print(render_menu_item(2, "Extending-Window Rolling 模型驗證"))
-        print(render_menu_item(3, "Fixed-Window Rolling 模型驗證"))
-        print(render_menu_item(4, "查看目前Workflow與工件狀態"))
+        print(render_menu_item(1, "Extending-Window Rolling Test", default=True))
+        print(render_menu_item(2, "Fixed-Window Rolling Stability Test"))
+        print(render_menu_item(3, "查看目前Workflow與工件狀態"))
         _comparisons, strategy_model_sources = _strategy_compare_required_model_sources()
         if strategy_model_sources:
-            print(render_menu_item(5, "準備策略比較所需模型工件"))
+            print(render_menu_item(4, "準備策略比較所需模型工件"))
         if research_spec.reference_profile_name:
-            print(render_menu_item(6, "比較目前 Target 與 reference Target"))
-        print(render_menu_item(7, "Timing Mode｜Rolling 訓練前後比較"))
+            print(render_menu_item(5, "比較目前 Target 與 reference Target"))
+        print(render_menu_item(6, "Timing Mode｜Rolling 訓練前後比較"))
         print(render_menu_item(0, "返回"))
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
@@ -3143,17 +3273,15 @@ def _interactive_model_research(program_name: str) -> int:
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         if choice == "1":
-            return _interactive_continuous_full_train(program_name, settings)
-        if choice == "2":
             return _interactive_continuous_pit_validation(program_name, settings)
-        if choice == "3":
+        if choice == "2":
             return _interactive_continuous_stability_validation(program_name, settings)
-        if choice == "4":
+        if choice == "3":
             _print_workflow_status(settings)
             continue
-        if choice == "5" and strategy_model_sources:
-            return int(_prepare_strategy_compare_model_artifacts(program_name))
-        if choice == "6" and research_spec.reference_profile_name:
+        if choice == "4" and strategy_model_sources:
+            return int(_interactive_prepare_strategy_compare_model_artifacts(program_name))
+        if choice == "5" and research_spec.reference_profile_name:
             return int(
                 _run_command(
                     "compare-daily-targets",
@@ -3166,7 +3294,7 @@ def _interactive_model_research(program_name: str) -> int:
                     program_name=program_name,
                 )
             )
-        if choice == "7":
+        if choice == "6":
             return int(_interactive_rolling_timing_mode(program_name))
         print("無效選項，請重新輸入。")
 

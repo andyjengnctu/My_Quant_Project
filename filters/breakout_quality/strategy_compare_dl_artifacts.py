@@ -32,6 +32,9 @@ from filters.breakout_quality.artifacts import (
     load_runtime_artifact_contract,
 )
 from filters.breakout_quality.paths import (
+    SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
+    SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+    SELECTION_POINT_IN_TIME_SCORE_FILENAME,
     resolve_filter_artifact_paths,
     resolve_filter_model_output_dir,
     resolve_selection_point_in_time_audit_json_path,
@@ -228,6 +231,18 @@ def _collect_model_upstream_dependencies(
     return cache[upstream_identity]
 
 
+def _selection_pit_override_dir(root: Path, source: Any) -> Path | None:
+    dirname = None if getattr(source, "point_in_time_dirname", None) in (None, "") else str(source.point_in_time_dirname).strip()
+    if dirname is None:
+        return None
+    return (
+        resolve_filter_model_output_dir(
+            root, source.filter_id, source.model_architecture, source.experiment_profile
+        )
+        / dirname
+    ).resolve()
+
+
 def _collect_selection_pit_source_status(
     *,
     root: Path,
@@ -245,13 +260,29 @@ def _collect_selection_pit_source_status(
     pit_status = "MISSING"
     pit_gate_status: str | None = None
     try:
+        pit_override_dir = _selection_pit_override_dir(root, source)
         pit_contract = load_selection_point_in_time_ranking_contract(
             str(root),
             source.filter_id,
             source.model_architecture,
             source.experiment_profile,
             require_model_validation_pass=False,
+            point_in_time_dir_override=pit_override_dir,
         )
+        expected_fold_months = getattr(source, "point_in_time_fold_months", None)
+        if expected_fold_months is not None and int(pit_contract.manifest.get("fold_months", -1)) != int(expected_fold_months):
+            raise ValueError(
+                "Selection PIT fold cadence與Strategy Compare mode不一致: "
+                f"expected={int(expected_fold_months)}, actual={pit_contract.manifest.get('fold_months')!r}"
+            )
+        expected_anchor = getattr(source, "point_in_time_fold_anchor_date", None)
+        if expected_anchor not in (None, ""):
+            actual_anchor = str(pit_contract.manifest.get("fold_anchor_date") or "").strip()
+            if actual_anchor != str(expected_anchor):
+                raise ValueError(
+                    "Selection PIT fold anchor與Strategy Compare mode不一致: "
+                    f"expected={expected_anchor}, actual={actual_anchor or None}"
+                )
         pit_gate_status = str(
             pit_contract.model_validation_gate.get("status") or ""
         ).strip().upper() or None
@@ -280,26 +311,34 @@ def _collect_selection_pit_source_status(
             "forward_scores": pit_contract.score_path,
         }
     else:
-        files = {
-            "manifest": resolve_selection_point_in_time_manifest_path(
-                root,
-                source.filter_id,
-                source.model_architecture,
-                source.experiment_profile,
-            ),
-            "audit": resolve_selection_point_in_time_audit_json_path(
-                root,
-                source.filter_id,
-                source.model_architecture,
-                source.experiment_profile,
-            ),
-            "forward_scores": resolve_selection_point_in_time_score_path(
-                root,
-                source.filter_id,
-                source.model_architecture,
-                source.experiment_profile,
-            ),
-        }
+        pit_override_dir = _selection_pit_override_dir(root, source)
+        if pit_override_dir is not None:
+            files = {
+                "manifest": pit_override_dir / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+                "audit": pit_override_dir / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
+                "forward_scores": pit_override_dir / SELECTION_POINT_IN_TIME_SCORE_FILENAME,
+            }
+        else:
+            files = {
+                "manifest": resolve_selection_point_in_time_manifest_path(
+                    root,
+                    source.filter_id,
+                    source.model_architecture,
+                    source.experiment_profile,
+                ),
+                "audit": resolve_selection_point_in_time_audit_json_path(
+                    root,
+                    source.filter_id,
+                    source.model_architecture,
+                    source.experiment_profile,
+                ),
+                "forward_scores": resolve_selection_point_in_time_score_path(
+                    root,
+                    source.filter_id,
+                    source.model_architecture,
+                    source.experiment_profile,
+                ),
+            }
     # Selection PIT scores / manifest / audit are model-research artifacts.
     # Strategy Compare is a consumer only: even when compatible fold checkpoints
     # already exist, rebuilding the PIT bundle also runs the PIT model Gate and

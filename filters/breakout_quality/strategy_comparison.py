@@ -10,6 +10,7 @@ from typing import Any
 
 import pandas as pd
 
+from config.breakout_quality import get_breakout_quality_workflow_settings
 from config.strategy_compare import (
     get_strategy_comparison_settings,
     get_strategy_runtime_integration_settings,
@@ -103,8 +104,14 @@ from filters.breakout_quality.strategy_compare_reuse import (
     _resolve_completed_pair_continuous_score_binding,
     _resolve_pair_pinned_score_path,
 )
+from filters.breakout_quality.paths import (
+    SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+    SELECTION_POINT_IN_TIME_SCORE_FILENAME,
+    resolve_filter_model_output_dir,
+)
 from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+    SCORE_SOURCE_SELECTION_POINT_IN_TIME,
 )
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 from filters.breakout_quality.strategy_rule_policies import (
@@ -117,6 +124,22 @@ from filters.breakout_quality.strategy_compare_preparation import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RESULT_SCHEMA_VERSION = 7
+
+
+def _selection_pit_mode_paths(dl: StrategyDLSource) -> dict[str, Path] | None:
+    dirname = None if dl.point_in_time_dirname in (None, "") else str(dl.point_in_time_dirname).strip()
+    if dirname is None:
+        return None
+    base = (
+        resolve_filter_model_output_dir(
+            PROJECT_ROOT, dl.filter_id, dl.model_architecture, dl.experiment_profile
+        )
+        / dirname
+    ).resolve()
+    return {
+        "score": base / SELECTION_POINT_IN_TIME_SCORE_FILENAME,
+        "manifest": base / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+    }
 
 
 def _json_native(value: Any) -> Any:
@@ -1350,6 +1373,18 @@ def run_strategy_comparison(
         )
         if quiet:
             print(f"[RUN] {on_arm.arm_id} {on_arm.name}")
+        selection_pit_mode_paths = (
+            _selection_pit_mode_paths(dl)
+            if dl.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+            else None
+        )
+        selection_pit_expected_seed = (
+            get_breakout_quality_workflow_settings(
+                experiment_profile=dl.experiment_profile
+            ).seed
+            if selection_pit_mode_paths is not None
+            else None
+        )
         pair_payload = run_comparison(
             project_root=root,
             dataset=settings.dataset,
@@ -1431,6 +1466,17 @@ def run_strategy_comparison(
                 )
                 else None
             ),
+            selection_pit_score_path_override=(
+                None
+                if selection_pit_mode_paths is None
+                else str(selection_pit_mode_paths["score"])
+            ),
+            selection_pit_manifest_path_override=(
+                None
+                if selection_pit_mode_paths is None
+                else str(selection_pit_mode_paths["manifest"])
+            ),
+            selection_pit_expected_seed_override=selection_pit_expected_seed,
             capture_execution_diagnostics=(
                 runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
             ),

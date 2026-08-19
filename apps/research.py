@@ -18,11 +18,14 @@ if str(PROJECT_ROOT) not in sys.path:
 from config.audit import get_active_audit_module_id
 from config.research import get_active_model_research_provider
 from config.strategy_compare import (
+    STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL,
+    STRATEGY_COMPARE_ROLLING_TEST_MENU_LABEL,
     get_strategy_comparison_menu_profiles,
     get_strategy_comparison_profiles,
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_profiles,
     get_strategy_multi_seed_robustness_settings,
+    get_strategy_rolling_test_modes,
     get_strategy_runtime_integration_settings,
 )
 from core.console_report import render_menu_item
@@ -230,23 +233,58 @@ def _show_all_strategy_comparison_status() -> None:
             print(f"[狀態不可用] {type(exc).__name__}: {exc}")
 
 
+def _strategy_rolling_mode_menu(*, robustness: bool) -> int:
+    modes = get_strategy_rolling_test_modes()
+    title = (
+        STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL
+        if robustness
+        else STRATEGY_COMPARE_ROLLING_TEST_MENU_LABEL
+    )
+    while True:
+        print(f"\n=== {title} ===")
+        for index, mode in enumerate(modes, start=1):
+            print(
+                render_menu_item(
+                    index,
+                    f"{mode['label']} | {int(mode['fold_months'])}M",
+                    default=index == 1,
+                )
+            )
+        print(render_menu_item(0, "返回"))
+        try:
+            raw = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            return 0
+        choice = "1" if raw == "" else raw
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        try:
+            numeric = int(choice)
+        except ValueError:
+            print("選項無效。")
+            continue
+        if 1 <= numeric <= len(modes):
+            mode = modes[numeric - 1]
+            if robustness:
+                _strategy_multi_seed_robustness_menu(str(mode["robustness_id"]))
+            else:
+                _strategy_compare_profile_menu(str(mode["profile_id"]))
+            continue
+        print(f"選項無效，請按 Enter 或輸入 0～{len(modes)}。")
+
+
 def _strategy_compare_menu() -> int:
-    profiles = get_strategy_comparison_menu_profiles()
     while True:
         print("\n=== 策略組合比較 ===")
-        for index, profile in enumerate(profiles, start=1):
-            print(render_menu_item(index, profile["label"], default=index == 1))
-        robustness_profiles = get_strategy_multi_seed_robustness_profiles()
-        robustness_start = len(profiles) + 1
-        for offset, robustness in enumerate(robustness_profiles):
-            print(render_menu_item(robustness_start + offset, robustness["label"]))
-        next_choice = robustness_start + len(robustness_profiles)
+        print(render_menu_item(1, STRATEGY_COMPARE_ROLLING_TEST_MENU_LABEL, default=True))
+        print(render_menu_item(2, STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL))
         integration_cfg = get_strategy_runtime_integration_settings()
-        integration_choice = next_choice if integration_cfg.enabled else None
+        integration_choice = 3 if integration_cfg.enabled else None
         if integration_choice is not None:
             print(render_menu_item(integration_choice, integration_cfg.label))
-            next_choice += 1
-        status_choice = next_choice
+            status_choice = 4
+        else:
+            status_choice = 3
         print(render_menu_item(status_choice, "查看目前Framework設定與工件狀態"))
         print(render_menu_item(0, "返回"))
         try:
@@ -261,11 +299,10 @@ def _strategy_compare_menu() -> int:
         except ValueError:
             print("選項無效。")
             continue
-        if 1 <= numeric <= len(profiles):
-            _strategy_compare_profile_menu(profiles[numeric - 1]["profile_id"])
-        elif robustness_start <= numeric < robustness_start + len(robustness_profiles):
-            robustness = robustness_profiles[numeric - robustness_start]
-            _strategy_multi_seed_robustness_menu(robustness["robustness_id"])
+        if numeric == 1:
+            _strategy_rolling_mode_menu(robustness=False)
+        elif numeric == 2:
+            _strategy_rolling_mode_menu(robustness=True)
         elif integration_choice is not None and numeric == integration_choice:
             _strategy_runtime_integration_menu()
         elif numeric == status_choice:

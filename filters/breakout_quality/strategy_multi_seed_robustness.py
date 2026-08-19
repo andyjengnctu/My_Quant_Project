@@ -511,7 +511,7 @@ def _arm_training_dl_ids(settings, arm: StrategyComparisonArm) -> tuple[str, ...
     score_sources = {str(settings.dl_sources[dl_id].score_source) for dl_id in unique}
     expected = (
         "selection_point_in_time"
-        if settings.profile_id in {"selection_pit", "extending_window_rolling"}
+        if settings.profile_id in {"selection_pit", "extending_window_rolling_fast", "extending_window_rolling"}
         else "continuous_ranker_oos"
     )
     if score_sources != {expected}:
@@ -756,15 +756,14 @@ def _render_robustness_execution_plan(
         f"模型訓練單元       ：{cfg.seed_count * len(training_sources)}（{len(training_sources)} unique DL sources × {cfg.seed_count} seeds）",
         f"策略Replay單元     ：{cfg.seed_count * len(stochastic_arms)}（{len(stochastic_arms)} stochastic arms × {cfg.seed_count} seeds）",
     ]
-    if settings.profile_id in {"selection_pit", "extending_window_rolling"} and start is not None and end is not None:
+    if settings.profile_id in {"selection_pit", "extending_window_rolling_fast", "extending_window_rolling"} and start is not None and end is not None:
         fold_counts = []
         for dl_id, _arm_entries in training_sources:
             dl = settings.dl_sources[str(dl_id)]
-            workflow = get_breakout_quality_workflow_settings(
-                experiment_profile=str(dl.experiment_profile)
-            )
             fold_counts.append(
-                _pit_fold_count_for_period(start, end, int(workflow.point_in_time_fold_months))
+                _pit_fold_count_for_period(
+                    start, end, _source_point_in_time_fold_months(settings=settings, dl_id=str(dl_id))
+                )
             )
         unique_fold_counts = sorted(set(fold_counts))
         fold_text = str(unique_fold_counts[0]) if len(unique_fold_counts) == 1 else "/".join(map(str, unique_fold_counts))
@@ -828,10 +827,31 @@ def _dataset_identity_snapshot(dataset: str) -> dict[str, Any]:
         }
 
 
-def _point_in_time_training_policy_snapshot(*, experiment_profile: str) -> dict[str, Any]:
+def _source_point_in_time_fold_months(*, settings, dl_id: str) -> int:
+    source = settings.dl_sources[str(dl_id)]
+    if source.point_in_time_fold_months is not None:
+        return int(source.point_in_time_fold_months)
+    workflow = get_breakout_quality_workflow_settings(
+        experiment_profile=str(source.experiment_profile)
+    )
+    return int(workflow.point_in_time_fold_months)
+
+
+def _source_point_in_time_fold_anchor_date(*, settings, dl_id: str) -> str | None:
+    source = settings.dl_sources[str(dl_id)]
+    value = source.point_in_time_fold_anchor_date
+    return None if value in (None, "") else str(value)
+
+
+def _point_in_time_training_policy_snapshot(
+    *, experiment_profile: str, fold_months: int | None = None, fold_anchor_date: str | None = None
+) -> dict[str, Any]:
     workflow = get_breakout_quality_workflow_settings(experiment_profile=str(experiment_profile))
     return {
-        "fold_months": int(workflow.point_in_time_fold_months),
+        "fold_months": int(
+            workflow.point_in_time_fold_months if fold_months is None else fold_months
+        ),
+        "fold_anchor_date": (None if fold_anchor_date in (None, "") else str(fold_anchor_date)),
         "inner_validation_months": int(workflow.point_in_time_inner_validation_months),
         "min_train_groups": int(workflow.point_in_time_min_train_groups),
         "min_validation_groups": int(workflow.point_in_time_min_validation_groups),
@@ -928,7 +948,13 @@ def build_multi_seed_robustness_contract(
             ).as_manifest_payload(),
             "point_in_time_training_policy": (
                 _point_in_time_training_policy_snapshot(
-                    experiment_profile=source.experiment_profile
+                    experiment_profile=source.experiment_profile,
+                    fold_months=_source_point_in_time_fold_months(
+                        settings=settings, dl_id=str(dl_id)
+                    ),
+                    fold_anchor_date=_source_point_in_time_fold_anchor_date(
+                        settings=settings, dl_id=str(dl_id)
+                    ),
                 )
                 if str(source.score_source) == "selection_point_in_time"
                 else None
@@ -970,7 +996,13 @@ def build_multi_seed_robustness_contract(
                 ).as_manifest_payload(),
                 "point_in_time_training_policy": (
                     _point_in_time_training_policy_snapshot(
-                        experiment_profile=settings.dl_sources[str(arm.dl_id)].experiment_profile
+                        experiment_profile=settings.dl_sources[str(arm.dl_id)].experiment_profile,
+                        fold_months=_source_point_in_time_fold_months(
+                            settings=settings, dl_id=str(arm.dl_id)
+                        ),
+                        fold_anchor_date=_source_point_in_time_fold_anchor_date(
+                            settings=settings, dl_id=str(arm.dl_id)
+                        ),
                     )
                     if str(settings.dl_sources[str(arm.dl_id)].score_source) == "selection_point_in_time"
                     else None
@@ -1405,6 +1437,23 @@ def _validate_training_artifacts(
                 raise ValueError(f"multi-seed PIT manifest {field}不一致")
         if int(manifest.get("seed", -1)) != int(seed):
             raise ValueError("multi-seed PIT manifest seed不一致")
+        expected_fold_months = _source_point_in_time_fold_months(
+            settings=settings, dl_id=str(dl_id)
+        )
+        if int(manifest.get("fold_months", -1) or -1) != int(expected_fold_months):
+            raise ValueError(
+                "multi-seed PIT manifest fold_months不一致: "
+                f"expected={expected_fold_months}, actual={manifest.get('fold_months')}"
+            )
+        expected_anchor = _source_point_in_time_fold_anchor_date(
+            settings=settings, dl_id=str(dl_id)
+        )
+        actual_anchor = str(manifest.get("fold_anchor_date") or "").strip() or None
+        if expected_anchor is not None and actual_anchor != expected_anchor:
+            raise ValueError(
+                "multi-seed PIT manifest fold_anchor_date不一致: "
+                f"expected={expected_anchor}, actual={actual_anchor}"
+            )
         period = dict(manifest.get("score_period") or {})
         actual_start = pd.Timestamp(period.get("start")).strftime("%Y-%m-%d")
         actual_end = pd.Timestamp(period.get("end")).strftime("%Y-%m-%d")
@@ -1491,16 +1540,25 @@ def _training_command(
 ) -> list[str]:
     dl = settings.dl_sources[str(dl_id)]
     if str(dl.score_source) == "selection_point_in_time":
-        return [
+        command = [
             sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores",
             "--filter-id", dl.filter_id,
             "--model-architecture", dl.model_architecture,
             "--experiment-profile", dl.experiment_profile,
             "--seed", str(int(seed)),
+            "--fold-months", str(
+                _source_point_in_time_fold_months(settings=settings, dl_id=str(dl_id))
+            ),
             "--score-start-date", str(comparison_start),
             "--score-end-date", str(comparison_end),
             "--point-in-time-dir-override", str(model_dir.resolve()),
         ]
+        fold_anchor_date = _source_point_in_time_fold_anchor_date(
+            settings=settings, dl_id=str(dl_id)
+        )
+        if fold_anchor_date is not None:
+            command.extend(["--fold-anchor-date", fold_anchor_date])
+        return command
     return [
         sys.executable, "-m", "tools.filters.breakout_quality.train_continuous_ranker",
         "--filter-id", dl.filter_id, "--model-architecture", dl.model_architecture,
@@ -1696,13 +1754,10 @@ def _pit_saved_fold_progress(meta: dict[str, Any]) -> tuple[int, int] | None:
     dl = settings.dl_sources[str(meta["dl_id"])]
     if str(dl.score_source) != "selection_point_in_time":
         return None
-    workflow = get_breakout_quality_workflow_settings(
-        experiment_profile=str(dl.experiment_profile)
-    )
     expected = _pit_fold_count_for_period(
         str(meta["comparison_start"]),
         str(meta["comparison_end"]),
-        int(workflow.point_in_time_fold_months),
+        _source_point_in_time_fold_months(settings=settings, dl_id=str(meta["dl_id"])),
     )
     folds_root = Path(str(meta["model_dir"])).resolve() / "folds"
     if not folds_root.is_dir():

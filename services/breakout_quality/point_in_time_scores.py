@@ -120,6 +120,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--score-end-date", default=settings.point_in_time_score_end_date)
     parser.add_argument("--fold-months", type=int, default=settings.point_in_time_fold_months)
     parser.add_argument(
+        "--fold-anchor-date",
+        default=None,
+        help=(
+            "可選的fold calendar anchor（YYYY-MM-DD）；省略時沿用canonical 2000-01-01。"
+            "Fast 60M使用2016-01-01以形成2016~2020、2021~2025兩個完整fold。"
+        ),
+    )
+    parser.add_argument(
         "--inner-validation-months",
         type=int,
         default=settings.point_in_time_inner_validation_months,
@@ -238,6 +246,8 @@ def _validate_args(args: argparse.Namespace) -> None:
     # profile and model spec are validated by the shared continuous-ranker pipeline.
     if int(args.fold_months) < 1 or int(args.inner_validation_months) < 1:
         raise ValueError("fold-months與inner-validation-months必須>=1")
+    if args.fold_anchor_date not in (None, ""):
+        _iso_timestamp(args.fold_anchor_date, field_name="fold_anchor_date")
     if args.train_window_months is not None:
         if int(args.train_window_months) <= int(args.inner_validation_months):
             raise ValueError("fixed train-window-months必須大於inner-validation-months")
@@ -296,6 +306,7 @@ def _build_fold_periods(
     score_end: pd.Timestamp,
     *,
     fold_months: int,
+    fold_anchor: pd.Timestamp | None = None,
 ) -> list[dict[str, Any]]:
     """Build calendar-anchored folds whose later boundaries never shift.
 
@@ -313,12 +324,17 @@ def _build_fold_periods(
     if end < start:
         raise ValueError("point-in-time score期間不合法")
 
-    month_delta = (start.year - FOLD_CALENDAR_ANCHOR.year) * 12 + (
-        start.month - FOLD_CALENDAR_ANCHOR.month
+    anchor = (
+        FOLD_CALENDAR_ANCHOR
+        if fold_anchor is None
+        else pd.Timestamp(fold_anchor).normalize()
+    )
+    month_delta = (start.year - anchor.year) * 12 + (
+        start.month - anchor.month
     )
     bucket_index = month_delta // months
     bucket_start = (
-        FOLD_CALENDAR_ANCHOR + pd.DateOffset(months=bucket_index * months)
+        anchor + pd.DateOffset(months=bucket_index * months)
     ).normalize()
     bucket_end = (
         bucket_start + pd.DateOffset(months=months) - pd.Timedelta(days=1)
@@ -387,6 +403,7 @@ def _resolve_score_start(
     score_end: pd.Timestamp,
     fold_months: int,
     validation_months: int,
+    fold_anchor: pd.Timestamp | None = None,
 ) -> tuple[pd.Timestamp, dict[str, Any]]:
     raw_text = str(raw_value or "").strip().lower()
     if raw_text != AUTO_SCORE_START_VALUE:
@@ -429,6 +446,7 @@ def _resolve_score_start(
             candidate,
             score_end,
             fold_months=int(fold_months),
+            fold_anchor=fold_anchor,
         )[0]
         score_start_ns = np.int64(pd.Timestamp(candidate).value)
         score_end_ns = np.int64(pd.Timestamp(fold["score_end"]).value)
@@ -1393,6 +1411,11 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
         )
     if str(args.score_start_date or "").strip().lower() == AUTO_SCORE_START_VALUE:
         print("[PIT start] 自動解析最早合法PIT Score日期...", flush=True)
+    fold_anchor = (
+        None
+        if args.fold_anchor_date in (None, "")
+        else _iso_timestamp(args.fold_anchor_date, field_name="fold_anchor_date")
+    )
     score_start, score_start_resolution = _resolve_score_start(
         args.score_start_date,
         bundle=bundle,
@@ -1401,6 +1424,7 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
         score_end=score_end,
         fold_months=int(args.fold_months),
         validation_months=int(args.inner_validation_months),
+        fold_anchor=fold_anchor,
     )
     if not selection_start <= score_start <= score_end <= available_end:
         raise ValueError(
@@ -1420,7 +1444,11 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
                 for key in ("inner_train", "validation", "score")
             )
         )
-    folds = _build_fold_periods(score_start, score_end, fold_months=int(args.fold_months))
+    folds = _build_fold_periods(
+        score_start, score_end,
+        fold_months=int(args.fold_months),
+        fold_anchor=fold_anchor,
+    )
     print(f"[PIT plan] 建立 {len(folds)} 個fold的合法 train/validation/score partitions...", flush=True)
     fold_details = [
         _fold_group_ids(
@@ -1686,14 +1714,20 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
                 None if args.train_window_months is None else int(args.train_window_months)
             ),
             "refit_score_fold_months": int(args.fold_months),
+            "fold_calendar_anchor": str(
+                (FOLD_CALENDAR_ANCHOR if fold_anchor is None else fold_anchor).date()
+            ),
             "score_end_resolution": score_end_mode,
             "information_cutoff_is_per_fold": True,
         },
         "fold_identity": {
             "schema": "score_period_dates",
             "format": "fold_YYYYMMDD_YYYYMMDD",
-            "stable_when_earlier_folds_are_added": True,
-            "legacy_fold_migration_supported": True,
+            "stable_when_earlier_folds_are_added": bool(fold_anchor is None),
+            "calendar_anchor": str(
+                (FOLD_CALENDAR_ANCHOR if fold_anchor is None else fold_anchor).date()
+            ),
+            "legacy_fold_migration_supported": bool(fold_anchor is None),
         },
         # Kept for old readers; no longer defines the active OOS boundary.
         "selection_period": {
@@ -1706,6 +1740,9 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
         },
         "training_universe_start_date": str(training_universe_start.date()),
         "fold_months": int(args.fold_months),
+        "fold_anchor_date": str(
+            (FOLD_CALENDAR_ANCHOR if fold_anchor is None else fold_anchor).date()
+        ),
         "inner_validation_months": int(args.inner_validation_months),
         "seed": int(args.seed),
         "fold_count": int(len(fold_manifests)),
@@ -1798,6 +1835,7 @@ def build_selection_point_in_time_scores(
     score_start_date: str | None = None,
     score_end_date: str | None = None,
     fold_months: int | None = None,
+    fold_anchor_date: str | None = None,
     inner_validation_months: int | None = None,
     train_window_months: int | None = None,
     seed: int | None = None,
@@ -1825,6 +1863,8 @@ def build_selection_point_in_time_scores(
         argv.extend(["--score-end-date", str(score_end_date)])
     if fold_months is not None:
         argv.extend(["--fold-months", str(int(fold_months))])
+    if fold_anchor_date is not None:
+        argv.extend(["--fold-anchor-date", str(fold_anchor_date)])
     if inner_validation_months is not None:
         argv.extend(["--inner-validation-months", str(int(inner_validation_months))])
     if train_window_months is not None:

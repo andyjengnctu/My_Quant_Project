@@ -9584,3 +9584,16 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Timing lifecycle：既有pre-promotion baseline可保留作本次promotion證據；若開始下一個獨立execution candidate，先用Timing Mode明確重建baseline，使新baseline代表已promote的`canonical_pairwise_weight_vector_v2`。
 - Decision：`EXACT_PASS / 1.065X / PROMOTED_TO_CANONICAL_EXECUTION / TIMING_ONLY_FLAGS_RETIRED / SCIENTIFIC_IDENTITY_UNCHANGED`。
 
+
+
+### 2026-08-19 — Rolling workflow收斂為 Fast 60M / Overnight 12M
+
+- 性質：evaluation/execution framework migration；不新增MR/SR/Cxx scientific identity，不改Target、architecture、loss、策略solver或production identity。
+- 使用者決策：current UI不再把Pre-Test／Fast／Annual等驗證層級攤成多個頂層模式。模型只保留`Extending-Window Rolling Test`與`Fixed-Window Rolling Stability Test`；策略只保留`Extending-Window Rolling Test`與`Extending-Window Rolling Multi-seed Robustness Test`。每個入口下一層再選`Fast Test`或`Overnight Test`。
+- Fast Test固定`60M` score/refit cadence、anchor=`2016-01-01`、score period=`2016-01-01～2025-12-31`，因此精確形成兩個fold：`2016-01-01～2020-12-31`與`2021-01-01～2025-12-31`。每fold仍使用score_start前且Target完整成熟的合法資料重新做inner validation／epoch selection與final refit；Fast只作最小必要Gate，不得promotion。
+- Overnight Test固定`12M` cadence，沿用既有2016～2025十個annual folds與canonical `point_in_time`／Strategy Compare output paths，因此既有合法annual工件保持原identity並可REUSE。
+- Artifact isolation：Fast Extending PIT固定`point_in_time_fast_60m`，Strategy Compare固定`outputs/strategy_compare/extending_window_rolling/fast_60m`；robustness/model-work亦用`fast_60m`隔離。Fast／Overnight只屬execution/evaluation mode，不新增Cxx／MR identity。
+- Strategy Compare兩mode共用`C61/C58/C59/C60`；Fast robustness與Overnight robustness都只固定`C58`、stochastic=`C60`、4 seeds。Fast先做2 folds×4 seeds，只有結果仍可能改變決策時才補Overnight 10 folds×4 seeds。
+- Legacy Pre-Test退出current menu與current model-artifact preparation；既有Frozen/Selection artifacts與歷史數值保留為`LEGACY_PRE_TEST / HISTORICAL_EVIDENCE`。
+- 本輪同時保留已promotion的`canonical_pairwise_weight_vector_v2` execution path；使用者第二次實機Timing重跑仍為`09:42.3` vs原baseline `10:10.2`，speedup=`1.048x`、elapsed=`-4.57%`、`PASS / bitwise exact`，支持其4～6%量級收益可重現。
+- Decision：`FAST_60M_OVERNIGHT_12M_CURRENT_WORKFLOW / PRETEST_HISTORICAL_ONLY / SCIENTIFIC_IDENTITIES_UNCHANGED / PRODUCTION_UNCHANGED`。
