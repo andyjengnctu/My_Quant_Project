@@ -82,6 +82,21 @@ def _latest_report_path(root: Path) -> Path:
     return root / "timing_report.md"
 
 
+def resolve_rolling_timing_artifact_paths() -> dict[str, Path]:
+    timing = get_breakout_quality_rolling_timing_settings()
+    root = _timing_root(
+        filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+        experiment_profile=timing.experiment_profile,
+        seed=timing.seed,
+    )
+    return {
+        "root": root,
+        "baseline": _baseline_summary_path(root),
+        "candidate": _candidate_summary_path(root),
+        "report": _latest_report_path(root),
+    }
+
+
 def _source_fingerprint() -> str:
     digest = hashlib.sha256()
     for relative in _SOURCE_FINGERPRINT_PATHS:
@@ -650,6 +665,7 @@ __all__ = [
     "TIMING_SCHEMA_VERSION",
     "_comparison_payload",
     "reset_timing_baseline",
+    "resolve_rolling_timing_artifact_paths",
     "run_timing_comparison",
     "show_latest_timing_report",
     "show_timing_status",

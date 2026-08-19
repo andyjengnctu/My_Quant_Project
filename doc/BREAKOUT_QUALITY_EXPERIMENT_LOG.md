@@ -9545,3 +9545,14 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - A/B contract：第一次執行建立immutable baseline summary；後續執行以目前程式作candidate。比較項固定包含fold contract fingerprint、selected epoch、semantic model-state SHA256、score CSV SHA256與group counts，全部一致才可標`PASS / bitwise exact`；wall-clock另輸出每year與total speedup/Δtime。任一result hash或scientific contract不同即FAIL，速度改善不得因此被接受為behavior-preserving。
 - Baseline lifecycle：candidate執行不覆寫baseline；只有Timing子選單明確輸入`RESET`才刪除並重新建立baseline。implementation fingerprint只作工程版本辨識，不參與scientific equality判定。
 - Decision：`TIMING_MODE_ADDED / BASELINE_THEN_CANDIDATE / EXACT_RESULT_GUARD / CANONICAL_ARTIFACTS_ISOLATED`。
+
+### 2026-08-19 — Rolling Timing Mode App simple-report formal closure
+
+- 性質：App output-contract bug fix；不改Timing benchmark、模型、Target、fold、seed、epoch selection、loss、dtype、deterministic或任何scientific identity。
+- Formal evidence：`apps/run_bundle.py` bundle顯示quick gate／chain checks／ml smoke皆PASS；consistency唯一FAIL=`BREAKOUT_QUALITY_APP_SIMPLE_REPORT_CONTRACT / breakout_quality_app_successful_subcommands_emit_simple_report`，meta quality僅由該synthetic FAIL向上彙總為`coverage_synthetic_suite_runs_successfully`。
+- 根因一：新增`timing-rolling-training`後，App `_run_command()`明確排除該command的simple-report emission，違反模型訓練工作類型成功正式輸出需有App層console＋`simple_reports/<command>.md`的既有契約。
+- 根因二：既有synthetic以原始碼字串`if returncode == 0:`判斷成功command是否emit report，對等價控制流過度脆弱，未直接驗證runtime behavior。
+- 修正：Timing的`run/compare`成功後會產生App simple report，並使用Timing config的profile／seed／score years；若已有candidate comparison，摘要直接讀既有Timing工件顯示baseline/candidate wall-clock、speedup與exact-result，detail path指向既有`timing_report.md`。`status/reset/report`不產生新的App simple report，避免覆寫最近一次正式Timing執行摘要。
+- Contract驗證改為mock `_run_command()`直接檢查：一般成功command會emit、Timing `run`會emit、Timing `status`不emit；不再依賴source wording。
+- Decision：`FORMAL_FAILURE_CLOSED / TIMING_SIMPLE_REPORT_ADDED / BEHAVIORAL_SYNTHETIC / SCIENTIFIC_SEMANTICS_UNCHANGED`。
+

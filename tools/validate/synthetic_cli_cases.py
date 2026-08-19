@@ -2740,13 +2740,68 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             ),
         )
 
-    source = Path(app_breakout_quality.__file__).read_text(encoding="utf-8")
+    fake_success_module = SimpleNamespace(main=lambda _args: 0)
+    with patch.object(
+        app_breakout_quality,
+        "_load_command_module",
+        return_value=fake_success_module,
+    ), patch.object(
+        app_breakout_quality,
+        "_emit_breakout_quality_simple_report",
+    ) as emit_mock:
+        generic_rc = app_breakout_quality._run_command(
+            "evaluate",
+            [],
+            program_name="apps/research.py model",
+        )
+        generic_emit_ok = (
+            generic_rc == 0
+            and emit_mock.call_count == 1
+            and emit_mock.call_args.args[0] == "evaluate"
+        )
+        emit_mock.reset_mock()
+        timing_run_rc = app_breakout_quality._run_command(
+            "timing-rolling-training",
+            ["run"],
+            program_name="apps/research.py model",
+        )
+        timing_run_emit_ok = (
+            timing_run_rc == 0
+            and emit_mock.call_count == 1
+            and emit_mock.call_args.args[0] == "timing-rolling-training"
+        )
+        emit_mock.reset_mock()
+        timing_status_rc = app_breakout_quality._run_command(
+            "timing-rolling-training",
+            ["status"],
+            program_name="apps/research.py model",
+        )
+        timing_status_does_not_overwrite = (
+            timing_status_rc == 0 and emit_mock.call_count == 0
+        )
+
     add_check(
         results, "output_contract", case_id,
         "breakout_quality_app_successful_subcommands_emit_simple_report", True,
-        "_emit_breakout_quality_simple_report(" in source
-        and "if returncode == 0:" in source,
+        generic_emit_ok,
     )
+    add_check(
+        results, "output_contract", case_id,
+        "breakout_quality_timing_run_emits_simple_report_without_status_overwrite", True,
+        timing_run_emit_ok and timing_status_does_not_overwrite,
+    )
+    timing_context = app_breakout_quality._simple_report_context(
+        "timing-rolling-training",
+        ["run"],
+    )
+    timing_settings = app_breakout_quality.get_breakout_quality_rolling_timing_settings()
+    add_check(
+        results, "output_contract", case_id,
+        "breakout_quality_timing_simple_report_uses_timing_profile_identity", True,
+        timing_context[2] == str(timing_settings.experiment_profile),
+    )
+
+    source = Path(app_breakout_quality.__file__).read_text(encoding="utf-8")
     add_check(
         results, "output_contract", case_id,
         "breakout_quality_app_workflow_emits_final_simple_report", True,

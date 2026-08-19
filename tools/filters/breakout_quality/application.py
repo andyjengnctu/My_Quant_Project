@@ -37,6 +37,7 @@ from config.breakout_quality import (
 from config.breakout_quality import (
     get_breakout_quality_continuous_ranker_pit_gate_settings,
     get_breakout_quality_model_research_settings,
+    get_breakout_quality_rolling_timing_settings,
     get_breakout_quality_workflow_settings,
 )
 from core.display_common import render_elapsed
@@ -219,6 +220,13 @@ def _safe_json_object(path: Path) -> dict:
 
 
 def _simple_report_context(command: str, args: list[str]) -> tuple[str, str, str]:
+    if command == "timing-rolling-training":
+        timing = get_breakout_quality_rolling_timing_settings()
+        return (
+            normalize_filter_id(BREAKOUT_QUALITY_DEFAULT_FILTER_ID),
+            str(BREAKOUT_QUALITY_MODEL_ARCHITECTURE),
+            str(timing.experiment_profile),
+        )
     settings = (
         get_breakout_quality_model_research_settings()
         if command in {"train-continuous-ranker", "compare-daily-targets"}
@@ -753,6 +761,54 @@ def _simple_report_details(
             PROJECT_ROOT, filter_id, architecture, profile
         )
         detail_report = candidate if candidate.is_file() else None
+    elif command == "timing-rolling-training":
+        timing = get_breakout_quality_rolling_timing_settings()
+        action = str(args[0]).strip().lower() if args else "run"
+        rows.extend(
+            [
+                ("Timing action", action),
+                ("Score years", list(timing.score_years)),
+                ("Seed", int(timing.seed)),
+                ("Mode", "Extending / from-scratch / isolated artifacts"),
+            ]
+        )
+        if action in {"run", "compare"}:
+            from services.breakout_quality.rolling_timing import (
+                resolve_rolling_timing_artifact_paths,
+            )
+
+            timing_paths = resolve_rolling_timing_artifact_paths()
+            baseline = _safe_json_object(timing_paths["baseline"])
+            candidate_payload = _safe_json_object(timing_paths["candidate"])
+            comparison = dict(candidate_payload.get("comparison_to_baseline") or {})
+            if baseline:
+                rows.append(
+                    (
+                        "Baseline total",
+                        render_elapsed(float(baseline.get("elapsed_wall_sec", 0.0) or 0.0)),
+                    )
+                )
+            if comparison:
+                rows.extend(
+                    [
+                        (
+                            "Candidate total",
+                            render_elapsed(float(comparison.get("candidate_total_sec", 0.0) or 0.0)),
+                        ),
+                        (
+                            "Speedup",
+                            f"{float(comparison.get('total_speedup_x') or 0.0):.3f}x",
+                        ),
+                        (
+                            "Exact result",
+                            "PASS / bitwise exact"
+                            if bool(comparison.get("exact_result"))
+                            else "FAIL / result changed",
+                        ),
+                    ]
+                )
+            timing_report = timing_paths["report"]
+            detail_report = timing_report if timing_report.is_file() else None
     elif command == "prepare-continuous-target":
         target_id = str(
             _cli_option_value(
@@ -866,13 +922,19 @@ def _run_command(command: str, args: list[str], *, program_name: str) -> int:
     finally:
         sys.argv[0] = original_program_name
     returncode = int(result or 0)
-    if returncode == 0 and command != "timing-rolling-training":
-        _emit_breakout_quality_simple_report(
-            command,
-            list(args),
-            returncode=returncode,
-            elapsed_sec=time.perf_counter() - started,
+    if returncode == 0:
+        timing_action = (
+            str(args[0]).strip().lower()
+            if command == "timing-rolling-training" and args
+            else "run"
         )
+        if command != "timing-rolling-training" or timing_action in {"run", "compare"}:
+            _emit_breakout_quality_simple_report(
+                command,
+                list(args),
+                returncode=returncode,
+                elapsed_sec=time.perf_counter() - started,
+            )
     return returncode
 
 
