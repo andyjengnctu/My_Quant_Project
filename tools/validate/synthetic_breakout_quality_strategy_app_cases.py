@@ -1549,6 +1549,97 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ),
     )
 
+    from filters.breakout_quality import ranking_score_store as ranking_store_module
+
+    with tempfile.TemporaryDirectory() as tmp:
+        override_project_root = Path(tmp)
+        override_dir = override_project_root / "isolated_fast_60m"
+        override_dir.mkdir(parents=True, exist_ok=True)
+        override_score = override_dir / "selection_point_in_time_scores.csv"
+        override_coverage = override_dir / "selection_point_in_time_coverage.csv"
+        override_manifest = override_dir / "selection_point_in_time_manifest.json"
+        override_audit = override_dir / "selection_point_in_time_audit.json"
+        override_score.write_text("synthetic-score\n", encoding="utf-8")
+        override_coverage.write_text("synthetic-coverage\n", encoding="utf-8")
+        override_profile_id = "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise"
+        override_profile = get_breakout_quality_experiment_profile(override_profile_id)
+        override_target_id = str(override_profile.continuous_target_id or "synthetic_target")
+        override_period = {"start": "2016-01-01", "end": "2025-12-31"}
+        override_manifest.write_text(
+            json.dumps({
+                "filter_id": "breakout_quality_v1",
+                "model_architecture": "inception_time_v1",
+                "experiment_profile": override_profile_id,
+                "training_sample_scope": override_profile.training_sample_scope,
+                "status": "BUILT",
+                "seed": 42,
+                "continuous_target_id": override_target_id,
+                "score_period": override_period,
+                "coverage": {"scored_group_count": 1},
+                "artifacts": {"scores": build_file_manifest(override_score)},
+            }),
+            encoding="utf-8",
+        )
+        override_audit.write_text(
+            json.dumps({
+                "schema_version": 3,
+                "status": "RESULT_AVAILABLE",
+                "filter_id": "breakout_quality_v1",
+                "model_architecture": "inception_time_v1",
+                "experiment_profile": override_profile_id,
+                "workflow": {"training_sample_scope": override_profile.training_sample_scope},
+                "continuous_target_id": override_target_id,
+                "score_period": override_period,
+                "score_group_count": 1,
+                "source_artifacts": {
+                    "point_in_time_manifest": {
+                        "path": str(override_manifest.resolve()),
+                        **build_file_manifest(override_manifest),
+                    },
+                    "point_in_time_scores": {
+                        "path": str(override_score.resolve()),
+                        **build_file_manifest(override_score),
+                    },
+                    "point_in_time_coverage": {
+                        "path": str(override_coverage.resolve()),
+                        **build_file_manifest(override_coverage),
+                    },
+                    "continuous_target_manifest": {},
+                },
+            }),
+            encoding="utf-8",
+        )
+        ranking_store_module.load_selection_point_in_time_ranking_contract.cache_clear()
+        with patch.object(
+            ranking_store_module, "_validate_score_eligibility_contract", return_value=None
+        ), patch.object(
+            ranking_store_module, "_validate_embedded_target_source_artifact", return_value=None
+        ), patch.object(
+            ranking_store_module,
+            "derive_point_in_time_model_validation_gate",
+            return_value={"status": "PASS", "checks": {}},
+        ):
+            override_contract = ranking_store_module.load_selection_point_in_time_ranking_contract(
+                str(override_project_root),
+                "breakout_quality_v1",
+                "inception_time_v1",
+                override_profile_id,
+                require_model_validation_pass=False,
+                point_in_time_dir_override=override_dir,
+            )
+        ranking_store_module.load_selection_point_in_time_ranking_contract.cache_clear()
+
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "selection_pit_override_keeps_score_manifest_coverage_and_audit_in_same_mode_namespace",
+        True,
+        override_contract.score_path == override_score.resolve()
+        and override_contract.manifest_path == override_manifest.resolve()
+        and override_contract.audit_path == override_audit.resolve()
+        and override_contract.available_from == "2016-01-01"
+        and override_contract.available_through == "2025-12-31",
+    )
+
     from filters.breakout_quality.strategy_compare_engine import (
         _resolve_continuous_score_override_period,
     )

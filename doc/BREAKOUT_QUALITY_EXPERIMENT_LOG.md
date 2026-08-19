@@ -9610,3 +9610,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Formal bundle 的 4 個 consistency FAIL 均來自 synthetic contract 仍假設舊 Pre-Test／Forward-OOS／單一 robustness profile；Fast/Overnight runtime 本身未發現對應科學語意錯誤。
 - 修正：CLI synthetic 改驗證 nested Rolling mode routing；Strategy Compare synthetic 改驗證 current Fast/Overnight PIT sources、mode-specific fold cadence/anchor與兩個 enabled robustness profiles；Strategy Compare 缺 PIT 的人讀 remediation path 同步改成「模型訓練 → 準備策略比較所需模型工件 → 相同 Fast／Overnight Test」。
 - 不變：MR/SR identity、Fast 60M／Overnight 12M cadence、PIT legality、模型訓練／loss／seed／optimizer、strategy replay semantics 均未修改。
+
+### 2026-08-20 — Fast 60M Strategy Compare PIT coverage override bug closure
+
+- 實機證據：Fast 60M 的 `CONT13E_ROLL / CONT13K_ROLL / CONT13M_ROLL` 已由模型訓練工作類型完整建立並 audit PASS，工件位於各 profile 的 `point_in_time_fast_60m`；回到 `Extending-Window Rolling Fast Test` 後 planner 卻仍把三個 source 的 `manifest / audit / forward_scores` 全部判成 BLOCKED。
+- 根因：`load_selection_point_in_time_ranking_contract(..., point_in_time_dir_override=...)` 對 Fast override 只把 score、manifest、audit 切到 override namespace；驗證 audit `source_artifacts.point_in_time_coverage` 時仍使用 canonical `resolve_selection_point_in_time_coverage_path()`，因此期待 12M canonical coverage path，與 Fast audit 實際 pin 的 `point_in_time_fast_60m/selection_point_in_time_coverage.csv` 不一致。這使合法 Fast bundle 被誤判 `SELECTION_PIT_INVALID`。
+- 修正：PIT ranking contract 在 override mode 下由同一 override base 一次解析 score、manifest、coverage、audit 四個工件；canonical mode維持原有 score/manifest/coverage 於 canonical PIT model namespace、audit於 canonical output namespace的既有契約。Strategy Compare replay既有 `selection_pit_score_path_override / manifest_path_override` 不變。
+- Regression guard：synthetic 新增 isolated override bundle，要求 score/manifest/coverage/audit 四者維持同一 mode namespace；另以 Fast `CONT13K_ROLL` planning fixture 驗證修後 planner 直接得到 `READY`，三個工件皆 `REUSE`，period=`2016-01-01～2025-12-31`。
+- 不變：Fast=`60M + 2016 anchor`、Overnight=`12M`、MR-13E/K/M identity、模型權重／score、Strategy Compare C61/C58/C59/C60、optimizer／loss／seed／PIT chronology均未修改；使用者已完成的 Fast 模型工件不需重訓。
+- Decision：`FAST_PIT_OVERRIDE_CONSUMER_BUG_FIXED / EXISTING_FAST_ARTIFACTS_REUSABLE / SCIENTIFIC_SEMANTICS_UNCHANGED`。
