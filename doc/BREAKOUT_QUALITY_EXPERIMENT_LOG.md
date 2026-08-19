@@ -9597,3 +9597,9 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Legacy Pre-Test退出current menu與current model-artifact preparation；既有Frozen/Selection artifacts與歷史數值保留為`LEGACY_PRE_TEST / HISTORICAL_EVIDENCE`。
 - 本輪同時保留已promotion的`canonical_pairwise_weight_vector_v2` execution path；使用者第二次實機Timing重跑仍為`09:42.3` vs原baseline `10:10.2`，speedup=`1.048x`、elapsed=`-4.57%`、`PASS / bitwise exact`，支持其4～6%量級收益可重現。
 - Decision：`FAST_60M_OVERNIGHT_12M_CURRENT_WORKFLOW / PRETEST_HISTORICAL_ONLY / SCIENTIFIC_IDENTITIES_UNCHANGED / PRODUCTION_UNCHANGED`。
+
+### 2026-08-19 — Fast/Overnight menu migration formal synthetic closure
+
+- Formal bundle：`to_chatgpt_bundle_20260819_222317_c8b7f5ba.zip`。`consistency`在`validate_dataset_cli_contract_case`執行模型選單 synthetic 時因Fast/Overnight新增一層mode選單，舊固定`input()`序列少一個mode選擇，於Fixed-Window Fast確認提示觸發`StopIteration`；因此consistency未能寫summary，後續meta quality的`coverage_synthetic_suite_runs_successfully`、`coverage_key_targets_hit`與`performance_required_step_summaries_present`皆為同一中止的衍生失敗。
+- 修正：synthetic不再假定Fast固定是特定數字；由`get_breakout_quality_rolling_test_modes()`依`mode_id="fast"`解析當前選單index，再明確提供`model menu -> Fixed-Window -> Fast -> confirm`輸入。正式runtime、Fast/Overnight cadence、fold identity、模型／策略語意均未修改。
+- Decision：`SYNTHETIC_MENU_INPUT_STALENESS_CLOSED / RUNTIME_UNCHANGED`。

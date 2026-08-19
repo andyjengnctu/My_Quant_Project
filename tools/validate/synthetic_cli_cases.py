@@ -720,6 +720,12 @@ def validate_dataset_cli_contract_case(_base_params):
         ["--dataset", "full", "--filter-id", model_research_settings.filter_id],
         "完整建立 indexed feature bank dataset",
     )
+    rolling_modes = app_breakout_quality.get_breakout_quality_rolling_test_modes()
+    fast_mode_choice = next(
+        str(index)
+        for index, mode in enumerate(rolling_modes, start=1)
+        if mode.mode_id == "fast"
+    )
     with (
         patch.object(
             breakout_quality_config,
@@ -746,7 +752,7 @@ def validate_dataset_cli_contract_case(_base_params):
             "BREAKOUT_QUALITY_STRATEGY_BUY_SORT",
             "auto",
         ),
-        patch("builtins.input", side_effect=["2", ""]),
+        patch("builtins.input", side_effect=["2", fast_mode_choice, ""]),
         patch("tools.filters.breakout_quality.application._print_workflow_status"),
         patch(
             "tools.filters.breakout_quality.application._dataset_refresh_step",

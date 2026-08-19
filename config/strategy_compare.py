@@ -569,7 +569,7 @@ STRATEGY_DL_SOURCES = {
         "experiment_profile": "daily_universal_no_time_full_list_ndcg_pairwise",
         "threshold": None,
         "score_source": "selection_point_in_time",
-        "description": "MR-13E Extending-Window Rolling PIT-safe score；expanding history + annual refit，2016→2025。",
+        "description": "MR-13E Extending-Window Rolling PIT-safe score；expanding history + mode-specific refit cadence，2016→2025。",
         "forward_scores_builder": {
             "enabled": True,
             "builder_type": "selection_pit_from_existing_folds",
@@ -582,7 +582,7 @@ STRATEGY_DL_SOURCES = {
         "experiment_profile": "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise",
         "threshold": None,
         "score_source": "selection_point_in_time",
-        "description": "MR-13K Extending-Window Rolling PIT-safe pure-MFE score；expanding history + annual refit。",
+        "description": "MR-13K Extending-Window Rolling PIT-safe pure-MFE score；expanding history + mode-specific refit cadence。",
         "forward_scores_builder": {
             "enabled": True,
             "builder_type": "selection_pit_from_existing_folds",
@@ -747,7 +747,7 @@ STRATEGY_COMPARE_ARMS = {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_RESIDUAL_SAFETY_CONSTRAINED,
         "description": (
             "Extending-Window Rolling B2：MR-13K primary + MR-13M same-day rank OLS residual-safety floor；"
-            "兩個score都由同一日期前已成熟資料的PIT-safe annual-refit model產生。"
+            "兩個score都由同一日期前已成熟資料的PIT-safe mode-specific refit model產生。"
         ),
         "param_source": "extending_min_roos",
         "rule_policy": "all_off",
