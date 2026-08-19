@@ -372,18 +372,18 @@ def validate_dataset_cli_contract_case(_base_params):
         (
             "build-point-in-time-scores" in [item["command"] for item in interactive_commands]
             and "audit-point-in-time-scores" in [item["command"] for item in interactive_commands]
-            and any("--fold-months" in item["args"] and "60" in item["args"] for item in interactive_commands if item["command"] == "build-point-in-time-scores")
+            and any("--single-score-block" in item["args"] and "2021-01-01" in item["args"] for item in interactive_commands if item["command"] == "build-point-in-time-scores")
             and all(item["compact_console"] == "1" for item in interactive_commands)
             and interactive_text.count("[Dataset]") == 0
             and "偵測到 PIT 模型所需 Dataset 尚未就緒" not in interactive_text
             and "[rebuild]" not in interactive_text
             and "[relabel]" not in interactive_text
             and "=== Continuous DL 模型研究與驗證 ===" in interactive_text
-            and "[1]  Extending-Window Rolling Test  (Enter)" in interactive_text
-            and "[2]  Fixed-Window Rolling Stability Test" in interactive_text
+            and "[1]  Extending-Window Test  (Enter)" in interactive_text
+            and "[2]  Fixed-Window Stability Test" in interactive_text
             and "[3]  查看目前Workflow與工件狀態" in interactive_text
             and "[6]  Timing Mode｜Rolling 訓練前後比較" in interactive_text
-            and "Fast Test | 60M" in interactive_text
+            and "OOS Test | 2021-01-01→最新" in interactive_text
             and f"[4]  {configured_ranker_menu_label}" not in interactive_text
             and "MR-12A/B/C" not in interactive_text
             and "Audit／診斷" not in interactive_text
@@ -437,8 +437,8 @@ def validate_dataset_cli_contract_case(_base_params):
             comparison_rc,
             comparison_commands,
             f"[4]  {configured_comparison_menu_label}" not in comparison_text
-            and "Extending-Window Rolling Test" in comparison_text
-            and "Fixed-Window Rolling Stability Test" in comparison_text,
+            and "Extending-Window Test" in comparison_text
+            and "Fixed-Window Stability Test" in comparison_text,
         ),
     )
 
@@ -581,9 +581,9 @@ def validate_dataset_cli_contract_case(_base_params):
         (0, True, True),
         (
             no_pit_rc,
-            "[2]  Fixed-Window Rolling Stability Test" in no_pit_text,
-            "[1]  Extending-Window Rolling Test  (Enter)" in no_pit_text
-            and "[2]  Fixed-Window Rolling Stability Test" in no_pit_text,
+            "[2]  Fixed-Window Stability Test" in no_pit_text,
+            "[1]  Extending-Window Test  (Enter)" in no_pit_text
+            and "[2]  Fixed-Window Stability Test" in no_pit_text,
         ),
     )
 
@@ -613,12 +613,12 @@ def validate_dataset_cli_contract_case(_base_params):
         (
             rejected_rc,
             rejected_profile_settings.rolling_authorized,
-            "[1]  Extending-Window Rolling Test  (Enter)" in rejected_text
-            and "[2]  Fixed-Window Rolling Stability Test" in rejected_text
+            "[1]  Extending-Window Test  (Enter)" in rejected_text
+            and "[2]  Fixed-Window Stability Test" in rejected_text
             and "[6]  Timing Mode｜Rolling 訓練前後比較" in rejected_text,
             "尚未授權Rolling PIT" in rejected_text,
-            "Extending Fast Test Scores" in rejected_status_text
-            or "Extending-Window Rolling Test" in rejected_status_text,
+            "Extending OOS Test Scores" in rejected_status_text
+            or "Extending-Window Test" in rejected_status_text,
         ),
     )
 
@@ -666,13 +666,13 @@ def validate_dataset_cli_contract_case(_base_params):
     else:
         pit_status_ok = (
             (
-                "Extending Fast Test Scores" in rendered_status
-                and "Extending Overnight Test Scores" in rendered_status
+                "Extending OOS Test Scores" in rendered_status
+                and "Extending Rolling Test Scores" in rendered_status
             )
             if current_model_settings.rolling_authorized
             else (
-                "Extending Fast Test Scores" not in rendered_status
-                and "Extending Overnight Test Scores" not in rendered_status
+                "Extending OOS Test Scores" not in rendered_status
+                and "Extending Rolling Test Scores" not in rendered_status
             )
         )
         workflow_status_contract_ok = (
@@ -721,10 +721,10 @@ def validate_dataset_cli_contract_case(_base_params):
         "完整建立 indexed feature bank dataset",
     )
     rolling_modes = app_breakout_quality.get_breakout_quality_rolling_test_modes()
-    fast_mode_choice = next(
+    oos_mode_choice = next(
         str(index)
         for index, mode in enumerate(rolling_modes, start=1)
-        if mode.mode_id == "fast"
+        if mode.mode_id == "oos"
     )
     with (
         patch.object(
@@ -752,7 +752,7 @@ def validate_dataset_cli_contract_case(_base_params):
             "BREAKOUT_QUALITY_STRATEGY_BUY_SORT",
             "auto",
         ),
-        patch("builtins.input", side_effect=["2", fast_mode_choice, ""]),
+        patch("builtins.input", side_effect=["2", oos_mode_choice, ""]),
         patch("tools.filters.breakout_quality.application._print_workflow_status"),
         patch(
             "tools.filters.breakout_quality.application._dataset_refresh_step",

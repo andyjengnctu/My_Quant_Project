@@ -275,6 +275,17 @@ def _collect_selection_pit_source_status(
                 "Selection PIT fold cadence與Strategy Compare mode不一致: "
                 f"expected={int(expected_fold_months)}, actual={pit_contract.manifest.get('fold_months')!r}"
             )
+        expected_single_block = bool(getattr(source, "point_in_time_single_score_block", False))
+        manifest_payload = getattr(pit_contract, "manifest", None)
+        if manifest_payload is not None:
+            actual_single_block = bool(dict(manifest_payload).get("single_score_block", False))
+            if actual_single_block != expected_single_block:
+                raise ValueError(
+                    "Selection PIT score-block mode與Strategy Compare mode不一致: "
+                    f"expected_single={expected_single_block}, actual_single={actual_single_block}"
+                )
+        elif expected_single_block:
+            raise ValueError("Selection PIT OOS mode缺少可驗證single_score_block的manifest")
         expected_anchor = getattr(source, "point_in_time_fold_anchor_date", None)
         if expected_anchor not in (None, ""):
             actual_anchor = str(pit_contract.manifest.get("fold_anchor_date") or "").strip()
@@ -367,7 +378,7 @@ def _collect_selection_pit_source_status(
             description = (
                 "缺少或無效的Selection PIT模型工件；Strategy Compare只消費既有PIT "
                 "score／manifest／audit，不建立、不重建也不執行PIT Model Gate。"
-                "請先執行 Research → [1] 模型訓練 → 準備策略比較所需模型工件，並選擇相同 Fast／Overnight Test。"
+                "請先執行 Research → [1] 模型訓練 → 準備策略比較所需模型工件，並選擇相同 OOS／Rolling Test。"
             )
         file_rows[key] = {
             "ready": pit_ready,

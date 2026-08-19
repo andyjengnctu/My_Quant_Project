@@ -9619,3 +9619,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Regression guard：synthetic 新增 isolated override bundle，要求 score/manifest/coverage/audit 四者維持同一 mode namespace；另以 Fast `CONT13K_ROLL` planning fixture 驗證修後 planner 直接得到 `READY`，三個工件皆 `REUSE`，period=`2016-01-01～2025-12-31`。
 - 不變：Fast=`60M + 2016 anchor`、Overnight=`12M`、MR-13E/K/M identity、模型權重／score、Strategy Compare C61/C58/C59/C60、optimizer／loss／seed／PIT chronology均未修改；使用者已完成的 Fast 模型工件不需重訓。
 - Decision：`FAST_PIT_OVERRIDE_CONSUMER_BUG_FIXED / EXISTING_FAST_ARTIFACTS_REUSABLE / SCIENTIFIC_SEMANTICS_UNCHANGED`。
+
+### 2026-08-20 — Current時間驗證收斂為 OOS Test / Rolling Test；OOS改為固定2020年底cutoff單一forward block
+- 使用者決策：舊名稱正式更新：`Extending-Window Rolling Test → Extending-Window Test`、`Fixed-Window Rolling Stability Test → Fixed-Window Stability Test`、`Extending-Window Rolling Multi-seed Robustness Test → Extending-Window Multi-seed Robustness Test`、`Fast Test → OOS Test`、`Overnight Test → Rolling Test`。
+- OOS Test不再使用2026-08-19短暫採用的兩個60M folds。Current OOS語意固定為：`score_start=2021-01-01`、`score_end=auto latest`、`single_score_block=True`；train／validation／final refit只使用2021前且Target完整成熟的合法歷史，因此information cutoff固定在2020年底以前。模型只訓練一次並評分2021→最新整段。
+- Rolling Test保留既有current truth：2016-01-01～2025-12-31、12M cadence、10個annual folds、expanding/extending history；既有合法canonical `point_in_time` folds與Strategy Compare結果不改identity/path並可REUSE。
+- Artifact isolation：新OOS PIT固定`point_in_time_oos_2021_forward`；Strategy Compare固定`outputs/strategy_compare/extending_window/oos_2021_forward`；OOS robustness model-work/output亦使用`oos_2021_forward` namespace。舊`point_in_time_fast_60m`／`fast_60m`工件保留historical evidence，不誤REUSE成新OOS。
+- Strategy Compare internal current profile更新為`extending_window_oos` + `extending_window_rolling`，schema 47→48；scientific arms仍為C61/C58/C59/C60，沒有新增MR/SR/Cxx identity。
+- Multi-seed OOS只需1 PIT fold / seed；Rolling robustness仍為10 folds / seed。兩者都維持configured deterministic seeds與canonical trainer/replay contract。

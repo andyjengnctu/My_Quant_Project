@@ -511,7 +511,7 @@ def _arm_training_dl_ids(settings, arm: StrategyComparisonArm) -> tuple[str, ...
     score_sources = {str(settings.dl_sources[dl_id].score_source) for dl_id in unique}
     expected = (
         "selection_point_in_time"
-        if settings.profile_id in {"selection_pit", "extending_window_rolling_fast", "extending_window_rolling"}
+        if settings.profile_id in {"selection_pit", "extending_window_oos", "extending_window_rolling"}
         else "continuous_ranker_oos"
     )
     if score_sources != {expected}:
@@ -673,10 +673,23 @@ def _comparison_period_from_upstream(settings, stochastic_arms, status: dict[str
         outer = resolve_breakout_quality_outer_policy(
             PROJECT_ROOT, source_data_end_date=source_end
         )
-        runtime_periods.append((
-            pd.Timestamp(str(outer["oos_start_date"])).normalize(),
-            pd.Timestamp(str(outer["effective_oos_end_date"])).normalize(),
-        ))
+        configured_start = _source_point_in_time_score_start_date(
+            settings=settings, dl_id=str(dl_id)
+        )
+        configured_end = _source_point_in_time_score_end_date(
+            settings=settings, dl_id=str(dl_id)
+        )
+        period_start = pd.Timestamp(
+            str(configured_start or outer["oos_start_date"])
+        ).normalize()
+        period_end = pd.Timestamp(
+            str(
+                outer["effective_oos_end_date"]
+                if configured_end in (None, "") or str(configured_end).lower() == "auto"
+                else configured_end
+            )
+        ).normalize()
+        runtime_periods.append((period_start, period_end))
     if not runtime_periods:
         raise RuntimeError("Multiple-seed robustness沒有可解析Forward OOS期間的stochastic source")
     start = max(item[0] for item in runtime_periods)
@@ -756,12 +769,14 @@ def _render_robustness_execution_plan(
         f"模型訓練單元       ：{cfg.seed_count * len(training_sources)}（{len(training_sources)} unique DL sources × {cfg.seed_count} seeds）",
         f"策略Replay單元     ：{cfg.seed_count * len(stochastic_arms)}（{len(stochastic_arms)} stochastic arms × {cfg.seed_count} seeds）",
     ]
-    if settings.profile_id in {"selection_pit", "extending_window_rolling_fast", "extending_window_rolling"} and start is not None and end is not None:
+    if settings.profile_id in {"selection_pit", "extending_window_oos", "extending_window_rolling"} and start is not None and end is not None:
         fold_counts = []
         for dl_id, _arm_entries in training_sources:
             dl = settings.dl_sources[str(dl_id)]
             fold_counts.append(
-                _pit_fold_count_for_period(
+                1
+                if _source_point_in_time_single_score_block(settings=settings, dl_id=str(dl_id))
+                else _pit_fold_count_for_period(
                     start, end, _source_point_in_time_fold_months(settings=settings, dl_id=str(dl_id))
                 )
             )
@@ -827,6 +842,20 @@ def _dataset_identity_snapshot(dataset: str) -> dict[str, Any]:
         }
 
 
+def _source_point_in_time_score_start_date(*, settings, dl_id: str) -> str | None:
+    value = settings.dl_sources[str(dl_id)].point_in_time_score_start_date
+    return None if value in (None, "") else str(value)
+
+
+def _source_point_in_time_score_end_date(*, settings, dl_id: str) -> str | None:
+    value = settings.dl_sources[str(dl_id)].point_in_time_score_end_date
+    return None if value in (None, "") else str(value)
+
+
+def _source_point_in_time_single_score_block(*, settings, dl_id: str) -> bool:
+    return bool(settings.dl_sources[str(dl_id)].point_in_time_single_score_block)
+
+
 def _source_point_in_time_fold_months(*, settings, dl_id: str) -> int:
     source = settings.dl_sources[str(dl_id)]
     if source.point_in_time_fold_months is not None:
@@ -844,7 +873,8 @@ def _source_point_in_time_fold_anchor_date(*, settings, dl_id: str) -> str | Non
 
 
 def _point_in_time_training_policy_snapshot(
-    *, experiment_profile: str, fold_months: int | None = None, fold_anchor_date: str | None = None
+    *, experiment_profile: str, fold_months: int | None = None, fold_anchor_date: str | None = None,
+    single_score_block: bool = False, score_start_date: str | None = None, score_end_date: str | None = None
 ) -> dict[str, Any]:
     workflow = get_breakout_quality_workflow_settings(experiment_profile=str(experiment_profile))
     return {
@@ -852,6 +882,9 @@ def _point_in_time_training_policy_snapshot(
             workflow.point_in_time_fold_months if fold_months is None else fold_months
         ),
         "fold_anchor_date": (None if fold_anchor_date in (None, "") else str(fold_anchor_date)),
+        "single_score_block": bool(single_score_block),
+        "score_start_date": None if score_start_date in (None, "") else str(score_start_date),
+        "score_end_date": None if score_end_date in (None, "") else str(score_end_date),
         "inner_validation_months": int(workflow.point_in_time_inner_validation_months),
         "min_train_groups": int(workflow.point_in_time_min_train_groups),
         "min_validation_groups": int(workflow.point_in_time_min_validation_groups),
@@ -955,6 +988,15 @@ def build_multi_seed_robustness_contract(
                     fold_anchor_date=_source_point_in_time_fold_anchor_date(
                         settings=settings, dl_id=str(dl_id)
                     ),
+                    single_score_block=_source_point_in_time_single_score_block(
+                        settings=settings, dl_id=str(dl_id)
+                    ),
+                    score_start_date=_source_point_in_time_score_start_date(
+                        settings=settings, dl_id=str(dl_id)
+                    ),
+                    score_end_date=_source_point_in_time_score_end_date(
+                        settings=settings, dl_id=str(dl_id)
+                    ),
                 )
                 if str(source.score_source) == "selection_point_in_time"
                 else None
@@ -1001,6 +1043,15 @@ def build_multi_seed_robustness_contract(
                             settings=settings, dl_id=str(arm.dl_id)
                         ),
                         fold_anchor_date=_source_point_in_time_fold_anchor_date(
+                            settings=settings, dl_id=str(arm.dl_id)
+                        ),
+                        single_score_block=_source_point_in_time_single_score_block(
+                            settings=settings, dl_id=str(arm.dl_id)
+                        ),
+                        score_start_date=_source_point_in_time_score_start_date(
+                            settings=settings, dl_id=str(arm.dl_id)
+                        ),
+                        score_end_date=_source_point_in_time_score_end_date(
                             settings=settings, dl_id=str(arm.dl_id)
                         ),
                     )
@@ -1445,6 +1496,14 @@ def _validate_training_artifacts(
                 "multi-seed PIT manifest fold_months不一致: "
                 f"expected={expected_fold_months}, actual={manifest.get('fold_months')}"
             )
+        expected_single_block = _source_point_in_time_single_score_block(
+            settings=settings, dl_id=str(dl_id)
+        )
+        if bool(manifest.get("single_score_block", False)) != bool(expected_single_block):
+            raise ValueError(
+                "multi-seed PIT manifest single_score_block不一致: "
+                f"expected={expected_single_block}, actual={manifest.get('single_score_block')}"
+            )
         expected_anchor = _source_point_in_time_fold_anchor_date(
             settings=settings, dl_id=str(dl_id)
         )
@@ -1558,6 +1617,8 @@ def _training_command(
         )
         if fold_anchor_date is not None:
             command.extend(["--fold-anchor-date", fold_anchor_date])
+        if _source_point_in_time_single_score_block(settings=settings, dl_id=str(dl_id)):
+            command.append("--single-score-block")
         return command
     return [
         sys.executable, "-m", "tools.filters.breakout_quality.train_continuous_ranker",

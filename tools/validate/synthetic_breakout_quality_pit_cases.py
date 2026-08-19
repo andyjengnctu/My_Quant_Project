@@ -285,6 +285,22 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         ],
     )
 
+    oos_periods = _build_fold_periods(
+        pd.Timestamp("2021-01-01"),
+        pd.Timestamp("2026-03-02"),
+        fold_months=12,
+        fold_anchor=pd.Timestamp("2021-01-01"),
+        single_score_block=True,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_single_score_block_keeps_2021_to_latest_as_one_fold",
+        [("2021-01-01", "2026-03-02")],
+        [(str(item["score_start"].date()), str(item["score_end"].date())) for item in oos_periods],
+    )
+
     original_annual_periods = _build_fold_periods(
         pd.Timestamp("2014-01-01"),
         pd.Timestamp("2015-12-31"),

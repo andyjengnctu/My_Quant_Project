@@ -148,8 +148,11 @@ class StrategyDLSource:
     description: str
     score_source: str = "canonical_runtime"
     forward_scores_builder: StrategyArtifactBuilder | None = None
+    point_in_time_score_start_date: str | None = None
+    point_in_time_score_end_date: str | None = None
     point_in_time_fold_months: int | None = None
     point_in_time_fold_anchor_date: str | None = None
+    point_in_time_single_score_block: bool = False
     point_in_time_dirname: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -166,12 +169,15 @@ class StrategyDLSource:
                 if self.forward_scores_builder is None
                 else self.forward_scores_builder.as_dict()
             ),
+            "point_in_time_score_start_date": self.point_in_time_score_start_date,
+            "point_in_time_score_end_date": self.point_in_time_score_end_date,
             "point_in_time_fold_months": (
                 None
                 if self.point_in_time_fold_months is None
                 else int(self.point_in_time_fold_months)
             ),
             "point_in_time_fold_anchor_date": self.point_in_time_fold_anchor_date,
+            "point_in_time_single_score_block": bool(self.point_in_time_single_score_block),
             "point_in_time_dirname": self.point_in_time_dirname,
         }
 
@@ -803,6 +809,20 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 raise ValueError(f"Selection PIT continuous DL source不得設定binary threshold: {key}")
             if source.point_in_time_fold_months is not None and int(source.point_in_time_fold_months) < 1:
                 raise ValueError(f"Selection PIT fold months必須>=1: {key}")
+            if source.point_in_time_score_start_date not in (None, ""):
+                try:
+                    date.fromisoformat(str(source.point_in_time_score_start_date))
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Selection PIT score start必須是YYYY-MM-DD: {key}/{source.point_in_time_score_start_date!r}"
+                    ) from exc
+            if source.point_in_time_score_end_date not in (None, "") and str(source.point_in_time_score_end_date).lower() != "auto":
+                try:
+                    date.fromisoformat(str(source.point_in_time_score_end_date))
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Selection PIT score end必須是YYYY-MM-DD或auto: {key}/{source.point_in_time_score_end_date!r}"
+                    ) from exc
             anchor = (
                 None
                 if source.point_in_time_fold_anchor_date in (None, "")
@@ -829,8 +849,11 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
         else:
             raise ValueError(f"DL source score_source不支援: {key}/{source.score_source}")
         if source.score_source != "selection_point_in_time" and (
-            source.point_in_time_fold_months is not None
+            source.point_in_time_score_start_date not in (None, "")
+            or source.point_in_time_score_end_date not in (None, "")
+            or source.point_in_time_fold_months is not None
             or source.point_in_time_fold_anchor_date not in (None, "")
+            or bool(source.point_in_time_single_score_block)
             or source.point_in_time_dirname not in (None, "")
         ):
             raise ValueError(f"非Selection PIT source不得設定Rolling mode欄位: {key}")

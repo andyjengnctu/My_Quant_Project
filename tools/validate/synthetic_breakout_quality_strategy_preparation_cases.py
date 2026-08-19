@@ -468,7 +468,7 @@ def append_strategy_compare_preparation_contract_checks(
         and all(action.builder_type is None for action in missing_actions)
         and all(action.producer_work_type == "model_training" for action in missing_actions)
         and all("準備策略比較所需模型工件" in action.description for action in missing_actions)
-        and all("Fast／Overnight Test" in action.description for action in missing_actions),
+        and all("OOS／Rolling Test" in action.description for action in missing_actions),
     )
 
     failed_gate_contract = SimpleNamespace(

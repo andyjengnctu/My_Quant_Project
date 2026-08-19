@@ -369,10 +369,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         tuple(item["profile_id"] for item in menu_profiles)
         == tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS)
         and tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS)
-        == ("extending_window_rolling_fast", "extending_window_rolling")
+        == ("extending_window_oos", "extending_window_rolling")
         and len(menu_labels) == 2
-        and "Fast Test" in menu_labels[0]
-        and "Overnight Test" in menu_labels[1]
+        and "OOS Test" in menu_labels[0]
+        and "Rolling Test" in menu_labels[1]
         and all("MR-" not in label for label in menu_labels),
     )
     active_arm_ids = {
@@ -650,8 +650,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "build_selection_point_in_time_scores" in model_prepare_source
         and "audit_selection_point_in_time_scores" in model_prepare_source
         and "resume=True" in model_prepare_source
+        and "point_in_time_score_start_date" in model_prepare_source
+        and "point_in_time_score_end_date" in model_prepare_source
         and "point_in_time_fold_months" in model_prepare_source
         and "point_in_time_fold_anchor_date" in model_prepare_source
+        and "point_in_time_single_score_block" in model_prepare_source
         and "point_in_time_dirname" in model_prepare_source
         and "缺少／不相容fold才補訓" in model_prepare_source
         and "Strategy Compare不得因此訓練模型" in (
@@ -673,8 +676,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             comparison.profile_id == str(mode["profile_id"])
             and all(
                 source.score_source == "selection_point_in_time"
+                and (source.point_in_time_score_start_date or None) == (mode.get("score_start_date") or None)
+                and (source.point_in_time_score_end_date or None) == (mode.get("score_end_date") or None)
                 and int(source.point_in_time_fold_months or 0) == int(mode["fold_months"])
                 and (source.point_in_time_fold_anchor_date or None) == (mode.get("fold_anchor_date") or None)
+                and bool(source.point_in_time_single_score_block) == bool(mode.get("single_score_block"))
                 for source in comparison.dl_sources.values()
                 if source.dl_id in {
                     str(arm.dl_id)
@@ -1553,7 +1559,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     with tempfile.TemporaryDirectory() as tmp:
         override_project_root = Path(tmp)
-        override_dir = override_project_root / "isolated_fast_60m"
+        override_dir = override_project_root / "isolated_oos_2021_forward"
         override_dir.mkdir(parents=True, exist_ok=True)
         override_score = override_dir / "selection_point_in_time_scores.csv"
         override_coverage = override_dir / "selection_point_in_time_coverage.csv"
@@ -1790,15 +1796,23 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "請先由Strategy Compare正式前置建立" not in robustness_source,
     )
 
-    configured_start, configured_end = robustness_module._comparison_period_from_upstream(
-        robustness_profile, robustness_stochastic, {}
+    current_mode = next(
+        item for item in rolling_modes
+        if str(item["profile_id"]) == str(robustness_profile.profile_id)
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "multi_seed_period_honors_explicit_current_profile_window_before_dataset_tail_fallback",
+        "multi_seed_current_mode_period_contract_is_config_driven",
         True,
-        configured_start == str(pd.Timestamp(str(robustness_profile.start_date)).date())
-        and configured_end == str(pd.Timestamp(str(robustness_profile.end_date)).date()),
+        (
+            robustness_profile.start_date is None
+            and robustness_profile.end_date is None
+            and str(current_mode.get("score_start_date")) == "2021-01-01"
+            and str(current_mode.get("score_end_date")).lower() == "auto"
+            and bool(current_mode.get("single_score_block"))
+        )
+        if str(current_mode.get("mode_id")) == "oos"
+        else (robustness_profile.start_date is not None and robustness_profile.end_date is not None),
     )
 
     dataset_profile_mismatch_rejected = False

@@ -246,7 +246,11 @@ def _strategy_rolling_mode_menu(*, robustness: bool) -> int:
             print(
                 render_menu_item(
                     index,
-                    f"{mode['label']} | {int(mode['fold_months'])}M",
+                    (
+                        f"{mode['label']} | {mode.get('score_start_date')}→{'最新' if str(mode.get('score_end_date')).lower() == 'auto' else mode.get('score_end_date')}"
+                        if bool(mode.get("single_score_block"))
+                        else f"{mode['label']} | {int(mode['fold_months'])}M"
+                    ),
                     default=index == 1,
                 )
             )

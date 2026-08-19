@@ -40,7 +40,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 47
+STRATEGY_COMPARE_SCHEMA_VERSION = 48
 
 # =============================================================================
 # 1. 常用設定
@@ -49,37 +49,43 @@ STRATEGY_COMPARE_SCHEMA_VERSION = 47
 #    繼承 config/breakout_quality.py 的 BreakoutQualityWorkflowSettings SSOT。
 # =============================================================================
 
-_ROLLING_FAST = get_breakout_quality_rolling_test_mode("fast")
-_ROLLING_OVERNIGHT = get_breakout_quality_rolling_test_mode("overnight")
+_ROLLING_OOS = get_breakout_quality_rolling_test_mode("oos")
+_ROLLING_ROLLING = get_breakout_quality_rolling_test_mode("rolling")
 
-STRATEGY_COMPARE_DEFAULT_PROFILE = "extending_window_rolling_fast"
-# Current UI只顯示Rolling研究問題；Fast／Overnight在下一層選單選擇。
+STRATEGY_COMPARE_DEFAULT_PROFILE = "extending_window_oos"
+# Current UI只顯示研究問題；OOS／Rolling在下一層選單選擇。
 # 此tuple仍列出兩個current internal profiles，供status／artifact resolver使用。
 STRATEGY_COMPARE_MENU_PROFILE_IDS = (
-    "extending_window_rolling_fast",
+    "extending_window_oos",
     "extending_window_rolling",
 )
-STRATEGY_COMPARE_ROLLING_TEST_MENU_LABEL = "Extending-Window Rolling Test"
-STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL = "Extending-Window Rolling Multi-seed Robustness Test"
+STRATEGY_COMPARE_ROLLING_TEST_MENU_LABEL = "Extending-Window Test"
+STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL = "Extending-Window Multi-seed Robustness Test"
 STRATEGY_COMPARE_ROLLING_TEST_MODES = (
     {
-        "mode_id": _ROLLING_FAST.mode_id,
-        "label": _ROLLING_FAST.label,
-        "fold_months": int(_ROLLING_FAST.fold_months),
-        "fold_anchor_date": _ROLLING_FAST.fold_anchor_date,
-        "profile_id": "extending_window_rolling_fast",
-        "robustness_id": "extending_window_rolling_fast",
+        "mode_id": _ROLLING_OOS.mode_id,
+        "label": _ROLLING_OOS.label,
+        "score_start_date": _ROLLING_OOS.score_start_date,
+        "score_end_date": _ROLLING_OOS.score_end_date,
+        "fold_months": int(_ROLLING_OOS.fold_months),
+        "fold_anchor_date": _ROLLING_OOS.fold_anchor_date,
+        "single_score_block": bool(_ROLLING_OOS.single_score_block),
+        "profile_id": "extending_window_oos",
+        "robustness_id": "extending_window_oos",
     },
     {
-        "mode_id": _ROLLING_OVERNIGHT.mode_id,
-        "label": _ROLLING_OVERNIGHT.label,
-        "fold_months": int(_ROLLING_OVERNIGHT.fold_months),
-        "fold_anchor_date": _ROLLING_OVERNIGHT.fold_anchor_date,
+        "mode_id": _ROLLING_ROLLING.mode_id,
+        "label": _ROLLING_ROLLING.label,
+        "score_start_date": _ROLLING_ROLLING.score_start_date,
+        "score_end_date": _ROLLING_ROLLING.score_end_date,
+        "fold_months": int(_ROLLING_ROLLING.fold_months),
+        "fold_anchor_date": _ROLLING_ROLLING.fold_anchor_date,
+        "single_score_block": bool(_ROLLING_ROLLING.single_score_block),
         "profile_id": "extending_window_rolling",
         "robustness_id": "extending_window_rolling",
     },
 )
-STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE = "extending_window_rolling_fast"
+STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE = "extending_window_oos"
 STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT = 4
 STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED = 20260810
 STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS = 2
@@ -145,20 +151,24 @@ STRATEGY_COMPARE_PROFILES = {
             "C56-C44", "C56-C3", "C56-C1",
         ),
     },
-    "extending_window_rolling_fast": {
-        "label": "Extending-Window Rolling Fast Test",
+    "extending_window_oos": {
+        "label": "Extending-Window Test | OOS Test",
         "description": (
-            "2016～2025完整score period只用兩個60M PIT-safe folds：2016～2020、2021～2025；"
-            "每個fold仍用score_start前所有合法成熟歷史重新選epoch/refit。只作快速Gate，不取代12M Overnight evidence。"
+            "固定information cutoff：只使用2021-01-01以前且Target已成熟的合法歷史做inner validation／epoch selection／final refit，"
+            "只訓練一次並評分2021-01-01起至最新合法score date。OOS Test只作快速Gate，不取代12M Rolling evidence。"
         ),
-        "display_alignment_group": "extending_strategy_compare_fast",
+        "display_alignment_group": "extending_strategy_compare_oos",
         "display_alignment_arm_ids": ("C61", "C58", "C59", "C60"),
-        "start_date": "2016-01-01",
-        "end_date": "2025-12-31",
-        "point_in_time_fold_months": int(_ROLLING_FAST.fold_months),
-        "point_in_time_fold_anchor_date": _ROLLING_FAST.fold_anchor_date,
-        "point_in_time_dirname": _ROLLING_FAST.point_in_time_dirname,
-        "output_root": "outputs/strategy_compare/extending_window_rolling/fast_60m",
+        # None = 由三個PIT runtime工件的共同coverage動態解析2021→最新。
+        "start_date": None,
+        "end_date": None,
+        "point_in_time_score_start_date": _ROLLING_OOS.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_OOS.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_OOS.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_OOS.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_OOS.single_score_block),
+        "point_in_time_dirname": _ROLLING_OOS.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/extending_window/oos_2021_forward",
         "reuse_output_roots": (),
         "arm_ids": ("C61", "C58", "C59", "C60"),
         "contrast_ids": (
@@ -167,7 +177,7 @@ STRATEGY_COMPARE_PROFILES = {
         ),
     },
     "extending_window_rolling": {
-        "label": "Extending-Window Rolling Overnight Test",
+        "label": "Extending-Window Test | Rolling Test",
         "description": (
             "2016→2025十個完整年度fold的單一PIT-safe operational chain；DL使用expanding history + "
             "annual refit；Full／Min ROOS都沿用各時期當時合法rolling params形成共同策略體系基準。"
@@ -177,9 +187,12 @@ STRATEGY_COMPARE_PROFILES = {
         "display_alignment_arm_ids": ("C61", "C58", "C59", "C60"),
         "start_date": "2016-01-01",
         "end_date": "2025-12-31",
-        "point_in_time_fold_months": int(_ROLLING_OVERNIGHT.fold_months),
-        "point_in_time_fold_anchor_date": _ROLLING_OVERNIGHT.fold_anchor_date,
-        "point_in_time_dirname": _ROLLING_OVERNIGHT.point_in_time_dirname,
+        "point_in_time_score_start_date": _ROLLING_ROLLING.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_ROLLING.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_ROLLING.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_ROLLING.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_ROLLING.single_score_block),
+        "point_in_time_dirname": _ROLLING_ROLLING.point_in_time_dirname,
         "output_root": "outputs/strategy_compare/extending_window_rolling",
         "reuse_output_roots": (
             "outputs/strategy_compare/selection_pit",
@@ -236,10 +249,10 @@ STRATEGY_COMPARE_PROFILES = {
 # stochastic/fixed比較對象由robustness profile顯式指定；
 # robustness orchestration不得改動單次Strategy Compare arm identity/fingerprint。
 STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
-    "extending_window_rolling_fast": {
-        "label": "Extending-Window Rolling Multi-seed Robustness Fast Test",
+    "extending_window_oos": {
+        "label": "Extending-Window Multi-seed Robustness Test | OOS Test",
         "enabled": True,
-        "profile_id": "extending_window_rolling_fast",
+        "profile_id": "extending_window_oos",
         "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
         "seed_generator_seed": STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED,
         "gpu_train_workers": STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS,
@@ -258,11 +271,11 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "fixed_arm_ids": ("C58",),
         "stochastic_arm_ids": ("C60",),
         "paired_contrasts": (),
-        "output_root": "outputs/strategy_compare/robustness/extending_window_rolling/fast_60m",
-        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window_rolling/fast_60m",
+        "output_root": "outputs/strategy_compare/robustness/extending_window/oos_2021_forward",
+        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/oos_2021_forward",
     },
     "extending_window_rolling": {
-        "label": "Extending-Window Rolling Multi-seed Robustness Overnight Test",
+        "label": "Extending-Window Multi-seed Robustness Test | Rolling Test",
         "enabled": True,
         "profile_id": "extending_window_rolling",
         "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
@@ -1100,7 +1113,7 @@ def get_strategy_multi_seed_robustness_settings(
     }
     expected_score_source = (
         "selection_point_in_time"
-        if settings.profile_id in {"selection_pit", "extending_window_rolling_fast", "extending_window_rolling"}
+        if settings.profile_id in {"selection_pit", "extending_window_oos", "extending_window_rolling"}
         else "continuous_ranker_oos"
     )
     if score_sources != {expected_score_source}:
@@ -1124,7 +1137,7 @@ def get_strategy_multi_seed_robustness_settings(
 
 
 def get_strategy_rolling_test_modes() -> tuple[dict[str, object], ...]:
-    """Return Fast/Overnight mode bindings for the nested Strategy Compare menus."""
+    """Return OOS/Rolling mode bindings for the nested Strategy Compare menus."""
 
     rows: list[dict[str, object]] = []
     seen_profiles: set[str] = set()
@@ -1241,6 +1254,17 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
         )
         for source_id, raw in parameter_catalog.items()
     }
+    profile_pit_score_start_date = (
+        None
+        if profile.get("point_in_time_score_start_date") in (None, "")
+        else str(profile.get("point_in_time_score_start_date")).strip()
+    )
+    profile_pit_score_end_date = (
+        None
+        if profile.get("point_in_time_score_end_date") in (None, "")
+        else str(profile.get("point_in_time_score_end_date")).strip()
+    )
+    profile_pit_single_score_block = bool(profile.get("point_in_time_single_score_block", False))
     profile_pit_fold_months = (
         None
         if profile.get("point_in_time_fold_months") in (None, "")
@@ -1266,6 +1290,16 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
             description=str(raw.get("description") or "").strip(),
             score_source=str(raw.get("score_source") or "canonical_runtime").strip(),
             forward_scores_builder=_builder(raw.get("forward_scores_builder")),
+            point_in_time_score_start_date=(
+                profile_pit_score_start_date
+                if str(raw.get("score_source") or "canonical_runtime").strip() == "selection_point_in_time"
+                else None
+            ),
+            point_in_time_score_end_date=(
+                profile_pit_score_end_date
+                if str(raw.get("score_source") or "canonical_runtime").strip() == "selection_point_in_time"
+                else None
+            ),
             point_in_time_fold_months=(
                 profile_pit_fold_months
                 if str(raw.get("score_source") or "canonical_runtime").strip() == "selection_point_in_time"
@@ -1275,6 +1309,11 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
                 profile_pit_anchor_date
                 if str(raw.get("score_source") or "canonical_runtime").strip() == "selection_point_in_time"
                 else None
+            ),
+            point_in_time_single_score_block=(
+                profile_pit_single_score_block
+                if str(raw.get("score_source") or "canonical_runtime").strip() == "selection_point_in_time"
+                else False
             ),
             point_in_time_dirname=(
                 profile_pit_dirname

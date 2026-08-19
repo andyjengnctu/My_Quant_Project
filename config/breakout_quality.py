@@ -221,29 +221,36 @@ BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE = "2016-01-01"
 # "auto"仍保留為可設定值，供未來明確擴展到最新可評分stock-day。
 BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE: str | None = "2025-12-31"
 
-# Current Rolling Test只保留兩種執行深度；兩者都完整覆蓋相同score period，
-# 唯一差別是score/refit cadence。Fast用兩個60M OOS blocks作快速Gate；
-# Overnight用12M annual folds作完整Rolling evidence。
+# Current時間驗證只保留兩種執行模式：
+# OOS Test固定以2021-01-01作information cutoff後的單一forward score block，
+# 只訓練一次並評分2021-01-01起至最新合法score date；Rolling Test才使用12M annual folds。
 BREAKOUT_QUALITY_ROLLING_TEST_MODES = {
-    "fast": {
-        "label": "Fast Test",
-        "fold_months": 60,
-        "fold_anchor_date": "2016-01-01",
-        # Fast aggregate必須隔離，不能覆寫既有12M canonical PIT。
-        "point_in_time_dirname": "point_in_time_fast_60m",
+    "oos": {
+        "label": "OOS Test",
+        "score_start_date": "2021-01-01",
+        "score_end_date": "auto",
+        # single_score_block=True時fold_months只保留CLI/manifest相容欄位，不切分score period。
+        "fold_months": 12,
+        "fold_anchor_date": "2021-01-01",
+        "single_score_block": True,
+        # 新OOS語意使用獨立namespace，不誤REUSE舊Fast 60M工件。
+        "point_in_time_dirname": "point_in_time_oos_2021_forward",
     },
-    "overnight": {
-        "label": "Overnight Test",
+    "rolling": {
+        "label": "Rolling Test",
+        "score_start_date": BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE,
+        "score_end_date": BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE,
         "fold_months": 12,
         "fold_anchor_date": None,
+        "single_score_block": False,
         # None = 沿用既有canonical point_in_time路徑，讓已完成12M folds直接REUSE。
         "point_in_time_dirname": None,
     },
 }
-BREAKOUT_QUALITY_DEFAULT_ROLLING_TEST_MODE = "fast"
-# Backward-compatible canonical PIT cadence；current Overnight Test由同一設定衍生。
+BREAKOUT_QUALITY_DEFAULT_ROLLING_TEST_MODE = "oos"
+# Backward-compatible canonical PIT cadence；current Rolling Test由同一設定衍生。
 BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_MONTHS = int(
-    BREAKOUT_QUALITY_ROLLING_TEST_MODES["overnight"]["fold_months"]
+    BREAKOUT_QUALITY_ROLLING_TEST_MODES["rolling"]["fold_months"]
 )
 BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS = 24
 # None = expanding history；正整數 = 完整fit history固定最近N個calendar months，
@@ -1707,8 +1714,11 @@ def get_breakout_quality_continuous_ranker_comparison_settings(
 class BreakoutQualityRollingTestModeSettings:
     mode_id: str
     label: str
+    score_start_date: str
+    score_end_date: str | None
     fold_months: int
     fold_anchor_date: str | None
+    single_score_block: bool
     point_in_time_dirname: str | None
 
 
@@ -1720,7 +1730,11 @@ def get_breakout_quality_rolling_test_modes() -> tuple[BreakoutQualityRollingTes
         if not normalized_id or normalized_id in seen:
             raise ValueError(f"Rolling Test mode id空白或重複: {mode_id!r}")
         label = str(dict(raw).get("label") or "").strip()
+        score_start_date = str(dict(raw).get("score_start_date") or "").strip()
+        score_end_raw = dict(raw).get("score_end_date")
+        score_end_date = None if score_end_raw in (None, "") else str(score_end_raw).strip()
         fold_months = int(dict(raw).get("fold_months", 0) or 0)
+        single_score_block = bool(dict(raw).get("single_score_block", False))
         anchor_raw = dict(raw).get("fold_anchor_date")
         fold_anchor_date = None if anchor_raw in (None, "") else str(anchor_raw).strip()
         if fold_anchor_date is not None:
@@ -1734,6 +1748,21 @@ def get_breakout_quality_rolling_test_modes() -> tuple[BreakoutQualityRollingTes
         dirname = None if dirname_raw in (None, "") else str(dirname_raw).strip()
         if not label:
             raise ValueError(f"Rolling Test mode label不可空白: {normalized_id}")
+        if not score_start_date:
+            raise ValueError(f"Rolling Test score_start_date不可空白: {normalized_id}")
+        try:
+            date.fromisoformat(score_start_date)
+        except ValueError as exc:
+            raise ValueError(
+                f"Rolling Test score_start_date必須是YYYY-MM-DD: {score_start_date!r}"
+            ) from exc
+        if score_end_date is not None and score_end_date.lower() != "auto":
+            try:
+                date.fromisoformat(score_end_date)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Rolling Test score_end_date必須是YYYY-MM-DD或auto: {score_end_date!r}"
+                ) from exc
         if fold_months < 1:
             raise ValueError(f"Rolling Test fold_months必須>=1: {normalized_id}")
         if dirname is not None and (Path(dirname).name != dirname or dirname in {".", ".."}):
@@ -1742,8 +1771,11 @@ def get_breakout_quality_rolling_test_modes() -> tuple[BreakoutQualityRollingTes
             BreakoutQualityRollingTestModeSettings(
                 mode_id=normalized_id,
                 label=label,
+                score_start_date=score_start_date,
+                score_end_date=score_end_date,
                 fold_months=fold_months,
                 fold_anchor_date=fold_anchor_date,
+                single_score_block=single_score_block,
                 point_in_time_dirname=dirname,
             )
         )

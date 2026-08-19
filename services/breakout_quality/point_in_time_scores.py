@@ -120,11 +120,16 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--score-end-date", default=settings.point_in_time_score_end_date)
     parser.add_argument("--fold-months", type=int, default=settings.point_in_time_fold_months)
     parser.add_argument(
+        "--single-score-block",
+        action="store_true",
+        help="將resolved score_start～score_end視為單一PIT fold；用於固定information-cutoff的OOS Test",
+    )
+    parser.add_argument(
         "--fold-anchor-date",
         default=None,
         help=(
             "可選的fold calendar anchor（YYYY-MM-DD）；省略時沿用canonical 2000-01-01。"
-            "Fast 60M使用2016-01-01以形成2016~2020、2021~2025兩個完整fold。"
+            "OOS Test可指定2021-01-01並搭配--single-score-block形成單一2021→最新forward fold。"
         ),
     )
     parser.add_argument(
@@ -307,6 +312,7 @@ def _build_fold_periods(
     *,
     fold_months: int,
     fold_anchor: pd.Timestamp | None = None,
+    single_score_block: bool = False,
 ) -> list[dict[str, Any]]:
     """Build calendar-anchored folds whose later boundaries never shift.
 
@@ -323,6 +329,12 @@ def _build_fold_periods(
         raise ValueError("fold_months必須>=1")
     if end < start:
         raise ValueError("point-in-time score期間不合法")
+    if bool(single_score_block):
+        return [{
+            "fold_id": _stable_fold_id(start, end),
+            "score_start": start,
+            "score_end": end,
+        }]
 
     anchor = (
         FOLD_CALENDAR_ANCHOR
@@ -1448,6 +1460,7 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
         score_start, score_end,
         fold_months=int(args.fold_months),
         fold_anchor=fold_anchor,
+        single_score_block=bool(args.single_score_block),
     )
     print(f"[PIT plan] 建立 {len(folds)} 個fold的合法 train/validation/score partitions...", flush=True)
     fold_details = [
@@ -1743,6 +1756,7 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
         "fold_anchor_date": str(
             (FOLD_CALENDAR_ANCHOR if fold_anchor is None else fold_anchor).date()
         ),
+        "single_score_block": bool(args.single_score_block),
         "inner_validation_months": int(args.inner_validation_months),
         "seed": int(args.seed),
         "fold_count": int(len(fold_manifests)),
@@ -1844,6 +1858,7 @@ def build_selection_point_in_time_scores(
     plan_only: bool = False,
     point_in_time_dir_override: str | None = None,
     allow_stale_source: bool = False,
+    single_score_block: bool = False,
 ) -> int:
     """Programmatic PIT producer used by formal workflows.
 
@@ -1865,6 +1880,8 @@ def build_selection_point_in_time_scores(
         argv.extend(["--fold-months", str(int(fold_months))])
     if fold_anchor_date is not None:
         argv.extend(["--fold-anchor-date", str(fold_anchor_date)])
+    if single_score_block:
+        argv.append("--single-score-block")
     if inner_validation_months is not None:
         argv.extend(["--inner-validation-months", str(int(inner_validation_months))])
     if train_window_months is not None:

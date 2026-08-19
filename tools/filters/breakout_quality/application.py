@@ -2044,14 +2044,14 @@ def _print_workflow_status(settings=None) -> None:
         rolling_modes = get_breakout_quality_rolling_test_modes()
         base_rows.extend((
             (
-                "Rolling Score Period",
-                f"{'auto（最早合法）' if str(settings.point_in_time_score_start_date).lower() == 'auto' else settings.point_in_time_score_start_date} ～ "
-                f"{settings.point_in_time_score_end_date or 'Legacy Selection end'}",
-            ),
-            (
-                "Rolling Test Modes",
+                "Time Test Modes",
                 " / ".join(
-                    f"{mode.label}={int(mode.fold_months)}M" for mode in rolling_modes
+                    (
+                        f"{mode.label}={mode.score_start_date}→{('最新' if str(mode.score_end_date).lower() == 'auto' else mode.score_end_date)} / single block"
+                        if mode.single_score_block
+                        else f"{mode.label}={mode.score_start_date}→{mode.score_end_date} / {int(mode.fold_months)}M"
+                    )
+                    for mode in rolling_modes
                 ),
             ),
             (
@@ -2564,12 +2564,15 @@ def _rolling_mode_point_in_time_dir(settings, mode, *, fixed_window: bool) -> Pa
     return model_output_dir / str(mode.point_in_time_dirname)
 
 
+def _rolling_mode_display_label(mode) -> str:
+    if bool(mode.single_score_block):
+        end_label = "最新" if str(mode.score_end_date).strip().lower() == "auto" else str(mode.score_end_date)
+        return f"{mode.label} | {mode.score_start_date}→{end_label}"
+    return f"{mode.label} | {int(mode.fold_months)}M"
+
+
 def _render_rolling_mode_line(index: int, mode, *, default: bool = False) -> str:
-    return render_menu_item(
-        index,
-        f"{mode.label} | {int(mode.fold_months)}M",
-        default=default,
-    )
+    return render_menu_item(index, _rolling_mode_display_label(mode), default=default)
 
 
 def _interactive_continuous_rolling_test(
@@ -2579,11 +2582,7 @@ def _interactive_continuous_rolling_test(
         print("目前Active Profile尚未授權Rolling PIT。")
         return 0
     modes = get_breakout_quality_rolling_test_modes()
-    title = (
-        "Fixed-Window Rolling Stability Test"
-        if fixed_window
-        else "Extending-Window Rolling Test"
-    )
+    title = "Fixed-Window Stability Test" if fixed_window else "Extending-Window Test"
     while True:
         print(f"\n=== {title} ===")
         for index, mode in enumerate(modes, start=1):
@@ -2609,17 +2608,20 @@ def _interactive_continuous_rolling_test(
             purpose = (
                 "固定calendar train history的歷史learnability診斷"
                 if fixed_window
-                else "expanding history的主要Rolling研究Gate"
+                else "固定2020年底information cutoff的OOS Gate"
             )
             print(
                 render_key_values(
                     (
                         ("Mode", mode.label),
-                        ("Score/refit cadence", f"{int(mode.fold_months)} months"),
+                        (
+                            "Score/refit",
+                            "single forward block" if mode.single_score_block else f"{int(mode.fold_months)} months",
+                        ),
                         (
                             "Score period",
-                            f"{BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE if fixed_window else settings.point_in_time_score_start_date} ～ "
-                            f"{BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE if fixed_window else settings.point_in_time_score_end_date}",
+                            f"{mode.score_start_date} ～ "
+                            f"{('最新' if str(mode.score_end_date).strip().lower() == 'auto' else mode.score_end_date)}",
                         ),
                         ("用途", purpose),
                     )
@@ -2662,7 +2664,7 @@ def _run_continuous_pit_profile(
     fixed_window: bool = False,
 ) -> int:
     settings = get_breakout_quality_workflow_settings(experiment_profile=profile_name)
-    selected_mode = mode or get_breakout_quality_rolling_test_mode("overnight")
+    selected_mode = mode or get_breakout_quality_rolling_test_mode("rolling")
     pit_dir_override = _rolling_mode_point_in_time_dir(
         settings, selected_mode, fixed_window=fixed_window
     )
@@ -2670,22 +2672,14 @@ def _run_continuous_pit_profile(
     print(
         "\n"
         + render_title(
-            f"{window_label} Rolling {selected_mode.label} | {model_id} | {settings.experiment_profile}"
+            f"{window_label} {selected_mode.label} | {model_id} | {settings.experiment_profile}"
         )
     )
     code = _prepare_continuous_research_inputs(program_name, settings)
     if code != 0:
         return int(code)
-    score_start = (
-        str(BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE)
-        if fixed_window
-        else settings.point_in_time_score_start_date
-    )
-    score_end = (
-        str(BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE)
-        if fixed_window
-        else settings.point_in_time_score_end_date
-    )
+    score_start = str(selected_mode.score_start_date)
+    score_end = selected_mode.score_end_date
     build_args = [
         "--filter-id", settings.filter_id,
         "--model-architecture", settings.model_architecture,
@@ -2697,6 +2691,8 @@ def _run_continuous_pit_profile(
     ]
     if selected_mode.fold_anchor_date is not None:
         build_args.extend(["--fold-anchor-date", str(selected_mode.fold_anchor_date)])
+    if selected_mode.single_score_block:
+        build_args.append("--single-score-block")
     if score_end:
         build_args.extend(["--score-end-date", str(score_end)])
     train_window = (
@@ -2925,8 +2921,11 @@ def _strategy_compare_required_model_sources(profile_ids: tuple[str, ...] | None
                 str(source.model_architecture),
                 str(source.experiment_profile),
                 str(source.score_source),
+                source.point_in_time_score_start_date,
+                source.point_in_time_score_end_date,
                 source.point_in_time_fold_months,
                 source.point_in_time_fold_anchor_date,
+                source.point_in_time_single_score_block,
                 source.point_in_time_dirname,
             )
             dedup.setdefault(key, (dl_id, source))
@@ -2943,7 +2942,7 @@ def _interactive_prepare_strategy_compare_model_artifacts(program_name: str) -> 
             print(
                 render_menu_item(
                     index,
-                    f"{mode['label']} | {int(mode['fold_months'])}M",
+                    (f"{mode['label']} | {mode.get('score_start_date')}→{'最新' if str(mode.get('score_end_date')).lower() == 'auto' else mode.get('score_end_date')}" if bool(mode.get("single_score_block")) else f"{mode['label']} | {int(mode['fold_months'])}M"),
                     default=index == 1,
                 )
             )
@@ -2973,8 +2972,8 @@ def _prepare_strategy_compare_model_artifacts(
 ) -> int:
     """Prepare model artifacts for the selected current Rolling Test mode(s).
 
-    Fast/Overnight share the canonical trainer and model identities but use different
-    PIT fold cadences and aggregate paths.  Strategy Compare itself remains unable to
+    OOS/Rolling share the canonical trainer and model identities but use different
+    score-block semantics and aggregate paths.  Strategy Compare itself remains unable to
     train model weights.
     """
 
@@ -3079,11 +3078,21 @@ def _prepare_strategy_compare_model_artifacts(
                 )
                 / str(source.point_in_time_dirname)
             )
+        score_start_date = (
+            str(source.point_in_time_score_start_date)
+            if source.point_in_time_score_start_date not in (None, "")
+            else str(workflow.point_in_time_score_start_date)
+        )
+        score_end_date = (
+            source.point_in_time_score_end_date
+            if source.point_in_time_score_end_date not in (None, "")
+            else workflow.point_in_time_score_end_date
+        )
         build_args = [
             "--filter-id", str(source.filter_id),
             "--model-architecture", str(source.model_architecture),
             "--experiment-profile", str(source.experiment_profile),
-            "--score-start-date", str(workflow.point_in_time_score_start_date),
+            "--score-start-date", score_start_date,
             "--fold-months", str(fold_months),
             "--inner-validation-months", str(workflow.point_in_time_inner_validation_months),
             "--seed", str(workflow.seed),
@@ -3093,14 +3102,19 @@ def _prepare_strategy_compare_model_artifacts(
             build_args.extend(
                 ["--fold-anchor-date", str(source.point_in_time_fold_anchor_date)]
             )
-        if workflow.point_in_time_score_end_date:
-            build_args.extend(
-                ["--score-end-date", str(workflow.point_in_time_score_end_date)]
-            )
+        if source.point_in_time_single_score_block:
+            build_args.append("--single-score-block")
+        if score_end_date:
+            build_args.extend(["--score-end-date", str(score_end_date)])
         if pit_dir_override is not None:
             build_args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
         print(
-            f"  PIT policy：{fold_months}M cadence"
+            "  PIT policy："
+            + (
+                f"single OOS block；score={score_start_date}→{('最新' if str(score_end_date).lower() == 'auto' else score_end_date)}"
+                if source.point_in_time_single_score_block
+                else f"{fold_months}M cadence"
+            )
             + (
                 ""
                 if source.point_in_time_fold_anchor_date in (None, "")
@@ -3121,12 +3135,8 @@ def _prepare_strategy_compare_model_artifacts(
                 filter_id=str(source.filter_id),
                 model_architecture=str(source.model_architecture),
                 experiment_profile=str(source.experiment_profile),
-                score_start_date=str(workflow.point_in_time_score_start_date),
-                score_end_date=(
-                    None
-                    if not workflow.point_in_time_score_end_date
-                    else str(workflow.point_in_time_score_end_date)
-                ),
+                score_start_date=score_start_date,
+                score_end_date=(None if score_end_date in (None, "") else str(score_end_date)),
                 fold_months=fold_months,
                 fold_anchor_date=(
                     None
@@ -3139,6 +3149,7 @@ def _prepare_strategy_compare_model_artifacts(
                 point_in_time_dir_override=(
                     None if pit_dir_override is None else str(pit_dir_override)
                 ),
+                single_score_block=bool(source.point_in_time_single_score_block),
             )
             if code != 0:
                 return int(code)
@@ -3254,8 +3265,8 @@ def _interactive_model_research(program_name: str) -> int:
         research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
-        print(render_menu_item(1, "Extending-Window Rolling Test", default=True))
-        print(render_menu_item(2, "Fixed-Window Rolling Stability Test"))
+        print(render_menu_item(1, "Extending-Window Test", default=True))
+        print(render_menu_item(2, "Fixed-Window Stability Test"))
         print(render_menu_item(3, "查看目前Workflow與工件狀態"))
         _comparisons, strategy_model_sources = _strategy_compare_required_model_sources()
         if strategy_model_sources:

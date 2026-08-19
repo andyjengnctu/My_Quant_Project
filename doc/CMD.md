@@ -127,8 +127,8 @@ python apps/research.py compare extending_window_rolling status
 
 ```text
 === 策略組合比較 ===
-[1]  Extending-Window Rolling Test  (Enter)
-[2]  Extending-Window Rolling Multi-seed Robustness Test
+[1]  Extending-Window Test  (Enter)
+[2]  Extending-Window Multi-seed Robustness Test
 [3]  查看目前 Framework 設定與工件狀態
 [4]  查看目前Framework設定與工件狀態
 [0]  返回
@@ -144,7 +144,7 @@ python apps/research.py compare extending_window_rolling status
 [0]  返回
 ```
 
-Current Rolling workflow只保留`Fast Test`與`Overnight Test`兩種深度。Fast以60M cadence完整覆蓋2016～2025，只形成`2016～2020 / 2021～2025`兩個PIT-safe folds；Overnight沿用12M cadence的2016～2025十個annual folds。Fixed-Window Rolling同樣使用Fast／Overnight兩種深度，但train history固定120M，只作learnability/stability診斷，不建立第二套Strategy Compare truth。舊Pre-Test／Selection PIT／Frozen Forward profile與工件只供歷史解讀／重現，不暴露於current主選單。
+Current時間驗證只保留`OOS Test`與`Rolling Test`兩種mode。OOS固定以2020年底以前合法成熟資料訓練一次，單一score block評分`2021-01-01→最新`；Rolling沿用12M cadence的2016～2025十個annual folds。Fixed-Window同樣使用OOS／Rolling兩種mode，但train history固定120M，只作learnability/stability診斷，不建立第二套Strategy Compare truth。舊Pre-Test／Selection PIT／Frozen Forward／Fast60 profile與工件只供歷史解讀／重現，不暴露於current主選單。
 
 目前比較profiles、比較對象、參數來源、DL來源、差異比較與前置建立政策全部條列於`config/strategy_compare.py`；每個profile用`arm_ids`／`contrast_ids`決定當階段啟用集合，arm／contrast定義本身仍可保留歷史項目，不存在代表整套實驗的`ACTIVE_STRATEGY_COMPARISON_ID`。同一param source／rule policy使用一個共用DL-off基準，可同時掛多個DL-on模型；各DL-on arm可獨立開關，執行引擎會逐一與同一基準形成controlled pair，並驗證重複基準結果一致。選擇一般Strategy Compare執行後，App先顯示`READY／PREPARABLE／BLOCKED`依賴計畫並只確認一次；對可由既有正式工件確定產生的缺件，依config自動重用、重建或接續，包括既有模型的forward-OOS scores與比較所需的策略參數。App不建立Label、不選模型、不訓練模型權重；Selection PIT scores／manifest／audit與PIT Model Gate一律由`[1] 模型訓練`工作類型建立／更新，Strategy Compare缺少或identity/coverage不合法時直接BLOCKED並導向該正式入口，不做checkpoint-only PIT重建或重跑Audit。執行前會由全部啟用DL runtime工件解析共同比較期間，先驗證Full／Min／Min-DL rolling active params是否完整覆蓋；Min ROOS固定使用forward P2 DL-off-trained工件，不得使用只涵蓋Selection的歷史Label teacher params。若forward scores建立後才得知正式期間，App會重新規劃下一波前置並自動建立／接續缺少或過期的P2／P3，全部READY後才開始第一組replay。DL-aware參數必須與訓練時相同的DL版本配對：TP1-trained只允許TP1-on，A9-trained只允許A9-on；跨版本runtime組合在config驗證階段直接拒絕。A9 P3使用獨立`p3_dl_on_trained/A9/`工件，不覆蓋TP1 P3。console／報表採簡稱`Min ROOS`、`Min ROOS: TP1-on`、`Min ROOS: A9-on`、`Min-TP1 ROOS`、`Min-TP1 ROOS: DL-on`、`Min-A9 ROOS`、`Min-A9 ROOS: DL-on`。報表的`同參數DL選擇R`只在相同`param_source`與`rule_policy`的arms間具共同attribution基準；跨參數contrast的`Δ同參數DL選擇R`固定顯示`-`。預設`reuse_completed_results=True`與`reuse_shared_baseline=True`：選單的執行計畫會把replay identity與目前工件SHA完全一致的既有arm顯示為`REUSE`，只有新／失效arm顯示`RUN`；同一param/rules群組的DL-off baseline最多執行一次。例如新增MR-12B的C19/C20時，若C3/C17/C18已有compatible正式結果，計畫應直接重用C3/C17/C18，只執行C19/C20，再組合全部contrasts。修改contrast或報表說明不會使cache失效；param、model、manifest、forward score、期間或runtime contract任何一項改變都必須重新replay。
 
@@ -180,8 +180,8 @@ Active continuous model menu由config／research spec動態產生；目前MR-13K
 ```text
 === Continuous DL 模型研究與驗證 ===
 Active Profile：daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise
-[1]  Extending-Window Rolling Test  (Enter)
-[2]  Fixed-Window Rolling Stability Test
+[1]  Extending-Window Test  (Enter)
+[2]  Fixed-Window Stability Test
 [3]  查看目前Workflow與工件狀態
 [4]  準備策略比較所需模型工件
 [5]  比較目前 Target 與 reference Target
@@ -189,19 +189,19 @@ Active Profile：daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise
 [0]  返回
 ```
 
-`Extending-Window Rolling Test`與`Fixed-Window Rolling Stability Test`進入後都再選`Fast Test | 60M`或`Overnight Test | 12M`。Fast完整覆蓋2016～2025但只使用`2016～2020 / 2021～2025`兩個score folds；Overnight沿用2016～2025十個12M年度fold。
+`Extending-Window Test`與`Fixed-Window Stability Test`進入後都再選`OOS Test | 2021→最新`或`Rolling Test | 12M`。OOS固定2020年底information cutoff、只訓練一次；Rolling沿用2016～2025十個12M年度fold。
 
 MR-13O已於Forward model Gate結案為`REJECTED / NO PIT`，不再作Active Profile。它沿用MR-13H `daily_full_horizon_opportunity_r_v1`作economic result truth，但training target不是該scalar R；trainer會從同一canonical stock-day rows建立`[MFE percentile, low-adverse percentile]`，僅strict Pareto-comparable pairs進`pairwise_logistic` loss。Epoch selection固定看`mean_daily_pareto_pair_concordance`，global Pareto concordance只作tie-break；MR-13H economic Daily rho／Pair／Top-K只能在候選checkpoint評估中作描述性 model-gate evidence，不能參與選模。`selection_pit_authorized=False`；若為歷史重現手動切回MR-13O，Extending／Fixed工作類型入口仍固定顯示，但選入後會明確BLOCKED且不得建立Rolling工件。MR-13O沒有新增scalar Target identity，所以不顯示`[6] Target comparison`。
 
 Forward console／簡易報表除既有economic ranking品質外，MR-13O會額外顯示Validation／Forward／breakout的Pareto pair concordance與comparable-pair coverage。若Pareto supervision本身學不到（接近隨機），此Target-formulation直接在model gate停止；若Pareto可學但economic ordering仍不改善，表示joint dominance supervision與最終economic ordering仍有落差，也不應直接進PIT。只有兩層證據都形成可信增量，才另輪授權Selection PIT。
 ### Current Rolling 驗證順序（2026-08-19 current）
 
-1. `apps/research.py → [1] 模型訓練 → [1] Extending-Window Rolling Test → Fast Test | 60M`：current第一層模型Gate；完整覆蓋2016～2025，但只建立`2016～2020 / 2021～2025`兩個PIT-safe folds。
-2. Fast仍有決策價值時，執行同入口的`Overnight Test | 12M`：沿用2016～2025十個年度fold作完整Extending evidence。
-3. Fixed learnability診斷走`apps/research.py → [1] 模型訓練 → [2] Fixed-Window Rolling Stability Test`，同樣先Fast 60M、必要時再Overnight 12M；train history固定120M。
-4. `apps/research.py → [1] 模型訓練 → [4] 準備策略比較所需模型工件`：進入後選與策略比較相同的Fast／Overnight mode；Fast與Overnight使用相同MR-13E/K/M scientific identity但不同PIT cadence／namespace。
-5. `apps/research.py → [3] 策略組合比較 → [1] Extending-Window Rolling Test`：進入後選Fast 60M或Overnight 12M，均比較`C61 Full ROOS / C58 Min ROOS / C59 MR-13E / C60 MR-13K+MR-13M`；`C61`使用既有historical/current Full rolling schedules stitch出的`P4_EXTENDING`，不重新最佳化。
-6. 若seed robustness仍可能改變決策，執行`apps/research.py → [3] 策略組合比較 → [2] Extending-Window Rolling Multi-seed Robustness Test`；先Fast 60M（2 folds×4 seeds），只有必要時再Overnight 12M（10 folds×4 seeds）。
+1. `apps/research.py → [1] 模型訓練 → [1] Extending-Window Test → OOS Test | 2021→最新`：current第一層模型Gate；固定2020年底information cutoff，只建立一個2021→最新PIT-safe OOS block。
+2. OOS仍有決策價值時，執行同入口的`Rolling Test | 12M`：沿用2016～2025十個年度fold作完整Extending evidence。
+3. Fixed learnability診斷走`apps/research.py → [1] 模型訓練 → [2] Fixed-Window Stability Test`，同樣先OOS Test、必要時再Rolling Test | 12M；train history固定120M。
+4. `apps/research.py → [1] 模型訓練 → [4] 準備策略比較所需模型工件`：進入後選與策略比較相同的OOS／Rolling mode；OOS與Rolling使用相同MR-13E/K/M scientific identity但不同score-block語意／namespace。
+5. `apps/research.py → [3] 策略組合比較 → [1] Extending-Window Test`：進入後選OOS Test或Rolling Test | 12M，均比較`C61 Full ROOS / C58 Min ROOS / C59 MR-13E / C60 MR-13K+MR-13M`；`C61`使用既有historical/current Full rolling schedules stitch出的`P4_EXTENDING`，不重新最佳化。
+6. 若seed robustness仍可能改變決策，執行`apps/research.py → [3] 策略組合比較 → [2] Extending-Window Multi-seed Robustness Test`；先OOS Test（1 fold×4 seeds），只有必要時再Rolling Test | 12M（10 folds×4 seeds）。
 7. Legacy Pre-Test／Selection PIT／Frozen Forward只保留historical evidence與compatibility，不再作current互動選單或current Gate。
 
 Continuous-ranker / Rolling CUDA feeding的current execution default為`train_prefetch_batches=8`、`train_prefetch_workers=4`，維持feature-only ordered prefetch，並使用pinned feature + non-blocking H2D + dedicated CUDA copy stream。complete-host prefetch與同張GPU的2-fold process parallel都已因使用者實機觀察更慢而退役；Rolling回到單fold串行，已完成且identity/hash合法的fold仍照原resume contract先REUSE。這些execution決策都不改fold scientific identity或optimizer semantics。
