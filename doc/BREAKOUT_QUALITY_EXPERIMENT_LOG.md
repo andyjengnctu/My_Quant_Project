@@ -9556,3 +9556,21 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Contract驗證改為mock `_run_command()`直接檢查：一般成功command會emit、Timing `run`會emit、Timing `status`不emit；不再依賴source wording。
 - Decision：`FORMAL_FAILURE_CLOSED / TIMING_SIMPLE_REPORT_ADDED / BEHAVIORAL_SYNTHETIC / SCIENTIFIC_SEMANTICS_UNCHANGED`。
 
+
+### 2026-08-19 — Rolling Timing Candidate 1：pairwise GPU sync consolidation
+
+- 性質：execution-only performance candidate；不新增MR/SR/PARAM identity，不改Target、dataset universe、fold split、seed、epoch selection、batch membership/order、optimizer step、loss tensor公式、dtype、deterministic或TF32語意。
+- Baseline evidence：使用者已以MR-13K / Seed42 / Extending 2025單fold建立Timing baseline=`10:10.2`；Epoch selection=`241.4s + 169.6s`、selected epoch=`1`，final refit=`177.5s`。該baseline保留不重建。
+- Candidate 1唯一變更：只在Timing candidate隔離路徑啟用`pairwise_sync_consolidation_v1`。Full-list Delta-NDCG成功路徑將target finite/range與margin finite的多次host sync合併；ideal-DCG／weight-sum scalar validity各改為單次scalar transfer；training loss沿用原本backward前的同步點直接取得scalar並重用於reporting，避免optimizer step後再做第二次loss host sync。`margin_diff / target_diff / comparable mask / Delta-NDCG weights / weighted reduction`本身不改。
+- 正式Rolling current default仍走canonical舊路徑；只有既有Timing baseline存在後的candidate run才開啟Candidate 1。fold scientific fingerprint不包含此execution-only flag，因此Timing的contract equality仍可直接檢查科學契約相同。
+- GPT isolated equivalence：固定兩日full-list fixture下old/new loss `torch.equal=True`、pair count完全一致、margin gradient `torch.equal=True`；NaN target、target越界、NaN margin三類invalid-input exception type/message亦一致。全專案345個Python AST PASS、bare except=0。
+- Decision：`IMPLEMENTED / TIMING_PENDING / NOT_PROMOTED_TO_CANONICAL`。下一個必要證據只需重跑同一Timing Mode candidate；只有selected epoch、model-state SHA、scores SHA全部bitwise exact且wall-clock確有淨改善才可升成正式Rolling execution path。
+
+### 2026-08-19 — Rolling Timing Candidate 1 result + Candidate 2 implementation
+
+- 程式基準：使用者提供`test-branch-1_20260819_195648_fcc5328(1).zip`，SHA256=`86191c34c971f43e2dea09e9c77805c766336091f324d5586663606f89fdb8e2`；其本機已套用前輪Candidate 1 patch `patch_timing_candidate_pairwise_sync_v1_20260819.zip`（SHA256=`45ec06a6617c8621d19c9135b2aee301e203ffb3da7f9b6b52948220d22a42bc`）後執行Timing A/B。
+- Candidate 1實機結果：MR-13K / Seed42 / Extending 2025單fold，Baseline=`10:10.2`、Candidate=`10:06.1`、speedup=`1.007x`、elapsed=`-0.68%`；selected epoch、model-state SHA與PIT scores SHA均`PASS / bitwise exact`。Epoch 1由`241.4s→180.7s`，但Epoch 2由`169.6s→205.8s`、final refit由`177.5s→198.0s`，顯示總體差異遠小於phase-level run-to-run波動；因此Candidate 1判定`EXACT_PASS / SPEED_GAIN_INSUFFICIENT / NOT_PROMOTED`，正式Rolling仍維持canonical execution。
+- Candidate 2=`pairwise_weight_vector_v2`只在Timing candidate隔離路徑啟用，並累積Candidate 1已證明exact的sync consolidation。唯一新增execution change位於full-list Delta-NDCG detached weight side：仍建立原本`target_diff`、`comparable`、`margin_diff`與`discount_delta`，仍以相同`comparable`順序產生loss；但`relevance_delta * discount_delta / ideal_dcg`不再先對整張N×N矩陣materialize後才mask，而是使用既有`selected_target_diff`與`discount_delta[comparable]`，只對完全相同的comparable pair vector執行相同abs／乘法／除法。`margin_diff` autograd path、pair順序、loss reduction、seed、batch、epoch selection、optimizer step、dtype與deterministic設定全部不變。
+- GPT isolated equivalence：200組含跨日與target ties的randomized fixture，canonical vs Candidate 2的loss、pair count、margin gradient均`torch.equal=True`；另以Adam做一個optimizer step後model state逐tensor`torch.equal=True`。這只證明CPU isolated arithmetic等價，不取代使用者RTX 5080 Timing Mode的最終bitwise model/scores guard。
+- Decision：`CANDIDATE1_NOT_PROMOTED / CANDIDATE2_IMPLEMENTED_TIMING_ONLY / CANONICAL_UNCHANGED`。下一個必要證據只需沿用既有Baseline=`10:10.2`跑同一Timing candidate；不得重建baseline。只有Candidate 2在RTX 5080上`PASS / bitwise exact`且wall-clock有實質淨改善才可升格。
+

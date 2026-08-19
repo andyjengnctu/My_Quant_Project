@@ -653,6 +653,8 @@ def _pairwise_logistic_loss(
     dates,
     *,
     reduction: str = CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    timing_sync_consolidation_v1: bool = False,
+    timing_weight_vector_v2: bool = False,
 ) -> tuple[Any | None, int]:
     """Return the configured RankNet loss over comparable within-day pairs.
 
@@ -763,12 +765,31 @@ def _pairwise_logistic_loss(
 
         detached_target = day_target.detach().float()
         detached_margin = day_margin.detach().float()
-        if not bool(torch.isfinite(detached_target).all().item()):
-            raise FloatingPointError("full-list Delta-NDCG target必須為有限值")
-        if bool((detached_target < 0.0).any().item()) or bool((detached_target > 1.0).any().item()):
-            raise ValueError("full-list Delta-NDCG只接受0～1 daily percentile target")
-        if not bool(torch.isfinite(detached_margin).all().item()):
-            raise FloatingPointError("full-list Delta-NDCG predicted margins必須為有限值")
+        if bool(timing_sync_consolidation_v1):
+            # Timing candidate only: keep the exact loss arithmetic below untouched,
+            # but collapse four success-path host synchronizations into one.  On the
+            # exceptional path rerun the canonical checks so error classification
+            # remains unchanged.
+            valid_inputs = (
+                torch.isfinite(detached_target).all()
+                & (detached_target >= 0.0).all()
+                & (detached_target <= 1.0).all()
+                & torch.isfinite(detached_margin).all()
+            )
+            if not bool(valid_inputs.item()):
+                if not bool(torch.isfinite(detached_target).all().item()):
+                    raise FloatingPointError("full-list Delta-NDCG target必須為有限值")
+                if bool((detached_target < 0.0).any().item()) or bool((detached_target > 1.0).any().item()):
+                    raise ValueError("full-list Delta-NDCG只接受0～1 daily percentile target")
+                if not bool(torch.isfinite(detached_margin).all().item()):
+                    raise FloatingPointError("full-list Delta-NDCG predicted margins必須為有限值")
+        else:
+            if not bool(torch.isfinite(detached_target).all().item()):
+                raise FloatingPointError("full-list Delta-NDCG target必須為有限值")
+            if bool((detached_target < 0.0).any().item()) or bool((detached_target > 1.0).any().item()):
+                raise ValueError("full-list Delta-NDCG只接受0～1 daily percentile target")
+            if not bool(torch.isfinite(detached_margin).all().item()):
+                raise FloatingPointError("full-list Delta-NDCG predicted margins必須為有限值")
 
         item_count = int(detached_target.numel())
         rank_positions = torch.arange(
@@ -780,14 +801,28 @@ def _pairwise_logistic_loss(
         discount_by_item[predicted_order] = rank_discounts
         ideal_order = torch.argsort(detached_target, descending=True, stable=True)
         ideal_dcg = (detached_target.index_select(0, ideal_order) * rank_discounts).sum()
-        if not bool(torch.isfinite(ideal_dcg).item()) or float(ideal_dcg.cpu().item()) <= 0.0:
+        if bool(timing_sync_consolidation_v1):
+            ideal_dcg_value = float(ideal_dcg.detach().cpu().item())
+            if not math.isfinite(ideal_dcg_value) or ideal_dcg_value <= 0.0:
+                raise FloatingPointError("full-list Delta-NDCG ideal DCG必須為正有限值")
+        elif not bool(torch.isfinite(ideal_dcg).item()) or float(ideal_dcg.cpu().item()) <= 0.0:
             raise FloatingPointError("full-list Delta-NDCG ideal DCG必須為正有限值")
 
-        relevance_delta = torch.abs(target_diff.detach())
         discount_delta = torch.abs(
             discount_by_item[:, None] - discount_by_item[None, :]
         )
-        weights = (relevance_delta * discount_delta / ideal_dcg)[comparable]
+        if bool(timing_weight_vector_v2):
+            # Timing candidate only. Keep the canonical comparable mask, pair order,
+            # margin-difference autograd path and final reductions unchanged. The
+            # target/relevance side is detached; selecting the exact same comparable
+            # entries before the elementwise multiply/divide avoids materializing two
+            # unnecessary full N×N float matrices.
+            selected_relevance_delta = torch.abs(selected_target_diff.detach())
+            selected_discount_delta = discount_delta[comparable]
+            weights = selected_relevance_delta * selected_discount_delta / ideal_dcg
+        else:
+            relevance_delta = torch.abs(target_diff.detach())
+            weights = (relevance_delta * discount_delta / ideal_dcg)[comparable]
         if not bool(torch.isfinite(weights).all().item()):
             raise FloatingPointError("full-list Delta-NDCG pairwise weights必須為有限值")
         pair_losses.append(losses * weights)
@@ -809,7 +844,18 @@ def _pairwise_logistic_loss(
         all_losses = torch.cat(pair_losses)
         all_weights = torch.cat(day_losses)
         weight_sum = all_weights.sum()
-        if not bool(torch.isfinite(weight_sum).item()) or float(weight_sum.detach().cpu().item()) <= 0.0:
+        if (
+            bool(timing_sync_consolidation_v1)
+            and reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
+        ):
+            weight_sum_value = float(weight_sum.detach().cpu().item())
+            valid_weight_sum = math.isfinite(weight_sum_value) and weight_sum_value > 0.0
+        else:
+            valid_weight_sum = (
+                bool(torch.isfinite(weight_sum).item())
+                and float(weight_sum.detach().cpu().item()) > 0.0
+            )
+        if not valid_weight_sum:
             label = (
                 "upper-tail relevance"
                 if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE
@@ -1026,6 +1072,8 @@ def _train_epoch(
     prefetch_batches: int = 0,
     prefetch_workers: int = 1,
     pairwise_reduction: str = CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    timing_sync_consolidation_v1: bool = False,
+    timing_weight_vector_v2: bool = False,
     raw_r_loss_name: str | None = None,
     raw_r_huber_delta_r: float | None = None,
 ) -> float:
@@ -1116,6 +1164,8 @@ def _train_epoch(
                     target,
                     group_dates_series.iloc[ids].to_numpy(),
                     reduction=str(pairwise_reduction),
+                    timing_sync_consolidation_v1=bool(timing_sync_consolidation_v1),
+                    timing_weight_vector_v2=bool(timing_weight_vector_v2),
                 )
                 if loss is None:
                     continue
@@ -1131,7 +1181,16 @@ def _train_epoch(
                 if loss is None:
                     continue
                 loss_weight = int(ranked_date_count)
-        if not bool(torch.isfinite(loss).item()):
+        timing_loss_value = None
+        if bool(timing_sync_consolidation_v1):
+            # Canonical path already synchronizes here before backward to validate
+            # finiteness.  Reading the scalar loss itself performs the same barrier
+            # and lets reporting reuse the value after optimizer.step without a
+            # second host synchronization.
+            timing_loss_value = float(loss.detach().cpu().item())
+            if not math.isfinite(timing_loss_value):
+                raise FloatingPointError("continuous ranker training loss非有限值")
+        elif not bool(torch.isfinite(loss).item()):
             raise FloatingPointError("continuous ranker training loss非有限值")
         if grad_scaler is None:
             loss.backward()
@@ -1145,7 +1204,11 @@ def _train_epoch(
                 torch.nn.utils.clip_grad_norm_(model.parameters(), float(gradient_clip_norm))
             grad_scaler.step(optimizer)
             grad_scaler.update()
-        value = float(loss.detach().cpu().item())
+        value = (
+            float(timing_loss_value)
+            if timing_loss_value is not None
+            else float(loss.detach().cpu().item())
+        )
         losses.append(value)
         weighted_loss_sum += value * float(loss_weight)
         weighted_loss_count += int(loss_weight)
@@ -1446,6 +1509,12 @@ def select_epoch(
                 research_spec.pairwise_reduction
                 or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
             ),
+            timing_sync_consolidation_v1=bool(
+                getattr(args, "timing_pairwise_sync_consolidation_v1", False)
+            ),
+            timing_weight_vector_v2=bool(
+                getattr(args, "timing_pairwise_weight_vector_v2", False)
+            ),
             raw_r_loss_name=raw_r_loss_name,
             raw_r_huber_delta_r=raw_r_delta,
         )
@@ -1721,6 +1790,12 @@ def fit_final(
             pairwise_reduction=(
                 research_spec.pairwise_reduction
                 or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
+            ),
+            timing_sync_consolidation_v1=bool(
+                getattr(args, "timing_pairwise_sync_consolidation_v1", False)
+            ),
+            timing_weight_vector_v2=bool(
+                getattr(args, "timing_pairwise_weight_vector_v2", False)
             ),
             raw_r_loss_name=raw_r_loss_name,
             raw_r_huber_delta_r=raw_r_delta,

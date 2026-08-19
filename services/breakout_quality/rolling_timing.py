@@ -169,7 +169,15 @@ def _single_fold_artifacts(point_in_time_dir: Path) -> tuple[Path, Path, Path]:
     return manifest_path, model_path, score_path
 
 
-def _run_year(*, run_root: Path, year: int, profile: str, seed: int) -> dict[str, Any]:
+def _run_year(
+    *,
+    run_root: Path,
+    year: int,
+    profile: str,
+    seed: int,
+    timing_pairwise_sync_consolidation_v1: bool,
+    timing_pairwise_weight_vector_v2: bool,
+) -> dict[str, Any]:
     year_root = run_root / f"year_{int(year)}"
     if year_root.exists():
         shutil.rmtree(year_root)
@@ -190,6 +198,12 @@ def _run_year(*, run_root: Path, year: int, profile: str, seed: int) -> dict[str
         checkpoint_only=False,
         plan_only=False,
         point_in_time_dir_override=str(point_in_time_dir),
+        timing_pairwise_sync_consolidation_v1=bool(
+            timing_pairwise_sync_consolidation_v1
+        ),
+        timing_pairwise_weight_vector_v2=bool(
+            timing_pairwise_weight_vector_v2
+        ),
     )
     elapsed_wall = time.perf_counter() - started_wall
     elapsed_cpu = time.process_time() - started_cpu
@@ -216,6 +230,13 @@ def _run_year(*, run_root: Path, year: int, profile: str, seed: int) -> dict[str
             key: int(group_counts.get(key, 0) or 0)
             for key in ("train", "validation", "final_refit", "score")
         },
+        "execution_candidate": (
+            "pairwise_weight_vector_v2"
+            if timing_pairwise_weight_vector_v2
+            else "pairwise_sync_consolidation_v1"
+            if timing_pairwise_sync_consolidation_v1
+            else "canonical"
+        ),
     }
 
 
@@ -251,6 +272,8 @@ def _build_run_summary(*, role: str, run_root: Path) -> dict[str, Any]:
                 year=year,
                 profile=profile,
                 seed=seed,
+                timing_pairwise_sync_consolidation_v1=(str(role) == "candidate"),
+                timing_pairwise_weight_vector_v2=(str(role) == "candidate"),
             )
         )
     measurement_wall_sec = float(time.perf_counter() - total_started)
@@ -264,6 +287,9 @@ def _build_run_summary(*, role: str, run_root: Path) -> dict[str, Any]:
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "benchmark": _benchmark_payload(timing),
         "implementation_fingerprint": source_fingerprint,
+        "execution_candidate": (
+            "pairwise_weight_vector_v2" if str(role) == "candidate" else "canonical"
+        ),
         "elapsed_wall_sec": benchmark_wall_sec,
         "measurement_wall_sec": measurement_wall_sec,
         "years": rows,
@@ -398,6 +424,7 @@ def _render_report_markdown(
             "## Candidate vs Baseline",
             "",
             f"- Candidate implementation fingerprint：`{candidate.get('implementation_fingerprint')}`",
+            f"- Execution candidate：`{candidate.get('execution_candidate') or 'canonical'}`",
             "- Exact result："
             + markdown_signal(
                 "PASS / bitwise exact" if comparison.get("exact_result") else "FAIL / result changed",
@@ -507,6 +534,7 @@ def _render_console_summary(
     print(
         render_key_values(
             (
+                ("Execution candidate", candidate.get("execution_candidate") or "canonical"),
                 ("Baseline total", _format_seconds(comparison.get("baseline_total_sec"))),
                 ("Candidate total", _format_seconds(comparison.get("candidate_total_sec"))),
                 ("Total speedup", f"{float(comparison.get('total_speedup_x') or 0.0):.3f}x"),

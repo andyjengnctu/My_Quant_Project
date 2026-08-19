@@ -382,6 +382,7 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 - Existing 2014～2020 expanding PIT folds contract相容時直接REUSE；首次延伸canonical aggregate至2021+前保留`legacy_selection_snapshot/`。Fixed Stability使用獨立artifact path與fixed-window fingerprint。
 - Current Strategy Compare主選單=`Pre-Test(C1/C3/C44/C56) → Extending(C61/C58/C59/C60)`，schema=46；current robustness只針對Extending-Window，預設4 seeds，legacy C56/C57 full-flow robustness取消。Production C42/C44保持不變直到明確promotion。
 - 2026-08-19 Rolling execution correction：complete-host worker prefetch先因使用者實機觀察更慢而REJECT並回退原feature-only ordered prefetch；其後曾加入同張GPU的2-fold `spawn` process parallelism。使用者第二次實機回報該方案「更慢、VRAM用滿、GPU約40%」，因此cross-fold process parallelism同樣判定`REJECTED_BY_RUNTIME_OBSERVATION / ROLLED_BACK`並物理移除專屬config／CLI／worker／synthetic；Current Rolling回到單fold串行＋feature-only ordered prefetch。兩次皆為execution-only工程負結果，不新增MR/SR identity，也不改既有fold scientific fingerprint／resume合法性。
+- 2026-08-19 Rolling Timing execution evidence：MR-13K/Seed42/2025 Baseline=`10:10.2`；Candidate 1 `pairwise_sync_consolidation_v1`=`10:06.1 / 1.007x / -0.68%`且model/scores bitwise exact，但幅度不足故`NOT_PROMOTED`，canonical execution不變。Candidate 2 `pairwise_weight_vector_v2`只作Timing隔離工程benchmark，不取得MR/SR identity；在RTX 5080完成exact-result + wall-clock Gate前不得進正式Rolling。
 
 ## 10. Registry 維護契約
 
