@@ -339,10 +339,11 @@ def _collect_selection_pit_source_status(
                     source.experiment_profile,
                 ),
             }
-    # Selection PIT scores / manifest / audit are model-research artifacts.
+    # Rolling PIT scores / manifest / audit are model-research artifacts.
     # Strategy Compare is a consumer only: even when compatible fold checkpoints
     # already exist, rebuilding the PIT bundle also runs the PIT model Gate and
-    # therefore belongs to Research -> Model Training -> Selection PIT Scores.
+    # therefore belongs to Research -> Model Training -> prepare model artifacts
+    # for the matching Fast/Overnight Rolling mode.
     # Keep the configured builder identity for the model-work-type orchestrator,
     # but never turn a missing PIT bundle into a Strategy Compare BUILD action.
     checkpoint_rebuild_blockers: tuple[str, ...] = tuple()
@@ -366,7 +367,7 @@ def _collect_selection_pit_source_status(
             description = (
                 "缺少或無效的Selection PIT模型工件；Strategy Compare只消費既有PIT "
                 "score／manifest／audit，不建立、不重建也不執行PIT Model Gate。"
-                "請先執行 Research → [1] 模型訓練 → [2] 建立／更新 Selection PIT Scores。"
+                "請先執行 Research → [1] 模型訓練 → 準備策略比較所需模型工件，並選擇相同 Fast／Overnight Test。"
             )
         file_rows[key] = {
             "ready": pit_ready,

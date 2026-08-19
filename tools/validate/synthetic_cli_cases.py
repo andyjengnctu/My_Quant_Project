@@ -1047,30 +1047,48 @@ def validate_dataset_cli_contract_case(_base_params):
     menu_profile_count = len(menu_profiles)
     strategy_profile_count = len(strategy_profiles)
     robustness_profile_count = len(robustness_profiles)
+    rolling_modes = app_strategy_compare.get_strategy_rolling_test_modes()
     integration_enabled = bool(
         app_strategy_compare.get_strategy_runtime_integration_settings().enabled
     )
-    strategy_status_choice = (
-        menu_profile_count + robustness_profile_count + (2 if integration_enabled else 1)
-    )
+    strategy_status_choice = 4 if integration_enabled else 3
     with (
         patch("builtins.input", side_effect=[str(strategy_status_choice), "0"]),
-        patch("apps.research.show_strategy_comparison_status") as compare_status,
-        patch(
-            "filters.breakout_quality.strategy_multi_seed_robustness.show_multi_seed_robustness_status"
-        ) as robustness_status,
+        patch("apps.research._show_all_strategy_comparison_status") as all_status,
     ):
         strategy_menu_rc = app_strategy_compare._strategy_compare_menu()
+
+    first_mode = rolling_modes[0]
+    with (
+        patch("builtins.input", side_effect=["1", "1", "0", "0"]),
+        patch("apps.research._strategy_compare_profile_menu") as profile_menu,
+    ):
+        strategy_profile_menu_rc = app_strategy_compare._strategy_compare_menu()
+    with (
+        patch("builtins.input", side_effect=["2", "1", "0", "0"]),
+        patch("apps.research._strategy_multi_seed_robustness_menu") as robustness_menu,
+    ):
+        strategy_robustness_menu_rc = app_strategy_compare._strategy_compare_menu()
     add_check(
         results,
         "cli_contract",
         case_id,
-        "strategy_compare_interactive_menu_is_profile_driven",
-        (0, menu_profile_count, robustness_profile_count),
+        "strategy_compare_interactive_menu_is_rolling_mode_driven",
+        (
+            0,
+            1,
+            0,
+            str(first_mode["profile_id"]),
+            0,
+            str(first_mode["robustness_id"]),
+        ),
         (
             strategy_menu_rc,
-            compare_status.call_count,
-            robustness_status.call_count,
+            all_status.call_count,
+            strategy_profile_menu_rc,
+            None if not profile_menu.call_args else str(profile_menu.call_args.args[0]),
+            strategy_robustness_menu_rc,
+            None if not robustness_menu.call_args else str(robustness_menu.call_args.args[0]),
         ),
     )
 

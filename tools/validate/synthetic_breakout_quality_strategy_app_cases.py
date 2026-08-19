@@ -611,70 +611,78 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and not legacy_param_path.exists()
         and '"export-scores": "filters.breakout_quality.export_scores"' in model_app_source,
     )
-    pit_sources = [
-        source for source in settings.dl_sources.values()
-        if source.score_source == "selection_point_in_time"
+    current_modes = strategy_config.get_strategy_rolling_test_modes()
+    current_comparisons = tuple(
+        strategy_config.get_strategy_comparison_settings(str(mode["profile_id"]))
+        for mode in current_modes
+    )
+    current_required_pit_sources = [
+        source
+        for comparison in current_comparisons
+        for source in comparison.dl_sources.values()
+        if source.dl_id in {
+            str(arm.dl_id)
+            for arm in comparison.enabled_arms
+            if arm.dl_enabled and arm.dl_id
+        }
+        and source.score_source == "selection_point_in_time"
     ]
     model_prepare_source = model_app_source.split(
         "def _prepare_strategy_compare_model_artifacts", 1
     )[1].split("def _interactive_model_research", 1)[0]
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "selection_pit_compare_is_consumer_only_and_model_work_type_owns_build_audit_and_missing_fold_training",
+        "rolling_compare_is_consumer_only_and_model_work_type_owns_pit_build_audit_and_missing_fold_training",
         True,
-        bool(pit_sources)
-        and all(source.threshold is None for source in pit_sources)
+        bool(current_required_pit_sources)
+        and all(source.threshold is None for source in current_required_pit_sources)
         and all(
             source.forward_scores_builder is not None
-            and source.forward_scores_builder.builder_type
-            == "selection_pit_from_existing_folds"
-            for source in pit_sources
+            and source.forward_scores_builder.builder_type == "selection_pit_from_existing_folds"
+            for source in current_required_pit_sources
         )
         and "load_selection_point_in_time_ranking_contract" in preparation_source
         and "Strategy Compare只消費既有PIT" in preparation_source
         and "不建立、不重建也不執行PIT Model Gate" in preparation_source
+        and "準備策略比較所需模型工件" in preparation_source
         and "checkpoint_only=True" not in preparation_source
         and "audit_selection_point_in_time_scores" not in preparation_source
         and "build_selection_point_in_time_scores" in model_prepare_source
+        and "audit_selection_point_in_time_scores" in model_prepare_source
         and "resume=True" in model_prepare_source
-        and "checkpoint_only=True" not in model_prepare_source
-        and "缺少／不相容fold由模型訓練工作類型補訓" in model_prepare_source
+        and "point_in_time_fold_months" in model_prepare_source
+        and "point_in_time_fold_anchor_date" in model_prepare_source
+        and "point_in_time_dirname" in model_prepare_source
+        and "缺少／不相容fold才補訓" in model_prepare_source
         and "Strategy Compare不得因此訓練模型" in (
             project_root / "services" / "breakout_quality" / "point_in_time_scores.py"
         ).read_text(encoding="utf-8")
-        and any(
-            source.artifact_contract is not None
-            for source in settings.parameter_sources.values()
-        ),
+        and any(source.artifact_contract is not None for source in settings.parameter_sources.values()),
     )
-    required_forward_oos_source_ids = {
-        str(arm.dl_id)
-        for arm in settings.enabled_arms
-        if arm.dl_enabled
-        and arm.dl_id
-        and settings.dl_sources[str(arm.dl_id)].score_source
-        == "continuous_ranker_oos"
-    }
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "model_work_type_prepares_all_configured_forward_oos_sources_without_strategy_compare_training",
+        "model_work_type_prepares_all_configured_current_rolling_sources_without_strategy_compare_training",
         True,
         "_strategy_compare_required_model_sources" in model_app_source
-        and "SCORE_SOURCE_CONTINUOUS_RANKER_OOS" in model_prepare_source
-        and "load_continuous_ranker_oos_contract" in model_prepare_source
-        and "rebuild_forward_oos_scores_from_frozen_checkpoint" in model_prepare_source
-        and '"train-continuous-ranker"' in model_prepare_source
-        and (
-            not required_forward_oos_source_ids
-            or all(
-                token in model_prepare_source
-                for token in (
-                    "Forward-OOS policy：REUSE",
-                    "Forward-OOS policy：模型工作類型修復",
-                    "先重用frozen checkpoint",
-                    "才重建完整模型工件",
-                )
+        and "get_strategy_comparison_menu_profiles" in model_app_source
+        and "get_strategy_rolling_test_modes" in model_app_source
+        and "SCORE_SOURCE_SELECTION_POINT_IN_TIME" in model_prepare_source
+        and "build_selection_point_in_time_scores" in model_prepare_source
+        and "audit_selection_point_in_time_scores" in model_prepare_source
+        and all(
+            comparison.profile_id == str(mode["profile_id"])
+            and all(
+                source.score_source == "selection_point_in_time"
+                and int(source.point_in_time_fold_months or 0) == int(mode["fold_months"])
+                and (source.point_in_time_fold_anchor_date or None) == (mode.get("fold_anchor_date") or None)
+                for source in comparison.dl_sources.values()
+                if source.dl_id in {
+                    str(arm.dl_id)
+                    for arm in comparison.enabled_arms
+                    if arm.dl_enabled and arm.dl_id
+                }
             )
+            for mode, comparison in zip(current_modes, current_comparisons)
         )
         and "train-continuous-ranker" not in preparation_source
         and "準備策略比較所需模型工件" in preparation_source,
@@ -762,11 +770,55 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     robustness_profiles = strategy_config.get_strategy_multi_seed_robustness_profiles()
     configured_robustness_ids = set(strategy_config.STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES)
     enabled_robustness_ids = {item["robustness_id"] for item in robustness_profiles}
-    expected_enabled_robustness_ids = {
-        robustness_id
-        for robustness_id, raw in strategy_config.STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES.items()
-        if bool(raw.get("enabled", True))
-    }
+    rolling_modes = strategy_config.get_strategy_rolling_test_modes()
+    expected_enabled_robustness_ids = {str(mode["robustness_id"]) for mode in rolling_modes}
+    robustness_mode_contracts = []
+    for mode in rolling_modes:
+        mode_settings = strategy_config.get_strategy_multi_seed_robustness_settings(str(mode["robustness_id"]))
+        mode_profile = strategy_config.get_strategy_comparison_settings(mode_settings.profile_id)
+        fixed = tuple(mode_profile.arms[arm_id] for arm_id in mode_settings.fixed_arm_ids)
+        stochastic = tuple(mode_profile.arms[arm_id] for arm_id in mode_settings.stochastic_arm_ids)
+        reference_specs = dict(mode_settings.romd_reference_baselines)
+        reference_matches = {
+            key: tuple(
+                arm for arm in fixed
+                if arm.param_source == spec["param_source"] and arm.rule_policy == spec["rule_policy"]
+            )
+            for key, spec in reference_specs.items()
+        }
+        robustness_mode_contracts.append(
+            mode_settings.profile_id == str(mode["profile_id"])
+            and mode_settings.seed_count >= 2
+            and 1 <= mode_settings.gpu_train_workers <= 2
+            and mode_settings.cpu_replay_workers >= 1
+            and bool(fixed)
+            and bool(stochastic)
+            and all(not arm.dl_enabled for arm in fixed)
+            and all(
+                arm.dl_enabled
+                and mode_profile.dl_sources[str(arm.dl_id)].score_source == "selection_point_in_time"
+                for arm in stochastic
+            )
+            and set(reference_matches) == {"min"}
+            and all(len(matches) == 1 for matches in reference_matches.values())
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_robustness_matrix_is_rolling_mode_config_driven_without_mutating_single_seed_arm_identity",
+        True,
+        robustness_path.is_file()
+        and expected_enabled_robustness_ids.issubset(configured_robustness_ids)
+        and enabled_robustness_ids == expected_enabled_robustness_ids
+        and robustness_settings.robustness_id in expected_enabled_robustness_ids
+        and all(robustness_mode_contracts)
+        and "romd_reference_baselines" in config_source
+        and "fixed_arm_ids" in config_source
+        and "stochastic_arm_ids" in config_source
+        and "MULTI_SEED_ROBUSTNESS_ARM_IDS" not in config_source
+        and all(token not in robustness_source for token in ("\"C20\"", "\"C29\"", "\"MR-12B\"", "\"MR-13A\"")),
+    )
+
+    # Downstream synthetic cases exercise the configured default robustness mode.
     robustness_profile = strategy_config.get_strategy_comparison_settings(
         robustness_settings.profile_id
     )
@@ -776,45 +828,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     robustness_stochastic = tuple(
         robustness_profile.arms[arm_id] for arm_id in robustness_settings.stochastic_arm_ids
     )
-    reference_specs = dict(robustness_settings.romd_reference_baselines)
+    default_reference_specs = dict(robustness_settings.romd_reference_baselines)
     reference_matches = {
         key: tuple(
             arm for arm in robustness_fixed
             if arm.param_source == spec["param_source"]
             and arm.rule_policy == spec["rule_policy"]
         )
-        for key, spec in reference_specs.items()
+        for key, spec in default_reference_specs.items()
     }
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "multi_seed_robustness_matrix_is_profile_config_driven_without_mutating_single_seed_arm_identity",
-        True,
-        robustness_path.is_file()
-        and "extending_window_rolling" in configured_robustness_ids
-        and enabled_robustness_ids == expected_enabled_robustness_ids == {"extending_window_rolling"}
-        and robustness_settings.robustness_id == "extending_window_rolling"
-        and robustness_settings.profile_id == "extending_window_rolling"
-        and robustness_settings.profile_id in strategy_config.STRATEGY_COMPARE_PROFILES
-        and robustness_settings.seed_count >= 2
-        and 1 <= robustness_settings.gpu_train_workers <= 2
-        and robustness_settings.cpu_replay_workers >= 1
-        and bool(robustness_fixed)
-        and bool(robustness_stochastic)
-        and all(not arm.dl_enabled for arm in robustness_fixed)
-        and all(
-            arm.dl_enabled
-            and robustness_profile.dl_sources[str(arm.dl_id)].score_source
-            == "selection_point_in_time"
-            for arm in robustness_stochastic
-        )
-        and set(reference_matches) == {"min"}
-        and all(len(matches) == 1 for matches in reference_matches.values())
-        and "romd_reference_baselines" in config_source
-        and "fixed_arm_ids" in config_source
-        and "stochastic_arm_ids" in config_source
-        and "MULTI_SEED_ROBUSTNESS_ARM_IDS" not in config_source
-        and all(token not in robustness_source for token in ("\"C20\"", "\"C29\"", "\"MR-12B\"", "\"MR-13A\"", "\"Min ROOS\"", "\"Full ROOS\"")),
-    )
 
     from filters.breakout_quality import strategy_multi_seed_robustness as robustness_module
 

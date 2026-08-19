@@ -459,7 +459,7 @@ def append_strategy_compare_preparation_contract_checks(
         )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "strategy_compare_missing_selection_pit_is_model_work_blocker_not_checkpoint_rebuild",
+        "strategy_compare_missing_rolling_pit_is_model_work_blocker_not_checkpoint_rebuild",
         True,
         not missing_ready
         and str(missing_row.get("status") or "").startswith("SELECTION_PIT_INVALID")
@@ -467,7 +467,8 @@ def append_strategy_compare_preparation_contract_checks(
         and all(action.action == "BLOCKED" for action in missing_actions)
         and all(action.builder_type is None for action in missing_actions)
         and all(action.producer_work_type == "model_training" for action in missing_actions)
-        and all("Research → [1] 模型訓練 → [2]" in action.description for action in missing_actions),
+        and all("準備策略比較所需模型工件" in action.description for action in missing_actions)
+        and all("Fast／Overnight Test" in action.description for action in missing_actions),
     )
 
     failed_gate_contract = SimpleNamespace(

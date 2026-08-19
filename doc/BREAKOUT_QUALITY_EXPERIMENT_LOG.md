@@ -9603,3 +9603,10 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Formal bundle：`to_chatgpt_bundle_20260819_222317_c8b7f5ba.zip`。`consistency`在`validate_dataset_cli_contract_case`執行模型選單 synthetic 時因Fast/Overnight新增一層mode選單，舊固定`input()`序列少一個mode選擇，於Fixed-Window Fast確認提示觸發`StopIteration`；因此consistency未能寫summary，後續meta quality的`coverage_synthetic_suite_runs_successfully`、`coverage_key_targets_hit`與`performance_required_step_summaries_present`皆為同一中止的衍生失敗。
 - 修正：synthetic不再假定Fast固定是特定數字；由`get_breakout_quality_rolling_test_modes()`依`mode_id="fast"`解析當前選單index，再明確提供`model menu -> Fixed-Window -> Fast -> confirm`輸入。正式runtime、Fast/Overnight cadence、fold identity、模型／策略語意均未修改。
 - Decision：`SYNTHETIC_MENU_INPUT_STALENESS_CLOSED / RUNTIME_UNCHANGED`。
+
+### 2026-08-19｜Fast/Overnight formal synthetic contract closure
+
+- 基準：`test-branch-1_20260819_223542_0e6c435.zip`。
+- Formal bundle 的 4 個 consistency FAIL 均來自 synthetic contract 仍假設舊 Pre-Test／Forward-OOS／單一 robustness profile；Fast/Overnight runtime 本身未發現對應科學語意錯誤。
+- 修正：CLI synthetic 改驗證 nested Rolling mode routing；Strategy Compare synthetic 改驗證 current Fast/Overnight PIT sources、mode-specific fold cadence/anchor與兩個 enabled robustness profiles；Strategy Compare 缺 PIT 的人讀 remediation path 同步改成「模型訓練 → 準備策略比較所需模型工件 → 相同 Fast／Overnight Test」。
+- 不變：MR/SR identity、Fast 60M／Overnight 12M cadence、PIT legality、模型訓練／loss／seed／optimizer、strategy replay semantics 均未修改。

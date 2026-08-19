@@ -180,28 +180,29 @@ Active continuous model menu由config／research spec動態產生；目前MR-13K
 ```text
 === Continuous DL 模型研究與驗證 ===
 Active Profile：daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise
-[1]  Pre-Test｜單模型快速驗證  (Enter)
-[2]  Extending-Window Rolling 模型驗證
-[3]  Fixed-Window Rolling 模型驗證
-[4]  查看目前Workflow與工件狀態
-[5]  準備策略比較所需模型工件
-[6]  比較目前 Target 與 reference Target
-[7]  Timing Mode｜Rolling 訓練前後比較
+[1]  Extending-Window Rolling Test  (Enter)
+[2]  Fixed-Window Rolling Stability Test
+[3]  查看目前Workflow與工件狀態
+[4]  準備策略比較所需模型工件
+[5]  比較目前 Target 與 reference Target
+[6]  Timing Mode｜Rolling 訓練前後比較
 [0]  返回
 ```
+
+`Extending-Window Rolling Test`與`Fixed-Window Rolling Stability Test`進入後都再選`Fast Test | 60M`或`Overnight Test | 12M`。Fast完整覆蓋2016～2025但只使用`2016～2020 / 2021～2025`兩個score folds；Overnight沿用2016～2025十個12M年度fold。
 
 MR-13O已於Forward model Gate結案為`REJECTED / NO PIT`，不再作Active Profile。它沿用MR-13H `daily_full_horizon_opportunity_r_v1`作economic result truth，但training target不是該scalar R；trainer會從同一canonical stock-day rows建立`[MFE percentile, low-adverse percentile]`，僅strict Pareto-comparable pairs進`pairwise_logistic` loss。Epoch selection固定看`mean_daily_pareto_pair_concordance`，global Pareto concordance只作tie-break；MR-13H economic Daily rho／Pair／Top-K只能在候選checkpoint評估中作描述性 model-gate evidence，不能參與選模。`selection_pit_authorized=False`；若為歷史重現手動切回MR-13O，Extending／Fixed工作類型入口仍固定顯示，但選入後會明確BLOCKED且不得建立Rolling工件。MR-13O沒有新增scalar Target identity，所以不顯示`[6] Target comparison`。
 
 Forward console／簡易報表除既有economic ranking品質外，MR-13O會額外顯示Validation／Forward／breakout的Pareto pair concordance與comparable-pair coverage。若Pareto supervision本身學不到（接近隨機），此Target-formulation直接在model gate停止；若Pareto可學但economic ordering仍不改善，表示joint dominance supervision與最終economic ordering仍有落差，也不應直接進PIT。只有兩層證據都形成可信增量，才另輪授權Selection PIT。
-### Current Rolling 驗證順序（2026-08-18 current）
+### Current Rolling 驗證順序（2026-08-19 current）
 
-1. `apps/research.py → [1] 模型訓練 → [1] Pre-Test｜單模型快速驗證`：沿用原本單模型流程；所有合法歷史→2020 Selection refit，2021+只作快速OOS研究Gate。
-2. `apps/research.py → [3] 策略組合比較 → [1] Pre-Test 策略比較`：直接REUSE單模型OOS scores，固定比較`Full ROOS / Min ROOS / MR-13E / MR-13K+MR-13M`；只決定是否值得進Rolling。
-3. `apps/research.py → [1] 模型訓練 → [2] Extending-Window Rolling 模型驗證`：2016～2025共10個完整年度fold，使用完整合法歷史、annual refit。
-4. `apps/research.py → [1] 模型訓練 → [3] Fixed-Window Rolling 模型驗證`：2016～2025固定120M history、annual refit，作歷史learnability診斷。
-5. `apps/research.py → [1] 模型訓練 → [4] 準備策略比較所需模型工件`：準備Pre-Test與Extending current sources。
-6. `apps/research.py → [3] 策略組合比較 → [2] Extending-Window Rolling 策略比較`：正式執行`C61 Full ROOS / C58 Min ROOS / C59 MR-13E / C60 MR-13K+MR-13M`。`C61`使用既有historical/current Full rolling schedules stitch出的`P4_EXTENDING`，不重新最佳化。
-7. 若正式Rolling Seed42結果仍有決策價值，再執行`[3] Extending-Window Rolling Multi-seed robustness`；預設4 seeds。沒有combined robustness入口。
+1. `apps/research.py → [1] 模型訓練 → [1] Extending-Window Rolling Test → Fast Test | 60M`：current第一層模型Gate；完整覆蓋2016～2025，但只建立`2016～2020 / 2021～2025`兩個PIT-safe folds。
+2. Fast仍有決策價值時，執行同入口的`Overnight Test | 12M`：沿用2016～2025十個年度fold作完整Extending evidence。
+3. Fixed learnability診斷走`apps/research.py → [1] 模型訓練 → [2] Fixed-Window Rolling Stability Test`，同樣先Fast 60M、必要時再Overnight 12M；train history固定120M。
+4. `apps/research.py → [1] 模型訓練 → [4] 準備策略比較所需模型工件`：進入後選與策略比較相同的Fast／Overnight mode；Fast與Overnight使用相同MR-13E/K/M scientific identity但不同PIT cadence／namespace。
+5. `apps/research.py → [3] 策略組合比較 → [1] Extending-Window Rolling Test`：進入後選Fast 60M或Overnight 12M，均比較`C61 Full ROOS / C58 Min ROOS / C59 MR-13E / C60 MR-13K+MR-13M`；`C61`使用既有historical/current Full rolling schedules stitch出的`P4_EXTENDING`，不重新最佳化。
+6. 若seed robustness仍可能改變決策，執行`apps/research.py → [3] 策略組合比較 → [2] Extending-Window Rolling Multi-seed Robustness Test`；先Fast 60M（2 folds×4 seeds），只有必要時再Overnight 12M（10 folds×4 seeds）。
+7. Legacy Pre-Test／Selection PIT／Frozen Forward只保留historical evidence與compatibility，不再作current互動選單或current Gate。
 
 Continuous-ranker / Rolling CUDA feeding的current execution default為`train_prefetch_batches=8`、`train_prefetch_workers=4`，維持feature-only ordered prefetch，並使用pinned feature + non-blocking H2D + dedicated CUDA copy stream。complete-host prefetch與同張GPU的2-fold process parallel都已因使用者實機觀察更慢而退役；Rolling回到單fold串行，已完成且identity/hash合法的fold仍照原resume contract先REUSE。這些execution決策都不改fold scientific identity或optimizer semantics。
 
