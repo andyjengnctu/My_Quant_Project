@@ -382,7 +382,7 @@ def validate_dataset_cli_contract_case(_base_params):
             and "[1]  Extending-Window Test  (Enter)" in interactive_text
             and "[2]  Fixed-Window Stability Test" in interactive_text
             and "[3]  查看目前Workflow與工件狀態" in interactive_text
-            and "[6]  Timing Mode｜Rolling 訓練前後比較" in interactive_text
+            and "[5]  Timing Mode｜Rolling 訓練前後比較" in interactive_text
             and "OOS Test | 2021-01-01→最新" in interactive_text
             and f"[4]  {configured_ranker_menu_label}" not in interactive_text
             and "MR-12A/B/C" not in interactive_text
@@ -442,14 +442,8 @@ def validate_dataset_cli_contract_case(_base_params):
         ),
     )
 
-    with (
-        patch("builtins.input", side_effect=["4"]),
-        patch(
-            "tools.filters.breakout_quality.application._interactive_prepare_strategy_compare_model_artifacts",
-            return_value=59,
-        ) as strategy_model_prepare,
-    ):
-        strategy_model_prepare_rc, strategy_model_prepare_text = _capture_stdout(
+    with patch("builtins.input", side_effect=["0"]):
+        compact_model_menu_rc, compact_model_menu_text = _capture_stdout(
             app_breakout_quality._interactive_model_research,
             "apps/research.py model",
         )
@@ -457,17 +451,18 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_model_menu_routes_configured_strategy_model_prerequisite_preparation",
-        (59, 1, True),
+        "breakout_quality_model_menu_has_no_manual_strategy_prerequisite_preparation_entry",
+        (0, True, True),
         (
-            strategy_model_prepare_rc,
-            strategy_model_prepare.call_count,
-            "[4]  準備策略比較所需模型工件" in strategy_model_prepare_text,
+            compact_model_menu_rc,
+            "準備策略比較所需模型工件" not in compact_model_menu_text,
+            "[4]  比較目前 Target 與 reference Target" in compact_model_menu_text
+            and "[5]  Timing Mode｜Rolling 訓練前後比較" in compact_model_menu_text,
         ),
     )
 
     with (
-        patch("builtins.input", side_effect=["6"]),
+        patch("builtins.input", side_effect=["5"]),
         patch(
             "tools.filters.breakout_quality.application._interactive_rolling_timing_mode",
             return_value=61,
@@ -486,7 +481,7 @@ def validate_dataset_cli_contract_case(_base_params):
         (
             rolling_timing_rc,
             rolling_timing_menu.call_count,
-            "[6]  Timing Mode｜Rolling 訓練前後比較" in rolling_timing_text,
+            "[5]  Timing Mode｜Rolling 訓練前後比較" in rolling_timing_text,
         ),
     )
 
@@ -615,7 +610,7 @@ def validate_dataset_cli_contract_case(_base_params):
             rejected_profile_settings.rolling_authorized,
             "[1]  Extending-Window Test  (Enter)" in rejected_text
             and "[2]  Fixed-Window Stability Test" in rejected_text
-            and "[6]  Timing Mode｜Rolling 訓練前後比較" in rejected_text,
+            and "[5]  Timing Mode｜Rolling 訓練前後比較" in rejected_text,
             "尚未授權Rolling PIT" in rejected_text,
             "Extending OOS Test Scores" in rejected_status_text
             or "Extending-Window Test" in rejected_status_text,

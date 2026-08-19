@@ -338,6 +338,24 @@ def render_status(
         )
         for item in current.enabled_contrasts
     ]
+    plan = current_status.get("preparation_plan")
+    hard_blocked = False
+    if isinstance(plan, StrategyPreparationPlan):
+        hard_blocked = any(
+            item.action == "BLOCKED" and item.producer_work_type != "model_training"
+            for item in plan.actions
+        )
+    display_overall_status = (
+        "PREPARABLE"
+        if isinstance(plan, StrategyPreparationPlan)
+        and not hard_blocked
+        and any(
+            item.action == "BLOCKED" and item.producer_work_type == "model_training"
+            for item in plan.actions
+        )
+        else current_status["overall_status"]
+    )
+
     artifact_rows = []
     for source_id, row in current_status["parameters"].items():
         artifact_rows.append((f"param:{source_id}", row["status"], row["action"], row["path"]))
@@ -350,10 +368,23 @@ def render_status(
                     row["identity_manifest_path"],
                 )
             )
+    model_action_by_key = {}
+    if isinstance(plan, StrategyPreparationPlan):
+        model_action_by_key = {item.artifact_key: item for item in plan.actions}
     for dl_id, row in current_status["dl_sources"].items():
         for key, file_row in row["files"].items():
+            artifact_key = f"dl:{dl_id}:{key}"
+            plan_item = model_action_by_key.get(artifact_key)
+            display_action = file_row["action"]
+            if (
+                plan_item is not None
+                and plan_item.action == "BLOCKED"
+                and plan_item.producer_work_type == "model_training"
+                and not hard_blocked
+            ):
+                display_action = "AUTO_BUILD"
             artifact_rows.append(
-                (f"dl:{dl_id}:{key}", file_row["status"], file_row["action"], file_row["path"])
+                (artifact_key, file_row["status"], display_action, file_row["path"])
             )
     return "\n\n".join(
         (
@@ -376,9 +407,9 @@ def render_status(
                     ("Max positions", current.max_positions),
                     ("Rotation", current.rotation),
                     ("Config fingerprint", current_status["config_fingerprint"]),
-                    ("比較狀態", current_status["overall_status"]),
+                    ("比較狀態", display_overall_status),
                     ("策略比較自動前置", "on" if current.preparation.auto_prepare else "off"),
-                    ("模型權重前置", "模型訓練 → 準備策略比較所需模型工件"),
+                    ("模型權重前置", "Strategy Compare執行時自動偵測／補建"),
                 )
             ),
             render_section("1. 比較對象"),
@@ -410,12 +441,27 @@ def render_execution_plan(
             item.artifact_key,
         ),
     )
-    blocked = plan.overall_status == "BLOCKED"
+    hard_blocked = any(
+        item.action == "BLOCKED" and item.producer_work_type != "model_training"
+        for item in plan.actions
+    )
+    auto_model_needed = any(
+        item.action == "BLOCKED" and item.producer_work_type == "model_training"
+        for item in plan.actions
+    )
+    blocked = hard_blocked
     rows = []
     for item in ordered_actions:
         action = item.action
         description = item.description
-        if blocked and action in {"BUILD", "REBUILD"}:
+        if item.action == "BLOCKED" and item.producer_work_type == "model_training":
+            if hard_blocked:
+                action = "NOT_RUN"
+                description = f"{description}｜另有不可自動處理的上游BLOCKED，本次不執行"
+            else:
+                action = "AUTO_BUILD"
+                description = f"{description}｜確認後由canonical model-training service自動BUILD／RESUME"
+        elif blocked and action in {"BUILD", "REBUILD"}:
             action = "NOT_RUN"
             description = f"{description}｜整體計畫已BLOCKED，本次不執行"
         rows.append((action, item.artifact_key, description))
@@ -456,7 +502,7 @@ def render_execution_plan(
             render_title("本次執行計畫"),
             render_key_values(
                 (
-                    ("整體狀態", plan.overall_status),
+                    ("整體狀態", "PREPARABLE" if auto_model_needed and not hard_blocked else plan.overall_status),
                     ("設定檔", "config/strategy_compare.py"),
                     ("比較階段", f"{settings.profile_label} ({settings.profile_id})"),
                     ("Config fingerprint", status["config_fingerprint"]),

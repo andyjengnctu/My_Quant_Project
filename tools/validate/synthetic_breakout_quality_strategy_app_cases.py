@@ -630,45 +630,41 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     model_prepare_source = model_app_source.split(
         "def _prepare_strategy_compare_model_artifacts", 1
     )[1].split("def _interactive_model_research", 1)[0]
+    research_provider_source = (project_root / "config" / "research.py").read_text(encoding="utf-8")
+    point_in_time_service_source = (
+        project_root / "services" / "breakout_quality" / "point_in_time_scores.py"
+    ).read_text(encoding="utf-8")
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "rolling_compare_is_consumer_only_and_model_work_type_owns_pit_build_audit_and_missing_fold_training",
+        "strategy_compare_auto_orchestrates_canonical_model_prerequisites_without_owning_training_logic",
         True,
         bool(current_required_pit_sources)
         and all(source.threshold is None for source in current_required_pit_sources)
-        and all(
-            source.forward_scores_builder is not None
-            and source.forward_scores_builder.builder_type == "selection_pit_from_existing_folds"
-            for source in current_required_pit_sources
-        )
         and "load_selection_point_in_time_ranking_contract" in preparation_source
-        and "Strategy Compare只消費既有PIT" in preparation_source
-        and "不建立、不重建也不執行PIT Model Gate" in preparation_source
-        and "準備策略比較所需模型工件" in preparation_source
-        and "checkpoint_only=True" not in preparation_source
+        and "producer_work_type=(" in preparation_source
+        and '"model_training"' in preparation_source
+        and "build_selection_point_in_time_scores" not in preparation_source
         and "audit_selection_point_in_time_scores" not in preparation_source
+        and "def prepare_strategy_compare_model_artifacts" in model_app_source
         and "build_selection_point_in_time_scores" in model_prepare_source
         and "audit_selection_point_in_time_scores" in model_prepare_source
         and "resume=True" in model_prepare_source
         and "point_in_time_score_start_date" in model_prepare_source
         and "point_in_time_score_end_date" in model_prepare_source
         and "point_in_time_fold_months" in model_prepare_source
-        and "point_in_time_fold_anchor_date" in model_prepare_source
         and "point_in_time_single_score_block" in model_prepare_source
-        and "point_in_time_dirname" in model_prepare_source
-        and "缺少／不相容fold才補訓" in model_prepare_source
-        and "Strategy Compare不得因此訓練模型" in (
-            project_root / "services" / "breakout_quality" / "point_in_time_scores.py"
-        ).read_text(encoding="utf-8")
+        and "_prepare_strategy_model_prerequisites" in app_source
+        and 'strategy_prerequisite_handler' in research_provider_source
+        and "canonical model-training service" in preparation_source
+        and "canonical model-training service" in point_in_time_service_source
         and any(source.artifact_contract is not None for source in settings.parameter_sources.values()),
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "model_work_type_prepares_all_configured_current_rolling_sources_without_strategy_compare_training",
+        "canonical_model_prerequisite_handler_covers_all_current_oos_and_rolling_sources",
         True,
         "_strategy_compare_required_model_sources" in model_app_source
         and "get_strategy_comparison_menu_profiles" in model_app_source
-        and "get_strategy_rolling_test_modes" in model_app_source
         and "SCORE_SOURCE_SELECTION_POINT_IN_TIME" in model_prepare_source
         and "build_selection_point_in_time_scores" in model_prepare_source
         and "audit_selection_point_in_time_scores" in model_prepare_source
@@ -679,7 +675,6 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 and (source.point_in_time_score_start_date or None) == (mode.get("score_start_date") or None)
                 and (source.point_in_time_score_end_date or None) == (mode.get("score_end_date") or None)
                 and int(source.point_in_time_fold_months or 0) == int(mode["fold_months"])
-                and (source.point_in_time_fold_anchor_date or None) == (mode.get("fold_anchor_date") or None)
                 and bool(source.point_in_time_single_score_block) == bool(mode.get("single_score_block"))
                 for source in comparison.dl_sources.values()
                 if source.dl_id in {
@@ -691,8 +686,80 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             for mode, comparison in zip(current_modes, current_comparisons)
         )
         and "train-continuous-ranker" not in preparation_source
-        and "準備策略比較所需模型工件" in preparation_source,
+        and "strategy_prerequisite_handler" in research_provider_source,
     )
+    from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
+    import apps.research as research_app_module
+
+    auto_model_plan = StrategyPreparationPlan.from_actions((
+        StrategyPreparationAction(
+            action_id="dl:CONT13K_ROLL:manifest",
+            artifact_key="dl:CONT13K_ROLL:manifest",
+            action="BLOCKED",
+            builder_type=None,
+            description="synthetic missing model artifact",
+            path="models/synthetic/manifest.json",
+            producer_work_type="model_training",
+        ),
+    ))
+    ready_model_plan = StrategyPreparationPlan.from_actions(tuple())
+    blocked_resolved = SimpleNamespace(
+        preparation_plan=auto_model_plan,
+        status_dict=lambda: {
+            "preparation_plan": auto_model_plan,
+            "config_fingerprint": "synthetic",
+        },
+    )
+    ready_resolved = SimpleNamespace(
+        preparation_plan=ready_model_plan,
+        status_dict=lambda: {
+            "preparation_plan": ready_model_plan,
+            "config_fingerprint": "synthetic",
+        },
+    )
+    fake_compare_settings = SimpleNamespace(
+        preparation=SimpleNamespace(require_confirmation=True),
+    )
+    auto_prepare_stdout = io.StringIO()
+    with (
+        patch.object(
+            research_app_module, "get_strategy_comparison_settings",
+            return_value=fake_compare_settings,
+        ),
+        patch.object(
+            research_app_module, "resolve_comparison_plan",
+            side_effect=[blocked_resolved, ready_resolved],
+        ) as resolve_plan_mock,
+        patch.object(
+            research_app_module, "render_execution_plan",
+            return_value="synthetic plan",
+        ),
+        patch.object(
+            research_app_module, "_prepare_strategy_model_prerequisites",
+            return_value=0,
+        ) as auto_prepare_mock,
+        patch.object(
+            research_app_module, "run_strategy_comparison",
+            return_value={"status": "ok"},
+        ) as replay_mock,
+        patch("builtins.input", return_value="") as confirm_mock,
+        redirect_stdout(auto_prepare_stdout),
+    ):
+        auto_prepare_result = research_app_module._run_current_comparison(
+            profile_id="extending_window_oos", confirm=True
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "single_seed_strategy_compare_auto_prepares_model_prerequisites_then_replans_with_one_confirmation",
+        True,
+        auto_prepare_result == {"status": "ok"}
+        and resolve_plan_mock.call_count == 2
+        and auto_prepare_mock.call_count == 1
+        and replay_mock.call_count == 1
+        and confirm_mock.call_count == 1
+        and "自動前置" in auto_prepare_stdout.getvalue(),
+    )
+
     selection_min_roos_source = settings.parameter_sources.get("selection_min_roos")
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -2140,7 +2207,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "selection_pit_checkpoint_rebuild_blocks_before_runtime_when_model_upstream_is_missing",
+        "model_upstream_missing_is_detected_for_auto_orchestration_before_runtime",
         True,
         len(event_blockers) == 2
         and any("canonical Dataset" in item for item in event_blockers)
@@ -2148,7 +2215,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and len(daily_blockers) == 1
         and any("canonical Dataset" in item for item in daily_blockers)
         and not any("market-set" in item for item in daily_blockers)
-        and "Strategy Compare不得建立Dataset／Label／Target" in preparation_source,
+        and "canonical model-training service自動補建" in preparation_source,
     )
     contract_example = {
         "breakout_quality_param_adaptation": {
@@ -2194,7 +2261,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             'failure_prefix="策略比較前置"',
             'f"{failure_prefix}失敗:',
         ))
-        and "按 Enter 執行；輸入 0 返回" in app_source
+        and "按 Enter 執行（含必要自動前置）；輸入 0 返回" in app_source
         and "render_execution_plan" in app_source,
     )
 

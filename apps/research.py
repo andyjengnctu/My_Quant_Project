@@ -71,6 +71,33 @@ def _show_model_status() -> None:
     handler()
 
 
+def _prepare_strategy_model_prerequisites(*, profile_id: str) -> int:
+    _, handler = _load_provider_handler("strategy_prerequisite_handler")
+    return int(
+        handler(
+            program_name="apps/research.py compare prerequisite",
+            profile_ids=(str(profile_id),),
+        )
+        or 0
+    )
+
+
+def _auto_preparable_model_blockers(resolved_plan) -> tuple[object, ...]:
+    return tuple(
+        action
+        for action in resolved_plan.preparation_plan.actions
+        if action.action == "BLOCKED" and action.producer_work_type == "model_training"
+    )
+
+
+def _non_model_blockers(resolved_plan) -> tuple[object, ...]:
+    return tuple(
+        action
+        for action in resolved_plan.preparation_plan.actions
+        if action.action == "BLOCKED" and action.producer_work_type != "model_training"
+    )
+
+
 def _run_optimizer(args: list[str] | None = None) -> int:
     from tools.optimizer import main as optimizer_main
 
@@ -83,17 +110,23 @@ def _run_current_comparison(*, profile_id: str, confirm: bool) -> dict:
     resolved_plan = resolve_comparison_plan(settings=settings)
     status = resolved_plan.status_dict()
     print("\n" + render_execution_plan(settings=settings, status=status))
-    if resolved_plan.overall_status == "BLOCKED":
-        blocked_reasons = list(dict.fromkeys(
-            action.description
-            for action in resolved_plan.preparation_plan.actions
-            if action.action == "BLOCKED" and str(action.description).strip()
-        ))
-        reason = blocked_reasons[0] if blocked_reasons else "目前缺少不可自動產生的上游工件。"
+
+    auto_model_blockers = _auto_preparable_model_blockers(resolved_plan)
+    hard_blockers = _non_model_blockers(resolved_plan)
+    if hard_blockers:
+        reason = str(hard_blockers[0].description or "目前缺少不可自動產生的上游工件。")
         raise RuntimeError(reason)
+
+    if auto_model_blockers:
+        unique_sources = sorted({str(item.artifact_key).split(":")[1] for item in auto_model_blockers if str(item.artifact_key).startswith("dl:")})
+        print(
+            "\n自動前置：將由canonical模型訓練服務補建／接續缺少的模型工件"
+            + (f" | sources={','.join(unique_sources)}" if unique_sources else "")
+        )
+
     if confirm and settings.preparation.require_confirmation:
         try:
-            choice = input("👉 按 Enter 執行；輸入 0 返回：").strip().lower()
+            choice = input("👉 按 Enter 執行（含必要自動前置）；輸入 0 返回：").strip().lower()
         except EOFError:
             print("\n輸入已結束，本次不執行。")
             return {}
@@ -103,6 +136,18 @@ def _run_current_comparison(*, profile_id: str, confirm: bool) -> dict:
         if choice not in {"", "1"}:
             print("輸入無效，本次不執行。")
             return {}
+
+    if auto_model_blockers:
+        code = _prepare_strategy_model_prerequisites(profile_id=profile_id)
+        if code != 0:
+            raise RuntimeError(f"策略比較模型前置失敗: returncode={code}")
+        resolved_plan = resolve_comparison_plan(settings=settings)
+        remaining = tuple(
+            action for action in resolved_plan.preparation_plan.actions if action.action == "BLOCKED"
+        )
+        if remaining:
+            raise RuntimeError(str(remaining[0].description or "自動前置後仍有BLOCKED工件。"))
+
     return run_strategy_comparison(
         resolved_plan=resolved_plan,
         auto_prepare=True,

@@ -2932,39 +2932,18 @@ def _strategy_compare_required_model_sources(profile_ids: tuple[str, ...] | None
     return tuple(comparisons), tuple(dedup.values())
 
 
-def _interactive_prepare_strategy_compare_model_artifacts(program_name: str) -> int:
-    from config.strategy_compare import get_strategy_rolling_test_modes
+def prepare_strategy_compare_model_artifacts(
+    *,
+    program_name: str,
+    profile_ids: tuple[str, ...],
+) -> int:
+    """Canonical model-work prerequisite handler for Strategy Compare orchestration."""
 
-    modes = get_strategy_rolling_test_modes()
-    while True:
-        print("\n=== 準備策略比較所需模型工件 ===")
-        for index, mode in enumerate(modes, start=1):
-            print(
-                render_menu_item(
-                    index,
-                    (f"{mode['label']} | {mode.get('score_start_date')}→{'最新' if str(mode.get('score_end_date')).lower() == 'auto' else mode.get('score_end_date')}" if bool(mode.get("single_score_block")) else f"{mode['label']} | {int(mode['fold_months'])}M"),
-                    default=index == 1,
-                )
-            )
-        print(render_menu_item(0, "返回"))
-        try:
-            raw = input("👉 請選擇：").strip().lower()
-        except EOFError:
-            return 0
-        choice = "1" if raw == "" else raw
-        if choice in {"0", "q", "quit", "exit"}:
-            return 0
-        try:
-            numeric = int(choice)
-        except ValueError:
-            print("無效選項，請重新輸入。")
-            continue
-        if 1 <= numeric <= len(modes):
-            mode = modes[numeric - 1]
-            return _prepare_strategy_compare_model_artifacts(
-                program_name, profile_ids=(str(mode["profile_id"]),)
-            )
-        print("無效選項，請重新輸入。")
+    return int(
+        _prepare_strategy_compare_model_artifacts(
+            program_name, profile_ids=tuple(str(value) for value in profile_ids)
+        )
+    )
 
 
 def _prepare_strategy_compare_model_artifacts(
@@ -2973,8 +2952,8 @@ def _prepare_strategy_compare_model_artifacts(
     """Prepare model artifacts for the selected current Rolling Test mode(s).
 
     OOS/Rolling share the canonical trainer and model identities but use different
-    score-block semantics and aggregate paths.  Strategy Compare itself remains unable to
-    train model weights.
+    score-block semantics and aggregate paths. Strategy Compare may invoke this canonical
+    model-work handler as an orchestrator, but it does not own or duplicate training logic.
     """
 
     comparisons, sources = _strategy_compare_required_model_sources(profile_ids)
@@ -3268,12 +3247,8 @@ def _interactive_model_research(program_name: str) -> int:
         print(render_menu_item(1, "Extending-Window Test", default=True))
         print(render_menu_item(2, "Fixed-Window Stability Test"))
         print(render_menu_item(3, "查看目前Workflow與工件狀態"))
-        _comparisons, strategy_model_sources = _strategy_compare_required_model_sources()
-        if strategy_model_sources:
-            print(render_menu_item(4, "準備策略比較所需模型工件"))
-        if research_spec.reference_profile_name:
-            print(render_menu_item(5, "比較目前 Target 與 reference Target"))
-        print(render_menu_item(6, "Timing Mode｜Rolling 訓練前後比較"))
+        print(render_menu_item(4, "比較目前 Target 與 reference Target"))
+        print(render_menu_item(5, "Timing Mode｜Rolling 訓練前後比較"))
         print(render_menu_item(0, "返回"))
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
@@ -3290,9 +3265,10 @@ def _interactive_model_research(program_name: str) -> int:
         if choice == "3":
             _print_workflow_status(settings)
             continue
-        if choice == "4" and strategy_model_sources:
-            return int(_interactive_prepare_strategy_compare_model_artifacts(program_name))
-        if choice == "5" and research_spec.reference_profile_name:
+        if choice == "4":
+            if not research_spec.reference_profile_name:
+                print("目前Active Profile未設定reference Target；此項不可執行。")
+                continue
             return int(
                 _run_command(
                     "compare-daily-targets",
@@ -3305,7 +3281,7 @@ def _interactive_model_research(program_name: str) -> int:
                     program_name=program_name,
                 )
             )
-        if choice == "6":
+        if choice == "5":
             return int(_interactive_rolling_timing_mode(program_name))
         print("無效選項，請重新輸入。")
 
@@ -3368,6 +3344,7 @@ __all__ = [
     "COMMAND_DESCRIPTIONS",
     "COMMAND_MODULES",
     "main",
+    "prepare_strategy_compare_model_artifacts",
     "run_model_training_menu",
     "show_model_status",
 ]

@@ -9627,3 +9627,10 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Artifact isolation：新OOS PIT固定`point_in_time_oos_2021_forward`；Strategy Compare固定`outputs/strategy_compare/extending_window/oos_2021_forward`；OOS robustness model-work/output亦使用`oos_2021_forward` namespace。舊`point_in_time_fast_60m`／`fast_60m`工件保留historical evidence，不誤REUSE成新OOS。
 - Strategy Compare internal current profile更新為`extending_window_oos` + `extending_window_rolling`，schema 47→48；scientific arms仍為C61/C58/C59/C60，沒有新增MR/SR/Cxx identity。
 - Multi-seed OOS只需1 PIT fold / seed；Rolling robustness仍為10 folds / seed。兩者都維持configured deterministic seeds與canonical trainer/replay contract。
+
+### 2026-08-20 — Strategy Compare prerequisite orchestration unified; manual preparation menu retired
+- 使用者決策：`Extending-Window Test`與`Extending-Window Multi-seed Robustness Test`都應由執行入口自動偵測／處理所需模型工件；單次Strategy Compare不再要求先手動進`[1] 模型訓練 → 準備策略比較所需模型工件`。
+- Current contract：Strategy Compare不得建立新Label、選擇新模型或複製trainer；但可作跨工作類型orchestrator，依config選定OOS／Rolling profile呼叫canonical model-training application/service，對MR-13E/K/M合法dependencies做REUSE／BUILD／REBUILD／RESUME與PIT Model Gate，完成後自動re-plan再strategy replay。
+- 模型研究主選單移除「準備策略比較所需模型工件」；Target比較／Timing前移為`[4]`／`[5]`。
+- Strategy Compare維持一次確認：先顯示目前preparation plan與將自動補建的model sources；確認後才執行canonical model prerequisites與strategy replay。不可確定建立的Dataset／Label／Target或需要新研究決策的上游仍BLOCKED。
+- 不變：MR-13E/K/M identity、OOS single-forward-block／Rolling 12M semantics、loss／seed／optimizer／strategy arms與Multi-seed scientific contract。

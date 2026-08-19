@@ -173,7 +173,7 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-MR-13E仍是production／reference anchor；current Extending-Window Rolling研究使用MR-13K作primary upside ranking、MR-13M作residual-safety secondary source。策略比較固定保留Full/Min兩個DL-off策略體系基準：`C61 Full ROOS / C58 Min ROOS / C59 MR-13E / C60 MR-13K+MR-13M`。模型訓練的單一Active Profile設為MR-13K；`[4] 準備策略比較所需模型工件`依current Strategy Compare config準備／重用MR-13E、MR-13K、MR-13M三個模型來源。Current Extending robustness預設4 seeds且仍只以C58對C60作current robustness；production identity保留既有C42/C44，未經Rolling evidence與明確promotion decision不得自動切換。後續順序以`doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`為準，`doc/ToDo.md`只屬使用者私人筆記。
+MR-13E仍是production／reference anchor；current Extending-Window Rolling研究使用MR-13K作primary upside ranking、MR-13M作residual-safety secondary source。策略比較固定保留Full/Min兩個DL-off策略體系基準：`C61 Full ROOS / C58 Min ROOS / C59 MR-13E / C60 MR-13K+MR-13M`。模型訓練的單一Active Profile設為MR-13K；Strategy Compare執行時依目前OOS／Rolling mode自動偵測MR-13E、MR-13K、MR-13M模型dependencies，必要時直接委派canonical model-training service BUILD／RESUME，不再要求手動先跑模型工件準備選單。Current Extending robustness預設4 seeds且仍只以C58對C60作current robustness；production identity保留既有C42/C44，未經Rolling evidence與明確promotion decision不得自動切換。後續順序以`doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`為準，`doc/ToDo.md`只屬使用者私人筆記。
 
 Active continuous model menu由config／research spec動態產生；目前MR-13K會顯示：
 
@@ -183,9 +183,8 @@ Active Profile：daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise
 [1]  Extending-Window Test  (Enter)
 [2]  Fixed-Window Stability Test
 [3]  查看目前Workflow與工件狀態
-[4]  準備策略比較所需模型工件
-[5]  比較目前 Target 與 reference Target
-[6]  Timing Mode｜Rolling 訓練前後比較
+[4]  比較目前 Target 與 reference Target
+[5]  Timing Mode｜Rolling 訓練前後比較
 [0]  返回
 ```
 
@@ -199,7 +198,7 @@ Forward console／簡易報表除既有economic ranking品質外，MR-13O會額�
 1. `apps/research.py → [1] 模型訓練 → [1] Extending-Window Test → OOS Test | 2021→最新`：current第一層模型Gate；固定2020年底information cutoff，只建立一個2021→最新PIT-safe OOS block。
 2. OOS仍有決策價值時，執行同入口的`Rolling Test | 12M`：沿用2016～2025十個年度fold作完整Extending evidence。
 3. Fixed learnability診斷走`apps/research.py → [1] 模型訓練 → [2] Fixed-Window Stability Test`，同樣先OOS Test、必要時再Rolling Test | 12M；train history固定120M。
-4. `apps/research.py → [1] 模型訓練 → [4] 準備策略比較所需模型工件`：進入後選與策略比較相同的OOS／Rolling mode；OOS與Rolling使用相同MR-13E/K/M scientific identity但不同score-block語意／namespace。
+4. `apps/research.py → [3] 策略組合比較 → Extending-Window Test`：選OOS／Rolling mode後，執行時自動偵測MR-13E/K/M模型工件；合法則REUSE，缺少／過期則由canonical model-training service自動BUILD／RESUME，完成後自動re-plan並進入strategy replay。
 5. `apps/research.py → [3] 策略組合比較 → [1] Extending-Window Test`：進入後選OOS Test或Rolling Test | 12M，均比較`C61 Full ROOS / C58 Min ROOS / C59 MR-13E / C60 MR-13K+MR-13M`；`C61`使用既有historical/current Full rolling schedules stitch出的`P4_EXTENDING`，不重新最佳化。
 6. 若seed robustness仍可能改變決策，執行`apps/research.py → [3] 策略組合比較 → [2] Extending-Window Multi-seed Robustness Test`；先OOS Test（1 fold×4 seeds），只有必要時再Rolling Test | 12M（10 folds×4 seeds）。
 7. Legacy Pre-Test／Selection PIT／Frozen Forward只保留historical evidence與compatibility，不再作current互動選單或current Gate。

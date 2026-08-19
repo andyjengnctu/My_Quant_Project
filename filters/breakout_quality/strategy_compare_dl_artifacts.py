@@ -200,8 +200,7 @@ def _collect_model_upstream_dependencies(
             if item.ready
             else (
                 item.description
-                + "；Strategy Compare不得建立Dataset／Label／Target，"
-                + "請由模型訓練工作類型執行「準備策略比較所需模型工件」"
+                + "；執行Strategy Compare時由canonical model-training service自動補建可確定的模型上游工件"
             )
         )
         actions.append(
@@ -376,9 +375,8 @@ def _collect_selection_pit_source_status(
         else:
             action = "BLOCKED"
             description = (
-                "缺少或無效的Selection PIT模型工件；Strategy Compare只消費既有PIT "
-                "score／manifest／audit，不建立、不重建也不執行PIT Model Gate。"
-                "請先執行 Research → [1] 模型訓練 → 準備策略比較所需模型工件，並選擇相同 OOS／Rolling Test。"
+                "缺少或無效的Selection PIT模型工件；執行Strategy Compare時會由canonical "
+                "model-training service依目前OOS／Rolling mode自動BUILD／RESUME並完成PIT Model Gate。"
             )
         file_rows[key] = {
             "ready": pit_ready,
@@ -510,8 +508,8 @@ def _collect_continuous_ranker_source_status(
             else f"重用既有{research_label} frozen OOS continuous scores"
             if ready
             else (
-                f"缺少或無效；請由模型訓練工作類型執行「準備策略比較所需模型工件」"
-                f"建立{research_label}工件；策略比較不得自動重訓"
+                f"缺少或無效；執行Strategy Compare時會委派canonical model-training service"
+                f"建立／接續{research_label}工件"
             )
         )
         file_rows[key] = {
