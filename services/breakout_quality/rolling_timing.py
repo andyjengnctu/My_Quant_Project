@@ -175,8 +175,6 @@ def _run_year(
     year: int,
     profile: str,
     seed: int,
-    timing_pairwise_sync_consolidation_v1: bool,
-    timing_pairwise_weight_vector_v2: bool,
 ) -> dict[str, Any]:
     year_root = run_root / f"year_{int(year)}"
     if year_root.exists():
@@ -198,12 +196,6 @@ def _run_year(
         checkpoint_only=False,
         plan_only=False,
         point_in_time_dir_override=str(point_in_time_dir),
-        timing_pairwise_sync_consolidation_v1=bool(
-            timing_pairwise_sync_consolidation_v1
-        ),
-        timing_pairwise_weight_vector_v2=bool(
-            timing_pairwise_weight_vector_v2
-        ),
     )
     elapsed_wall = time.perf_counter() - started_wall
     elapsed_cpu = time.process_time() - started_cpu
@@ -230,13 +222,7 @@ def _run_year(
             key: int(group_counts.get(key, 0) or 0)
             for key in ("train", "validation", "final_refit", "score")
         },
-        "execution_candidate": (
-            "pairwise_weight_vector_v2"
-            if timing_pairwise_weight_vector_v2
-            else "pairwise_sync_consolidation_v1"
-            if timing_pairwise_sync_consolidation_v1
-            else "canonical"
-        ),
+        "execution_candidate": "canonical_pairwise_weight_vector_v2",
     }
 
 
@@ -272,8 +258,6 @@ def _build_run_summary(*, role: str, run_root: Path) -> dict[str, Any]:
                 year=year,
                 profile=profile,
                 seed=seed,
-                timing_pairwise_sync_consolidation_v1=(str(role) == "candidate"),
-                timing_pairwise_weight_vector_v2=(str(role) == "candidate"),
             )
         )
     measurement_wall_sec = float(time.perf_counter() - total_started)
@@ -287,9 +271,7 @@ def _build_run_summary(*, role: str, run_root: Path) -> dict[str, Any]:
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "benchmark": _benchmark_payload(timing),
         "implementation_fingerprint": source_fingerprint,
-        "execution_candidate": (
-            "pairwise_weight_vector_v2" if str(role) == "candidate" else "canonical"
-        ),
+        "execution_candidate": "canonical_pairwise_weight_vector_v2",
         "elapsed_wall_sec": benchmark_wall_sec,
         "measurement_wall_sec": measurement_wall_sec,
         "years": rows,

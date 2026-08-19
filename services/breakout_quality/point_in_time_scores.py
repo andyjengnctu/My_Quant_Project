@@ -230,16 +230,6 @@ def parse_args(argv=None) -> argparse.Namespace:
         action="store_true",
         help="只供離線重現；預設要求來源CSV inventory與dataset一致",
     )
-    parser.add_argument(
-        "--timing-pairwise-sync-consolidation-v1",
-        action="store_true",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--timing-pairwise-weight-vector-v2",
-        action="store_true",
-        help=argparse.SUPPRESS,
-    )
     return parser.parse_args(argv)
 
 
@@ -1816,8 +1806,6 @@ def build_selection_point_in_time_scores(
     plan_only: bool = False,
     point_in_time_dir_override: str | None = None,
     allow_stale_source: bool = False,
-    timing_pairwise_sync_consolidation_v1: bool = False,
-    timing_pairwise_weight_vector_v2: bool = False,
 ) -> int:
     """Programmatic PIT producer used by formal workflows.
 
@@ -1853,10 +1841,6 @@ def build_selection_point_in_time_scores(
         argv.extend(["--point-in-time-dir-override", str(point_in_time_dir_override)])
     if allow_stale_source:
         argv.append("--allow-stale-source")
-    if timing_pairwise_sync_consolidation_v1:
-        argv.append("--timing-pairwise-sync-consolidation-v1")
-    if timing_pairwise_weight_vector_v2:
-        argv.append("--timing-pairwise-weight-vector-v2")
     return _run_point_in_time_scores(parse_args(argv))
 
 

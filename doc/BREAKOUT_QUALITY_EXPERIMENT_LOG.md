@@ -9574,3 +9574,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - GPT isolated equivalence：200組含跨日與target ties的randomized fixture，canonical vs Candidate 2的loss、pair count、margin gradient均`torch.equal=True`；另以Adam做一個optimizer step後model state逐tensor`torch.equal=True`。這只證明CPU isolated arithmetic等價，不取代使用者RTX 5080 Timing Mode的最終bitwise model/scores guard。
 - Decision：`CANDIDATE1_NOT_PROMOTED / CANDIDATE2_IMPLEMENTED_TIMING_ONLY / CANONICAL_UNCHANGED`。下一個必要證據只需沿用既有Baseline=`10:10.2`跑同一Timing candidate；不得重建baseline。只有Candidate 2在RTX 5080上`PASS / bitwise exact`且wall-clock有實質淨改善才可升格。
 
+### 2026-08-19 — Rolling Timing Candidate 2 result + canonical promotion
+
+- 程式基準：使用者提供`test-branch-1_20260819_204305_73d4bc4.zip`，SHA256=`318923cd3fefaa96efcb784763f504816bb1782945dd09ad035b0c7654b029f8`；其本機Timing Mode沿用MR-13K / Seed42 / Extending 2025既有baseline=`10:10.2`，未重建baseline。
+- Candidate 2實機結果：`pairwise_weight_vector_v2` Candidate=`09:32.9`、speedup=`1.065x`、elapsed=`-6.12%`；selected epoch=`1`且fold contract、model-state SHA、PIT scores SHA與group counts均`PASS / bitwise exact`。Epoch selection兩輪=`179.8s + 178.9s`，final refit=`192.6s`。
+- 採用內容：Candidate 2累積Candidate 1已驗證exact的success-path sync consolidation，並把full-list Delta-NDCG detached relevance/discount weight從「先materialize整張N×N relevance-weight再mask」改為「沿既有comparable順序只計算相同pair vector」。`margin_diff` autograd path、`target_diff`、comparable mask、pair順序、weighted reduction、batch、seed、epoch selection、optimizer step、dtype、deterministic與TF32全部不變。
+- Promotion：上述兩項execution optimization正式成為full-list Delta-NDCG canonical path；Timing-only hidden CLI／service flags物理移除，避免已結案performance experiment永久留在正式runtime。其他pairwise reductions與非full-list training objectives維持原路徑。
+- Artifact/reuse：execution optimization不進PIT fold scientific fingerprint；由Timing Mode已證明model state與scores bitwise一致，因此既有identity/hash合法的canonical folds可繼續REUSE，不需因promotion重訓。
+- Timing lifecycle：既有pre-promotion baseline可保留作本次promotion證據；若開始下一個獨立execution candidate，先用Timing Mode明確重建baseline，使新baseline代表已promote的`canonical_pairwise_weight_vector_v2`。
+- Decision：`EXACT_PASS / 1.065X / PROMOTED_TO_CANONICAL_EXECUTION / TIMING_ONLY_FLAGS_RETIRED / SCIENTIFIC_IDENTITY_UNCHANGED`。
+
