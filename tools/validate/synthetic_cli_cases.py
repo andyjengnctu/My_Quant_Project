@@ -396,6 +396,7 @@ def validate_dataset_cli_contract_case(_base_params):
             and "[2]  Extending-Window Rolling 模型驗證" in interactive_text
             and "[3]  Fixed-Window Rolling 模型驗證" in interactive_text
             and "[4]  查看目前Workflow與工件狀態" in interactive_text
+            and "[7]  Timing Mode｜Rolling 訓練前後比較" in interactive_text
             and f"[4]  {configured_ranker_menu_label}" not in interactive_text
             and "MR-12A/B/C" not in interactive_text
             and "Audit／診斷" not in interactive_text
@@ -475,6 +476,66 @@ def validate_dataset_cli_contract_case(_base_params):
             strategy_model_prepare_rc,
             strategy_model_prepare.call_count,
             "[5]  準備策略比較所需模型工件" in strategy_model_prepare_text,
+        ),
+    )
+
+    with (
+        patch("builtins.input", side_effect=["7"]),
+        patch(
+            "tools.filters.breakout_quality.application._interactive_rolling_timing_mode",
+            return_value=61,
+        ) as rolling_timing_menu,
+    ):
+        rolling_timing_rc, rolling_timing_text = _capture_stdout(
+            app_breakout_quality._interactive_model_research,
+            "apps/research.py model",
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_model_menu_exposes_and_routes_rolling_timing_mode",
+        (61, 1, True),
+        (
+            rolling_timing_rc,
+            rolling_timing_menu.call_count,
+            "[7]  Timing Mode｜Rolling 訓練前後比較" in rolling_timing_text,
+        ),
+    )
+
+    rolling_timing = importlib.import_module("services.breakout_quality.rolling_timing")
+    timing_baseline = {
+        "benchmark": {"profile": "synthetic", "seed": 42},
+        "elapsed_wall_sec": 100.0,
+        "years": [
+            {
+                "year": 2025,
+                "elapsed_wall_sec": 100.0,
+                "selected_epoch": 2,
+                "contract_fingerprint": "contract",
+                "model_state_sha256": "model",
+                "scores_file_sha256": "scores",
+                "group_counts": {"train": 10, "validation": 2, "final_refit": 12, "score": 3},
+            }
+        ],
+    }
+    timing_candidate = json.loads(json.dumps(timing_baseline))
+    timing_candidate["elapsed_wall_sec"] = 80.0
+    timing_candidate["years"][0]["elapsed_wall_sec"] = 80.0
+    exact_timing = rolling_timing._comparison_payload(timing_baseline, timing_candidate)
+    timing_candidate_bad = json.loads(json.dumps(timing_candidate))
+    timing_candidate_bad["years"][0]["scores_file_sha256"] = "changed"
+    changed_timing = rolling_timing._comparison_payload(timing_baseline, timing_candidate_bad)
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "rolling_timing_compares_speed_without_accepting_changed_results",
+        (True, 1.25, False),
+        (
+            bool(exact_timing.get("exact_result")),
+            round(float(exact_timing.get("total_speedup_x") or 0.0), 2),
+            bool(changed_timing.get("exact_result")),
         ),
     )
 
@@ -567,7 +628,8 @@ def validate_dataset_cli_contract_case(_base_params):
             rejected_profile_settings.rolling_authorized,
             "[1]  Pre-Test｜單模型快速驗證  (Enter)" in rejected_text
             and "[2]  Extending-Window Rolling 模型驗證" in rejected_text
-            and "[3]  Fixed-Window Rolling 模型驗證" in rejected_text,
+            and "[3]  Fixed-Window Rolling 模型驗證" in rejected_text
+            and "[7]  Timing Mode｜Rolling 訓練前後比較" in rejected_text,
             "尚未授權Rolling PIT" in rejected_text,
             "Extending-Window Rolling Scores" in rejected_status_text
             or "Extending-Window Rolling 模型驗證" in rejected_status_text,

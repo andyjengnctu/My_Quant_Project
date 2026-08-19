@@ -124,6 +124,7 @@ COMMAND_MODULES = {
     "compare-daily-targets": "services.breakout_quality.daily_target_comparison",
     "compare-continuous-rankers": "tools.filters.breakout_quality.compare_continuous_rankers",
     "build-point-in-time-scores": "tools.filters.breakout_quality.build_point_in_time_scores",
+    "timing-rolling-training": "services.breakout_quality.rolling_timing",
     "build-binary-point-in-time-scores": (
         "tools.filters.breakout_quality.build_binary_point_in_time_scores"
     ),
@@ -158,6 +159,7 @@ COMMAND_DESCRIPTIONS = {
         "只讀config設定的continuous-ranker frozen scores，做paired／random baseline／Dynamic-K品質比較"
     ),
     "build-point-in-time-scores": "建立泛用Selection point-in-time continuous-ranker scores",
+    "timing-rolling-training": "以隔離單fold建立Rolling訓練改善前baseline並比較目前實作的wall-clock與exact-result hashes",
     "build-binary-point-in-time-scores": (
         "建立Binary DL filter歷史 point-in-time scores；research-only、CLI-only"
     ),
@@ -864,7 +866,7 @@ def _run_command(command: str, args: list[str], *, program_name: str) -> int:
     finally:
         sys.argv[0] = original_program_name
     returncode = int(result or 0)
-    if returncode == 0:
+    if returncode == 0 and command != "timing-rolling-training":
         _emit_breakout_quality_simple_report(
             command,
             list(args),
@@ -2983,6 +2985,66 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
     return 0
 
 
+def _interactive_rolling_timing_mode(program_name: str) -> int:
+    while True:
+        print("\n=== Timing Mode｜Rolling 訓練前後比較 ===")
+        print(render_menu_item(1, "執行／更新 A/B 比較", default=True))
+        print(render_menu_item(2, "查看 Timing 設定與基準狀態"))
+        print(render_menu_item(3, "重新建立改善前 Baseline"))
+        print(render_menu_item(4, "查看最新 Timing 報表"))
+        print(render_menu_item(0, "返回"))
+        try:
+            raw_choice = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            return 0
+        choice = "1" if raw_choice == "" else raw_choice
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        try:
+            if choice == "1":
+                return int(
+                    _run_command(
+                        "timing-rolling-training",
+                        ["run"],
+                        program_name=program_name,
+                    )
+                )
+            if choice == "2":
+                _run_command(
+                    "timing-rolling-training",
+                    ["status"],
+                    program_name=program_name,
+                )
+                continue
+            if choice == "3":
+                try:
+                    confirm = input(
+                        "👉 這會刪除目前Timing baseline；輸入 RESET 確認，其他返回："
+                    ).strip()
+                except EOFError:
+                    return 0
+                if confirm != "RESET":
+                    print("未重設 Timing baseline。")
+                    continue
+                _run_command(
+                    "timing-rolling-training",
+                    ["reset-baseline"],
+                    program_name=program_name,
+                )
+                continue
+            if choice == "4":
+                _run_command(
+                    "timing-rolling-training",
+                    ["report"],
+                    program_name=program_name,
+                )
+                continue
+            print("無效選項，請重新輸入。")
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            print(f"[錯誤] {type(exc).__name__}: {exc}")
+        except KeyboardInterrupt:
+            print("\nTiming操作已中止，返回Timing Mode選單。")
+
 def _interactive_model_research(program_name: str) -> int:
     settings = get_breakout_quality_model_research_settings()
     if settings.is_binary_classification:
@@ -3008,6 +3070,7 @@ def _interactive_model_research(program_name: str) -> int:
             print(render_menu_item(5, "準備策略比較所需模型工件"))
         if research_spec.reference_profile_name:
             print(render_menu_item(6, "比較目前 Target 與 reference Target"))
+        print(render_menu_item(7, "Timing Mode｜Rolling 訓練前後比較"))
         print(render_menu_item(0, "返回"))
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
@@ -3041,6 +3104,8 @@ def _interactive_model_research(program_name: str) -> int:
                     program_name=program_name,
                 )
             )
+        if choice == "7":
+            return int(_interactive_rolling_timing_mode(program_name))
         print("無效選項，請重新輸入。")
 
 def run_model_training_menu(program_name: str = "apps/research.py model") -> int:

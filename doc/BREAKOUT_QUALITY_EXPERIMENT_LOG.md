@@ -9535,3 +9535,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 獨立synthetic驗證：Min與Full stitched schedule都可得到canonical `2014-01-01～2026-12-31`、artifact=`READY`、identity=`READY`；Extending current arms解析=`C61/C58/C59/C60`，Pre-Test=`C1/C3/C44/C56`。
 - Decision：`FULL_ROOS_COMPARATOR_RESTORED / PIT_SAFE_EXTENDING_FULL_BASELINE_IMPLEMENTED / RESULT_PENDING / PRODUCTION_UNCHANGED`。
 
+
+### 2026-08-19 — Rolling Training Timing Mode baseline/candidate harness
+
+- 性質：execution-performance measurement infrastructure；不新增MR/SR/PARAM identity，不改Target、dataset universe、fold split、seed、epoch selection、batch membership、optimizer step、loss、dtype、deterministic或TF32語意。
+- 使用者要求：後續Rolling效能改善以「不改變結果」為主，並新增可比較改善前後的Timing Mode，避免只依GPU利用率或主觀體感判斷。
+- 正式入口：`apps/research.py → [1] 模型訓練 → [7] Timing Mode｜Rolling 訓練前後比較`。選單固定可見；若config指定profile未授權current Rolling，執行邊界直接BLOCKED，不以隱藏選單處理。
+- Benchmark config：集中於`config/breakout_quality.py`的`BREAKOUT_QUALITY_ROLLING_TIMING_SCORE_YEARS / EXPERIMENT_PROFILE / SEED`；預設只跑2025完整年度單fold，Extending history、12M score fold、24M inner validation、`resume=False`，輸出完全隔離於`outputs/filters/breakout_quality/<filter_id>/timing/rolling_training/...`，不得重用或覆寫canonical PIT folds。
+- A/B contract：第一次執行建立immutable baseline summary；後續執行以目前程式作candidate。比較項固定包含fold contract fingerprint、selected epoch、semantic model-state SHA256、score CSV SHA256與group counts，全部一致才可標`PASS / bitwise exact`；wall-clock另輸出每year與total speedup/Δtime。任一result hash或scientific contract不同即FAIL，速度改善不得因此被接受為behavior-preserving。
+- Baseline lifecycle：candidate執行不覆寫baseline；只有Timing子選單明確輸入`RESET`才刪除並重新建立baseline。implementation fingerprint只作工程版本辨識，不參與scientific equality判定。
+- Decision：`TIMING_MODE_ADDED / BASELINE_THEN_CANDIDATE / EXACT_RESULT_GUARD / CANONICAL_ARTIFACTS_ISOLATED`。

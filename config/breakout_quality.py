@@ -228,6 +228,16 @@ BREAKOUT_QUALITY_POINT_IN_TIME_TRAIN_WINDOW_MONTHS: int | None = None
 BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS = 120
 BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE = "2016-01-01"
 BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE = "2025-12-31"
+
+# Rolling Timing Mode：只做 execution benchmark，不改正式 PIT 工件或模型科學契約。
+# 第一次執行會建立改善前 baseline；之後同設定重跑時以目前程式作 candidate，
+# 比較 wall-clock 與 exact-result hashes。預設只量最晚完整年度，避免為了 benchmark
+# 再跑完整 10-fold；可自行加入較早年度觀察 Extending history 成長造成的 scaling。
+BREAKOUT_QUALITY_ROLLING_TIMING_SCORE_YEARS = (2025,)
+# None = 跟隨目前 Model Research Active Profile／共用 Seed。若要固定 benchmark 對象可明確指定。
+BREAKOUT_QUALITY_ROLLING_TIMING_EXPERIMENT_PROFILE: str | None = None
+BREAKOUT_QUALITY_ROLLING_TIMING_SEED: int | None = None
+
 BREAKOUT_QUALITY_POINT_IN_TIME_MIN_TRAIN_GROUPS = 20
 BREAKOUT_QUALITY_POINT_IN_TIME_MIN_VALIDATION_GROUPS = 20
 BREAKOUT_QUALITY_POINT_IN_TIME_MIN_SCORE_GROUPS = 1
@@ -1668,6 +1678,83 @@ def get_breakout_quality_continuous_ranker_comparison_settings(
     )
 
 
+@dataclass(frozen=True)
+class BreakoutQualityRollingTimingSettings:
+    experiment_profile: str
+    seed: int
+    score_years: tuple[int, ...]
+
+
+def get_breakout_quality_rolling_timing_settings() -> BreakoutQualityRollingTimingSettings:
+    profile_name = str(
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE
+        if BREAKOUT_QUALITY_ROLLING_TIMING_EXPERIMENT_PROFILE is None
+        else BREAKOUT_QUALITY_ROLLING_TIMING_EXPERIMENT_PROFILE
+    ).strip()
+    if not profile_name:
+        raise ValueError("Rolling Timing experiment profile不可空白")
+    profile = get_breakout_quality_experiment_profile(profile_name)
+    if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
+        raise ValueError("Rolling Timing只支援continuous ranker profile")
+
+    research_spec = get_continuous_ranker_research_spec(profile_name)
+    if not bool(research_spec.selection_pit_authorized):
+        raise ValueError(
+            f"Rolling Timing profile尚未授權current Rolling: {profile_name}"
+        )
+
+    seed = (
+        resolve_breakout_quality_random_seed()
+        if BREAKOUT_QUALITY_ROLLING_TIMING_SEED is None
+        else int(BREAKOUT_QUALITY_ROLLING_TIMING_SEED)
+    )
+    if seed < 0:
+        raise ValueError("Rolling Timing seed必須 >= 0")
+
+    years = tuple(int(value) for value in BREAKOUT_QUALITY_ROLLING_TIMING_SCORE_YEARS)
+    if not years:
+        raise ValueError("Rolling Timing至少需要一個score year")
+    if len(set(years)) != len(years):
+        raise ValueError("Rolling Timing score years不可重複")
+    if tuple(sorted(years)) != years:
+        raise ValueError("Rolling Timing score years必須遞增排序")
+    formal_start_raw = str(BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE).strip()
+    formal_start = (
+        None
+        if formal_start_raw.lower() == "auto"
+        else date.fromisoformat(formal_start_raw)
+    )
+    formal_end_raw = (
+        ""
+        if BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE is None
+        else str(BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE).strip()
+    )
+    formal_end = (
+        None
+        if formal_end_raw.lower() in {"", "auto"}
+        else date.fromisoformat(formal_end_raw)
+    )
+    for year in years:
+        if year < 1900 or year > 2200:
+            raise ValueError(f"Rolling Timing score year不合法: {year}")
+        start = date(year, 1, 1)
+        end = date(year, 12, 31)
+        if formal_start is not None and start < formal_start:
+            raise ValueError(
+                f"Rolling Timing year早於current Rolling起點: {year} < {formal_start.year}"
+            )
+        if formal_end is not None and end > formal_end:
+            raise ValueError(
+                f"Rolling Timing year晚於current完整Rolling終點: {year} > {formal_end.year}"
+            )
+
+    return BreakoutQualityRollingTimingSettings(
+        experiment_profile=profile_name,
+        seed=int(seed),
+        score_years=years,
+    )
+
+
 # =============================================================================
 # WORKFLOW RESOLUTION AND VALIDATION — do not edit unless changing implementation
 # =============================================================================
@@ -2302,6 +2389,7 @@ __all__ = [
     'BREAKOUT_QUALITY_STRATEGY_SCORE_SOURCE',
     'BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE',
     'BreakoutQualityContinuousRankerComparisonSettings',
+    'BreakoutQualityRollingTimingSettings',
     'BreakoutQualityWorkflowSettings',
     'SUPPORTED_WORKFLOW_SCORE_SOURCES',
     'SUPPORTED_WORKFLOW_STRATEGY_MODES',
@@ -2316,6 +2404,7 @@ __all__ = [
     'WORKFLOW_STRATEGY_MODE_HARD_FILTER',
     'WORKFLOW_STRATEGY_MODE_SCORE_RANKING',
     'get_breakout_quality_continuous_ranker_comparison_settings',
+    'get_breakout_quality_rolling_timing_settings',
     'get_breakout_quality_workflow_settings',
     'BreakoutQualityContinuousRankerPITGateSettings',
     'get_breakout_quality_continuous_ranker_pit_gate_settings',

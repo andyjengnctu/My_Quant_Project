@@ -186,6 +186,7 @@ Active Profile：daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise
 [4]  查看目前Workflow與工件狀態
 [5]  準備策略比較所需模型工件
 [6]  比較目前 Target 與 reference Target
+[7]  Timing Mode｜Rolling 訓練前後比較
 [0]  返回
 ```
 
@@ -204,6 +205,11 @@ Forward console／簡易報表除既有economic ranking品質外，MR-13O會額�
 
 Continuous-ranker / Rolling CUDA feeding的current execution default為`train_prefetch_batches=8`、`train_prefetch_workers=4`，維持feature-only ordered prefetch，並使用pinned feature + non-blocking H2D + dedicated CUDA copy stream。complete-host prefetch與同張GPU的2-fold process parallel都已因使用者實機觀察更慢而退役；Rolling回到單fold串行，已完成且identity/hash合法的fold仍照原resume contract先REUSE。這些execution決策都不改fold scientific identity或optimizer semantics。
 
+### Rolling Timing Mode
+
+`apps/research.py → [1] 模型訓練 → [7] Timing Mode｜Rolling 訓練前後比較`只用來量測execution改善，不建立或覆寫正式PIT工件。benchmark設定集中在`config/breakout_quality.py`：`BREAKOUT_QUALITY_ROLLING_TIMING_SCORE_YEARS`、`BREAKOUT_QUALITY_ROLLING_TIMING_EXPERIMENT_PROFILE`、`BREAKOUT_QUALITY_ROLLING_TIMING_SEED`。預設只量最晚完整年度2025；每個year都以相同Extending history、fold cadence、inner validation、seed與`resume=False`從零訓練，輸出到`outputs/filters/breakout_quality/<filter_id>/timing/rolling_training/...`隔離路徑。
+
+第一次執行建立改善前`baseline.json`；後續程式效能修改後再執行，會產生candidate並比較wall-clock、fold contract、selected epoch、semantic model-state SHA256與score CSV SHA256。只有contract／epoch／model state／scores／group counts全部exact一致時報告才標`PASS / bitwise exact`；任一不同即視為「結果有改變」，不得只因速度更快就升成current default。Baseline不會因candidate失敗被覆寫；只有在Timing子選單明確輸入`RESET`才會重建。
 
 ### Continuous Target自動準備
 
