@@ -21,6 +21,7 @@ from core.active_param_ensemble import (
     ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
     build_active_param_ensemble_schedule,
     get_active_param_ensemble_date_range,
+    get_active_param_ensemble_policy,
     is_active_param_ensemble_payload,
     resolve_active_param_ensemble_mode,
 )
@@ -315,28 +316,52 @@ def _load_json_object(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _runtime_param_member_signatures(members: Any) -> list[str]:
+    """Return replay-semantic hashes for ensemble members.
+
+    Legacy OOS and Rolling artifacts may carry different optimizer bookkeeping
+    (seed/member_index/trial metadata) even when the actual strategy parameter
+    mappings consumed by replay are identical. Cleanup proof therefore compares
+    only each member's ``params`` mapping, not producer-only member metadata.
+    """
+    return sorted(
+        canonical_json_sha256(dict(member["params"]))
+        for member in normalize_seed_ensemble_members(members)
+    )
+
+
 def _legacy_frozen_oos_matches_schedule_initial(source: Path, target: Path) -> bool:
-    legacy = _load_json_object(source); schedule = _load_json_object(target)
-    if legacy is None or schedule is None or not is_active_param_ensemble_payload(schedule):
+    legacy = _load_json_object(source)
+    schedule = _load_json_object(target)
+    if (
+        legacy is None
+        or schedule is None
+        or not is_active_param_ensemble_payload(legacy)
+        or not is_active_param_ensemble_payload(schedule)
+        or resolve_active_param_ensemble_mode(schedule) != ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING
+    ):
         return False
-    target_mapping = dict(schedule.get("params_ensemble_by_effective_date") or {})
-    if not target_mapping:
+
+    try:
+        legacy_schedule = build_active_param_ensemble_schedule(legacy)
+        canonical_schedule = build_active_param_ensemble_schedule(schedule)
+        legacy_policy = get_active_param_ensemble_policy(legacy)
+        canonical_policy = get_active_param_ensemble_policy(schedule)
+    except (KeyError, TypeError, ValueError):
         return False
-    first_date = sorted(str(key) for key in target_mapping)[0]
-    target_members = normalize_seed_ensemble_members(target_mapping.get(first_date))
-    if not target_members:
+    if not legacy_schedule or not canonical_schedule:
         return False
-    legacy_members: list[dict[str, Any]] = []
-    if is_active_param_ensemble_payload(legacy):
-        legacy_mode = resolve_active_param_ensemble_mode(legacy)
-        if legacy_mode == ACTIVE_PARAM_ENSEMBLE_MODE_STATIC:
-            legacy_members = normalize_seed_ensemble_members(legacy.get("params_ensemble"))
-        elif legacy_mode == ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING:
-            mapping = dict(legacy.get("params_ensemble_by_effective_date") or {})
-            if mapping:
-                first_legacy = sorted(str(key) for key in mapping)[0]
-                legacy_members = normalize_seed_ensemble_members(mapping.get(first_legacy))
-    return bool(legacy_members) and canonical_json_sha256(legacy_members) == canonical_json_sha256(target_members)
+
+    legacy_members = list(legacy_schedule[0].get("members") or [])
+    canonical_members = list(canonical_schedule[0].get("members") or [])
+    legacy_signatures = _runtime_param_member_signatures(legacy_members)
+    canonical_signatures = _runtime_param_member_signatures(canonical_members)
+    if not legacy_signatures or legacy_signatures != canonical_signatures:
+        return False
+
+    # Ensemble voting is replay-semantic. A different min_agree can change which
+    # candidates are tradable even when every member's params are identical.
+    return int(legacy_policy.get("min_agree") or 0) == int(canonical_policy.get("min_agree") or 0)
 
 
 def collect_legacy_root_strategy_parameter_cleanup_plan(project_root: str | Path) -> dict[str, Any]:

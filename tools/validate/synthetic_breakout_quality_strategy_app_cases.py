@@ -564,14 +564,24 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         migration_root = Path(migration_tmp)
         migration_models = migration_root / "models"
         migration_models.mkdir(parents=True, exist_ok=True)
-        member = {"member_index": 1, "seed": 42, "params": {"high_len": 201}}
-        for policy_name in POLICY_FILENAME_BY_NAME:
+        # Legacy frozen-OOS and Rolling producer metadata can legitimately differ
+        # even when replay consumes the exact same strategy params. Cleanup proof
+        # must compare runtime params/min_agree, not seed/member/trial bookkeeping.
+        static_member = {
+            "member_index": 7, "seed": 999, "trial_number": 123,
+            "params": {"high_len": 201},
+        }
+        rolling_member = {
+            "member_index": 1, "seed": 42, "trial_number": 1,
+            "params": {"high_len": 201},
+        }
+        for policy_name, legacy_filename in POLICY_FILENAME_BY_NAME.items():
             static_payload = {
                 "schema_type": ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
                 "schema_version": 1,
                 "mode": "static",
                 "selector": str(policy_name),
-                "params_ensemble": [member],
+                "params_ensemble": [static_member],
                 "meta": {
                     "walk_forward_policy": {
                         "oos_start_year": 2021,
@@ -585,7 +595,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 "schema_version": 1,
                 "mode": "rolling",
                 "selector": str(policy_name),
-                "params_ensemble_by_effective_date": {"2021-01-01": [member]},
+                "params_ensemble_by_effective_date": {"2021-01-01": [rolling_member]},
                 "folds": [{
                     "effective_start": "2021-01-01",
                     "effective_end": "2026-03-02",
@@ -603,6 +613,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             (
                 migration_models / get_optimizer_policy_paramset_filename(policy_name)
             ).write_text(json.dumps(rolling_payload), encoding="utf-8")
+
+            for family in ("full", "min"):
+                nested_oos = migration_models / "strategy_params" / family / "oos" / legacy_filename
+                nested_rolling = migration_models / "strategy_params" / family / "rolling" / legacy_filename
+                nested_oos.parent.mkdir(parents=True, exist_ok=True)
+                nested_rolling.parent.mkdir(parents=True, exist_ok=True)
+                nested_oos.write_text(json.dumps(static_payload), encoding="utf-8")
+                nested_rolling.write_text(json.dumps(rolling_payload), encoding="utf-8")
         (migration_models / "run_best_params.json").write_text(
             json.dumps({"high_len": 201}), encoding="utf-8"
         )
@@ -660,6 +678,32 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 for payload in migrated_oos_payloads
             ),
         )
+
+        # Actual strategy-param divergence must remain blocked even though
+        # producer-only member metadata differences are cleanup-safe.
+        diverged_oos_path = (
+            migration_models / "strategy_params" / "full" / "oos"
+            / POLICY_FILENAME_BY_NAME["base_finalist_best"]
+        )
+        original_oos_payload = json.loads(diverged_oos_path.read_text(encoding="utf-8"))
+        diverged_oos_payload = json.loads(diverged_oos_path.read_text(encoding="utf-8"))
+        diverged_oos_payload["params_ensemble"][0]["params"]["high_len"] = 250
+        diverged_oos_path.write_text(json.dumps(diverged_oos_payload), encoding="utf-8")
+        diverged_oos_plan = collect_legacy_root_strategy_parameter_cleanup_plan(migration_root)
+        diverged_oos_blockers = {
+            str(row.get("source") or ""): str(row.get("reason") or "")
+            for row in list(diverged_oos_plan.get("blockers") or [])
+        }
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "legacy_oos_cleanup_blocks_true_strategy_param_divergence",
+            True,
+            str(diverged_oos_plan.get("status")) == "BLOCKED"
+            and diverged_oos_blockers.get(
+                "models/strategy_params/full/oos/base_best.json"
+            ) == "legacy_source_not_proven_migrated",
+        )
+        diverged_oos_path.write_text(json.dumps(original_oos_payload), encoding="utf-8")
 
         canonical_trade_active = resolve_strategy_param_state_path(
             migration_root, artifact="active"
