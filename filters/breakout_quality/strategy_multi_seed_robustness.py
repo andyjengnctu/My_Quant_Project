@@ -94,7 +94,7 @@ from core.strategy_comparison import (
     strategy_comparison_param_artifact_key,
     strategy_comparison_param_binding_key,
 )
-from filters.breakout_quality.artifacts import compute_file_sha256
+from filters.breakout_quality.artifacts import build_file_manifest, compute_file_sha256
 from filters.breakout_quality.dataset_store import resolve_dataset_paths
 from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_COVERAGE_FILENAME,
@@ -1347,6 +1347,7 @@ def build_multi_seed_robustness_contract(
             "console_mode": robustness.console_mode,
             "progress_interval_seconds": float(robustness.progress_interval_seconds),
             "yearly_report": bool(robustness.yearly_report),
+            "initial_checkpoint_cache_root": robustness.initial_checkpoint_cache_root,
         },
         "retention": {
             "keep_checkpoints": bool(robustness.keep_checkpoints),
@@ -1862,9 +1863,193 @@ def _validate_training_artifacts(
     return artifact_payload
 
 
+
+PIT_FOLD_MANIFEST_FILENAME = "manifest.json"
+PIT_FOLD_MODEL_FILENAME = "model.pt"
+INITIAL_CHECKPOINT_CACHE_MANIFEST_FILENAME = "cache_manifest.json"
+
+
+def _initial_checkpoint_training_identity(manifest: dict[str, Any]) -> str:
+    """Fingerprint only the model-fitting contract, excluding score-only horizon fields."""
+
+    planned = dict(manifest.get("planned_periods") or {})
+    observed = dict(manifest.get("observed_periods") or {})
+    group_counts = dict(manifest.get("group_counts") or {})
+    event_row_counts = dict(manifest.get("event_row_counts") or {})
+    payload = {
+        key: manifest.get(key)
+        for key in (
+            "filter_id",
+            "model_architecture",
+            "experiment_profile",
+            "continuous_target_id",
+            "training_label_scope",
+            "training_sample_scope",
+            "seed",
+            "model_information_cutoff",
+            "model_spec",
+            "experiment_settings",
+            "training_settings",
+            "source_contract",
+            "lookahead_contract",
+        )
+    }
+    payload["planned_periods"] = {
+        key: planned.get(key)
+        for key in ("validation_start", "validation_end", "score_start", "history_start")
+    }
+    payload["observed_periods"] = {
+        phase: observed.get(phase) for phase in ("inner_train", "validation", "final_refit")
+    }
+    payload["group_counts"] = {
+        phase: group_counts.get(phase) for phase in ("inner_train", "validation", "final_refit")
+    }
+    payload["event_row_counts"] = {
+        phase: event_row_counts.get(phase) for phase in ("inner_train", "validation", "final_refit")
+    }
+    return canonical_json_sha256(payload, length=32)
+
+
+def _initial_checkpoint_cache_dir(
+    *, cache_root: str | None, benchmark_id: str | None, dl_id: str, seed: int,
+) -> Path | None:
+    if cache_root in (None, "") or benchmark_id in (None, ""):
+        return None
+    return (
+        PROJECT_ROOT
+        / str(cache_root)
+        / str(benchmark_id)
+        / _unit_key(str(dl_id), int(seed))
+    ).resolve()
+
+
+def _find_initial_pit_fold_dir(model_dir: Path, *, comparison_start: str) -> Path | None:
+    folds_root = Path(model_dir).resolve() / "folds"
+    if not folds_root.is_dir():
+        return None
+    target_start = pd.Timestamp(comparison_start).strftime("%Y-%m-%d")
+    matches: list[Path] = []
+    for candidate in sorted(path for path in folds_root.iterdir() if path.is_dir()):
+        manifest_path = candidate / PIT_FOLD_MANIFEST_FILENAME
+        model_path = candidate / PIT_FOLD_MODEL_FILENAME
+        if not (manifest_path.is_file() and model_path.is_file()):
+            continue
+        try:
+            manifest = _read_json(manifest_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        planned = dict(manifest.get("planned_periods") or {})
+        raw_start = str(planned.get("score_start") or "").strip()
+        if not raw_start:
+            continue
+        if pd.Timestamp(raw_start).strftime("%Y-%m-%d") == target_start:
+            matches.append(candidate)
+    if len(matches) > 1:
+        raise RuntimeError(
+            "multi-seed PIT初始checkpoint fold不唯一: "
+            + ", ".join(path.name for path in matches)
+        )
+    return matches[0] if matches else None
+
+
+def _publish_initial_checkpoint_cache(
+    *,
+    model_dir: Path,
+    cache_dir: Path | None,
+    comparison_start: str,
+    benchmark_id: str | None,
+    dl_id: str,
+    seed: int,
+) -> dict[str, Any] | None:
+    """Persist the common 2021 fitted model outside disposable OOS/Rolling work trees."""
+
+    if cache_dir is None:
+        return None
+    source_fold_dir = _find_initial_pit_fold_dir(
+        model_dir, comparison_start=comparison_start
+    )
+    if source_fold_dir is None:
+        raise RuntimeError(
+            f"multi-seed PIT找不到score_start={comparison_start}的初始checkpoint fold"
+        )
+    source_manifest_path = source_fold_dir / PIT_FOLD_MANIFEST_FILENAME
+    source_model_path = source_fold_dir / PIT_FOLD_MODEL_FILENAME
+    source_manifest = _read_json(source_manifest_path)
+    source_checkpoint_manifest = build_file_manifest(source_model_path)
+    if source_checkpoint_manifest != dict(source_manifest.get("artifacts") or {}).get("checkpoint"):
+        raise RuntimeError(
+            f"multi-seed PIT初始checkpoint hash/size與fold manifest不一致: {source_fold_dir.name}"
+        )
+    source_model_sha = str(source_checkpoint_manifest["sha256"])
+    training_identity = _initial_checkpoint_training_identity(source_manifest)
+
+    existing_manifest_path = cache_dir / PIT_FOLD_MANIFEST_FILENAME
+    existing_model_path = cache_dir / PIT_FOLD_MODEL_FILENAME
+    if existing_manifest_path.is_file() and existing_model_path.is_file():
+        try:
+            existing_manifest = _read_json(existing_manifest_path)
+            existing_checkpoint_manifest = build_file_manifest(existing_model_path)
+            if existing_checkpoint_manifest != dict(existing_manifest.get("artifacts") or {}).get(
+                "checkpoint"
+            ):
+                raise ValueError("cached checkpoint manifest mismatch")
+            existing_identity = _initial_checkpoint_training_identity(existing_manifest)
+            existing_model_sha = str(existing_checkpoint_manifest["sha256"])
+        except (OSError, ValueError, json.JSONDecodeError):
+            existing_identity = ""
+            existing_model_sha = ""
+        if existing_identity == training_identity and existing_model_sha != source_model_sha:
+            raise RuntimeError(
+                "同一benchmark seed／DL source／fitting contract產生不同初始checkpoint；"
+                f"dl_id={dl_id}, seed={seed}, cached={existing_model_sha}, current={source_model_sha}"
+            )
+        if existing_identity == training_identity and existing_model_sha == source_model_sha:
+            return {
+                "cache_dir": str(cache_dir),
+                "model_sha256": source_model_sha,
+                "training_identity": training_identity,
+                "reused_existing_cache": True,
+            }
+
+    staging = cache_dir.parent / (
+        f".{cache_dir.name}.publish_{os.getpid()}_{time.time_ns()}"
+    )
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=False)
+    try:
+        shutil.copy2(source_model_path, staging / PIT_FOLD_MODEL_FILENAME)
+        shutil.copy2(source_manifest_path, staging / PIT_FOLD_MANIFEST_FILENAME)
+        _write_json(
+            staging / INITIAL_CHECKPOINT_CACHE_MANIFEST_FILENAME,
+            {
+                "schema_version": 1,
+                "benchmark_id": benchmark_id,
+                "dl_id": str(dl_id),
+                "seed": int(seed),
+                "comparison_start": pd.Timestamp(comparison_start).strftime("%Y-%m-%d"),
+                "training_identity": training_identity,
+                "model_sha256": source_model_sha,
+                "source_fold_id": str(source_manifest.get("fold_id") or source_fold_dir.name),
+                "source_score_reused": False,
+                "published_at_utc": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        cache_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        staging.replace(cache_dir)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+    return {
+        "cache_dir": str(cache_dir),
+        "model_sha256": source_model_sha,
+        "training_identity": training_identity,
+        "reused_existing_cache": False,
+    }
+
 def _training_command(
     *, arm: StrategyComparisonArm, dl_id: str, seed: int, model_dir: Path, research_dir: Path, settings,
-    comparison_start: str, comparison_end: str,
+    comparison_start: str, comparison_end: str, checkpoint_reuse_source_fold_dir: Path | None = None,
 ) -> list[str]:
     dl = settings.dl_sources[str(dl_id)]
     if str(dl.score_source) == "selection_point_in_time":
@@ -1888,6 +2073,11 @@ def _training_command(
             command.extend(["--fold-anchor-date", fold_anchor_date])
         if _source_point_in_time_single_score_block(settings=settings, dl_id=str(dl_id)):
             command.append("--single-score-block")
+        if checkpoint_reuse_source_fold_dir is not None and checkpoint_reuse_source_fold_dir.is_dir():
+            command.extend([
+                "--checkpoint-reuse-source-fold-dir",
+                str(checkpoint_reuse_source_fold_dir.resolve()),
+            ])
         return command
     return [
         sys.executable, "-m", "tools.filters.breakout_quality.train_continuous_ranker",
@@ -1929,6 +2119,16 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     dl_id = str(job["dl_id"])
     dl = settings.dl_sources[dl_id]
     is_selection_pit = str(dl.score_source) == "selection_point_in_time"
+    checkpoint_cache_dir = (
+        None
+        if job.get("initial_checkpoint_cache_dir") in (None, "")
+        else Path(str(job["initial_checkpoint_cache_dir"])).resolve()
+    )
+    checkpoint_reuse_source_fold_dir = (
+        checkpoint_cache_dir
+        if is_selection_pit and checkpoint_cache_dir is not None and checkpoint_cache_dir.is_dir()
+        else None
+    )
     started = time.perf_counter()
     artifacts = None
     if bool(job.get("reuse_completed")) and model_dir.is_dir() and research_dir.is_dir():
@@ -1946,9 +2146,22 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         except (FileNotFoundError, ValueError):
             artifacts = None
     if artifacts is not None:
+        cache = (
+            _publish_initial_checkpoint_cache(
+                model_dir=model_dir,
+                cache_dir=checkpoint_cache_dir,
+                comparison_start=str(job["comparison_start"]),
+                benchmark_id=job.get("benchmark_id"),
+                dl_id=dl_id,
+                seed=seed,
+            )
+            if is_selection_pit and checkpoint_cache_dir is not None
+            else None
+        )
         return {
             "artifacts": artifacts,
             "reused": True,
+            "initial_checkpoint_cache": cache,
             "wall_elapsed_sec": round(time.perf_counter() - started, 3),
         }
 
@@ -1987,6 +2200,7 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
                 settings=settings,
                 comparison_start=str(job["comparison_start"]),
                 comparison_end=str(job["comparison_end"]),
+                checkpoint_reuse_source_fold_dir=checkpoint_reuse_source_fold_dir,
             ),
             cwd=str(PROJECT_ROOT),
             env=env,
@@ -2022,9 +2236,22 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         comparison_start=str(job["comparison_start"]),
         comparison_end=str(job["comparison_end"]),
     )
+    cache = (
+        _publish_initial_checkpoint_cache(
+            model_dir=model_dir,
+            cache_dir=checkpoint_cache_dir,
+            comparison_start=str(job["comparison_start"]),
+            benchmark_id=job.get("benchmark_id"),
+            dl_id=dl_id,
+            seed=seed,
+        )
+        if is_selection_pit and checkpoint_cache_dir is not None
+        else None
+    )
     return {
         "artifacts": artifacts,
         "reused": False,
+        "initial_checkpoint_cache": cache,
         "wall_elapsed_sec": round(time.perf_counter() - started, 3),
     }
 
@@ -2040,6 +2267,8 @@ def _training_units(
     comparison_start: str,
     comparison_end: str,
     reuse_completed: bool,
+    benchmark_id: str | None = None,
+    initial_checkpoint_cache_root: str | None = None,
 ) -> deque[dict[str, Any]]:
     units: deque[dict[str, Any]] = deque()
     source_groups = _training_source_groups(stochastic_arms, settings=settings)
@@ -2054,6 +2283,12 @@ def _training_units(
                 continue
             representative_arm = arm_entries[0][1]
             source_unit = _unit_key(dl_id, int(seed))
+            initial_checkpoint_cache_dir = _initial_checkpoint_cache_dir(
+                cache_root=initial_checkpoint_cache_root,
+                benchmark_id=benchmark_id,
+                dl_id=str(dl_id),
+                seed=int(seed),
+            )
             units.append({
                 "arm": representative_arm,
                 "replay_arms": replay_entries,
@@ -2068,6 +2303,12 @@ def _training_units(
                 "comparison_start": str(comparison_start),
                 "comparison_end": str(comparison_end),
                 "reuse_completed": bool(reuse_completed),
+                "benchmark_id": benchmark_id,
+                "initial_checkpoint_cache_dir": (
+                    None
+                    if initial_checkpoint_cache_dir is None
+                    else str(initial_checkpoint_cache_dir)
+                ),
             })
     return units
 
@@ -3739,6 +3980,8 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         comparison_start=comparison_start,
         comparison_end=comparison_end,
         reuse_completed=cfg.reuse_completed,
+        benchmark_id=cfg.benchmark_id,
+        initial_checkpoint_cache_root=cfg.initial_checkpoint_cache_root,
     )
     training_cleanup_targets = []
     for meta in pending_trainings:
@@ -4016,6 +4259,12 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             artifacts = dict(trained["artifacts"])
             trained_artifacts[(str(meta["dl_id"]), int(meta["seed"]))] = artifacts
             tag = "[TRAIN REUSE]" if trained["reused"] else "[TRAIN DONE]"
+            cache_meta = dict(trained.get("initial_checkpoint_cache") or {})
+            cache_note = (
+                " | 2021 checkpoint cache="
+                + ("reuse" if bool(cache_meta.get("reused_existing_cache")) else "publish")
+                if cache_meta else ""
+            )
             progress.print_line(
                 paint(tag, "green", enabled=color_enabled, bold=True)
                 + f" seed {meta['seed_order']}/{len(seeds)} | "
@@ -4023,6 +4272,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
                 + f"| replay targets={len(meta['replay_arms'])} "
                 + f"| epoch={artifacts['selected_epoch']} "
                 + f"| elapsed={_format_elapsed(artifacts.get('training_elapsed_sec', trained['wall_elapsed_sec']))}"
+                + cache_note
             )
             for arm_order, arm in meta["replay_arms"]:
                 queue_replay_if_ready(
@@ -4228,6 +4478,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         f"{cleanup_tag}：checkpoints={'保留' if cfg.keep_checkpoints else '已清除'}｜"
         f"scores={'保留' if cfg.keep_scores else '已清除'}｜"
         f"replay details={'保留' if cfg.keep_replay_details else '已清除'}"
+        + ("｜2021 shared checkpoint cache=保留" if cfg.initial_checkpoint_cache_root else "")
     )
     print("永久工件：")
     permanent_paths = [manifest_path, seed_results_path, seed_yearly_results_path]

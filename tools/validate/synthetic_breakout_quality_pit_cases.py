@@ -54,6 +54,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         _fold_training_contract_is_compatible,
         _migrate_compatible_legacy_fold,
         _rescore_daily_fold_from_compatible_checkpoint,
+        _rescore_fold_from_external_checkpoint,
         _resolve_score_start,
         _resolve_training_universe_start,
         _snapshot_superseded_point_in_time_aggregate,
@@ -66,7 +67,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         resolve_forward_oos_score_group_ids,
         resolve_forward_oos_target_evaluable_group_ids,
     )
-    from filters.breakout_quality.artifacts import build_file_manifest
+    from filters.breakout_quality.artifacts import build_file_manifest, compute_file_sha256
     from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME, LABEL_PASS
 
     consistent_terminal_events = pd.DataFrame(
@@ -754,6 +755,21 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     expanded_score_contract["event_row_counts"]["score"] = 55
     changed_training_contract = json.loads(json.dumps(expanded_score_contract))
     changed_training_contract["group_counts"]["final_refit"] = 31
+    cross_mode_score_horizon_contract = json.loads(json.dumps(training_contract))
+    cross_mode_score_horizon_contract["planned_periods"]["score_end"] = "2026-03-02"
+    cross_mode_score_horizon_contract["observed_periods"]["score"]["end"] = "2026-03-02"
+    cross_mode_score_horizon_contract["group_counts"]["score"] = 400
+    cross_mode_score_horizon_contract["event_row_counts"]["score"] = 400
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "daily_pit_training_identity_ignores_score_end_for_oos_rolling_initial_checkpoint_reuse",
+        True,
+        _fold_training_contract_is_compatible(
+            training_contract, expected_contract=cross_mode_score_horizon_contract
+        ),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -850,6 +866,8 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         (rescore_fold_dir / "manifest.json").write_text(
             json.dumps(old_rescore_manifest), encoding="utf-8"
         )
+        original_checkpoint_bytes = rescore_model_path.read_bytes()
+        original_manifest_text = (rescore_fold_dir / "manifest.json").read_text(encoding="utf-8")
         with patch(
             "tools.filters.breakout_quality.build_point_in_time_scores.build_model",
             return_value=_SyntheticRankerModel(),
@@ -873,6 +891,55 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             if rescored is not None
             else {}
         )
+
+        external_source_dir = Path(tmp_dir) / "external_source"
+        external_source_dir.mkdir(parents=True, exist_ok=True)
+        (external_source_dir / DEFAULT_MODEL_FILENAME).write_bytes(original_checkpoint_bytes)
+        (external_source_dir / "manifest.json").write_text(
+            original_manifest_text, encoding="utf-8"
+        )
+        cross_mode_contract = json.loads(json.dumps(expected_checkpoint_contract))
+        cross_mode_contract["fold_id"] = "fold_20140101_20161231"
+        cross_mode_contract["planned_periods"]["score_end"] = "2016-12-31"
+        cross_mode_target_dir = Path(tmp_dir) / cross_mode_contract["fold_id"]
+        source_sha = compute_file_sha256(external_source_dir / DEFAULT_MODEL_FILENAME)
+        with patch(
+            "tools.filters.breakout_quality.build_point_in_time_scores.build_model",
+            return_value=_SyntheticRankerModel(),
+        ), patch(
+            "tools.filters.breakout_quality.build_point_in_time_scores.predict_scores",
+            return_value=np.asarray([0.25, 0.75], dtype=np.float32),
+        ):
+            cross_mode_rescored = _rescore_fold_from_external_checkpoint(
+                source_fold_dir=external_source_dir,
+                target_fold_dir=cross_mode_target_dir,
+                bundle=synthetic_bundle,
+                ids={"score_ids": np.asarray([0, 1], dtype=np.int64)},
+                fold_contract=cross_mode_contract,
+                expected_fingerprint="cross-mode-score-fingerprint",
+                args=SimpleNamespace(evaluation_batch_size=32),
+                torch_module=torch,
+                plan=SimpleNamespace(device="cpu"),
+            )
+        cross_mode_manifest = (cross_mode_rescored or (pd.DataFrame(), {}))[1]
+        target_sha = (
+            compute_file_sha256(cross_mode_target_dir / DEFAULT_MODEL_FILENAME)
+            if cross_mode_rescored is not None
+            else ""
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "daily_pit_cross_mode_reuse_preserves_exact_checkpoint_sha_and_rescores_only",
+        (True, True, False, source_sha),
+        (
+            cross_mode_rescored is not None,
+            bool(dict(cross_mode_manifest.get("migration") or {}).get("source_checkpoint_sha_preserved")),
+            bool(dict(cross_mode_manifest.get("migration") or {}).get("source_score_reused")),
+            target_sha,
+        ),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",

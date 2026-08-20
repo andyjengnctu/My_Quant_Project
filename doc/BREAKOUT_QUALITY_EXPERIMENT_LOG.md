@@ -9737,3 +9737,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Benchmark同樣收斂成一seed一strategy一個完整跨年JSON；OOS與Rolling共用2021 initial optimizer work，Rolling只在需要時延伸2022+ members。
 - 本輪只改Strategy Parameter SSOT/storage/reuse contract；MR-13E/K/M robustness OOS↔Rolling identical DL checkpoint reuse留待下一輪，未混入本輪。
 - Decision：`FLAT_CROSS_TIME_STRATEGY_PARAM_SSOT / OOS_ROLLING_SINGLE_PHYSICAL_TRUTH / STALE_AUTO_REBUILD_ENABLED / ROUND_A_DONE`.
+
+### 2026-08-21 — Robustness Round B：OOS／Rolling 共用同seed 2021 initial DL checkpoint
+- 基準：`test-branch-1_20260821_041622_3cf6361(1).zip`，SHA256=`3366a43e9d8a7f0727b7f3775485c208d376e6a4bc8c42f10c73bf4ed3291db4`；承接Round A的flat cross-time Strategy Parameter SSOT，不改4-seed `end_to_end_v1`題庫、300 trials/fold、Compare Suite或MR-13E/K/M scientific identity。
+- 問題定位：PIT既有checkpoint-rescore compatibility把完整`planned_periods`視為同一欄位，因此OOS single block `2021→latest`與Rolling第一個annual fold雖共享完全相同的<=2020 training/validation/refit與information cutoff，仍只因`score_end`不同而判成不同模型，造成同seed 2021初始模型重訓；且multi-seed正式retention預設會清除per-mode checkpoints，不能靠OOS model-work tree留給Rolling。
+- 修正：PIT fitting identity改為嚴格比較validation start/end、score start、history start、inner-train/validation/final-refit observed periods/groups/rows、information cutoff、seed、model/training/source/lookahead contracts，刻意排除純evaluation-horizon的`score_end`與score-only rows/groups。新增`--checkpoint-reuse-source-fold-dir`，只匯入來源checkpoint＋fold manifest，依目前fold重新推論並寫自己的score；來源score永不跨mode重用。
+- Orchestrator新增兩個current robustness profiles共用的benchmark-only `shared_initial_checkpoints/<benchmark_id>/<dl_id>__seed_<seed>/` cache。OOS或Rolling任一mode先完成同seed E/K/M 2021 initial fold即可publish；另一mode若fitting contract相容就直接重用完全相同checkpoint SHA並重評自身score。cache位於per-mode disposable model-work之外，因此`keep_checkpoints=False`清掉OOS/Rolling暫存後仍可重用；Rolling 2022+ annual folds照原契約正常續訓。
+- 防護：同一benchmark/DL/seed且同一fitting identity若再次產生不同checkpoint SHA，直接FAIL，不可靜默覆蓋；舊cache若training identity已改變則視為stale，可由目前合法initial fold原子替換。shared cache不進production parameter/model truth、不改scientific fingerprint，只屬execution reuse metadata。
+- 驗證：新增PIT synthetic釘死`score_end`差異可共享training identity但training phase改變不可共享；Strategy Compare synthetic釘死OOS/Rolling兩profile共享唯一cache root、只跨mode傳checkpoint不傳score。實際4-seed benchmark evidence仍待使用者長跑，研究決策不在本輪提前宣告。
+- 決策：**IMPLEMENTED / READY_FOR_OOS_BENCHMARK**。正式順序仍是OOS先跑；只有OOS結果仍可能改變GO/REJECT/promotion時才跑Rolling，此時Rolling應重用同seed 2021 strategy member與E/K/M initial checkpoint，只新增2022+ annual work。
+

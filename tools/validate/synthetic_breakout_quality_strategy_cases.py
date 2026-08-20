@@ -3577,6 +3577,32 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "_selector_timing_table(" not in render_report_source,
     )
 
+    strategy_compare_config_source = (project_root / "config/strategy_compare.py").read_text(encoding="utf-8")
+    point_in_time_source = (
+        project_root / "services/breakout_quality/point_in_time_scores.py"
+    ).read_text(encoding="utf-8")
+    from config.strategy_compare import get_strategy_multi_seed_robustness_settings
+
+    oos_robustness = get_strategy_multi_seed_robustness_settings("extending_window_oos")
+    rolling_robustness = get_strategy_multi_seed_robustness_settings("extending_window_rolling")
+    oos_cache_root = str(oos_robustness.initial_checkpoint_cache_root or "").strip()
+    rolling_cache_root = str(rolling_robustness.initial_checkpoint_cache_root or "").strip()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "current_oos_and_rolling_robustness_share_benchmark_initial_checkpoint_cache",
+        True,
+        bool(oos_cache_root)
+        and oos_cache_root == rolling_cache_root
+        and not Path(oos_cache_root).is_absolute()
+        and '"initial_checkpoint_cache_root"' in strategy_compare_config_source
+        and "--checkpoint-reuse-source-fold-dir" in multi_seed_source
+        and "cross_mode_initial_checkpoint_reuse" in point_in_time_source
+        and "source_score_reused" in point_in_time_source
+        and "source_score_reused" in multi_seed_source,
+    )
+
     add_check(
         results,
         "synthetic_breakout_quality",
