@@ -7,8 +7,9 @@ from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS
 import argparse
 import json
 import math
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -468,6 +469,7 @@ def run_comparison(
     selection_pit_expected_seed_override=None,
     capture_execution_diagnostics=False,
     capture_selection_target_diagnostics=True,
+    progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
 ):
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
@@ -806,6 +808,10 @@ def run_comparison(
     baseline_replay_counts = {} if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
     baseline_summary_override = None
     baseline_orderable_reused = None
+    pair_timing_started = time.perf_counter()
+    baseline_timing_started = time.perf_counter()
+    if progress_callback is not None:
+        progress_callback("baseline_start", {"reused": baseline_reuse_dir is not None})
     if baseline_reuse_dir is not None:
         baseline_payload, baseline_summary_override, baseline_orderable_reused = (
             _load_reusable_no_filter_baseline(
@@ -838,6 +844,15 @@ def run_comparison(
             max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet,
             replay_counts=baseline_replay_counts,
         )
+    baseline_elapsed_sec = time.perf_counter() - baseline_timing_started
+    if progress_callback is not None:
+        progress_callback(
+            "baseline_done",
+            {
+                "reused": baseline_reuse_dir is not None,
+                "elapsed_sec": float(baseline_elapsed_sec),
+            },
+        )
     quality_replay_counts = {} if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
     quality_execution_rows = (
         []
@@ -848,6 +863,9 @@ def run_comparison(
     quality_selector_trace_rows = (
         [] if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
     )
+    active_timing_started = time.perf_counter()
+    if progress_callback is not None:
+        progress_callback("active_start", {})
     quality_payload = _run_scenario(
         name=labels["active_name"], data_dir=data_dir,
         param_source_kind=param_source_kind, params=quality_params,
@@ -857,6 +875,9 @@ def run_comparison(
         replay_selector_trace_rows=quality_selector_trace_rows,
         ranking_source=ranking_source, filter_source=filter_source,
     )
+    active_elapsed_sec = time.perf_counter() - active_timing_started
+    if progress_callback is not None:
+        progress_callback("active_done", {"elapsed_sec": float(active_elapsed_sec)})
     _assert_shared_benchmark(baseline_payload, quality_payload)
 
     baseline = (
@@ -1085,6 +1106,12 @@ def run_comparison(
 
     metadata = {
         "schema_version": SCHEMA_VERSION,
+        "execution_timing": {
+            "baseline_action": "REUSE" if baseline_reuse_dir is not None else "RUN",
+            "baseline_elapsed_sec": round(float(baseline_elapsed_sec), 6),
+            "active_elapsed_sec": round(float(active_elapsed_sec), 6),
+            "pair_elapsed_to_metadata_sec": round(float(time.perf_counter() - pair_timing_started), 6),
+        },
         "comparison_mode": comparison_mode,
         "score_ranking_policy": ranking_policy if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None,
         "score_ranking_options": ranking_options if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None,

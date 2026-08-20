@@ -126,13 +126,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RESULT_SCHEMA_VERSION = 7
 
 
-def _selection_pit_mode_paths(dl: StrategyDLSource) -> dict[str, Path] | None:
+def _selection_pit_mode_paths(
+    dl: StrategyDLSource,
+    *,
+    project_root: Path = PROJECT_ROOT,
+) -> dict[str, Path] | None:
     dirname = None if dl.point_in_time_dirname in (None, "") else str(dl.point_in_time_dirname).strip()
     if dirname is None:
         return None
     base = (
         resolve_filter_model_output_dir(
-            PROJECT_ROOT, dl.filter_id, dl.model_architecture, dl.experiment_profile
+            Path(project_root).resolve(), dl.filter_id, dl.model_architecture, dl.experiment_profile
         )
         / dirname
     ).resolve()
@@ -177,6 +181,7 @@ def _resolved_ranking_options(
     arm: StrategyComparisonArm,
     *,
     continuous_score_overrides: dict[str, dict[str, Any]] | None = None,
+    project_root: Path = PROJECT_ROOT,
 ) -> dict[str, Any]:
     options = dict(arm.dl_runtime_options or {})
     if arm.dl_runtime_mode not in {
@@ -189,6 +194,13 @@ def _resolved_ranking_options(
         raise ValueError(f"dual-model safety arm缺少合法safety_dl_id: {arm.arm_id}")
     source = settings.dl_sources[safety_dl_id]
     safety_override = dict((continuous_score_overrides or {}).get(safety_dl_id) or {})
+    if source.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+        mode_paths = _selection_pit_mode_paths(source, project_root=project_root)
+        if mode_paths is not None:
+            safety_override = {
+                "score_path": mode_paths["score"],
+                "manifest_path": mode_paths["manifest"],
+            }
     options.update({
         "safety_filter_id": str(source.filter_id),
         "safety_score_source": str(source.score_source),
@@ -1420,7 +1432,7 @@ def run_strategy_comparison(
         if quiet:
             print(f"[RUN] {on_arm.arm_id} {on_arm.name}")
         selection_pit_mode_paths = (
-            _selection_pit_mode_paths(dl)
+            _selection_pit_mode_paths(dl, project_root=root)
             if dl.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME
             else None
         )
@@ -1448,6 +1460,7 @@ def run_strategy_comparison(
                         settings,
                         on_arm,
                         continuous_score_overrides=(status.get("continuous_score_overrides") or {}),
+                        project_root=root,
                     ),
                     **(
                         {

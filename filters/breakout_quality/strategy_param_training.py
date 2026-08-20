@@ -31,7 +31,10 @@ from config.training_policy import (
     SELECTION_POLICY_PARAM_SPECS,
 )
 from core.file_integrity import canonical_json_sha256 as _canonical_hash
-from core.active_param_ensemble import get_active_param_ensemble_date_range
+from core.active_param_ensemble import (
+    build_active_param_ensemble_schedule,
+    get_active_param_ensemble_date_range,
+)
 from core.dataset_profiles import get_dataset_dir
 from core.model_paths import resolve_models_dir
 from core.runtime_utils import get_taipei_now
@@ -1502,6 +1505,161 @@ def _prepare_extending_roos_params(
         )
     return {"params_path": params_path, "manifest_path": manifest_path, "summary": manifest}
 
+
+
+def prepare_oos_frozen_roos_params(
+    *,
+    project_root=PROJECT_ROOT,
+    param_policy: str,
+    source_params_path: str,
+    output_relative_dir: str | Path,
+    freeze_effective_date: str = "2021-01-01",
+    freeze_cutoff_date: str = "2020-12-31",
+    display_name: str = "ROOS",
+    quiet: bool = False,
+):
+    """Freeze one PIT-safe rolling parameter member for the whole OOS score block.
+
+    OOS Test is a single fixed-information-cutoff experiment.  The source rolling
+    schedule is used only to locate the parameter ensemble that was legally
+    effective at ``freeze_effective_date``; no later fitted member may enter the
+    output.  The resulting artifact remains a rolling active-param ensemble only
+    so the existing portfolio runtime can cover the full 2021→latest interval.
+    """
+
+    root = Path(project_root).resolve()
+    filename = str(PARAM_POLICY_SPECS[str(param_policy)]["filename"])
+    rendered = str(source_params_path).format(param_filename=filename)
+    source_path = Path(rendered)
+    if not source_path.is_absolute():
+        source_path = (root / source_path).resolve()
+    if not source_path.is_file():
+        raise FileNotFoundError(f"OOS {display_name} freeze source不存在: {source_path}")
+
+    source = _load_param_source(source_path)
+    if str(source.get("kind") or "") != "rolling_active_param_ensemble":
+        raise ValueError(f"OOS {display_name} freeze只接受rolling active-param ensemble")
+    _validate_requested_param_policy(source, str(param_policy))
+    source_payload = dict(source["payload"])
+    source_start, source_end = get_active_param_ensemble_date_range(source_payload)
+    freeze_date = pd.Timestamp(str(freeze_effective_date)).normalize()
+    cutoff_date = pd.Timestamp(str(freeze_cutoff_date)).normalize()
+    if freeze_date != cutoff_date + pd.Timedelta(days=1):
+        raise ValueError(
+            f"OOS freeze effective/cutoff必須相鄰: cutoff={cutoff_date.date()}, "
+            f"effective={freeze_date.date()}"
+        )
+    if not (pd.Timestamp(source_start).normalize() <= freeze_date <= pd.Timestamp(source_end).normalize()):
+        raise ValueError(
+            f"OOS {display_name} freeze date超出source coverage: "
+            f"freeze={freeze_date.date()}, source={source_start}~{source_end}"
+        )
+
+    schedule = build_active_param_ensemble_schedule(source_payload)
+    eligible = [item for item in schedule if pd.Timestamp(item["effective_date"]).normalize() <= freeze_date]
+    if not eligible:
+        raise ValueError(f"OOS {display_name} source在{freeze_date.date()}前沒有合法參數")
+    selected = eligible[-1]
+    selected_date = pd.Timestamp(selected["effective_date"]).normalize()
+    if selected_date != freeze_date:
+        raise ValueError(
+            f"OOS {display_name} freeze要求source具有精確{freeze_date.date()} effective member，"
+            f"實際latest={selected_date.date()}"
+        )
+
+    raw_mapping = dict(source_payload.get("params_ensemble_by_effective_date") or {})
+    selected_key = selected_date.strftime("%Y-%m-%d")
+    selected_members = raw_mapping.get(selected_key)
+    if not isinstance(selected_members, list) or not selected_members:
+        raise ValueError(f"OOS {display_name} freeze member缺失: {selected_key}")
+
+    payload = copy.deepcopy(source_payload)
+    payload["params_ensemble_by_effective_date"] = {
+        freeze_date.strftime("%Y-%m-%d"): copy.deepcopy(selected_members)
+    }
+    # Remove legacy parallel schedules so no downstream consumer can accidentally
+    # select a post-cutoff fitted parameter through a different field.
+    payload.pop("params_by_effective_date", None)
+    payload.pop("params_by_oos_year", None)
+    payload["folds"] = [{
+        "effective_start": freeze_date.strftime("%Y-%m-%d"),
+        "effective_end": str(source_end),
+        "oos_start_date": freeze_date.strftime("%Y-%m-%d"),
+        "oos_end_date": str(source_end),
+        "source_effective_date": selected_key,
+        "freeze_cutoff_date": cutoff_date.strftime("%Y-%m-%d"),
+        "oos_frozen_parameter_reuse": True,
+    }]
+    meta = dict(payload.get("meta") or {})
+    meta.update({
+        "first_oos_date": freeze_date.strftime("%Y-%m-%d"),
+        "last_oos_date": str(source_end),
+        "oos_parameter_mode": "fixed_information_cutoff",
+        "freeze_effective_date": freeze_date.strftime("%Y-%m-%d"),
+        "freeze_cutoff_date": cutoff_date.strftime("%Y-%m-%d"),
+        "source_effective_date": selected_key,
+    })
+    payload["meta"] = meta
+    summary = dict(payload.get("summary") or {})
+    summary.update({
+        "folds": 1,
+        "oos_period": f"{freeze_date.strftime('%Y-%m-%d')}~{source_end}",
+        "oos_start_date": freeze_date.strftime("%Y-%m-%d"),
+        "oos_end_date": str(source_end),
+        "oos_parameter_mode": "fixed_information_cutoff",
+        "freeze_cutoff_date": cutoff_date.strftime("%Y-%m-%d"),
+        "source_effective_date": selected_key,
+    })
+    payload["summary"] = summary
+    payload["breakout_quality_param_adaptation"] = {
+        "mode": "oos_param_freeze",
+        "training_dl_enabled": False,
+        "freeze_effective_date": freeze_date.strftime("%Y-%m-%d"),
+        "freeze_cutoff_date": cutoff_date.strftime("%Y-%m-%d"),
+        "source_effective_date": selected_key,
+    }
+
+    output_dir = Path(output_relative_dir)
+    if not output_dir.is_absolute():
+        output_dir = root / output_dir
+    params_path = output_dir / "active_params" / filename
+    manifest_path = output_dir / "oos_freeze_manifest.json"
+    frozen_start, frozen_end = get_active_param_ensemble_date_range(payload)
+    expected_start = freeze_date.strftime("%Y-%m-%d")
+    if frozen_start != expected_start or frozen_end != str(source_end):
+        raise RuntimeError(
+            f"OOS {display_name} frozen coverage錯誤: "
+            f"actual={frozen_start}~{frozen_end}, expected={expected_start}~{source_end}"
+        )
+    _write_json(params_path, payload)
+    manifest = {
+        "schema_version": 1,
+        "status": "READY",
+        "builder_type": "oos_param_freeze",
+        "training_dl_enabled": False,
+        "param_policy": str(param_policy),
+        "display_name": str(display_name),
+        "freeze_effective_date": expected_start,
+        "freeze_cutoff_date": cutoff_date.strftime("%Y-%m-%d"),
+        "source_effective_date": selected_key,
+        "coverage_start": frozen_start,
+        "coverage_end": frozen_end,
+        "source_artifact": {
+            "path": project_relative_display_path(source_path, project_root=root),
+            "sha256": compute_file_sha256(source_path),
+        },
+        "output_params": {
+            "path": project_relative_display_path(params_path, project_root=root),
+            "sha256": compute_file_sha256(params_path),
+        },
+    }
+    _write_json(manifest_path, manifest)
+    if not quiet:
+        print(
+            f"OOS {display_name} params已凍結 | cutoff={manifest['freeze_cutoff_date']} "
+            f"| source_effective={selected_key} | coverage={frozen_start}~{frozen_end}"
+        )
+    return {"params_path": params_path, "manifest_path": manifest_path, "summary": manifest}
 
 def prepare_extending_min_roos_params(
     *,

@@ -3519,6 +3519,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "核心策略結果" in render_report_source
         and "R 預測／轉化" in render_report_source
         and "資金／執行" in render_report_source
+        and "5. 執行摘要" in render_report_source
+        and "render_strategy_run_execution_table" in render_report_source
         and "報表分工" not in render_report_source
         and "render_strategy_r_analysis_table" in render_report_source
         and "metrics=CORE_STRATEGY_RESULT_METRICS" in comparison_source
@@ -3549,6 +3551,23 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "Bottom-R" in report_metrics_source
         and "DL選擇R" in report_metrics_source,
     )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strategy_compare_progress_and_final_report_share_high_level_wall_time_summary",
+        True,
+        "arm_execution_timing" in comparison_source
+        and '"execution_summary": execution_summary' in comparison_source
+        and 'f"[RUN] {on_arm.arm_id} {on_arm.name} "' in comparison_source
+        and 'f"[DONE] {on_arm.arm_id} {on_arm.name} "' in comparison_source
+        and 'elapsed={format_elapsed(' in comparison_source
+        and 'total={format_elapsed(' in comparison_source
+        and 'render_section("5. 執行摘要")' in comparison_source
+        and "render_strategy_run_execution_table" in comparison_source
+        and "_selector_timing_table(" not in render_report_source,
+    )
+
     add_check(
         results,
         "synthetic_breakout_quality",

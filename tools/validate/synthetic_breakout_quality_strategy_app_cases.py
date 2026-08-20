@@ -389,6 +389,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         str(strategy_config.STRATEGY_COMPARE_ARMS[arm_id]["param_source"])
         for arm_id in active_arm_ids
     }
+    active_param_ids.update(
+        str(source_id)
+        for raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.values()
+        for source_id in dict(raw_profile.get("arm_param_source_overrides") or {}).values()
+    )
     active_dl_ids = {
         str(strategy_config.STRATEGY_COMPARE_ARMS[arm_id].get("dl_id") or "")
         for arm_id in active_arm_ids
@@ -4010,6 +4015,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c54_options = dict(c54_current.dl_runtime_options or {})
     c55_options = dict(c55_current.dl_runtime_options or {})
     c56_options = dict(c56_current.dl_runtime_options or {})
+    oos_current_settings = strategy_config.get_strategy_comparison_settings("extending_window_oos")
+    c61_oos = oos_current_settings.arms["C61"]
+    c58_oos = oos_current_settings.arms["C58"]
+    c59_oos = oos_current_settings.arms["C59"]
+    c60_oos = oos_current_settings.arms["C60"]
     operational_current_settings = strategy_config.get_strategy_comparison_settings("extending_window_rolling")
     c61_current = operational_current_settings.arms["C61"]
     c58_current = operational_current_settings.arms["C58"]
@@ -4090,6 +4100,36 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     _, selection_required_dl, selection_runtime_dl = resolve_required_artifact_sources(
         selection_excess_settings
     )
+    oos_c60_options = _resolved_ranking_options(
+        oos_current_settings,
+        c60_oos,
+        project_root=project_root,
+    )
+    oos_primary_dir = oos_current_settings.dl_sources["CONT13K_ROLL"].point_in_time_dirname
+    oos_safety_dir = oos_current_settings.dl_sources["CONT13M_ROLL"].point_in_time_dirname
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "oos_test_freezes_2020_cutoff_params_and_keeps_k_m_in_same_pit_namespace",
+        True,
+        c61_oos.param_source == "oos_full_roos"
+        and c58_oos.param_source == c59_oos.param_source == c60_oos.param_source == "oos_min_roos"
+        and oos_current_settings.parameter_sources["oos_full_roos"].builder is not None
+        and oos_current_settings.parameter_sources["oos_full_roos"].builder.builder_type == "oos_param_freeze"
+        and oos_current_settings.parameter_sources["oos_min_roos"].builder is not None
+        and oos_current_settings.parameter_sources["oos_min_roos"].builder.builder_type == "oos_param_freeze"
+        and dict(oos_current_settings.parameter_sources["oos_full_roos"].builder.options).get("source_param_source_id") == "extending_full_roos"
+        and dict(oos_current_settings.parameter_sources["oos_min_roos"].builder.options).get("source_param_source_id") == "extending_min_roos"
+        and dict(oos_current_settings.parameter_sources["oos_min_roos"].builder.options).get("freeze_cutoff_date") == "2020-12-31"
+        and dict(oos_current_settings.parameter_sources["oos_min_roos"].builder.options).get("freeze_effective_date") == "2021-01-01"
+        and oos_primary_dir == oos_safety_dir == "point_in_time_oos_2021_forward"
+        and "point_in_time_oos_2021_forward" in str(oos_c60_options.get("safety_score_path_override") or "")
+        and "point_in_time_oos_2021_forward" in str(oos_c60_options.get("safety_score_manifest_path_override") or "")
+        and "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
+            in str(oos_c60_options.get("safety_score_path_override") or "")
+        and c61_current.param_source == "extending_full_roos"
+        and c58_current.param_source == c59_current.param_source == c60_current.param_source == "extending_min_roos",
+    )
+
     c56_pinned_options = _resolved_ranking_options(
         forward_current_settings,
         c56_current,

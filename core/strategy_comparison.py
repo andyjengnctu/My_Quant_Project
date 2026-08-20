@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 import hashlib
 import json
 from pathlib import Path
@@ -642,6 +642,21 @@ def _validate_builder(
             raise ValueError(f"{field_name}.inference_batch_size必須>=1")
         if int(builder.options.get("inference_workers") or 0) < 1:
             raise ValueError(f"{field_name}.inference_workers必須>=1")
+    if builder.builder_type == "oos_param_freeze":
+        source_param_source_id = str(builder.options.get("source_param_source_id") or "").strip()
+        if not source_param_source_id:
+            raise ValueError(f"{field_name}.source_param_source_id不可空白")
+        freeze_effective_date = str(builder.options.get("freeze_effective_date") or "").strip()
+        freeze_cutoff_date = str(builder.options.get("freeze_cutoff_date") or "").strip()
+        try:
+            effective = date.fromisoformat(freeze_effective_date)
+            cutoff = date.fromisoformat(freeze_cutoff_date)
+        except ValueError as exc:
+            raise ValueError(f"{field_name}.freeze date必須是YYYY-MM-DD") from exc
+        if effective != cutoff + timedelta(days=1):
+            raise ValueError(f"{field_name}.freeze effective必須是cutoff隔日")
+        output_relative_dir = str(builder.options.get("output_relative_dir") or "").strip()
+        _validate_relative_path(output_relative_dir, field_name=f"{field_name}.output_relative_dir")
     if builder.builder_type == "binary_dl_min_roos_rolling":
         parameter_set = str(builder.options.get("parameter_set") or "").lower()
         if parameter_set not in {"p2", "p3"}:
@@ -761,6 +776,7 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 "binary_dl_min_roos_rolling",
                 "extending_min_roos_stitch",
                 "extending_full_roos_stitch",
+                "oos_param_freeze",
                 "selection_historical_p2",
                 "selection_historical_full_roos",
             },
@@ -783,6 +799,14 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 raise ValueError(f"parameter source {key}的P2 builder不得設定trained_with_dl_id")
             if source.builder.builder_type == "selection_historical_p2" and source.trained_with_dl_id is not None:
                 raise ValueError(f"parameter source {key}的Selection historical P2 builder不得設定trained_with_dl_id")
+            if source.builder.builder_type == "oos_param_freeze":
+                source_param_source_id = str(options.get("source_param_source_id") or "").strip()
+                if source_param_source_id == key or source_param_source_id not in settings.parameter_sources:
+                    raise ValueError(
+                        f"parameter source {key}的OOS freeze source無效: {source_param_source_id!r}"
+                    )
+                if source.trained_with_dl_id is not None:
+                    raise ValueError(f"parameter source {key}的OOS freeze builder不得設定trained_with_dl_id")
 
     for key, source in settings.dl_sources.items():
         if key != source.dl_id or not key.strip():

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT
+from core.console_report import project_relative_display_path
 from core.strategy_comparison import (
     StrategyComparisonSettings,
     StrategyPreparationAction,
@@ -21,6 +22,7 @@ from filters.breakout_quality.strategy_compare_preparation_status import (
 from filters.breakout_quality.strategy_param_training import (
     prepare_extending_full_roos_params,
     prepare_extending_min_roos_params,
+    prepare_oos_frozen_roos_params,
     prepare_selection_historical_full_roos_params,
     prepare_selection_historical_p2_params,
     prepare_strategy_parameter_source,
@@ -74,6 +76,28 @@ def _execute_preparation_action(
             historical_params_path=str(options["historical_params_path"]),
             current_params_path=str(options["current_params_path"]),
             output_relative_dir=str(options["output_relative_dir"]),
+            quiet=bool(options.get("quiet", False)),
+        )
+        return
+    if action.builder_type == "oos_param_freeze":
+        _kind, source_id = action.artifact_key.split(":", 1)
+        source = settings.parameter_sources[source_id]
+        builder = source.builder
+        if builder is None:
+            raise RuntimeError(f"參數來源builder設定不完整: {source_id}")
+        options = dict(builder.options)
+        dependency_id = str(options.get("source_param_source_id") or "").strip()
+        if not dependency_id or dependency_id not in settings.parameter_sources:
+            raise RuntimeError(f"OOS freeze缺少合法source_param_source_id: {source_id}")
+        dependency_path = resolve_param_source_path(root, settings, dependency_id)
+        prepare_oos_frozen_roos_params(
+            project_root=root,
+            param_policy=settings.param_policy,
+            source_params_path=project_relative_display_path(dependency_path, project_root=root),
+            output_relative_dir=str(options["output_relative_dir"]),
+            freeze_effective_date=str(options.get("freeze_effective_date") or "2021-01-01"),
+            freeze_cutoff_date=str(options.get("freeze_cutoff_date") or "2020-12-31"),
+            display_name=str(options.get("display_name") or source_id),
             quiet=bool(options.get("quiet", False)),
         )
         return

@@ -136,6 +136,7 @@ def append_strategy_compare_preparation_contract_checks(
         MIN_ROOS_SEARCH_FIELDS,
         prepare_extending_full_roos_params,
         prepare_extending_min_roos_params,
+        prepare_oos_frozen_roos_params,
     )
 
     extending_settings = get_strategy_comparison_settings("extending_window_rolling")
@@ -162,8 +163,10 @@ def append_strategy_compare_preparation_contract_checks(
         for year in range(first_year, last_year + 1):
             effective_start = f"{year}-01-01"
             effective_end = f"{year}-12-31"
-            mapping[effective_start] = [{"params": dict(params)}]
-            simple_mapping[effective_start] = dict(params)
+            year_params = dict(params)
+            year_params["high_len"] = year
+            mapping[effective_start] = [{"params": year_params}]
+            simple_mapping[effective_start] = dict(year_params)
             folds.append({
                 "effective_start": effective_start,
                 "effective_end": effective_end,
@@ -259,6 +262,85 @@ def append_strategy_compare_preparation_contract_checks(
         and extending_identity_status == "READY"
         and not stale_identity_ready
         and stale_identity_status == "EXTENDING_STITCH_SOURCE_HASH_MISMATCH:current",
+    )
+
+
+    oos_settings = get_strategy_comparison_settings("extending_window_oos")
+    oos_min_source = oos_settings.parameter_sources["oos_min_roos"]
+    oos_min_options = dict(oos_min_source.builder.options)
+    with tempfile.TemporaryDirectory() as oos_temp:
+        oos_root = Path(oos_temp)
+        historical_path = oos_root / _render_param_path(extending_options["historical_params_path"])
+        current_path = oos_root / _render_param_path(extending_options["current_params_path"])
+        historical_path.parent.mkdir(parents=True, exist_ok=True)
+        current_path.parent.mkdir(parents=True, exist_ok=True)
+        historical_path.write_text(
+            json.dumps(_synthetic_min_roos_payload(2014, 2020)), encoding="utf-8"
+        )
+        current_path.write_text(
+            json.dumps(_synthetic_min_roos_payload(2021, 2026)), encoding="utf-8"
+        )
+        prepare_extending_min_roos_params(
+            project_root=oos_root,
+            param_policy=oos_settings.param_policy,
+            historical_params_path=str(extending_options["historical_params_path"]),
+            current_params_path=str(extending_options["current_params_path"]),
+            output_relative_dir=str(extending_options["output_relative_dir"]),
+            quiet=True,
+        )
+        oos_dependency_path = resolve_param_source_path(
+            oos_root, oos_settings, "extending_min_roos"
+        )
+        prepare_oos_frozen_roos_params(
+            project_root=oos_root,
+            param_policy=oos_settings.param_policy,
+            source_params_path=str(oos_dependency_path.relative_to(oos_root)),
+            output_relative_dir=str(oos_min_options["output_relative_dir"]),
+            freeze_effective_date=str(oos_min_options["freeze_effective_date"]),
+            freeze_cutoff_date=str(oos_min_options["freeze_cutoff_date"]),
+            display_name="Min ROOS",
+            quiet=True,
+        )
+        oos_output = resolve_param_source_path(oos_root, oos_settings, "oos_min_roos")
+        oos_payload = json.loads(oos_output.read_text(encoding="utf-8"))
+        oos_mapping = dict(oos_payload.get("params_ensemble_by_effective_date") or {})
+        oos_range = get_active_param_ensemble_date_range(oos_payload)
+        oos_artifact_ready, oos_artifact_status, _oos_policy = _validate_param_artifact(
+            oos_output,
+            param_policy=oos_settings.param_policy,
+            comparison_start="2021-01-01",
+            comparison_end="2026-12-31",
+            artifact_contract=dict(oos_min_source.artifact_contract),
+        )
+        oos_identity_ready, oos_identity_status, _oos_manifest = (
+            _validate_param_training_identity(
+                root=oos_root, settings=oos_settings, source_id="oos_min_roos"
+            )
+        )
+        dependency_payload = json.loads(oos_dependency_path.read_text(encoding="utf-8"))
+        dependency_payload["summary"]["synthetic_post_freeze_change"] = True
+        oos_dependency_path.write_text(json.dumps(dependency_payload), encoding="utf-8")
+        stale_oos_ready, stale_oos_status, _stale_oos_manifest = (
+            _validate_param_training_identity(
+                root=oos_root, settings=oos_settings, source_id="oos_min_roos"
+            )
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "oos_param_freeze_uses_only_2021_effective_member_and_invalidates_on_source_change",
+        True,
+        oos_range == ("2021-01-01", "2026-12-31")
+        and tuple(oos_mapping) == ("2021-01-01",)
+        and oos_mapping["2021-01-01"][0]["params"]["high_len"] == 2021
+        and "params_by_effective_date" not in oos_payload
+        and "params_by_oos_year" not in oos_payload
+        and oos_payload["breakout_quality_param_adaptation"]["freeze_cutoff_date"] == "2020-12-31"
+        and oos_artifact_ready
+        and oos_artifact_status == "READY"
+        and oos_identity_ready
+        and oos_identity_status == "READY"
+        and not stale_oos_ready
+        and stale_oos_status == "OOS_FREEZE_SOURCE_HASH_MISMATCH",
     )
 
 

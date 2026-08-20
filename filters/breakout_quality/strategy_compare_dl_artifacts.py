@@ -103,6 +103,25 @@ def resolve_required_artifact_sources(
     """Resolve profile demand without performing any artifact I/O."""
 
     required_param_sources = {arm.param_source for arm in settings.enabled_arms}
+    # Parameter builders may deterministically derive one execution-mode artifact
+    # from another canonical parameter source (for example OOS fixed-cutoff freeze).
+    # Include that dependency in the same preparation graph so callers never need
+    # a manual prerequisite step.
+    pending_param_sources = list(required_param_sources)
+    while pending_param_sources:
+        source_id = pending_param_sources.pop()
+        source = settings.parameter_sources[source_id]
+        builder = source.builder
+        if builder is None or not builder.enabled:
+            continue
+        dependency_id = str(dict(builder.options).get("source_param_source_id") or "").strip()
+        if dependency_id and dependency_id not in required_param_sources:
+            if dependency_id not in settings.parameter_sources:
+                raise ValueError(
+                    f"parameter source {source_id}引用不存在的source_param_source_id: {dependency_id}"
+                )
+            required_param_sources.add(dependency_id)
+            pending_param_sources.append(dependency_id)
     required_dl_sources = {
         arm.dl_id for arm in settings.enabled_arms if arm.dl_enabled and arm.dl_id
     }

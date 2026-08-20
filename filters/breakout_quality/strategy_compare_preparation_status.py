@@ -313,6 +313,50 @@ def _validate_param_training_identity(
             ):
                 return False, "EXTENDING_STITCH_COVERAGE_MISMATCH", manifest_path
             return True, "READY", manifest_path
+        if builder.builder_type == "oos_param_freeze":
+            if str(payload.get("builder_type") or "") != "oos_param_freeze":
+                return False, "OOS_FREEZE_IDENTITY_MISMATCH", manifest_path
+            if bool(payload.get("training_dl_enabled")):
+                return False, "OOS_FREEZE_TRAINING_DL_ENABLED", manifest_path
+            expected_effective = str(options.get("freeze_effective_date") or "").strip()
+            expected_cutoff = str(options.get("freeze_cutoff_date") or "").strip()
+            if str(payload.get("freeze_effective_date") or "") != expected_effective:
+                return False, "OOS_FREEZE_EFFECTIVE_DATE_MISMATCH", manifest_path
+            if str(payload.get("freeze_cutoff_date") or "") != expected_cutoff:
+                return False, "OOS_FREEZE_CUTOFF_DATE_MISMATCH", manifest_path
+            if str(payload.get("param_policy") or "") != str(settings.param_policy):
+                return False, "OOS_FREEZE_PARAM_POLICY_MISMATCH", manifest_path
+            dependency_id = str(options.get("source_param_source_id") or "").strip()
+            if dependency_id not in settings.parameter_sources:
+                return False, "OOS_FREEZE_SOURCE_ID_INVALID", manifest_path
+            source_path = resolve_param_source_path(root, settings, dependency_id)
+            if not source_path.is_file():
+                return False, "OOS_FREEZE_SOURCE_MISSING", manifest_path
+            source_record = dict(payload.get("source_artifact") or {})
+            if str(source_record.get("sha256") or "") != compute_file_sha256(source_path):
+                return False, "OOS_FREEZE_SOURCE_HASH_MISMATCH", manifest_path
+            output_path = resolve_param_source_path(root, settings, source_id)
+            if not output_path.is_file():
+                return False, "OOS_FREEZE_OUTPUT_MISSING", manifest_path
+            output_record = dict(payload.get("output_params") or {})
+            if str(output_record.get("sha256") or "") != compute_file_sha256(output_path):
+                return False, "OOS_FREEZE_OUTPUT_HASH_MISMATCH", manifest_path
+            try:
+                output_source = _load_param_source(output_path)
+                actual_start, actual_end = get_active_param_ensemble_date_range(output_source["payload"])
+                mapping = dict(output_source["payload"].get("params_ensemble_by_effective_date") or {})
+            except (OSError, RuntimeError, ValueError, KeyError, TypeError):
+                return False, "OOS_FREEZE_OUTPUT_INVALID", manifest_path
+            if tuple(mapping) != (expected_effective,):
+                return False, "OOS_FREEZE_MULTIPLE_EFFECTIVE_MEMBERS", manifest_path
+            if str(payload.get("source_effective_date") or "") != expected_effective:
+                return False, "OOS_FREEZE_SOURCE_EFFECTIVE_DATE_MISMATCH", manifest_path
+            if (
+                str(payload.get("coverage_start") or "") != actual_start
+                or str(payload.get("coverage_end") or "") != actual_end
+            ):
+                return False, "OOS_FREEZE_COVERAGE_MISMATCH", manifest_path
+            return True, "READY", manifest_path
         expected_parameter_set = str(options.get("parameter_set") or "").upper()
         if expected_parameter_set and str(payload.get("arm_id") or "").upper() != expected_parameter_set:
             return False, "PARAMETER_SET_IDENTITY_MISMATCH", manifest_path
@@ -708,6 +752,19 @@ def _collect_parameter_artifact_status(
             if not source.trained_with_dl_id
             else bool(dl_model_ready.get(source.trained_with_dl_id))
         )
+        param_dependency_id = (
+            ""
+            if builder is None
+            else str(dict(builder.options).get("source_param_source_id") or "").strip()
+        )
+        if param_dependency_id:
+            dependency_row = parameter_rows.get(param_dependency_id)
+            dependency_action = None if dependency_row is None else str(dependency_row.get("action") or "")
+            upstream_ready = bool(
+                upstream_ready
+                and dependency_row is not None
+                and dependency_action in {"REUSE", "BUILD", "REBUILD"}
+            )
         if ready and settings.preparation.reuse_ready_artifacts:
             action = "REUSE"
             description = "重用既有策略參數工件"
@@ -744,16 +801,20 @@ def _collect_parameter_artifact_status(
                             else (
                                 "合併既有historical/current Full ROOS為Extending-Window rolling schedule"
                                 if builder is not None and builder.builder_type == "extending_full_roos_stitch"
-                                else "建立／接續Selection historical Min ROOS單階段rolling參數"
+                                else (
+                                    "凍結2020 information cutoff當下合法策略參數供OOS Test全期間使用"
+                                    if builder is not None and builder.builder_type == "oos_param_freeze"
+                                    else "建立／接續Selection historical Min ROOS單階段rolling參數"
+                                )
                             )
                         )
                         if builder is not None and builder.builder_type in {
-                            "extending_min_roos_stitch", "extending_full_roos_stitch", "selection_historical_p2"
+                            "extending_min_roos_stitch", "extending_full_roos_stitch", "oos_param_freeze", "selection_historical_p2"
                         }
                         else "建立／接續Selection historical Full ROOS rolling參數"
                     )
                     if builder is not None and builder.builder_type in {
-                        "extending_min_roos_stitch", "extending_full_roos_stitch",
+                        "extending_min_roos_stitch", "extending_full_roos_stitch", "oos_param_freeze",
                         "selection_historical_p2", "selection_historical_full_roos"
                     }
                     else "執行或接續config指定的策略參數訓練"
@@ -792,7 +853,9 @@ def _collect_parameter_artifact_status(
                 else project_relative_display_path(identity_path, project_root=root)
             ),
         }
-        upstream_dependencies: tuple[str, ...] = ()
+        upstream_dependencies: tuple[str, ...] = (
+            (f"param:{param_dependency_id}",) if param_dependency_id else ()
+        )
         if source.trained_with_dl_id:
             upstream_candidates = (
                 f"dl:{source.trained_with_dl_id}:model",
@@ -800,9 +863,10 @@ def _collect_parameter_artifact_status(
                 f"dl:{source.trained_with_dl_id}:forward_scores",
             )
             existing_action_keys = {item.artifact_key for item in actions}
-            upstream_dependencies = tuple(
-                key for key in upstream_candidates if key in existing_action_keys
-            )[:1]
+            upstream_dependencies = tuple(dict.fromkeys((
+                *upstream_dependencies,
+                *tuple(key for key in upstream_candidates if key in existing_action_keys)[:1],
+            )))
         actions.append(
             _preparation_action(
                 action_id=f"param:{source_id}",
@@ -815,7 +879,11 @@ def _collect_parameter_artifact_status(
                 producer_work_type=(
                     "existing_artifact"
                     if action == "REUSE"
-                    else "strategy_parameter_optimization"
+                    else (
+                        "strategy_compare_deterministic_rebuild"
+                        if builder is not None and builder.builder_type == "oos_param_freeze"
+                        else "strategy_parameter_optimization"
+                    )
                     if action in {"BUILD", "REBUILD"}
                     else "model_training"
                     if source.trained_with_dl_id and not upstream_ready

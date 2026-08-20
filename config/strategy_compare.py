@@ -40,7 +40,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 48
+STRATEGY_COMPARE_SCHEMA_VERSION = 49
 
 # =============================================================================
 # 1. 常用設定
@@ -170,6 +170,12 @@ STRATEGY_COMPARE_PROFILES = {
         "point_in_time_dirname": _ROLLING_OOS.point_in_time_dirname,
         "output_root": "outputs/strategy_compare/extending_window/oos_2021_forward",
         "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C61": "oos_full_roos",
+            "C58": "oos_min_roos",
+            "C59": "oos_min_roos",
+            "C60": "oos_min_roos",
+        },
         "arm_ids": ("C61", "C58", "C59", "C60"),
         "contrast_ids": (
             "C61-C58", "C59-C58", "C59-C61",
@@ -266,7 +272,7 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
         "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
         "romd_reference_baselines": {
-            "min": {"param_source": "extending_min_roos", "rule_policy": "all_off"},
+            "min": {"param_source": "oos_min_roos", "rule_policy": "all_off"},
         },
         "fixed_arm_ids": ("C58",),
         "stochastic_arm_ids": ("C60",),
@@ -452,6 +458,80 @@ STRATEGY_PARAM_SOURCES = {
                 "output_relative_dir": (
                     "models/research/breakout_quality/strategy_compare/extending_full_roos"
                 ),
+                "quiet": False,
+            },
+        },
+    },
+    "oos_min_roos": {
+        "path_template": (
+            "models/research/breakout_quality/strategy_compare/oos_min_roos/"
+            "active_params/{param_filename}"
+        ),
+        "description": (
+            "OOS Test fixed-cutoff Min ROOS；只取Extending Min ROOS在2021-01-01當下合法的"
+            "2020-cutoff參數，凍結使用至最新，不使用任何2021後重新fit的策略參數。"
+        ),
+        "identity_manifest_path": (
+            "models/research/breakout_quality/strategy_compare/oos_min_roos/"
+            "oos_freeze_manifest.json"
+        ),
+        "trained_with_dl_id": None,
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "mode": "oos_param_freeze",
+                "training_dl_enabled": False,
+                "freeze_effective_date": "2021-01-01",
+                "freeze_cutoff_date": "2020-12-31",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "oos_param_freeze",
+            "options": {
+                "source_param_source_id": "extending_min_roos",
+                "output_relative_dir": (
+                    "models/research/breakout_quality/strategy_compare/oos_min_roos"
+                ),
+                "freeze_effective_date": "2021-01-01",
+                "freeze_cutoff_date": "2020-12-31",
+                "display_name": "Min ROOS",
+                "quiet": False,
+            },
+        },
+    },
+    "oos_full_roos": {
+        "path_template": (
+            "models/research/breakout_quality/strategy_compare/oos_full_roos/"
+            "active_params/{param_filename}"
+        ),
+        "description": (
+            "OOS Test fixed-cutoff Full ROOS；只取Extending Full ROOS在2021-01-01當下合法的"
+            "2020-cutoff參數，凍結使用至最新，不使用任何2021後重新fit的策略參數。"
+        ),
+        "identity_manifest_path": (
+            "models/research/breakout_quality/strategy_compare/oos_full_roos/"
+            "oos_freeze_manifest.json"
+        ),
+        "trained_with_dl_id": None,
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "mode": "oos_param_freeze",
+                "training_dl_enabled": False,
+                "freeze_effective_date": "2021-01-01",
+                "freeze_cutoff_date": "2020-12-31",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "oos_param_freeze",
+            "options": {
+                "source_param_source_id": "extending_full_roos",
+                "output_relative_dir": (
+                    "models/research/breakout_quality/strategy_compare/oos_full_roos"
+                ),
+                "freeze_effective_date": "2021-01-01",
+                "freeze_cutoff_date": "2020-12-31",
+                "display_name": "Full ROOS",
                 "quiet": False,
             },
         },
@@ -722,7 +802,7 @@ STRATEGY_COMPARE_ARMS = {
     "C61": {
         "name": STRATEGY_COMPARE_DISPLAY_FULL_ROOS,
         "description": (
-            "Extending-Window 2016→2025 stitched Full ROOS rolling params；formal rules；DL-off baseline"
+            "Extending-Window Full ROOS baseline；參數來源由evaluation mode綁定：OOS固定2020 cutoff，Rolling使用PIT-safe stitched schedule；formal rules；DL-off"
         ),
         "param_source": "extending_full_roos",
         "rule_policy": "formal",
@@ -733,7 +813,7 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C58": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_ROOS,
-        "description": "Extending-Window 2016→2025 stitched Min ROOS rolling params；rules全關；DL-off baseline",
+        "description": "Extending-Window Min ROOS baseline；參數來源由evaluation mode綁定：OOS固定2020 cutoff，Rolling使用PIT-safe stitched schedule；rules全關；DL-off",
         "param_source": "extending_min_roos",
         "rule_policy": "all_off",
         "dl_enabled": False,
@@ -743,7 +823,7 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C59": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED,
-        "description": "Extending-Window Rolling MR-13E exact constrained；每個score fold只用當時已成熟歷史訓練。",
+        "description": "Extending-Window MR-13E exact constrained；模型與策略參數都依OOS／Rolling mode使用一致information-cutoff contract。",
         "param_source": "extending_min_roos",
         "rule_policy": "all_off",
         "dl_enabled": True,
@@ -759,8 +839,8 @@ STRATEGY_COMPARE_ARMS = {
     "C60": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_RESIDUAL_SAFETY_CONSTRAINED,
         "description": (
-            "Extending-Window Rolling B2：MR-13K primary + MR-13M same-day rank OLS residual-safety floor；"
-            "兩個score都由同一日期前已成熟資料的PIT-safe mode-specific refit model產生。"
+            "Extending-Window B2：MR-13K primary + MR-13M same-day rank OLS residual-safety floor；"
+            "兩個score必須來自同一evaluation mode／同一information-cutoff namespace。"
         ),
         "param_source": "extending_min_roos",
         "rule_policy": "all_off",
@@ -914,12 +994,12 @@ STRATEGY_COMPARE_ARMS = {
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
-    "C61-C58": {"left": "C61", "right": "C58", "description": "Extending-Window Rolling Full ROOS相對同期間Min ROOS的完整策略體系差異；不是單一參數效果"},
-    "C59-C58": {"left": "C59", "right": "C58", "description": "Extending-Window Rolling MR-13E相對同期間DL-off Min ROOS的增量策略效果"},
-    "C59-C61": {"left": "C59", "right": "C61", "description": "Extending-Window Rolling MR-13E Min策略相對同期間Full ROOS的整體策略結果；不是單一DL效果"},
-    "C60-C58": {"left": "C60", "right": "C58", "description": "Extending-Window Rolling B2相對同期間DL-off Min ROOS的增量策略效果"},
-    "C60-C61": {"left": "C60", "right": "C61", "description": "Extending-Window Rolling B2 Min策略相對同期間Full ROOS的整體策略結果；不是單一DL效果"},
-    "C60-C59": {"left": "C60", "right": "C59", "description": "Extending-Window Rolling B2相對MR-13E production reference語意的同政策比較"},
+    "C61-C58": {"left": "C61", "right": "C58", "description": "Extending-Window Full ROOS相對同期間Min ROOS的完整策略體系差異；不是單一參數效果"},
+    "C59-C58": {"left": "C59", "right": "C58", "description": "Extending-Window MR-13E相對同期間DL-off Min ROOS的增量策略效果"},
+    "C59-C61": {"left": "C59", "right": "C61", "description": "Extending-Window MR-13E Min策略相對同期間Full ROOS的整體策略結果；不是單一DL效果"},
+    "C60-C58": {"left": "C60", "right": "C58", "description": "Extending-Window B2相對同期間DL-off Min ROOS的增量策略效果"},
+    "C60-C61": {"left": "C60", "right": "C61", "description": "Extending-Window B2 Min策略相對同期間Full ROOS的整體策略結果；不是單一DL效果"},
+    "C60-C59": {"left": "C60", "right": "C59", "description": "Extending-Window B2相對MR-13E production reference語意的同政策比較"},
     "C42-C23": {"left": "C42", "right": "C23", "description": "Selection PIT frozen MR-13E score exact constrained optimum相對DL-off Min ROOS的策略經濟效果"},
     "C42-C32": {"left": "C42", "right": "C32", "description": "Selection PIT active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
     "C57-C42": {"left": "C57", "right": "C42", "description": "C56 full-flow Selection primary contrast：同historical Min/K/R0/exact/cash/execution下，以MR-13K PIT primary + MR-13M PIT residual safety對production MR-13E exact reference"},
@@ -1323,6 +1403,22 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
         )
         for dl_id, raw in dl_catalog.items()
     }
+    profile_arm_param_source_overrides = {
+        str(arm_id): str(source_id)
+        for arm_id, source_id in dict(profile.get("arm_param_source_overrides") or {}).items()
+    }
+    unknown_param_override_arms = sorted(
+        set(profile_arm_param_source_overrides) - set(arm_catalog)
+    )
+    unknown_param_override_sources = sorted(
+        set(profile_arm_param_source_overrides.values()) - set(parameter_sources)
+    )
+    if unknown_param_override_arms or unknown_param_override_sources:
+        raise ValueError(
+            "Strategy Compare profile param-source override無效: "
+            f"arms={unknown_param_override_arms or '-'}, "
+            f"params={unknown_param_override_sources or '-'}"
+        )
     ordered_arm_ids = tuple(dict.fromkeys((*profile_arm_ids, *arm_catalog.keys())))
     arms = {
         arm_id: StrategyComparisonArm(
@@ -1330,7 +1426,11 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
             enabled=arm_id in profile_arm_ids,
             name=str(raw.get("name") or "").strip(),
             description=str(raw.get("description") or "").strip(),
-            param_source=str(raw.get("param_source") or "").strip(),
+            param_source=str(
+                profile_arm_param_source_overrides.get(
+                    arm_id, raw.get("param_source") or ""
+                )
+            ).strip(),
             rule_policy=str(raw.get("rule_policy") or "").strip(),
             dl_enabled=bool(raw.get("dl_enabled")),
             dl_id=(None if raw.get("dl_id") in (None, "") else str(raw.get("dl_id"))),
