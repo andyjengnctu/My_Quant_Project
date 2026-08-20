@@ -703,6 +703,42 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 "models/strategy_params/full/oos/base_best.json"
             ) == "legacy_source_not_proven_migrated",
         )
+
+        # Re-running the explicit migration must preserve a genuinely different
+        # old OOS payload as historical evidence before making its old path
+        # cleanup-safe. It must never pretend the divergent params equal the
+        # canonical schedule initial member.
+        archived_finalize = finalize_legacy_strategy_parameter_migration(migration_root)
+        archived_cleanup = dict(archived_finalize.get("cleanup") or {})
+        archived_migration = dict(archived_finalize.get("migration") or {})
+        archived_oos = dict(archived_migration.get("legacy_oos_archive") or {})
+        archived_rows = list(archived_oos.get("archived") or [])
+        archived_source = "models/strategy_params/full/oos/base_best.json"
+        archived_row = next(
+            (row for row in archived_rows if str(row.get("source") or "") == archived_source),
+            None,
+        )
+        archive_path = (
+            migration_root / str((archived_row or {}).get("archive") or "")
+            if archived_row
+            else None
+        )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "legacy_oos_true_divergence_is_byte_preserved_before_cleanup_ready",
+            True,
+            str(archived_finalize.get("status")) == "READY_FOR_CLEANUP"
+            and str(archived_cleanup.get("status")) == "READY"
+            and archived_row is not None
+            and archive_path is not None
+            and archive_path.is_file()
+            and archive_path.read_bytes() == diverged_oos_path.read_bytes()
+            and any(
+                str(row.get("source") or "") == archived_source
+                and str(row.get("evidence") or "") == "historical_oos_archive_sha_match"
+                for row in list(archived_cleanup.get("removable") or [])
+            ),
+        )
         diverged_oos_path.write_text(json.dumps(original_oos_payload), encoding="utf-8")
 
         canonical_trade_active = resolve_strategy_param_state_path(

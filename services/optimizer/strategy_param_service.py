@@ -316,6 +316,131 @@ def _load_json_object(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+_LEGACY_OOS_ARCHIVE_RELATIVE = (
+    Path("models") / "research" / "breakout_quality" / "strategy_param_legacy_oos"
+)
+
+
+def _legacy_oos_archive_manifest_path(root: Path) -> Path:
+    return root / _LEGACY_OOS_ARCHIVE_RELATIVE / "archive_manifest.json"
+
+
+def _legacy_oos_archive_path(root: Path, *, family: str, source_sha: str, source: Path) -> Path:
+    stem = source.stem.replace(" ", "_")
+    return (
+        root
+        / _LEGACY_OOS_ARCHIVE_RELATIVE
+        / f"{family}_oos_{stem}_{str(source_sha)[:16]}.json"
+    )
+
+
+def _load_legacy_oos_archive_records(root: Path) -> dict[str, dict[str, Any]]:
+    payload = _load_json_object(_legacy_oos_archive_manifest_path(root)) or {}
+    out: dict[str, dict[str, Any]] = {}
+    for record in list(payload.get("artifacts") or []):
+        if not isinstance(record, dict):
+            continue
+        source_path = str(record.get("source_path") or "")
+        source_sha = str(record.get("source_sha256") or "")
+        archive_path = str(record.get("archive_path") or "")
+        archive_sha = str(record.get("archive_sha256") or "")
+        if source_path and source_sha and archive_path and archive_sha:
+            out[f"{source_path}|{source_sha}"] = dict(record)
+    return out
+
+
+def _archive_legacy_frozen_oos_artifacts(project_root: str | Path) -> dict[str, Any]:
+    """Preserve divergent legacy OOS artifacts before flat-SSOT cleanup.
+
+    Old OOS parameters were historically allowed to be trained independently from
+    Rolling.  After OOS became a frozen view of the single canonical schedule, such
+    payloads are no longer current truth, but they still remain historical evidence.
+    This explicit migration copies every existing legacy OOS source byte-for-byte to
+    a historical research archive and records both source/archive SHA256 values.
+    """
+    root = Path(project_root).resolve()
+    models_root = root / "models"
+    sources: list[tuple[str, str, Path]] = []
+    for family in ("full", "min"):
+        for policy in POLICY_FILENAME_BY_NAME:
+            nested = (
+                models_root / "strategy_params" / family / "oos"
+                / POLICY_FILENAME_BY_NAME[policy]
+            )
+            sources.append((family, policy, nested))
+            if family == "full":
+                sources.append((
+                    family,
+                    policy,
+                    models_root / _legacy_policy_filename(policy, evaluation_mode="oos"),
+                ))
+
+    records = _load_legacy_oos_archive_records(root)
+    archived: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for family, policy, source in sorted(sources, key=lambda item: str(item[2]).lower()):
+        if not source.is_file():
+            continue
+        target = resolve_strategy_param_artifact_path(
+            root, family=family, evaluation_mode="rolling", policy=policy
+        )
+        if target.is_file() and _legacy_frozen_oos_matches_schedule_initial(source, target):
+            # The canonical schedule already preserves this frozen OOS runtime view.
+            continue
+        source_rel = _project_relative(root, source)
+        source_sha = compute_strategy_param_file_sha256(source)
+        key = f"{source_rel}|{source_sha}"
+        if key in seen:
+            continue
+        seen.add(key)
+        archive = _legacy_oos_archive_path(
+            root, family=family, source_sha=source_sha, source=source
+        )
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        if not archive.is_file() or compute_strategy_param_file_sha256(archive) != source_sha:
+            shutil.copy2(source, archive)
+        archive_sha = compute_strategy_param_file_sha256(archive)
+        if archive_sha != source_sha:
+            raise RuntimeError(
+                "legacy OOS historical archive SHA mismatch: "
+                f"{source_rel} -> {_project_relative(root, archive)}"
+            )
+        record = {
+            "family": family,
+            "source_path": source_rel,
+            "source_sha256": source_sha,
+            "archive_path": _project_relative(root, archive),
+            "archive_sha256": archive_sha,
+        }
+        records[key] = record
+        archived.append({
+            "source": source_rel,
+            "archive": record["archive_path"],
+            "sha256": source_sha,
+        })
+
+    manifest_path = _legacy_oos_archive_manifest_path(root)
+    if records:
+        manifest_payload = {
+            "schema_type": "historical_strategy_parameter_oos_archive",
+            "schema_version": 1,
+            "producer": "optimizer_migration",
+            "usage": "historical_evidence_only",
+            "artifacts": sorted(
+                records.values(),
+                key=lambda record: (str(record["source_path"]), str(record["source_sha256"])),
+            ),
+        }
+        _write_json(manifest_path, manifest_payload)
+    return {
+        "status": "PASS",
+        "archive_manifest_path": (
+            _project_relative(root, manifest_path) if records else ""
+        ),
+        "archived": archived,
+    }
+
+
 def _runtime_param_member_signatures(members: Any) -> list[str]:
     """Return replay-semantic hashes for ensemble members.
 
@@ -445,6 +570,7 @@ def collect_legacy_root_strategy_parameter_cleanup_plan(project_root: str | Path
     removable: list[dict[str, str]] = []
     blockers: list[dict[str, str]] = []
     seen_sources: set[str] = set()
+    legacy_oos_archive_records = _load_legacy_oos_archive_records(root)
     for item in sorted(mappings, key=lambda row: str(row["source"]).lower()):
         source = Path(item["source"]); target = Path(item["target"])
         source_key = str(source.resolve())
@@ -471,6 +597,7 @@ def collect_legacy_root_strategy_parameter_cleanup_plan(project_root: str | Path
 
         target_sha = compute_strategy_param_file_sha256(target)
         source_sha = compute_strategy_param_file_sha256(source)
+        archive_records = legacy_oos_archive_records if item["kind"] == "frozen_oos" else {}
         if item["kind"] in {"policy", "frozen_oos"}:
             policy = str(item["policy"]); manifest_record = dict(dict(manifest.get("artifacts") or {}).get(policy) or {})
         else:
@@ -485,6 +612,20 @@ def collect_legacy_root_strategy_parameter_cleanup_plan(project_root: str | Path
         if not evidence and item["kind"] == "frozen_oos":
             if _legacy_frozen_oos_matches_schedule_initial(source, target):
                 evidence = "frozen_view_matches_schedule_initial"
+            else:
+                archive_record = dict(
+                    archive_records.get(f"{source_rel}|{source_sha}") or {}
+                )
+                archive_rel = str(archive_record.get("archive_path") or "")
+                archive_path = root / archive_rel if archive_rel else Path("__missing_archive__")
+                if (
+                    archive_rel
+                    and str(archive_record.get("source_sha256") or "") == source_sha
+                    and archive_path.is_file()
+                    and compute_strategy_param_file_sha256(archive_path) == source_sha
+                    and str(archive_record.get("archive_sha256") or "") == source_sha
+                ):
+                    evidence = "historical_oos_archive_sha_match"
         if not evidence and item["kind"] == "policy":
             source_record = dict(manifest_record.get("source") or {})
             if (
@@ -515,10 +656,12 @@ def migrate_all_legacy_strategy_parameter_artifacts(project_root: str | Path) ->
             root, family="min", evaluation_mode="rolling"
         )
     )
+    legacy_oos_archive = _archive_legacy_frozen_oos_artifacts(root)
     return {
         "status": "PASS",
         "project_root": str(root),
         "results": results,
+        "legacy_oos_archive": legacy_oos_archive,
     }
 
 def finalize_legacy_strategy_parameter_migration(project_root: str | Path) -> dict[str, Any]:

@@ -1379,17 +1379,21 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             root=root_path, params_path=None,
             param_policy=PARAM_POLICY_BASE_FINALISTS_AGREE, allow_static_diagnostic=False,
         )
-    from core.strategy_param_artifacts import POLICY_FILENAME_BY_NAME
+    from core.strategy_param_artifacts import resolve_strategy_param_artifact_path
+
+    expected_best = resolve_strategy_param_artifact_path(
+        root_path, family="full", evaluation_mode="rolling", policy="base_finalist_best"
+    )
+    expected_agree = resolve_strategy_param_artifact_path(
+        root_path, family="full", evaluation_mode="rolling", policy="base_finalists_agree"
+    )
 
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
         "score_ranking_param_policy_resolves_canonical_ssot_filenames",
-        (
-            POLICY_FILENAME_BY_NAME["base_finalist_best"],
-            POLICY_FILENAME_BY_NAME["base_finalists_agree"],
-        ),
+        (expected_best.name, expected_agree.name),
         (resolved_best.name, resolved_agree.name),
     )
 

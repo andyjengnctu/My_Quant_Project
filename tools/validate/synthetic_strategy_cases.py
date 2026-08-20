@@ -141,7 +141,10 @@ def _existing_shipped_reference_param_paths():
         return []
     paths = []
     for path in sorted(root.rglob("*.json")):
-        if path.name == "manifest.json" or path.name.endswith("_summary.json"):
+        # Manifests are repository metadata, not runtime strategy-param payloads.
+        # Flat SSOT names them <family>_manifest.json / <family>_<mode>_manifest.json
+        # and benchmark manifests include the seed, so exclude by semantic stem.
+        if "manifest" in path.stem.lower() or path.name.endswith("_summary.json"):
             continue
         if "backups" in path.parts:
             continue

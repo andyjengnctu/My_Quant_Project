@@ -112,8 +112,16 @@ def _run_strategy_param_migration() -> int:
     print(f"Cleanup gate      ：{cleanup.get('status')}")
     removable = list(cleanup.get("removable") or [])
     blockers = list(cleanup.get("blockers") or [])
+    migration = dict(result.get("migration") or {})
+    legacy_oos_archive = dict(migration.get("legacy_oos_archive") or {})
+    archived_oos = list(legacy_oos_archive.get("archived") or [])
     print(f"可安全移除legacy ：{len(removable)}")
+    print(f"Historical OOS archive：{len(archived_oos)}")
     print(f"Cleanup blockers  ：{len(blockers)}")
+    if archived_oos:
+        print(
+            f"Archive manifest   ：{legacy_oos_archive.get('archive_manifest_path') or '(missing)'}"
+        )
     if removable:
         print("\n可安全移除：")
         for row in removable:
