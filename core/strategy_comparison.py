@@ -224,6 +224,7 @@ class StrategyMultiSeedRobustnessSettings:
     label: str
     enabled: bool
     profile_id: str
+    suite_id: str | None
     seed_count: int
     seed_generator_seed: int
     gpu_train_workers: int
@@ -249,6 +250,7 @@ class StrategyMultiSeedRobustnessSettings:
             "label": self.label,
             "enabled": bool(self.enabled),
             "profile_id": self.profile_id,
+            "suite_id": self.suite_id,
             "seed_count": int(self.seed_count),
             "seed_generator_seed": int(self.seed_generator_seed),
             "gpu_train_workers": int(self.gpu_train_workers),
@@ -423,6 +425,8 @@ class StrategyComparisonSettings:
     schema_version: int
     profile_id: str
     profile_label: str
+    suite_id: str | None
+    display_suffix: str | None
     dataset: str
     start_date: str | None
     end_date: str | None
@@ -450,6 +454,8 @@ class StrategyComparisonSettings:
             "schema_version": int(self.schema_version),
             "profile_id": self.profile_id,
             "profile_label": self.profile_label,
+            "suite_id": self.suite_id,
+            "display_suffix": self.display_suffix,
             "dataset": self.dataset,
             "start_date": self.start_date,
             "end_date": self.end_date,

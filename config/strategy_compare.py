@@ -8,6 +8,8 @@ Fixed-Window Rolling屬模型穩定性診斷，不建立另一套production stra
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from config.breakout_quality import (
     get_breakout_quality_rolling_test_mode,
     get_breakout_quality_workflow_settings,
@@ -40,7 +42,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 49
+STRATEGY_COMPARE_SCHEMA_VERSION = 50
 
 # =============================================================================
 # 1. 常用設定
@@ -120,14 +122,32 @@ STRATEGY_RUNTIME_INTEGRATION = {
     "require_strict_romd_majority": True,
 }
 
-# Current Strategy Compare核心比較名稱的單一真理。
-# Selection PIT／Forward-OOS由profile頁首區分，不把研究階段或固定selector語意塞進arm顯示名稱。
+# Strategy arm的scientific base name只描述策略本體；current evaluation mode的
+# OOS／Rolling suffix由profile renderer衍生，避免同一arm在各mode各自維護顯示名稱。
 STRATEGY_COMPARE_DISPLAY_FULL_ROOS = "Full ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_ROOS = "Min ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED = "Min MR-13E Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13K_SCORE_CONSTRAINED = "Min MR-13K Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_SAFETY_CONSTRAINED = "Min MR-13K + MR-13M Safety"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_RESIDUAL_SAFETY_CONSTRAINED = "Min MR-13K + MR-13M Residual Safety"
+
+# Current Compare Suite是「比較誰／比較哪些差」的唯一真理來源。
+# OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
+STRATEGY_COMPARE_SUITES = {
+    "extending_current": {
+        "arm_ids": ("C61", "C58", "C59", "C60"),
+        "contrast_ids": (
+            "C61-C58", "C59-C58", "C59-C61",
+            "C60-C58", "C60-C61", "C60-C59",
+        ),
+        "display_name_bases": {
+            "C61": "Full",
+            "C58": "Min",
+            "C59": "Min MR-13E Constrained",
+            "C60": "Min MR-13K + MR-13M Residual Safety",
+        },
+    },
+}
 
 # Strategy Compare以研究階段profile隔離設定與輸出；App只顯示泛化階段名稱，
 # arms／contrasts／period／output namespace全部由本檔驅動。
@@ -157,8 +177,9 @@ STRATEGY_COMPARE_PROFILES = {
             "固定information cutoff：只使用2021-01-01以前且Target已成熟的合法歷史做inner validation／epoch selection／final refit，"
             "只訓練一次並評分2021-01-01起至最新合法score date。OOS Test只作快速Gate，不取代12M Rolling evidence。"
         ),
-        "display_alignment_group": "extending_strategy_compare_oos",
-        "display_alignment_arm_ids": ("C61", "C58", "C59", "C60"),
+        "display_alignment_group": "extending_strategy_compare",
+        "suite_id": "extending_current",
+        "display_suffix": "OOS",
         # None = 由三個PIT runtime工件的共同coverage動態解析2021→最新。
         "start_date": None,
         "end_date": None,
@@ -176,21 +197,17 @@ STRATEGY_COMPARE_PROFILES = {
             "C59": "oos_min_roos",
             "C60": "oos_min_roos",
         },
-        "arm_ids": ("C61", "C58", "C59", "C60"),
-        "contrast_ids": (
-            "C61-C58", "C59-C58", "C59-C61",
-            "C60-C58", "C60-C61", "C60-C59",
-        ),
     },
     "extending_window_rolling": {
         "label": "Extending-Window Test | Rolling Test",
         "description": (
             "2016→2025十個完整年度fold的單一PIT-safe operational chain；DL使用expanding history + "
-            "annual refit；Full／Min ROOS都沿用各時期當時合法rolling params形成共同策略體系基準。"
+            "annual refit；Full／Min都沿用各時期當時合法rolling params形成共同策略體系基準。"
             "2021不再形成evaluation policy斷點。"
         ),
         "display_alignment_group": "extending_strategy_compare",
-        "display_alignment_arm_ids": ("C61", "C58", "C59", "C60"),
+        "suite_id": "extending_current",
+        "display_suffix": "Rolling",
         "start_date": "2016-01-01",
         "end_date": "2025-12-31",
         "point_in_time_score_start_date": _ROLLING_ROLLING.score_start_date,
@@ -203,11 +220,6 @@ STRATEGY_COMPARE_PROFILES = {
         "reuse_output_roots": (
             "outputs/strategy_compare/selection_pit",
             "outputs/strategy_compare/forward_oos",
-        ),
-        "arm_ids": ("C61", "C58", "C59", "C60"),
-        "contrast_ids": (
-            "C61-C58", "C59-C58", "C59-C61",
-            "C60-C58", "C60-C61", "C60-C59",
         ),
     },
     # Legacy evaluation policies retained only for historical replay / artifact interpretation.
@@ -252,13 +264,16 @@ STRATEGY_COMPARE_PROFILES = {
 }
 
 # Multiple-seed robustness各研究階段以獨立config profile呈現於正式選單。
-# stochastic/fixed比較對象由robustness profile顯式指定；
-# robustness orchestration不得改動單次Strategy Compare arm identity/fingerprint。
+# Current OOS／Rolling robustness只引用Compare Suite；fixed／stochastic membership與paired contrasts
+# 由suite arm的model dependency自動推導，不得再於profile重複維護比較矩陣。
+# Historical robustness profiles保留顯式membership供artifact compatibility；orchestration不得改動
+# 單次Strategy Compare arm identity/fingerprint。
 STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
     "extending_window_oos": {
         "label": "Extending-Window Multi-seed Robustness Test | OOS Test",
         "enabled": True,
         "profile_id": "extending_window_oos",
+        "suite_id": "extending_current",
         "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
         "seed_generator_seed": STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED,
         "gpu_train_workers": STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS,
@@ -273,10 +288,8 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
         "romd_reference_baselines": {
             "min": {"param_source": "oos_min_roos", "rule_policy": "all_off"},
+            "full": {"param_source": "oos_full_roos", "rule_policy": "formal"},
         },
-        "fixed_arm_ids": ("C58",),
-        "stochastic_arm_ids": ("C60",),
-        "paired_contrasts": (),
         "output_root": "outputs/strategy_compare/robustness/extending_window/oos_2021_forward",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/oos_2021_forward",
     },
@@ -284,6 +297,7 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "label": "Extending-Window Multi-seed Robustness Test | Rolling Test",
         "enabled": True,
         "profile_id": "extending_window_rolling",
+        "suite_id": "extending_current",
         "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
         "seed_generator_seed": STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED,
         "gpu_train_workers": STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS,
@@ -298,10 +312,8 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
         "romd_reference_baselines": {
             "min": {"param_source": "extending_min_roos", "rule_policy": "all_off"},
+            "full": {"param_source": "extending_full_roos", "rule_policy": "formal"},
         },
-        "fixed_arm_ids": ("C58",),
-        "stochastic_arm_ids": ("C60",),
-        "paired_contrasts": (),
         "output_root": "outputs/strategy_compare/robustness/extending_window_rolling",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window_rolling",
     },
@@ -468,7 +480,7 @@ STRATEGY_PARAM_SOURCES = {
             "active_params/{param_filename}"
         ),
         "description": (
-            "OOS Test fixed-cutoff Min ROOS；只取Extending Min ROOS在2021-01-01當下合法的"
+            "OOS Test fixed-cutoff Min參數；只取Extending Min schedule在2021-01-01當下合法的"
             "2020-cutoff參數，凍結使用至最新，不使用任何2021後重新fit的策略參數。"
         ),
         "identity_manifest_path": (
@@ -494,7 +506,7 @@ STRATEGY_PARAM_SOURCES = {
                 ),
                 "freeze_effective_date": "2021-01-01",
                 "freeze_cutoff_date": "2020-12-31",
-                "display_name": "Min ROOS",
+                "display_name": "Min OOS",
                 "quiet": False,
             },
         },
@@ -505,7 +517,7 @@ STRATEGY_PARAM_SOURCES = {
             "active_params/{param_filename}"
         ),
         "description": (
-            "OOS Test fixed-cutoff Full ROOS；只取Extending Full ROOS在2021-01-01當下合法的"
+            "OOS Test fixed-cutoff Full參數；只取Extending Full schedule在2021-01-01當下合法的"
             "2020-cutoff參數，凍結使用至最新，不使用任何2021後重新fit的策略參數。"
         ),
         "identity_manifest_path": (
@@ -531,7 +543,7 @@ STRATEGY_PARAM_SOURCES = {
                 ),
                 "freeze_effective_date": "2021-01-01",
                 "freeze_cutoff_date": "2020-12-31",
-                "display_name": "Full ROOS",
+                "display_name": "Full OOS",
                 "quiet": False,
             },
         },
@@ -795,14 +807,14 @@ STRATEGY_DL_SOURCES = {
 # =============================================================================
 # 5. Strategy arm definitions
 # =============================================================================
-# Arm 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["arm_ids"] 決定；
-# arm definition 本身不再保存第二份 enabled 狀態。
+# Historical profile的arm集合仍可由profile-local arm_ids指定；current Extending profiles只引用Compare Suite。
+# Arm definition本身不保存第二份enabled/mode membership；current matrix不得在profile或robustness重複列出。
 
 STRATEGY_COMPARE_ARMS = {
     "C61": {
         "name": STRATEGY_COMPARE_DISPLAY_FULL_ROOS,
         "description": (
-            "Extending-Window Full ROOS baseline；參數來源由evaluation mode綁定：OOS固定2020 cutoff，Rolling使用PIT-safe stitched schedule；formal rules；DL-off"
+            "Extending-Window Full baseline；人讀名稱由evaluation mode渲染為Full OOS／Full Rolling；參數來源由mode綁定：OOS固定2020 cutoff，Rolling使用PIT-safe stitched schedule；formal rules；DL-off"
         ),
         "param_source": "extending_full_roos",
         "rule_policy": "formal",
@@ -813,13 +825,13 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C58": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_ROOS,
-        "description": "Extending-Window Min ROOS baseline；參數來源由evaluation mode綁定：OOS固定2020 cutoff，Rolling使用PIT-safe stitched schedule；rules全關；DL-off",
+        "description": "Extending-Window Min baseline；人讀名稱由evaluation mode渲染為Min OOS／Min Rolling；參數來源由mode綁定：OOS固定2020 cutoff，Rolling使用PIT-safe stitched schedule；rules全關；DL-off",
         "param_source": "extending_min_roos",
         "rule_policy": "all_off",
         "dl_enabled": False,
         "dl_id": None,
         "dl_runtime_mode": None,
-        "robustness_role": "fixed_baseline",
+        "robustness_role": "off",
     },
     "C59": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED,
@@ -994,12 +1006,12 @@ STRATEGY_COMPARE_ARMS = {
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
-    "C61-C58": {"left": "C61", "right": "C58", "description": "Extending-Window Full ROOS相對同期間Min ROOS的完整策略體系差異；不是單一參數效果"},
-    "C59-C58": {"left": "C59", "right": "C58", "description": "Extending-Window MR-13E相對同期間DL-off Min ROOS的增量策略效果"},
-    "C59-C61": {"left": "C59", "right": "C61", "description": "Extending-Window MR-13E Min策略相對同期間Full ROOS的整體策略結果；不是單一DL效果"},
-    "C60-C58": {"left": "C60", "right": "C58", "description": "Extending-Window B2相對同期間DL-off Min ROOS的增量策略效果"},
-    "C60-C61": {"left": "C60", "right": "C61", "description": "Extending-Window B2 Min策略相對同期間Full ROOS的整體策略結果；不是單一DL效果"},
-    "C60-C59": {"left": "C60", "right": "C59", "description": "Extending-Window B2相對MR-13E production reference語意的同政策比較"},
+    "C61-C58": {"left": "C61", "right": "C58", "description": "{left}相對{right}的完整策略體系差異；不是單一參數效果"},
+    "C59-C58": {"left": "C59", "right": "C58", "description": "{left}相對{right}的增量策略效果"},
+    "C59-C61": {"left": "C59", "right": "C61", "description": "{left}相對{right}的整體策略結果；不是單一DL效果"},
+    "C60-C58": {"left": "C60", "right": "C58", "description": "{left}相對{right}的增量策略效果"},
+    "C60-C61": {"left": "C60", "right": "C61", "description": "{left}相對{right}的整體策略結果；不是單一DL效果"},
+    "C60-C59": {"left": "C60", "right": "C59", "description": "{left}相對{right}的同政策比較"},
     "C42-C23": {"left": "C42", "right": "C23", "description": "Selection PIT frozen MR-13E score exact constrained optimum相對DL-off Min ROOS的策略經濟效果"},
     "C42-C32": {"left": "C42", "right": "C32", "description": "Selection PIT active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
     "C57-C42": {"left": "C57", "right": "C42", "description": "C56 full-flow Selection primary contrast：同historical Min/K/R0/exact/cash/execution下，以MR-13K PIT primary + MR-13M PIT residual safety對production MR-13E exact reference"},
@@ -1070,6 +1082,66 @@ def _builder(raw) -> StrategyArtifactBuilder | None:
     )
 
 
+def _resolved_suite_id(profile: dict) -> str | None:
+    value = str(profile.get("suite_id") or "").strip()
+    return value or None
+
+
+def _resolved_profile_matrix(profile: dict) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    suite_id = _resolved_suite_id(profile)
+    if suite_id is None:
+        return (
+            tuple(str(value) for value in profile.get("arm_ids", ())),
+            tuple(str(value) for value in profile.get("contrast_ids", ())),
+        )
+    if suite_id not in STRATEGY_COMPARE_SUITES:
+        raise ValueError(f"Strategy Compare profile引用不存在Compare Suite: {suite_id}")
+    suite = get_strategy_compare_suite(suite_id)
+    if profile.get("arm_ids") not in (None, (), []):
+        raise ValueError(f"current suite profile不得另寫arm_ids: suite={suite_id}")
+    if profile.get("contrast_ids") not in (None, (), []):
+        raise ValueError(f"current suite profile不得另寫contrast_ids: suite={suite_id}")
+    return (
+        tuple(str(value) for value in suite.get("arm_ids", ())),
+        tuple(str(value) for value in suite.get("contrast_ids", ())),
+    )
+
+
+def _arm_has_seed_sensitive_model_dependency(arm: StrategyComparisonArm) -> bool:
+    return bool(arm.dl_enabled and str(arm.dl_id or "").strip())
+
+
+def _derived_robustness_membership(
+    profile_settings: StrategyComparisonSettings,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    fixed: list[str] = []
+    stochastic: list[str] = []
+    for arm in profile_settings.enabled_arms:
+        (stochastic if _arm_has_seed_sensitive_model_dependency(arm) else fixed).append(arm.arm_id)
+    if not fixed or not stochastic:
+        raise ValueError(
+            "Compare Suite robustness必須同時具有fixed與seed-sensitive arms: "
+            f"suite={profile_settings.suite_id}, fixed={fixed}, stochastic={stochastic}"
+        )
+    return tuple(fixed), tuple(stochastic)
+
+
+def _derived_stochastic_contrasts(
+    profile_settings: StrategyComparisonSettings, stochastic_arm_ids: tuple[str, ...],
+) -> tuple[dict[str, str], ...]:
+    stochastic = set(stochastic_arm_ids)
+    rows: list[dict[str, str]] = []
+    for contrast in profile_settings.enabled_contrasts:
+        if contrast.left in stochastic and contrast.right in stochastic:
+            rows.append({
+                "contrast_id": contrast.contrast_id,
+                "left": contrast.left,
+                "right": contrast.right,
+                "description": contrast.description,
+            })
+    return tuple(rows)
+
+
 def get_strategy_runtime_integration_settings() -> StrategyRuntimeIntegrationSettings:
     raw = dict(STRATEGY_RUNTIME_INTEGRATION)
     settings = StrategyRuntimeIntegrationSettings(
@@ -1098,7 +1170,7 @@ def get_strategy_runtime_integration_settings() -> StrategyRuntimeIntegrationSet
         (settings.forward_profile_id, settings.forward_candidate_arm_id, "Forward"),
     )
     for profile_id, arm_id, stage_label in candidate_specs:
-        active_ids = {str(value) for value in STRATEGY_COMPARE_PROFILES[profile_id].get("arm_ids", ())}
+        active_ids = set(_resolved_profile_matrix(dict(STRATEGY_COMPARE_PROFILES[profile_id]))[0])
         if arm_id not in active_ids:
             raise ValueError(
                 f"runtime integration {stage_label} candidate不在active profile: {arm_id}"
@@ -1128,6 +1200,7 @@ def get_strategy_multi_seed_robustness_settings(
         label=str(raw.get("label") or selected_id).strip(),
         enabled=bool(raw.get("enabled", True)),
         profile_id=str(raw.get("profile_id") or "").strip(),
+        suite_id=(None if raw.get("suite_id") in (None, "") else str(raw.get("suite_id")).strip()),
         seed_count=int(raw.get("seed_count", 0) or 0),
         seed_generator_seed=int(raw.get("seed_generator_seed", 0) or 0),
         gpu_train_workers=int(raw.get("gpu_train_workers", STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS)),
@@ -1161,12 +1234,27 @@ def get_strategy_multi_seed_robustness_settings(
         output_root=str(raw.get("output_root") or "").strip(),
         model_work_root=str(raw.get("model_work_root") or "").strip(),
     )
-    validate_strategy_multi_seed_robustness_settings(settings)
+    if settings.suite_id is None:
+        validate_strategy_multi_seed_robustness_settings(settings)
     if settings.profile_id not in STRATEGY_COMPARE_PROFILES:
         raise ValueError(
             f"multi-seed robustness引用不存在的Strategy Compare profile: {settings.profile_id}"
         )
     profile_settings = get_strategy_comparison_settings(settings.profile_id)
+    if settings.suite_id is not None:
+        if profile_settings.suite_id != settings.suite_id:
+            raise ValueError(
+                "multi-seed robustness suite與Strategy Compare profile不一致: "
+                f"robustness={settings.suite_id}, profile={profile_settings.suite_id}"
+            )
+        fixed_ids, stochastic_ids = _derived_robustness_membership(profile_settings)
+        settings = replace(
+            settings,
+            fixed_arm_ids=fixed_ids,
+            stochastic_arm_ids=stochastic_ids,
+            paired_contrasts=_derived_stochastic_contrasts(profile_settings, stochastic_ids),
+        )
+        validate_strategy_multi_seed_robustness_settings(settings)
     enabled_by_id = {arm.arm_id: arm for arm in profile_settings.enabled_arms}
     missing_fixed = [arm_id for arm_id in settings.fixed_arm_ids if arm_id not in enabled_by_id]
     missing_stochastic = [arm_id for arm_id in settings.stochastic_arm_ids if arm_id not in enabled_by_id]
@@ -1237,7 +1325,62 @@ def get_strategy_rolling_test_modes() -> tuple[dict[str, object], ...]:
         seen_robustness.add(robustness_id)
     if not rows:
         raise ValueError("Strategy Compare至少需要一個Rolling Test mode")
+    current_suite_ids = {
+        _resolved_suite_id(dict(STRATEGY_COMPARE_PROFILES[str(item["profile_id"])]))
+        for item in rows
+    }
+    if None in current_suite_ids or len(current_suite_ids) != 1:
+        raise ValueError(
+            "current OOS／Rolling modes必須引用同一Compare Suite: "
+            f"suite_ids={sorted(str(value) for value in current_suite_ids)}"
+        )
+    for item in rows:
+        raw_robustness = dict(
+            STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES[str(item["robustness_id"])]
+        )
+        if str(raw_robustness.get("suite_id") or "").strip() not in current_suite_ids:
+            raise ValueError(
+                "current robustness mode必須引用與single-seed相同Compare Suite: "
+                f"robustness={item['robustness_id']}"
+            )
     return tuple(rows)
+
+
+def get_strategy_compare_suite(suite_id: str) -> dict[str, object]:
+    selected = str(suite_id).strip()
+    if selected not in STRATEGY_COMPARE_SUITES:
+        raise ValueError(f"不存在的Strategy Compare suite: {selected}")
+    raw = dict(STRATEGY_COMPARE_SUITES[selected])
+    arm_ids = tuple(str(value) for value in raw.get("arm_ids", ()))
+    contrast_ids = tuple(str(value) for value in raw.get("contrast_ids", ()))
+    display_name_bases = {
+        str(key): str(value).strip()
+        for key, value in dict(raw.get("display_name_bases") or {}).items()
+    }
+    if not arm_ids or len(set(arm_ids)) != len(arm_ids):
+        raise ValueError(f"Strategy Compare suite arm_ids不可空白／重複: {selected}")
+    if len(set(contrast_ids)) != len(contrast_ids):
+        raise ValueError(f"Strategy Compare suite contrast_ids不得重複: {selected}")
+    if set(display_name_bases) != set(arm_ids):
+        raise ValueError(
+            f"Strategy Compare suite display_name_bases必須完整覆蓋arms: suite={selected}"
+        )
+    missing_arms = [arm_id for arm_id in arm_ids if arm_id not in STRATEGY_COMPARE_ARMS]
+    missing_contrasts = [cid for cid in contrast_ids if cid not in STRATEGY_COMPARE_CONTRASTS]
+    if missing_arms or missing_contrasts:
+        raise ValueError(
+            f"Strategy Compare suite引用不存在設定: arms={missing_arms}, contrasts={missing_contrasts}"
+        )
+    for cid in contrast_ids:
+        spec = dict(STRATEGY_COMPARE_CONTRASTS[cid])
+        if str(spec.get("left") or "") not in arm_ids or str(spec.get("right") or "") not in arm_ids:
+            raise ValueError(f"Strategy Compare suite contrast端點不在suite: {selected}/{cid}")
+    return {
+        "suite_id": selected,
+        "arm_ids": arm_ids,
+        "contrast_ids": contrast_ids,
+        "display_name_bases": display_name_bases,
+    }
 
 
 def get_strategy_comparison_profiles() -> tuple[dict[str, str], ...]:
@@ -1276,8 +1419,19 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
     if selected_profile_id not in STRATEGY_COMPARE_PROFILES:
         raise ValueError(f"未知Strategy Compare profile: {selected_profile_id}")
     profile = dict(STRATEGY_COMPARE_PROFILES[selected_profile_id])
-    profile_arm_ids = tuple(str(value) for value in profile.get("arm_ids", ()))
-    profile_contrast_ids = tuple(str(value) for value in profile.get("contrast_ids", ()))
+    profile_arm_ids, profile_contrast_ids = _resolved_profile_matrix(profile)
+    profile_suite_id = _resolved_suite_id(profile)
+    profile_suite_display_bases = (
+        {} if profile_suite_id is None
+        else {
+            str(key): str(value).strip()
+            for key, value in dict(get_strategy_compare_suite(profile_suite_id).get("display_name_bases") or {}).items()
+        }
+    )
+    profile_display_suffix = (
+        None if profile.get("display_suffix") in (None, "")
+        else str(profile.get("display_suffix")).strip()
+    )
     missing_arms = [arm_id for arm_id in profile_arm_ids if arm_id not in STRATEGY_COMPARE_ARMS]
     missing_contrasts = [
         contrast_id
@@ -1424,7 +1578,11 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
         arm_id: StrategyComparisonArm(
             arm_id=arm_id,
             enabled=arm_id in profile_arm_ids,
-            name=str(raw.get("name") or "").strip(),
+            name=(
+                f"{profile_suite_display_bases.get(arm_id, str(raw.get('name') or '').strip())} {profile_display_suffix}"
+                if arm_id in profile_suite_display_bases and profile_display_suffix
+                else str(raw.get("name") or "").strip()
+            ),
             description=str(raw.get("description") or "").strip(),
             param_source=str(
                 profile_arm_param_source_overrides.get(
@@ -1456,7 +1614,10 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
             enabled=contrast_id in profile_contrast_ids,
             left=str(raw.get("left") or "").strip(),
             right=str(raw.get("right") or "").strip(),
-            description=str(raw.get("description") or "").strip(),
+            description=str(raw.get("description") or "").strip().format(
+                left=arms[str(raw.get("left") or "").strip()].name,
+                right=arms[str(raw.get("right") or "").strip()].name,
+            ),
         )
         for contrast_id in ordered_contrast_ids
         for raw in (contrast_catalog[contrast_id],)
@@ -1466,6 +1627,8 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
         schema_version=int(STRATEGY_COMPARE_SCHEMA_VERSION),
         profile_id=selected_profile_id,
         profile_label=str(profile["label"]),
+        suite_id=profile_suite_id,
+        display_suffix=profile_display_suffix,
         dataset=str(workflow_settings.strategy_dataset).strip(),
         start_date=(
             None
@@ -1501,6 +1664,7 @@ __all__ = [
     "STRATEGY_COMPARE_CONTRASTS",
     "STRATEGY_COMPARE_PREPARATION",
     "STRATEGY_COMPARE_PROFILES",
+    "STRATEGY_COMPARE_SUITES",
     "STRATEGY_COMPARE_MENU_PROFILE_IDS",
     "STRATEGY_COMPARE_ROLLING_TEST_MENU_LABEL",
     "STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL",
@@ -1509,6 +1673,7 @@ __all__ = [
     "STRATEGY_RUNTIME_INTEGRATION",
     "STRATEGY_DL_SOURCES",
     "STRATEGY_PARAM_SOURCES",
+    "get_strategy_compare_suite",
     "get_strategy_rolling_test_modes",
     "get_strategy_comparison_profiles",
     "get_strategy_comparison_menu_profiles",

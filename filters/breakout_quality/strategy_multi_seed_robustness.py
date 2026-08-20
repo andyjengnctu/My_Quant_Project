@@ -138,7 +138,7 @@ LATEST_FILENAME = "latest.json"
 ATTRIBUTION_SOURCE_DIRNAME = "attribution_source"
 ATTRIBUTION_SOURCE_SCHEMA_VERSION = 2
 ROBUSTNESS_SCHEMA_VERSION = 9
-ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 2
+ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 3
 TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
 MEAN_METRICS: tuple[tuple[str, str, str], ...] = (
@@ -223,7 +223,13 @@ def _report_settings_for_contract(contract: dict[str, Any], settings):
         if arm is None:
             raise ValueError(f"robustness report contract引用不存在的arm: {arm_id}")
         selected[arm_id] = replace(arm, enabled=True)
-    return replace(settings, arms=selected, contrasts={})
+    selected_ids = set(selected)
+    selected_contrasts = {
+        contrast_id: contrast
+        for contrast_id, contrast in settings.contrasts.items()
+        if contrast.enabled and contrast.left in selected_ids and contrast.right in selected_ids
+    }
+    return replace(settings, arms=selected, contrasts=selected_contrasts)
 
 
 def _read_attribution_csv(unit_manifest: dict[str, Any], role: str) -> pd.DataFrame:
@@ -1007,6 +1013,7 @@ def build_multi_seed_robustness_contract(
         "scientific_contract_version": ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION,
         "robustness_id": robustness.robustness_id,
         "profile_id": settings.profile_id,
+        "suite_id": settings.suite_id,
         "dataset": settings.dataset,
         "dataset_identity": _dataset_identity_snapshot(settings.dataset),
         "param_policy": settings.param_policy,

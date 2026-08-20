@@ -351,12 +351,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and all("enabled" not in raw for raw in strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS.values())
         and all("enabled" not in raw for raw in strategy_history.HISTORICAL_STRATEGY_COMPARE_CONTRASTS.values())
         and all(
-            {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings(profile_id).enabled_arms}
-            == set(raw_profile["arm_ids"])
-            and {
-                contrast.contrast_id
-                for contrast in strategy_config.get_strategy_comparison_settings(profile_id).enabled_contrasts
-            } == set(raw_profile["contrast_ids"])
+            (lambda resolved, expected: (
+                {arm.arm_id for arm in resolved.enabled_arms} == set(expected[0])
+                and {contrast.contrast_id for contrast in resolved.enabled_contrasts} == set(expected[1])
+            ))(
+                strategy_config.get_strategy_comparison_settings(profile_id),
+                strategy_config._resolved_profile_matrix(dict(raw_profile)),
+            )
             for profile_id, raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.items()
         ),
     )
@@ -378,12 +379,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     active_arm_ids = {
         str(arm_id)
         for raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.values()
-        for arm_id in tuple(raw_profile.get("arm_ids") or ())
+        for arm_id in strategy_config._resolved_profile_matrix(dict(raw_profile))[0]
     }
     active_contrast_ids = {
         str(contrast_id)
         for raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.values()
-        for contrast_id in tuple(raw_profile.get("contrast_ids") or ())
+        for contrast_id in strategy_config._resolved_profile_matrix(dict(raw_profile))[1]
     }
     active_param_ids = {
         str(strategy_config.STRATEGY_COMPARE_ARMS[arm_id]["param_source"])
@@ -801,16 +802,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and {item["profile_id"] for item in strategy_config.get_strategy_comparison_profiles()}
         == set(strategy_config.STRATEGY_COMPARE_PROFILES)
         and all(
-            {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings(profile_id).enabled_arms}
-            == set(raw_profile["arm_ids"])
-            and {
-                item.contrast_id
-                for item in strategy_config.get_strategy_comparison_settings(profile_id).enabled_contrasts
-            } == set(raw_profile["contrast_ids"])
-            and strategy_config.get_strategy_comparison_settings(profile_id).output_root
-            == str(raw_profile["output_root"])
-            and strategy_config.get_strategy_comparison_settings(profile_id).reuse_output_roots
-            == tuple(raw_profile.get("reuse_output_roots", ()))
+            (lambda resolved, expected: (
+                {arm.arm_id for arm in resolved.enabled_arms} == set(expected[0])
+                and {item.contrast_id for item in resolved.enabled_contrasts} == set(expected[1])
+                and resolved.output_root == str(raw_profile["output_root"])
+                and resolved.reuse_output_roots == tuple(raw_profile.get("reuse_output_roots", ()))
+            ))(
+                strategy_config.get_strategy_comparison_settings(profile_id),
+                strategy_config._resolved_profile_matrix(dict(raw_profile)),
+            )
             for profile_id, raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.items()
         )
         and "def _comparison_runs_roots(" in reuse_source
@@ -823,10 +823,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         if not group:
             continue
         settings_for_alignment = strategy_config.get_strategy_comparison_settings(profile_id)
-        alignment_ids = tuple(raw_profile.get("display_alignment_arm_ids") or raw_profile["arm_ids"])
-        display_alignment_groups.setdefault(group, []).append(
-            tuple(settings_for_alignment.arms[arm_id].name for arm_id in alignment_ids)
-        )
+        resolved_matrix = strategy_config._resolved_profile_matrix(dict(raw_profile))
+        alignment_ids = tuple(raw_profile.get("display_alignment_arm_ids") or resolved_matrix[0])
+        suite_id = str(raw_profile.get("suite_id") or "").strip()
+        if suite_id:
+            bases = dict(strategy_config.get_strategy_compare_suite(suite_id)["display_name_bases"])
+            display_names = tuple(bases[arm_id] for arm_id in alignment_ids)
+        else:
+            display_names = tuple(settings_for_alignment.arms[arm_id].name for arm_id in alignment_ids)
+        display_alignment_groups.setdefault(group, []).append(display_names)
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "configured_core_arm_display_alignment_groups_stay_aligned",
@@ -877,8 +882,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 and mode_profile.dl_sources[str(arm.dl_id)].score_source == "selection_point_in_time"
                 for arm in stochastic
             )
-            and set(reference_matches) == {"min"}
+            and set(reference_matches) == {"min", "full"}
             and all(len(matches) == 1 for matches in reference_matches.values())
+            and mode_settings.suite_id == mode_profile.suite_id == "extending_current"
+            and tuple(mode_settings.fixed_arm_ids + mode_settings.stochastic_arm_ids)
+                == tuple(arm.arm_id for arm in mode_profile.enabled_arms)
         )
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -890,8 +898,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and robustness_settings.robustness_id in expected_enabled_robustness_ids
         and all(robustness_mode_contracts)
         and "romd_reference_baselines" in config_source
-        and "fixed_arm_ids" in config_source
-        and "stochastic_arm_ids" in config_source
+        and all(
+            "fixed_arm_ids" not in raw
+            and "stochastic_arm_ids" not in raw
+            and "paired_contrasts" not in raw
+            and str(raw.get("suite_id") or "") == "extending_current"
+            for rid, raw in strategy_config.STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES.items()
+            if rid in expected_enabled_robustness_ids
+        )
         and "MULTI_SEED_ROBUSTNESS_ARM_IDS" not in config_source
         and all(token not in robustness_source for token in ("\"C20\"", "\"C29\"", "\"MR-12B\"", "\"MR-13A\"")),
     )
@@ -1006,11 +1020,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_operational_dual_model_profile_trains_both_same_seed_sources_before_single_strategy_replay",
         True,
-        tuple(arm.arm_id for arm in robustness_stochastic) == ("C60",)
-        and tuple((str(item["left"]), str(item["right"])) for item in robustness_settings.paired_contrasts) == ()
-        and len(operational_groups) == 2
-        and len(operational_units) == 2 * len(dedupe_seeds)
-        and sum(len(unit["replay_arms"]) for unit in operational_units) == 2 * len(dedupe_seeds)
+        tuple(arm.arm_id for arm in robustness_stochastic) == ("C59", "C60")
+        and tuple((str(item["left"]), str(item["right"])) for item in robustness_settings.paired_contrasts) == (("C60", "C59"),)
+        and len(operational_groups) == 3
+        and len(operational_units) == 3 * len(dedupe_seeds)
+        and sum(len(unit["replay_arms"]) for unit in operational_units) == 3 * len(dedupe_seeds)
         and "queue_replay_if_ready" in robustness_source
         and "trained_artifacts" in robustness_source
         and "_arm_training_dl_ids" in robustness_source,
@@ -1019,13 +1033,22 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_activation_is_decoupled_from_single_seed_arm_roles_and_uses_only_current_operational_profile_arms",
         True,
-        strategy_config.STRATEGY_COMPARE_SCHEMA_VERSION >= 42
+        strategy_config.STRATEGY_COMPARE_SCHEMA_VERSION >= 50
+        and robustness_profile.suite_id == robustness_settings.suite_id == "extending_current"
         and all(
             robustness_profile.arms[arm_id].robustness_role == "off"
             for arm_id in robustness_settings.stochastic_arm_ids
         )
-        and set(robustness_settings.fixed_arm_ids + robustness_settings.stochastic_arm_ids)
-            <= {arm.arm_id for arm in robustness_profile.enabled_arms},
+        and tuple(robustness_settings.fixed_arm_ids + robustness_settings.stochastic_arm_ids)
+            == tuple(arm.arm_id for arm in robustness_profile.enabled_arms)
+        and all(
+            (not robustness_profile.arms[arm_id].dl_enabled)
+            for arm_id in robustness_settings.fixed_arm_ids
+        )
+        and all(
+            robustness_profile.arms[arm_id].dl_enabled
+            for arm_id in robustness_settings.stochastic_arm_ids
+        ),
     )
 
     synthetic_period = {"start": "2001-01-01", "end": "2001-12-31"}
@@ -1063,6 +1086,20 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             retention_contract_a["retention"]["keep_attribution_source"]
             != retention_contract_b["retention"]["keep_attribution_source"],
         ),
+    )
+    report_settings = robustness_module._report_settings_for_contract(
+        retention_contract_a, robustness_profile
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "current_multi_seed_report_preserves_compare_suite_arms_contrasts_and_contract_version",
+        True,
+        retention_contract_a.get("suite_id") == robustness_profile.suite_id == "extending_current"
+        and int(retention_contract_a.get("scientific_contract_version") or 0) >= 3
+        and tuple(arm.arm_id for arm in report_settings.enabled_arms)
+            == tuple(arm.arm_id for arm in robustness_profile.enabled_arms)
+        and tuple(item.contrast_id for item in report_settings.enabled_contrasts)
+            == tuple(item.contrast_id for item in robustness_profile.enabled_contrasts),
     )
 
     def _robustness_metrics(romd, total_return, win_rate):
@@ -1253,12 +1290,20 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                     stochastic_expected_mean[arm.arm_id] + 1.0,
                 )
             )
-            and romd_by_arm[arm.arm_id]["beats_full_count"] is None
+            and romd_by_arm[arm.arm_id]["beats_full_count"]
+            == sum(
+                value > 7.0
+                for value in (
+                    stochastic_expected_mean[arm.arm_id] - 1.0,
+                    stochastic_expected_mean[arm.arm_id] + 1.0,
+                )
+            )
             for arm in robustness_stochastic
         )
         and synthetic_summary["contract"]["romd_reference_baselines"]["min"]["arm_id"]
         == min_reference_arm.arm_id
-        and "full" not in synthetic_summary["contract"]["romd_reference_baselines"]
+        and synthetic_summary["contract"]["romd_reference_baselines"]["full"]["arm_id"]
+        == full_reference_arm.arm_id
         and paired_comparisons_ok
         and legacy_pair_fields_ok
         and len(synthetic_summary["yearly_statistics"]) >= len(robustness_fixed) * 2 + len(robustness_stochastic) * 2
@@ -4072,9 +4117,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and {"C61-C58", "C59-C58", "C59-C61", "C60-C58", "C60-C61", "C60-C59"}
         == {contrast.contrast_id for contrast in operational_current_settings.enabled_contrasts}
         and operational_robustness_active.enabled
-        and tuple(operational_robustness_active.fixed_arm_ids) == ("C58",)
-        and tuple(operational_robustness_active.stochastic_arm_ids) == ("C60",)
-        and tuple(operational_robustness_active.paired_contrasts) == ()
+        and operational_current_settings.suite_id == "extending_current"
+        and operational_robustness_active.suite_id == operational_current_settings.suite_id
+        and tuple(operational_robustness_active.fixed_arm_ids) == ("C61", "C58")
+        and tuple(operational_robustness_active.stochastic_arm_ids) == ("C59", "C60")
+        and tuple(
+            str(item.get("contrast_id") or "")
+            for item in operational_robustness_active.paired_contrasts
+        ) == ("C60-C59",)
         and not selection_robustness_legacy.enabled
         and not forward_robustness_legacy.enabled
         and c56_current.enabled
@@ -5418,28 +5468,42 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     switch_target_arm_id = enabled_dl_arm_ids[0] if len(enabled_dl_arm_ids) >= 2 else None
     profile_id = settings.profile_id
     original_profile = dict(strategy_config.STRATEGY_COMPARE_PROFILES[profile_id])
+    suite_id = str(original_profile.get("suite_id") or "").strip()
+    original_suite = (
+        None if not suite_id else dict(strategy_config.STRATEGY_COMPARE_SUITES[suite_id])
+    )
     reduced_settings = settings
     if switch_target_arm_id is not None:
         try:
+            active_ids, active_contrast_ids = strategy_config._resolved_profile_matrix(original_profile)
             reduced_arm_ids = tuple(
-                arm_id
-                for arm_id in original_profile["arm_ids"]
-                if arm_id != switch_target_arm_id
+                arm_id for arm_id in active_ids if arm_id != switch_target_arm_id
             )
             reduced_contrast_ids = tuple(
                 contrast_id
-                for contrast_id in original_profile["contrast_ids"]
+                for contrast_id in active_contrast_ids
                 if strategy_config.STRATEGY_COMPARE_CONTRASTS[contrast_id].get("left")
                 != switch_target_arm_id
                 and strategy_config.STRATEGY_COMPARE_CONTRASTS[contrast_id].get("right")
                 != switch_target_arm_id
             )
-            strategy_config.STRATEGY_COMPARE_PROFILES[profile_id]["arm_ids"] = reduced_arm_ids
-            strategy_config.STRATEGY_COMPARE_PROFILES[profile_id]["contrast_ids"] = reduced_contrast_ids
+            if suite_id:
+                strategy_config.STRATEGY_COMPARE_SUITES[suite_id]["arm_ids"] = reduced_arm_ids
+                strategy_config.STRATEGY_COMPARE_SUITES[suite_id]["contrast_ids"] = reduced_contrast_ids
+                strategy_config.STRATEGY_COMPARE_SUITES[suite_id]["display_name_bases"] = {
+                    arm_id: original_suite["display_name_bases"][arm_id]
+                    for arm_id in reduced_arm_ids
+                }
+            else:
+                strategy_config.STRATEGY_COMPARE_PROFILES[profile_id]["arm_ids"] = reduced_arm_ids
+                strategy_config.STRATEGY_COMPARE_PROFILES[profile_id]["contrast_ids"] = reduced_contrast_ids
             reduced_settings = strategy_config.get_strategy_comparison_settings(profile_id)
         finally:
             strategy_config.STRATEGY_COMPARE_PROFILES[profile_id].clear()
             strategy_config.STRATEGY_COMPARE_PROFILES[profile_id].update(original_profile)
+            if suite_id and original_suite is not None:
+                strategy_config.STRATEGY_COMPARE_SUITES[suite_id].clear()
+                strategy_config.STRATEGY_COMPARE_SUITES[suite_id].update(original_suite)
     expected_reduced_arm_ids = tuple(
         arm.arm_id
         for arm in settings.enabled_arms
