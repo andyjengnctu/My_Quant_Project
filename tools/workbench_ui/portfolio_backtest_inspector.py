@@ -251,7 +251,7 @@ def _resolve_source_mode_from_payload(payload, *, filename=""):
         return "rolling_oos"
     if filename_key.startswith("oos_"):
         return "oos"
-    if filename_key.startswith("trade_") or filename_key in {"run_best_params", "candidate_best_params"}:
+    if filename_key.startswith("trade_") or filename_key in {"run_best_params", "candidate_best_params", "active", "candidate_best"}:
         return "trade"
     meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}

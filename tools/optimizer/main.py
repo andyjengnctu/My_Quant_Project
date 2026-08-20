@@ -24,7 +24,14 @@ from core.dataset_profiles import (
     build_empty_dataset_dir_message,
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.model_paths import resolve_models_dir, resolve_run_best_params_path
+from core.model_paths import (
+    resolve_models_dir,
+    resolve_run_best_params_path,
+    resolve_candidate_best_params_path,
+    resolve_candidate_retention_best_params_path,
+    resolve_candidate_val_score_best_params_path,
+)
+from core.strategy_param_artifacts import resolve_strategy_param_artifact_path, resolve_strategy_param_state_path
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_process_pool_executor_kwargs, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args, is_interactive_console, safe_prompt_choice, stdout_supports_inline_progress, write_inline_progress
 from core.output_paths import build_output_dir
 from core.walk_forward_policy import (
@@ -104,14 +111,14 @@ def _print_profile_summary_compatible(profile_recorder, *, emit_console: bool):
 
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "ml_optimizer")
 MODELS_DIR = resolve_models_dir(PROJECT_ROOT)
-RUN_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "run_best_params.json")
-CANDIDATE_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "candidate_best_params.json")
-CANDIDATE_BEST_SUMMARY_PATH = os.path.join(MODELS_DIR, "candidate_best_summary.json")
-CANDIDATE_RETENTION_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "candidate_retention_best_params.json")
-CANDIDATE_RETENTION_BEST_SUMMARY_PATH = os.path.join(MODELS_DIR, "candidate_retention_best_summary.json")
-CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "candidate_val_score_best_params.json")
-CANDIDATE_VAL_SCORE_BEST_SUMMARY_PATH = os.path.join(MODELS_DIR, "candidate_val_score_best_summary.json")
-RUN_BEST_SUMMARY_PATH = os.path.join(MODELS_DIR, "run_best_summary.json")
+RUN_BEST_PARAMS_PATH = resolve_run_best_params_path(PROJECT_ROOT)
+CANDIDATE_BEST_PARAMS_PATH = resolve_candidate_best_params_path(PROJECT_ROOT)
+CANDIDATE_BEST_SUMMARY_PATH = str(resolve_strategy_param_state_path(PROJECT_ROOT, artifact="candidate_best_summary"))
+CANDIDATE_RETENTION_BEST_PARAMS_PATH = resolve_candidate_retention_best_params_path(PROJECT_ROOT)
+CANDIDATE_RETENTION_BEST_SUMMARY_PATH = str(resolve_strategy_param_state_path(PROJECT_ROOT, artifact="candidate_retention_best_summary"))
+CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH = resolve_candidate_val_score_best_params_path(PROJECT_ROOT)
+CANDIDATE_VAL_SCORE_BEST_SUMMARY_PATH = str(resolve_strategy_param_state_path(PROJECT_ROOT, artifact="candidate_val_score_best_summary"))
+RUN_BEST_SUMMARY_PATH = str(resolve_strategy_param_state_path(PROJECT_ROOT, artifact="active_summary"))
 DEFAULT_WALK_FORWARD_POLICY = load_walk_forward_policy(PROJECT_ROOT)
 TRAIN_MAX_POSITIONS = DEFAULT_PORTFOLIO_MAX_POSITIONS
 TRAIN_ENABLE_ROTATION = DEFAULT_PORTFOLIO_ROTATION == "on"
@@ -138,8 +145,17 @@ def ensure_runtime_dirs():
 
 
 def _write_json_file(path: str, payload: dict):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=4, ensure_ascii=False)
+
+
+def _refresh_trade_state_manifest() -> None:
+    from services.optimizer.strategy_param_repository import refresh_strategy_parameter_manifest
+
+    refresh_strategy_parameter_manifest(
+        PROJECT_ROOT, family="full", evaluation_mode="trade"
+    )
 
 
 def _load_json_file_or_none(path: str):
@@ -640,6 +656,7 @@ def _promote_candidate_to_run_best(*, session=None, emit_output: bool = True):
         promoted_payload = dict(candidate_params) if isinstance(candidate_params, dict) else {}
         promoted_payload["summary"] = promoted_summary
         _write_json_file(RUN_BEST_PARAMS_PATH, promoted_payload)
+        _refresh_trade_state_manifest()
         if bool(emit_output):
             _print_optimizer_output_files("✅ run_best 已進版", [("run_best", RUN_BEST_PARAMS_PATH)])
         return 0
@@ -663,6 +680,7 @@ def _promote_candidate_to_run_best(*, session=None, emit_output: bool = True):
         promoted_payload = dict(candidate_params) if isinstance(candidate_params, dict) else {}
         promoted_payload["summary"] = promoted_summary
         _write_json_file(RUN_BEST_PARAMS_PATH, promoted_payload)
+        _refresh_trade_state_manifest()
         if bool(emit_output):
             _print_optimizer_output_files("✅ run_best 已進版", [("run_best", RUN_BEST_PARAMS_PATH)])
         return 0
@@ -688,6 +706,7 @@ def _promote_candidate_to_run_best(*, session=None, emit_output: bool = True):
     promoted_payload = dict(candidate_params) if isinstance(candidate_params, dict) else {}
     promoted_payload["summary"] = promoted_summary
     _write_json_file(RUN_BEST_PARAMS_PATH, promoted_payload)
+    _refresh_trade_state_manifest()
     try:
         if os.path.exists(RUN_BEST_SUMMARY_PATH):
             os.remove(RUN_BEST_SUMMARY_PATH)
@@ -1834,6 +1853,7 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
     payload["summary"] = dict(summary)
     if bool(write_candidate_best):
         _write_json_file(CANDIDATE_BEST_PARAMS_PATH, payload)
+        _refresh_trade_state_manifest()
         try:
             if os.path.exists(CANDIDATE_BEST_SUMMARY_PATH):
                 os.remove(CANDIDATE_BEST_SUMMARY_PATH)
@@ -1862,10 +1882,9 @@ def _remove_study_full_non_base_policy_outputs() -> None:
     for policy_name in get_optimizer_paramset_policy_names():
         if str(policy_name) == "base":
             continue
-        path = os.path.join(
-            MODELS_DIR,
-            get_optimizer_nonrolling_policy_paramset_filename(str(policy_name), mode="study"),
-        )
+        path = str(resolve_strategy_param_artifact_path(
+            PROJECT_ROOT, family="full", evaluation_mode="study", policy=str(policy_name)
+        ))
         try:
             if os.path.exists(path):
                 os.remove(path)
@@ -1927,12 +1946,18 @@ def _finalize_single_seed_study_base_only_outputs(
         "seed": seed_value,
         "base_score": float(base_score),
     })
-    base_path = os.path.join(
-        MODELS_DIR,
-        get_optimizer_nonrolling_policy_paramset_filename("base", mode=selected_model_mode),
-    )
+    base_path = str(resolve_strategy_param_artifact_path(
+        PROJECT_ROOT,
+        family="full",
+        evaluation_mode=normalize_optimizer_model_mode(selected_model_mode),
+        policy="base",
+    ))
     _remove_study_full_non_base_policy_outputs()
     _write_json_file(base_path, base_payload)
+    from services.optimizer.strategy_param_repository import refresh_strategy_parameter_manifest
+    refresh_strategy_parameter_manifest(
+        PROJECT_ROOT, family="full", evaluation_mode=normalize_optimizer_model_mode(selected_model_mode)
+    )
     print(
         f"{C_GREEN}✅ Study-Full base 完成｜"
         f"trial=#{int(best_trial.number) + 1}｜base={format_optimizer_score_for_display(base_score, decimals=3)}{C_RESET}"

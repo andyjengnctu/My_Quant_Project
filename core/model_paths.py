@@ -12,6 +12,8 @@ CANDIDATE_RETENTION_BEST_PARAMS_PATH_ENV_VAR = "V16_CANDIDATE_RETENTION_BEST_PAR
 CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH_ENV_VAR = "V16_CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH"
 
 PARAMS_FILENAME_SUFFIX = "_params.json"
+STRATEGY_PARAM_REPOSITORY_DIRNAME = "strategy_params"
+STRATEGY_PARAM_TRADE_STATE_RELATIVE_DIR = os.path.join("strategy_params", "full", "trade", "state")
 CANONICAL_PARAM_FILENAME_LABELS = {
     "run_best_params.json": "run_best_params.json",
     "candidate_best_params.json": "candidate_best_params.json",
@@ -19,57 +21,6 @@ CANONICAL_PARAM_FILENAME_LABELS = {
     "candidate_val_score_best_params.json": "candidate_val_score_best_params.json",
 }
 CANONICAL_PARAM_FILENAME_ORDER = tuple(CANONICAL_PARAM_FILENAME_LABELS.keys())
-
-PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES = (
-    "run_best_params.json",
-    "candidate_best_params.json",
-    "trade_base_best.json",
-    "trade_local_best.json",
-    "trade_retention_best.json",
-    "trade_base_finalists_agree.json",
-    "trade_local_finalists_agree.json",
-    "trade_retention_finalists_agree.json",
-    "trade_ensemble_base.json",
-    "trade_ensemble_local.json",
-    "trade_ensemble_retention.json",
-    "full_base_best.json",
-    "full_local_best.json",
-    "full_retention_best.json",
-    "full_base_finalists_agree.json",
-    "full_local_finalists_agree.json",
-    "full_retention_finalists_agree.json",
-    "full_ensemble_base.json",
-    "full_ensemble_local.json",
-    "full_ensemble_retention.json",
-    "base_best.json",
-    "local_best.json",
-    "retention_best.json",
-    "base_finalists_agree.json",
-    "local_finalists_agree.json",
-    "retention_finalists_agree.json",
-    "base.json",
-    "local.json",
-    "retention.json",
-    "candidate_retention_best_params.json",
-    "oos_base_best.json",
-    "oos_local_best.json",
-    "oos_retention_best.json",
-    "oos_base_finalists_agree.json",
-    "oos_local_finalists_agree.json",
-    "oos_retention_finalists_agree.json",
-    "oos_ensemble_base.json",
-    "oos_ensemble_local.json",
-    "oos_ensemble_retention.json",
-    "roos_base_best.json",
-    "roos_local_best.json",
-    "roos_retention_best.json",
-    "roos_base_finalists_agree.json",
-    "roos_local_finalists_agree.json",
-    "roos_retention_finalists_agree.json",
-    "roos_ensemble_base.json",
-    "roos_ensemble_local.json",
-    "roos_ensemble_retention.json",
-)
 
 
 def _resolve_override_path(project_root: str, raw_value: str) -> str:
@@ -89,12 +40,21 @@ def resolve_models_dir(project_root: str, environ: Optional[Mapping[str, str]] =
     return os.path.abspath(os.path.join(project_root, "models"))
 
 
+def _resolve_trade_state_path(project_root: str, filename: str, *, environ: Optional[Mapping[str, str]] = None) -> str:
+    env = os.environ if environ is None else environ
+    return os.path.join(
+        resolve_models_dir(project_root, environ=env),
+        STRATEGY_PARAM_TRADE_STATE_RELATIVE_DIR,
+        str(filename),
+    )
+
+
 def resolve_run_best_params_path(project_root: str, environ: Optional[Mapping[str, str]] = None) -> str:
     env = os.environ if environ is None else environ
     override = str(env.get(RUN_BEST_PARAMS_PATH_ENV_VAR, "")).strip()
     if override != "":
         return _resolve_override_path(project_root, override)
-    return os.path.join(resolve_models_dir(project_root, environ=env), "run_best_params.json")
+    return _resolve_trade_state_path(project_root, "active.json", environ=env)
 
 
 
@@ -104,7 +64,7 @@ def resolve_candidate_best_params_path(project_root: str, environ: Optional[Mapp
     override = str(env.get(CANDIDATE_BEST_PARAMS_PATH_ENV_VAR, "")).strip()
     if override != "":
         return _resolve_override_path(project_root, override)
-    return os.path.join(resolve_models_dir(project_root, environ=env), "candidate_best_params.json")
+    return _resolve_trade_state_path(project_root, "candidate_best.json", environ=env)
 
 
 def resolve_candidate_retention_best_params_path(project_root: str, environ: Optional[Mapping[str, str]] = None) -> str:
@@ -112,7 +72,7 @@ def resolve_candidate_retention_best_params_path(project_root: str, environ: Opt
     override = str(env.get(CANDIDATE_RETENTION_BEST_PARAMS_PATH_ENV_VAR, "")).strip()
     if override != "":
         return _resolve_override_path(project_root, override)
-    return os.path.join(resolve_models_dir(project_root, environ=env), "candidate_retention_best_params.json")
+    return _resolve_trade_state_path(project_root, "candidate_retention_best.json", environ=env)
 
 
 def resolve_candidate_val_score_best_params_path(project_root: str, environ: Optional[Mapping[str, str]] = None) -> str:
@@ -120,7 +80,7 @@ def resolve_candidate_val_score_best_params_path(project_root: str, environ: Opt
     override = str(env.get(CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH_ENV_VAR, "")).strip()
     if override != "":
         return _resolve_override_path(project_root, override)
-    return os.path.join(resolve_models_dir(project_root, environ=env), "candidate_val_score_best_params.json")
+    return _resolve_trade_state_path(project_root, "candidate_val_score_best.json", environ=env)
 
 
 def _param_source_key_from_filename(filename: str) -> str:
@@ -135,16 +95,9 @@ def _format_param_source_label(filename: str) -> str:
     return CANONICAL_PARAM_FILENAME_LABELS.get(basename, basename)
 
 
-def _canonical_param_source_sort_rank(filename: str) -> int:
-    try:
-        return CANONICAL_PARAM_FILENAME_ORDER.index(os.path.basename(str(filename)))
-    except ValueError:
-        return len(CANONICAL_PARAM_FILENAME_ORDER)
-
-
 def _strategy_param_repository_dirs(project_root: str, environ: Optional[Mapping[str, str]] = None) -> List[str]:
     env = os.environ if environ is None else environ
-    base = os.path.join(resolve_models_dir(project_root, environ=env), "strategy_params")
+    base = os.path.join(resolve_models_dir(project_root, environ=env), STRATEGY_PARAM_REPOSITORY_DIRNAME)
     if not os.path.isdir(base):
         return []
     folders: List[str] = []
@@ -157,7 +110,6 @@ def _discover_active_param_ensemble_sets(project_root: str, environ: Optional[Ma
     env = os.environ if environ is None else environ
     search_dirs = [
         *_strategy_param_repository_dirs(project_root, environ=env),
-        resolve_models_dir(project_root, environ=env),
         os.path.join(build_output_dir(project_root, "optimizer"), "outer_rolling_oos"),
     ]
     records: List[Dict[str, str]] = []
@@ -213,7 +165,6 @@ def _discover_rolling_oos_param_sets(project_root: str, environ: Optional[Mappin
     env = os.environ if environ is None else environ
     search_dirs = [
         *_strategy_param_repository_dirs(project_root, environ=env),
-        resolve_models_dir(project_root, environ=env),
         os.path.join(build_output_dir(project_root, "optimizer"), "outer_rolling_oos"),
     ]
     records: List[Dict[str, str]] = []
@@ -263,35 +214,17 @@ def _discover_rolling_oos_param_sets(project_root: str, environ: Optional[Mappin
 
 
 def discover_model_param_sources(project_root: str, environ: Optional[Mapping[str, str]] = None, *, include_rolling_oos: bool = False, include_active_param_ensemble: bool = False) -> List[Dict[str, str]]:
-    """Return selectable parameter files that currently exist under models/.
+    """Return selectable canonical strategy-parameter artifacts.
 
-    By default only ``*_params.json`` single-param files are exposed, so optimizer
-    summary files do not pollute trading/scanner dropdowns.  Rolling OOS
-    validation param sets are opt-in because they are not live-trading params.
+    Current discovery never scans legacy JSON files from ``models/`` root.  The
+    default live parameter state and all first-class policy artifacts live below
+    ``models/strategy_params/``; optimizer ``outputs/`` are validation-only extras.
     """
     env = os.environ if environ is None else environ
-    models_dir = resolve_models_dir(project_root, environ=env)
     records: List[Dict[str, str]] = []
-    try:
-        filenames = os.listdir(models_dir)
-    except FileNotFoundError:
-        filenames = []
-
-    for filename in filenames:
-        if not filename.endswith(PARAMS_FILENAME_SUFFIX):
-            continue
-        path = os.path.abspath(os.path.join(models_dir, filename))
-        if not os.path.isfile(path):
-            continue
-        if is_active_param_ensemble_file(path) or is_rolling_oos_param_set_file(path):
-            continue
-        records.append({
-            "key": _param_source_key_from_filename(filename),
-            "label": _format_param_source_label(filename),
-            "path": path,
-            "filename": filename,
-            "kind": "single_param",
-        })
+    active_path = resolve_run_best_params_path(project_root, environ=env)
+    if os.path.isfile(active_path):
+        records.append(_model_record_for_path(active_path, key="run_best", label="strategy_params/full/trade/state/active.json"))
 
     if include_active_param_ensemble:
         records.extend(_discover_active_param_ensemble_sets(project_root, environ=env))
@@ -299,14 +232,22 @@ def discover_model_param_sources(project_root: str, environ: Optional[Mapping[st
     if include_rolling_oos:
         records.extend(_discover_rolling_oos_param_sets(project_root, environ=env))
 
+    seen: set[str] = set()
+    deduped: List[Dict[str, str]] = []
+    for record in records:
+        path = os.path.abspath(str(record.get("path") or ""))
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        deduped.append(record)
     kind_rank = {"single_param": 0, "active_param_ensemble": 1, "rolling_oos_param_set": 2}
-    records.sort(key=lambda item: (
+    deduped.sort(key=lambda item: (
+        0 if str(item.get("key")) == "run_best" else 1,
         kind_rank.get(str(item.get("kind", "single_param")), 99),
-        _canonical_param_source_sort_rank(item["filename"]) if str(item.get("kind", "single_param")) == "single_param" else 0,
-        -int(os.path.getmtime(item["path"])) if str(item.get("kind")) in {"active_param_ensemble", "rolling_oos_param_set"} and os.path.exists(item["path"]) else 0,
+        -int(os.path.getmtime(item["path"])) if os.path.exists(item["path"]) else 0,
         str(item["label"]).lower(),
     ))
-    return records
+    return deduped
 
 
 
@@ -332,12 +273,9 @@ def _model_record_for_path(path: str, *, key: str, label: Optional[str] = None) 
 def resolve_default_primary_param_source_record(project_root: str, environ: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
     """Return the canonical primary parameter source record.
 
-    ``V16_RUN_BEST_PARAMS_PATH`` is the only supported runtime override.  Without
-    that override, the canonical source always resolves to
-    ``models/run_best_params.json`` even when the optional artifact has not been
-    created yet.  Discovery of other existing parameter artifacts belongs to
-    ``discover_model_param_sources()`` and must not silently change the default
-    runtime source.
+    ``V16_RUN_BEST_PARAMS_PATH`` remains a test/compatibility override.  Without
+    that override, the current source always resolves to the Optimizer-owned
+    ``models/strategy_params/full/trade/state/active.json`` artifact.
     """
     env = os.environ if environ is None else environ
     override = str(env.get(RUN_BEST_PARAMS_PATH_ENV_VAR, "")).strip()
@@ -348,7 +286,7 @@ def resolve_default_primary_param_source_record(project_root: str, environ: Opti
     return _model_record_for_path(
         resolve_run_best_params_path(project_root, environ=env),
         key="run_best",
-        label="run_best_params.json",
+        label="strategy_params/full/trade/state/active.json",
     )
 
 

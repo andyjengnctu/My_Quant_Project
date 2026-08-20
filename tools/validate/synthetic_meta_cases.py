@@ -14,6 +14,7 @@ from core.model_paths import (
     RUN_BEST_PARAMS_PATH_ENV_VAR,
     resolve_default_primary_param_source_path,
     resolve_models_dir,
+    discover_model_param_sources,
 )
 from .module_loader import build_project_absolute_path
 
@@ -417,18 +418,15 @@ def validate_model_param_source_resolution_contract_case(_base_params):
     models_dir = Path(resolve_models_dir(PROJECT_ROOT, environ={}))
 
     required_fragments = [
-        "│  └─ <optimizer parameter artifacts>.json",
-        "runtime 產生或使用者保留的可選參數工件",
+        "strategy_params/",
+        "models root不再放current策略JSON",
         "formal_primary_params.json",
         "V16_RUN_BEST_PARAMS_PATH",
-        "不要求 repository 或交付 ZIP 內建 `models/run_best_params.json`",
+        "models/strategy_params/full/trade/state/active.json",
     ]
     stale_exact_tree_fragments = [
-        "│  ├─ full_base_best.json",
-        "│  ├─ full_base_finalists_agree.json",
-        "│  ├─ full_ensemble_base.json",
-        "│  ├─ oos_ensemble_base.json",
-        "│  └─ roos_ensemble_base.json",
+        "│  └─ <optimizer parameter artifacts>.json",
+        "預設參數 fallback 仍解析到 `models/run_best_params.json`",
     ]
 
     for idx, fragment in enumerate(required_fragments, start=1):
@@ -453,22 +451,37 @@ def validate_model_param_source_resolution_contract_case(_base_params):
     default_param_source_path = Path(
         resolve_default_primary_param_source_path(PROJECT_ROOT, environ={})
     )
+    expected_default_path = models_dir / "strategy_params" / "full" / "trade" / "state" / "active.json"
     add_check(
         results,
         "meta_architecture_contract",
         case_id,
-        "default_primary_param_fallback_is_under_models",
-        models_dir,
-        default_param_source_path.parent,
+        "default_primary_param_is_canonical_trade_active_state",
+        expected_default_path.resolve(),
+        default_param_source_path.resolve(),
     )
-    add_check(
-        results,
-        "meta_architecture_contract",
-        case_id,
-        "default_primary_param_fallback_filename",
-        "run_best_params.json",
-        default_param_source_path.name,
-    )
+
+    with tempfile.TemporaryDirectory(prefix="canonical_param_discovery_contract_") as temp_dir:
+        temp_root = Path(temp_dir)
+        legacy_root = temp_root / "models"
+        legacy_root.mkdir(parents=True, exist_ok=True)
+        (legacy_root / "run_best_params.json").write_text("{}", encoding="utf-8")
+        add_check(
+            results, "meta_architecture_contract", case_id,
+            "legacy_models_root_strategy_json_is_not_current_discovery_source",
+            [],
+            discover_model_param_sources(str(temp_root), environ={}),
+        )
+        canonical_active = temp_root / "models" / "strategy_params" / "full" / "trade" / "state" / "active.json"
+        canonical_active.parent.mkdir(parents=True, exist_ok=True)
+        canonical_active.write_text("{}", encoding="utf-8")
+        discovered = discover_model_param_sources(str(temp_root), environ={})
+        add_check(
+            results, "meta_architecture_contract", case_id,
+            "canonical_trade_active_state_is_discovered",
+            True,
+            any(Path(record["path"]).resolve() == canonical_active.resolve() for record in discovered),
+        )
 
     with tempfile.TemporaryDirectory(prefix="formal_param_override_contract_") as temp_dir:
         override_path = Path(temp_dir) / "formal_primary_params.json"

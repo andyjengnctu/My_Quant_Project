@@ -7,7 +7,6 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
-import shutil
 from typing import Any
 
 from config.breakout_quality import (
@@ -28,7 +27,6 @@ from config.strategy_compare import (
 from core.active_param_ensemble import build_active_param_ensemble_schedule
 from core.console_report import print_artifact_paths, render_key_values, render_title
 from core.file_integrity import compute_file_sha256
-from core.model_paths import resolve_active_params_path
 from core.params_io import build_params_from_mapping, load_params_from_json, params_to_json_dict
 from filters.breakout_quality.export_scores import export_workflow_runtime_scores
 from filters.breakout_quality.runtime_integration_gate import collect_runtime_integration_status
@@ -40,6 +38,7 @@ from filters.breakout_quality.workflow_runtime_score_store import (
     resolve_workflow_runtime_score_paths,
 )
 from filters.breakout_quality.workflow_io import write_json
+from services.optimizer.strategy_param_repository import write_strategy_parameter_state_artifact
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -172,21 +171,16 @@ def apply_or_refresh_runtime_promotion(*, project_root: Path = PROJECT_ROOT) -> 
     )
 
     official_payload = _build_official_runtime_params(raw_params, filter_id=workflow.filter_id)
-    official_path = Path(resolve_active_params_path(str(root))).resolve()
-    backup_path = None
     timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
-    if official_path.is_file():
-        backup_dir = official_path.parent / "runtime_promotion" / "backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        backup_path = backup_dir / f"run_best_params_before_mr13e_{timestamp}.json"
-        shutil.copy2(official_path, backup_path)
-    official_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = official_path.with_name(official_path.name + ".tmp")
-    temp_path.write_text(
-        json.dumps(official_payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+    state_write = write_strategy_parameter_state_artifact(
+        root,
+        artifact="active",
+        payload=official_payload,
+        backup_existing=True,
+        backup_label=f"before_mr13e_{timestamp}",
     )
-    os.replace(temp_path, official_path)
+    official_path = Path(state_write["path"]).resolve()
+    backup_path = state_write.get("backup_path")
     load_params_from_json(str(official_path))
 
     output_dir = root / "outputs" / "strategy_compare" / "runtime_integration" / "promotion" / timestamp

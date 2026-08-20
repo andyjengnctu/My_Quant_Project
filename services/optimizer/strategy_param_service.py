@@ -30,6 +30,8 @@ from core.strategy_param_artifacts import (
     normalize_strategy_param_policy,
     resolve_strategy_param_artifact_path,
     resolve_strategy_param_dir,
+    resolve_strategy_param_state_path,
+    STRATEGY_PARAM_STATE_FILENAME_BY_NAME,
 )
 from services.optimizer.strategy_param_repository import refresh_strategy_parameter_manifest
 
@@ -48,29 +50,20 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def _legacy_policy_filename(policy: str, *, evaluation_mode: str) -> str:
     normalized = normalize_strategy_param_policy(policy)
-    rolling = {
-        "base_finalist_best": "roos_base_best.json",
-        "local_finalist_best": "roos_local_best.json",
-        "retention_finalist_best": "roos_retention_best.json",
-        "base_finalists_agree": "roos_base_finalists_agree.json",
-        "local_finalists_agree": "roos_local_finalists_agree.json",
-        "retention_finalists_agree": "roos_retention_finalists_agree.json",
-        "base": "roos_ensemble_base.json",
-        "local": "roos_ensemble_local.json",
-        "retention": "roos_ensemble_retention.json",
-    }
-    oos = {
-        "base_finalist_best": "oos_base_best.json",
-        "local_finalist_best": "oos_local_best.json",
-        "retention_finalist_best": "oos_retention_best.json",
-        "base_finalists_agree": "oos_base_finalists_agree.json",
-        "local_finalists_agree": "oos_local_finalists_agree.json",
-        "retention_finalists_agree": "oos_retention_finalists_agree.json",
-        "base": "oos_ensemble_base.json",
-        "local": "oos_ensemble_local.json",
-        "retention": "oos_ensemble_retention.json",
-    }
-    return (oos if normalize_strategy_param_evaluation_mode(evaluation_mode) == "oos" else rolling)[normalized]
+    mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
+    base = POLICY_FILENAME_BY_NAME[normalized]
+    if mode == "study":
+        if normalized in {"base", "local", "retention"}:
+            return f"{normalized}.json"
+        return base
+    if mode in {"full", "trade"}:
+        if normalized in {"base", "local", "retention"}:
+            return f"{mode}_ensemble_{normalized}.json"
+        return f"{mode}_{base}"
+    prefix = "oos" if mode == "oos" else "roos"
+    if normalized in {"base", "local", "retention"}:
+        return f"{prefix}_ensemble_{normalized}.json"
+    return f"{prefix}_{base}"
 
 
 def _legacy_candidates(root: Path, *, family: str, evaluation_mode: str, policy: str) -> tuple[Path, ...]:
@@ -143,6 +136,43 @@ def _materialize_legacy_candidate(*, candidate: Path, target: Path, evaluation_m
     return True
 
 
+
+def migrate_legacy_trade_state_artifacts(project_root: str | Path) -> dict[str, Any]:
+    """Copy legacy root Trade runtime state into the canonical repository once."""
+    root = Path(project_root).resolve()
+    legacy_by_artifact = {
+        "active": "run_best_params.json",
+        "active_summary": "run_best_summary.json",
+        "candidate_best": "candidate_best_params.json",
+        "candidate_best_summary": "candidate_best_summary.json",
+        "candidate_retention_best": "candidate_retention_best_params.json",
+        "candidate_retention_best_summary": "candidate_retention_best_summary.json",
+        "candidate_val_score_best": "candidate_val_score_best_params.json",
+        "candidate_val_score_best_summary": "candidate_val_score_best_summary.json",
+    }
+    migrated: dict[str, str] = {}
+    reused: list[str] = []
+    for artifact in STRATEGY_PARAM_STATE_FILENAME_BY_NAME:
+        target = resolve_strategy_param_state_path(root, artifact=artifact)
+        if target.is_file():
+            reused.append(artifact)
+            continue
+        legacy_name = legacy_by_artifact[artifact]
+        source = root / "models" / legacy_name
+        if not source.is_file():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        migrated[artifact] = _project_relative(root, source)
+    manifest = refresh_strategy_parameter_manifest(root, family="full", evaluation_mode="trade")
+    return {
+        "family": "full",
+        "evaluation_mode": "trade",
+        "migrated": migrated,
+        "reused": reused,
+        "manifest_path": _project_relative(root, manifest),
+    }
+
 def migrate_legacy_strategy_parameter_artifacts(project_root: str | Path, *, family: str, evaluation_mode: str) -> dict[str, Any]:
     """Migrate existing optimizer/research legacy files into the canonical repository.
 
@@ -174,6 +204,9 @@ def migrate_legacy_strategy_parameter_artifacts(project_root: str | Path, *, fam
             }
             migrated[policy] = _project_relative(root, candidate)
             break
+    state_migration = None
+    if family == "full" and mode == "trade":
+        state_migration = migrate_legacy_trade_state_artifacts(root)
     manifest_path = refresh_strategy_parameter_manifest(root, family=family, evaluation_mode=mode, source_records=sources)
     return {
         "family": family,
@@ -181,9 +214,79 @@ def migrate_legacy_strategy_parameter_artifacts(project_root: str | Path, *, fam
         "migrated": migrated,
         "reused": reused,
         "manifest_path": _project_relative(root, manifest_path),
+        "state_migration": state_migration,
     }
 
 
+
+
+
+def collect_legacy_root_strategy_parameter_cleanup_plan(project_root: str | Path) -> dict[str, Any]:
+    """Return legacy root strategy JSONs that are safe to delete after migration."""
+    root = Path(project_root).resolve()
+    models_root = root / "models"
+    mappings: dict[Path, Path] = {}
+    for mode in ("study", "full", "oos", "rolling", "trade"):
+        for policy in POLICY_FILENAME_BY_NAME:
+            source = models_root / _legacy_policy_filename(policy, evaluation_mode=mode)
+            target = resolve_strategy_param_artifact_path(
+                root, family="full", evaluation_mode=mode, policy=policy
+            )
+            mappings[source] = target
+    state_legacy = {
+        "active": "run_best_params.json",
+        "active_summary": "run_best_summary.json",
+        "candidate_best": "candidate_best_params.json",
+        "candidate_best_summary": "candidate_best_summary.json",
+        "candidate_retention_best": "candidate_retention_best_params.json",
+        "candidate_retention_best_summary": "candidate_retention_best_summary.json",
+        "candidate_val_score_best": "candidate_val_score_best_params.json",
+        "candidate_val_score_best_summary": "candidate_val_score_best_summary.json",
+    }
+    for artifact, legacy_name in state_legacy.items():
+        mappings[models_root / legacy_name] = resolve_strategy_param_state_path(
+            root, artifact=artifact
+        )
+    removable: list[dict[str, str]] = []
+    blockers: list[dict[str, str]] = []
+    for source, target in sorted(mappings.items(), key=lambda item: item[0].name.lower()):
+        if not source.is_file():
+            continue
+        record = {
+            "source": _project_relative(root, source),
+            "target": _project_relative(root, target),
+        }
+        if target.is_file():
+            removable.append(record)
+        else:
+            blockers.append(record)
+    return {
+        "status": "READY" if not blockers else "BLOCKED",
+        "removable": removable,
+        "blockers": blockers,
+    }
+
+def migrate_all_legacy_strategy_parameter_artifacts(project_root: str | Path) -> dict[str, Any]:
+    """One-shot content-preserving migration of every legacy current parameter family."""
+    root = Path(project_root).resolve()
+    results: list[dict[str, Any]] = []
+    for mode in ("study", "full", "oos", "rolling", "trade"):
+        results.append(
+            migrate_legacy_strategy_parameter_artifacts(
+                root, family="full", evaluation_mode=mode
+            )
+        )
+    for mode in ("oos", "rolling"):
+        results.append(
+            migrate_legacy_strategy_parameter_artifacts(
+                root, family="min", evaluation_mode=mode
+            )
+        )
+    return {
+        "status": "PASS",
+        "project_root": str(root),
+        "results": results,
+    }
 
 def _freeze_rolling_policy_to_oos(
     root: Path,
@@ -365,5 +468,8 @@ def ensure_strategy_parameter_artifact(
 __all__ = [
     "ensure_strategy_parameter_artifact",
     "migrate_legacy_strategy_parameter_artifacts",
+    "migrate_legacy_trade_state_artifacts",
+    "migrate_all_legacy_strategy_parameter_artifacts",
+    "collect_legacy_root_strategy_parameter_cleanup_plan",
     "refresh_strategy_parameter_manifest",
 ]

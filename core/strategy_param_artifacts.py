@@ -11,11 +11,22 @@ import json
 from pathlib import Path
 from typing import Any
 
-STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION = 1
+STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION = 2
 STRATEGY_PARAM_ROOT_RELATIVE = Path("models") / "strategy_params"
 
 STRATEGY_PARAM_FAMILIES = ("full", "min")
 STRATEGY_PARAM_EVALUATION_MODES = ("study", "full", "oos", "rolling", "trade")
+STRATEGY_PARAM_STATE_DIRNAME = "state"
+STRATEGY_PARAM_STATE_FILENAME_BY_NAME = {
+    "active": "active.json",
+    "active_summary": "active_summary.json",
+    "candidate_best": "candidate_best.json",
+    "candidate_best_summary": "candidate_best_summary.json",
+    "candidate_retention_best": "candidate_retention_best.json",
+    "candidate_retention_best_summary": "candidate_retention_best_summary.json",
+    "candidate_val_score_best": "candidate_val_score_best.json",
+    "candidate_val_score_best_summary": "candidate_val_score_best_summary.json",
+}
 
 POLICY_FILENAME_BY_NAME = {
     "base_finalist_best": "base_best.json",
@@ -77,6 +88,33 @@ def resolve_strategy_param_artifact_path(
     return resolve_strategy_param_dir(project_root, family=family, evaluation_mode=evaluation_mode) / POLICY_FILENAME_BY_NAME[normalized_policy]
 
 
+
+def resolve_strategy_param_state_dir(
+    project_root: str | Path,
+    *,
+    family: str = "full",
+    evaluation_mode: str = "trade",
+) -> Path:
+    return resolve_strategy_param_dir(
+        project_root, family=family, evaluation_mode=evaluation_mode
+    ) / STRATEGY_PARAM_STATE_DIRNAME
+
+
+def resolve_strategy_param_state_path(
+    project_root: str | Path,
+    *,
+    artifact: str,
+    family: str = "full",
+    evaluation_mode: str = "trade",
+) -> Path:
+    key = str(artifact or "").strip()
+    if key not in STRATEGY_PARAM_STATE_FILENAME_BY_NAME:
+        raise ValueError(f"不支援的策略參數state artifact: {artifact!r}")
+    return resolve_strategy_param_state_dir(
+        project_root, family=family, evaluation_mode=evaluation_mode
+    ) / STRATEGY_PARAM_STATE_FILENAME_BY_NAME[key]
+
+
 def resolve_strategy_param_manifest_path(project_root: str | Path, *, family: str, evaluation_mode: str) -> Path:
     return resolve_strategy_param_dir(project_root, family=family, evaluation_mode=evaluation_mode) / "manifest.json"
 
@@ -105,6 +143,8 @@ __all__ = [
     "STRATEGY_PARAM_ROOT_RELATIVE",
     "STRATEGY_PARAM_FAMILIES",
     "STRATEGY_PARAM_EVALUATION_MODES",
+    "STRATEGY_PARAM_STATE_DIRNAME",
+    "STRATEGY_PARAM_STATE_FILENAME_BY_NAME",
     "POLICY_FILENAME_BY_NAME",
     "COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY",
     "normalize_strategy_param_family",
@@ -112,6 +152,8 @@ __all__ = [
     "normalize_strategy_param_policy",
     "resolve_strategy_param_dir",
     "resolve_strategy_param_artifact_path",
+    "resolve_strategy_param_state_dir",
+    "resolve_strategy_param_state_path",
     "resolve_strategy_param_manifest_path",
     "compute_strategy_param_file_sha256",
     "load_strategy_param_manifest",

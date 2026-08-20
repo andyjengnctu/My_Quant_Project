@@ -17,6 +17,7 @@ from core.active_param_ensemble import (
 )
 from core.buy_sort import BREAKOUT_QUALITY_RANKING_POLICY_SCORE
 from core.model_paths import resolve_default_primary_param_source_record
+from core.strategy_param_artifacts import resolve_strategy_param_artifact_path
 from core.params_io import build_params_from_mapping, load_params_from_json, params_to_json_dict
 from core.rolling_oos_params import build_active_param_schedule, is_rolling_oos_param_set_payload
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
@@ -210,19 +211,18 @@ def _resolve_params_path(
         requested = Path(params_path)
         return requested.resolve() if requested.is_absolute() else (root / requested).resolve()
     if param_policy != PARAM_POLICY_AUTO:
-        if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-            return (
-                root / "models" / "research" / "breakout_quality"
-                / "selection_strategy_realization"
-                / PARAM_POLICY_SPECS[param_policy]["filename"]
-            ).resolve()
-        return (root / "models" / PARAM_POLICY_SPECS[param_policy]["filename"]).resolve()
+        return resolve_strategy_param_artifact_path(
+            root,
+            family="full",
+            evaluation_mode="rolling",
+            policy=PARAM_POLICY_SPECS[param_policy]["selector"],
+        ).resolve()
     if allow_static_diagnostic:
         return Path(resolve_default_primary_param_source_record(str(root))["path"]).resolve()
     raise ValueError(
-        "正式 OOS 策略對照必須以 --params 指定 rolling OOS JSON，或用 "
-        "--param-policy base-finalist-best / base-finalists-agree 自動解析；"
-        "只有非 OOS 敏感度診斷才可加 --allow-static-diagnostic 使用 run_best_params.json。"
+        "正式策略對照必須以 --params 指定明確工件，或用 "
+        "--param-policy base-finalist-best / base-finalists-agree 解析 canonical Strategy Parameter SSOT；"
+        "只有非 OOS 敏感度診斷才可加 --allow-static-diagnostic 使用 canonical Trade active state。"
     )
 
 def _comparison_output_dir_name(

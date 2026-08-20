@@ -9676,3 +9676,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Strategy Compare current identity改為`full_oos/min_oos/full_rolling/min_rolling`；C61使用Full family，C58/C59/C60使用Min family。缺件時Research只委派canonical Optimizer parameter service並re-plan，不自己執行另一套optimizer policy。OOS fixed-2020-cutoff view亦由Optimizer service從合法rolling effective member deterministic derivation。
 - Legacy root-level `models/roos_*.json`、`models/oos_*.json`與`models/research/...`參數工件保留只讀migration／historical compatibility，不再是current truth。沒有新增MR／SR／Cxx identity，也不改search space、參數值、strategy semantics、Compare Suite、模型Target／architecture／loss。
 - Strategy Compare config schema `50→51`。Decision：`STRATEGY_PARAM_SSOT / OPTIMIZER_SOLE_PRODUCER / RESEARCH_CONSUMER_ONLY / SCIENTIFIC_SEMANTICS_UNCHANGED`。
+
+
+### 2026-08-20 Strategy Parameter root-legacy retirement / Trade state SSOT
+
+- 工程性重構，不新增MR/SR/Cxx identity，不改任何strategy search space、seed數值、trial數值、C61/C58/C59/C60或模型science。
+- Strategy Parameter SSOT補完Study／Full／OOS／Rolling／Trade全部first-class policy migration；legacy `models/base*.json`、`full_*`、`trade_*`、`oos_*`、`roos_*`只作一次性migration source。
+- `run_best_params.json`與candidate state不再位於`models/` root；current Trade active/candidate固定為`models/strategy_params/full/trade/state/`。`core/model_paths.py`預設active resolver與Workbench/Portfolio/Trade Analysis discovery均只讀canonical repository，不再掃root strategy JSON。
+- Breakout Quality runtime promotion不再直接寫strategy param；正式active-state atomic write／backup／manifest refresh委派`services/optimizer/strategy_param_repository.py`，維持Optimizer sole-producer。
+- Canonical Strategy Parameter manifest schema升至v2並納入`state_artifacts` SHA。舊root檔migration完成且canonical檔驗證通過後可刪除；historical `models/research/...`仍只作明確compatibility，不得current REUSE。

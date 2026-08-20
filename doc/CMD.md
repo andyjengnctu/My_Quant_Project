@@ -407,3 +407,8 @@ outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_
 ### 11H～11K 歷史診斷（已完成並退役）
 
 11H PASS realization-gap、11I Selection strategy-realization、11J per-candidate counterfactual、11K portfolio selection-pressure已完成研究決策並退出current CLI。對應implementation、catalog registration與專屬synthetic tests不再隨正式程式維護；歷史結論請查`doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`與`doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`。若未來需要重新回答相似問題，應建立新的最小Audit，而不是復活舊命令。
+
+
+## Strategy Parameter SSOT 一次性 migration
+
+舊`models/*.json`策略參數只作一次性migration source；current正式位置為`models/strategy_params/`。Migration必須呼叫`services.optimizer.strategy_param_service.migrate_all_legacy_strategy_parameter_artifacts()`，不得手動Move-Item後略過manifest/source SHA。完成migration並通過驗證後，才可刪除legacy root strategy JSON；current runtime不得再從root fallback。

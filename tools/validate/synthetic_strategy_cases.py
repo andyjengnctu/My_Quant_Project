@@ -20,7 +20,6 @@ from core.strategy_dashboard import print_optimizer_trial_console_dashboard, pri
 from core.walk_forward_policy import build_optimizer_runtime_policy, load_walk_forward_policy
 from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, SYSTEM_SCORE_DISPLAY_MULTIPLIER, V16StrategyParams, format_system_score_for_display, get_score_mdd_denominator_epsilon, get_score_mdd_power
 from config.training_policy import FULL_END_YEAR, OOS_EVALUATION_END_YEAR
-from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.portfolio_fast_data import build_score_single_stock_profile_fields
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score, calc_score_median_r_multiplier, calc_score_min_full_year_return_multiplier, calc_score_min_month_return_multiplier, calc_score_min_quarter_return_multiplier, calc_score_portfolio_return_multiplier, calc_score_positive_return_multiplier, calc_score_win_rate_multiplier
@@ -137,18 +136,15 @@ def _extract_reference_param_payloads(payload):
 
 
 def _existing_shipped_reference_param_paths():
-    candidate_names = (
-        "candidate_best_params.json",
-        *PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES,
-    )
+    root = Path("models") / "strategy_params"
+    if not root.is_dir():
+        return []
     paths = []
-    seen = set()
-    for filename in candidate_names:
-        path = Path("models") / filename
-        key = str(path)
-        if key in seen or not path.exists():
+    for path in sorted(root.rglob("*.json")):
+        if path.name == "manifest.json" or path.name.endswith("_summary.json"):
             continue
-        seen.add(key)
+        if "backups" in path.parts:
+            continue
         paths.append(path)
     return paths
 

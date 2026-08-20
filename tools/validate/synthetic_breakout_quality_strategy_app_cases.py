@@ -174,6 +174,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     param_service_path = project_root / "services" / "optimizer" / "strategy_param_training.py"
     param_compatibility_path = project_root / "filters" / "breakout_quality" / "strategy_param_training.py"
     param_repository_service_path = project_root / "services" / "optimizer" / "strategy_param_service.py"
+    param_manifest_repository_path = project_root / "services" / "optimizer" / "strategy_param_repository.py"
+    model_paths_path = project_root / "core" / "model_paths.py"
+    optimizer_main_path = project_root / "tools" / "optimizer" / "main.py"
+    runtime_promotion_path = project_root / "services" / "breakout_quality" / "runtime_promotion.py"
     workflow_io_path = project_root / "filters" / "breakout_quality" / "workflow_io.py"
     optimizer_policy_path = project_root / "filters" / "breakout_quality" / "strategy_optimizer_policy.py"
     artifact_registry_path = project_root / "filters" / "breakout_quality" / "artifact_dependency_registry.py"
@@ -513,6 +517,23 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "def ensure_strategy_parameter_artifact(" in param_repository_service_source
         and "from config.training_policy import" in param_repository_service_source
         and "trials_per_fold" not in json.dumps(current_param_builder_options, sort_keys=True),
+    )
+
+    model_paths_source = model_paths_path.read_text(encoding="utf-8")
+    optimizer_main_source = optimizer_main_path.read_text(encoding="utf-8")
+    runtime_promotion_source = runtime_promotion_path.read_text(encoding="utf-8")
+    param_manifest_repository_source = param_manifest_repository_path.read_text(encoding="utf-8")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "current_strategy_parameter_runtime_retires_models_root_json_and_keeps_optimizer_as_state_writer",
+        True,
+        "strategy_params/full/trade/state/active.json" in model_paths_source
+        and "resolve_models_dir(project_root, environ=env), \"run_best_params.json\"" not in model_paths_source
+        and "os.path.join(MODELS_DIR, \"run_best_params.json\")" not in optimizer_main_source
+        and "write_strategy_parameter_state_artifact" in runtime_promotion_source
+        and "resolve_active_params_path" not in runtime_promotion_source
+        and "def write_strategy_parameter_state_artifact(" in param_manifest_repository_source
+        and "def migrate_all_legacy_strategy_parameter_artifacts(" in param_repository_service_source,
     )
 
     add_check(

@@ -324,7 +324,7 @@ def main(argv=None, environ=None):
     sanitize_stats = analysis_result["sanitize_stats"]
 
     print(f"📥 讀取 {analysis_result['file_path']}...")
-    print(f"{C_GREEN}✅ 成功載入參數大腦: {os.path.join(BASE_DIR, 'models', 'run_best_params.json')}{C_RESET}")
+    print(f"{C_GREEN}✅ 成功載入參數大腦: {resolve_run_best_params_path(BASE_DIR)}{C_RESET}")
 
     dropped_row_count = sanitize_stats['dropped_row_count']
     invalid_row_count = sanitize_stats['invalid_row_count']

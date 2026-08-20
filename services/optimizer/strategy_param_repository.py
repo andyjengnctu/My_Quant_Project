@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,9 @@ from core.strategy_param_artifacts import (
     normalize_strategy_param_family,
     resolve_strategy_param_dir,
     resolve_strategy_param_manifest_path,
+    resolve_strategy_param_state_dir,
+    STRATEGY_PARAM_STATE_FILENAME_BY_NAME,
+    resolve_strategy_param_state_path,
 )
 
 
@@ -95,6 +100,16 @@ def build_strategy_parameter_manifest_payload(
         source = dict(preserved_sources.get(policy) or {})
         if source:
             artifacts[policy]["source"] = source
+    state_artifacts: dict[str, Any] = {}
+    if family == "full" and mode == "trade":
+        state_dir = resolve_strategy_param_state_dir(root, family=family, evaluation_mode=mode)
+        for state_name, filename in STRATEGY_PARAM_STATE_FILENAME_BY_NAME.items():
+            state_path = state_dir / filename
+            if state_path.is_file():
+                state_artifacts[state_name] = {
+                    "path": _project_relative(root, state_path),
+                    "sha256": compute_strategy_param_file_sha256(state_path),
+                }
     training_policy = get_strategy_parameter_training_policy_snapshot(evaluation_mode=mode)
     return {
         "schema_type": "canonical_strategy_parameter_artifact_set",
@@ -105,9 +120,52 @@ def build_strategy_parameter_manifest_payload(
         "training_policy": training_policy,
         "training_policy_fingerprint": _canonical_json_sha256(training_policy)[:16],
         "artifacts": artifacts,
+        "state_artifacts": state_artifacts,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
+
+
+def write_strategy_parameter_state_artifact(
+    project_root: str | Path,
+    *,
+    artifact: str,
+    payload: dict[str, Any],
+    family: str = "full",
+    evaluation_mode: str = "trade",
+    backup_existing: bool = False,
+    backup_label: str | None = None,
+) -> dict[str, Any]:
+    """Atomically write Optimizer-owned runtime/candidate state and refresh manifest."""
+    root = Path(project_root).resolve()
+    family = normalize_strategy_param_family(family)
+    mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
+    target = resolve_strategy_param_state_path(
+        root, artifact=artifact, family=family, evaluation_mode=mode
+    )
+    backup_path: Path | None = None
+    if backup_existing and target.is_file():
+        backups = target.parent / "backups"
+        backups.mkdir(parents=True, exist_ok=True)
+        suffix = str(backup_label or "previous").strip() or "previous"
+        backup_path = backups / f"{target.stem}_{suffix}.json"
+        shutil.copy2(target, backup_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_name(target.name + ".tmp")
+    temp.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False, default=str) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temp, target)
+    manifest = refresh_strategy_parameter_manifest(
+        root, family=family, evaluation_mode=mode
+    )
+    return {
+        "path": target,
+        "sha256": compute_strategy_param_file_sha256(target),
+        "backup_path": backup_path,
+        "manifest_path": manifest,
+    }
 
 def refresh_strategy_parameter_manifest(
     project_root: str | Path,
@@ -135,4 +193,5 @@ def refresh_strategy_parameter_manifest(
 __all__ = [
     "build_strategy_parameter_manifest_payload",
     "refresh_strategy_parameter_manifest",
+    "write_strategy_parameter_state_artifact",
 ]
