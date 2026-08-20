@@ -1227,7 +1227,102 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and benchmark_manifest["artifacts"]["base_finalist_best"]["path"].startswith(
             "models/strategy_params/benchmark/"
         )
-        and "Robustness Benchmark Round 1只完成scientific contract" in robustness_source,
+        and "Robustness Benchmark Round 1只完成scientific contract" not in robustness_source
+        and "ensure_robustness_benchmark_strategy_parameter_artifact" in robustness_source,
+    )
+
+    from services.optimizer import strategy_param_service as strategy_param_service_module
+
+    def _fake_benchmark_optimizer(**kwargs):
+        output_root = Path(kwargs["output_relative_dir"])
+        output_root.mkdir(parents=True, exist_ok=True)
+        start = str(kwargs["first_oos_date"])
+        end = str(kwargs["last_oos_date"])
+        seed_value = int(kwargs["optimizer_seed"])
+        mapping = {}
+        folds = []
+        start_year = int(start[:4])
+        end_year = int(end[:4])
+        for year in range(start_year, end_year + 1):
+            effective = f"{year}-01-01"
+            mapping[effective] = [{
+                "member_index": 1,
+                "seed": seed_value,
+                "params": {"high_len": 200 + (seed_value % 7), "atr_len": 14},
+            }]
+            folds.append({
+                "effective_start": effective,
+                "effective_end": (end if year == end_year else f"{year}-12-31"),
+                "oos_start_date": effective,
+                "oos_end_date": (end if year == end_year else f"{year}-12-31"),
+            })
+        payload = {
+            "schema_type": ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
+            "schema_version": 1,
+            "mode": "rolling",
+            "selector": "base_finalist_best",
+            "params_ensemble_by_effective_date": mapping,
+            "folds": folds,
+            "meta": {"first_oos_date": start, "last_oos_date": end},
+            "summary": {"oos_start_date": start, "oos_end_date": end, "oos_period": f"{start}~{end}"},
+        }
+        path = output_root / "roos_base_best.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return {"params_path": path}
+
+    with tempfile.TemporaryDirectory() as round2_tmp, patch.object(
+        __import__("services.optimizer.strategy_param_training", fromlist=["prepare_selection_historical_full_roos_params"]),
+        "prepare_selection_historical_full_roos_params",
+        side_effect=_fake_benchmark_optimizer,
+    ), patch.object(
+        __import__("services.optimizer.strategy_param_training", fromlist=["prepare_selection_historical_p2_params"]),
+        "prepare_selection_historical_p2_params",
+        side_effect=_fake_benchmark_optimizer,
+    ):
+        round2_root = Path(round2_tmp)
+        common_round2 = {
+            "project_root": round2_root,
+            "benchmark_id": str(robustness_settings.benchmark_id),
+            "seed": benchmark_seed,
+            "family": "full",
+            "policy": "base-finalist-best",
+            "comparison_end_date": "2026-03-02",
+            "dataset": "full",
+            "filter_id": "synthetic",
+            "model_architecture": "synthetic",
+            "experiment_profile": "synthetic",
+            "max_positions": 10,
+            "rotation": "off",
+            "fixed_risk": 0.01,
+            "max_position_cap_pct": 0.30,
+            "resume_parameter_training": True,
+            "quiet": True,
+        }
+        round2_oos = strategy_param_service_module.ensure_robustness_benchmark_strategy_parameter_artifact(
+            evaluation_mode="oos", **common_round2
+        )
+        round2_rolling = strategy_param_service_module.ensure_robustness_benchmark_strategy_parameter_artifact(
+            evaluation_mode="rolling", **common_round2
+        )
+        round2_oos_reuse = strategy_param_service_module.ensure_robustness_benchmark_strategy_parameter_artifact(
+            evaluation_mode="oos", **common_round2
+        )
+        extended_round2 = dict(common_round2)
+        extended_round2["comparison_end_date"] = "2026-04-30"
+        round2_oos_extended = strategy_param_service_module.ensure_robustness_benchmark_strategy_parameter_artifact(
+            evaluation_mode="oos", **extended_round2
+        )
+        oos_extended_payload = json.loads(Path(round2_oos_extended["path"]).read_text(encoding="utf-8"))
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "robustness_round2_optimizer_producer_reuses_same_2021_member_and_refreshes_latest_coverage",
+        True,
+        round2_oos["action"] == "BUILD"
+        and round2_rolling["action"] == "BUILD"
+        and round2_oos["initial_2021_member_sha256"] == round2_rolling["initial_2021_member_sha256"]
+        and round2_oos_reuse["action"] == "REUSE"
+        and round2_oos_extended["action"] == "BUILD"
+        and str(dict(oos_extended_payload.get("meta") or {}).get("last_oos_date")) == "2026-04-30",
     )
 
     shared_source_arm = robustness_profile.arms["C59"]

@@ -1154,6 +1154,7 @@ def prepare_selection_historical_p2_params(
     last_oos_date: str | None = TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
     train_window_months: int = TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
     oos_months: int = TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
+    output_relative_dir: str | Path | None = None,
 ):
     """Build/reuse Selection Min ROOS with one canonical rolling optimization.
 
@@ -1227,13 +1228,18 @@ def prepare_selection_historical_p2_params(
             f"| trials={int(trials_per_fold)}/fold "
             f"| search={','.join(MIN_ROOS_SEARCH_FIELDS)}"
         )
+    resolved_output_dir = (
+        root / TRADE_PATH_HISTORICAL_TEACHER_RELATIVE_DIR
+        if output_relative_dir in (None, "")
+        else (Path(output_relative_dir) if Path(output_relative_dir).is_absolute() else root / Path(output_relative_dir))
+    )
     return _run_optimizer_arm(
         root=root,
         args=args,
         settings=settings,
         baseline_contract=schedule_contract,
         model_artifact=None,
-        output_dir=root / TRADE_PATH_HISTORICAL_TEACHER_RELATIVE_DIR,
+        output_dir=resolved_output_dir,
         arm_id="P2_HISTORY",
         training_dl_enabled=False,
         binary_pit=None,
@@ -1891,8 +1897,14 @@ def prepare_selection_historical_full_roos_params(
     last_oos_date: str | None = TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
     train_window_months: int = TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
     oos_months: int = TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
+    output_relative_dir: str | Path | None = None,
 ):
-    """Build/reuse Selection historical Full ROOS using the canonical full search space."""
+    """Build/reuse Full rolling params using the canonical full search space.
+
+    ``output_relative_dir`` is an Optimizer-owned isolation hook used by the
+    reproducible robustness benchmark. Production callers keep the historical
+    default path.
+    """
 
     root = Path(project_root).resolve()
     resolved_first_oos_date, resolved_last_oos_date = _resolve_selection_historical_oos_period(
@@ -1915,7 +1927,11 @@ def prepare_selection_historical_full_roos_params(
         resume_parameter_training=bool(resume_parameter_training),
         quiet=bool(quiet),
     )
-    output_dir = root / SELECTION_FULL_ROOS_RELATIVE_DIR
+    output_dir = (
+        root / SELECTION_FULL_ROOS_RELATIVE_DIR
+        if output_relative_dir in (None, "")
+        else (Path(output_relative_dir) if Path(output_relative_dir).is_absolute() else root / Path(output_relative_dir))
+    )
     active_param_dir = output_dir / "active_params"
     optimizer_output_dir = output_dir / "optimizer_runtime"
     preflight_path = output_dir / "rolling_preflight.json"

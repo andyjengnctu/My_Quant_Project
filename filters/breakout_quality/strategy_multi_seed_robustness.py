@@ -58,6 +58,10 @@ from config.strategy_compare import (
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_settings,
 )
+from config.execution_policy import (
+    DEFAULT_FIXED_RISK,
+    DEFAULT_MAX_POSITION_CAP_PCT,
+)
 from core.file_integrity import canonical_json_sha256
 from core.console_report import (
     console_color_enabled,
@@ -113,6 +117,9 @@ from filters.breakout_quality.strategy_compare_sources import (
 from filters.breakout_quality.strategy_compare_engine import run_comparison
 from filters.breakout_quality.strategy_compare_replay import run_standalone_baseline
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
+from services.optimizer.strategy_param_service import (
+    ensure_robustness_benchmark_strategy_parameter_artifact,
+)
 from core.report_style import (
     SIGNAL_NEGATIVE,
     SIGNAL_POSITIVE,
@@ -147,8 +154,8 @@ MANIFEST_FILENAME = "manifest.json"
 LATEST_FILENAME = "latest.json"
 ATTRIBUTION_SOURCE_DIRNAME = "attribution_source"
 ATTRIBUTION_SOURCE_SCHEMA_VERSION = 2
-ROBUSTNESS_SCHEMA_VERSION = 10
-ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 4
+ROBUSTNESS_SCHEMA_VERSION = 11
+ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 5
 TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
 MEAN_METRICS: tuple[tuple[str, str, str], ...] = (
@@ -589,13 +596,140 @@ def _benchmark_parameter_plan_rows(
                 rows.append(("REUSE", label, project_relative_display_path(path, project_root=PROJECT_ROOT)))
             else:
                 reason = (
-                    "Round 2需由canonical Optimizer以相同benchmark seed與統一trials/fold建立；"
+                    "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立；"
                     "不得fallback到production Seed42策略參數"
                 )
-                rows.append(("BLOCKED", label, reason))
-                blockers.append(label + ": " + reason)
+                rows.append(("BUILD", label, reason))
     return rows, blockers, bindings
 
+
+
+def _prepare_benchmark_strategy_parameter_artifacts(
+    *, settings, robustness, benchmark_arms: tuple[StrategyComparisonArm, ...], comparison_end: str
+) -> dict[tuple[str, int], dict[str, Any]]:
+    if robustness.benchmark_id is None:
+        return {}
+    workflow = get_breakout_quality_workflow_settings()
+    built_by_unit: dict[tuple[int, str, str, str], dict[str, Any]] = {}
+    bindings: dict[tuple[str, int], dict[str, Any]] = {}
+    for seed in robustness.resolved_seeds:
+        for arm in benchmark_arms:
+            binding = _benchmark_param_binding(
+                settings=settings, robustness=robustness, arm=arm, seed=int(seed)
+            )
+            unit = (
+                int(seed), str(binding["family"]), str(binding["evaluation_mode"]),
+                str(binding["param_policy"]),
+            )
+            result = built_by_unit.get(unit)
+            if result is None:
+                result = ensure_robustness_benchmark_strategy_parameter_artifact(
+                    PROJECT_ROOT,
+                    benchmark_id=str(robustness.benchmark_id),
+                    seed=int(seed),
+                    family=str(binding["family"]),
+                    evaluation_mode=str(binding["evaluation_mode"]),
+                    policy=str(binding["param_policy"]),
+                    comparison_end_date=str(comparison_end),
+                    dataset=str(settings.dataset),
+                    filter_id=str(workflow.filter_id),
+                    model_architecture=str(workflow.model_architecture),
+                    experiment_profile=str(workflow.experiment_profile),
+                    max_positions=int(settings.max_positions),
+                    rotation=str(settings.rotation),
+                    fixed_risk=float(DEFAULT_FIXED_RISK),
+                    max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+                    resume_parameter_training=True,
+                    quiet=False,
+                )
+                built_by_unit[unit] = result
+                print(
+                    paint(f"[PARAM {result['action']}]", "green", enabled=console_color_enabled(), bold=True)
+                    + f" seed={seed} {binding['family']}/{binding['evaluation_mode']} "
+                    + f"{binding['param_policy']}"
+                )
+            bindings[(arm.arm_id, int(seed))] = {
+                **binding,
+                "path": Path(result["path"]),
+                "manifest_path": Path(result["manifest_path"]),
+                "sha256": str(result["sha256"]),
+                "manifest_sha256": compute_file_sha256(Path(result["manifest_path"])),
+            }
+    return bindings
+
+
+def _benchmark_identity_payload(
+    bindings: dict[tuple[str, int], dict[str, Any]]
+) -> dict[str, Any]:
+    return {
+        f"{arm_id}:seed={seed}": {
+            "family": item["family"],
+            "evaluation_mode": item["evaluation_mode"],
+            "param_policy": item["param_policy"],
+            "sha256": item["sha256"],
+            "manifest_sha256": item["manifest_sha256"],
+        }
+        for (arm_id, seed), item in sorted(bindings.items())
+    }
+
+
+def _strategy_only_benchmark_arms(
+    benchmark_arms: tuple[StrategyComparisonArm, ...], model_arms: tuple[StrategyComparisonArm, ...]
+) -> tuple[StrategyComparisonArm, ...]:
+    model_ids = {arm.arm_id for arm in model_arms}
+    return tuple(arm for arm in benchmark_arms if arm.arm_id not in model_ids)
+
+
+def _run_strategy_only_benchmark_unit(
+    *, settings, arm: StrategyComparisonArm, seed: int, seed_order: int, arm_order: int,
+    params_path: Path, comparison_start: str, comparison_end: str, output_dir: Path,
+    strategy_param_sha256: str, strategy_param_manifest_sha256: str,
+) -> dict[str, Any]:
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    all_off = arm.rule_policy == "all_off"
+    started = time.perf_counter()
+    payload = run_standalone_baseline(
+        project_root=PROJECT_ROOT,
+        dataset=settings.dataset,
+        params_path=str(params_path),
+        param_policy=resolve_strategy_comparison_arm_param_policy(settings, arm),
+        max_positions=settings.max_positions,
+        enable_rotation=settings.rotation == "on",
+        optional_entry_filter_policy=(
+            OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF if all_off else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
+        ),
+        output_dir_override=output_dir,
+        comparison_start_date=str(comparison_start),
+        comparison_end_date=str(comparison_end),
+        quiet=True,
+        shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None),
+    )
+    metrics = dict(payload.get("no_filter") or {})
+    return {
+        "arm_id": arm.arm_id,
+        "name": arm.name,
+        "seed": int(seed),
+        "arm_order": int(arm_order),
+        "seed_order": int(seed_order),
+        "selected_epoch": 0,
+        "fold_count": None,
+        "training_elapsed_sec": 0.0,
+        "replay_elapsed_sec": round(time.perf_counter() - started, 3),
+        "model_sha256": None,
+        "score_sha256": None,
+        "runtime_source_identity_sha256": None,
+        "strategy_param_sha256": str(strategy_param_sha256),
+        "strategy_param_manifest_sha256": str(strategy_param_manifest_sha256),
+        **{key: metrics.get(key) for _label, key, _unit in MEAN_METRICS},
+        **{key: metrics.get(key) for key in COMMON_STRATEGY_REPORT_METRIC_KEYS},
+        **{key: None for key in (*MODEL_PREDICTION_METRIC_KEYS, "continuous_target_id")},
+        "yearly": _normalize_yearly_rows(
+            payload.get("yearly"), arm_id=arm.arm_id, name=arm.name, seed=int(seed),
+            seed_order=int(seed_order), arm_order=int(arm_order), result_side="no_filter",
+        ),
+        "baseline_dir": str(output_dir.resolve()),
+    }
 
 def _required_parameter_sources(
     fixed_arms: tuple[StrategyComparisonArm, ...],
@@ -877,15 +1011,7 @@ def _render_robustness_execution_plan(
         period_error = str(exc)
         blockers.append(str(exc))
 
-    # Round 1 intentionally freezes execution before expensive evidence generation.
-    # Round 2 will add the Optimizer benchmark builder and same-seed strategy replay.
-    if cfg.benchmark_id is not None:
-        blockers.append(
-            "Robustness Benchmark Round 1只完成scientific contract／artifact identity；"
-            "Round 2 benchmark strategy training/replay尚未授權執行"
-        )
-
-    pending_param = any(row[0] in {"BUILD", "REBUILD"} for row in param_rows)
+    pending_param = any(row[0] in {"BUILD", "REBUILD"} for row in (*param_rows, *benchmark_rows))
     overall = "BLOCKED" if blockers else "PREPARABLE" if pending_param else "READY"
     rows = [*param_rows, *benchmark_rows, *upstream_rows]
     for arm in fixed_arms:
@@ -1056,6 +1182,7 @@ def build_multi_seed_robustness_contract(
     robustness_id: str | None = None,
     comparison_period: dict[str, Any] | None = None,
     artifact_identities: dict[str, Any] | None = None,
+    benchmark_parameter_identities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     robustness = get_strategy_multi_seed_robustness_settings(robustness_id)
     settings = get_strategy_comparison_settings(robustness.profile_id)
@@ -1179,6 +1306,7 @@ def build_multi_seed_robustness_contract(
         "comparison_period": resolved_period,
         "parameter_artifact_identities": parameter_identities,
         "benchmark_id": robustness.benchmark_id,
+        "benchmark_parameter_artifact_identities": dict(benchmark_parameter_identities or {}),
         "seed_count": int(robustness.seed_count),
         "seed_generator_seed": int(robustness.seed_generator_seed),
         "resolved_seeds": list(seeds),
@@ -2182,6 +2310,8 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         "model_sha256": str(job.get("model_sha256") or "") or None,
         "score_sha256": str(job.get("score_sha256") or "") or None,
         "runtime_source_identity_sha256": str(job.get("runtime_source_identity_sha256") or "") or None,
+        "strategy_param_sha256": str(job.get("strategy_param_sha256") or "") or None,
+        "strategy_param_manifest_sha256": str(job.get("strategy_param_manifest_sha256") or "") or None,
         **{key: metrics.get(key) for _label, key, _unit in MEAN_METRICS},
         **{key: metrics.get(key) for key in COMMON_STRATEGY_REPORT_METRIC_KEYS},
         **{key: model_prediction.get(key) for key in (*MODEL_PREDICTION_METRIC_KEYS, "continuous_target_id")},
@@ -3158,9 +3288,9 @@ def render_multi_seed_robustness_report(
             "- 舊robustness工件若未永久保存model prediction／Future Target conversion欄位，report-only refresh會顯示`-`，不為補報表重訓或重跑strategy replay。",
             "- resolved seeds只用於重現；不得挑best seed或依本報表組seed ensemble。",
             (
-                f"- {full_name}／{min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一表。"
+                f"- {full_name}／{min_name}在current end-to-end benchmark中使用per-seed strategy params；只有C62/C63 finalists-agree屬固定production consensus context。"
                 if "full" in references
-                else f"- {min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一表；本profile未設定Full reference。"
+                else f"- {min_name}在current end-to-end benchmark中使用per-seed strategy params；fixed finalists-agree僅作production consensus context。"
             ),
             "- 同一DL source／seed只訓練一次，允許fan-out到不同runtime selector replay；此reuse不改變模型scientific condition。",
             "- Extending-Window Rolling robustness只評估config既定scientific condition；不得依結果回頭調整training semantics或使用future fold結果擬合當下模型。",
@@ -3180,6 +3310,10 @@ def show_multi_seed_robustness_status(*, robustness_id: str | None = None) -> No
     settings = get_strategy_comparison_settings(cfg.profile_id)
     status = collect_artifact_status(settings=settings)
     fixed, stochastic = _robustness_arms(settings, cfg)
+    model_arms = (
+        _model_seed_sensitive_arms(settings, cfg, tuple(stochastic))
+        if cfg.benchmark_id is not None else tuple(stochastic)
+    )
     plan_text, plan = _render_robustness_execution_plan(
         cfg=cfg, settings=settings, status=status, fixed_arms=fixed, stochastic_arms=stochastic
     )
@@ -3187,9 +3321,23 @@ def show_multi_seed_robustness_status(*, robustness_id: str | None = None) -> No
     if plan["comparison_period"] is None or plan["overall_status"] != "READY":
         print("Fingerprint       ：前置完成後依正式param identity與共同期間解析")
         return
+    benchmark_bindings = dict(plan.get("benchmark_param_bindings") or {})
+    resolved_benchmark_bindings: dict[tuple[str, int], dict[str, Any]] = {}
+    for unit, item in benchmark_bindings.items():
+        path = Path(item["path"])
+        manifest_path = Path(item["manifest_path"])
+        if not path.is_file() or not manifest_path.is_file():
+            print("Fingerprint       ：benchmark strategy param前置完成後解析")
+            return
+        resolved_benchmark_bindings[unit] = {
+            **item,
+            "sha256": compute_file_sha256(path),
+            "manifest_sha256": compute_file_sha256(manifest_path),
+        }
     contract = build_multi_seed_robustness_contract(
         robustness_id=cfg.robustness_id, comparison_period=dict(plan["comparison_period"]),
         artifact_identities=dict(status.get("artifact_identities") or {}),
+        benchmark_parameter_identities=_benchmark_identity_payload(resolved_benchmark_bindings),
     )
     run_root = _run_root(contract)
     existing = _load_seed_results(run_root / SEED_RESULTS_FILENAME)
@@ -3197,11 +3345,11 @@ def show_multi_seed_robustness_status(*, robustness_id: str | None = None) -> No
     _validate_seed_results_frame(existing, stochastic_arms=stochastic, seeds=seeds)
     print(f"Fingerprint       ：{contract['fingerprint']}")
     ready_attribution = _attribution_ready_units(
-        run_root, stochastic_arms=stochastic, seeds=seeds, fingerprint=str(contract["fingerprint"])
+        run_root, stochastic_arms=tuple(model_arms), seeds=seeds, fingerprint=str(contract["fingerprint"])
     ) if cfg.keep_attribution_source else set()
     print(f"已完成seed結果    ：{len(existing)}/{len(stochastic) * cfg.seed_count}")
     if cfg.keep_attribution_source:
-        print(f"Attribution工件   ：{len(ready_attribution)}/{len(stochastic) * cfg.seed_count}")
+        print(f"Attribution工件   ：{len(ready_attribution)}/{len(model_arms) * cfg.seed_count}")
     print("永久輸出：")
     print(f"- {project_relative_display_path(run_root / MANIFEST_FILENAME, project_root=PROJECT_ROOT)}")
     print(f"- {project_relative_display_path(run_root / SEED_RESULTS_FILENAME, project_root=PROJECT_ROOT)}")
@@ -3346,6 +3494,11 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         raise RuntimeError("Multiple-seed robustness目前由config關閉")
     settings = get_strategy_comparison_settings(cfg.profile_id)
     fixed_arms, stochastic_arms = _robustness_arms(settings, cfg)
+    model_arms = (
+        _model_seed_sensitive_arms(settings, cfg, tuple(stochastic_arms))
+        if cfg.benchmark_id is not None else tuple(stochastic_arms)
+    )
+    strategy_only_arms = _strategy_only_benchmark_arms(tuple(stochastic_arms), tuple(model_arms))
     status = collect_artifact_status(settings=settings)
     plan_text, plan = _render_robustness_execution_plan(
         cfg=cfg, settings=settings, status=status, fixed_arms=fixed_arms, stochastic_arms=stochastic_arms
@@ -3375,7 +3528,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         status_refresher=lambda: collect_artifact_status(settings=settings),
     )
     post_upstream_rows, post_upstream_blockers = _model_upstream_rows(
-        settings, stochastic_arms
+        settings, model_arms
     )
     del post_upstream_rows
     if post_upstream_blockers:
@@ -3385,7 +3538,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         )
     resolved_params = dict(status.get("resolved_arm_parameter_paths") or {})
     missing_params = sorted(
-        arm.arm_id for arm in (*fixed_arms, *stochastic_arms)
+        arm.arm_id for arm in fixed_arms
         if not resolved_params.get(arm.arm_id) or not Path(resolved_params[arm.arm_id]).is_file()
     )
     if missing_params:
@@ -3394,7 +3547,11 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             + ", ".join(missing_params)
         )
     comparison_start, comparison_end = _comparison_period_from_upstream(
-        settings, stochastic_arms, status
+        settings, model_arms, status
+    )
+    benchmark_bindings = _prepare_benchmark_strategy_parameter_artifacts(
+        settings=settings, robustness=cfg, benchmark_arms=tuple(stochastic_arms),
+        comparison_end=str(comparison_end),
     )
     status = dict(status)
     status["comparison_period"] = {"start": comparison_start, "end": comparison_end}
@@ -3402,6 +3559,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         robustness_id=cfg.robustness_id,
         comparison_period={"start": comparison_start, "end": comparison_end},
         artifact_identities=dict(status.get("artifact_identities") or {}),
+        benchmark_parameter_identities=_benchmark_identity_payload(benchmark_bindings),
     )
     run_root = _run_root(contract)
     model_root = _model_work_root(contract)
@@ -3448,14 +3606,6 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             + f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
         )
         raise
-    baseline_by_group = {
-        (
-            arm.param_source,
-            resolve_strategy_comparison_arm_param_policy(settings, arm),
-            arm.rule_policy,
-        ): fixed_results[arm.arm_id]["baseline_dir"]
-        for arm in fixed_arms
-    }
     scientific_completed = {
         (str(row.arm_id), int(row.seed))
         for row in existing.itertuples(index=False)
@@ -3465,17 +3615,19 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             (str(row.arm_id), int(row.seed)) for row in existing_yearly.itertuples(index=False)
         }
         scientific_completed &= yearly_units
+    model_arm_ids = {arm.arm_id for arm in model_arms}
+    strategy_only_completed = {unit for unit in scientific_completed if unit[0] not in model_arm_ids}
     attribution_ready = (
         _attribution_ready_units(
             run_root,
-            stochastic_arms=stochastic_arms,
+            stochastic_arms=tuple(model_arms),
             seeds=seeds,
             fingerprint=str(contract["fingerprint"]),
         )
         if cfg.keep_attribution_source
-        else set(scientific_completed)
+        else {unit for unit in scientific_completed if unit[0] in model_arm_ids}
     )
-    completed = set(scientific_completed & attribution_ready)
+    completed = set(strategy_only_completed | (scientific_completed & attribution_ready))
     rows = (
         [row for row in existing.to_dict("records") if (str(row.get("arm_id")), int(row.get("seed"))) in scientific_completed]
         if not existing.empty and cfg.reuse_completed else []
@@ -3488,6 +3640,51 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         (str(row.get("arm_id")), int(row.get("seed"))): dict(row)
         for row in rows
     }
+
+    # Round 2: C61/C58 are no longer fixed production baselines. They are replayed
+    # once per benchmark seed with that seed's Optimizer-owned strategy params.
+    # Their work directories are then the same-seed C58 baseline reused by C59/C60.
+    benchmark_baseline_dirs: dict[tuple[str, int], str] = {}
+    stochastic_order = {arm.arm_id: index for index, arm in enumerate(stochastic_arms, start=1)}
+    for seed_order, seed in enumerate(seeds, start=1):
+        for arm in strategy_only_arms:
+            unit_identity = (arm.arm_id, int(seed))
+            binding = benchmark_bindings[unit_identity]
+            output_dir = run_root / "work" / "benchmark_baselines" / _unit_key(arm.arm_id, int(seed))
+            result = _run_strategy_only_benchmark_unit(
+                settings=settings,
+                arm=arm,
+                seed=int(seed),
+                seed_order=int(seed_order),
+                arm_order=int(stochastic_order[arm.arm_id]),
+                params_path=Path(binding["path"]),
+                comparison_start=str(comparison_start),
+                comparison_end=str(comparison_end),
+                output_dir=output_dir,
+                strategy_param_sha256=str(binding["sha256"]),
+                strategy_param_manifest_sha256=str(binding["manifest_sha256"]),
+            )
+            benchmark_baseline_dirs[unit_identity] = str(output_dir.resolve())
+            rows = [
+                row for row in rows
+                if (str(row.get("arm_id")), int(row.get("seed"))) != unit_identity
+            ]
+            rows.append(_result_row(result))
+            yearly_rows = [
+                row for row in yearly_rows
+                if (str(row.get("arm_id")), int(row.get("seed"))) != unit_identity
+            ]
+            yearly_rows.extend(result["yearly"])
+            scientific_completed.add(unit_identity)
+            completed.add(unit_identity)
+    if strategy_only_arms:
+        seed_frame_checkpoint = pd.DataFrame(rows)
+        yearly_frame_checkpoint = pd.DataFrame(yearly_rows)
+        if not seed_frame_checkpoint.empty:
+            _write_seed_results(seed_results_path, seed_frame_checkpoint)
+        if not yearly_frame_checkpoint.empty:
+            _write_seed_yearly_results(seed_yearly_results_path, yearly_frame_checkpoint)
+
     total_units = len(stochastic_arms) * len(seeds)
     training_sources = _training_source_groups(stochastic_arms, settings=settings)
     training_unit_count = len(training_sources) * len(seeds)
@@ -3501,13 +3698,12 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
     if cfg.keep_attribution_source:
         missing_attr = scientific_completed - attribution_ready
         print(
-            f"Compact attribution source={len(attribution_ready)}/{total_units} ready"
+            f"Compact attribution source={len(attribution_ready)}/{len(model_arms) * len(seeds)} ready"
             + (f" | rebuild={len(missing_attr)}" if missing_attr else "")
         )
     color_enabled = console_color_enabled()
     progress = InlineProgress()
     min_ref_arm = str(dict(dict(contract.get("romd_reference_baselines") or {}).get("min") or {}).get("arm_id") or "")
-    min_baseline_romd = float(fixed_results[min_ref_arm]["metrics"]["return_over_max_drawdown"])
 
     def progress_update(text: str) -> None:
         if cfg.console_mode == "verbose":
@@ -3657,14 +3853,21 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             completed.add(unit_identity)
             done_units = len(completed)
             romd = float(result.get("return_over_max_drawdown"))
-            delta_min = romd - min_baseline_romd
+            min_row = next((
+                row for row in rows
+                if str(row.get("arm_id")) == min_ref_arm and int(row.get("seed")) == int(result["seed"])
+            ), None)
+            delta_min = None if min_row is None else romd - float(min_row.get("return_over_max_drawdown"))
             done_tag = paint(
                 f"[DONE {done_units}/{total_units}]", "green", enabled=color_enabled, bold=True
             )
-            delta_text = terminal_signal(
-                f"ΔMin={delta_min:+.2f}",
-                signal_for_delta(delta_min, preference="higher"),
-                enabled=color_enabled,
+            delta_text = (
+                "ΔMin=N/A"
+                if delta_min is None else terminal_signal(
+                    f"ΔMin={delta_min:+.2f}",
+                    signal_for_delta(delta_min, preference="higher"),
+                    enabled=color_enabled,
+                )
             )
             progress.print_line(
                 f"{done_tag} seed {meta['seed_order']}/{len(seeds)} | "
@@ -3707,11 +3910,22 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         if any(key not in trained_artifacts for key in source_keys):
             return
         arm_param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
-        baseline_dir = baseline_by_group.get((arm.param_source, arm_param_policy, arm.rule_policy))
+        baseline_matches = [
+            candidate for candidate in strategy_only_arms
+            if candidate.param_source == arm.param_source
+            and resolve_strategy_comparison_arm_param_policy(settings, candidate) == arm_param_policy
+            and candidate.rule_policy == arm.rule_policy
+        ]
+        if len(baseline_matches) != 1:
+            raise RuntimeError(
+                "model benchmark arm無法唯一解析same-seed DL-off baseline: "
+                f"arm={arm.arm_id}, matches={[item.arm_id for item in baseline_matches]}"
+            )
+        baseline_arm = baseline_matches[0]
+        baseline_dir = benchmark_baseline_dirs.get((baseline_arm.arm_id, int(seed)))
         if not baseline_dir:
             raise RuntimeError(
-                "stochastic arm找不到同參數政策fixed baseline: "
-                f"{arm.param_source}/{arm_param_policy}/{arm.rule_policy}"
+                f"model benchmark arm缺少same-seed baseline replay: {baseline_arm.arm_id}/seed={seed}"
             )
         source_artifacts = {
             dl_id: dict(trained_artifacts[(dl_id, int(seed))])
@@ -3748,7 +3962,9 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             "arm_order": int(arm_order),
             "seed": int(seed),
             "seed_order": int(seed_order),
-            "params_path": str(resolved_params[arm.arm_id]),
+            "params_path": str(benchmark_bindings[(arm.arm_id, int(seed))]["path"]),
+            "strategy_param_sha256": str(benchmark_bindings[(arm.arm_id, int(seed))]["sha256"]),
+            "strategy_param_manifest_sha256": str(benchmark_bindings[(arm.arm_id, int(seed))]["manifest_sha256"]),
             "comparison_start": comparison_start,
             "comparison_end": comparison_end,
             "baseline_dir": baseline_dir,
@@ -3921,20 +4137,21 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             raise RuntimeError(f"multi-seed年度結果不完整: missing_observations={len(missing_yearly)}")
         attribution_index_path = None
         if cfg.keep_attribution_source:
+            expected_attribution = len(model_arms) * len(seeds)
             ready_attribution = _attribution_ready_units(
                 run_root,
-                stochastic_arms=stochastic_arms,
+                stochastic_arms=tuple(model_arms),
                 seeds=seeds,
                 fingerprint=str(contract["fingerprint"]),
             )
-            if len(ready_attribution) != expected:
+            if len(ready_attribution) != expected_attribution:
                 raise RuntimeError(
-                    f"compact attribution source不完整: expected={expected}, actual={len(ready_attribution)}"
+                    f"compact attribution source不完整: expected={expected_attribution}, actual={len(ready_attribution)}"
                 )
             attribution_index_path = _write_attribution_index_manifest(
                 run_root,
                 contract=contract,
-                stochastic_arms=stochastic_arms,
+                stochastic_arms=tuple(model_arms),
                 seeds=seeds,
             )
         summary = _robustness_summary(
@@ -3950,7 +4167,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             "completed_at_utc": datetime.now(timezone.utc).isoformat(),
             "elapsed_sec": summary["elapsed_sec"],
             "completed_seed_strategy_observations": int(len(seed_frame)),
-            "attribution_source_units": (expected if cfg.keep_attribution_source else 0),
+            "attribution_source_units": (len(model_arms) * len(seeds) if cfg.keep_attribution_source else 0),
             "attribution_source_manifest_path": (
                 None if attribution_index_path is None else project_relative_display_path(attribution_index_path, project_root=PROJECT_ROOT)
             ),
@@ -3985,7 +4202,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         raise
     selection_score_tree = any(
         str(settings.dl_sources[str(arm.dl_id)].score_source) == "selection_point_in_time"
-        for arm in stochastic_arms
+        for arm in model_arms
     )
     if not cfg.keep_replay_details:
         shutil.rmtree(run_root / "work" / "replay", ignore_errors=True)

@@ -49,7 +49,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 53
+STRATEGY_COMPARE_SCHEMA_VERSION = 54
 
 # =============================================================================
 # 1. 常用設定

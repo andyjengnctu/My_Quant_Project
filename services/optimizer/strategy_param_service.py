@@ -12,7 +12,10 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from config.training_policy import get_strategy_parameter_training_policy_snapshot
+from config.training_policy import (
+    get_strategy_parameter_training_policy_snapshot,
+    get_robustness_benchmark_policy_snapshot,
+)
 from core.active_param_ensemble import (
     ACTIVE_PARAM_ENSEMBLE_MODE_STATIC,
     ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
@@ -22,6 +25,7 @@ from core.active_param_ensemble import (
     resolve_active_param_ensemble_mode,
 )
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
+from core.file_integrity import canonical_json_sha256
 from core.strategy_param_artifacts import (
     POLICY_FILENAME_BY_NAME,
     compute_strategy_param_file_sha256,
@@ -29,11 +33,17 @@ from core.strategy_param_artifacts import (
     normalize_strategy_param_family,
     normalize_strategy_param_policy,
     resolve_strategy_param_artifact_path,
+    resolve_strategy_param_benchmark_artifact_path,
+    resolve_strategy_param_benchmark_dir,
+    resolve_strategy_param_benchmark_manifest_path,
     resolve_strategy_param_dir,
     resolve_strategy_param_state_path,
     STRATEGY_PARAM_STATE_FILENAME_BY_NAME,
 )
-from services.optimizer.strategy_param_repository import refresh_strategy_parameter_manifest
+from services.optimizer.strategy_param_repository import (
+    refresh_strategy_parameter_benchmark_manifest,
+    refresh_strategy_parameter_manifest,
+)
 
 
 def _project_relative(root: Path, path: Path) -> str:
@@ -396,6 +406,7 @@ def _freeze_rolling_policy_to_oos(
     target_path: Path,
     freeze_effective_date: str = "2021-01-01",
     freeze_cutoff_date: str = "2020-12-31",
+    coverage_end_date: str | None = None,
 ) -> dict[str, Any]:
     try:
         payload = json.loads(source_path.read_text(encoding="utf-8"))
@@ -420,6 +431,7 @@ def _freeze_rolling_policy_to_oos(
     if not isinstance(members, list) or not members:
         raise ValueError(f"OOS freeze member缺失: {freeze_effective_date}")
     _source_start, source_end = get_active_param_ensemble_date_range(payload)
+    source_end = str(coverage_end_date or source_end)
     frozen = json.loads(json.dumps(payload, ensure_ascii=False, default=str))
     frozen["type"] = "canonical_oos_frozen_param_set"
     frozen["mode"] = ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING
@@ -564,7 +576,372 @@ def ensure_strategy_parameter_artifact(
     }
 
 
+def _benchmark_optimizer_work_root(
+    root: Path, *, benchmark_id: str, seed: int, family: str
+) -> Path:
+    rolling_dir = resolve_strategy_param_benchmark_dir(
+        root,
+        benchmark_id=benchmark_id,
+        seed=int(seed),
+        family=family,
+        evaluation_mode="rolling",
+    )
+    # .../seed_<seed>/<family>/rolling -> .../seed_<seed>/_optimizer_work/<family>
+    seed_root = rolling_dir.parents[1]
+    return seed_root / "_optimizer_work" / str(family)
+
+
+def _copy_json_payload(source: Path, target: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"benchmark策略參數source無法讀取: {source}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"benchmark策略參數source必須是JSON object: {source}")
+    _write_json(target, payload)
+    return payload
+
+
+def _stitch_benchmark_rolling_payload(
+    *, initial_path: Path, tail_path: Path | None, target_path: Path, comparison_end_date: str
+) -> None:
+    initial = json.loads(initial_path.read_text(encoding="utf-8"))
+    if not isinstance(initial, dict) or not is_active_param_ensemble_payload(initial):
+        raise ValueError("benchmark 2021初始策略參數格式不合法")
+    merged = json.loads(json.dumps(initial, ensure_ascii=False, default=str))
+    initial_mapping = dict(initial.get("params_ensemble_by_effective_date") or {})
+    if "2021-01-01" not in initial_mapping:
+        raise ValueError("benchmark初始策略參數缺少2021-01-01 effective member")
+    combined = {"2021-01-01": initial_mapping["2021-01-01"]}
+    tail = None
+    if tail_path is not None:
+        tail = json.loads(tail_path.read_text(encoding="utf-8"))
+        if not isinstance(tail, dict) or not is_active_param_ensemble_payload(tail):
+            raise ValueError("benchmark Rolling tail策略參數格式不合法")
+        for key, value in dict(tail.get("params_ensemble_by_effective_date") or {}).items():
+            if str(key) >= "2022-01-01":
+                combined[str(key)] = value
+    merged["params_ensemble_by_effective_date"] = {
+        key: combined[key] for key in sorted(combined)
+    }
+    for optional_field in ("params_by_effective_date", "params_by_oos_year"):
+        out = {}
+        for source in (initial, tail or {}):
+            for key, value in dict(source.get(optional_field) or {}).items():
+                text = str(key)
+                if text.startswith("2021") or text >= "2022":
+                    out[text] = value
+        if out:
+            merged[optional_field] = {key: out[key] for key in sorted(out)}
+        else:
+            merged.pop(optional_field, None)
+    folds = []
+    for source in (initial, tail or {}):
+        for item in list(source.get("folds") or []):
+            if not isinstance(item, dict):
+                continue
+            start = str(item.get("effective_start") or item.get("oos_start_date") or "")
+            if start and start >= "2021-01-01":
+                folds.append(json.loads(json.dumps(item, ensure_ascii=False, default=str)))
+    folds.sort(key=lambda item: str(item.get("effective_start") or item.get("oos_start_date") or ""))
+    if folds:
+        merged["folds"] = folds
+    merged.setdefault("meta", {}).update({
+        "first_oos_date": "2021-01-01",
+        "last_oos_date": str(comparison_end_date),
+        "robustness_benchmark_same_seed_initial": True,
+    })
+    merged.setdefault("summary", {}).update({
+        "folds": len(combined),
+        "oos_start_date": "2021-01-01",
+        "oos_end_date": str(comparison_end_date),
+        "oos_period": f"2021-01-01~{comparison_end_date}",
+        "robustness_benchmark_same_seed_initial": True,
+    })
+    _write_json(target_path, merged)
+
+
+
+def _benchmark_effective_member_sha256(path: Path, effective_date: str = "2021-01-01") -> str:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    mapping = dict(payload.get("params_ensemble_by_effective_date") or {})
+    members = mapping.get(str(effective_date))
+    if not isinstance(members, list) or not members:
+        raise ValueError(f"benchmark策略參數缺少{effective_date} member: {path}")
+    return canonical_json_sha256(members)
+
+
+def _validate_benchmark_oos_rolling_initial_alignment(
+    root: Path, *, benchmark_id: str, seed: int, family: str, policy: str
+) -> str | None:
+    oos = resolve_strategy_param_benchmark_artifact_path(
+        root, benchmark_id=benchmark_id, seed=seed, family=family,
+        evaluation_mode="oos", policy=policy,
+    )
+    rolling = resolve_strategy_param_benchmark_artifact_path(
+        root, benchmark_id=benchmark_id, seed=seed, family=family,
+        evaluation_mode="rolling", policy=policy,
+    )
+    if not oos.is_file() or not rolling.is_file():
+        return None
+    left = _benchmark_effective_member_sha256(oos)
+    right = _benchmark_effective_member_sha256(rolling)
+    if left != right:
+        raise RuntimeError(
+            "robustness benchmark OOS/Rolling 2021起始param不一致: "
+            f"family={family}, seed={seed}, oos={left}, rolling={right}"
+        )
+    return left
+
+
+
+def _benchmark_parameter_coverage_end(path: Path) -> str | None:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    meta = dict(payload.get("meta") or {})
+    summary = dict(payload.get("summary") or {})
+    value = meta.get("last_oos_date") or summary.get("oos_end_date")
+    return None if value in (None, "") else str(value)
+
+
+def _benchmark_manifest_matches_current_policy(
+    manifest_path: Path, *, benchmark: dict[str, Any], benchmark_id: str, seed: int,
+    family: str, evaluation_mode: str, policy: str, target_path: Path,
+) -> bool:
+    try:
+        payload = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if (
+        str(payload.get("benchmark_id") or "") != str(benchmark_id)
+        or int(payload.get("benchmark_seed") or -1) != int(seed)
+        or str(payload.get("family") or "") != str(family)
+        or str(payload.get("evaluation_mode") or "") != str(evaluation_mode)
+    ):
+        return False
+    pinned = dict(payload.get("benchmark") or {})
+    if (
+        str(pinned.get("benchmark_id") or "") != str(benchmark.get("benchmark_id") or "")
+        or tuple(int(v) for v in tuple(pinned.get("resolved_seeds") or ()))
+            != tuple(int(v) for v in tuple(benchmark.get("resolved_seeds") or ()))
+        or int(pinned.get("strategy_trials_per_fold") or -1)
+            != int(benchmark.get("strategy_trials_per_fold") or -2)
+    ):
+        return False
+    training = dict(payload.get("training_policy") or {})
+    if (
+        int(training.get("optimizer_seed") or -1) != int(seed)
+        or int(training.get("trials_per_fold") or -1)
+            != int(benchmark.get("strategy_trials_per_fold") or -2)
+        or training.get("benchmark_override") is not True
+    ):
+        return False
+    artifact = dict(dict(payload.get("artifacts") or {}).get(policy) or {})
+    expected_sha = str(artifact.get("sha256") or "")
+    return bool(expected_sha) and expected_sha == compute_strategy_param_file_sha256(target_path)
+
+def ensure_robustness_benchmark_strategy_parameter_artifact(
+    project_root: str | Path,
+    *,
+    benchmark_id: str,
+    seed: int,
+    family: str,
+    evaluation_mode: str,
+    policy: str,
+    comparison_end_date: str,
+    dataset: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    max_positions: int,
+    rotation: str,
+    fixed_risk: float,
+    max_position_cap_pct: float,
+    resume_parameter_training: bool = True,
+    quiet: bool = False,
+) -> dict[str, Any]:
+    """Build/reuse one optimizer-owned end-to-end robustness benchmark param artifact.
+
+    OOS trains only the <=2020 -> 2021 initial fold and freezes that exact member.
+    Rolling reuses the same cached 2021 member and optimizes only 2022+ folds before
+    stitching the schedule, so OOS and Rolling cannot silently diverge at 2021.
+    """
+    root = Path(project_root).resolve()
+    family = normalize_strategy_param_family(family)
+    mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
+    policy = normalize_strategy_param_policy(policy)
+    if mode not in {"oos", "rolling"}:
+        raise ValueError("robustness benchmark策略參數只支援oos/rolling")
+    if policy != "base_finalist_best":
+        raise ValueError("robustness benchmark per-seed策略參數固定使用base-finalist-best")
+    benchmark = get_robustness_benchmark_policy_snapshot()
+    if str(benchmark_id) != str(benchmark["benchmark_id"]):
+        raise ValueError(f"benchmark_id與current SSOT不一致: {benchmark_id}")
+    if int(seed) not in {int(value) for value in benchmark["resolved_seeds"]}:
+        raise ValueError(f"seed不屬於current robustness benchmark題庫: {seed}")
+    trials = int(benchmark["strategy_trials_per_fold"])
+    target = resolve_strategy_param_benchmark_artifact_path(
+        root,
+        benchmark_id=str(benchmark_id),
+        seed=int(seed),
+        family=family,
+        evaluation_mode=mode,
+        policy=policy,
+    )
+    manifest_path = resolve_strategy_param_benchmark_manifest_path(
+        root,
+        benchmark_id=str(benchmark_id),
+        seed=int(seed),
+        family=family,
+        evaluation_mode=mode,
+    )
+    reusable = (
+        target.is_file()
+        and manifest_path.is_file()
+        and _benchmark_parameter_coverage_end(target) == str(comparison_end_date)
+        and _benchmark_manifest_matches_current_policy(
+            manifest_path,
+            benchmark=benchmark,
+            benchmark_id=str(benchmark_id),
+            seed=int(seed),
+            family=family,
+            evaluation_mode=mode,
+            policy=policy,
+            target_path=target,
+        )
+    )
+    if reusable:
+        initial_sha = _benchmark_effective_member_sha256(target)
+        aligned_sha = _validate_benchmark_oos_rolling_initial_alignment(
+            root, benchmark_id=str(benchmark_id), seed=int(seed), family=family, policy=policy
+        )
+        return {
+            "action": "REUSE", "path": target, "manifest_path": manifest_path,
+            "sha256": compute_strategy_param_file_sha256(target),
+            "initial_2021_member_sha256": str(aligned_sha or initial_sha),
+        }
+
+    work_root = _benchmark_optimizer_work_root(
+        root, benchmark_id=str(benchmark_id), seed=int(seed), family=family
+    )
+    work_root.mkdir(parents=True, exist_ok=True)
+    initial_cache = work_root / "initial_2021_base_best.json"
+    from services.optimizer.strategy_param_training import (
+        prepare_selection_historical_full_roos_params,
+        prepare_selection_historical_p2_params,
+    )
+
+    if not initial_cache.is_file():
+        initial_output = work_root / "initial_2021"
+        common = dict(
+            project_root=root,
+            dataset=str(dataset),
+            param_policy="base-finalist-best",
+            trials_per_fold=trials,
+            max_positions=int(max_positions),
+            rotation=str(rotation),
+            fixed_risk=float(fixed_risk),
+            max_position_cap_pct=float(max_position_cap_pct),
+            optimizer_seed=int(seed),
+            resume_parameter_training=bool(resume_parameter_training),
+            quiet=bool(quiet),
+            first_oos_date="2021-01-01",
+            last_oos_date="2021-12-31",
+            train_window_months=120,
+            oos_months=12,
+            output_relative_dir=initial_output,
+        )
+        if family == "full":
+            result = prepare_selection_historical_full_roos_params(**common)
+        else:
+            result = prepare_selection_historical_p2_params(
+                **common,
+                comparison_output_root=str(work_root / "no_recovery"),
+                comparison_output_roots=(str(work_root / "no_recovery"),),
+            )
+        _copy_json_payload(Path(result["params_path"]), initial_cache)
+
+    if mode == "oos":
+        _freeze_rolling_policy_to_oos(
+            root,
+            family=family,
+            policy=policy,
+            source_path=initial_cache,
+            target_path=target,
+            coverage_end_date=str(comparison_end_date),
+        )
+    else:
+        tail_path = None
+        if str(comparison_end_date) >= "2022-01-01":
+            tail_output = work_root / "rolling_tail_2022_plus"
+            common_tail = dict(
+                project_root=root,
+                dataset=str(dataset),
+                param_policy="base-finalist-best",
+                trials_per_fold=trials,
+                max_positions=int(max_positions),
+                rotation=str(rotation),
+                fixed_risk=float(fixed_risk),
+                max_position_cap_pct=float(max_position_cap_pct),
+                optimizer_seed=int(seed),
+                resume_parameter_training=bool(resume_parameter_training),
+                quiet=bool(quiet),
+                first_oos_date="2022-01-01",
+                last_oos_date=str(comparison_end_date),
+                train_window_months=120,
+                oos_months=12,
+                output_relative_dir=tail_output,
+            )
+            if family == "full":
+                tail_result = prepare_selection_historical_full_roos_params(**common_tail)
+            else:
+                tail_result = prepare_selection_historical_p2_params(
+                    **common_tail,
+                    comparison_output_root=str(work_root / "no_recovery_tail"),
+                    comparison_output_roots=(str(work_root / "no_recovery_tail"),),
+                )
+            tail_path = Path(tail_result["params_path"])
+        _stitch_benchmark_rolling_payload(
+            initial_path=initial_cache,
+            tail_path=tail_path,
+            target_path=target,
+            comparison_end_date=str(comparison_end_date),
+        )
+
+    initial_member_sha = _benchmark_effective_member_sha256(target)
+    aligned_member_sha = _validate_benchmark_oos_rolling_initial_alignment(
+        root, benchmark_id=str(benchmark_id), seed=int(seed), family=family, policy=policy
+    )
+    manifest = refresh_strategy_parameter_benchmark_manifest(
+        root,
+        benchmark_id=str(benchmark_id),
+        seed=int(seed),
+        family=family,
+        evaluation_mode=mode,
+        source_records={
+            policy: {
+                "benchmark_initial_2021_member_sha256": str(aligned_member_sha or initial_member_sha),
+                "same_seed_oos_rolling_initial_required": True,
+            }
+        },
+    )
+    return {
+        "action": "BUILD",
+        "path": target,
+        "manifest_path": manifest,
+        "sha256": compute_strategy_param_file_sha256(target),
+        "initial_2021_member_sha256": str(aligned_member_sha or initial_member_sha),
+    }
+
+
 __all__ = [
+    "ensure_robustness_benchmark_strategy_parameter_artifact",
     "ensure_strategy_parameter_artifact",
     "migrate_legacy_strategy_parameter_artifacts",
     "migrate_legacy_trade_state_artifacts",

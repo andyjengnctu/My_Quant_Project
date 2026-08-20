@@ -9706,3 +9706,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 不變：production `models/strategy_params/{full|min}/...`、C61～C63 scientific identity、Full/Min search space、MR-13E/K/M model science、OOS/ Rolling period、12M cadence、portfolio/risk semantics均不修改。本輪不執行長時間optimizer或DL訓練。
 - Decision：`ROBUSTNESS_END_TO_END_BENCHMARK_CONTRACT_ALIGNED / ROUND1_DONE / ROUND2_BENCHMARK_TRAINING_PENDING / PRODUCTION_ARTIFACTS_UNCHANGED`.
 
+### 2026-08-20 — End-to-end Robustness Benchmark Alignment Round 2：可執行producer／same-seed replay workflow
+- 基準：`test-branch-1_20260820_184852_705f419.zip`，SHA256=`5fc39bd296401ce7036ff2b6284e336971dc51690c1a3bf3d73b472c90b50e10`。本輪不新增MR／SR／Cxx identity，不改Full/Min search space、MR-13E/K/M science、production params或benchmark題庫。
+- Canonical strategy benchmark producer：`services/optimizer/strategy_param_service.py`可依`end_to_end_v1`固定seed與`300 trials/fold`建立`full|min × oos|rolling` benchmark artifacts。每seed先只建立2021共同初始member；OOS deterministic freeze至comparison latest，Rolling沿同一benchmark work identity自2022起續跑並stitch 2021 member。OOS／Rolling 2021 member canonical SHA不同即FAIL。
+- Replay role：C61/C58改為每seed以benchmark Full/Min params作DL-off replay；C59/C60必須使用同seed Min benchmark params，且只可重用該seed C58 baseline。C59建立MR-13E同seed模型；C60建立MR-13K primary與MR-13M safety同seed模型。C62/C63仍固定production finalists-agree consensus context，不取代paired baseline。
+- Scientific fingerprint：Robustness contract升級，pin每個`arm_id × seed`的benchmark strategy-param payload SHA與manifest SHA；seed-results同時保存strategy-param identity。舊model-only或未pin benchmark param identity的run不得誤REUSE。
+- Attribution：compact attribution只屬C59/C60 model-sensitive observations；C61/C58 strategy-only benchmark units不被要求建立DL attribution。Status／finalization denominator與cleanup均依model-sensitive subset處理。
+- Execution：current plan對缺benchmark params回報BUILD／PREPARABLE；使用者一次確認後先由canonical Optimizer BUILD／RESUME params，再訓same-seed models與replay。長時間4-seed evidence尚未在本輪執行；OOS仍是第一Gate，只有結果仍可能改變決策時才補Rolling。
+- Version：Strategy Compare schema=`53→54`；Robustness report schema=`10→11`；Robustness scientific contract=`4→5`。
+- Decision：`ROUND2_EXECUTABLE / SAME_SEED_STRATEGY_MODEL_BINDING_ENFORCED / BENCHMARK_EVIDENCE_PENDING / PRODUCTION_UNCHANGED`.
+
