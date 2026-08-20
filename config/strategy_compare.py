@@ -42,7 +42,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 50
+STRATEGY_COMPARE_SCHEMA_VERSION = 51
 
 # =============================================================================
 # 1. 常用設定
@@ -192,10 +192,10 @@ STRATEGY_COMPARE_PROFILES = {
         "output_root": "outputs/strategy_compare/extending_window/oos_2021_forward",
         "reuse_output_roots": (),
         "arm_param_source_overrides": {
-            "C61": "oos_full_roos",
-            "C58": "oos_min_roos",
-            "C59": "oos_min_roos",
-            "C60": "oos_min_roos",
+            "C61": "full_oos",
+            "C58": "min_oos",
+            "C59": "min_oos",
+            "C60": "min_oos",
         },
     },
     "extending_window_rolling": {
@@ -286,8 +286,8 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
         "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
         "romd_reference_baselines": {
-            "min": {"param_source": "oos_min_roos", "rule_policy": "all_off"},
-            "full": {"param_source": "oos_full_roos", "rule_policy": "formal"},
+            "min": {"param_source": "min_oos", "rule_policy": "all_off"},
+            "full": {"param_source": "full_oos", "rule_policy": "formal"},
         },
         "output_root": "outputs/strategy_compare/robustness/extending_window/oos_2021_forward",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/oos_2021_forward",
@@ -310,8 +310,8 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
         "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
         "romd_reference_baselines": {
-            "min": {"param_source": "extending_min_roos", "rule_policy": "all_off"},
-            "full": {"param_source": "extending_full_roos", "rule_policy": "formal"},
+            "min": {"param_source": "min_rolling", "rule_policy": "all_off"},
+            "full": {"param_source": "full_rolling", "rule_policy": "formal"},
         },
         "output_root": "outputs/strategy_compare/robustness/extending_window/rolling_2021_forward",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/rolling_2021_forward",
@@ -392,160 +392,47 @@ STRATEGY_COMPARE_PREPARATION = {
 # =============================================================================
 
 STRATEGY_PARAM_SOURCES = {
-    "extending_min_roos": {
-        "path_template": (
-            "models/research/breakout_quality/strategy_compare/extending_min_roos/"
-            "active_params/{param_filename}"
-        ),
-        "description": (
-            "Extending-Window Min rolling schedule；stitch既有2014-2020 historical P2與2021+ "
-            "current P2 rolling schedules；只在兩段rolling/search contract一致時建立，不重新最佳化。"
-        ),
-        "identity_manifest_path": (
-            "models/research/breakout_quality/strategy_compare/extending_min_roos/"
-            "extending_stitch_manifest.json"
-        ),
+    # Current strategy parameter SSOT.  Optimizer is the only producer; Research/
+    # Strategy Compare only resolves/migrates these canonical identities.
+    "full_oos": {
+        "path_template": None,
+        "description": "Canonical Optimizer Full OOS strategy params (2020 cutoff, 2021→latest).",
+        "identity_manifest_path": None,
         "trained_with_dl_id": None,
-        "artifact_contract": {
-            "breakout_quality_param_adaptation": {
-                "mode": "min_roos_training",
-                "parameter_set": "P2_EXTENDING",
-                "search_fields": [
-                    "high_len", "atr_len", "atr_buy_tol", "atr_times_init", "atr_times_trail"
-                ],
-                "fixed_rule_contract": "all_rule_filters_off",
-                "training_dl_enabled": False,
-            }
-        },
-        "builder": {
-            "enabled": True,
-            "builder_type": "extending_min_roos_stitch",
-            "options": {
-                "historical_params_path": (
-                    "models/research/breakout_quality/trade_path_label/a2_teacher_params/"
-                    "p2_dl_off_trained/active_params/{param_filename}"
-                ),
-                "current_params_path": (
-                    "models/research/breakout_quality/binary_dl_filter_param_adaptation/"
-                    "risk_only_rolling/p2_dl_off_trained/active_params/{param_filename}"
-                ),
-                "output_relative_dir": (
-                    "models/research/breakout_quality/strategy_compare/extending_min_roos"
-                ),
-                "quiet": False,
-            },
-        },
+        "canonical_family": "full",
+        "canonical_evaluation_mode": "oos",
+        "artifact_contract": None,
+        "builder": {"enabled": True, "builder_type": "canonical_optimizer_strategy_params", "options": {}},
     },
-    "extending_full_roos": {
-        "path_template": (
-            "models/research/breakout_quality/strategy_compare/extending_full_roos/"
-            "active_params/{param_filename}"
-        ),
-        "description": (
-            "Extending-Window Full rolling schedule；stitch既有2014-2020 historical P4與2021+ "
-            "canonical Full rolling schedules；只在rolling/search contract一致時建立，不重新最佳化。"
-        ),
-        "identity_manifest_path": (
-            "models/research/breakout_quality/strategy_compare/extending_full_roos/"
-            "extending_stitch_manifest.json"
-        ),
+    "min_oos": {
+        "path_template": None,
+        "description": "Canonical Optimizer Min OOS strategy params; Research不得另建seed/trial policy。",
+        "identity_manifest_path": None,
         "trained_with_dl_id": None,
-        "artifact_contract": {
-            "breakout_quality_param_adaptation": {
-                "mode": "extending_full_roos_stitch",
-                "parameter_set": "P4_EXTENDING",
-                "training_dl_enabled": False,
-            }
-        },
-        "builder": {
-            "enabled": True,
-            "builder_type": "extending_full_roos_stitch",
-            "options": {
-                "historical_params_path": (
-                    "models/research/breakout_quality/strategy_compare/selection_full_roos/"
-                    "active_params/{param_filename}"
-                ),
-                "current_params_path": "models/{param_filename}",
-                "output_relative_dir": (
-                    "models/research/breakout_quality/strategy_compare/extending_full_roos"
-                ),
-                "quiet": False,
-            },
-        },
+        "canonical_family": "min",
+        "canonical_evaluation_mode": "oos",
+        "artifact_contract": None,
+        "builder": {"enabled": True, "builder_type": "canonical_optimizer_strategy_params", "options": {}},
     },
-    "oos_min_roos": {
-        "path_template": (
-            "models/research/breakout_quality/strategy_compare/oos_min_roos/"
-            "active_params/{param_filename}"
-        ),
-        "description": (
-            "OOS Test fixed-cutoff Min參數；只取Extending Min schedule在2021-01-01當下合法的"
-            "2020-cutoff參數，凍結使用至最新，不使用任何2021後重新fit的策略參數。"
-        ),
-        "identity_manifest_path": (
-            "models/research/breakout_quality/strategy_compare/oos_min_roos/"
-            "oos_freeze_manifest.json"
-        ),
+    "full_rolling": {
+        "path_template": None,
+        "description": "Canonical Optimizer Full Rolling strategy params (2021→latest / 12M).",
+        "identity_manifest_path": None,
         "trained_with_dl_id": None,
-        "artifact_contract": {
-            "breakout_quality_param_adaptation": {
-                "mode": "oos_param_freeze",
-                "training_dl_enabled": False,
-                "freeze_effective_date": "2021-01-01",
-                "freeze_cutoff_date": "2020-12-31",
-            }
-        },
-        "builder": {
-            "enabled": True,
-            "builder_type": "oos_param_freeze",
-            "options": {
-                "source_param_source_id": "extending_min_roos",
-                "output_relative_dir": (
-                    "models/research/breakout_quality/strategy_compare/oos_min_roos"
-                ),
-                "freeze_effective_date": "2021-01-01",
-                "freeze_cutoff_date": "2020-12-31",
-                "display_name": "Min OOS",
-                "quiet": False,
-            },
-        },
+        "canonical_family": "full",
+        "canonical_evaluation_mode": "rolling",
+        "artifact_contract": None,
+        "builder": {"enabled": True, "builder_type": "canonical_optimizer_strategy_params", "options": {}},
     },
-    "oos_full_roos": {
-        "path_template": (
-            "models/research/breakout_quality/strategy_compare/oos_full_roos/"
-            "active_params/{param_filename}"
-        ),
-        "description": (
-            "OOS Test fixed-cutoff Full參數；只取Extending Full schedule在2021-01-01當下合法的"
-            "2020-cutoff參數，凍結使用至最新，不使用任何2021後重新fit的策略參數。"
-        ),
-        "identity_manifest_path": (
-            "models/research/breakout_quality/strategy_compare/oos_full_roos/"
-            "oos_freeze_manifest.json"
-        ),
+    "min_rolling": {
+        "path_template": None,
+        "description": "Canonical Optimizer Min Rolling strategy params (2021→latest / 12M).",
+        "identity_manifest_path": None,
         "trained_with_dl_id": None,
-        "artifact_contract": {
-            "breakout_quality_param_adaptation": {
-                "mode": "oos_param_freeze",
-                "training_dl_enabled": False,
-                "freeze_effective_date": "2021-01-01",
-                "freeze_cutoff_date": "2020-12-31",
-            }
-        },
-        "builder": {
-            "enabled": True,
-            "builder_type": "oos_param_freeze",
-            "options": {
-                "source_param_source_id": "extending_full_roos",
-                "output_relative_dir": (
-                    "models/research/breakout_quality/strategy_compare/oos_full_roos"
-                ),
-                "freeze_effective_date": "2021-01-01",
-                "freeze_cutoff_date": "2020-12-31",
-                "display_name": "Full OOS",
-                "quiet": False,
-            },
-        },
+        "canonical_family": "min",
+        "canonical_evaluation_mode": "rolling",
+        "artifact_contract": None,
+        "builder": {"enabled": True, "builder_type": "canonical_optimizer_strategy_params", "options": {}},
     },
     "full_roos": {
         "path_template": None,
@@ -813,9 +700,9 @@ STRATEGY_COMPARE_ARMS = {
     "C61": {
         "name": STRATEGY_COMPARE_DISPLAY_FULL_ROOS,
         "description": (
-            "Extending-Window Full baseline；人讀名稱由evaluation mode渲染為Full OOS／Full Rolling；參數來源由mode綁定：OOS固定2020 cutoff，Rolling使用PIT-safe stitched schedule；formal rules；DL-off"
+            "Extending-Window Full baseline；人讀名稱由evaluation mode渲染為Full OOS／Full Rolling；參數來源由mode綁定：OOS固定2020 cutoff，Rolling使用Optimizer-owned canonical schedule；formal rules；DL-off"
         ),
-        "param_source": "extending_full_roos",
+        "param_source": "full_rolling",
         "rule_policy": "formal",
         "dl_enabled": False,
         "dl_id": None,
@@ -824,8 +711,8 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C58": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_ROOS,
-        "description": "Extending-Window Min baseline；人讀名稱由evaluation mode渲染為Min OOS／Min Rolling；參數來源由mode綁定：OOS固定2020 cutoff，Rolling使用PIT-safe stitched schedule；rules全關；DL-off",
-        "param_source": "extending_min_roos",
+        "description": "Extending-Window Min baseline；人讀名稱由evaluation mode渲染為Min OOS／Min Rolling；參數來源由mode綁定：OOS固定2020 cutoff，Rolling使用Optimizer-owned canonical schedule；rules全關；DL-off",
+        "param_source": "min_rolling",
         "rule_policy": "all_off",
         "dl_enabled": False,
         "dl_id": None,
@@ -835,7 +722,7 @@ STRATEGY_COMPARE_ARMS = {
     "C59": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED,
         "description": "Extending-Window MR-13E exact constrained；模型與策略參數都依OOS／Rolling mode使用一致information-cutoff contract。",
-        "param_source": "extending_min_roos",
+        "param_source": "min_rolling",
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "CONT13E_ROLL",
@@ -853,7 +740,7 @@ STRATEGY_COMPARE_ARMS = {
             "Extending-Window B2：MR-13K primary + MR-13M same-day rank OLS residual-safety floor；"
             "兩個score必須來自同一evaluation mode／同一information-cutoff namespace。"
         ),
-        "param_source": "extending_min_roos",
+        "param_source": "min_rolling",
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "CONT13K_ROLL",
@@ -1484,6 +1371,8 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
                 else dict(raw.get("artifact_contract") or {})
             ),
             builder=_builder(raw.get("builder")),
+            canonical_family=(None if raw.get("canonical_family") in (None, "") else str(raw.get("canonical_family"))),
+            canonical_evaluation_mode=(None if raw.get("canonical_evaluation_mode") in (None, "") else str(raw.get("canonical_evaluation_mode"))),
         )
         for source_id, raw in parameter_catalog.items()
     }

@@ -123,6 +123,8 @@ class StrategyParameterSource:
     trained_with_dl_id: str | None = None
     artifact_contract: Mapping[str, Any] | None = None
     builder: StrategyArtifactBuilder | None = None
+    canonical_family: str | None = None
+    canonical_evaluation_mode: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -135,6 +137,8 @@ class StrategyParameterSource:
                 None if self.artifact_contract is None else dict(self.artifact_contract)
             ),
             "builder": None if self.builder is None else self.builder.as_dict(),
+            "canonical_family": self.canonical_family,
+            "canonical_evaluation_mode": self.canonical_evaluation_mode,
         }
 
 
@@ -770,6 +774,21 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
             source.identity_manifest_path,
             field_name=f"parameter_sources[{key}].identity_manifest_path",
         )
+        if bool(source.canonical_family) != bool(source.canonical_evaluation_mode):
+            raise ValueError(
+                f"parameter source {key}的canonical_family/evaluation_mode必須同時設定"
+            )
+        if source.canonical_family is not None:
+            from core.strategy_param_artifacts import (
+                normalize_strategy_param_evaluation_mode,
+                normalize_strategy_param_family,
+            )
+            normalize_strategy_param_family(source.canonical_family)
+            normalize_strategy_param_evaluation_mode(source.canonical_evaluation_mode)
+            if source.path_template not in (None, "") or source.identity_manifest_path not in (None, ""):
+                raise ValueError(
+                    f"parameter source {key}使用canonical resolver時不得再設定path_template/identity_manifest_path"
+                )
         if source.trained_with_dl_id and source.trained_with_dl_id not in settings.dl_sources:
             raise ValueError(
                 f"parameter source {key}引用不存在的trained_with_dl_id: "
@@ -785,6 +804,7 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 "oos_param_freeze",
                 "selection_historical_p2",
                 "selection_historical_full_roos",
+                "canonical_optimizer_strategy_params",
             },
         )
         if source.builder is not None and source.builder.enabled:

@@ -9666,3 +9666,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Model PIT fold store繼續使用canonical `point_in_time`：既有2021～2025合法annual folds可直接REUSE，latest資料尾端可補partial fold；2016～2020 fold永久保留historical evidence。第一次以較窄current period刷新top-level canonical aggregate前，必須snapshot舊較廣aggregate與既有audit，避免歷史2016～2025證據被覆寫。
 - Current Strategy Compare Rolling輸出改到`outputs/strategy_compare/extending_window/rolling_2021_forward`；Rolling robustness改到對應`.../rolling_2021_forward` output/model-work namespace。舊`outputs/strategy_compare/extending_window_rolling`及2016～2025 robustness結果只作historical compatibility，不得誤REUSE成current。
 - Compare Suite、C61/C58/C59/C60、六個contrasts、Seed42 single-seed、robustness seed_count=4 / generator=20260810、MR-13E/K/M identity、12M refit semantics與PIT legality全部不變。
+
+
+### 2026-08-20 — Strategy Parameter Artifact SSOT / Optimizer sole-producer refactor
+- 使用者決策：Optimizer與Research不得各自保存／計算策略參數；`base_best`、`local_best`、`retention_best`、`*_finalists_agree`、`ensemble_*`以及seed／trial policy都必須由同一Strategy Parameter domain管理。
+- Current physical truth統一為`models/strategy_params/<family>/<mode>/`；`family=full|min`，current Strategy Compare只解析`oos|rolling`，Optimizer其他正式模式可使用`study|full|trade`。每個mode目錄有單一`manifest.json`，記錄producer、training-policy snapshot/fingerprint、artifact path/SHA與legacy migration/derivation source。
+- `services/optimizer/strategy_param_repository.py`持有無training依賴的canonical manifest writer，`services/optimizer/strategy_param_service.py`成為artifact orchestration service；`services/optimizer/strategy_param_training.py`持有原Min/Selection training implementation。`filters/breakout_quality/strategy_param_training.py`降為historical compatibility module alias，不再保存第二套搜尋實作。
+- `config/training_policy.py`維持數值不變並成為current策略參數seed/trials唯一policy source：single-fold=1000、rolling=300/fold、optimizer base seed=42。Strategy Compare current parameter source builder options清空，不再攜帶`trials_per_fold`、`optimizer_seed`、historical/current/output path或freeze/stitch設定。
+- Strategy Compare current identity改為`full_oos/min_oos/full_rolling/min_rolling`；C61使用Full family，C58/C59/C60使用Min family。缺件時Research只委派canonical Optimizer parameter service並re-plan，不自己執行另一套optimizer policy。OOS fixed-2020-cutoff view亦由Optimizer service從合法rolling effective member deterministic derivation。
+- Legacy root-level `models/roos_*.json`、`models/oos_*.json`與`models/research/...`參數工件保留只讀migration／historical compatibility，不再是current truth。沒有新增MR／SR／Cxx identity，也不改search space、參數值、strategy semantics、Compare Suite、模型Target／architecture／loss。
+- Strategy Compare config schema `50→51`。Decision：`STRATEGY_PARAM_SSOT / OPTIMIZER_SOLE_PRODUCER / RESEARCH_CONSUMER_ONLY / SCIENTIFIC_SEMANTICS_UNCHANGED`。

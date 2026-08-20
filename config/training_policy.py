@@ -505,3 +505,39 @@ def build_training_score_policy_snapshot():
 def build_selection_policy_snapshot():
     return {field_name: spec["default"] for field_name, spec in SELECTION_POLICY_PARAM_SPECS.items()}
 
+
+
+def get_strategy_parameter_training_policy_snapshot(*, evaluation_mode: str) -> dict:
+    """Return the canonical optimizer-owned strategy-parameter training policy.
+
+    Consumers (Research/Strategy Compare/Audit) may record this snapshot but must not
+    own independent seed/trial settings for current strategy-parameter artifacts.
+    """
+    mode = str(evaluation_mode or "").strip().lower()
+    if mode == "roos":
+        mode = "rolling"
+    if mode == "split":
+        mode = "oos"
+    rolling_like = mode == "rolling"
+    return {
+        "owner": "optimizer",
+        "evaluation_mode": mode,
+        "optimizer_seed": int(OPTIMIZER_RANDOM_SEED_DEFAULT),
+        "trials_per_fold": int(
+            OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
+            if rolling_like
+            else OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT
+        ),
+        "train_window_months": int(OUTER_ROLLING_TRAIN_WINDOW_MONTHS),
+        "oos_horizon_months": int(OUTER_ROLLING_OOS_HORIZON_MONTHS),
+        "random_seed_ensemble": build_seed_ensemble_policy_snapshot(
+            enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
+            seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
+            min_agree=OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
+        ),
+        "finalists_agree": {
+            "base_min_agree": OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
+            "local_min_agree": OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
+            "retention_min_agree": OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE,
+        },
+    }

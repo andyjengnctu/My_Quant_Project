@@ -32,6 +32,10 @@ from filters.breakout_quality.artifacts import (
     load_runtime_artifact_contract,
 )
 from core.console_report import project_relative_display_path
+from core.strategy_param_artifacts import (
+    resolve_strategy_param_artifact_path,
+    resolve_strategy_param_manifest_path,
+)
 from filters.breakout_quality.expected_r_calibration import (
     EXPECTED_R_CALIBRATION_METHOD,
     resolve_expected_r_calibration_paths,
@@ -85,6 +89,13 @@ def resolve_param_source_path(
     source_id: str,
 ) -> Path:
     source = settings.parameter_sources[source_id]
+    if source.canonical_family and source.canonical_evaluation_mode:
+        return resolve_strategy_param_artifact_path(
+            root,
+            family=source.canonical_family,
+            evaluation_mode=source.canonical_evaluation_mode,
+            policy=settings.param_policy,
+        ).resolve()
     if source.path_template in (None, ""):
         return _resolve_params_path(
             root=root,
@@ -219,6 +230,22 @@ def _validate_param_training_identity(
     source_id: str,
 ) -> tuple[bool, str, Path | None]:
     source = settings.parameter_sources[source_id]
+    if source.canonical_family and source.canonical_evaluation_mode:
+        manifest_path = resolve_strategy_param_manifest_path(
+            root,
+            family=source.canonical_family,
+            evaluation_mode=source.canonical_evaluation_mode,
+        )
+        payload = _read_json(manifest_path)
+        if payload is None:
+            return False, "CANONICAL_PARAM_MANIFEST_MISSING_OR_INVALID", manifest_path
+        if str(payload.get("producer") or "") != "optimizer":
+            return False, "CANONICAL_PARAM_PRODUCER_MISMATCH", manifest_path
+        if str(payload.get("family") or "") != str(source.canonical_family):
+            return False, "CANONICAL_PARAM_FAMILY_MISMATCH", manifest_path
+        if str(payload.get("evaluation_mode") or "") != str(source.canonical_evaluation_mode):
+            return False, "CANONICAL_PARAM_MODE_MISMATCH", manifest_path
+        return True, "READY", manifest_path
     if not source.identity_manifest_path:
         if source.trained_with_dl_id:
             return False, "IDENTITY_MANIFEST_NOT_CONFIGURED", None
@@ -792,7 +819,10 @@ def _collect_parameter_artifact_status(
             action = "REBUILD" if (path.exists() or (identity_path is not None and identity_path.exists())) else "BUILD"
             if action == "REBUILD" and not settings.preparation.rebuild_stale_artifacts:
                 action = "BLOCKED"
-            description = (
+            if builder is not None and builder.builder_type == "canonical_optimizer_strategy_params":
+                description = "由canonical Optimizer parameter service解析／遷移策略參數工件"
+            else:
+                description = (
                 (
                     (
                         (
@@ -880,9 +910,13 @@ def _collect_parameter_artifact_status(
                     "existing_artifact"
                     if action == "REUSE"
                     else (
-                        "strategy_compare_deterministic_rebuild"
-                        if builder is not None and builder.builder_type == "oos_param_freeze"
-                        else "strategy_parameter_optimization"
+                        "optimizer_strategy_parameter_service"
+                        if builder is not None and builder.builder_type == "canonical_optimizer_strategy_params"
+                        else (
+                            "strategy_compare_deterministic_rebuild"
+                            if builder is not None and builder.builder_type == "oos_param_freeze"
+                            else "strategy_parameter_optimization"
+                        )
                     )
                     if action in {"BUILD", "REBUILD"}
                     else "model_training"

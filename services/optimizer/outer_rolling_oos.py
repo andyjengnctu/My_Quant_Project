@@ -5754,12 +5754,25 @@ def _remove_stale_policy_paramset_files(models_dir: str) -> None:
             print(f"{C_YELLOW}⚠️ 無法移除舊 policy 檔：{display_path}｜{type(exc).__name__}: {exc}{C_RESET}")
 
 
-def _write_policy_paramset_files(*, models_dir: str, rows: list[dict], config: OuterRollingConfig, summary: dict) -> dict:
+def _write_policy_paramset_files(
+    *,
+    models_dir: str,
+    rows: list[dict],
+    config: OuterRollingConfig,
+    summary: dict,
+    canonical_filenames: bool = False,
+) -> dict:
     os.makedirs(models_dir, exist_ok=True)
     _remove_stale_policy_paramset_files(models_dir)
     paths = {}
     for policy_name in REPORT_POLICY_NAMES:
-        path = os.path.join(models_dir, str(PARAMSET_FILENAME_BY_POLICY.get(policy_name, f"roos_{policy_name}.json")))
+        if canonical_filenames:
+            from core.strategy_param_artifacts import POLICY_FILENAME_BY_NAME
+
+            filename = str(POLICY_FILENAME_BY_NAME.get(policy_name, f"{policy_name}.json"))
+        else:
+            filename = str(PARAMSET_FILENAME_BY_POLICY.get(policy_name, f"roos_{policy_name}.json"))
+        path = os.path.join(models_dir, filename)
         payload = _build_policy_paramset_payload(policy_name=policy_name, rows=rows, config=config, summary=summary)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=4, ensure_ascii=False)
@@ -5779,13 +5792,41 @@ def _write_reports(
 ) -> dict:
     _ = (output_dir, session_ts)
     resolved_models_dir = str(models_dir or resolve_models_dir(project_root))
+    default_models_dir = os.path.abspath(resolve_models_dir(project_root))
+    from core.strategy_param_artifacts import resolve_strategy_param_dir
+
+    canonical_family = None
+    requested_abs = os.path.abspath(resolved_models_dir)
+    for candidate_family in ("full", "min"):
+        candidate_dir = resolve_strategy_param_dir(
+            project_root, family=candidate_family, evaluation_mode="rolling"
+        )
+        if requested_abs == os.path.abspath(str(candidate_dir)):
+            canonical_family = candidate_family
+            resolved_models_dir = str(candidate_dir)
+            break
+    if canonical_family is None and requested_abs == default_models_dir:
+        canonical_family = "full"
+        resolved_models_dir = str(
+            resolve_strategy_param_dir(
+                project_root, family="full", evaluation_mode="rolling"
+            )
+        )
+    canonical_current_output = canonical_family is not None
     summary = _build_summary(rows, config=config, chained_override=chained_override)
     paramset_paths = _write_policy_paramset_files(
         models_dir=resolved_models_dir,
         rows=rows,
         config=config,
         summary=summary,
+        canonical_filenames=bool(canonical_current_output),
     )
+    if canonical_current_output:
+        from services.optimizer.strategy_param_repository import refresh_strategy_parameter_manifest
+
+        refresh_strategy_parameter_manifest(
+            project_root, family=str(canonical_family), evaluation_mode="rolling"
+        )
     return {"paramsets": paramset_paths}
 
 def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None, chained_override: dict | None = None) -> dict:

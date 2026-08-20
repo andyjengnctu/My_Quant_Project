@@ -19,7 +19,8 @@ from filters.breakout_quality.strategy_compare_preparation_status import (
     resolve_comparison_period,
     resolve_param_source_path,
 )
-from filters.breakout_quality.strategy_param_training import (
+from services.optimizer.strategy_param_service import ensure_strategy_parameter_artifact
+from services.optimizer.strategy_param_training import (
     prepare_extending_full_roos_params,
     prepare_extending_min_roos_params,
     prepare_oos_frozen_roos_params,
@@ -56,6 +57,18 @@ def _execute_preparation_action(
             deterministic_algorithms=bool(options.get("deterministic_algorithms", True)),
             allow_tf32=bool(options.get("allow_tf32", False)),
             preload_feature_bank=bool(options.get("preload_feature_bank", True)),
+        )
+        return
+    if action.builder_type == "canonical_optimizer_strategy_params":
+        _kind, source_id = action.artifact_key.split(":", 1)
+        source = settings.parameter_sources[source_id]
+        if not source.canonical_family or not source.canonical_evaluation_mode:
+            raise RuntimeError(f"canonical optimizer參數來源缺少family/mode: {source_id}")
+        ensure_strategy_parameter_artifact(
+            root,
+            family=source.canonical_family,
+            evaluation_mode=source.canonical_evaluation_mode,
+            policy=settings.param_policy,
         )
         return
     if action.builder_type in {"extending_min_roos_stitch", "extending_full_roos_stitch"}:

@@ -142,9 +142,21 @@ def _canonical_param_source_sort_rank(filename: str) -> int:
         return len(CANONICAL_PARAM_FILENAME_ORDER)
 
 
+def _strategy_param_repository_dirs(project_root: str, environ: Optional[Mapping[str, str]] = None) -> List[str]:
+    env = os.environ if environ is None else environ
+    base = os.path.join(resolve_models_dir(project_root, environ=env), "strategy_params")
+    if not os.path.isdir(base):
+        return []
+    folders: List[str] = []
+    for folder, _dirs, _files in os.walk(base):
+        folders.append(folder)
+    return folders
+
+
 def _discover_active_param_ensemble_sets(project_root: str, environ: Optional[Mapping[str, str]] = None) -> List[Dict[str, str]]:
     env = os.environ if environ is None else environ
     search_dirs = [
+        *_strategy_param_repository_dirs(project_root, environ=env),
         resolve_models_dir(project_root, environ=env),
         os.path.join(build_output_dir(project_root, "optimizer"), "outer_rolling_oos"),
     ]
@@ -168,7 +180,12 @@ def _discover_active_param_ensemble_sets(project_root: str, environ: Optional[Ma
                 payload = load_ensemble_json_file(path)
             except (OSError, UnicodeDecodeError, ValueError):
                 continue
-            label = os.path.basename(filename)
+            models_dir = resolve_models_dir(project_root, environ=env)
+            try:
+                relative_label = os.path.relpath(path, models_dir).replace(os.sep, "/")
+            except ValueError:
+                relative_label = os.path.basename(filename)
+            label = relative_label if relative_label.startswith("strategy_params/") else os.path.basename(filename)
             if label in seen_labels:
                 continue
             seen_paths.add(path)
@@ -195,6 +212,7 @@ def _discover_rolling_oos_param_sets(project_root: str, environ: Optional[Mappin
     # outputs/ 只補充尚未複製到 models/ 的 rolling OOS 參數組。
     env = os.environ if environ is None else environ
     search_dirs = [
+        *_strategy_param_repository_dirs(project_root, environ=env),
         resolve_models_dir(project_root, environ=env),
         os.path.join(build_output_dir(project_root, "optimizer"), "outer_rolling_oos"),
     ]
@@ -218,7 +236,12 @@ def _discover_rolling_oos_param_sets(project_root: str, environ: Optional[Mappin
                 payload = load_json_file(path)
             except (OSError, UnicodeDecodeError, ValueError):
                 continue
-            label = os.path.basename(filename)
+            models_dir = resolve_models_dir(project_root, environ=env)
+            try:
+                relative_label = os.path.relpath(path, models_dir).replace(os.sep, "/")
+            except ValueError:
+                relative_label = os.path.basename(filename)
+            label = relative_label if relative_label.startswith("strategy_params/") else os.path.basename(filename)
             if label in seen_labels:
                 continue
             seen_paths.add(path)

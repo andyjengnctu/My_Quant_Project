@@ -171,7 +171,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     diagnostics_path = project_root / "filters" / "breakout_quality" / "strategy_compare_diagnostics.py"
     replay_path = project_root / "filters" / "breakout_quality" / "strategy_compare_replay.py"
     export_service_path = project_root / "filters" / "breakout_quality" / "export_scores.py"
-    param_service_path = project_root / "filters" / "breakout_quality" / "strategy_param_training.py"
+    param_service_path = project_root / "services" / "optimizer" / "strategy_param_training.py"
+    param_compatibility_path = project_root / "filters" / "breakout_quality" / "strategy_param_training.py"
+    param_repository_service_path = project_root / "services" / "optimizer" / "strategy_param_service.py"
     workflow_io_path = project_root / "filters" / "breakout_quality" / "workflow_io.py"
     optimizer_policy_path = project_root / "filters" / "breakout_quality" / "strategy_optimizer_policy.py"
     artifact_registry_path = project_root / "filters" / "breakout_quality" / "artifact_dependency_registry.py"
@@ -433,6 +435,86 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == active_contrast_ids.union(strategy_history.HISTORICAL_STRATEGY_COMPARE_CONTRASTS),
     )
 
+    from config.training_policy import (
+        OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT,
+        get_strategy_parameter_training_policy_snapshot,
+    )
+    from core.strategy_param_artifacts import (
+        STRATEGY_PARAM_FAMILIES,
+        normalize_strategy_param_evaluation_mode,
+    )
+
+    current_profile_ids = tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS)
+    current_param_source_ids = {
+        str(strategy_config.STRATEGY_COMPARE_ARMS[arm_id]["param_source"])
+        for profile_id in current_profile_ids
+        for arm_id in strategy_config._resolved_profile_matrix(
+            dict(strategy_config.STRATEGY_COMPARE_PROFILES[profile_id])
+        )[0]
+    }
+    current_param_source_ids.update(
+        str(source_id)
+        for profile_id in current_profile_ids
+        for source_id in dict(
+            strategy_config.STRATEGY_COMPARE_PROFILES[profile_id].get(
+                "arm_param_source_overrides"
+            )
+            or {}
+        ).values()
+    )
+    current_param_sources = {
+        source_id: strategy_config.STRATEGY_PARAM_SOURCES[source_id]
+        for source_id in current_param_source_ids
+    }
+    current_param_identities = {
+        (str(raw.get("canonical_family")), str(raw.get("canonical_evaluation_mode")))
+        for raw in current_param_sources.values()
+    }
+    current_param_builder_options = [
+        dict((raw.get("builder") or {}).get("options") or {})
+        for raw in current_param_sources.values()
+    ]
+    rolling_policy_snapshot = get_strategy_parameter_training_policy_snapshot(
+        evaluation_mode="rolling"
+    )
+    oos_policy_snapshot = get_strategy_parameter_training_policy_snapshot(
+        evaluation_mode="oos"
+    )
+    param_compatibility_source = param_compatibility_path.read_text(encoding="utf-8")
+    param_repository_service_source = param_repository_service_path.read_text(encoding="utf-8")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "current_strategy_parameter_domain_has_optimizer_owned_artifact_and_training_ssot",
+        True,
+        current_param_identities
+        == {
+            (family, mode)
+            for family in STRATEGY_PARAM_FAMILIES
+            for mode in ("oos", "rolling")
+        }
+        and all(
+            raw.get("path_template") is None
+            and raw.get("identity_manifest_path") is None
+            and str((raw.get("builder") or {}).get("builder_type"))
+            == "canonical_optimizer_strategy_params"
+            for raw in current_param_sources.values()
+        )
+        and all(not options for options in current_param_builder_options)
+        and int(rolling_policy_snapshot["optimizer_seed"])
+        == int(OPTIMIZER_RANDOM_SEED_DEFAULT)
+        and int(rolling_policy_snapshot["trials_per_fold"])
+        == int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
+        and int(oos_policy_snapshot["optimizer_seed"])
+        == int(OPTIMIZER_RANDOM_SEED_DEFAULT)
+        and int(oos_policy_snapshot["trials_per_fold"])
+        == int(OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT)
+        and normalize_strategy_param_evaluation_mode("roos") == "rolling"
+        and "sys.modules[__name__] = _optimizer_impl" in param_compatibility_source
+        and "def ensure_strategy_parameter_artifact(" in param_repository_service_source
+        and "from config.training_policy import" in param_repository_service_source
+        and "trials_per_fold" not in json.dumps(current_param_builder_options, sort_keys=True),
+    )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "strategy_execution_and_optimizer_defaults_have_config_ssot",
@@ -485,6 +567,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         project_root / "services" / "optimizer" / "outer_rolling_oos.py",
         project_root / "services" / "optimizer" / "runtime.py",
         project_root / "services" / "optimizer" / "session_factory.py",
+        project_root / "services" / "optimizer" / "strategy_param_training.py",
+        project_root / "services" / "optimizer" / "strategy_param_service.py",
     )
     forbidden_reverse_imports: list[str] = []
     for root_name in ("services", "filters", "core"):
@@ -527,6 +611,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         canonical_train_module is legacy_train_module
         and canonical_optimizer_module is legacy_optimizer_module
         and canonical_pit_module is legacy_pit_module
+        and importlib.import_module("filters.breakout_quality.strategy_param_training")
+            is importlib.import_module("services.optimizer.strategy_param_training")
         and Path(canonical_train_module.PROJECT_ROOT).resolve() == project_root.resolve(),
     )
 
@@ -605,7 +691,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "deterministic_prerequisites_use_formal_shared_services_without_model_training",
         True,
         all(path.is_file() for path in (
-            preparation_path, export_service_path, param_service_path, workflow_io_path, optimizer_policy_path,
+            preparation_path, export_service_path, param_service_path, param_repository_service_path,
+            param_compatibility_path, workflow_io_path, optimizer_policy_path,
         ))
         and "prepare_strategy_comparison_artifacts" in orchestration_source
         and "export_forward_oos_scores" in preparation_source
@@ -4072,10 +4159,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c60_current = operational_current_settings.arms["C60"]
     c60_options = dict(c60_current.dl_runtime_options or {})
     operational_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("extending_window_rolling")
-    extending_param_source = operational_current_settings.parameter_sources["extending_min_roos"]
-    extending_param_builder = extending_param_source.builder
-    extending_full_source = operational_current_settings.parameter_sources["extending_full_roos"]
-    extending_full_builder = extending_full_source.builder
+    rolling_min_source = operational_current_settings.parameter_sources[c58_current.param_source]
+    rolling_full_source = operational_current_settings.parameter_sources[c61_current.param_source]
     selection_robustness_legacy = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
     forward_robustness_legacy = strategy_config.get_strategy_multi_seed_robustness_settings("forward_oos")
     add_check(
@@ -4085,26 +4170,24 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         {"C61", "C58", "C59", "C60"}
         == {arm.arm_id for arm in operational_current_settings.enabled_arms}
         and c61_current.enabled and not c61_current.dl_enabled
-        and c61_current.param_source == "extending_full_roos"
         and c61_current.rule_policy == "formal"
         and c58_current.enabled and not c58_current.dl_enabled
         and c59_current.enabled and c59_current.dl_id == "CONT13E_ROLL"
         and c60_current.enabled
-        and c60_current.param_source == c58_current.param_source == c59_current.param_source == "extending_min_roos"
-        and extending_param_builder is not None
-        and extending_param_builder.builder_type == "extending_min_roos_stitch"
-        and dict(extending_param_builder.options).get("output_relative_dir")
-            == "models/research/breakout_quality/strategy_compare/extending_min_roos"
-        and extending_param_source.identity_manifest_path.endswith("extending_stitch_manifest.json")
-        and dict(extending_param_source.artifact_contract.get("breakout_quality_param_adaptation") or {}).get("parameter_set")
-            == "P2_EXTENDING"
-        and extending_full_builder is not None
-        and extending_full_builder.builder_type == "extending_full_roos_stitch"
-        and dict(extending_full_builder.options).get("output_relative_dir")
-            == "models/research/breakout_quality/strategy_compare/extending_full_roos"
-        and extending_full_source.identity_manifest_path.endswith("extending_stitch_manifest.json")
-        and dict(extending_full_source.artifact_contract.get("breakout_quality_param_adaptation") or {}).get("parameter_set")
-            == "P4_EXTENDING"
+        and c60_current.param_source == c58_current.param_source == c59_current.param_source
+        and rolling_full_source.canonical_family == "full"
+        and rolling_full_source.canonical_evaluation_mode == "rolling"
+        and rolling_min_source.canonical_family == "min"
+        and rolling_min_source.canonical_evaluation_mode == "rolling"
+        and rolling_full_source.path_template is None
+        and rolling_min_source.path_template is None
+        and rolling_full_source.identity_manifest_path is None
+        and rolling_min_source.identity_manifest_path is None
+        and rolling_full_source.builder is not None
+        and rolling_min_source.builder is not None
+        and rolling_full_source.builder.builder_type == rolling_min_source.builder.builder_type == "canonical_optimizer_strategy_params"
+        and dict(rolling_full_source.builder.options) == {}
+        and dict(rolling_min_source.builder.options) == {}
         and c60_current.rule_policy == c58_current.rule_policy == c59_current.rule_policy == "all_off"
         and c60_current.dl_id == "CONT13K_ROLL"
         and c60_current.dl_runtime_mode == "resource-aware-continuous-score-residual-safety-constrained-optimal"
@@ -4161,23 +4244,26 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "oos_test_freezes_2020_cutoff_params_and_keeps_k_m_in_same_pit_namespace",
         True,
-        c61_oos.param_source == "oos_full_roos"
-        and c58_oos.param_source == c59_oos.param_source == c60_oos.param_source == "oos_min_roos"
-        and oos_current_settings.parameter_sources["oos_full_roos"].builder is not None
-        and oos_current_settings.parameter_sources["oos_full_roos"].builder.builder_type == "oos_param_freeze"
-        and oos_current_settings.parameter_sources["oos_min_roos"].builder is not None
-        and oos_current_settings.parameter_sources["oos_min_roos"].builder.builder_type == "oos_param_freeze"
-        and dict(oos_current_settings.parameter_sources["oos_full_roos"].builder.options).get("source_param_source_id") == "extending_full_roos"
-        and dict(oos_current_settings.parameter_sources["oos_min_roos"].builder.options).get("source_param_source_id") == "extending_min_roos"
-        and dict(oos_current_settings.parameter_sources["oos_min_roos"].builder.options).get("freeze_cutoff_date") == "2020-12-31"
-        and dict(oos_current_settings.parameter_sources["oos_min_roos"].builder.options).get("freeze_effective_date") == "2021-01-01"
+        oos_current_settings.parameter_sources[c61_oos.param_source].canonical_family == "full"
+        and oos_current_settings.parameter_sources[c61_oos.param_source].canonical_evaluation_mode == "oos"
+        and c58_oos.param_source == c59_oos.param_source == c60_oos.param_source
+        and oos_current_settings.parameter_sources[c58_oos.param_source].canonical_family == "min"
+        and oos_current_settings.parameter_sources[c58_oos.param_source].canonical_evaluation_mode == "oos"
+        and oos_current_settings.parameter_sources[c61_oos.param_source].builder is not None
+        and oos_current_settings.parameter_sources[c58_oos.param_source].builder is not None
+        and oos_current_settings.parameter_sources[c61_oos.param_source].builder.builder_type == "canonical_optimizer_strategy_params"
+        and oos_current_settings.parameter_sources[c58_oos.param_source].builder.builder_type == "canonical_optimizer_strategy_params"
+        and dict(oos_current_settings.parameter_sources[c61_oos.param_source].builder.options) == {}
+        and dict(oos_current_settings.parameter_sources[c58_oos.param_source].builder.options) == {}
         and oos_primary_dir == oos_safety_dir == "point_in_time_oos_2021_forward"
         and "point_in_time_oos_2021_forward" in str(oos_c60_options.get("safety_score_path_override") or "")
         and "point_in_time_oos_2021_forward" in str(oos_c60_options.get("safety_score_manifest_path_override") or "")
         and "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
             in str(oos_c60_options.get("safety_score_path_override") or "")
-        and c61_current.param_source == "extending_full_roos"
-        and c58_current.param_source == c59_current.param_source == c60_current.param_source == "extending_min_roos",
+        and operational_current_settings.parameter_sources[c61_current.param_source].canonical_family == "full"
+        and operational_current_settings.parameter_sources[c61_current.param_source].canonical_evaluation_mode == "rolling"
+        and operational_current_settings.parameter_sources[c58_current.param_source].canonical_family == "min"
+        and operational_current_settings.parameter_sources[c58_current.param_source].canonical_evaluation_mode == "rolling",
     )
 
     c56_pinned_options = _resolved_ranking_options(

@@ -1,9 +1,9 @@
 ## Going
 - improve test effiency
-    - rolling period : 2021~latest
-    - ROOS -> OOS 
-    - FULL/MIN MULTISEED
+
     - Finaliszs agreed
+    - models/output cleaner
+
 - imrove DL module
     - use dual models (MFA, MEA ) in strategy
     - simply label

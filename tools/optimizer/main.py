@@ -1681,15 +1681,16 @@ def _build_static_seed_ensemble_policy_paramset_payload(*, policy_name: str, mem
 
 
 def _remove_disabled_nonrolling_policy_paramset_files(*, mode: str, active_policy_names: set[str], all_policy_names: tuple[str, ...]) -> None:
-    from tools.optimizer.outer_rolling_oos import get_optimizer_nonrolling_policy_paramset_filename
+    from core.strategy_param_artifacts import resolve_strategy_param_artifact_path
 
     normalized_mode = normalize_optimizer_model_mode(mode)
     active = {str(name) for name in set(active_policy_names or set())}
     for policy_name in tuple(str(name) for name in all_policy_names if str(name)):
         if policy_name in active:
             continue
-        filename = get_optimizer_nonrolling_policy_paramset_filename(policy_name, mode=normalized_mode)
-        path = os.path.join(MODELS_DIR, filename)
+        path = str(resolve_strategy_param_artifact_path(
+            PROJECT_ROOT, family="full", evaluation_mode=normalized_mode, policy=policy_name
+        ))
         try:
             if os.path.exists(path):
                 os.remove(path)
@@ -1742,11 +1743,14 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
             trials_per_seed=trials_per_seed,
         )
         payloads[str(policy_name)] = payload
-        filename = get_optimizer_nonrolling_policy_paramset_filename(
-            str(policy_name),
-            mode=normalize_optimizer_model_mode(selected_model_mode),
-        )
-        path = os.path.join(MODELS_DIR, filename)
+        from core.strategy_param_artifacts import resolve_strategy_param_artifact_path
+
+        path = str(resolve_strategy_param_artifact_path(
+            PROJECT_ROOT,
+            family="full",
+            evaluation_mode=normalize_optimizer_model_mode(selected_model_mode),
+            policy=str(policy_name),
+        ))
         if str(policy_name) not in first_class_policy_set:
             try:
                 if os.path.exists(path):
@@ -1757,6 +1761,14 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
         if bool(write_files):
             _write_json_file(path, payload)
             paths[str(policy_name)] = path
+    if bool(write_files) and paths:
+        from services.optimizer.strategy_param_repository import refresh_strategy_parameter_manifest
+
+        refresh_strategy_parameter_manifest(
+            PROJECT_ROOT,
+            family="full",
+            evaluation_mode=normalize_optimizer_model_mode(selected_model_mode),
+        )
     return paths, payloads
 
 
