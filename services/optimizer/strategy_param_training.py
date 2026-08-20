@@ -899,6 +899,7 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
                 default_trials=int(args.trials_per_fold),
                 timing_mode=False,
                 paramset_models_dir=str(active_param_dir.resolve()),
+                canonical_strategy_param_family=(canonical_family if canonical_current else None),
             )
         if int(exit_code) != 0:
             raise RuntimeError(f"{arm_id} Min ROOS rolling optimizer失敗: {exit_code}")
@@ -2472,7 +2473,7 @@ def prepare_strategy_parameter_source(
     """Build one configured Min rolling parameter source without replay.
 
     Current Optimizer-owned production passes ``canonical_strategy_param_family="min"``
-    so every first-class policy is written to ``models/strategy_params/min/rolling``.
+    so every first-class policy is written to ``models/strategy_params/canonical/``.
     Historical callers may omit it and retain their legacy artifact path.
     """
 

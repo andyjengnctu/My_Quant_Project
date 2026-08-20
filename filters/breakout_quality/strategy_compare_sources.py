@@ -17,7 +17,11 @@ from core.active_param_ensemble import (
 )
 from core.buy_sort import BREAKOUT_QUALITY_RANKING_POLICY_SCORE
 from core.model_paths import resolve_default_primary_param_source_record
-from core.strategy_param_artifacts import resolve_strategy_param_artifact_path
+from core.file_integrity import canonical_json_sha256
+from core.strategy_param_artifacts import (
+    freeze_strategy_param_payload_for_period,
+    resolve_strategy_param_artifact_path,
+)
 from core.params_io import build_params_from_mapping, load_params_from_json, params_to_json_dict
 from core.rolling_oos_params import build_active_param_schedule, is_rolling_oos_param_set_payload
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
@@ -311,6 +315,45 @@ def _first_existing_comparison_dir(
         "找不到既有strategy compare輸出目錄；已檢查: "
         + ", ".join(str(path) for path in candidates)
     )
+
+def apply_strategy_param_evaluation_view(
+    source: dict[str, Any], *, evaluation_mode: str | None, start_date: str, end_date: str
+) -> dict[str, Any]:
+    """Apply OOS/Rolling consumption semantics without creating another file.
+
+    Canonical and benchmark strategy parameter JSONs contain one complete PIT-safe
+    effective-date schedule.  Rolling consumes that schedule as-is; OOS freezes the
+    latest member legal at the comparison start entirely in memory.
+    """
+    mode = str(evaluation_mode or "rolling").strip().lower()
+    if mode in {"roos"}:
+        mode = "rolling"
+    if mode in {"split"}:
+        mode = "oos"
+    if mode not in {"oos", "rolling"}:
+        return source
+    if source.get("kind") != "rolling_active_param_ensemble":
+        return source
+    if mode == "rolling":
+        return source
+    payload = freeze_strategy_param_payload_for_period(
+        source["payload"], start_date=str(start_date), end_date=str(end_date)
+    )
+    return {**source, "payload": payload, "evaluation_view": "frozen_oos"}
+
+
+def strategy_param_source_identity_sha256(source: dict[str, Any], *, source_path: Path) -> str:
+    """Hash the parameter content actually consumed by this evaluation.
+
+    Rolling hashes the full schedule; OOS hashes its in-memory frozen view.  This
+    keeps OOS result reuse stable when later Rolling-only members are appended to
+    the same physical JSON.
+    """
+    payload = source.get("payload")
+    if isinstance(payload, dict):
+        return canonical_json_sha256(payload)
+    return _sha256_file(Path(source_path))
+
 
 def _load_param_source(path: Path) -> dict[str, Any]:
     try:

@@ -439,10 +439,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == active_contrast_ids.union(strategy_history.HISTORICAL_STRATEGY_COMPARE_CONTRASTS),
     )
 
-    from config.training_policy import (
-        OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT,
-        get_strategy_parameter_training_policy_snapshot,
+    from core.strategy_param_artifacts import (
+        POLICY_FILENAME_BY_NAME,
+        resolve_strategy_param_artifact_path,
+        resolve_strategy_param_state_path,
     )
+    from config.training_policy import get_strategy_parameter_training_policy_snapshot
     from core.strategy_param_artifacts import (
         STRATEGY_PARAM_FAMILIES,
         normalize_strategy_param_evaluation_mode,
@@ -511,7 +513,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and int(oos_policy_snapshot["optimizer_seed"])
         == int(OPTIMIZER_RANDOM_SEED_DEFAULT)
         and int(oos_policy_snapshot["trials_per_fold"])
-        == int(OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT)
+        == int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
+        and all(
+            resolve_strategy_param_artifact_path(
+                project_root, family=family, evaluation_mode="oos", policy="base_finalist_best"
+            )
+            == resolve_strategy_param_artifact_path(
+                project_root, family=family, evaluation_mode="rolling", policy="base_finalist_best"
+            )
+            for family in STRATEGY_PARAM_FAMILIES
+        )
         and normalize_strategy_param_evaluation_mode("roos") == "rolling"
         and "sys.modules[__name__] = _optimizer_impl" in param_compatibility_source
         and "def ensure_strategy_parameter_artifact(" in param_repository_service_source
@@ -527,7 +538,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "current_strategy_parameter_runtime_retires_models_root_json_and_keeps_optimizer_as_state_writer",
         True,
-        "strategy_params/full/trade/state/active.json" in model_paths_source
+        "STRATEGY_PARAM_CANONICAL_RELATIVE_DIR" in model_paths_source
+        and "full/trade/state/active.json" not in model_paths_source
         and "resolve_models_dir(project_root, environ=env), \"run_best_params.json\"" not in model_paths_source
         and "os.path.join(MODELS_DIR, \"run_best_params.json\")" not in optimizer_main_source
         and "write_strategy_parameter_state_artifact" in runtime_promotion_source
@@ -537,11 +549,6 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     from core.active_param_ensemble import ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE
-    from core.strategy_param_artifacts import (
-        POLICY_FILENAME_BY_NAME,
-        resolve_strategy_param_artifact_path,
-        resolve_strategy_param_state_path,
-    )
     from services.optimizer.outer_rolling_oos import (
         get_optimizer_nonrolling_policy_paramset_filename,
         get_optimizer_policy_paramset_filename,

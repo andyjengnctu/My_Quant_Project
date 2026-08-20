@@ -148,7 +148,7 @@ Current時間驗證只保留`OOS Test`與`Rolling Test`兩種mode。OOS固定以
 
 目前比較profiles、參數來源、DL來源、時間policy與前置建立政策集中於`config/strategy_compare.py`；**current Extending比較矩陣只由`STRATEGY_COMPARE_SUITES["extending_current"]`定義一次**，固定arms=`C61/C62/C58/C63/C59/C60`與九個contrasts。OOS／Rolling profile只引用`suite_id`並決定evaluation policy、param binding、artifact namespace與人讀suffix，不得再寫`arm_ids`／`contrast_ids`；current robustness同樣只引用suite，不得再寫`fixed_arm_ids`／`stochastic_arm_ids`／`paired_contrasts`。Robustness runtime在同一六-arm矩陣上依benchmark語意分工：C62/C63為fixed production consensus references；C61/C58/C59/C60為per-seed strategy benchmark arms，C59/C60再是model-seed-sensitive子集。題庫seed count／generator／resolved sequence與strategy trials只讀`config/training_policy.py`，不得在Strategy Compare再設第二份；新增／移除current arm仍只改suite一處。Historical profiles仍可保留profile-local matrix作artifact compatibility，不存在代表整套實驗的`ACTIVE_STRATEGY_COMPARISON_ID`。
 
-選擇Strategy Compare執行後，App先顯示`READY／PREPARABLE／BLOCKED`依賴計畫並只確認一次；合法模型／參數直接REUSE，缺少且可由current config確定性建立的模型工件由Strategy Compare作orchestrator委派canonical model-training service BUILD／REBUILD／RESUME並完成PIT Model Gate，之後自動re-plan再進strategy replay；不得複製trainer、改target／architecture／loss／seed或自行挑模型。只有Dataset／Target truth缺失、workflow未授權或需要新研究決策的上游才BLOCKED。Current策略參數不再由Research另建freeze／stitch artifacts：OOS直接解析Optimizer-owned `models/strategy_params/{full|min}/oos/`，Rolling解析`models/strategy_params/{full|min}/rolling/`；`base_best`、`*_finalists_agree`、`ensemble_*`全部共用同一canonical repository與manifest。缺件時Strategy Compare只委派canonical Optimizer parameter service後re-plan，Research不得自行帶seed／trials／search/path設定。報表的`同參數DL選擇R`只在相同`param_source`與`rule_policy`的arms間具共同attribution基準；跨參數contrast的`Δ同參數DL選擇R`固定顯示`-`。預設`reuse_completed_results=True`與`reuse_shared_baseline=True`：replay identity與目前工件SHA完全一致的既有arm顯示`REUSE`，只有新／失效arm顯示`RUN`；修改contrast或純顯示文字不使cache失效，param、model、manifest、score、期間或runtime contract任一改變都必須重新replay。
+選擇Strategy Compare執行後，App先顯示`READY／PREPARABLE／BLOCKED`依賴計畫並只確認一次；合法模型／參數直接REUSE，缺少且可由current config確定性建立的模型工件由Strategy Compare作orchestrator委派canonical model-training service BUILD／REBUILD／RESUME並完成PIT Model Gate，之後自動re-plan再進strategy replay；不得複製trainer、改target／architecture／loss／seed或自行挑模型。只有Dataset／Target truth缺失、workflow未授權或需要新研究決策的上游才BLOCKED。Current策略參數不再由Research另建freeze／stitch artifacts：OOS與Rolling都解析Optimizer-owned `models/strategy_params/canonical/<family>_<policy>.json`同一跨年schedule；OOS只在讀取時freeze起始日合法member，Rolling按effective date讀取。`base_best`、`*_finalists_agree`、`ensemble_*`全部共用同一canonical repository與manifest。缺件時Strategy Compare只委派canonical Optimizer parameter service後re-plan，Research不得自行帶seed／trials／search/path設定。報表的`同參數DL選擇R`只在相同`param_source`與`rule_policy`的arms間具共同attribution基準；跨參數contrast的`Δ同參數DL選擇R`固定顯示`-`。預設`reuse_completed_results=True`與`reuse_shared_baseline=True`：replay identity與目前工件SHA完全一致的既有arm顯示`REUSE`，只有新／失效arm顯示`RUN`；修改contrast或純顯示文字不使cache失效，param、model、manifest、score、期間或runtime contract任一改變都必須重新replay。
 
 當目前 workflow 是 Binary classification 時，選擇 `[1]  模型研究與驗證  (Enter)` 後會顯示：
 
@@ -411,7 +411,7 @@ outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_
 
 ## Strategy Parameter SSOT 一次性 migration
 
-舊`models/*.json`策略參數只作一次性migration source；current正式位置為`models/strategy_params/`。正式一次性入口為：
+舊`models/*.json`與舊`models/strategy_params/{full|min}/{oos|rolling|trade}/`策略參數只作一次性migration source；current正常策略正式位置為`models/strategy_params/canonical/`，robustness seed工件隔離於`models/strategy_params/benchmark/<benchmark_id>/`。正式一次性入口為：
 
 ```powershell
 python apps/research.py optimizer migrate-strategy-params
@@ -419,4 +419,4 @@ python apps/research.py optimizer migrate-strategy-params
 
 此入口只呼叫Optimizer-owned migration service並做cleanup readiness驗證，不刪檔。Cleanup gate只有在canonical target存在、Optimizer manifest identity正確、target SHA由manifest pin住，且legacy source可由內容SHA或migration lineage證明已保存時才會回報`READY_FOR_CLEANUP`。完成後才可依回報的`removable`清單執行`Remove-Item`。
 
-Round 3完成後，current `ensure_strategy_parameter_artifact()`不再掃描、fallback或自動migration `models/*.json` root；current Strategy Compare只接受canonical truth、Optimizer current build／resume與Optimizer-owned OOS derivation。若canonical工件缺失，必須先由Optimizer正式流程建立或執行上述一次性migration，不得讓Research在current執行途中偷偷讀legacy root。
+Round 3完成後，current `ensure_strategy_parameter_artifact()`不再掃描、fallback或自動migration `models/*.json` root；current Strategy Compare只接受flat canonical schedule truth與Optimizer current build／rebuild／resume；OOS freeze只發生在consumer讀取時，不再產生Optimizer-owned第二份OOS parameter artifact。若canonical工件缺失，必須先由Optimizer正式流程建立或執行上述一次性migration，不得讓Research在current執行途中偷偷讀legacy root。

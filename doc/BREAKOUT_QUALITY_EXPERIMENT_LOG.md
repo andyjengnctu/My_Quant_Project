@@ -9727,3 +9727,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Version：Strategy Compare schema=`53→54`；Robustness report schema=`10→11`；Robustness scientific contract=`4→5`。
 - Decision：`ROUND2_EXECUTABLE / SAME_SEED_STRATEGY_MODEL_BINDING_ENFORCED / BENCHMARK_EVIDENCE_PENDING / PRODUCTION_UNCHANGED`.
 
+
+
+### 2026-08-21 — Strategy Parameter Flat Cross-Time SSOT Round A：單一跨年JSON + stale auto-rebuild
+- 使用者決策：Strategy Parameter physical storage不再以`full/min/oos/rolling/trade`資料夾切割。同一策略跨時間只保留一個JSON；Full/Min/policy用檔名區隔。正常current artifacts集中`models/strategy_params/canonical/`；benchmark仍隔離於`models/strategy_params/benchmark/<benchmark_id>/`，每個獨立benchmark seed以檔名區隔。
+- OOS／Rolling改為同一parameter schedule的兩種consumption semantics：Rolling按effective date使用完整schedule；OOS在replay讀取時freeze score-start當下合法member，不另寫OOS參數JSON。Rolling日後補入2022+ members不會改變OOS frozen evaluation-view identity。
+- `active.json`不再是第二份parameter truth；既有active resolver API只作compatibility alias，physical current named artifact為`canonical/run_best_params.json`。一般Workbench/runtime discovery只看`canonical/`，benchmark seed工件不得洩漏到正常策略選擇。
+- Stale contract補強：canonical REUSE不得只看檔案存在，必須同時驗證Optimizer seed、trials/fold、train/OOS window、search space/search fields、dataset、max positions、rotation、fixed risk、position cap、manifest path/SHA與schedule completeness；不一致或coverage不足時由canonical Optimizer自動BUILD／REBUILD／RESUME。
+- Benchmark同樣收斂成一seed一strategy一個完整跨年JSON；OOS與Rolling共用2021 initial optimizer work，Rolling只在需要時延伸2022+ members。
+- 本輪只改Strategy Parameter SSOT/storage/reuse contract；MR-13E/K/M robustness OOS↔Rolling identical DL checkpoint reuse留待下一輪，未混入本輪。
+- Decision：`FLAT_CROSS_TIME_STRATEGY_PARAM_SSOT / OOS_ROLLING_SINGLE_PHYSICAL_TRUTH / STALE_AUTO_REBUILD_ENABLED / ROUND_A_DONE`.

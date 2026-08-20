@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 
 from core.model_paths import discover_model_param_sources, resolve_default_primary_param_source_record, resolve_run_best_params_path
 
-DEFAULT_PARAM_SOURCE_LABEL = "strategy_params/full/trade/state/active.json"
+DEFAULT_PARAM_SOURCE_LABEL = "strategy_params/canonical/run_best_params.json"
 LEGACY_PARAM_SOURCE_LABEL = DEFAULT_PARAM_SOURCE_LABEL
 
 

@@ -684,6 +684,7 @@ def _run_strategy_only_benchmark_unit(
     *, settings, arm: StrategyComparisonArm, seed: int, seed_order: int, arm_order: int,
     params_path: Path, comparison_start: str, comparison_end: str, output_dir: Path,
     strategy_param_sha256: str, strategy_param_manifest_sha256: str,
+    param_evaluation_mode: str,
 ) -> dict[str, Any]:
     if output_dir.exists():
         shutil.rmtree(output_dir)
@@ -704,6 +705,7 @@ def _run_strategy_only_benchmark_unit(
         comparison_end_date=str(comparison_end),
         quiet=True,
         shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None),
+        param_evaluation_mode=str(param_evaluation_mode),
     )
     metrics = dict(payload.get("no_filter") or {})
     return {
@@ -2276,6 +2278,7 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         comparison_start_date=start, comparison_end_date=end, quiet=True,
         shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None),
         baseline_reuse_dir=baseline_dir,
+        param_evaluation_mode=str(job.get("param_evaluation_mode") or "rolling"),
         continuous_score_path_override=(
             None if is_selection else str(primary_override.get("score_path") or job["score_path"])
         ),
@@ -3663,6 +3666,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
                 output_dir=output_dir,
                 strategy_param_sha256=str(binding["sha256"]),
                 strategy_param_manifest_sha256=str(binding["manifest_sha256"]),
+                param_evaluation_mode=str(binding["evaluation_mode"]),
             )
             benchmark_baseline_dirs[unit_identity] = str(output_dir.resolve())
             rows = [
@@ -3965,6 +3969,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             "params_path": str(benchmark_bindings[(arm.arm_id, int(seed))]["path"]),
             "strategy_param_sha256": str(benchmark_bindings[(arm.arm_id, int(seed))]["sha256"]),
             "strategy_param_manifest_sha256": str(benchmark_bindings[(arm.arm_id, int(seed))]["manifest_sha256"]),
+            "param_evaluation_mode": str(benchmark_bindings[(arm.arm_id, int(seed))]["evaluation_mode"]),
             "comparison_start": comparison_start,
             "comparison_end": comparison_end,
             "baseline_dir": baseline_dir,

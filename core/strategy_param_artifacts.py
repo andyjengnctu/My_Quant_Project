@@ -1,31 +1,46 @@
 """Canonical strategy-parameter artifact paths and identities.
 
-The optimizer domain is the only producer of current strategy-parameter artifacts.
-Research/Strategy Compare resolves artifacts through this module and never assembles
-optimizer output paths on its own.
+Strategy parameters are stored by strategy identity, not by evaluation mode.
+OOS and Rolling are consumption semantics over the same PIT-safe effective-date
+schedule.  The optimizer domain remains the only producer of current artifacts;
+Research/Strategy Compare resolves paths through this module.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION = 2
+from core.active_param_ensemble import (
+    ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
+    get_active_param_ensemble_date_range,
+    is_active_param_ensemble_payload,
+    resolve_active_param_ensemble_mode,
+)
+from core.seed_ensemble_policy import normalize_seed_ensemble_members
+
+STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION = 3
 STRATEGY_PARAM_ROOT_RELATIVE = Path("models") / "strategy_params"
+STRATEGY_PARAM_CANONICAL_DIRNAME = "canonical"
 STRATEGY_PARAM_BENCHMARK_DIRNAME = "benchmark"
 
 STRATEGY_PARAM_FAMILIES = ("full", "min")
 STRATEGY_PARAM_EVALUATION_MODES = ("study", "full", "oos", "rolling", "trade")
-STRATEGY_PARAM_STATE_DIRNAME = "state"
+STRATEGY_PARAM_SCHEDULE_MODES = ("oos", "rolling")
+
+# Optimizer working/current named artifacts live beside canonical strategy files.
+# ``active`` is kept only as a compatibility API key; its physical filename is the
+# explicit run_best artifact, not a second anonymous active-param truth.
 STRATEGY_PARAM_STATE_FILENAME_BY_NAME = {
-    "active": "active.json",
-    "active_summary": "active_summary.json",
-    "candidate_best": "candidate_best.json",
+    "active": "run_best_params.json",
+    "active_summary": "run_best_summary.json",
+    "candidate_best": "candidate_best_params.json",
     "candidate_best_summary": "candidate_best_summary.json",
-    "candidate_retention_best": "candidate_retention_best.json",
+    "candidate_retention_best": "candidate_retention_best_params.json",
     "candidate_retention_best_summary": "candidate_retention_best_summary.json",
-    "candidate_val_score_best": "candidate_val_score_best.json",
+    "candidate_val_score_best": "candidate_val_score_best_params.json",
     "candidate_val_score_best_summary": "candidate_val_score_best_summary.json",
 }
 
@@ -73,9 +88,27 @@ def normalize_strategy_param_policy(value: str) -> str:
     return policy
 
 
+def _canonical_dir(project_root: str | Path) -> Path:
+    return Path(project_root).resolve() / STRATEGY_PARAM_ROOT_RELATIVE / STRATEGY_PARAM_CANONICAL_DIRNAME
+
+
+def _canonical_policy_filename(*, family: str, evaluation_mode: str, policy: str) -> str:
+    family = normalize_strategy_param_family(family)
+    mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
+    policy = normalize_strategy_param_policy(policy)
+    base = POLICY_FILENAME_BY_NAME[policy]
+    # Current OOS/Rolling share one complete cross-time schedule per strategy.
+    if mode in STRATEGY_PARAM_SCHEDULE_MODES:
+        return f"{family}_{base}"
+    # Optimizer Study/Full/Trade products remain named, but no longer create mode folders.
+    return f"{family}_{mode}_{base}"
+
+
 def resolve_strategy_param_dir(project_root: str | Path, *, family: str, evaluation_mode: str) -> Path:
-    root = Path(project_root).resolve()
-    return root / STRATEGY_PARAM_ROOT_RELATIVE / normalize_strategy_param_family(family) / normalize_strategy_param_evaluation_mode(evaluation_mode)
+    # Compatibility API: family/mode validation is retained, physical storage is flat.
+    normalize_strategy_param_family(family)
+    normalize_strategy_param_evaluation_mode(evaluation_mode)
+    return _canonical_dir(project_root)
 
 
 def resolve_strategy_param_artifact_path(
@@ -85,9 +118,9 @@ def resolve_strategy_param_artifact_path(
     evaluation_mode: str,
     policy: str,
 ) -> Path:
-    normalized_policy = normalize_strategy_param_policy(policy)
-    return resolve_strategy_param_dir(project_root, family=family, evaluation_mode=evaluation_mode) / POLICY_FILENAME_BY_NAME[normalized_policy]
-
+    return _canonical_dir(project_root) / _canonical_policy_filename(
+        family=family, evaluation_mode=evaluation_mode, policy=policy
+    )
 
 
 def resolve_strategy_param_state_dir(
@@ -96,9 +129,9 @@ def resolve_strategy_param_state_dir(
     family: str = "full",
     evaluation_mode: str = "trade",
 ) -> Path:
-    return resolve_strategy_param_dir(
-        project_root, family=family, evaluation_mode=evaluation_mode
-    ) / STRATEGY_PARAM_STATE_DIRNAME
+    normalize_strategy_param_family(family)
+    normalize_strategy_param_evaluation_mode(evaluation_mode)
+    return _canonical_dir(project_root)
 
 
 def resolve_strategy_param_state_path(
@@ -117,8 +150,13 @@ def resolve_strategy_param_state_path(
 
 
 def resolve_strategy_param_manifest_path(project_root: str | Path, *, family: str, evaluation_mode: str) -> Path:
-    return resolve_strategy_param_dir(project_root, family=family, evaluation_mode=evaluation_mode) / "manifest.json"
-
+    family = normalize_strategy_param_family(family)
+    mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
+    if mode in STRATEGY_PARAM_SCHEDULE_MODES:
+        filename = f"{family}_manifest.json"
+    else:
+        filename = f"{family}_{mode}_manifest.json"
+    return _canonical_dir(project_root) / filename
 
 
 def normalize_strategy_param_benchmark_id(value: str) -> str:
@@ -145,15 +183,14 @@ def resolve_strategy_param_benchmark_dir(
     family: str,
     evaluation_mode: str,
 ) -> Path:
-    root = Path(project_root).resolve()
+    normalize_strategy_param_benchmark_seed(seed)
+    normalize_strategy_param_family(family)
+    normalize_strategy_param_evaluation_mode(evaluation_mode)
     return (
-        root
+        Path(project_root).resolve()
         / STRATEGY_PARAM_ROOT_RELATIVE
         / STRATEGY_PARAM_BENCHMARK_DIRNAME
         / normalize_strategy_param_benchmark_id(benchmark_id)
-        / f"seed_{normalize_strategy_param_benchmark_seed(seed)}"
-        / normalize_strategy_param_family(family)
-        / normalize_strategy_param_evaluation_mode(evaluation_mode)
     )
 
 
@@ -166,14 +203,20 @@ def resolve_strategy_param_benchmark_artifact_path(
     evaluation_mode: str,
     policy: str,
 ) -> Path:
-    normalized_policy = normalize_strategy_param_policy(policy)
+    family = normalize_strategy_param_family(family)
+    mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
+    if mode not in STRATEGY_PARAM_SCHEDULE_MODES:
+        raise ValueError("robustness benchmark strategy params只支援oos/rolling")
+    policy = normalize_strategy_param_policy(policy)
+    stem = Path(POLICY_FILENAME_BY_NAME[policy]).stem
+    seed_value = normalize_strategy_param_benchmark_seed(seed)
     return resolve_strategy_param_benchmark_dir(
         project_root,
         benchmark_id=benchmark_id,
-        seed=seed,
+        seed=seed_value,
         family=family,
-        evaluation_mode=evaluation_mode,
-    ) / POLICY_FILENAME_BY_NAME[normalized_policy]
+        evaluation_mode=mode,
+    ) / f"{family}_{stem}_seed_{seed_value}.json"
 
 
 def resolve_strategy_param_benchmark_manifest_path(
@@ -184,13 +227,19 @@ def resolve_strategy_param_benchmark_manifest_path(
     family: str,
     evaluation_mode: str,
 ) -> Path:
+    family = normalize_strategy_param_family(family)
+    mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
+    if mode not in STRATEGY_PARAM_SCHEDULE_MODES:
+        raise ValueError("robustness benchmark strategy params只支援oos/rolling")
+    seed_value = normalize_strategy_param_benchmark_seed(seed)
     return resolve_strategy_param_benchmark_dir(
         project_root,
         benchmark_id=benchmark_id,
-        seed=seed,
+        seed=seed_value,
         family=family,
-        evaluation_mode=evaluation_mode,
-    ) / "manifest.json"
+        evaluation_mode=mode,
+    ) / f"{family}_seed_{seed_value}_manifest.json"
+
 
 def compute_strategy_param_file_sha256(path: str | Path) -> str:
     digest = hashlib.sha256()
@@ -211,13 +260,82 @@ def load_strategy_param_manifest(project_root: str | Path, *, family: str, evalu
     return payload if isinstance(payload, dict) else None
 
 
+def freeze_strategy_param_payload_for_period(
+    payload: Mapping[str, Any], *, start_date: str, end_date: str
+) -> dict[str, Any]:
+    """Return an in-memory frozen view of one rolling strategy schedule.
+
+    No file is written.  The latest member legally effective on ``start_date`` is
+    used for the entire requested period.  This makes OOS a consumption mode over
+    the same canonical schedule used by Rolling.
+    """
+    if not isinstance(payload, Mapping):
+        raise ValueError("strategy parameter payload必須是mapping")
+    source = copy.deepcopy(dict(payload))
+    start = str(start_date)[:10]
+    end = str(end_date)[:10]
+    if end < start:
+        raise ValueError("frozen strategy parameter period不合法")
+
+    if not is_active_param_ensemble_payload(source) or resolve_active_param_ensemble_mode(source) != ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING:
+        raise ValueError("OOS frozen view只接受rolling active-param ensemble")
+    mapping = dict(source.get("params_ensemble_by_effective_date") or {})
+    eligible = sorted(date for date in mapping if str(date)[:10] <= start)
+    if not eligible:
+        raise ValueError(f"canonical strategy schedule在{start}前沒有合法effective member")
+    effective = eligible[-1]
+    members = normalize_seed_ensemble_members(mapping[effective])
+    if not members:
+        raise ValueError(f"canonical strategy schedule effective member無效: {effective}")
+
+    frozen = copy.deepcopy(source)
+    frozen["params_ensemble_by_effective_date"] = {start: members}
+    # Keep any single-member compatibility mapping consistent when present.
+    if isinstance(frozen.get("params_by_effective_date"), Mapping):
+        raw = dict(frozen.get("params_by_effective_date") or {})
+        if effective in raw:
+            frozen["params_by_effective_date"] = {start: copy.deepcopy(raw[effective])}
+    if isinstance(frozen.get("params_by_oos_year"), Mapping):
+        raw_years = dict(frozen.get("params_by_oos_year") or {})
+        effective_year = str(effective)[:4]
+        if effective_year in raw_years:
+            frozen["params_by_oos_year"] = {str(start)[:4]: copy.deepcopy(raw_years[effective_year])}
+    frozen["folds"] = [{
+        "effective_start": start,
+        "effective_end": end,
+        "oos_start_date": start,
+        "oos_end_date": end,
+    }]
+    frozen.setdefault("meta", {}).update({
+        "evaluation_view": "frozen_oos",
+        "source_effective_date": str(effective),
+        "freeze_start_date": start,
+        "freeze_end_date": end,
+    })
+    frozen.setdefault("summary", {}).update({
+        "folds": 1,
+        "oos_period": f"{start}~{end}",
+        "oos_start_date": start,
+        "oos_end_date": end,
+    })
+    # Assert the generated view actually covers the requested period.
+    actual_start, actual_end = get_active_param_ensemble_date_range(frozen)
+    if str(actual_start) != start or str(actual_end) != end:
+        raise ValueError(
+            "frozen strategy parameter coverage不一致: "
+            f"expected={start}~{end}, actual={actual_start}~{actual_end}"
+        )
+    return frozen
+
+
 __all__ = [
     "STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION",
     "STRATEGY_PARAM_ROOT_RELATIVE",
+    "STRATEGY_PARAM_CANONICAL_DIRNAME",
     "STRATEGY_PARAM_BENCHMARK_DIRNAME",
     "STRATEGY_PARAM_FAMILIES",
     "STRATEGY_PARAM_EVALUATION_MODES",
-    "STRATEGY_PARAM_STATE_DIRNAME",
+    "STRATEGY_PARAM_SCHEDULE_MODES",
     "STRATEGY_PARAM_STATE_FILENAME_BY_NAME",
     "POLICY_FILENAME_BY_NAME",
     "COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY",
@@ -236,4 +354,5 @@ __all__ = [
     "resolve_strategy_param_benchmark_manifest_path",
     "compute_strategy_param_file_sha256",
     "load_strategy_param_manifest",
+    "freeze_strategy_param_payload_for_period",
 ]

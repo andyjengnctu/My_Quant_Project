@@ -11,6 +11,7 @@ from typing import Any
 
 import pandas as pd
 
+from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT
 from core.active_param_ensemble import get_active_param_ensemble_date_range
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
@@ -80,6 +81,9 @@ from filters.breakout_quality.strategy_compare_sources import (
 from filters.breakout_quality.strategy_param_training import (
     FULL_ROOS_SEARCH_FIELDS,
     MIN_ROOS_SEARCH_FIELDS,
+)
+from services.optimizer.strategy_param_service import (
+    validate_strategy_parameter_artifact_identity,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -265,7 +269,12 @@ def _validate_param_training_identity(
             return False, "CANONICAL_PARAM_PRODUCER_MISMATCH", manifest_path
         if str(payload.get("family") or "") != str(source.canonical_family):
             return False, "CANONICAL_PARAM_FAMILY_MISMATCH", manifest_path
-        if str(payload.get("evaluation_mode") or "") != str(source.canonical_evaluation_mode):
+        expected_storage_mode = (
+            "schedule"
+            if str(source.canonical_evaluation_mode) in {"oos", "rolling"}
+            else str(source.canonical_evaluation_mode)
+        )
+        if str(payload.get("evaluation_mode") or "") != expected_storage_mode:
             return False, "CANONICAL_PARAM_MODE_MISMATCH", manifest_path
         return True, "READY", manifest_path
     if not source.identity_manifest_path:
@@ -801,7 +810,24 @@ def _collect_parameter_artifact_status(
                     None if source.artifact_contract is None else dict(source.artifact_contract)
                 ),
             )
-            ready = bool(artifact_ready and identity_ready)
+            policy_identity_ready = identity_ready
+            policy_identity_status = identity_status
+            if source.canonical_family and source.canonical_evaluation_mode:
+                policy_identity_ready, policy_identity_status, _canonical_target = (
+                    validate_strategy_parameter_artifact_identity(
+                        root,
+                        family=str(source.canonical_family),
+                        policy=param_policy,
+                        evaluation_mode=str(source.canonical_evaluation_mode),
+                        comparison_end_date=comparison_end,
+                        dataset=settings.dataset,
+                        max_positions=int(settings.max_positions),
+                        rotation=str(settings.rotation),
+                        fixed_risk=float(DEFAULT_FIXED_RISK),
+                        max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+                    )
+                )
+            ready = bool(artifact_ready and policy_identity_ready)
             all_artifacts_ready = bool(all_artifacts_ready and ready)
             any_target_exists = bool(any_target_exists or path.exists())
             sha256 = compute_file_sha256(path) if path.is_file() else None
@@ -811,7 +837,7 @@ def _collect_parameter_artifact_status(
                 "path": display_path,
                 "sha256": sha256,
                 "param_policy": param_policy,
-                "identity_status": identity_status,
+                "identity_status": policy_identity_status,
                 "coverage_start": None if policy is None else policy.get("coverage_start"),
                 "coverage_end": None if policy is None else policy.get("coverage_end"),
                 "coverage_status": artifact_status,
@@ -819,7 +845,9 @@ def _collect_parameter_artifact_status(
             policy_rows[param_policy] = {
                 "ready": ready,
                 "status": "READY" if ready else (
-                    identity_status if artifact_ready and not identity_ready else artifact_status
+                    policy_identity_status
+                    if artifact_ready and not policy_identity_ready
+                    else artifact_status
                 ),
                 "path": display_path,
                 "sha256": sha256,

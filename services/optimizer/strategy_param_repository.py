@@ -23,7 +23,7 @@ from core.strategy_param_artifacts import (
     compute_strategy_param_file_sha256,
     normalize_strategy_param_evaluation_mode,
     normalize_strategy_param_family,
-    resolve_strategy_param_dir,
+    resolve_strategy_param_artifact_path,
     resolve_strategy_param_manifest_path,
     resolve_strategy_param_benchmark_artifact_path,
     resolve_strategy_param_benchmark_dir,
@@ -81,6 +81,23 @@ def _existing_source_records(
     return out
 
 
+def _storage_mode(evaluation_mode: str) -> str:
+    mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
+    return "schedule" if mode in {"oos", "rolling"} else mode
+
+
+def _training_policy_for_storage_mode(evaluation_mode: str) -> dict[str, Any]:
+    mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
+    # OOS and Rolling consume the same canonical schedule.  The schedule itself is
+    # produced by the PIT-safe rolling optimizer contract; OOS freezes it at read time.
+    source_mode = "rolling" if mode in {"oos", "rolling"} else mode
+    snapshot = dict(get_strategy_parameter_training_policy_snapshot(evaluation_mode=source_mode))
+    if mode in {"oos", "rolling"}:
+        snapshot["evaluation_mode"] = "schedule"
+        snapshot["consumption_modes"] = ["oos", "rolling"]
+    return snapshot
+
+
 def build_strategy_parameter_manifest_payload(
     project_root: str | Path,
     *,
@@ -91,12 +108,14 @@ def build_strategy_parameter_manifest_payload(
     root = Path(project_root).resolve()
     family = normalize_strategy_param_family(family)
     mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
-    target_dir = resolve_strategy_param_dir(root, family=family, evaluation_mode=mode)
+    storage_mode = _storage_mode(mode)
     preserved_sources = _existing_source_records(root, family=family, evaluation_mode=mode)
     preserved_sources.update(dict(source_records or {}))
     artifacts: dict[str, Any] = {}
-    for policy, filename in POLICY_FILENAME_BY_NAME.items():
-        path = target_dir / filename
+    for policy in POLICY_FILENAME_BY_NAME:
+        path = resolve_strategy_param_artifact_path(
+            root, family=family, evaluation_mode=mode, policy=policy
+        )
         if not path.is_file():
             continue
         artifacts[policy] = {
@@ -116,21 +135,20 @@ def build_strategy_parameter_manifest_payload(
                     "path": _project_relative(root, state_path),
                     "sha256": compute_strategy_param_file_sha256(state_path),
                 }
-    training_policy = get_strategy_parameter_training_policy_snapshot(evaluation_mode=mode)
+    training_policy = _training_policy_for_storage_mode(mode)
     return {
         "schema_type": "canonical_strategy_parameter_artifact_set",
         "schema_version": STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION,
         "producer": "optimizer",
         "family": family,
-        "evaluation_mode": mode,
+        "evaluation_mode": storage_mode,
+        "consumption_modes": ["oos", "rolling"] if storage_mode == "schedule" else [mode],
         "training_policy": training_policy,
         "training_policy_fingerprint": _canonical_json_sha256(training_policy)[:16],
         "artifacts": artifacts,
         "state_artifacts": state_artifacts,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-
-
 
 
 def build_strategy_parameter_benchmark_manifest_payload(
@@ -145,18 +163,13 @@ def build_strategy_parameter_benchmark_manifest_payload(
     root = Path(project_root).resolve()
     family = normalize_strategy_param_family(family)
     mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
-    target_dir = resolve_strategy_param_benchmark_dir(
-        root, benchmark_id=benchmark_id, seed=seed, family=family, evaluation_mode=mode
-    )
+    if mode not in {"oos", "rolling"}:
+        raise ValueError("robustness benchmark strategy params只支援oos/rolling")
     artifacts: dict[str, Any] = {}
     for policy in POLICY_FILENAME_BY_NAME:
         path = resolve_strategy_param_benchmark_artifact_path(
-            root,
-            benchmark_id=benchmark_id,
-            seed=seed,
-            family=family,
-            evaluation_mode=mode,
-            policy=policy,
+            root, benchmark_id=benchmark_id, seed=seed, family=family,
+            evaluation_mode=mode, policy=policy,
         )
         if not path.is_file():
             continue
@@ -171,7 +184,9 @@ def build_strategy_parameter_benchmark_manifest_payload(
     if int(seed) not in {int(value) for value in benchmark_policy["resolved_seeds"]}:
         raise ValueError(f"seed不屬於目前robustness benchmark題庫: {seed}")
     training_policy = {
-        **get_strategy_parameter_training_policy_snapshot(evaluation_mode=mode),
+        **get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling"),
+        "evaluation_mode": "schedule",
+        "consumption_modes": ["oos", "rolling"],
         "optimizer_seed": int(seed),
         "trials_per_fold": int(benchmark_policy["strategy_trials_per_fold"]),
         "benchmark_override": True,
@@ -185,7 +200,8 @@ def build_strategy_parameter_benchmark_manifest_payload(
         "benchmark_seed": int(seed),
         "benchmark_seed_index": list(benchmark_policy["resolved_seeds"]).index(int(seed)) + 1,
         "family": family,
-        "evaluation_mode": mode,
+        "evaluation_mode": "schedule",
+        "consumption_modes": ["oos", "rolling"],
         "training_policy": training_policy,
         "training_policy_fingerprint": _canonical_json_sha256(training_policy)[:16],
         "artifacts": artifacts,

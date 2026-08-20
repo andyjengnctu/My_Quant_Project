@@ -5760,16 +5760,17 @@ def _write_policy_paramset_files(
     rows: list[dict],
     config: OuterRollingConfig,
     summary: dict,
-    canonical_filenames: bool = False,
+    canonical_strategy_param_family: str | None = None,
 ) -> dict:
     os.makedirs(models_dir, exist_ok=True)
     _remove_stale_policy_paramset_files(models_dir)
     paths = {}
     for policy_name in REPORT_POLICY_NAMES:
-        if canonical_filenames:
+        if canonical_strategy_param_family:
             from core.strategy_param_artifacts import POLICY_FILENAME_BY_NAME
 
-            filename = str(POLICY_FILENAME_BY_NAME.get(policy_name, f"{policy_name}.json"))
+            base = str(POLICY_FILENAME_BY_NAME.get(policy_name, f"{policy_name}.json"))
+            filename = f"{canonical_strategy_param_family}_{base}"
         else:
             filename = str(PARAMSET_FILENAME_BY_POLICY.get(policy_name, f"roos_{policy_name}.json"))
         path = os.path.join(models_dir, filename)
@@ -5789,29 +5790,30 @@ def _write_reports(
     config: OuterRollingConfig,
     chained_override: dict | None = None,
     models_dir: str | None = None,
+    canonical_strategy_param_family: str | None = None,
 ) -> dict:
     _ = (output_dir, session_ts)
     resolved_models_dir = str(models_dir or resolve_models_dir(project_root))
     default_models_dir = os.path.abspath(resolve_models_dir(project_root))
-    from core.strategy_param_artifacts import resolve_strategy_param_dir
-
-    canonical_family = None
     requested_abs = os.path.abspath(resolved_models_dir)
-    for candidate_family in ("full", "min"):
-        candidate_dir = resolve_strategy_param_dir(
-            project_root, family=candidate_family, evaluation_mode="rolling"
-        )
-        if requested_abs == os.path.abspath(str(candidate_dir)):
-            canonical_family = candidate_family
-            resolved_models_dir = str(candidate_dir)
-            break
-    if canonical_family is None and requested_abs == default_models_dir:
+    canonical_family = (
+        None if canonical_strategy_param_family in (None, "")
+        else str(canonical_strategy_param_family).strip().lower()
+    )
+    if canonical_family not in (None, "full", "min"):
+        raise ValueError(f"不支援的canonical strategy parameter family: {canonical_family!r}")
+    if canonical_family is not None:
+        from core.strategy_param_artifacts import resolve_strategy_param_dir
+        resolved_models_dir = str(resolve_strategy_param_dir(
+            project_root, family=canonical_family, evaluation_mode="rolling"
+        ))
+    elif requested_abs == default_models_dir:
+        # Historical direct Outer-Rolling entry is the Full canonical producer.
+        from core.strategy_param_artifacts import resolve_strategy_param_dir
         canonical_family = "full"
-        resolved_models_dir = str(
-            resolve_strategy_param_dir(
-                project_root, family="full", evaluation_mode="rolling"
-            )
-        )
+        resolved_models_dir = str(resolve_strategy_param_dir(
+            project_root, family="full", evaluation_mode="rolling"
+        ))
     canonical_current_output = canonical_family is not None
     summary = _build_summary(rows, config=config, chained_override=chained_override)
     paramset_paths = _write_policy_paramset_files(
@@ -5819,7 +5821,7 @@ def _write_reports(
         rows=rows,
         config=config,
         summary=summary,
-        canonical_filenames=bool(canonical_current_output),
+        canonical_strategy_param_family=(str(canonical_family) if canonical_current_output else None),
     )
     if canonical_current_output:
         from services.optimizer.strategy_param_repository import refresh_strategy_parameter_manifest
@@ -9096,6 +9098,7 @@ def run_outer_rolling_oos(
     default_trials: int = OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
     timing_mode: bool = False,
     paramset_models_dir: str | None = None,
+    canonical_strategy_param_family: str | None = None,
 ) -> int:
     from services.optimizer.session import close_study_storage
     from services.optimizer.session_factory import build_optimizer_session_from_spec
@@ -9661,6 +9664,7 @@ def run_outer_rolling_oos(
                 if paramset_models_dir is not None
                 else resolve_models_dir(project_root, environ=environ)
             ),
+            canonical_strategy_param_family=canonical_strategy_param_family,
         )
     report_write_sec = max(0.0, time.perf_counter() - report_write_started)
     resource_sampler.stop()

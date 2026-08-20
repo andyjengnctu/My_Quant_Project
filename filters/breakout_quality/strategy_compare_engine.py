@@ -36,6 +36,8 @@ from filters.breakout_quality.strategy_compare_sources import (
     _assert_controlled_param_pair,
     _assert_controlled_payload_pair,
     _build_controlled_param_source_pair,
+    apply_strategy_param_evaluation_view,
+    strategy_param_source_identity_sha256,
     _collect_payload_differences,
     _comparison_output_dir_name,
     _first_existing_comparison_dir,
@@ -470,6 +472,7 @@ def run_comparison(
     capture_execution_diagnostics=False,
     capture_selection_target_diagnostics=True,
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
+    param_evaluation_mode="rolling",
 ):
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
@@ -760,6 +763,15 @@ def run_comparison(
     if max_position_cap_pct is not None and not (0.0 < float(max_position_cap_pct) <= 1.0):
         raise ValueError("max_position_cap_pct必須介於0與1")
     param_source = _load_param_source(resolved_params_path)
+    param_source = apply_strategy_param_evaluation_view(
+        param_source,
+        evaluation_mode=param_evaluation_mode,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    param_identity_sha256 = strategy_param_source_identity_sha256(
+        param_source, source_path=resolved_params_path
+    )
     param_policy_contract = _validate_requested_param_policy(param_source, param_policy)
     (
         param_source_kind,
@@ -818,7 +830,7 @@ def run_comparison(
                 Path(baseline_reuse_dir),
                 comparison_mode=comparison_mode,
                 expected_dataset=dataset,
-                expected_params_sha256=_sha256_file(resolved_params_path),
+                expected_params_sha256=param_identity_sha256,
                 expected_param_policy=param_policy,
                 expected_optional_entry_filter_policy=optional_entry_filter_policy,
                 expected_shared_param_overrides=dict(shared_param_overrides or {}),
@@ -1130,7 +1142,9 @@ def run_comparison(
         "dataset": dataset,
         "data_dir": str(data_dir),
         "params_path": str(resolved_params_path),
-        "params_file_sha256": _sha256_file(resolved_params_path),
+        "params_file_sha256": param_identity_sha256,
+        "params_source_file_sha256": _sha256_file(resolved_params_path),
+        "param_evaluation_mode": str(param_evaluation_mode),
         "param_source_kind": param_source_kind,
         "requested_param_policy": param_policy,
         "param_selector": param_policy_contract["selector"],

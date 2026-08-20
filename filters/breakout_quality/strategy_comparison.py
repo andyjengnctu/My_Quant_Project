@@ -1397,6 +1397,9 @@ def run_strategy_comparison(
                 ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None
             ),
             baseline_reuse_dir=baseline_reuse_source,
+            param_evaluation_mode=(
+                settings.parameter_sources[off_arm.param_source].canonical_evaluation_mode or "rolling"
+            ),
         )
         pair_payloads[group_id] = {
             "arm_contract": (
@@ -1675,6 +1678,9 @@ def run_strategy_comparison(
                 ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None
             ),
             baseline_reuse_dir=baseline_reuse_source,
+            param_evaluation_mode=(
+                settings.parameter_sources[on_arm.param_source].canonical_evaluation_mode or "rolling"
+            ),
             continuous_score_path_override=(
                 str(
                     (status.get("continuous_score_overrides") or {})[on_arm.dl_id][

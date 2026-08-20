@@ -37,6 +37,7 @@ def _execute_preparation_action(
     root: Path,
     settings: StrategyComparisonSettings,
     action: StrategyPreparationAction,
+    comparison_end_date: str | None = None,
 ) -> None:
     if action.builder_type == "forward_oos_scores":
         _kind, dl_id, _name = action.artifact_key.split(":", 2)
@@ -71,6 +72,12 @@ def _execute_preparation_action(
                 family=source.canonical_family,
                 evaluation_mode=source.canonical_evaluation_mode,
                 policy=param_policy,
+                comparison_end_date=comparison_end_date,
+                dataset=settings.dataset,
+                max_positions=int(settings.max_positions),
+                rotation=str(settings.rotation),
+                fixed_risk=float(DEFAULT_FIXED_RISK),
+                max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
             )
         return
     if action.builder_type in {"extending_min_roos_stitch", "extending_full_roos_stitch"}:
@@ -335,7 +342,16 @@ def _run_preparation_plan(
 
         print(f"\n[前置] {action.description}")
         try:
-            _execute_preparation_action(root=root, settings=settings, action=action)
+            comparison_period = dict(current.get("comparison_period") or {})
+            _execute_preparation_action(
+                root=root,
+                settings=settings,
+                action=action,
+                comparison_end_date=(
+                    None if comparison_period.get("end") in (None, "")
+                    else str(comparison_period.get("end"))
+                ),
+            )
         except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
             raise RuntimeError(
                 f"{failure_prefix}失敗: {action.artifact_key} | action={action.action} | "

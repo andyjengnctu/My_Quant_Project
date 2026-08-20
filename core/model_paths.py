@@ -3,6 +3,7 @@ from typing import Dict, List, Mapping, Optional
 
 from core.active_param_ensemble import is_active_param_ensemble_file, load_json_file as load_ensemble_json_file
 from core.output_paths import build_output_dir
+from core.strategy_param_artifacts import STRATEGY_PARAM_STATE_FILENAME_BY_NAME
 from core.rolling_oos_params import is_rolling_oos_param_set_file, load_json_file
 
 MODELS_DIR_ENV_VAR = "V16_MODELS_DIR"
@@ -13,7 +14,7 @@ CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH_ENV_VAR = "V16_CANDIDATE_VAL_SCORE_BEST_PAR
 
 PARAMS_FILENAME_SUFFIX = "_params.json"
 STRATEGY_PARAM_REPOSITORY_DIRNAME = "strategy_params"
-STRATEGY_PARAM_TRADE_STATE_RELATIVE_DIR = os.path.join("strategy_params", "full", "trade", "state")
+STRATEGY_PARAM_CANONICAL_RELATIVE_DIR = os.path.join("strategy_params", "canonical")
 CANONICAL_PARAM_FILENAME_LABELS = {
     "run_best_params.json": "run_best_params.json",
     "candidate_best_params.json": "candidate_best_params.json",
@@ -40,12 +41,17 @@ def resolve_models_dir(project_root: str, environ: Optional[Mapping[str, str]] =
     return os.path.abspath(os.path.join(project_root, "models"))
 
 
-def _resolve_trade_state_path(project_root: str, filename: str, *, environ: Optional[Mapping[str, str]] = None) -> str:
+def _resolve_named_strategy_param_state_path(
+    project_root: str, artifact: str, *, environ: Optional[Mapping[str, str]] = None
+) -> str:
     env = os.environ if environ is None else environ
+    models_dir = resolve_models_dir(project_root, environ=env)
+    key = str(artifact or "").strip()
+    if key not in STRATEGY_PARAM_STATE_FILENAME_BY_NAME:
+        raise ValueError(f"不支援的策略參數state artifact: {artifact!r}")
     return os.path.join(
-        resolve_models_dir(project_root, environ=env),
-        STRATEGY_PARAM_TRADE_STATE_RELATIVE_DIR,
-        str(filename),
+        models_dir, STRATEGY_PARAM_CANONICAL_RELATIVE_DIR,
+        STRATEGY_PARAM_STATE_FILENAME_BY_NAME[key],
     )
 
 
@@ -54,9 +60,7 @@ def resolve_run_best_params_path(project_root: str, environ: Optional[Mapping[st
     override = str(env.get(RUN_BEST_PARAMS_PATH_ENV_VAR, "")).strip()
     if override != "":
         return _resolve_override_path(project_root, override)
-    return _resolve_trade_state_path(project_root, "active.json", environ=env)
-
-
+    return _resolve_named_strategy_param_state_path(project_root, "active", environ=env)
 
 
 def resolve_candidate_best_params_path(project_root: str, environ: Optional[Mapping[str, str]] = None) -> str:
@@ -64,7 +68,7 @@ def resolve_candidate_best_params_path(project_root: str, environ: Optional[Mapp
     override = str(env.get(CANDIDATE_BEST_PARAMS_PATH_ENV_VAR, "")).strip()
     if override != "":
         return _resolve_override_path(project_root, override)
-    return _resolve_trade_state_path(project_root, "candidate_best.json", environ=env)
+    return _resolve_named_strategy_param_state_path(project_root, "candidate_best", environ=env)
 
 
 def resolve_candidate_retention_best_params_path(project_root: str, environ: Optional[Mapping[str, str]] = None) -> str:
@@ -72,7 +76,7 @@ def resolve_candidate_retention_best_params_path(project_root: str, environ: Opt
     override = str(env.get(CANDIDATE_RETENTION_BEST_PARAMS_PATH_ENV_VAR, "")).strip()
     if override != "":
         return _resolve_override_path(project_root, override)
-    return _resolve_trade_state_path(project_root, "candidate_retention_best.json", environ=env)
+    return _resolve_named_strategy_param_state_path(project_root, "candidate_retention_best", environ=env)
 
 
 def resolve_candidate_val_score_best_params_path(project_root: str, environ: Optional[Mapping[str, str]] = None) -> str:
@@ -80,7 +84,7 @@ def resolve_candidate_val_score_best_params_path(project_root: str, environ: Opt
     override = str(env.get(CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH_ENV_VAR, "")).strip()
     if override != "":
         return _resolve_override_path(project_root, override)
-    return _resolve_trade_state_path(project_root, "candidate_val_score_best.json", environ=env)
+    return _resolve_named_strategy_param_state_path(project_root, "candidate_val_score_best", environ=env)
 
 
 def _param_source_key_from_filename(filename: str) -> str:
@@ -96,14 +100,17 @@ def _format_param_source_label(filename: str) -> str:
 
 
 def _strategy_param_repository_dirs(project_root: str, environ: Optional[Mapping[str, str]] = None) -> List[str]:
+    """Return user-selectable canonical parameter directories only.
+
+    Benchmark artifacts are intentionally excluded from generic Workbench/runtime
+    discovery so research seeds cannot leak into normal strategy selection.
+    """
     env = os.environ if environ is None else environ
-    base = os.path.join(resolve_models_dir(project_root, environ=env), STRATEGY_PARAM_REPOSITORY_DIRNAME)
-    if not os.path.isdir(base):
-        return []
-    folders: List[str] = []
-    for folder, _dirs, _files in os.walk(base):
-        folders.append(folder)
-    return folders
+    canonical = os.path.join(
+        resolve_models_dir(project_root, environ=env),
+        STRATEGY_PARAM_CANONICAL_RELATIVE_DIR,
+    )
+    return [canonical] if os.path.isdir(canonical) else []
 
 
 def _discover_active_param_ensemble_sets(project_root: str, environ: Optional[Mapping[str, str]] = None) -> List[Dict[str, str]]:
@@ -224,7 +231,7 @@ def discover_model_param_sources(project_root: str, environ: Optional[Mapping[st
     records: List[Dict[str, str]] = []
     active_path = resolve_run_best_params_path(project_root, environ=env)
     if os.path.isfile(active_path):
-        records.append(_model_record_for_path(active_path, key="run_best", label="strategy_params/full/trade/state/active.json"))
+        records.append(_model_record_for_path(active_path, key="run_best", label="strategy_params/canonical/run_best_params.json"))
 
     if include_active_param_ensemble:
         records.extend(_discover_active_param_ensemble_sets(project_root, environ=env))
@@ -275,7 +282,7 @@ def resolve_default_primary_param_source_record(project_root: str, environ: Opti
 
     ``V16_RUN_BEST_PARAMS_PATH`` remains a test/compatibility override.  Without
     that override, the current source always resolves to the Optimizer-owned
-    ``models/strategy_params/full/trade/state/active.json`` artifact.
+    ``models/strategy_params/canonical/run_best_params.json`` artifact.
     """
     env = os.environ if environ is None else environ
     override = str(env.get(RUN_BEST_PARAMS_PATH_ENV_VAR, "")).strip()
@@ -286,7 +293,7 @@ def resolve_default_primary_param_source_record(project_root: str, environ: Opti
     return _model_record_for_path(
         resolve_run_best_params_path(project_root, environ=env),
         key="run_best",
-        label="strategy_params/full/trade/state/active.json",
+        label="strategy_params/canonical/run_best_params.json",
     )
 
 
