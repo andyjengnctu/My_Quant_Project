@@ -1,8 +1,8 @@
 ## Going
-- improve test effiency
-
-    - Finaliszs agreed
+- improve test effiency and restreucture
     - models/output cleaner
+    - retrain min parameters
+    - multi-seed parameters resut
 
 - imrove DL module
     - use dual models (MFA, MEA ) in strategy
@@ -14,9 +14,7 @@
     - non breakout strategy
     - 三大法人籌碼資訊/ EPS財報/ 基本面 
 
-- stablity test
-    - multi seeds test
-    - finalist_agree * multiple_seeds_best as baseline
+
 
 
 

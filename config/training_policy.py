@@ -1,4 +1,5 @@
 import math
+import random
 
 from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
 
@@ -107,10 +108,62 @@ OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT = 1000
 # Rolling OOS 與 Selection rolling adaptation 每個 fold 的預設 trial 數。
 OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 300
 
-# Canonical optimizer stochastic seed.  Model-training seeds remain owned by their model config.
+# Canonical optimizer stochastic seed for ordinary production/single-seed training.
 OPTIMIZER_RANDOM_SEED_DEFAULT = 42
 
-# random seed ensemble：每次 retrain 隨機抽 N 個 seeds，正式輸出用同一個 JSON 保存 N 組參數
+# End-to-end robustness benchmark 題庫。
+# 同一 benchmark seed 必須同時供 Strategy Optimizer 與所有 DL model source 使用；
+# resolved sequence 是跨版本可重現的 scientific identity，不得由 Strategy Compare 另設第二份。
+ROBUSTNESS_BENCHMARK_ID = "end_to_end_v1"
+ROBUSTNESS_BENCHMARK_SEED_COUNT = 4
+ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED = 20260810
+ROBUSTNESS_BENCHMARK_STRATEGY_TRIALS_PER_FOLD = 300
+
+
+def resolve_robustness_benchmark_seeds(
+    *,
+    seed_count: int | None = None,
+    generator_seed: int | None = None,
+) -> tuple[int, ...]:
+    count = int(ROBUSTNESS_BENCHMARK_SEED_COUNT if seed_count is None else seed_count)
+    seed0 = int(
+        ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED
+        if generator_seed is None
+        else generator_seed
+    )
+    if count < 2:
+        raise ValueError("robustness benchmark seed_count必須>=2")
+    if seed0 < 0:
+        raise ValueError("robustness benchmark generator seed必須>=0")
+    rng = random.Random(seed0)
+    values: list[int] = []
+    seen: set[int] = set()
+    while len(values) < count:
+        value = int(rng.randrange(1, 2**31 - 1))
+        if value in seen:
+            continue
+        seen.add(value)
+        values.append(value)
+    return tuple(values)
+
+
+ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS = resolve_robustness_benchmark_seeds()
+
+
+def get_robustness_benchmark_policy_snapshot() -> dict:
+    return {
+        "benchmark_id": str(ROBUSTNESS_BENCHMARK_ID),
+        "seed_count": int(ROBUSTNESS_BENCHMARK_SEED_COUNT),
+        "seed_generator_seed": int(ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED),
+        "resolved_seeds": [int(value) for value in ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS],
+        "strategy_trials_per_fold": int(ROBUSTNESS_BENCHMARK_STRATEGY_TRIALS_PER_FOLD),
+        "train_window_months": int(OUTER_ROLLING_TRAIN_WINDOW_MONTHS),
+        "oos_horizon_months": int(OUTER_ROLLING_OOS_HORIZON_MONTHS),
+        "seed_pairing": "same_seed_strategy_optimizer_and_all_dl_sources",
+        "production_ensemble_is_separate": True,
+    }
+
+# random seed ensemble：production consensus／多人投標用途；與固定 robustness benchmark 題庫分離。
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = False
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 8
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = "auto" # "auto" = 過半數；整數 = 至少幾個 seed 同意。最大值永遠是 N。

@@ -13,7 +13,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from config.training_policy import get_strategy_parameter_training_policy_snapshot
+from config.training_policy import (
+    get_robustness_benchmark_policy_snapshot,
+    get_strategy_parameter_training_policy_snapshot,
+)
 from core.strategy_param_artifacts import (
     POLICY_FILENAME_BY_NAME,
     STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION,
@@ -22,6 +25,9 @@ from core.strategy_param_artifacts import (
     normalize_strategy_param_family,
     resolve_strategy_param_dir,
     resolve_strategy_param_manifest_path,
+    resolve_strategy_param_benchmark_artifact_path,
+    resolve_strategy_param_benchmark_dir,
+    resolve_strategy_param_benchmark_manifest_path,
     resolve_strategy_param_state_dir,
     STRATEGY_PARAM_STATE_FILENAME_BY_NAME,
     resolve_strategy_param_state_path,
@@ -126,6 +132,97 @@ def build_strategy_parameter_manifest_payload(
 
 
 
+
+def build_strategy_parameter_benchmark_manifest_payload(
+    project_root: str | Path,
+    *,
+    benchmark_id: str,
+    seed: int,
+    family: str,
+    evaluation_mode: str,
+    source_records: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    family = normalize_strategy_param_family(family)
+    mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
+    target_dir = resolve_strategy_param_benchmark_dir(
+        root, benchmark_id=benchmark_id, seed=seed, family=family, evaluation_mode=mode
+    )
+    artifacts: dict[str, Any] = {}
+    for policy in POLICY_FILENAME_BY_NAME:
+        path = resolve_strategy_param_benchmark_artifact_path(
+            root,
+            benchmark_id=benchmark_id,
+            seed=seed,
+            family=family,
+            evaluation_mode=mode,
+            policy=policy,
+        )
+        if not path.is_file():
+            continue
+        artifacts[policy] = {
+            "path": _project_relative(root, path),
+            "sha256": compute_strategy_param_file_sha256(path),
+        }
+        source = dict(dict(source_records or {}).get(policy) or {})
+        if source:
+            artifacts[policy]["source"] = source
+    benchmark_policy = get_robustness_benchmark_policy_snapshot()
+    if int(seed) not in {int(value) for value in benchmark_policy["resolved_seeds"]}:
+        raise ValueError(f"seed不屬於目前robustness benchmark題庫: {seed}")
+    training_policy = {
+        **get_strategy_parameter_training_policy_snapshot(evaluation_mode=mode),
+        "optimizer_seed": int(seed),
+        "trials_per_fold": int(benchmark_policy["strategy_trials_per_fold"]),
+        "benchmark_override": True,
+    }
+    return {
+        "schema_type": "strategy_parameter_robustness_benchmark_artifact_set",
+        "schema_version": STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION,
+        "producer": "optimizer",
+        "benchmark": benchmark_policy,
+        "benchmark_id": str(benchmark_id),
+        "benchmark_seed": int(seed),
+        "benchmark_seed_index": list(benchmark_policy["resolved_seeds"]).index(int(seed)) + 1,
+        "family": family,
+        "evaluation_mode": mode,
+        "training_policy": training_policy,
+        "training_policy_fingerprint": _canonical_json_sha256(training_policy)[:16],
+        "artifacts": artifacts,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def refresh_strategy_parameter_benchmark_manifest(
+    project_root: str | Path,
+    *,
+    benchmark_id: str,
+    seed: int,
+    family: str,
+    evaluation_mode: str,
+    source_records: dict[str, dict[str, Any]] | None = None,
+) -> Path:
+    root = Path(project_root).resolve()
+    manifest_path = resolve_strategy_param_benchmark_manifest_path(
+        root,
+        benchmark_id=benchmark_id,
+        seed=seed,
+        family=family,
+        evaluation_mode=evaluation_mode,
+    )
+    _write_json(
+        manifest_path,
+        build_strategy_parameter_benchmark_manifest_payload(
+            root,
+            benchmark_id=benchmark_id,
+            seed=seed,
+            family=family,
+            evaluation_mode=evaluation_mode,
+            source_records=source_records,
+        ),
+    )
+    return manifest_path
+
 def write_strategy_parameter_state_artifact(
     project_root: str | Path,
     *,
@@ -192,6 +289,8 @@ def refresh_strategy_parameter_manifest(
 
 __all__ = [
     "build_strategy_parameter_manifest_payload",
+    "build_strategy_parameter_benchmark_manifest_payload",
+    "refresh_strategy_parameter_benchmark_manifest",
     "refresh_strategy_parameter_manifest",
     "write_strategy_parameter_state_artifact",
 ]

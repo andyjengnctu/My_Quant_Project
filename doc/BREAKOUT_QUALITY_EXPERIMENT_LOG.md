@@ -9695,3 +9695,14 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Robustness角色仍由model dependency自動推導：fixed=`C61/C62/C58/C63`，stochastic=`C59/C60`；same-seed stochastic contrast仍只有`C60-C59`。RoMD min/full references明確pin `base-finalist-best`，避免同source存在兩個DL-off policy後解析歧義。
 - Strategy Parameter source identity仍只有`full_oos/min_oos/full_rolling/min_rolling`四個；policy改為arm-level binding，Research不建立第二套參數source。若某mode的`base-finalists-agree` canonical artifact缺失，只能由Optimizer parameter service MIGRATE/DERIVE/BUILD後re-plan。
 - Strategy Compare schema `51→52`。不改模型science、seed/trials、selector、risk/execution或production C42/C44。Decision：`DL_OFF_FINALISTS_AGREE_REFERENCES_ADDED / COMPARE_SUITE_STILL_SINGLE_SSOT / EXISTING_ARMS_NOT_MUTATED`。
+
+### 2026-08-20 — End-to-end Robustness Benchmark Alignment Round 1：固定題庫、same-seed Strategy+Model、禁止舊model-only執行
+- 使用者決策：Multi-seed Robustness的科學問題改為「整條Strategy Optimizer + DL Model pipeline對固定seed題庫的敏感度」，不再拆成策略seed與模型seed兩組user-facing設定。Benchmark必須跨版本可重現；Ensemble／`finalists_agree`另屬production consensus，不與benchmark seed count／sequence綁定。
+- Benchmark SSOT移至`config/training_policy.py`：`benchmark_id=end_to_end_v1`、`seed_count=4`、`seed_generator_seed=20260810`、resolved seeds=`693545351 / 2014432738 / 104504529 / 762252050`、`strategy_trials_per_fold=300`。`config/strategy_compare.py` current robustness profile只引用此identity；既有seed count/generator名稱僅保留compatibility alias，不再是第二份數值owner。
+- Same-seed contract：每題`Si`同時用於Full Optimizer、Min Optimizer、MR-13E、MR-13K、MR-13M。C61/C58/C59/C60全部是per-seed strategy benchmark arms；C59/C60再是model-seed-sensitive subset；C62/C63維持production `base-finalists-agree` consensus context。Primary paired evidence固定在相同`Si`內先算`C61-C58 / C59-C58 / C59-C61 / C60-C58 / C60-C61 / C60-C59`，再跨四題aggregate。
+- Strategy benchmark artifacts與production truth隔離：新增`models/strategy_params/benchmark/<benchmark_id>/seed_<seed>/{full|min}/{oos|rolling}/` resolver與Optimizer-owned benchmark manifest。Manifest pin benchmark identity、seed index、完整resolved sequence、300 trials/fold、family/mode、training-policy snapshot與artifact SHA。
+- OOS/ Rolling起點契約：Round2同seed的2021 strategy parameter必須由同一<=2020合法fit產生；OOS 2021→latest freeze此member，Rolling 2021用同member並自2022起annual refit。不得以production Seed42 params或不同trial budget代替benchmark evidence。
+- Execution safety：Round1只實作scientific contract／artifact identity／report-role groundwork；current robustness execution plan故意加入BLOCKED，直到Round2 per-seed strategy params與same-seed model artifacts正式建立。這避免在新報表名稱下誤跑舊「固定策略參數 + 只vary模型seed」流程。
+- 不變：production `models/strategy_params/{full|min}/...`、C61～C63 scientific identity、Full/Min search space、MR-13E/K/M model science、OOS/ Rolling period、12M cadence、portfolio/risk semantics均不修改。本輪不執行長時間optimizer或DL訓練。
+- Decision：`ROBUSTNESS_END_TO_END_BENCHMARK_CONTRACT_ALIGNED / ROUND1_DONE / ROUND2_BENCHMARK_TRAINING_PENDING / PRODUCTION_ARTIFACTS_UNCHANGED`.
+

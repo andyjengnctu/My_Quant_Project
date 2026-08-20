@@ -26,6 +26,12 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_DEFAULT,
     OUTER_ROLLING_OOS_HORIZON_MONTHS,
     OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
+    ROBUSTNESS_BENCHMARK_ID,
+    ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS,
+    ROBUSTNESS_BENCHMARK_SEED_COUNT,
+    ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
+    ROBUSTNESS_BENCHMARK_STRATEGY_TRIALS_PER_FOLD,
+    resolve_robustness_benchmark_seeds,
 )
 from core.strategy_comparison import (
     StrategyArtifactBuilder,
@@ -43,7 +49,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 52
+STRATEGY_COMPARE_SCHEMA_VERSION = 53
 
 # =============================================================================
 # 1. 常用設定
@@ -89,8 +95,11 @@ STRATEGY_COMPARE_ROLLING_TEST_MODES = (
     },
 )
 STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE = "extending_window_oos"
-STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT = 4
-STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED = 20260810
+# Backward-compatible aliases only.  Current robustness scientific seed policy is
+# owned by config/training_policy.py ROBUSTNESS_BENCHMARK_* and profiles below do
+# not define a second seed count/generator.
+STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT = ROBUSTNESS_BENCHMARK_SEED_COUNT
+STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED = ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED
 STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS = 2
 STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS = 1
 STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED = True
@@ -281,8 +290,8 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "enabled": True,
         "profile_id": "extending_window_oos",
         "suite_id": "extending_current",
-        "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
-        "seed_generator_seed": STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED,
+        "benchmark_id": ROBUSTNESS_BENCHMARK_ID,
+        "strategy_trials_per_fold": ROBUSTNESS_BENCHMARK_STRATEGY_TRIALS_PER_FOLD,
         "gpu_train_workers": STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS,
         "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
         "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
@@ -305,8 +314,8 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "enabled": True,
         "profile_id": "extending_window_rolling",
         "suite_id": "extending_current",
-        "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
-        "seed_generator_seed": STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED,
+        "benchmark_id": ROBUSTNESS_BENCHMARK_ID,
+        "strategy_trials_per_fold": ROBUSTNESS_BENCHMARK_STRATEGY_TRIALS_PER_FOLD,
         "gpu_train_workers": STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS,
         "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
         "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
@@ -1042,17 +1051,32 @@ def _arm_has_seed_sensitive_model_dependency(arm: StrategyComparisonArm) -> bool
 
 def _derived_robustness_membership(
     profile_settings: StrategyComparisonSettings,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    fixed: list[str] = []
-    stochastic: list[str] = []
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Derive end-to-end benchmark roles from arm semantics, never arm IDs.
+
+    Production finalists-agree DL-off arms are fixed consensus references.  Every
+    other current suite arm uses per-benchmark-seed strategy parameters; the subset
+    with DL dependencies additionally retrains model sources with that same seed.
+    """
+    consensus: list[str] = []
+    benchmark: list[str] = []
+    model_sensitive: list[str] = []
     for arm in profile_settings.enabled_arms:
-        (stochastic if _arm_has_seed_sensitive_model_dependency(arm) else fixed).append(arm.arm_id)
-    if not fixed or not stochastic:
+        policy = resolve_strategy_comparison_arm_param_policy(profile_settings, arm)
+        has_model = _arm_has_seed_sensitive_model_dependency(arm)
+        if policy == "base-finalists-agree" and not has_model:
+            consensus.append(arm.arm_id)
+            continue
+        benchmark.append(arm.arm_id)
+        if has_model:
+            model_sensitive.append(arm.arm_id)
+    if not consensus or not benchmark or not model_sensitive:
         raise ValueError(
-            "Compare Suite robustness必須同時具有fixed與seed-sensitive arms: "
-            f"suite={profile_settings.suite_id}, fixed={fixed}, stochastic={stochastic}"
+            "Compare Suite end-to-end robustness角色不完整: "
+            f"suite={profile_settings.suite_id}, consensus={consensus}, "
+            f"benchmark={benchmark}, model_sensitive={model_sensitive}"
         )
-    return tuple(fixed), tuple(stochastic)
+    return tuple(consensus), tuple(benchmark), tuple(model_sensitive)
 
 
 def _derived_stochastic_contrasts(
@@ -1130,8 +1154,20 @@ def get_strategy_multi_seed_robustness_settings(
         enabled=bool(raw.get("enabled", True)),
         profile_id=str(raw.get("profile_id") or "").strip(),
         suite_id=(None if raw.get("suite_id") in (None, "") else str(raw.get("suite_id")).strip()),
-        seed_count=int(raw.get("seed_count", 0) or 0),
-        seed_generator_seed=int(raw.get("seed_generator_seed", 0) or 0),
+        benchmark_id=(None if raw.get("benchmark_id") in (None, "") else str(raw.get("benchmark_id")).strip()),
+        seed_count=int(raw.get("seed_count", ROBUSTNESS_BENCHMARK_SEED_COUNT) or 0),
+        seed_generator_seed=int(raw.get("seed_generator_seed", ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED) or 0),
+        resolved_seeds=tuple(
+            int(value) for value in tuple(
+                raw.get("resolved_seeds")
+                or (ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS if raw.get("benchmark_id") not in (None, "") else ())
+                or ()
+            )
+        ),
+        strategy_trials_per_fold=(
+            None if raw.get("strategy_trials_per_fold") in (None, "")
+            else int(raw.get("strategy_trials_per_fold"))
+        ),
         gpu_train_workers=int(raw.get("gpu_train_workers", STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS)),
         cpu_replay_workers=int(raw.get("cpu_replay_workers", 0) or 0),
         reuse_completed=bool(raw.get("reuse_completed", True)),
@@ -1145,12 +1181,16 @@ def get_strategy_multi_seed_robustness_settings(
         romd_reference_baselines={
             str(key).strip(): {
                 "param_source": str(dict(value or {}).get("param_source") or "").strip(),
+                "param_policy": str(dict(value or {}).get("param_policy") or "").strip(),
                 "rule_policy": str(dict(value or {}).get("rule_policy") or "").strip(),
             }
             for key, value in dict(raw.get("romd_reference_baselines") or {}).items()
         },
         fixed_arm_ids=tuple(str(value).strip() for value in tuple(raw.get("fixed_arm_ids") or ()) if str(value).strip()),
         stochastic_arm_ids=tuple(str(value).strip() for value in tuple(raw.get("stochastic_arm_ids") or ()) if str(value).strip()),
+        benchmark_strategy_arm_ids=tuple(str(value).strip() for value in tuple(raw.get("benchmark_strategy_arm_ids") or raw.get("stochastic_arm_ids") or ()) if str(value).strip()),
+        model_seed_sensitive_arm_ids=tuple(str(value).strip() for value in tuple(raw.get("model_seed_sensitive_arm_ids") or raw.get("stochastic_arm_ids") or ()) if str(value).strip()),
+        consensus_reference_arm_ids=tuple(str(value).strip() for value in tuple(raw.get("consensus_reference_arm_ids") or raw.get("fixed_arm_ids") or ()) if str(value).strip()),
         paired_contrasts=tuple(
             {
                 "contrast_id": str(dict(item or {}).get("contrast_id") or "").strip(),
@@ -1164,6 +1204,13 @@ def get_strategy_multi_seed_robustness_settings(
         model_work_root=str(raw.get("model_work_root") or "").strip(),
     )
     if settings.suite_id is None:
+        if not settings.resolved_seeds:
+            settings = replace(
+                settings,
+                resolved_seeds=resolve_robustness_benchmark_seeds(
+                    seed_count=settings.seed_count, generator_seed=settings.seed_generator_seed
+                ),
+            )
         validate_strategy_multi_seed_robustness_settings(settings)
     if settings.profile_id not in STRATEGY_COMPARE_PROFILES:
         raise ValueError(
@@ -1176,12 +1223,15 @@ def get_strategy_multi_seed_robustness_settings(
                 "multi-seed robustness suite與Strategy Compare profile不一致: "
                 f"robustness={settings.suite_id}, profile={profile_settings.suite_id}"
             )
-        fixed_ids, stochastic_ids = _derived_robustness_membership(profile_settings)
+        consensus_ids, benchmark_ids, model_ids = _derived_robustness_membership(profile_settings)
         settings = replace(
             settings,
-            fixed_arm_ids=fixed_ids,
-            stochastic_arm_ids=stochastic_ids,
-            paired_contrasts=_derived_stochastic_contrasts(profile_settings, stochastic_ids),
+            fixed_arm_ids=consensus_ids,
+            stochastic_arm_ids=benchmark_ids,
+            benchmark_strategy_arm_ids=benchmark_ids,
+            model_seed_sensitive_arm_ids=model_ids,
+            consensus_reference_arm_ids=consensus_ids,
+            paired_contrasts=_derived_stochastic_contrasts(profile_settings, benchmark_ids),
         )
         validate_strategy_multi_seed_robustness_settings(settings)
     enabled_by_id = {arm.arm_id: arm for arm in profile_settings.enabled_arms}
@@ -1218,20 +1268,23 @@ def get_strategy_multi_seed_robustness_settings(
             "multi-seed stochastic arms的score source與robustness階段不一致: "
             f"expected={expected_score_source}, actual={sorted(score_sources)}"
         )
+    reference_pool = stochastic if settings.benchmark_id is not None else fixed
+    reference_role = "same-seed benchmark baseline" if settings.benchmark_id is not None else "fixed baseline"
     for reference_key, spec in settings.romd_reference_baselines.items():
         expected_param_policy = str(
             spec.get("param_policy") or profile_settings.param_policy
         ).strip()
         matches = [
-            arm for arm in fixed
+            arm for arm in reference_pool
             if arm.param_source == spec["param_source"]
             and resolve_strategy_comparison_arm_param_policy(profile_settings, arm)
             == expected_param_policy
             and arm.rule_policy == spec["rule_policy"]
+            and not arm.dl_enabled
         ]
         if len(matches) != 1:
             raise ValueError(
-                "multi-seed RoMD reference必須唯一對應一個fixed baseline: "
+                f"multi-seed RoMD reference必須唯一對應一個{reference_role}: "
                 f"reference={reference_key}, param_source={spec['param_source']}, "
                 f"param_policy={expected_param_policy}, rule_policy={spec['rule_policy']}, "
                 f"matches={len(matches)}"

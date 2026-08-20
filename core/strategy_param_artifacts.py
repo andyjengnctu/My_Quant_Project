@@ -13,6 +13,7 @@ from typing import Any
 
 STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION = 2
 STRATEGY_PARAM_ROOT_RELATIVE = Path("models") / "strategy_params"
+STRATEGY_PARAM_BENCHMARK_DIRNAME = "benchmark"
 
 STRATEGY_PARAM_FAMILIES = ("full", "min")
 STRATEGY_PARAM_EVALUATION_MODES = ("study", "full", "oos", "rolling", "trade")
@@ -119,6 +120,78 @@ def resolve_strategy_param_manifest_path(project_root: str | Path, *, family: st
     return resolve_strategy_param_dir(project_root, family=family, evaluation_mode=evaluation_mode) / "manifest.json"
 
 
+
+def normalize_strategy_param_benchmark_id(value: str) -> str:
+    benchmark_id = str(value or "").strip()
+    if not benchmark_id:
+        raise ValueError("策略參數benchmark_id不可空白")
+    if any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for ch in benchmark_id):
+        raise ValueError(f"策略參數benchmark_id含不支援字元: {value!r}")
+    return benchmark_id
+
+
+def normalize_strategy_param_benchmark_seed(value: int) -> int:
+    seed = int(value)
+    if seed <= 0:
+        raise ValueError("策略參數benchmark seed必須>0")
+    return seed
+
+
+def resolve_strategy_param_benchmark_dir(
+    project_root: str | Path,
+    *,
+    benchmark_id: str,
+    seed: int,
+    family: str,
+    evaluation_mode: str,
+) -> Path:
+    root = Path(project_root).resolve()
+    return (
+        root
+        / STRATEGY_PARAM_ROOT_RELATIVE
+        / STRATEGY_PARAM_BENCHMARK_DIRNAME
+        / normalize_strategy_param_benchmark_id(benchmark_id)
+        / f"seed_{normalize_strategy_param_benchmark_seed(seed)}"
+        / normalize_strategy_param_family(family)
+        / normalize_strategy_param_evaluation_mode(evaluation_mode)
+    )
+
+
+def resolve_strategy_param_benchmark_artifact_path(
+    project_root: str | Path,
+    *,
+    benchmark_id: str,
+    seed: int,
+    family: str,
+    evaluation_mode: str,
+    policy: str,
+) -> Path:
+    normalized_policy = normalize_strategy_param_policy(policy)
+    return resolve_strategy_param_benchmark_dir(
+        project_root,
+        benchmark_id=benchmark_id,
+        seed=seed,
+        family=family,
+        evaluation_mode=evaluation_mode,
+    ) / POLICY_FILENAME_BY_NAME[normalized_policy]
+
+
+def resolve_strategy_param_benchmark_manifest_path(
+    project_root: str | Path,
+    *,
+    benchmark_id: str,
+    seed: int,
+    family: str,
+    evaluation_mode: str,
+) -> Path:
+    return resolve_strategy_param_benchmark_dir(
+        project_root,
+        benchmark_id=benchmark_id,
+        seed=seed,
+        family=family,
+        evaluation_mode=evaluation_mode,
+    ) / "manifest.json"
+
 def compute_strategy_param_file_sha256(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
@@ -141,6 +214,7 @@ def load_strategy_param_manifest(project_root: str | Path, *, family: str, evalu
 __all__ = [
     "STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION",
     "STRATEGY_PARAM_ROOT_RELATIVE",
+    "STRATEGY_PARAM_BENCHMARK_DIRNAME",
     "STRATEGY_PARAM_FAMILIES",
     "STRATEGY_PARAM_EVALUATION_MODES",
     "STRATEGY_PARAM_STATE_DIRNAME",
@@ -150,11 +224,16 @@ __all__ = [
     "normalize_strategy_param_family",
     "normalize_strategy_param_evaluation_mode",
     "normalize_strategy_param_policy",
+    "normalize_strategy_param_benchmark_id",
+    "normalize_strategy_param_benchmark_seed",
     "resolve_strategy_param_dir",
     "resolve_strategy_param_artifact_path",
     "resolve_strategy_param_state_dir",
     "resolve_strategy_param_state_path",
     "resolve_strategy_param_manifest_path",
+    "resolve_strategy_param_benchmark_dir",
+    "resolve_strategy_param_benchmark_artifact_path",
+    "resolve_strategy_param_benchmark_manifest_path",
     "compute_strategy_param_file_sha256",
     "load_strategy_param_manifest",
 ]

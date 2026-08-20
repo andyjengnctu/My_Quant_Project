@@ -231,8 +231,11 @@ class StrategyMultiSeedRobustnessSettings:
     enabled: bool
     profile_id: str
     suite_id: str | None
+    benchmark_id: str | None
     seed_count: int
     seed_generator_seed: int
+    resolved_seeds: tuple[int, ...]
+    strategy_trials_per_fold: int | None
     gpu_train_workers: int
     cpu_replay_workers: int
     reuse_completed: bool
@@ -246,6 +249,9 @@ class StrategyMultiSeedRobustnessSettings:
     romd_reference_baselines: Mapping[str, Mapping[str, str]]
     fixed_arm_ids: tuple[str, ...]
     stochastic_arm_ids: tuple[str, ...]
+    benchmark_strategy_arm_ids: tuple[str, ...]
+    model_seed_sensitive_arm_ids: tuple[str, ...]
+    consensus_reference_arm_ids: tuple[str, ...]
     paired_contrasts: tuple[Mapping[str, str], ...]
     output_root: str
     model_work_root: str
@@ -257,8 +263,13 @@ class StrategyMultiSeedRobustnessSettings:
             "enabled": bool(self.enabled),
             "profile_id": self.profile_id,
             "suite_id": self.suite_id,
+            "benchmark_id": self.benchmark_id,
             "seed_count": int(self.seed_count),
             "seed_generator_seed": int(self.seed_generator_seed),
+            "resolved_seeds": [int(value) for value in self.resolved_seeds],
+            "strategy_trials_per_fold": (
+                None if self.strategy_trials_per_fold is None else int(self.strategy_trials_per_fold)
+            ),
             "gpu_train_workers": int(self.gpu_train_workers),
             "cpu_replay_workers": int(self.cpu_replay_workers),
             "reuse_completed": bool(self.reuse_completed),
@@ -275,6 +286,9 @@ class StrategyMultiSeedRobustnessSettings:
             },
             "fixed_arm_ids": list(self.fixed_arm_ids),
             "stochastic_arm_ids": list(self.stochastic_arm_ids),
+            "benchmark_strategy_arm_ids": list(self.benchmark_strategy_arm_ids),
+            "model_seed_sensitive_arm_ids": list(self.model_seed_sensitive_arm_ids),
+            "consensus_reference_arm_ids": list(self.consensus_reference_arm_ids),
             "paired_contrasts": [dict(item) for item in self.paired_contrasts],
             "output_root": self.output_root,
             "model_work_root": self.model_work_root,
@@ -294,6 +308,16 @@ def validate_strategy_multi_seed_robustness_settings(
         raise ValueError("multi-seed robustness seed_count必須>=2")
     if int(settings.seed_generator_seed) < 0:
         raise ValueError("multi-seed robustness seed_generator_seed必須>=0")
+    if len(tuple(settings.resolved_seeds)) != int(settings.seed_count):
+        raise ValueError("multi-seed robustness resolved_seeds數量必須等於seed_count")
+    if len(set(int(value) for value in settings.resolved_seeds)) != len(tuple(settings.resolved_seeds)):
+        raise ValueError("multi-seed robustness resolved_seeds不得重複")
+    if any(int(value) <= 0 for value in settings.resolved_seeds):
+        raise ValueError("multi-seed robustness resolved_seeds必須全部>0")
+    if settings.benchmark_id is not None and not str(settings.benchmark_id).strip():
+        raise ValueError("multi-seed robustness benchmark_id不可空白")
+    if settings.strategy_trials_per_fold is not None and int(settings.strategy_trials_per_fold) < 1:
+        raise ValueError("multi-seed robustness strategy_trials_per_fold必須>=1")
     gpu_train_workers = int(settings.gpu_train_workers)
     if not (
         MULTI_SEED_GPU_TRAIN_WORKERS_MIN
@@ -345,6 +369,24 @@ def validate_strategy_multi_seed_robustness_settings(
     overlap = sorted(set(fixed_ids) & set(stochastic_ids))
     if overlap:
         raise ValueError(f"multi-seed robustness fixed/stochastic arms不得重疊: {overlap}")
+    benchmark_ids = tuple(str(value).strip() for value in settings.benchmark_strategy_arm_ids if str(value).strip())
+    model_ids = tuple(str(value).strip() for value in settings.model_seed_sensitive_arm_ids if str(value).strip())
+    consensus_ids = tuple(str(value).strip() for value in settings.consensus_reference_arm_ids if str(value).strip())
+    if settings.benchmark_id is not None:
+        if not benchmark_ids:
+            raise ValueError("end-to-end robustness benchmark至少需要一個strategy-seed arm")
+        if not model_ids:
+            raise ValueError("end-to-end robustness benchmark至少需要一個model-seed arm")
+        if not consensus_ids:
+            raise ValueError("end-to-end robustness benchmark至少需要一個production consensus reference")
+        if not set(model_ids).issubset(set(benchmark_ids)):
+            raise ValueError("model_seed_sensitive_arm_ids必須是benchmark_strategy_arm_ids子集")
+        if set(benchmark_ids) & set(consensus_ids):
+            raise ValueError("benchmark strategy arms與consensus references不得重疊")
+        if tuple(stochastic_ids) != tuple(benchmark_ids):
+            raise ValueError("current end-to-end benchmark的stochastic_arm_ids必須等於benchmark_strategy_arm_ids")
+        if tuple(fixed_ids) != tuple(consensus_ids):
+            raise ValueError("current end-to-end benchmark的fixed_arm_ids必須等於consensus_reference_arm_ids")
     contrast_ids: set[str] = set()
     for raw in settings.paired_contrasts:
         spec = dict(raw or {})

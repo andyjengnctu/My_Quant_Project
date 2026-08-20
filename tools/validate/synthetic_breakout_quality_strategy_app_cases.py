@@ -1068,11 +1068,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         mode_profile = strategy_config.get_strategy_comparison_settings(mode_settings.profile_id)
         fixed = tuple(mode_profile.arms[arm_id] for arm_id in mode_settings.fixed_arm_ids)
         stochastic = tuple(mode_profile.arms[arm_id] for arm_id in mode_settings.stochastic_arm_ids)
+        model_sensitive = tuple(
+            mode_profile.arms[arm_id] for arm_id in mode_settings.model_seed_sensitive_arm_ids
+        )
         reference_specs = dict(mode_settings.romd_reference_baselines)
         reference_matches = {
             key: tuple(
-                arm for arm in fixed
-                if arm.param_source == spec["param_source"]
+                arm for arm in stochastic
+                if not arm.dl_enabled
+                and arm.param_source == spec["param_source"]
                 and resolve_strategy_comparison_arm_param_policy(mode_profile, arm)
                 == str(spec.get("param_policy") or mode_profile.param_policy)
                 and arm.rule_policy == spec["rule_policy"]
@@ -1086,17 +1090,24 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and mode_settings.cpu_replay_workers >= 1
             and bool(fixed)
             and bool(stochastic)
+            and bool(model_sensitive)
             and all(not arm.dl_enabled for arm in fixed)
             and all(
                 arm.dl_enabled
                 and mode_profile.dl_sources[str(arm.dl_id)].score_source == "selection_point_in_time"
-                for arm in stochastic
+                for arm in model_sensitive
+            )
+            and set(mode_settings.model_seed_sensitive_arm_ids).issubset(
+                set(mode_settings.benchmark_strategy_arm_ids)
             )
             and set(reference_matches) == {"min", "full"}
             and all(len(matches) == 1 for matches in reference_matches.values())
             and mode_settings.suite_id == mode_profile.suite_id == "extending_current"
-            and tuple(mode_settings.fixed_arm_ids + mode_settings.stochastic_arm_ids)
-                == tuple(arm.arm_id for arm in mode_profile.enabled_arms)
+            and set(mode_settings.fixed_arm_ids).isdisjoint(mode_settings.stochastic_arm_ids)
+            and set(mode_settings.fixed_arm_ids).union(mode_settings.stochastic_arm_ids)
+                == {arm.arm_id for arm in mode_profile.enabled_arms}
+            and tuple(mode_settings.fixed_arm_ids) == tuple(mode_settings.consensus_reference_arm_ids)
+            and tuple(mode_settings.stochastic_arm_ids) == tuple(mode_settings.benchmark_strategy_arm_ids)
         )
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -1112,6 +1123,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "fixed_arm_ids" not in raw
             and "stochastic_arm_ids" not in raw
             and "paired_contrasts" not in raw
+            and "seed_count" not in raw
+            and "seed_generator_seed" not in raw
+            and str(raw.get("benchmark_id") or "")
             and str(raw.get("suite_id") or "") == "extending_current"
             for rid, raw in strategy_config.STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES.items()
             if rid in expected_enabled_robustness_ids
@@ -1133,8 +1147,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     default_reference_specs = dict(robustness_settings.romd_reference_baselines)
     reference_matches = {
         key: tuple(
-            arm for arm in robustness_fixed
-            if arm.param_source == spec["param_source"]
+            arm for arm in robustness_stochastic
+            if not arm.dl_enabled
+            and arm.param_source == spec["param_source"]
             and resolve_strategy_comparison_arm_param_policy(robustness_profile, arm)
             == str(spec.get("param_policy") or robustness_profile.param_policy)
             and arm.rule_policy == spec["rule_policy"]
@@ -1159,12 +1174,60 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_values_are_deterministically_generated_unique_and_not_best_seed_selection",
         True,
-        seeds_a == seeds_b
+        seeds_a == seeds_b == tuple(robustness_settings.resolved_seeds)
         and seeds_a != seeds_c
         and len(seeds_a) == len(set(seeds_a)) == configured_seed_count
         and all(seed > 0 for seed in seeds_a)
         and "best_seed =" not in robustness_source.lower()
         and "selected_best_seed" not in robustness_source.lower(),
+    )
+
+    from config.training_policy import get_robustness_benchmark_policy_snapshot
+    from core.strategy_param_artifacts import resolve_strategy_param_benchmark_artifact_path
+    from services.optimizer.strategy_param_repository import (
+        build_strategy_parameter_benchmark_manifest_payload,
+    )
+
+    benchmark_policy = get_robustness_benchmark_policy_snapshot()
+    benchmark_seed = int(tuple(robustness_settings.resolved_seeds)[0])
+    with tempfile.TemporaryDirectory() as benchmark_tmp:
+        benchmark_root = Path(benchmark_tmp)
+        benchmark_artifact = resolve_strategy_param_benchmark_artifact_path(
+            benchmark_root,
+            benchmark_id=str(robustness_settings.benchmark_id),
+            seed=benchmark_seed,
+            family="full",
+            evaluation_mode="oos",
+            policy="base-finalist-best",
+        )
+        benchmark_artifact.parent.mkdir(parents=True, exist_ok=True)
+        benchmark_artifact.write_text('{"synthetic": true}\n', encoding="utf-8")
+        benchmark_manifest = build_strategy_parameter_benchmark_manifest_payload(
+            benchmark_root,
+            benchmark_id=str(robustness_settings.benchmark_id),
+            seed=benchmark_seed,
+            family="full",
+            evaluation_mode="oos",
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "robustness_benchmark_seed_policy_and_strategy_parameter_namespace_are_single_ssot",
+        True,
+        benchmark_policy["benchmark_id"] == robustness_settings.benchmark_id
+        and tuple(int(value) for value in benchmark_policy["resolved_seeds"])
+            == tuple(robustness_settings.resolved_seeds)
+        and int(benchmark_policy["strategy_trials_per_fold"])
+            == int(robustness_settings.strategy_trials_per_fold)
+        and benchmark_manifest["producer"] == "optimizer"
+        and benchmark_manifest["benchmark_seed"] == benchmark_seed
+        and benchmark_manifest["training_policy"]["optimizer_seed"] == benchmark_seed
+        and benchmark_manifest["training_policy"]["trials_per_fold"]
+            == int(robustness_settings.strategy_trials_per_fold)
+        and benchmark_manifest["training_policy"]["benchmark_override"] is True
+        and benchmark_manifest["artifacts"]["base_finalist_best"]["path"].startswith(
+            "models/strategy_params/benchmark/"
+        )
+        and "Robustness Benchmark Round 1只完成scientific contract" in robustness_source,
     )
 
     shared_source_arm = robustness_profile.arms["C59"]
@@ -1219,11 +1282,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "training_cleanup_targets" in robustness_source,
     )
 
+    robustness_model_sensitive = tuple(
+        robustness_profile.arms[arm_id]
+        for arm_id in robustness_settings.model_seed_sensitive_arm_ids
+    )
     operational_groups = robustness_module._training_source_groups(
-        robustness_stochastic, settings=robustness_profile
+        robustness_model_sensitive, settings=robustness_profile
     )
     operational_units = list(robustness_module._training_units(
-        seeds=dedupe_seeds, stochastic_arms=robustness_stochastic, settings=robustness_profile,
+        seeds=dedupe_seeds, stochastic_arms=robustness_model_sensitive, settings=robustness_profile,
         completed=set(), model_root=Path("/tmp/extending_window_rolling_models"),
         run_root=Path("/tmp/extending_window_rolling_run"),
         comparison_start="2021-01-01", comparison_end="2025-12-31", reuse_completed=True,
@@ -1232,8 +1299,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_operational_dual_model_profile_trains_both_same_seed_sources_before_single_strategy_replay",
         True,
-        tuple(arm.arm_id for arm in robustness_stochastic) == ("C59", "C60")
-        and tuple((str(item["left"]), str(item["right"])) for item in robustness_settings.paired_contrasts) == (("C60", "C59"),)
+        tuple(arm.arm_id for arm in robustness_model_sensitive)
+            == tuple(robustness_settings.model_seed_sensitive_arm_ids)
+        and all(arm.dl_enabled for arm in robustness_model_sensitive)
+        and any(
+            str(item["left"]) in robustness_settings.model_seed_sensitive_arm_ids
+            and str(item["right"]) in robustness_settings.model_seed_sensitive_arm_ids
+            for item in robustness_settings.paired_contrasts
+        )
         and len(operational_groups) == 3
         and len(operational_units) == 3 * len(dedupe_seeds)
         and sum(len(unit["replay_arms"]) for unit in operational_units) == 3 * len(dedupe_seeds)
@@ -1251,15 +1324,22 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             robustness_profile.arms[arm_id].robustness_role == "off"
             for arm_id in robustness_settings.stochastic_arm_ids
         )
-        and tuple(robustness_settings.fixed_arm_ids + robustness_settings.stochastic_arm_ids)
-            == tuple(arm.arm_id for arm in robustness_profile.enabled_arms)
+        and set(robustness_settings.fixed_arm_ids).isdisjoint(robustness_settings.stochastic_arm_ids)
+        and set(robustness_settings.fixed_arm_ids).union(robustness_settings.stochastic_arm_ids)
+            == {arm.arm_id for arm in robustness_profile.enabled_arms}
         and all(
             (not robustness_profile.arms[arm_id].dl_enabled)
             for arm_id in robustness_settings.fixed_arm_ids
         )
+        and tuple(robustness_settings.stochastic_arm_ids)
+            == tuple(robustness_settings.benchmark_strategy_arm_ids)
         and all(
             robustness_profile.arms[arm_id].dl_enabled
-            for arm_id in robustness_settings.stochastic_arm_ids
+            for arm_id in robustness_settings.model_seed_sensitive_arm_ids
+        )
+        and all(
+            not robustness_profile.arms[arm_id].dl_enabled
+            for arm_id in robustness_settings.consensus_reference_arm_ids
         ),
     )
 
@@ -1351,10 +1431,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     synthetic_seed_rows = []
     synthetic_yearly_rows = []
     stochastic_expected_mean = {}
+    stochastic_expected_by_seed = {}
     for arm_order, arm in enumerate(robustness_stochastic, start=1):
         low = 5.0 + 3.0 * (arm_order - 1)
         high = low + 2.0
         stochastic_expected_mean[arm.arm_id] = (low + high) / 2.0
+        stochastic_expected_by_seed[arm.arm_id] = {101: low, 202: high}
         for seed_order, (seed, romd) in enumerate(((101, low), (202, high)), start=1):
             synthetic_seed_rows.append({
                 "arm_id": arm.arm_id,
@@ -1454,6 +1536,23 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         yearly_pair = list(item.get("yearly_same_seed") or [])
         expected_right_wins = 2 if expected_romd_delta > 0 else 0
         expected_left_wins = 2 if expected_romd_delta < 0 else 0
+        left_arm = robustness_profile.arms[left_id]
+        right_arm = robustness_profile.arms[right_id]
+        same_parameter_runtime_universe = (
+            left_arm.param_source == right_arm.param_source
+            and resolve_strategy_comparison_arm_param_policy(robustness_profile, left_arm)
+            == resolve_strategy_comparison_arm_param_policy(robustness_profile, right_arm)
+            and left_arm.rule_policy == right_arm.rule_policy
+        )
+        direct_and_translation_ok = (
+            isinstance(direct_same, dict)
+            and direct_same.get("n") == 2
+            and math.isclose(float(direct_same.get("right_minus_left_mean")), expected_direct_delta)
+            and isinstance(translation, dict)
+            and translation.get("n") == 2
+            and len(translation.get("seed_rows") or []) == 2
+            and [row["seed_index"] for row in translation.get("seed_rows") or []] == [1, 2]
+        ) if same_parameter_runtime_universe else (direct_same is None and translation is None)
         paired_comparisons_ok = paired_comparisons_ok and (
             item.get("left_arm_id") == left_id
             and item.get("right_arm_id") == right_id
@@ -1464,13 +1563,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and romd_same.get("tie_count") == (2 if math.isclose(expected_romd_delta, 0.0) else 0)
             and math.isclose(float(romd_same.get("right_minus_left_mean")), expected_romd_delta)
             and math.isclose(float(romd_same.get("right_minus_left_median")), expected_romd_delta)
-            and isinstance(direct_same, dict)
-            and direct_same.get("n") == 2
-            and math.isclose(float(direct_same.get("right_minus_left_mean")), expected_direct_delta)
-            and isinstance(translation, dict)
-            and translation.get("n") == 2
-            and len(translation.get("seed_rows") or []) == 2
-            and [row["seed_index"] for row in translation.get("seed_rows") or []] == [1, 2]
+            and direct_and_translation_ok
             and isinstance(distribution, dict)
             and distribution.get("pair_count") == 4
             and len(yearly_pair) == 2
@@ -1488,27 +1581,28 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "multi_seed_report_uses_mean_for_all_strategy_metrics_and_full_romd_distribution_with_fixed_baselines",
+        "multi_seed_report_uses_mean_for_all_strategy_metrics_and_full_romd_distribution_with_same_seed_benchmarks",
         True,
-        math.isclose(mean_by_arm[min_reference_arm.arm_id]["return_over_max_drawdown"], 6.0)
-        and romd_by_arm[min_reference_arm.arm_id]["std"] is None
+        math.isclose(
+            mean_by_arm[min_reference_arm.arm_id]["return_over_max_drawdown"],
+            stochastic_expected_mean[min_reference_arm.arm_id],
+        )
+        and romd_by_arm[min_reference_arm.arm_id]["std"] is not None
+        and full_reference_arm is not None
+        and romd_by_arm[full_reference_arm.arm_id]["std"] is not None
         and stochastic_distribution_ok
         and all(
             romd_by_arm[arm.arm_id]["beats_min_count"]
             == sum(
-                value > 6.0
-                for value in (
-                    stochastic_expected_mean[arm.arm_id] - 1.0,
-                    stochastic_expected_mean[arm.arm_id] + 1.0,
-                )
+                stochastic_expected_by_seed[arm.arm_id][seed]
+                > stochastic_expected_by_seed[min_reference_arm.arm_id][seed]
+                for seed in (101, 202)
             )
             and romd_by_arm[arm.arm_id]["beats_full_count"]
             == sum(
-                value > 7.0
-                for value in (
-                    stochastic_expected_mean[arm.arm_id] - 1.0,
-                    stochastic_expected_mean[arm.arm_id] + 1.0,
-                )
+                stochastic_expected_by_seed[arm.arm_id][seed]
+                > stochastic_expected_by_seed[full_reference_arm.arm_id][seed]
+                for seed in (101, 202)
             )
             for arm in robustness_stochastic
         )
@@ -1622,12 +1716,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         pair_dir = compact_root / "pair"
         run_root = compact_root / "run"
         pair_dir.mkdir(parents=True)
-        active_prefix = robustness_module._arm_runtime_spec(robustness_stochastic[0])["active_key"]
+        active_prefix = robustness_module._arm_runtime_spec(robustness_model_sensitive[0])["active_key"]
         for suffix in ("trades", "equity", "daily_capacity", "selected_buys", "execution"):
             pd.DataFrame([{"x": 1}, {"x": 2}]).to_csv(
                 pair_dir / f"{active_prefix}_{suffix}.csv", index=False, encoding="utf-8-sig"
             )
-        arm = robustness_stochastic[0]
+        arm = robustness_model_sensitive[0]
         dl = robustness_profile.dl_sources[str(arm.dl_id)]
         runtime_spec = robustness_module._arm_runtime_spec(arm)
         attribution_dir = run_root / robustness_module.ATTRIBUTION_SOURCE_DIRNAME / f"{arm.arm_id}__seed_101"
@@ -4295,18 +4389,28 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     current_suite = strategy_config.get_strategy_compare_suite(operational_current_settings.suite_id)
     suite_arm_ids = tuple(str(value) for value in current_suite.get("arm_ids", ()))
     suite_contrast_ids = tuple(str(value) for value in current_suite.get("contrast_ids", ()))
-    resolved_fixed_ids = tuple(
-        arm.arm_id for arm in operational_current_settings.enabled_arms if not arm.dl_enabled
+    resolved_consensus_ids = tuple(
+        arm.arm_id
+        for arm in operational_current_settings.enabled_arms
+        if not arm.dl_enabled
+        and str(arm.param_policy or operational_current_settings.param_policy) == "base-finalists-agree"
     )
-    resolved_stochastic_ids = tuple(
-        arm.arm_id for arm in operational_current_settings.enabled_arms if arm.dl_enabled
+    resolved_benchmark_ids = tuple(
+        arm.arm_id
+        for arm in operational_current_settings.enabled_arms
+        if arm.arm_id not in set(resolved_consensus_ids)
     )
-    stochastic_id_set = set(resolved_stochastic_ids)
+    resolved_model_sensitive_ids = tuple(
+        arm.arm_id
+        for arm in operational_current_settings.enabled_arms
+        if arm.dl_enabled and arm.arm_id in set(resolved_benchmark_ids)
+    )
+    benchmark_id_set = set(resolved_benchmark_ids)
     expected_paired_ids = tuple(
         contrast.contrast_id
         for contrast in operational_current_settings.enabled_contrasts
-        if contrast.left in stochastic_id_set
-        and contrast.right in stochastic_id_set
+        if contrast.left in benchmark_id_set
+        and contrast.right in benchmark_id_set
     )
     dl_off_policy_families = {
         (
@@ -4359,8 +4463,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and operational_robustness_active.enabled
         and operational_current_settings.suite_id == "extending_current"
         and operational_robustness_active.suite_id == operational_current_settings.suite_id
-        and tuple(operational_robustness_active.fixed_arm_ids) == resolved_fixed_ids
-        and tuple(operational_robustness_active.stochastic_arm_ids) == resolved_stochastic_ids
+        and tuple(operational_robustness_active.consensus_reference_arm_ids) == resolved_consensus_ids
+        and tuple(operational_robustness_active.fixed_arm_ids) == resolved_consensus_ids
+        and tuple(operational_robustness_active.benchmark_strategy_arm_ids) == resolved_benchmark_ids
+        and tuple(operational_robustness_active.stochastic_arm_ids) == resolved_benchmark_ids
+        and tuple(operational_robustness_active.model_seed_sensitive_arm_ids) == resolved_model_sensitive_ids
         and tuple(
             str(item.get("contrast_id") or "")
             for item in operational_robustness_active.paired_contrasts
@@ -4379,9 +4486,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and not c54_current.enabled
         and not c55_current.enabled
         and operational_robustness_active.seed_count
-        == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT == 4
+        == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT
         and operational_robustness_active.seed_generator_seed
-        == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED == 20260810
+        == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED
+        and tuple(operational_robustness_active.resolved_seeds)
+        == tuple(strategy_config.ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS)
+        and operational_robustness_active.strategy_trials_per_fold
+        == strategy_config.ROBUSTNESS_BENCHMARK_STRATEGY_TRIALS_PER_FOLD
         and strategy_config.get_strategy_runtime_integration_settings().selection_candidate_arm_id == "C42"
         and strategy_config.get_strategy_runtime_integration_settings().forward_candidate_arm_id == "C44",
     )
