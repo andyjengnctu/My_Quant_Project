@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 import shutil
+import time
 from typing import Any
 
 import pandas as pd
@@ -16,6 +17,7 @@ from config.strategy_compare import (
     get_strategy_runtime_integration_settings,
 )
 from core.runtime_utils import get_taipei_now
+from core.display_common import format_elapsed
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
@@ -123,7 +125,7 @@ from filters.breakout_quality.strategy_compare_preparation import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RESULT_SCHEMA_VERSION = 7
+RESULT_SCHEMA_VERSION = 8
 
 
 def _selection_pit_mode_paths(
@@ -1104,6 +1106,55 @@ def _comparison_period(pair_payloads: dict[str, dict[str, Any]]) -> Any:
     )
 
 
+def render_strategy_run_execution_table(
+    execution_summary: dict[str, Any],
+    *,
+    settings: StrategyComparisonSettings,
+    target: str = "plain",
+) -> str:
+    """Render neutral wall-time metadata for one Strategy Compare run.
+
+    Performance timing is execution metadata only.  It must never participate in
+    strategy best/worst coloring or alter the scientific fingerprint.
+    """
+
+    del target  # Table is intentionally neutral for both console and Markdown.
+    arm_rows = dict(execution_summary.get("arms") or {})
+    rows: list[tuple[object, ...]] = []
+    for arm in settings.enabled_arms:
+        row = dict(arm_rows.get(arm.arm_id) or {})
+        rows.append(
+            (
+                arm.arm_id,
+                arm.name,
+                str(row.get("action") or "-"),
+                format_elapsed(float(row.get("elapsed_sec") or 0.0)),
+                format_elapsed(float(row.get("cumulative_sec") or 0.0)),
+            )
+        )
+    post_elapsed = float(execution_summary.get("post_processing_elapsed_sec") or 0.0)
+    total_elapsed = float(execution_summary.get("total_elapsed_sec") or 0.0)
+    rows.append(
+        (
+            "REPORT",
+            "診斷／報表整理",
+            "REPORT",
+            format_elapsed(post_elapsed),
+            format_elapsed(total_elapsed),
+        )
+    )
+    rows.append(
+        (
+            "TOTAL",
+            "總耗時",
+            "TOTAL",
+            format_elapsed(total_elapsed),
+            format_elapsed(total_elapsed),
+        )
+    )
+    return render_table(("編號", "比較對象", "動作", "本次耗時", "累計時間"), rows)
+
+
 def render_strategy_aggregate_report(
     *,
     settings: StrategyComparisonSettings,
@@ -1116,12 +1167,14 @@ def render_strategy_aggregate_report(
     title: str = "策略績效比較",
     fingerprint_label: str = "Config fingerprint",
     extra_metadata: tuple[tuple[object, object], ...] = (),
+    execution_summary: dict[str, Any] | None = None,
 ) -> str:
     """Render the canonical cross-arm Strategy Compare human report.
 
-    Selection PIT, Forward-OOS and Multi-seed robustness all consume this same
-    top-level renderer.  Callers may append method-specific sections after the
-    four canonical Strategy Compare sections, but must not reimplement them.
+    Single-seed OOS/Rolling and Multi-seed robustness consume this same top-level
+    renderer.  The four performance sections are canonical.  Single-seed runs
+    may add the neutral execution-summary section; robustness keeps its own
+    method-specific sections after the shared performance surface.
     """
 
     metadata_rows = (
@@ -1134,26 +1187,34 @@ def render_strategy_aggregate_report(
         ("比較設定", "config/strategy_compare.py"),
         *tuple(extra_metadata),
     )
-    return "\n\n".join(
-        (
-            render_title(title),
-            render_key_values(metadata_rows),
-            render_section("1. 核心策略結果"),
-            render_strategy_core_result_table(
-                scenarios, settings=settings, target=target
-            ),
-            render_section("2. R 預測／轉化"),
-            render_strategy_r_analysis_table(diagnostics, target=target),
-            render_section("3. 資金／執行"),
-            render_strategy_execution_table(
-                scenarios, settings=settings, target=target
-            ),
-            render_section("4. 年度結果"),
-            render_strategy_yearly_values_table(
-                yearly_by_id, settings=settings, target=target
-            ),
+    sections = [
+        render_title(title),
+        render_key_values(metadata_rows),
+        render_section("1. 核心策略結果"),
+        render_strategy_core_result_table(
+            scenarios, settings=settings, target=target
+        ),
+        render_section("2. R 預測／轉化"),
+        render_strategy_r_analysis_table(diagnostics, target=target),
+        render_section("3. 資金／執行"),
+        render_strategy_execution_table(
+            scenarios, settings=settings, target=target
+        ),
+        render_section("4. 年度結果"),
+        render_strategy_yearly_values_table(
+            yearly_by_id, settings=settings, target=target
+        ),
+    ]
+    if execution_summary is not None:
+        sections.extend(
+            (
+                render_section("5. 執行摘要"),
+                render_strategy_run_execution_table(
+                    execution_summary, settings=settings, target=target
+                ),
+            )
         )
-    ).rstrip() + "\n"
+    return "\n\n".join(sections).rstrip() + "\n"
 
 
 def _render_report(
@@ -1163,6 +1224,7 @@ def _render_report(
     scenarios: dict[str, dict[str, Any]],
     pair_payloads: dict[str, dict[str, Any]],
     diagnostics: dict[str, Any],
+    execution_summary: dict[str, Any] | None = None,
     target: str = "plain",
 ) -> str:
     return render_strategy_aggregate_report(
@@ -1172,6 +1234,7 @@ def _render_report(
         scenarios=scenarios,
         diagnostics=diagnostics,
         yearly_by_id=_yearly_values_by_id(pair_payloads, settings=settings),
+        execution_summary=execution_summary,
         target=target,
     )
 
@@ -1261,6 +1324,8 @@ def run_strategy_comparison(
         fingerprint=status["config_fingerprint"],
     )
     run_dir.mkdir(parents=True, exist_ok=False)
+    replay_started = time.perf_counter()
+    arm_execution_timing: dict[str, dict[str, Any]] = {}
     pair_payloads: dict[str, dict[str, Any]] = {}
     direct_r: dict[str, float] = {}
     pair_execution: dict[str, dict[str, Any]] = {}
@@ -1282,6 +1347,13 @@ def run_strategy_comparison(
             else None
         )
         all_off = off_arm.rule_policy == "all_off"
+        arm_started = time.perf_counter()
+        baseline_action = "REUSE" if baseline_reuse_source is not None else "RUN"
+        if quiet and baseline_action == "RUN":
+            print(
+                f"[RUN] {off_arm.arm_id} {off_arm.name} "
+                f"| total={format_elapsed(arm_started - replay_started)}"
+            )
         baseline_payload = run_standalone_baseline(
             project_root=root,
             dataset=settings.dataset,
@@ -1309,8 +1381,15 @@ def run_strategy_comparison(
             ),
             "payload": baseline_payload,
         }
+        arm_finished = time.perf_counter()
+        arm_elapsed = arm_finished - arm_started
+        arm_execution_timing[off_arm.arm_id] = {
+            "action": baseline_action,
+            "elapsed_sec": arm_elapsed,
+            "cumulative_sec": arm_finished - replay_started,
+        }
         pair_execution[off_arm.arm_id] = {
-            "action": "REUSE" if baseline_reuse_source is not None else "RUN",
+            "action": baseline_action,
             "source_pair_dir": (
                 None
                 if baseline_reuse_source is None
@@ -1325,7 +1404,11 @@ def run_strategy_comparison(
         }
         if quiet:
             action = "REUSE" if baseline_reuse_source is not None else "DONE"
-            print(f"[{action}] {off_arm.arm_id} {off_arm.name}")
+            print(
+                f"[{action}] {off_arm.arm_id} {off_arm.name} "
+                f"| elapsed={format_elapsed(arm_elapsed)} "
+                f"| total={format_elapsed(arm_finished - replay_started)}"
+            )
         baseline_sources[group_key] = pair_dir
 
     for param_source, rule_policy, off_arm, on_arm in _execution_pairs(settings):
@@ -1344,6 +1427,7 @@ def run_strategy_comparison(
         cache_entry = cached_pairs.get(on_arm.arm_id)
 
         if isinstance(cache_entry, dict) and cache_entry.get("source_pair_dir"):
+            arm_started = time.perf_counter()
             source_pair_dir = Path(str(cache_entry["source_pair_dir"])).resolve()
             if pair_dir.exists():
                 shutil.rmtree(pair_dir)
@@ -1391,6 +1475,25 @@ def run_strategy_comparison(
                 active_trades_filename=runtime_spec["active_trades_filename"],
             )
             baseline_sources[baseline_group_key] = pair_dir
+            if off_arm.arm_id not in arm_execution_timing:
+                arm_execution_timing[off_arm.arm_id] = {
+                    "action": "REUSE",
+                    "elapsed_sec": 0.0,
+                    "cumulative_sec": time.perf_counter() - replay_started,
+                }
+                if quiet:
+                    print(
+                        f"[REUSE] {off_arm.arm_id} {off_arm.name} "
+                        f"| elapsed={format_elapsed(0.0)} "
+                        f"| total={format_elapsed(time.perf_counter() - replay_started)}"
+                    )
+            arm_finished = time.perf_counter()
+            arm_elapsed = arm_finished - arm_started
+            arm_execution_timing[on_arm.arm_id] = {
+                "action": "REUSE",
+                "elapsed_sec": arm_elapsed,
+                "cumulative_sec": arm_finished - replay_started,
+            }
             pair_execution[on_arm.arm_id] = {
                 "action": "REUSE",
                 "pair_fingerprint": cache_entry.get("fingerprint"),
@@ -1406,7 +1509,11 @@ def run_strategy_comparison(
                 ),
             }
             if quiet:
-                print(f"[REUSE] {on_arm.arm_id} {on_arm.name}")
+                print(
+                    f"[REUSE] {on_arm.arm_id} {on_arm.name} "
+                    f"| elapsed={format_elapsed(arm_elapsed)} "
+                    f"| total={format_elapsed(arm_finished - replay_started)}"
+                )
             else:
                 print(
                     f"[{on_arm.arm_id}] REUSE 已完成正式pair："
@@ -1429,8 +1536,50 @@ def run_strategy_comparison(
             and runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
             else None
         )
-        if quiet:
-            print(f"[RUN] {on_arm.arm_id} {on_arm.name}")
+        arm_started = time.perf_counter()
+        baseline_already_accounted = off_arm.arm_id in arm_execution_timing
+        active_wall_started: float | None = None
+        if quiet and baseline_already_accounted:
+            print(
+                f"[RUN] {on_arm.arm_id} {on_arm.name} "
+                f"| total={format_elapsed(arm_started - replay_started)}"
+            )
+
+        def _pair_progress(event: str, detail: dict[str, Any]) -> None:
+            nonlocal active_wall_started
+            now = time.perf_counter()
+            if event == "baseline_start" and not baseline_already_accounted:
+                if quiet:
+                    action = "REUSE" if bool(detail.get("reused")) else "RUN"
+                    print(
+                        f"[{action}] {off_arm.arm_id} {off_arm.name} "
+                        f"| total={format_elapsed(now - replay_started)}"
+                    )
+                return
+            if event == "baseline_done" and not baseline_already_accounted:
+                elapsed = float(detail.get("elapsed_sec") or 0.0)
+                action = "REUSE" if bool(detail.get("reused")) else "RUN"
+                arm_execution_timing[off_arm.arm_id] = {
+                    "action": action,
+                    "elapsed_sec": elapsed,
+                    "cumulative_sec": now - replay_started,
+                }
+                if quiet:
+                    done_label = "REUSE" if action == "REUSE" else "DONE"
+                    print(
+                        f"[{done_label}] {off_arm.arm_id} {off_arm.name} "
+                        f"| elapsed={format_elapsed(elapsed)} "
+                        f"| total={format_elapsed(now - replay_started)}"
+                    )
+                return
+            if event == "active_start":
+                active_wall_started = now if not baseline_already_accounted else arm_started
+                if quiet and not baseline_already_accounted:
+                    print(
+                        f"[RUN] {on_arm.arm_id} {on_arm.name} "
+                        f"| total={format_elapsed(now - replay_started)}"
+                    )
+
         selection_pit_mode_paths = (
             _selection_pit_mode_paths(dl, project_root=root)
             if dl.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME
@@ -1497,6 +1646,7 @@ def run_strategy_comparison(
             comparison_start_date=comparison_start,
             comparison_end_date=comparison_end,
             quiet=quiet,
+            progress_callback=_pair_progress,
             shared_param_overrides=(
                 ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None
             ),
@@ -1560,6 +1710,25 @@ def run_strategy_comparison(
             active_trades_filename=runtime_spec["active_trades_filename"],
         )
         baseline_sources[baseline_group_key] = pair_dir
+        arm_finished = time.perf_counter()
+        effective_active_started = (
+            arm_started if baseline_already_accounted else (active_wall_started or arm_started)
+        )
+        arm_elapsed = arm_finished - effective_active_started
+        if off_arm.arm_id not in arm_execution_timing:
+            # Defensive fallback if an engine implementation omitted progress callbacks.
+            engine_timing = dict(dict(pair_payload.get("metadata") or {}).get("execution_timing") or {})
+            baseline_elapsed = float(engine_timing.get("baseline_elapsed_sec") or 0.0)
+            arm_execution_timing[off_arm.arm_id] = {
+                "action": str(engine_timing.get("baseline_action") or "RUN"),
+                "elapsed_sec": baseline_elapsed,
+                "cumulative_sec": max(0.0, arm_finished - replay_started - arm_elapsed),
+            }
+        arm_execution_timing[on_arm.arm_id] = {
+            "action": "RUN",
+            "elapsed_sec": arm_elapsed,
+            "cumulative_sec": arm_finished - replay_started,
+        }
         pair_execution[on_arm.arm_id] = {
             "action": "RUN",
             "pair_fingerprint": _current_pair_cache_fingerprint(
@@ -1583,8 +1752,13 @@ def run_strategy_comparison(
             ),
         }
         if quiet:
-            print(f"[DONE] {on_arm.arm_id} {on_arm.name}")
+            print(
+                f"[DONE] {on_arm.arm_id} {on_arm.name} "
+                f"| elapsed={format_elapsed(arm_elapsed)} "
+                f"| total={format_elapsed(arm_finished - replay_started)}"
+            )
 
+    post_processing_started = time.perf_counter()
     scenarios = _scenario_payloads(pair_payloads, direct_r, settings=settings)
     reference_arm_id = _report_reference_arm_id(settings)
     diagnostics = build_strategy_diagnostics(
@@ -1595,12 +1769,18 @@ def run_strategy_comparison(
         pair_payloads=pair_payloads,
         reference_arm_id=reference_arm_id,
     )
+    execution_summary = {
+        "arms": arm_execution_timing,
+        "post_processing_elapsed_sec": time.perf_counter() - post_processing_started,
+        "total_elapsed_sec": time.perf_counter() - replay_started,
+    }
     report = _render_report(
         settings=settings,
         status=status,
         scenarios=scenarios,
         pair_payloads=pair_payloads,
         diagnostics=diagnostics,
+        execution_summary=execution_summary,
         target="markdown",
     )
     console_report = _render_report(
@@ -1609,6 +1789,29 @@ def run_strategy_comparison(
         scenarios=scenarios,
         pair_payloads=pair_payloads,
         diagnostics=diagnostics,
+        execution_summary=execution_summary,
+        target="console",
+    )
+    execution_summary["post_processing_elapsed_sec"] = (
+        time.perf_counter() - post_processing_started
+    )
+    execution_summary["total_elapsed_sec"] = time.perf_counter() - replay_started
+    report = _render_report(
+        settings=settings,
+        status=status,
+        scenarios=scenarios,
+        pair_payloads=pair_payloads,
+        diagnostics=diagnostics,
+        execution_summary=execution_summary,
+        target="markdown",
+    )
+    console_report = _render_report(
+        settings=settings,
+        status=status,
+        scenarios=scenarios,
+        pair_payloads=pair_payloads,
+        diagnostics=diagnostics,
+        execution_summary=execution_summary,
         target="console",
     )
     report_path = run_dir / "strategy_comparison.md"
@@ -1645,6 +1848,7 @@ def run_strategy_comparison(
             key: value["payload"] for key, value in pair_payloads.items()
         },
         "pair_execution": pair_execution,
+        "execution_summary": execution_summary,
         "replay_reuse_policy": {
             "reuse_completed_results": bool(
                 settings.preparation.reuse_completed_results
@@ -1674,6 +1878,7 @@ def run_strategy_comparison(
             "requested_preparation_plan": requested_plan.as_dict(),
             "final_preparation_plan": status["preparation_plan"].as_dict(),
             "pair_execution": pair_execution,
+            "execution_summary": execution_summary,
             "replay_reuse_policy": payload["replay_reuse_policy"],
             "run_dir": project_relative_display_path(run_dir, project_root=root),
         },
@@ -1723,6 +1928,7 @@ __all__ = [
     "render_execution_plan",
     "render_status",
     "render_strategy_aggregate_report",
+    "render_strategy_run_execution_table",
     "run_strategy_comparison",
     "show_strategy_comparison_status",
 ]
