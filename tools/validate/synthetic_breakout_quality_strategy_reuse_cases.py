@@ -484,6 +484,10 @@ def append_completed_pair_cache_contract_checks(
         reuse_status["resolved_parameter_paths"] = {
             "min_roos": "models/min_roos.json"
         }
+        reuse_status["resolved_arm_parameter_paths"] = {
+            arm.arm_id: "models/min_roos.json"
+            for arm in historical_settings.enabled_arms
+        }
         reuse_status["dl_sources"] = {
             str(arm.dl_id): {"ready": True}
             for arm in historical_settings.enabled_arms
@@ -511,7 +515,7 @@ def append_completed_pair_cache_contract_checks(
                 "C22": None,
             },
             "baseline_groups": {
-                "min_roos::all_off": {
+                "min_roos::base-finalist-best::all_off": {
                     "off_arm_id": "C3",
                     "source_pair_dir": reusable_pair_dir,
                 }

@@ -79,7 +79,12 @@ from core.report_metrics import (
     ROBUSTNESS_YEARLY_DISTRIBUTION_METRICS,
     TRADE_RESULT_METRICS,
 )
-from core.strategy_comparison import StrategyComparisonArm
+from core.strategy_comparison import (
+    StrategyComparisonArm,
+    resolve_strategy_comparison_arm_param_policy,
+    strategy_comparison_param_artifact_key,
+    strategy_comparison_param_binding_key,
+)
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.dataset_store import resolve_dataset_paths
 from filters.breakout_quality.paths import (
@@ -940,20 +945,26 @@ def build_multi_seed_robustness_contract(
     if not resolved_period:
         resolved_period = {"start": settings.start_date, "end": settings.end_date}
     identities = dict(artifact_identities or {})
-    required_param_sources = sorted({arm.param_source for arm in (*fixed, *stochastic)})
     parameter_identities = {}
-    for source_id in required_param_sources:
-        raw_identity = identities.get(f"param:{source_id}")
+    for arm in (*fixed, *stochastic):
+        param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
+        binding_key = strategy_comparison_param_binding_key(arm.param_source, param_policy)
+        raw_identity = identities.get(
+            strategy_comparison_param_artifact_key(arm.param_source, param_policy)
+        )
         if isinstance(raw_identity, dict):
-            parameter_identities[source_id] = {
+            parameter_identities[binding_key] = {
                 key: raw_identity.get(key)
-                for key in ("sha256", "coverage_start", "coverage_end")
+                for key in ("sha256", "coverage_start", "coverage_end", "param_policy")
             }
     reference_baselines: dict[str, dict[str, Any]] = {}
     for reference_key, spec in robustness.romd_reference_baselines.items():
+        expected_param_policy = str(spec.get("param_policy") or settings.param_policy).strip()
         matches = [
             arm for arm in fixed
-            if arm.param_source == spec["param_source"] and arm.rule_policy == spec["rule_policy"]
+            if arm.param_source == spec["param_source"]
+            and resolve_strategy_comparison_arm_param_policy(settings, arm) == expected_param_policy
+            and arm.rule_policy == spec["rule_policy"]
         ]
         if len(matches) != 1:
             raise ValueError(
@@ -963,7 +974,9 @@ def build_multi_seed_robustness_contract(
         matched = matches[0]
         reference_baselines[str(reference_key)] = {
             "arm_id": matched.arm_id, "name": matched.name,
-            "param_source": matched.param_source, "rule_policy": matched.rule_policy,
+            "param_source": matched.param_source,
+            "param_policy": resolve_strategy_comparison_arm_param_policy(settings, matched),
+            "rule_policy": matched.rule_policy,
         }
     scientific_reference_baselines = {
         key: {
@@ -1016,7 +1029,11 @@ def build_multi_seed_robustness_contract(
         "suite_id": settings.suite_id,
         "dataset": settings.dataset,
         "dataset_identity": _dataset_identity_snapshot(settings.dataset),
-        "param_policy": settings.param_policy,
+        "param_policy": "per-arm",
+        "arm_param_policies": {
+            arm.arm_id: resolve_strategy_comparison_arm_param_policy(settings, arm)
+            for arm in (*fixed, *stochastic)
+        },
         "max_positions": int(settings.max_positions),
         "rotation": settings.rotation,
         "comparison_period": resolved_period,
@@ -1027,13 +1044,19 @@ def build_multi_seed_robustness_contract(
         "training_defaults": _continuous_training_defaults_snapshot(),
         "romd_reference_baselines": scientific_reference_baselines,
         "fixed_arms": [
-            {"arm_id": arm.arm_id, "param_source": arm.param_source, "rule_policy": arm.rule_policy}
+            {
+                "arm_id": arm.arm_id,
+                "param_source": arm.param_source,
+                "param_policy": resolve_strategy_comparison_arm_param_policy(settings, arm),
+                "rule_policy": arm.rule_policy,
+            }
             for arm in fixed
         ],
         "stochastic_arms": [
             {
                 "arm_id": arm.arm_id,
                 "param_source": arm.param_source,
+                "param_policy": resolve_strategy_comparison_arm_param_policy(settings, arm),
                 "rule_policy": arm.rule_policy,
                 "dl_id": arm.dl_id,
                 "dl_runtime_mode": arm.dl_runtime_mode,
@@ -1921,9 +1944,10 @@ def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dic
     start, end = _resolved_period(settings, status)
     results: dict[str, dict[str, Any]] = {}
     for arm in fixed_arms:
-        path_text = str((status.get("resolved_parameter_paths") or {}).get(arm.param_source) or "")
+        path_text = str((status.get("resolved_arm_parameter_paths") or {}).get(arm.arm_id) or "")
         if not path_text:
-            raise RuntimeError(f"robustness baseline缺少param source: {arm.param_source}")
+            raise RuntimeError(f"robustness baseline缺少arm param binding: {arm.arm_id}")
+        arm_param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
         reusable_dir = _find_reusable_baseline_source(
             root=PROJECT_ROOT, settings=settings, status=status, off_arm=arm
         )
@@ -1955,7 +1979,7 @@ def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dic
             project_root=PROJECT_ROOT,
             dataset=settings.dataset,
             params_path=path_text,
-            param_policy=settings.param_policy,
+            param_policy=arm_param_policy,
             max_positions=settings.max_positions,
             enable_rotation=settings.rotation == "on",
             optional_entry_filter_policy=(
@@ -2002,7 +2026,7 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     primary_override = dict(score_overrides.get(str(arm.dl_id)) or {})
     payload = run_comparison(
         project_root=PROJECT_ROOT, dataset=settings.dataset, params_path=str(job["params_path"]),
-        param_policy=settings.param_policy, max_positions=settings.max_positions,
+        param_policy=resolve_strategy_comparison_arm_param_policy(settings, arm), max_positions=settings.max_positions,
         enable_rotation=settings.rotation == "on", comparison_mode=runtime_spec["comparison_mode"],
         ranking_policy=runtime_spec["ranking_policy"], ranking_options=_resolved_ranking_options(
             settings,
@@ -2167,13 +2191,19 @@ def _pairwise_distribution_comparison(
 
 def _paired_seed_translation_diagnostic(
     *,
+    settings: StrategyComparisonSettings,
     seed_frame: pd.DataFrame,
     left: StrategyComparisonArm,
     right: StrategyComparisonArm,
     resolved_seeds: tuple[int, ...] = (),
 ) -> dict[str, Any] | None:
     """Describe whether same-seed selection-R improvements translate to strategy gains."""
-    if left.param_source != right.param_source or left.rule_policy != right.rule_policy:
+    if (
+        left.param_source != right.param_source
+        or resolve_strategy_comparison_arm_param_policy(settings, left)
+        != resolve_strategy_comparison_arm_param_policy(settings, right)
+        or left.rule_policy != right.rule_policy
+    ):
         return None
 
     required_metrics = (
@@ -2340,7 +2370,7 @@ def _paired_comparison_summaries(
                 require_same_parameter_runtime_universe=True,
             ),
             "selection_r_to_strategy": _paired_seed_translation_diagnostic(
-                seed_frame=seed_frame, left=left, right=right,
+                settings=settings, seed_frame=seed_frame, left=left, right=right,
                 resolved_seeds=resolved_seeds,
             ),
             "romd_distribution": _pairwise_distribution_comparison(
@@ -3228,15 +3258,14 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             "Multiple-seed robustness模型上游工件在前置後仍BLOCKED: "
             + "；".join(post_upstream_blockers)
         )
-    resolved_params = dict(status.get("resolved_parameter_paths") or {})
-    required_param_sources = _required_parameter_sources(fixed_arms, stochastic_arms)
+    resolved_params = dict(status.get("resolved_arm_parameter_paths") or {})
     missing_params = sorted(
-        source for source in required_param_sources
-        if not resolved_params.get(source) or not Path(resolved_params[source]).is_file()
+        arm.arm_id for arm in (*fixed_arms, *stochastic_arms)
+        if not resolved_params.get(arm.arm_id) or not Path(resolved_params[arm.arm_id]).is_file()
     )
     if missing_params:
         raise RuntimeError(
-            "Multiple-seed robustness策略參數前置完成後仍缺工件: "
+            "Multiple-seed robustness策略參數前置完成後仍缺arm binding: "
             + ", ".join(missing_params)
         )
     comparison_start, comparison_end = _comparison_period_from_upstream(
@@ -3295,7 +3324,11 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         )
         raise
     baseline_by_group = {
-        (arm.param_source, arm.rule_policy): fixed_results[arm.arm_id]["baseline_dir"]
+        (
+            arm.param_source,
+            resolve_strategy_comparison_arm_param_policy(settings, arm),
+            arm.rule_policy,
+        ): fixed_results[arm.arm_id]["baseline_dir"]
         for arm in fixed_arms
     }
     scientific_completed = {
@@ -3548,10 +3581,12 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         source_keys = tuple((dl_id, int(seed)) for dl_id in required_dl_ids)
         if any(key not in trained_artifacts for key in source_keys):
             return
-        baseline_dir = baseline_by_group.get((arm.param_source, arm.rule_policy))
+        arm_param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
+        baseline_dir = baseline_by_group.get((arm.param_source, arm_param_policy, arm.rule_policy))
         if not baseline_dir:
             raise RuntimeError(
-                f"stochastic arm找不到同參數fixed baseline: {arm.param_source}/{arm.rule_policy}"
+                "stochastic arm找不到同參數政策fixed baseline: "
+                f"{arm.param_source}/{arm_param_policy}/{arm.rule_policy}"
             )
         source_artifacts = {
             dl_id: dict(trained_artifacts[(dl_id, int(seed))])
@@ -3588,7 +3623,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             "arm_order": int(arm_order),
             "seed": int(seed),
             "seed_order": int(seed_order),
-            "params_path": str(resolved_params[arm.param_source]),
+            "params_path": str(resolved_params[arm.arm_id]),
             "comparison_start": comparison_start,
             "comparison_end": comparison_end,
             "baseline_dir": baseline_dir,

@@ -23,6 +23,7 @@ from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
     StrategyComparisonArm,
     StrategyComparisonSettings,
+    resolve_strategy_comparison_arm_param_policy,
 )
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
@@ -126,18 +127,19 @@ def _execution_pairs(
 ) -> tuple[tuple[str, str, StrategyComparisonArm, StrategyComparisonArm], ...]:
     """Return one replay pair per enabled DL source in config order.
 
-    A ``param_source`` / ``rule_policy`` group owns one shared DL-off baseline
-    and may expose multiple DL-on arms.  Each DL-on arm is replayed against the
-    same baseline; downstream aggregation verifies that repeated baseline
-    summaries and yearly returns remain identical.
+    A ``param_source`` / effective ``param_policy`` / ``rule_policy`` group owns
+    one shared DL-off baseline.  This keeps base-finalist-best DL arms paired only
+    with the matching base-finalist-best baseline even when additional DL-off
+    parameter-policy references are displayed in the same Compare Suite.
     """
     grouped: dict[
-        tuple[str, str],
+        tuple[str, str, str],
         dict[str, StrategyComparisonArm | list[StrategyComparisonArm] | None],
     ] = {}
-    ordered_keys: list[tuple[str, str]] = []
+    ordered_keys: list[tuple[str, str, str]] = []
     for arm in settings.enabled_arms:
-        key = (arm.param_source, arm.rule_policy)
+        param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
+        key = (arm.param_source, param_policy, arm.rule_policy)
         if key not in grouped:
             grouped[key] = {"off": None, "on": []}
             ordered_keys.append(key)
@@ -146,7 +148,7 @@ def _execution_pairs(
             if group["off"] is not None:
                 raise ValueError(
                     "啟用比較群組重複定義DL-off基準: "
-                    f"{arm.param_source}/{arm.rule_policy}"
+                    f"{arm.param_source}/{param_policy}/{arm.rule_policy}"
                 )
             group["off"] = arm
             continue
@@ -162,26 +164,24 @@ def _execution_pairs(
         ):
             raise ValueError(
                 "啟用比較群組重複定義相同DL source/runtime mode: "
-                f"{arm.param_source}/{arm.rule_policy}/{arm.dl_id}/{arm.dl_runtime_mode}"
+                f"{arm.param_source}/{param_policy}/{arm.rule_policy}/{arm.dl_id}/{arm.dl_runtime_mode}"
             )
         on_arms.append(arm)
 
-    pairs: list[
-        tuple[str, str, StrategyComparisonArm, StrategyComparisonArm]
-    ] = []
-    for param_source, rule_policy in ordered_keys:
-        group = grouped[(param_source, rule_policy)]
+    pairs: list[tuple[str, str, StrategyComparisonArm, StrategyComparisonArm]] = []
+    for param_source, param_policy, rule_policy in ordered_keys:
+        group = grouped[(param_source, param_policy, rule_policy)]
         off_arm = group["off"]
         on_arms = group["on"]
-        if not isinstance(off_arm, StrategyComparisonArm) or not isinstance(on_arms, list):
-            raise ValueError(
-                "啟用比較群組缺少共用DL-off基準: "
-                f"{param_source}/{rule_policy}"
-            )
+        if not isinstance(on_arms, list):
+            raise TypeError("strategy comparison execution group contract錯誤")
         if not on_arms:
-            # Standalone DL-off comparator由run_standalone_baseline處理；
-            # 不需要為了engine pair contract而保留無研究價值的DL-on arm。
             continue
+        if not isinstance(off_arm, StrategyComparisonArm):
+            raise ValueError(
+                "啟用DL比較群組缺少同parameter-policy的DL-off基準: "
+                f"{param_source}/{param_policy}/{rule_policy}"
+            )
         for on_arm in on_arms:
             pairs.append((param_source, rule_policy, off_arm, on_arm))
     return tuple(pairs)
@@ -194,9 +194,11 @@ def _standalone_baseline_arms(
     for arm in enabled:
         if arm.dl_enabled:
             continue
+        arm_param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
         has_enabled_on = any(
             other.dl_enabled
             and other.param_source == arm.param_source
+            and resolve_strategy_comparison_arm_param_policy(settings, other) == arm_param_policy
             and other.rule_policy == arm.rule_policy
             for other in enabled
         )

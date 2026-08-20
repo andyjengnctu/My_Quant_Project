@@ -211,6 +211,13 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
             source_id: root / f"params/{source_id}.json"
             for source_id in {arm.param_source for arm in base.enabled_arms}
         }
+        ready_status["resolved_arm_parameter_paths"] = {
+            arm.arm_id: root / (
+                f"params/{arm.param_source}__"
+                f"{str(arm.param_policy or base.param_policy)}.json"
+            )
+            for arm in base.enabled_arms
+        }
         resolved = ResolvedComparisonPlan.from_status(
             settings=base,
             project_root=root,

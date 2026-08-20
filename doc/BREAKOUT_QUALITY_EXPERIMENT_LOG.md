@@ -9685,3 +9685,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - `run_best_params.json`與candidate state不再位於`models/` root；current Trade active/candidate固定為`models/strategy_params/full/trade/state/`。`core/model_paths.py`預設active resolver與Workbench/Portfolio/Trade Analysis discovery均只讀canonical repository，不再掃root strategy JSON。
 - Breakout Quality runtime promotion不再直接寫strategy param；正式active-state atomic write／backup／manifest refresh委派`services/optimizer/strategy_param_repository.py`，維持Optimizer sole-producer。
 - Canonical Strategy Parameter manifest schema升至v2並納入`state_artifacts` SHA。舊root檔migration完成且canonical檔驗證通過後可刪除；historical `models/research/...`仍只作明確compatibility，不得current REUSE。
+
+
+### 2026-08-20 — Current Compare加入DL-off Base-Finalists-Agree references
+
+- 使用者決策：current Compare的無DL比較對象除既有`base-finalist-best`外，也要納入`base-finalists-agree`，且OOS／Rolling／Robustness仍必須共用同一Compare Suite。
+- 不改寫既有C61/C58 identity：新增`SR-C62 Full Base-Finalists-Agree`與`SR-C63 Min Base-Finalists-Agree`。C62與C61唯一controlled change為parameter policy；C63與C58唯一controlled change亦為parameter policy。C61/C58/C59/C60固定`base-finalist-best`，C62/C63固定`base-finalists-agree`。
+- `extending_current` suite由4 arms/6 contrasts擴為6 arms/9 contrasts：新增`C62-C61`、`C63-C58`、`C62-C63`；既有DL contrasts全部保留。C59/C60相對C63不得解讀為純DL效果，因parameter policy不同。
+- Robustness角色仍由model dependency自動推導：fixed=`C61/C62/C58/C63`，stochastic=`C59/C60`；same-seed stochastic contrast仍只有`C60-C59`。RoMD min/full references明確pin `base-finalist-best`，避免同source存在兩個DL-off policy後解析歧義。
+- Strategy Parameter source identity仍只有`full_oos/min_oos/full_rolling/min_rolling`四個；policy改為arm-level binding，Research不建立第二套參數source。若某mode的`base-finalists-agree` canonical artifact缺失，只能由Optimizer parameter service MIGRATE/DERIVE/BUILD後re-plan。
+- Strategy Compare schema `51→52`。不改模型science、seed/trials、selector、risk/execution或production C42/C44。Decision：`DL_OFF_FINALISTS_AGREE_REFERENCES_ADDED / COMPARE_SUITE_STILL_SINGLE_SSOT / EXISTING_ARMS_NOT_MUTATED`。

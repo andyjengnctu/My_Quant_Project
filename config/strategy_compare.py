@@ -37,12 +37,13 @@ from core.strategy_comparison import (
     StrategyDLSource,
     StrategyParameterSource,
     StrategyPreparationPolicy,
+    resolve_strategy_comparison_arm_param_policy,
     validate_strategy_comparison_settings,
     validate_strategy_multi_seed_robustness_settings,
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 51
+STRATEGY_COMPARE_SCHEMA_VERSION = 52
 
 # =============================================================================
 # 1. 常用設定
@@ -126,6 +127,8 @@ STRATEGY_RUNTIME_INTEGRATION = {
 # OOS／Rolling suffix由profile renderer衍生，避免同一arm在各mode各自維護顯示名稱。
 STRATEGY_COMPARE_DISPLAY_FULL_ROOS = "Full ROOS"
 STRATEGY_COMPARE_DISPLAY_MIN_ROOS = "Min ROOS"
+STRATEGY_COMPARE_DISPLAY_FULL_FINALISTS_AGREE = "Full Base-Finalists-Agree"
+STRATEGY_COMPARE_DISPLAY_MIN_FINALISTS_AGREE = "Min Base-Finalists-Agree"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED = "Min MR-13E Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13K_SCORE_CONSTRAINED = "Min MR-13K Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_SAFETY_CONSTRAINED = "Min MR-13K + MR-13M Safety"
@@ -135,14 +138,17 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_RESIDUAL_SAFETY_CONSTRAINED = "Min MR-1
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
 STRATEGY_COMPARE_SUITES = {
     "extending_current": {
-        "arm_ids": ("C61", "C58", "C59", "C60"),
+        "arm_ids": ("C61", "C62", "C58", "C63", "C59", "C60"),
         "contrast_ids": (
+            "C62-C61", "C63-C58", "C62-C63",
             "C61-C58", "C59-C58", "C59-C61",
             "C60-C58", "C60-C61", "C60-C59",
         ),
         "display_name_bases": {
-            "C61": "Full",
-            "C58": "Min",
+            "C61": "Full Base-Finalist-Best",
+            "C62": "Full Base-Finalists-Agree",
+            "C58": "Min Base-Finalist-Best",
+            "C63": "Min Base-Finalists-Agree",
             "C59": "Min MR-13E Constrained",
             "C60": "Min MR-13K + MR-13M Residual Safety",
         },
@@ -193,7 +199,9 @@ STRATEGY_COMPARE_PROFILES = {
         "reuse_output_roots": (),
         "arm_param_source_overrides": {
             "C61": "full_oos",
+            "C62": "full_oos",
             "C58": "min_oos",
+            "C63": "min_oos",
             "C59": "min_oos",
             "C60": "min_oos",
         },
@@ -286,8 +294,8 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
         "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
         "romd_reference_baselines": {
-            "min": {"param_source": "min_oos", "rule_policy": "all_off"},
-            "full": {"param_source": "full_oos", "rule_policy": "formal"},
+            "min": {"param_source": "min_oos", "param_policy": "base-finalist-best", "rule_policy": "all_off"},
+            "full": {"param_source": "full_oos", "param_policy": "base-finalist-best", "rule_policy": "formal"},
         },
         "output_root": "outputs/strategy_compare/robustness/extending_window/oos_2021_forward",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/oos_2021_forward",
@@ -310,8 +318,8 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
         "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
         "romd_reference_baselines": {
-            "min": {"param_source": "min_rolling", "rule_policy": "all_off"},
-            "full": {"param_source": "full_rolling", "rule_policy": "formal"},
+            "min": {"param_source": "min_rolling", "param_policy": "base-finalist-best", "rule_policy": "all_off"},
+            "full": {"param_source": "full_rolling", "param_policy": "base-finalist-best", "rule_policy": "formal"},
         },
         "output_root": "outputs/strategy_compare/robustness/extending_window/rolling_2021_forward",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/rolling_2021_forward",
@@ -703,6 +711,21 @@ STRATEGY_COMPARE_ARMS = {
             "Extending-Window Full baseline；人讀名稱由evaluation mode渲染為Full OOS／Full Rolling；參數來源由mode綁定：OOS固定2020 cutoff，Rolling使用Optimizer-owned canonical schedule；formal rules；DL-off"
         ),
         "param_source": "full_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "formal",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
+    "C62": {
+        "name": STRATEGY_COMPARE_DISPLAY_FULL_FINALISTS_AGREE,
+        "description": (
+            "Extending-Window Full DL-off parameter-policy reference；與C61完全相同formal rules／execution，"
+            "唯一差異為canonical parameter policy使用base-finalists-agree。"
+        ),
+        "param_source": "full_rolling",
+        "param_policy": "base-finalists-agree",
         "rule_policy": "formal",
         "dl_enabled": False,
         "dl_id": None,
@@ -713,6 +736,21 @@ STRATEGY_COMPARE_ARMS = {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_ROOS,
         "description": "Extending-Window Min baseline；人讀名稱由evaluation mode渲染為Min OOS／Min Rolling；參數來源由mode綁定：OOS固定2020 cutoff，Rolling使用Optimizer-owned canonical schedule；rules全關；DL-off",
         "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "all_off",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
+    "C63": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_FINALISTS_AGREE,
+        "description": (
+            "Extending-Window Min DL-off parameter-policy reference；與C58完全相同all-off rules／execution，"
+            "唯一差異為canonical parameter policy使用base-finalists-agree。"
+        ),
+        "param_source": "min_rolling",
+        "param_policy": "base-finalists-agree",
         "rule_policy": "all_off",
         "dl_enabled": False,
         "dl_id": None,
@@ -723,6 +761,7 @@ STRATEGY_COMPARE_ARMS = {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED,
         "description": "Extending-Window MR-13E exact constrained；模型與策略參數都依OOS／Rolling mode使用一致information-cutoff contract。",
         "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "CONT13E_ROLL",
@@ -741,6 +780,7 @@ STRATEGY_COMPARE_ARMS = {
             "兩個score必須來自同一evaluation mode／同一information-cutoff namespace。"
         ),
         "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "CONT13K_ROLL",
@@ -892,6 +932,9 @@ STRATEGY_COMPARE_ARMS = {
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
+    "C62-C61": {"left": "C62", "right": "C61", "description": "{left}相對{right}的Full parameter-policy單變量差異"},
+    "C63-C58": {"left": "C63", "right": "C58", "description": "{left}相對{right}的Min parameter-policy單變量差異"},
+    "C62-C63": {"left": "C62", "right": "C63", "description": "base-finalists-agree政策下Full相對Min的完整策略體系差異"},
     "C61-C58": {"left": "C61", "right": "C58", "description": "{left}相對{right}的完整策略體系差異；不是單一參數效果"},
     "C59-C58": {"left": "C59", "right": "C58", "description": "{left}相對{right}的增量策略效果"},
     "C59-C61": {"left": "C59", "right": "C61", "description": "{left}相對{right}的整體策略結果；不是單一DL效果"},
@@ -1176,16 +1219,22 @@ def get_strategy_multi_seed_robustness_settings(
             f"expected={expected_score_source}, actual={sorted(score_sources)}"
         )
     for reference_key, spec in settings.romd_reference_baselines.items():
+        expected_param_policy = str(
+            spec.get("param_policy") or profile_settings.param_policy
+        ).strip()
         matches = [
             arm for arm in fixed
             if arm.param_source == spec["param_source"]
+            and resolve_strategy_comparison_arm_param_policy(profile_settings, arm)
+            == expected_param_policy
             and arm.rule_policy == spec["rule_policy"]
         ]
         if len(matches) != 1:
             raise ValueError(
                 "multi-seed RoMD reference必須唯一對應一個fixed baseline: "
                 f"reference={reference_key}, param_source={spec['param_source']}, "
-                f"rule_policy={spec['rule_policy']}, matches={len(matches)}"
+                f"param_policy={expected_param_policy}, rule_policy={spec['rule_policy']}, "
+                f"matches={len(matches)}"
             )
     return settings
 
@@ -1477,6 +1526,11 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
                     arm_id, raw.get("param_source") or ""
                 )
             ).strip(),
+            param_policy=(
+                None
+                if raw.get("param_policy") in (None, "")
+                else str(raw.get("param_policy")).strip()
+            ),
             rule_policy=str(raw.get("rule_policy") or "").strip(),
             dl_enabled=bool(raw.get("dl_enabled")),
             dl_id=(None if raw.get("dl_id") in (None, "") else str(raw.get("dl_id"))),

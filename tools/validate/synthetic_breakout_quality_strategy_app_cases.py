@@ -1053,6 +1053,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
     robustness_source = robustness_path.read_text(encoding="utf-8")
     robustness_settings = strategy_config.get_strategy_multi_seed_robustness_settings()
+    from core.strategy_comparison import (
+        resolve_strategy_comparison_arm_param_policy,
+        strategy_comparison_param_artifact_key,
+    )
     robustness_profiles = strategy_config.get_strategy_multi_seed_robustness_profiles()
     configured_robustness_ids = set(strategy_config.STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES)
     enabled_robustness_ids = {item["robustness_id"] for item in robustness_profiles}
@@ -1068,7 +1072,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         reference_matches = {
             key: tuple(
                 arm for arm in fixed
-                if arm.param_source == spec["param_source"] and arm.rule_policy == spec["rule_policy"]
+                if arm.param_source == spec["param_source"]
+                and resolve_strategy_comparison_arm_param_policy(mode_profile, arm)
+                == str(spec.get("param_policy") or mode_profile.param_policy)
+                and arm.rule_policy == spec["rule_policy"]
             )
             for key, spec in reference_specs.items()
         }
@@ -1128,6 +1135,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         key: tuple(
             arm for arm in robustness_fixed
             if arm.param_source == spec["param_source"]
+            and resolve_strategy_comparison_arm_param_policy(robustness_profile, arm)
+            == str(spec.get("param_policy") or robustness_profile.param_policy)
             and arm.rule_policy == spec["rule_policy"]
         )
         for key, spec in default_reference_specs.items()
@@ -2217,7 +2226,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         robustness_module, "build_source_data_inventory",
         return_value={"dataset": "synthetic-full", "inventory": "same"},
     ):
-        operational_param_key = f"param:{robustness_fixed[0].param_source}"
+        operational_param_key = strategy_comparison_param_artifact_key(
+            robustness_fixed[0].param_source,
+            resolve_strategy_comparison_arm_param_policy(
+                robustness_profile, robustness_fixed[0]
+            ),
+        )
         fingerprint_base = robustness_module.build_multi_seed_robustness_contract(
             comparison_period={"start": "2021-01-01", "end": "2025-12-22"},
             artifact_identities={operational_param_key: {"sha256": "a"}},
@@ -2571,12 +2585,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     execution_pairs = strategy_comparison_module._execution_pairs(settings)
     expected_pairs_by_group: dict[
-        tuple[str, str],
+        tuple[str, str, str],
         dict[str, object],
     ] = {}
-    expected_group_order: list[tuple[str, str]] = []
+    expected_group_order: list[tuple[str, str, str]] = []
     for arm in settings.enabled_arms:
-        key = (arm.param_source, arm.rule_policy)
+        arm_param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
+        key = (arm.param_source, arm_param_policy, arm.rule_policy)
         if key not in expected_pairs_by_group:
             expected_pairs_by_group[key] = {"off": None, "on": []}
             expected_group_order.append(key)
@@ -2592,8 +2607,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             group["off"].arm_id,
             on_arm.arm_id,
         )
-        for param_source, rule_policy in expected_group_order
-        for group in (expected_pairs_by_group[(param_source, rule_policy)],)
+        for param_source, _param_policy, rule_policy in expected_group_order
+        for group in (
+            expected_pairs_by_group[(param_source, _param_policy, rule_policy)],
+        )
         if group["off"] is not None
         for on_arm in group["on"]
     )
@@ -4275,6 +4292,30 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c60_current = operational_current_settings.arms["C60"]
     c60_options = dict(c60_current.dl_runtime_options or {})
     operational_robustness_active = strategy_config.get_strategy_multi_seed_robustness_settings("extending_window_rolling")
+    current_suite = strategy_config.get_strategy_compare_suite(operational_current_settings.suite_id)
+    suite_arm_ids = tuple(str(value) for value in current_suite.get("arm_ids", ()))
+    suite_contrast_ids = tuple(str(value) for value in current_suite.get("contrast_ids", ()))
+    resolved_fixed_ids = tuple(
+        arm.arm_id for arm in operational_current_settings.enabled_arms if not arm.dl_enabled
+    )
+    resolved_stochastic_ids = tuple(
+        arm.arm_id for arm in operational_current_settings.enabled_arms if arm.dl_enabled
+    )
+    stochastic_id_set = set(resolved_stochastic_ids)
+    expected_paired_ids = tuple(
+        contrast.contrast_id
+        for contrast in operational_current_settings.enabled_contrasts
+        if contrast.left in stochastic_id_set
+        and contrast.right in stochastic_id_set
+    )
+    dl_off_policy_families = {
+        (
+            operational_current_settings.parameter_sources[arm.param_source].canonical_family,
+            str(arm.param_policy or operational_current_settings.param_policy),
+        )
+        for arm in operational_current_settings.enabled_arms
+        if not arm.dl_enabled
+    }
     rolling_min_source = operational_current_settings.parameter_sources[c58_current.param_source]
     rolling_full_source = operational_current_settings.parameter_sources[c61_current.param_source]
     selection_robustness_legacy = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
@@ -4283,7 +4324,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "operational_c60_is_current_dual_model_research_line_while_c56_c57_full_flow_is_legacy",
         True,
-        {"C61", "C58", "C59", "C60"}
+        set(suite_arm_ids)
         == {arm.arm_id for arm in operational_current_settings.enabled_arms}
         and c61_current.enabled and not c61_current.dl_enabled
         and c61_current.rule_policy == "formal"
@@ -4313,17 +4354,24 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and c60_options.get("preserve_k_r0") is True
         and c60_options.get("constrained_solver") == "exact_branch_and_bound_v1"
         and c60_options.get("selection_only") is True
-        and {"C61-C58", "C59-C58", "C59-C61", "C60-C58", "C60-C61", "C60-C59"}
+        and set(suite_contrast_ids)
         == {contrast.contrast_id for contrast in operational_current_settings.enabled_contrasts}
         and operational_robustness_active.enabled
         and operational_current_settings.suite_id == "extending_current"
         and operational_robustness_active.suite_id == operational_current_settings.suite_id
-        and tuple(operational_robustness_active.fixed_arm_ids) == ("C61", "C58")
-        and tuple(operational_robustness_active.stochastic_arm_ids) == ("C59", "C60")
+        and tuple(operational_robustness_active.fixed_arm_ids) == resolved_fixed_ids
+        and tuple(operational_robustness_active.stochastic_arm_ids) == resolved_stochastic_ids
         and tuple(
             str(item.get("contrast_id") or "")
             for item in operational_robustness_active.paired_contrasts
-        ) == ("C60-C59",)
+        ) == expected_paired_ids
+        and dl_off_policy_families
+        == {
+            ("full", "base-finalist-best"),
+            ("full", "base-finalists-agree"),
+            ("min", "base-finalist-best"),
+            ("min", "base-finalists-agree"),
+        }
         and not selection_robustness_legacy.enabled
         and not forward_robustness_legacy.enabled
         and c56_current.enabled
@@ -5298,6 +5346,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "resolved_parameter_paths": {
             source_id: f"models/{source_id}.json"
             for source_id in {arm.param_source for arm in settings.enabled_arms}
+        },
+        "resolved_arm_parameter_paths": {
+            arm.arm_id: (
+                f"models/{arm.param_source}__"
+                f"{str(arm.param_policy or settings.param_policy)}.json"
+            )
+            for arm in settings.enabled_arms
         },
         "preparation_plan": ready_plan,
         "comparison_period": {"start": "2021-01-01", "end": "2021-12-31"},

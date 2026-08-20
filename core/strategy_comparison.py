@@ -193,6 +193,7 @@ class StrategyComparisonArm:
     name: str
     description: str
     param_source: str
+    param_policy: str | None
     rule_policy: str
     dl_enabled: bool
     dl_id: str | None
@@ -207,6 +208,7 @@ class StrategyComparisonArm:
             "name": self.name,
             "description": self.description,
             "param_source": self.param_source,
+            "param_policy": self.param_policy,
             "rule_policy": self.rule_policy,
             "dl_enabled": bool(self.dl_enabled),
             "dl_id": self.dl_id,
@@ -321,6 +323,15 @@ def validate_strategy_multi_seed_robustness_settings(
             raise ValueError(f"multi-seed robustness {key} reference缺少param_source")
         if not str(spec.get("rule_policy") or "").strip():
             raise ValueError(f"multi-seed robustness {key} reference缺少rule_policy")
+        raw_param_policy = spec.get("param_policy")
+        if raw_param_policy not in (None, "") and str(raw_param_policy).strip() not in {
+            "base-finalist-best",
+            "base-finalists-agree",
+        }:
+            raise ValueError(
+                f"multi-seed robustness {key} reference param_policy只支援"
+                "base-finalist-best/base-finalists-agree"
+            )
     fixed_ids = tuple(str(value).strip() for value in settings.fixed_arm_ids if str(value).strip())
     stochastic_ids = tuple(str(value).strip() for value in settings.stochastic_arm_ids if str(value).strip())
     if not fixed_ids:
@@ -480,6 +491,30 @@ class StrategyComparisonSettings:
                 key: value.as_dict() for key, value in self.contrasts.items()
             },
         }
+
+
+def strategy_comparison_param_binding_key(source_id: str, param_policy: str) -> str:
+    source = str(source_id or "").strip()
+    policy = str(param_policy or "").strip()
+    if not source or not policy:
+        raise ValueError("strategy comparison parameter binding不可空白")
+    return f"{source}::{policy}"
+
+
+def strategy_comparison_param_artifact_key(source_id: str, param_policy: str) -> str:
+    return "param:" + strategy_comparison_param_binding_key(source_id, param_policy)
+
+
+def resolve_strategy_comparison_arm_param_policy(
+    settings: StrategyComparisonSettings,
+    arm: StrategyComparisonArm,
+) -> str:
+    policy = str(arm.param_policy or settings.param_policy).strip()
+    if policy not in {"base-finalist-best", "base-finalists-agree"}:
+        raise ValueError(
+            f"arm {arm.arm_id} param_policy不支援: {policy!r}"
+        )
+    return policy
 
 
 @dataclass(frozen=True)
@@ -928,6 +963,7 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
             raise ValueError(f"arm {key} stochastic robustness必須是DL-on")
         if arm.param_source not in settings.parameter_sources:
             raise ValueError(f"arm {key}引用不存在的param_source: {arm.param_source}")
+        resolve_strategy_comparison_arm_param_policy(settings, arm)
         if arm.rule_policy not in {"formal", "all_off"}:
             raise ValueError(f"arm {key} rule_policy不支援: {arm.rule_policy}")
         parameter_source = settings.parameter_sources[arm.param_source]
@@ -1131,19 +1167,20 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
             )
 
     groups: dict[
-        tuple[str, str],
+        tuple[str, str, str],
         dict[str, StrategyComparisonArm | dict[tuple[str, str], StrategyComparisonArm] | None],
     ] = {}
     for arm in settings.arms.values():
+        arm_param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
         group = groups.setdefault(
-            (arm.param_source, arm.rule_policy),
+            (arm.param_source, arm_param_policy, arm.rule_policy),
             {"off": None, "on": {}},
         )
         if not arm.dl_enabled:
             if group["off"] is not None:
                 raise ValueError(
-                    "同一param_source／rule_policy只能定義一個DL-off基準: "
-                    f"{arm.param_source}/{arm.rule_policy}"
+                    "同一param_source／param_policy／rule_policy只能定義一個DL-off基準: "
+                    f"{arm.param_source}/{arm_param_policy}/{arm.rule_policy}"
                 )
             group["off"] = arm
             continue
@@ -1155,13 +1192,18 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
         runtime_key = (dl_id, runtime_mode)
         if runtime_key in on_arms:
             raise ValueError(
-                "同一param_source／rule_policy不得重複定義相同DL source/runtime mode: "
-                f"{arm.param_source}/{arm.rule_policy}/{dl_id}/{runtime_mode}"
+                "同一param_source／param_policy／rule_policy不得重複定義相同DL source/runtime mode: "
+                f"{arm.param_source}/{arm_param_policy}/{arm.rule_policy}/{dl_id}/{runtime_mode}"
             )
         on_arms[runtime_key] = arm
 
     enabled_groups = {
-        (arm.param_source, arm.rule_policy) for arm in settings.enabled_arms
+        (
+            arm.param_source,
+            resolve_strategy_comparison_arm_param_policy(settings, arm),
+            arm.rule_policy,
+        )
+        for arm in settings.enabled_arms
     }
     for group_key in enabled_groups:
         group = groups[group_key]
@@ -1251,6 +1293,9 @@ __all__ = [
     "StrategyPreparationPlan",
     "StrategyPreparationPolicy",
     "StrategyRuntimeIntegrationSettings",
+    "resolve_strategy_comparison_arm_param_policy",
+    "strategy_comparison_param_binding_key",
+    "strategy_comparison_param_artifact_key",
     "strategy_comparison_fingerprint",
     "validate_strategy_comparison_settings",
     "validate_strategy_runtime_integration_settings",

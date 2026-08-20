@@ -41,6 +41,7 @@ from core.strategy_comparison import (
     StrategyDLSource,
     StrategyPreparationAction,
     StrategyPreparationPlan,
+    resolve_strategy_comparison_arm_param_policy,
     strategy_comparison_fingerprint,
 )
 from core.report_metrics import (
@@ -336,6 +337,7 @@ def render_status(
             arm.arm_id,
             arm.name,
             arm.param_source,
+            resolve_strategy_comparison_arm_param_policy(current, arm),
             arm.rule_policy,
             "DL-on" if arm.dl_enabled else "DL-off",
             arm.description,
@@ -417,7 +419,13 @@ def render_status(
                             else f"{current.start_date or 'artifact start'} ～ {current.end_date or 'artifact end'}"
                         ),
                     ),
-                    ("Param policy", current.param_policy),
+                    (
+                        "Param policy",
+                        " / ".join(dict.fromkeys(
+                            resolve_strategy_comparison_arm_param_policy(current, arm)
+                            for arm in current.enabled_arms
+                        )),
+                    ),
                     ("Max positions", current.max_positions),
                     ("Rotation", current.rotation),
                     ("Config fingerprint", current_status["config_fingerprint"]),
@@ -428,7 +436,7 @@ def render_status(
             ),
             render_section("1. 比較對象"),
             render_table(
-                ("開關", "編號", "名稱", "參數來源", "Rules", "DL", "用途"),
+                ("開關", "編號", "名稱", "參數來源", "Param policy", "Rules", "DL", "用途"),
                 arm_rows,
             ),
             render_section("2. 差異比較"),
@@ -495,7 +503,11 @@ def render_execution_plan(
                 else arm.name
             )
         else:
-            group_key = f"{arm.param_source}::{arm.rule_policy}"
+            group_key = (
+                f"{arm.param_source}::"
+                f"{resolve_strategy_comparison_arm_param_policy(settings, arm)}::"
+                f"{arm.rule_policy}"
+            )
             action = "REUSE" if cached_baselines.get(group_key) is not None else "RUN"
             description = (
                 f"{arm.name}｜重用既有正式shared baseline"
@@ -608,8 +620,12 @@ def _load_direct_selection_r(
 
 
 
-def _standalone_baseline_group_id(arm: StrategyComparisonArm) -> str:
-    return f"{arm.param_source}__{arm.rule_policy}__dl_off_baseline"
+def _standalone_baseline_group_id(
+    settings: StrategyComparisonSettings,
+    arm: StrategyComparisonArm,
+) -> str:
+    param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
+    return f"{arm.param_source}__{param_policy.replace('-', '_')}__{arm.rule_policy}__dl_off_baseline"
 
 
 
@@ -1180,7 +1196,13 @@ def render_strategy_aggregate_report(
     metadata_rows = (
         ("期間", comparison_period),
         ("Dataset", settings.dataset),
-        ("Param policy", settings.param_policy),
+        (
+            "Param policy",
+            " / ".join(dict.fromkeys(
+                resolve_strategy_comparison_arm_param_policy(settings, arm)
+                for arm in settings.enabled_arms
+            )),
+        ),
         ("Max positions", settings.max_positions),
         ("Rotation", settings.rotation),
         (fingerprint_label, fingerprint),
@@ -1338,8 +1360,9 @@ def run_strategy_comparison(
     }
 
     for off_arm in _standalone_baseline_arms(settings):
-        group_key = f"{off_arm.param_source}::{off_arm.rule_policy}"
-        group_id = _standalone_baseline_group_id(off_arm)
+        off_param_policy = resolve_strategy_comparison_arm_param_policy(settings, off_arm)
+        group_key = f"{off_arm.param_source}::{off_param_policy}::{off_arm.rule_policy}"
+        group_id = _standalone_baseline_group_id(settings, off_arm)
         pair_dir = run_dir / "pairs" / group_id
         baseline_reuse_source = (
             baseline_sources.get(group_key)
@@ -1357,8 +1380,8 @@ def run_strategy_comparison(
         baseline_payload = run_standalone_baseline(
             project_root=root,
             dataset=settings.dataset,
-            params_path=str(status["resolved_parameter_paths"][off_arm.param_source]),
-            param_policy=settings.param_policy,
+            params_path=str(status["resolved_arm_parameter_paths"][off_arm.arm_id]),
+            param_policy=off_param_policy,
             max_positions=settings.max_positions,
             enable_rotation=settings.rotation == "on",
             optional_entry_filter_policy=(
@@ -1423,7 +1446,8 @@ def run_strategy_comparison(
             dl_runtime_mode=str(on_arm.dl_runtime_mode or ""),
         )
         pair_dir = run_dir / "pairs" / group_id
-        baseline_group_key = f"{param_source}::{rule_policy}"
+        on_param_policy = resolve_strategy_comparison_arm_param_policy(settings, on_arm)
+        baseline_group_key = f"{param_source}::{on_param_policy}::{rule_policy}"
         cache_entry = cached_pairs.get(on_arm.arm_id)
 
         if isinstance(cache_entry, dict) and cache_entry.get("source_pair_dir"):
@@ -1595,8 +1619,8 @@ def run_strategy_comparison(
         pair_payload = run_comparison(
             project_root=root,
             dataset=settings.dataset,
-            params_path=str(status["resolved_parameter_paths"][param_source]),
-            param_policy=settings.param_policy,
+            params_path=str(status["resolved_arm_parameter_paths"][on_arm.arm_id]),
+            param_policy=on_param_policy,
             max_positions=settings.max_positions,
             enable_rotation=settings.rotation == "on",
             fixed_risk=None,

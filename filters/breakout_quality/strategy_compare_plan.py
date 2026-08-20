@@ -155,11 +155,16 @@ class ResolvedComparisonPlan:
         resolved_parameter_paths = self._status.get("resolved_parameter_paths")
         if not isinstance(resolved_parameter_paths, Mapping):
             raise RuntimeError("Strategy Compare READY但缺少resolved parameter paths")
-        required_param_sources = {arm.param_source for arm in self.settings.enabled_arms}
-        missing_params = sorted(required_param_sources - set(resolved_parameter_paths))
+        resolved_arm_parameter_paths = self._status.get("resolved_arm_parameter_paths")
+        if not isinstance(resolved_arm_parameter_paths, Mapping):
+            raise RuntimeError("Strategy Compare READY但缺少resolved arm parameter paths")
+        missing_params = sorted(
+            arm.arm_id for arm in self.settings.enabled_arms
+            if arm.arm_id not in resolved_arm_parameter_paths
+        )
         if missing_params:
             raise RuntimeError(
-                "Strategy Compare READY但缺少參數binding: " + ",".join(missing_params)
+                "Strategy Compare READY但缺少arm參數binding: " + ",".join(missing_params)
             )
 
         dl_rows = self._status.get("dl_sources")

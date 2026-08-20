@@ -19,6 +19,9 @@ from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
     StrategyComparisonSettings,
     StrategyPreparationAction,
+    resolve_strategy_comparison_arm_param_policy,
+    strategy_comparison_param_artifact_key,
+    strategy_comparison_param_binding_key,
     StrategyPreparationPlan,
 )
 from filters.breakout_quality.artifact_dependency_registry import (
@@ -87,23 +90,28 @@ def resolve_param_source_path(
     root: Path,
     settings: StrategyComparisonSettings,
     source_id: str,
+    *,
+    param_policy: str | None = None,
 ) -> Path:
     source = settings.parameter_sources[source_id]
+    resolved_policy = str(param_policy or settings.param_policy).strip()
+    if resolved_policy not in PARAM_POLICY_SPECS:
+        raise ValueError(f"不支援的Strategy Compare param policy: {resolved_policy!r}")
     if source.canonical_family and source.canonical_evaluation_mode:
         return resolve_strategy_param_artifact_path(
             root,
             family=source.canonical_family,
             evaluation_mode=source.canonical_evaluation_mode,
-            policy=settings.param_policy,
+            policy=resolved_policy,
         ).resolve()
     if source.path_template in (None, ""):
         return _resolve_params_path(
             root=root,
             params_path=None,
-            param_policy=settings.param_policy,
+            param_policy=resolved_policy,
             allow_static_diagnostic=False,
         ).resolve()
-    filename = str(PARAM_POLICY_SPECS[settings.param_policy]["filename"])
+    filename = str(PARAM_POLICY_SPECS[resolved_policy]["filename"])
     try:
         rendered = str(source.path_template).format(param_filename=filename)
     except (KeyError, ValueError) as exc:
@@ -111,6 +119,20 @@ def resolve_param_source_path(
             f"parameter source {source_id}路徑模板只支援{{param_filename}}"
         ) from exc
     return _resolve_relative_path(root, rendered)
+
+
+def resolve_required_param_policies_for_source(
+    settings: StrategyComparisonSettings,
+    source_id: str,
+) -> tuple[str, ...]:
+    policies = {
+        resolve_strategy_comparison_arm_param_policy(settings, arm)
+        for arm in settings.enabled_arms
+        if arm.param_source == source_id
+    }
+    if not policies:
+        policies.add(str(settings.param_policy))
+    return tuple(sorted(policies))
 
 
 def _validate_expected_artifact_contract(
@@ -749,40 +771,69 @@ def _collect_parameter_artifact_status(
 ):
     parameter_rows: dict[str, Any] = {}
     resolved_parameter_paths: dict[str, Path] = {}
+
     for source_id in settings.parameter_sources:
         if source_id not in required_param_sources:
             continue
         source = settings.parameter_sources[source_id]
-        path = resolve_param_source_path(root, settings, source_id)
-        resolved_parameter_paths[source_id] = path
-        artifact_ready, artifact_status, policy = _validate_param_artifact(
-            path,
-            param_policy=settings.param_policy,
-            comparison_start=comparison_start,
-            comparison_end=comparison_end,
-            artifact_contract=(
-                None if source.artifact_contract is None else dict(source.artifact_contract)
-            ),
-        )
+        policies = resolve_required_param_policies_for_source(settings, source_id)
         identity_ready, identity_status, identity_path = _validate_param_training_identity(
-            root=root,
-            settings=settings,
-            source_id=source_id,
+            root=root, settings=settings, source_id=source_id
         )
-        ready = bool(artifact_ready and identity_ready)
-        status = "READY" if ready else (
-            identity_status if artifact_ready and not identity_ready else artifact_status
-        )
+        policy_rows: dict[str, Any] = {}
+        all_artifacts_ready = True
+        any_target_exists = False
+        for param_policy in policies:
+            path = resolve_param_source_path(
+                root, settings, source_id, param_policy=param_policy
+            )
+            binding_key = strategy_comparison_param_binding_key(source_id, param_policy)
+            resolved_parameter_paths[binding_key] = path
+            if param_policy == settings.param_policy:
+                # Backward-compatible alias for historical single-policy callers.
+                resolved_parameter_paths[source_id] = path
+            artifact_ready, artifact_status, policy = _validate_param_artifact(
+                path,
+                param_policy=param_policy,
+                comparison_start=comparison_start,
+                comparison_end=comparison_end,
+                artifact_contract=(
+                    None if source.artifact_contract is None else dict(source.artifact_contract)
+                ),
+            )
+            ready = bool(artifact_ready and identity_ready)
+            all_artifacts_ready = bool(all_artifacts_ready and ready)
+            any_target_exists = bool(any_target_exists or path.exists())
+            sha256 = compute_file_sha256(path) if path.is_file() else None
+            display_path = project_relative_display_path(path, project_root=root)
+            artifact_key = strategy_comparison_param_artifact_key(source_id, param_policy)
+            artifact_identities[artifact_key] = {
+                "path": display_path,
+                "sha256": sha256,
+                "param_policy": param_policy,
+                "identity_status": identity_status,
+                "coverage_start": None if policy is None else policy.get("coverage_start"),
+                "coverage_end": None if policy is None else policy.get("coverage_end"),
+                "coverage_status": artifact_status,
+            }
+            policy_rows[param_policy] = {
+                "ready": ready,
+                "status": "READY" if ready else (
+                    identity_status if artifact_ready and not identity_ready else artifact_status
+                ),
+                "path": display_path,
+                "sha256": sha256,
+                "selector": None if policy is None else policy.get("selector"),
+                "coverage_start": None if policy is None else policy.get("coverage_start"),
+                "coverage_end": None if policy is None else policy.get("coverage_end"),
+            }
+
         builder = source.builder
         upstream_ready = (
-            True
-            if not source.trained_with_dl_id
-            else bool(dl_model_ready.get(source.trained_with_dl_id))
+            True if not source.trained_with_dl_id else bool(dl_model_ready.get(source.trained_with_dl_id))
         )
         param_dependency_id = (
-            ""
-            if builder is None
-            else str(dict(builder.options).get("source_param_source_id") or "").strip()
+            "" if builder is None else str(dict(builder.options).get("source_param_source_id") or "").strip()
         )
         if param_dependency_id:
             dependency_row = parameter_rows.get(param_dependency_id)
@@ -792,11 +843,12 @@ def _collect_parameter_artifact_status(
                 and dependency_row is not None
                 and dependency_action in {"REUSE", "BUILD", "REBUILD"}
             )
-        if ready and settings.preparation.reuse_ready_artifacts:
+
+        if all_artifacts_ready and settings.preparation.reuse_ready_artifacts:
             action = "REUSE"
             description = "重用既有策略參數工件"
             builder_type = None
-        elif ready:
+        elif all_artifacts_ready:
             if (
                 settings.preparation.auto_prepare
                 and settings.preparation.rebuild_stale_artifacts
@@ -816,72 +868,43 @@ def _collect_parameter_artifact_status(
             and builder is not None
             and builder.enabled
         ):
-            action = "REBUILD" if (path.exists() or (identity_path is not None and identity_path.exists())) else "BUILD"
+            action = "REBUILD" if (any_target_exists or (identity_path is not None and identity_path.exists())) else "BUILD"
             if action == "REBUILD" and not settings.preparation.rebuild_stale_artifacts:
                 action = "BLOCKED"
-            if builder is not None and builder.builder_type == "canonical_optimizer_strategy_params":
-                description = "由canonical Optimizer parameter service解析／遷移策略參數工件"
-            else:
+            if builder.builder_type == "canonical_optimizer_strategy_params":
                 description = (
-                (
-                    (
-                        (
-                            "合併既有historical/current Min ROOS為Extending-Window rolling schedule"
-                            if builder is not None and builder.builder_type == "extending_min_roos_stitch"
-                            else (
-                                "合併既有historical/current Full ROOS為Extending-Window rolling schedule"
-                                if builder is not None and builder.builder_type == "extending_full_roos_stitch"
-                                else (
-                                    "凍結2020 information cutoff當下合法策略參數供OOS Test全期間使用"
-                                    if builder is not None and builder.builder_type == "oos_param_freeze"
-                                    else "建立／接續Selection historical Min ROOS單階段rolling參數"
-                                )
-                            )
-                        )
-                        if builder is not None and builder.builder_type in {
-                            "extending_min_roos_stitch", "extending_full_roos_stitch", "oos_param_freeze", "selection_historical_p2"
-                        }
-                        else "建立／接續Selection historical Full ROOS rolling參數"
-                    )
-                    if builder is not None and builder.builder_type in {
-                        "extending_min_roos_stitch", "extending_full_roos_stitch", "oos_param_freeze",
-                        "selection_historical_p2", "selection_historical_full_roos"
-                    }
-                    else "執行或接續config指定的策略參數訓練"
+                    "由canonical Optimizer parameter service解析／遷移策略參數工件"
+                    f"｜policies={','.join(policies)}"
                 )
-                if action in {"BUILD", "REBUILD"}
-                else "參數工件過期且config禁止自動重建"
-            )
+            else:
+                description = "執行或接續config指定的策略參數訓練"
             builder_type = builder.builder_type if action != "BLOCKED" else None
         else:
             action = "BLOCKED"
             description = "缺少參數工件且無可用builder或上游模型工件"
             builder_type = None
-        sha256 = compute_file_sha256(path) if path.is_file() else None
-        display_path = project_relative_display_path(path, project_root=root)
-        artifact_identities[f"param:{source_id}"] = {
-            "path": display_path,
-            "sha256": sha256,
-            "identity_status": identity_status,
-            "coverage_start": None if policy is None else policy.get("coverage_start"),
-            "coverage_end": None if policy is None else policy.get("coverage_end"),
-            "coverage_status": artifact_status,
-        }
+
+        source_paths = [row["path"] for row in policy_rows.values()]
         parameter_rows[source_id] = {
-            "ready": ready,
-            "status": status,
+            "ready": all_artifacts_ready,
+            "status": "READY" if all_artifacts_ready else "POLICY_ARTIFACT_NOT_READY",
             "action": action,
-            "path": display_path,
-            "sha256": sha256,
-            "selector": None if policy is None else policy.get("selector"),
+            "path": source_paths[0] if len(source_paths) == 1 else "; ".join(source_paths),
+            "policies": policy_rows,
             "identity_status": identity_status,
-            "coverage_start": None if policy is None else policy.get("coverage_start"),
-            "coverage_end": None if policy is None else policy.get("coverage_end"),
             "identity_manifest_path": (
-                None
-                if identity_path is None
+                None if identity_path is None
                 else project_relative_display_path(identity_path, project_root=root)
             ),
+        }
+        # Aggregate identity remains for old readers, but current replay/cache uses policy-specific keys.
+        artifact_identities[f"param:{source_id}"] = {
+            "status": "READY" if all_artifacts_ready else "POLICY_ARTIFACT_NOT_READY",
+            "policies": {
+                policy: {"path": row["path"], "sha256": row["sha256"]}
+                for policy, row in policy_rows.items()
+            },
+            "identity_status": identity_status,
         }
         upstream_dependencies: tuple[str, ...] = (
             (f"param:{param_dependency_id}",) if param_dependency_id else ()
@@ -904,7 +927,7 @@ def _collect_parameter_artifact_status(
                 action=action,
                 builder_type=builder_type,
                 description=description,
-                path=display_path,
+                path=parameter_rows[source_id]["path"],
                 dependencies=upstream_dependencies,
                 producer_work_type=(
                     "existing_artifact"
@@ -912,11 +935,7 @@ def _collect_parameter_artifact_status(
                     else (
                         "optimizer_strategy_parameter_service"
                         if builder is not None and builder.builder_type == "canonical_optimizer_strategy_params"
-                        else (
-                            "strategy_compare_deterministic_rebuild"
-                            if builder is not None and builder.builder_type == "oos_param_freeze"
-                            else "strategy_parameter_optimization"
-                        )
+                        else "strategy_parameter_optimization"
                     )
                     if action in {"BUILD", "REBUILD"}
                     else "model_training"
@@ -927,7 +946,14 @@ def _collect_parameter_artifact_status(
             )
         )
 
-    return parameter_rows, resolved_parameter_paths
+    resolved_arm_parameter_paths: dict[str, Path] = {}
+    for arm in settings.enabled_arms:
+        param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
+        binding_key = strategy_comparison_param_binding_key(arm.param_source, param_policy)
+        if binding_key in resolved_parameter_paths:
+            resolved_arm_parameter_paths[arm.arm_id] = resolved_parameter_paths[binding_key]
+
+    return parameter_rows, resolved_parameter_paths, resolved_arm_parameter_paths
 
 def collect_artifact_status(
     *,
@@ -974,7 +1000,7 @@ def collect_artifact_status(
         settings=settings,
         runtime_periods=runtime_periods,
     )
-    parameter_rows, resolved_parameter_paths = _collect_parameter_artifact_status(
+    parameter_rows, resolved_parameter_paths, resolved_arm_parameter_paths = _collect_parameter_artifact_status(
         root=root,
         settings=settings,
         required_param_sources=required_param_sources,
@@ -997,6 +1023,7 @@ def collect_artifact_status(
         "expected_excess_r_calibrations": expected_excess_r_rows,
         "artifact_identities": artifact_identities,
         "resolved_parameter_paths": resolved_parameter_paths,
+        "resolved_arm_parameter_paths": resolved_arm_parameter_paths,
         "comparison_period": (
             None
             if comparison_start is None or comparison_end is None
@@ -1011,4 +1038,5 @@ __all__ = [
     "model_upstream_prerequisite_blockers",
     "resolve_comparison_period",
     "resolve_param_source_path",
+    "resolve_required_param_policies_for_source",
 ]

@@ -20,6 +20,8 @@ from core.strategy_comparison import (
     StrategyComparisonSettings,
     StrategyPreparationAction,
     StrategyPreparationPlan,
+    resolve_strategy_comparison_arm_param_policy,
+    strategy_comparison_param_artifact_key,
     strategy_comparison_fingerprint,
 )
 from filters.breakout_quality.ranking_score_store import (
@@ -63,6 +65,7 @@ def _pair_group_id(
 def _replay_arm_contract(raw: dict[str, Any]) -> dict[str, Any]:
     contract = {
         "param_source": str(raw.get("param_source") or ""),
+        "param_policy": raw.get("param_policy"),
         "rule_policy": str(raw.get("rule_policy") or ""),
         "dl_enabled": bool(raw.get("dl_enabled")),
         "dl_id": raw.get("dl_id"),
@@ -91,7 +94,10 @@ def _pair_cache_fingerprint_from_payload(
     param_payload = dict(parameter_sources.get(param_source) or {})
     dl_payload = dict(dl_sources.get(dl_id) or {})
 
-    artifact_keys = [f"param:{param_source}"]
+    arm_param_policy = str(
+        on_arm_payload.get("param_policy") or settings_payload.get("param_policy") or ""
+    ).strip()
+    artifact_keys = [strategy_comparison_param_artifact_key(param_source, arm_param_policy)]
     trained_with = str(param_payload.get("trained_with_dl_id") or "")
     if trained_with:
         artifact_keys.extend(
@@ -149,7 +155,7 @@ def _pair_cache_fingerprint_from_payload(
         "engine_schema_version": int(engine_schema_version),
         "dataset": settings_payload.get("dataset"),
         "comparison_period": dict(comparison_period or {}),
-        "param_policy": settings_payload.get("param_policy"),
+        "param_policy": arm_param_policy,
         "max_positions": settings_payload.get("max_positions"),
         "rotation": settings_payload.get("rotation"),
         "parameter_source": {
@@ -343,7 +349,10 @@ def _find_reusable_pair_with_archived_source(
         return None
     param_identity = dict(
         (status.get("artifact_identities") or {}).get(
-            f"param:{on_arm.param_source}"
+            strategy_comparison_param_artifact_key(
+                on_arm.param_source,
+                resolve_strategy_comparison_arm_param_policy(settings, on_arm),
+            )
         )
         or {}
     )
@@ -402,7 +411,12 @@ def _find_reusable_pair_with_archived_source(
 
         run_artifacts = dict(run_payload.get("artifact_identities") or {})
         stored_param_sha = _artifact_identity_sha(
-            run_artifacts.get(f"param:{on_arm.param_source}")
+            run_artifacts.get(
+                strategy_comparison_param_artifact_key(
+                    on_arm.param_source,
+                    resolve_strategy_comparison_arm_param_policy(settings, on_arm),
+                )
+            )
         )
         if stored_param_sha != current_param_sha:
             continue
@@ -593,7 +607,7 @@ def _collect_replay_cache_status(
             pairs[on_arm.arm_id] = entry
             if entry is not None:
                 baseline_groups.setdefault(
-                    f"{param_source}::{rule_policy}",
+                    f"{param_source}::{resolve_strategy_comparison_arm_param_policy(settings, off_arm)}::{rule_policy}",
                     {
                         "off_arm_id": off_arm.arm_id,
                         "source_pair_dir": entry["source_pair_dir"],
@@ -605,7 +619,7 @@ def _collect_replay_cache_status(
             )
             if source_pair_dir is not None:
                 baseline_groups.setdefault(
-                    f"{off_arm.param_source}::{off_arm.rule_policy}",
+                    f"{off_arm.param_source}::{resolve_strategy_comparison_arm_param_policy(settings, off_arm)}::{off_arm.rule_policy}",
                     {
                         "off_arm_id": off_arm.arm_id,
                         "source_pair_dir": source_pair_dir,
@@ -1281,7 +1295,10 @@ def _find_reusable_baseline_source(
         return None
     param_identity = dict(
         (status.get("artifact_identities") or {}).get(
-            f"param:{off_arm.param_source}"
+            strategy_comparison_param_artifact_key(
+                off_arm.param_source,
+                resolve_strategy_comparison_arm_param_policy(settings, off_arm),
+            )
         )
         or {}
     )
@@ -1292,7 +1309,7 @@ def _find_reusable_baseline_source(
     expected = {
         "dataset": settings.dataset,
         "params_file_sha256": expected_param_sha,
-        "requested_param_policy": settings.param_policy,
+        "requested_param_policy": resolve_strategy_comparison_arm_param_policy(settings, off_arm),
         "optional_entry_filter_policy": (
             OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
             if all_off

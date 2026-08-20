@@ -18,6 +18,7 @@ from filters.breakout_quality.strategy_compare_preparation_status import (
     model_upstream_prerequisite_blockers,
     resolve_comparison_period,
     resolve_param_source_path,
+    resolve_required_param_policies_for_source,
 )
 from services.optimizer.strategy_param_service import ensure_strategy_parameter_artifact
 from services.optimizer.strategy_param_training import (
@@ -64,12 +65,13 @@ def _execute_preparation_action(
         source = settings.parameter_sources[source_id]
         if not source.canonical_family or not source.canonical_evaluation_mode:
             raise RuntimeError(f"canonical optimizer參數來源缺少family/mode: {source_id}")
-        ensure_strategy_parameter_artifact(
-            root,
-            family=source.canonical_family,
-            evaluation_mode=source.canonical_evaluation_mode,
-            policy=settings.param_policy,
-        )
+        for param_policy in resolve_required_param_policies_for_source(settings, source_id):
+            ensure_strategy_parameter_artifact(
+                root,
+                family=source.canonical_family,
+                evaluation_mode=source.canonical_evaluation_mode,
+                policy=param_policy,
+            )
         return
     if action.builder_type in {"extending_min_roos_stitch", "extending_full_roos_stitch"}:
         _kind, source_id = action.artifact_key.split(":", 1)
