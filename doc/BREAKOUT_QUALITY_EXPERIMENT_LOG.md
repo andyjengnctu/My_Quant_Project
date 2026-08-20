@@ -9657,3 +9657,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 防回歸：current OOS/ Rolling modes必須解析同一suite；current robustness suite必須與single-seed profile suite相同；suite display base必須完整覆蓋arms；contrast端點必須都在suite；robustness fixed/stochastic union必須等於suite arms且由`dl_enabled/model dependency`分割。
 - Decision：`COMPARE_SUITE_SSOT / MODE_MATRIX_DRIFT_PREVENTED / ROBUSTNESS_C59_INCLUDED / CURRENT_DISPLAY_NAMES_OOS_ROLLING`。
 - Robustness scientific contract version同步升級為3，正式fingerprint明確包含`suite_id`與由suite推導後的fixed／stochastic／paired membership；舊version 2 observations只作historical compatibility，不得誤REUSE成新的四-arm current robustness evidence。不新增MR/SR/Cxx identity，不改Seed42、4-seed generator、OOS cutoff、Rolling 12M、策略參數與selector semantics。
+
+
+## 2026-08-20 — Current Rolling period aligned to OOS: 2021→latest
+
+- 使用者決策：current `Rolling Test`不再跑2016～2025十個fold；改為`score_start=2021-01-01`、`score_end=auto`、12M calendar cadence。`OOS Test`與`Rolling Test`因此使用完全相同的2021→latest評估期間，主要受控差異只剩2020 cutoff後是否持續annual refit。
+- Extending與Fixed-Window的Rolling mode同步採用此期間；Fixed仍只改train history=120M，不建立第二套period。
+- Model PIT fold store繼續使用canonical `point_in_time`：既有2021～2025合法annual folds可直接REUSE，latest資料尾端可補partial fold；2016～2020 fold永久保留historical evidence。第一次以較窄current period刷新top-level canonical aggregate前，必須snapshot舊較廣aggregate與既有audit，避免歷史2016～2025證據被覆寫。
+- Current Strategy Compare Rolling輸出改到`outputs/strategy_compare/extending_window/rolling_2021_forward`；Rolling robustness改到對應`.../rolling_2021_forward` output/model-work namespace。舊`outputs/strategy_compare/extending_window_rolling`及2016～2025 robustness結果只作historical compatibility，不得誤REUSE成current。
+- Compare Suite、C61/C58/C59/C60、六個contrasts、Seed42 single-seed、robustness seed_count=4 / generator=20260810、MR-13E/K/M identity、12M refit semantics與PIT legality全部不變。

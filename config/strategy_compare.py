@@ -157,7 +157,7 @@ STRATEGY_COMPARE_PROFILES = {
         "description": (
             "單模型快速研究Gate：沿用原本full-Selection refit後的2021+ continuous-ranker OOS scores，"
             "固定比較Full ROOS、Min ROOS、MR-13E reference與目前B2 candidate。只決定是否值得進正式Rolling，"
-            "不得取代2016～2025十fold Extending-Window evidence。"
+            "不得取代2021→latest的12M Extending-Window Rolling evidence。"
         ),
         "display_alignment_group": "pre_test_strategy_compare",
         "display_alignment_arm_ids": ("C1", "C3", "C44", "C56"),
@@ -201,26 +201,25 @@ STRATEGY_COMPARE_PROFILES = {
     "extending_window_rolling": {
         "label": "Extending-Window Test | Rolling Test",
         "description": (
-            "2016→2025十個完整年度fold的單一PIT-safe operational chain；DL使用expanding history + "
-            "annual refit；Full／Min都沿用各時期當時合法rolling params形成共同策略體系基準。"
-            "2021不再形成evaluation policy斷點。"
+            "2021→latest的12M PIT-safe operational chain；DL使用expanding history + annual refit；"
+            "Full／Min都沿用各時期當時合法rolling params。與OOS Test使用相同評估期間，"
+            "兩者主要差異只保留是否按年度持續refit。"
         ),
         "display_alignment_group": "extending_strategy_compare",
         "suite_id": "extending_current",
         "display_suffix": "Rolling",
-        "start_date": "2016-01-01",
-        "end_date": "2025-12-31",
+        # None = 由三個Rolling PIT runtime工件的共同coverage動態解析2021→latest。
+        "start_date": None,
+        "end_date": None,
         "point_in_time_score_start_date": _ROLLING_ROLLING.score_start_date,
         "point_in_time_score_end_date": _ROLLING_ROLLING.score_end_date,
         "point_in_time_fold_months": int(_ROLLING_ROLLING.fold_months),
         "point_in_time_fold_anchor_date": _ROLLING_ROLLING.fold_anchor_date,
         "point_in_time_single_score_block": bool(_ROLLING_ROLLING.single_score_block),
         "point_in_time_dirname": _ROLLING_ROLLING.point_in_time_dirname,
-        "output_root": "outputs/strategy_compare/extending_window_rolling",
-        "reuse_output_roots": (
-            "outputs/strategy_compare/selection_pit",
-            "outputs/strategy_compare/forward_oos",
-        ),
+        "output_root": "outputs/strategy_compare/extending_window/rolling_2021_forward",
+        # 舊2016～2025 aggregate保留historical-only；period不同時不得誤REUSE。
+        "reuse_output_roots": ("outputs/strategy_compare/extending_window_rolling",),
     },
     # Legacy evaluation policies retained only for historical replay / artifact interpretation.
     "selection_pit": {
@@ -314,8 +313,8 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
             "min": {"param_source": "extending_min_roos", "rule_policy": "all_off"},
             "full": {"param_source": "extending_full_roos", "rule_policy": "formal"},
         },
-        "output_root": "outputs/strategy_compare/robustness/extending_window_rolling",
-        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window_rolling",
+        "output_root": "outputs/strategy_compare/robustness/extending_window/rolling_2021_forward",
+        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/rolling_2021_forward",
     },
     "selection_pit": {
         "label": "Selection PIT Multi-seed robustness (Legacy)",
@@ -399,7 +398,7 @@ STRATEGY_PARAM_SOURCES = {
             "active_params/{param_filename}"
         ),
         "description": (
-            "Extending-Window 2016→2025 Min ROOS；stitch既有2014-2020 historical P2與2021+ "
+            "Extending-Window Min rolling schedule；stitch既有2014-2020 historical P2與2021+ "
             "current P2 rolling schedules；只在兩段rolling/search contract一致時建立，不重新最佳化。"
         ),
         "identity_manifest_path": (
@@ -443,7 +442,7 @@ STRATEGY_PARAM_SOURCES = {
             "active_params/{param_filename}"
         ),
         "description": (
-            "Extending-Window 2016→2025 Full ROOS；stitch既有2014-2020 historical P4與2021+ "
+            "Extending-Window Full rolling schedule；stitch既有2014-2020 historical P4與2021+ "
             "canonical Full rolling schedules；只在rolling/search contract一致時建立，不重新最佳化。"
         ),
         "identity_manifest_path": (
@@ -674,7 +673,7 @@ STRATEGY_DL_SOURCES = {
         "experiment_profile": "daily_universal_no_time_full_list_ndcg_pairwise",
         "threshold": None,
         "score_source": "selection_point_in_time",
-        "description": "MR-13E Extending-Window Rolling PIT-safe score；expanding history + mode-specific refit cadence，2016→2025。",
+        "description": "MR-13E Extending-Window Rolling PIT-safe score；expanding history + 12M annual refit，current period=2021→latest。",
         "forward_scores_builder": {
             "enabled": True,
             "builder_type": "selection_pit_from_existing_folds",

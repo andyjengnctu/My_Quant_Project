@@ -2565,10 +2565,10 @@ def _rolling_mode_point_in_time_dir(settings, mode, *, fixed_window: bool) -> Pa
 
 
 def _rolling_mode_display_label(mode) -> str:
+    end_label = "最新" if str(mode.score_end_date).strip().lower() == "auto" else str(mode.score_end_date)
     if bool(mode.single_score_block):
-        end_label = "最新" if str(mode.score_end_date).strip().lower() == "auto" else str(mode.score_end_date)
         return f"{mode.label} | {mode.score_start_date}→{end_label}"
-    return f"{mode.label} | {int(mode.fold_months)}M"
+    return f"{mode.label} | {mode.score_start_date}→{end_label} | {int(mode.fold_months)}M"
 
 
 def _render_rolling_mode_line(index: int, mode, *, default: bool = False) -> str:

@@ -1343,6 +1343,61 @@ def _combined_fold_record(args, item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _snapshot_superseded_point_in_time_aggregate(
+    *,
+    point_in_time_dir: Path,
+    manifest_path: Path,
+    score_start: pd.Timestamp,
+    score_end: pd.Timestamp,
+    selection_end: pd.Timestamp,
+) -> Path | None:
+    """Preserve a combined PIT aggregate before its time semantics narrow.
+
+    Fold directories are immutable/reusable and stay in place.  Only top-level
+    combined score/coverage/manifest/audit files are snapshotted.  The helper is
+    intentionally path-agnostic so Extending and Fixed-Window stores get the same
+    historical-evidence protection.
+    """
+
+    if not manifest_path.exists():
+        return None
+    try:
+        existing_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    existing_period = dict(existing_manifest.get("score_period") or {})
+    existing_start_raw = str(existing_period.get("start") or "").strip()
+    existing_end_raw = str(existing_period.get("end") or "").strip()
+    existing_start = pd.Timestamp(existing_start_raw) if existing_start_raw else None
+    existing_end = pd.Timestamp(existing_end_raw) if existing_end_raw else None
+
+    snapshot_dir = None
+    if existing_end is not None and existing_end <= selection_end and score_end > selection_end:
+        snapshot_dir = point_in_time_dir / "legacy_selection_snapshot"
+    elif (
+        existing_start is not None
+        and existing_end is not None
+        and (existing_start < score_start or existing_end > score_end)
+    ):
+        snapshot_dir = point_in_time_dir / (
+            "historical_aggregate_"
+            + existing_start.strftime("%Y%m%d")
+            + "_"
+            + existing_end.strftime("%Y%m%d")
+        )
+    if snapshot_dir is None:
+        return None
+
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    for source_path in sorted(point_in_time_dir.glob("selection_point_in_time_*")):
+        if not source_path.is_file():
+            continue
+        target_path = snapshot_dir / source_path.name
+        if not target_path.exists():
+            shutil.copy2(source_path, target_path)
+    return snapshot_dir
+
+
 def _run_point_in_time_scores(args: argparse.Namespace) -> int:
     _validate_args(args)
     settings = get_breakout_quality_workflow_settings(
@@ -1669,33 +1724,14 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
     coverage_path = _selection_point_in_time_coverage_path_for_args(args)
     manifest_path = _selection_point_in_time_manifest_path_for_args(args)
 
-    # Evaluation-framework migration: when the canonical expanding PIT aggregate is
-    # first extended beyond the historical Selection boundary, preserve the old
-    # combined aggregate before refreshing it. Individual fold directories are
-    # already immutable/reusable, but this snapshot keeps the pre-migration
-    # top-level score/coverage/manifest directly inspectable as historical evidence.
-    if (
-        not str(getattr(args, "point_in_time_dir_override", "") or "").strip()
-        and args.train_window_months is None
-        and score_end > selection_end
-        and manifest_path.exists()
-    ):
-        try:
-            existing_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            existing_manifest = {}
-        existing_end_raw = str(
-            dict(existing_manifest.get("score_period") or {}).get("end") or ""
-        ).strip()
-        existing_end = pd.Timestamp(existing_end_raw) if existing_end_raw else None
-        if existing_end is not None and existing_end <= selection_end:
-            snapshot_dir = point_in_time_dir / "legacy_selection_snapshot"
-            snapshot_dir.mkdir(parents=True, exist_ok=True)
-            for source_path in (score_path, coverage_path, manifest_path):
-                if source_path.exists():
-                    target_path = snapshot_dir / source_path.name
-                    if not target_path.exists():
-                        shutil.copy2(source_path, target_path)
+    # Preserve superseded top-level aggregates while reusing immutable annual folds.
+    _snapshot_superseded_point_in_time_aggregate(
+        point_in_time_dir=point_in_time_dir,
+        manifest_path=manifest_path,
+        score_start=score_start,
+        score_end=score_end,
+        selection_end=selection_end,
+    )
 
     combined.to_csv(score_path, index=False, encoding="utf-8-sig")
     pd.DataFrame(coverage_rows).to_csv(coverage_path, index=False, encoding="utf-8-sig")

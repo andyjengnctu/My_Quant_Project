@@ -144,7 +144,7 @@ python apps/research.py compare extending_window_rolling status
 [0]  返回
 ```
 
-Current時間驗證只保留`OOS Test`與`Rolling Test`兩種mode。OOS固定以2020年底以前合法成熟資料訓練一次，單一score block評分`2021-01-01→最新`；策略參數亦固定2020 cutoff，只取`2021-01-01`當下合法effective member後凍結到最新。Rolling沿用12M cadence的2016～2025十個annual folds。Fixed-Window同樣使用OOS／Rolling兩種mode，但train history固定120M，只作learnability/stability診斷，不建立第二套Strategy Compare truth。舊Pre-Test／Selection PIT／Frozen Forward／Fast60 profile與工件只供歷史解讀／重現，不暴露於current主選單。
+Current時間驗證只保留`OOS Test`與`Rolling Test`兩種mode。OOS固定以2020年底以前合法成熟資料訓練一次，單一score block評分`2021-01-01→最新`；策略參數亦固定2020 cutoff，只取`2021-01-01`當下合法effective member後凍結到最新。Rolling改為與OOS相同的2021→最新評估期間，維持12M cadence逐fold refit；既有2021+ annual folds直接REUSE，尾端依latest合法日期補partial fold。Fixed-Window同樣使用OOS／Rolling兩種mode，但train history固定120M，只作learnability/stability診斷，不建立第二套Strategy Compare truth。舊Pre-Test／Selection PIT／Frozen Forward／Fast60 profile與工件只供歷史解讀／重現，不暴露於current主選單。
 
 目前比較profiles、參數來源、DL來源、時間policy與前置建立政策集中於`config/strategy_compare.py`；**current Extending比較矩陣只由`STRATEGY_COMPARE_SUITES["extending_current"]`定義一次**，固定arms=`C61/C58/C59/C60`與六個contrasts。OOS／Rolling profile只引用`suite_id`並決定evaluation policy、param binding、artifact namespace與人讀suffix，不得再寫`arm_ids`／`contrast_ids`；current robustness同樣只引用suite，不得再寫`fixed_arm_ids`／`stochastic_arm_ids`／`paired_contrasts`。Runtime依arm model dependency自動推導C61/C58為fixed references、C59/C60為stochastic arms，故single-seed與multi-seed報表永遠維持同一四-arm比較矩陣；新增／移除current arm只改suite一處。Historical profiles仍可保留profile-local matrix作artifact compatibility，不存在代表整套實驗的`ACTIVE_STRATEGY_COMPARISON_ID`。
 
@@ -190,7 +190,7 @@ Active Profile：daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise
 [0]  返回
 ```
 
-`Extending-Window Test`與`Fixed-Window Stability Test`進入後都再選`OOS Test | 2021→最新`或`Rolling Test | 12M`。OOS固定2020年底information cutoff、只訓練一次；Rolling沿用2016～2025十個12M年度fold。
+`Extending-Window Test`與`Fixed-Window Stability Test`進入後都再選`OOS Test | 2021→最新`或`Rolling Test | 2021→最新 | 12M`。OOS固定2020年底information cutoff、只訓練一次；Rolling為2021→最新、12M年度cadence，fold數依latest合法日期動態決定。
 
 MR-13O已於Forward model Gate結案為`REJECTED / NO PIT`，不再作Active Profile。它沿用MR-13H `daily_full_horizon_opportunity_r_v1`作economic result truth，但training target不是該scalar R；trainer會從同一canonical stock-day rows建立`[MFE percentile, low-adverse percentile]`，僅strict Pareto-comparable pairs進`pairwise_logistic` loss。Epoch selection固定看`mean_daily_pareto_pair_concordance`，global Pareto concordance只作tie-break；MR-13H economic Daily rho／Pair／Top-K只能在候選checkpoint評估中作描述性 model-gate evidence，不能參與選模。`selection_pit_authorized=False`；若為歷史重現手動切回MR-13O，Extending／Fixed工作類型入口仍固定顯示，但選入後會明確BLOCKED且不得建立Rolling工件。MR-13O沒有新增scalar Target identity，所以不顯示`[6] Target comparison`。
 
@@ -198,11 +198,11 @@ Forward console／簡易報表除既有economic ranking品質外，MR-13O會額�
 ### Current Rolling 驗證順序（2026-08-19 current）
 
 1. `apps/research.py → [1] 模型訓練 → [1] Extending-Window Test → OOS Test | 2021→最新`：current第一層模型Gate；固定2020年底information cutoff，只建立一個2021→最新PIT-safe OOS block。
-2. OOS仍有決策價值時，執行同入口的`Rolling Test | 12M`：沿用2016～2025十個年度fold作完整Extending evidence。
-3. Fixed learnability診斷走`apps/research.py → [1] 模型訓練 → [2] Fixed-Window Stability Test`，同樣先OOS Test、必要時再Rolling Test | 12M；train history固定120M。
+2. OOS仍有決策價值時，執行同入口的`Rolling Test | 2021→最新 | 12M`：使用2021→最新的12M annual refit作完整Extending evidence，與OOS保持同期間。
+3. Fixed learnability診斷走`apps/research.py → [1] 模型訓練 → [2] Fixed-Window Stability Test`，同樣先OOS Test、必要時再Rolling Test | 2021→最新 | 12M；train history固定120M。
 4. `apps/research.py → [3] 策略組合比較 → Extending-Window Test`：選OOS／Rolling mode後，執行時自動偵測MR-13E/K/M模型工件；合法則REUSE，缺少／過期則由canonical model-training service自動BUILD／RESUME，完成後自動re-plan並進入strategy replay。
-5. `apps/research.py → [3] 策略組合比較 → [1] Extending-Window Test`：進入後選OOS Test或Rolling Test | 12M，兩者都引用同一`extending_current` Compare Suite＝`C61/C58/C59/C60`。OOS人讀名稱為`Full OOS / Min OOS / Min MR-13E Constrained OOS / Min MR-13K + MR-13M Residual Safety OOS`，並由`P4_EXTENDING/P2_EXTENDING`取`2021-01-01`當下合法member建立`oos_full_roos/oos_min_roos` frozen artifacts，整段2021→最新不再換參數；Rolling人讀名稱對應`Full Rolling / Min Rolling / ... Rolling`，直接使用P4/P2 Extending stitched schedule。C60 primary K與secondary M必須解析到同一mode的PIT namespace。
-6. 若seed robustness仍可能改變決策，執行`apps/research.py → [3] 策略組合比較 → [2] Extending-Window Multi-seed Robustness Test`；先OOS Test（1 fold×4 seeds），只有必要時再Rolling Test | 12M（10 folds×4 seeds）。
+5. `apps/research.py → [3] 策略組合比較 → [1] Extending-Window Test`：進入後選OOS Test或Rolling Test | 2021→最新 | 12M，兩者都引用同一`extending_current` Compare Suite＝`C61/C58/C59/C60`。OOS人讀名稱為`Full OOS / Min OOS / Min MR-13E Constrained OOS / Min MR-13K + MR-13M Residual Safety OOS`，並由`P4_EXTENDING/P2_EXTENDING`取`2021-01-01`當下合法member建立`oos_full_roos/oos_min_roos` frozen artifacts，整段2021→最新不再換參數；Rolling人讀名稱對應`Full Rolling / Min Rolling / ... Rolling`，直接使用P4/P2 Extending stitched schedule。C60 primary K與secondary M必須解析到同一mode的PIT namespace。
+6. 若seed robustness仍可能改變決策，執行`apps/research.py → [3] 策略組合比較 → [2] Extending-Window Multi-seed Robustness Test`；先OOS Test（1 fold×4 seeds），只有必要時再Rolling Test | 2021→最新 | 12M（2021→latest folds×4 seeds）。
 7. Legacy Pre-Test／Selection PIT／Frozen Forward只保留historical evidence與compatibility，不再作current互動選單或current Gate。
 
 Continuous-ranker / Rolling CUDA feeding的current execution default為`train_prefetch_batches=8`、`train_prefetch_workers=4`，維持feature-only ordered prefetch，並使用pinned feature + non-blocking H2D + dedicated CUDA copy stream。complete-host prefetch與同張GPU的2-fold process parallel都已因使用者實機觀察更慢而退役；Rolling回到單fold串行，已完成且identity/hash合法的fold仍照原resume contract先REUSE。這些execution決策都不改fold scientific identity或optimizer semantics。

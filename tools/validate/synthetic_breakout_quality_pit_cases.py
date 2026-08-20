@@ -56,6 +56,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         _rescore_daily_fold_from_compatible_checkpoint,
         _resolve_score_start,
         _resolve_training_universe_start,
+        _snapshot_superseded_point_in_time_aggregate,
         _validate_score_frame,
         parse_args as parse_point_in_time_args,
     )
@@ -299,6 +300,66 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "point_in_time_single_score_block_keeps_2021_to_latest_as_one_fold",
         [("2021-01-01", "2026-03-02")],
         [(str(item["score_start"].date()), str(item["score_end"].date())) for item in oos_periods],
+    )
+
+    rolling_periods = _build_fold_periods(
+        pd.Timestamp("2021-01-01"),
+        pd.Timestamp("2026-03-02"),
+        fold_months=12,
+        single_score_block=False,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_current_rolling_uses_2021_to_latest_annual_folds_with_partial_tail",
+        [
+            ("2021-01-01", "2021-12-31"),
+            ("2022-01-01", "2022-12-31"),
+            ("2023-01-01", "2023-12-31"),
+            ("2024-01-01", "2024-12-31"),
+            ("2025-01-01", "2025-12-31"),
+            ("2026-01-01", "2026-03-02"),
+        ],
+        [(str(item["score_start"].date()), str(item["score_end"].date())) for item in rolling_periods],
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pit_root = Path(tmp) / "point_in_time"
+        pit_root.mkdir(parents=True, exist_ok=True)
+        manifest_path = pit_root / "selection_point_in_time_manifest.json"
+        manifest_path.write_text(
+            json.dumps({"score_period": {"start": "2016-01-01", "end": "2025-12-31"}}),
+            encoding="utf-8",
+        )
+        for name in (
+            "selection_point_in_time_scores.csv",
+            "selection_point_in_time_coverage.csv",
+            "selection_point_in_time_audit.md",
+        ):
+            (pit_root / name).write_text(name, encoding="utf-8")
+        snapshot_dir = _snapshot_superseded_point_in_time_aggregate(
+            point_in_time_dir=pit_root,
+            manifest_path=manifest_path,
+            score_start=pd.Timestamp("2021-01-01"),
+            score_end=pd.Timestamp("2026-03-02"),
+            selection_end=pd.Timestamp("2020-12-31"),
+        )
+        snapshot_ok = (
+            snapshot_dir is not None
+            and snapshot_dir.name == "historical_aggregate_20160101_20251231"
+            and (snapshot_dir / manifest_path.name).is_file()
+            and (snapshot_dir / "selection_point_in_time_scores.csv").is_file()
+            and (snapshot_dir / "selection_point_in_time_coverage.csv").is_file()
+            and (snapshot_dir / "selection_point_in_time_audit.md").is_file()
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_narrower_current_period_snapshots_broader_historical_aggregate_before_refresh",
+        True,
+        snapshot_ok,
     )
 
     original_annual_periods = _build_fold_periods(

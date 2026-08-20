@@ -1926,10 +1926,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and robustness_profile.end_date is None
             and str(current_mode.get("score_start_date")) == "2021-01-01"
             and str(current_mode.get("score_end_date")).lower() == "auto"
+            and int(current_mode.get("fold_months") or 0) == 12
             and bool(current_mode.get("single_score_block"))
-        )
-        if str(current_mode.get("mode_id")) == "oos"
-        else (robustness_profile.start_date is not None and robustness_profile.end_date is not None),
+                == (str(current_mode.get("mode_id")) == "oos")
+        ),
     )
 
     dataset_profile_mismatch_rejected = False

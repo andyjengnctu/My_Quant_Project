@@ -213,13 +213,13 @@ BREAKOUT_QUALITY_PRETRAINING_STRIDE = 5  # Dataset sampling設定；每個ticker
 # Fixed-Window Rolling 是獨立診斷：相同annual refit，但限制完整fit history為固定
 # calendar window，專門檢查不同年代在較一致資訊長度下的learnability。它使用
 # 獨立工件路徑，不覆寫Extending-Window Rolling。
-BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE = "2016-01-01"
+BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE = "2021-01-01"
 # Strategy/reporting只從此日期起視為正式operational evidence；更早的合法fold可保留
 # 作模型warm-up與coverage，但不強迫策略比較納入。
-BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE = "2016-01-01"
-# Current formal Rolling只使用10個完整年度fold：2016～2025；不納入2026 partial fold。
-# "auto"仍保留為可設定值，供未來明確擴展到最新可評分stock-day。
-BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE: str | None = "2025-12-31"
+BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE = "2021-01-01"
+# Current Rolling與OOS使用同一可比較期間：2021-01-01起至最新合法score date。
+# Rolling仍以12M calendar folds逐期refit，因此資料尾端可形成partial latest fold。
+BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE: str | None = "auto"
 
 # Current時間驗證只保留兩種執行模式：
 # OOS Test固定以2021-01-01作information cutoff後的單一forward score block，
@@ -243,7 +243,7 @@ BREAKOUT_QUALITY_ROLLING_TEST_MODES = {
         "fold_months": 12,
         "fold_anchor_date": None,
         "single_score_block": False,
-        # None = 沿用既有canonical point_in_time路徑，讓已完成12M folds直接REUSE。
+        # None = 沿用canonical point_in_time fold store；2021～既有年度fold可直接REUSE，僅補latest缺fold。
         "point_in_time_dirname": None,
     },
 }
