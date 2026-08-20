@@ -536,6 +536,101 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "def migrate_all_legacy_strategy_parameter_artifacts(" in param_repository_service_source,
     )
 
+    from core.active_param_ensemble import ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE
+    from core.strategy_param_artifacts import (
+        POLICY_FILENAME_BY_NAME,
+        resolve_strategy_param_artifact_path,
+    )
+    from services.optimizer.outer_rolling_oos import (
+        get_optimizer_nonrolling_policy_paramset_filename,
+        get_optimizer_policy_paramset_filename,
+    )
+    from services.optimizer.strategy_param_service import (
+        collect_legacy_root_strategy_parameter_cleanup_plan,
+        migrate_all_legacy_strategy_parameter_artifacts,
+    )
+
+    with tempfile.TemporaryDirectory() as migration_tmp:
+        migration_root = Path(migration_tmp)
+        migration_models = migration_root / "models"
+        migration_models.mkdir(parents=True, exist_ok=True)
+        member = {"member_index": 1, "seed": 42, "params": {"high_len": 201}}
+        for policy_name in POLICY_FILENAME_BY_NAME:
+            static_payload = {
+                "schema_type": ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
+                "schema_version": 1,
+                "mode": "static",
+                "selector": str(policy_name),
+                "params_ensemble": [member],
+                "meta": {
+                    "walk_forward_policy": {
+                        "oos_start_year": 2021,
+                        "oos_end_year": None,
+                    }
+                },
+                "summary": {"oos_period": "2021-01-01~latest"},
+            }
+            rolling_payload = {
+                "schema_type": ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
+                "schema_version": 1,
+                "mode": "rolling",
+                "selector": str(policy_name),
+                "params_ensemble_by_effective_date": {"2021-01-01": [member]},
+                "folds": [{
+                    "effective_start": "2021-01-01",
+                    "effective_end": "2026-03-02",
+                    "oos_start_date": "2021-01-01",
+                    "oos_end_date": "2026-03-02",
+                }],
+                "summary": {"oos_period": "2021-01-01~2026-03-02"},
+            }
+            (
+                migration_models
+                / get_optimizer_nonrolling_policy_paramset_filename(
+                    policy_name, mode="oos"
+                )
+            ).write_text(json.dumps(static_payload), encoding="utf-8")
+            (
+                migration_models / get_optimizer_policy_paramset_filename(policy_name)
+            ).write_text(json.dumps(rolling_payload), encoding="utf-8")
+
+        migration_result = migrate_all_legacy_strategy_parameter_artifacts(
+            migration_root
+        )
+        cleanup_plan = collect_legacy_root_strategy_parameter_cleanup_plan(
+            migration_root
+        )
+        migrated_oos_payloads = []
+        for policy_name in POLICY_FILENAME_BY_NAME:
+            target = resolve_strategy_param_artifact_path(
+                migration_root,
+                family="full",
+                evaluation_mode="oos",
+                policy=policy_name,
+            )
+            migrated_oos_payloads.append(
+                json.loads(target.read_text(encoding="utf-8"))
+                if target.is_file()
+                else {}
+            )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "legacy_oos_all_policies_migrate_before_root_cleanup_even_when_period_ends_latest",
+            True,
+            str(migration_result.get("status")) == "PASS"
+            and str(cleanup_plan.get("status")) == "READY"
+            and not list(cleanup_plan.get("blockers") or [])
+            and len(migrated_oos_payloads) == len(POLICY_FILENAME_BY_NAME)
+            and all(
+                payload.get("mode") == "rolling"
+                and str((payload.get("folds") or [{}])[0].get("effective_start"))
+                == "2021-01-01"
+                and str((payload.get("folds") or [{}])[0].get("effective_end"))
+                == "2026-03-02"
+                for payload in migrated_oos_payloads
+            ),
+        )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "strategy_execution_and_optimizer_defaults_have_config_ssot",

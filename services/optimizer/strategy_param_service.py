@@ -97,7 +97,89 @@ def _legacy_candidates(root: Path, *, family: str, evaluation_mode: str, policy:
 
 
 
-def _materialize_legacy_candidate(*, candidate: Path, target: Path, evaluation_mode: str) -> bool:
+def _normalize_legacy_period_date(value: Any, *, is_end: bool = False) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"latest", "auto", "none", "null"}:
+        return ""
+    if len(text) == 4 and text.isdigit():
+        return f"{text}-12-31" if is_end else f"{text}-01-01"
+    return text[:10]
+
+
+def _legacy_static_oos_period(payload: dict[str, Any]) -> tuple[str, str]:
+    meta = dict(payload.get("meta") or {})
+    workflow = dict(meta.get("walk_forward_policy") or {})
+    summary = dict(payload.get("summary") or {})
+    period = str(summary.get("oos_period") or payload.get("oos_period") or "").strip()
+    period_start = period_end = ""
+    if "~" in period:
+        period_start, period_end = [part.strip() for part in period.split("~", 1)]
+    start_candidates = (
+        meta.get("oos_start_date"),
+        payload.get("oos_start_date"),
+        summary.get("oos_start_date"),
+        workflow.get("oos_start_date"),
+        period_start,
+        workflow.get("oos_start_year"),
+    )
+    end_candidates = (
+        meta.get("oos_end_date"),
+        meta.get("latest_data_date"),
+        payload.get("oos_end_date"),
+        summary.get("oos_end_date"),
+        workflow.get("oos_end_date"),
+        period_end,
+        workflow.get("oos_end_year"),
+    )
+    start = next(
+        (resolved for raw in start_candidates if (resolved := _normalize_legacy_period_date(raw))),
+        "2021-01-01",
+    )
+    end = next(
+        (resolved for raw in end_candidates if (resolved := _normalize_legacy_period_date(raw, is_end=True))),
+        "",
+    )
+    return start, end
+
+
+def _resolve_rolling_policy_end_date(root: Path, *, family: str, policy: str) -> str:
+    candidates = [
+        resolve_strategy_param_artifact_path(
+            root, family=family, evaluation_mode="rolling", policy=policy
+        )
+    ]
+    candidates.extend(
+        _legacy_candidates(root, family=family, evaluation_mode="rolling", policy=policy)
+    )
+    for source in candidates:
+        if not source.is_file():
+            continue
+        try:
+            payload = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict) or not is_active_param_ensemble_payload(payload):
+            continue
+        if resolve_active_param_ensemble_mode(payload) != ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING:
+            continue
+        try:
+            _start, end = get_active_param_ensemble_date_range(payload)
+        except (TypeError, ValueError, KeyError):
+            continue
+        if end:
+            return str(end)
+    return ""
+
+
+def _materialize_legacy_candidate(
+    *,
+    root: Path,
+    family: str,
+    policy: str,
+    candidate: Path,
+    target: Path,
+    evaluation_mode: str,
+) -> bool:
     mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
     if mode != "oos":
         shutil.copy2(candidate, target)
@@ -110,10 +192,12 @@ def _materialize_legacy_candidate(*, candidate: Path, target: Path, evaluation_m
         return False
     if is_active_param_ensemble_payload(payload) and resolve_active_param_ensemble_mode(payload) == ACTIVE_PARAM_ENSEMBLE_MODE_STATIC:
         members = normalize_seed_ensemble_members(payload.get("params_ensemble"))
-        meta = dict(payload.get("meta") or {})
-        start = str(meta.get("oos_start_date") or payload.get("oos_start_date") or "2021-01-01")
-        end = str(meta.get("oos_end_date") or meta.get("latest_data_date") or payload.get("oos_end_date") or "")
-        if not end or end.lower() == "latest":
+        if not members:
+            return False
+        start, end = _legacy_static_oos_period(payload)
+        if not end:
+            end = _resolve_rolling_policy_end_date(root, family=family, policy=policy)
+        if not end:
             return False
         rolling = dict(payload)
         rolling["mode"] = ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING
@@ -129,6 +213,14 @@ def _materialize_legacy_candidate(*, candidate: Path, target: Path, evaluation_m
         rolling.setdefault("meta", {}).update({
             "canonical_oos_freeze": True,
             "source_static_optimizer_artifact": candidate.name,
+            "oos_start_date": start,
+            "oos_end_date": end,
+        })
+        rolling.setdefault("summary", {}).update({
+            "folds": 1,
+            "oos_period": f"{start}~{end}",
+            "oos_start_date": start,
+            "oos_end_date": end,
         })
         _write_json(target, rolling)
         return True
@@ -195,7 +287,14 @@ def migrate_legacy_strategy_parameter_artifacts(project_root: str | Path, *, fam
         for candidate in _legacy_candidates(root, family=family, evaluation_mode=mode, policy=policy):
             if not candidate.is_file():
                 continue
-            if not _materialize_legacy_candidate(candidate=candidate, target=target, evaluation_mode=mode):
+            if not _materialize_legacy_candidate(
+                root=root,
+                family=family,
+                policy=policy,
+                candidate=candidate,
+                target=target,
+                evaluation_mode=mode,
+            ):
                 continue
             sources[policy] = {
                 "migration_only": True,
@@ -226,7 +325,7 @@ def collect_legacy_root_strategy_parameter_cleanup_plan(project_root: str | Path
     root = Path(project_root).resolve()
     models_root = root / "models"
     mappings: dict[Path, Path] = {}
-    for mode in ("study", "full", "oos", "rolling", "trade"):
+    for mode in ("study", "full", "rolling", "oos", "trade"):
         for policy in POLICY_FILENAME_BY_NAME:
             source = models_root / _legacy_policy_filename(policy, evaluation_mode=mode)
             target = resolve_strategy_param_artifact_path(
