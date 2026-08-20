@@ -1379,12 +1379,17 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             root=root_path, params_path=None,
             param_policy=PARAM_POLICY_BASE_FINALISTS_AGREE, allow_static_diagnostic=False,
         )
+    from core.strategy_param_artifacts import POLICY_FILENAME_BY_NAME
+
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "score_ranking_param_policy_resolves_canonical_roos_filenames",
-        ("roos_base_best.json", "roos_base_finalists_agree.json"),
+        "score_ranking_param_policy_resolves_canonical_ssot_filenames",
+        (
+            POLICY_FILENAME_BY_NAME["base_finalist_best"],
+            POLICY_FILENAME_BY_NAME["base_finalists_agree"],
+        ),
         (resolved_best.name, resolved_agree.name),
     )
 
@@ -3437,7 +3442,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         ),
         (
             "strategy_parameter_adaptation",
-            project_root / "filters/breakout_quality/strategy_param_training.py",
+            project_root / "services/optimizer/strategy_param_training.py",
             "strategy_dl_filter_param_adapt_gate.md",
             "_render_report",
         ),
