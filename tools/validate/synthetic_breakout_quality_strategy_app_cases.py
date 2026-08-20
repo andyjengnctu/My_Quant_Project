@@ -1325,6 +1325,24 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     benchmark_policy = get_robustness_benchmark_policy_snapshot()
     benchmark_seed = int(tuple(robustness_settings.resolved_seeds)[0])
+    benchmark_binding_arm = robustness_stochastic[0]
+    benchmark_binding = robustness_module._benchmark_param_binding(
+        settings=robustness_profile,
+        robustness=robustness_settings,
+        arm=benchmark_binding_arm,
+        seed=benchmark_seed,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "robustness_execution_plan_reads_canonical_parameter_sources_field",
+        True,
+        benchmark_binding["arm_id"] == benchmark_binding_arm.arm_id
+        and benchmark_binding["seed"] == benchmark_seed
+        and benchmark_binding["family"]
+            == str(robustness_profile.parameter_sources[str(benchmark_binding_arm.param_source)].canonical_family)
+        and benchmark_binding["evaluation_mode"]
+            == str(robustness_profile.parameter_sources[str(benchmark_binding_arm.param_source)].canonical_evaluation_mode),
+    )
     with tempfile.TemporaryDirectory() as benchmark_tmp:
         benchmark_root = Path(benchmark_tmp)
         benchmark_artifact = resolve_strategy_param_benchmark_artifact_path(

@@ -528,7 +528,7 @@ def _benchmark_param_binding(
 ) -> dict[str, Any]:
     if robustness.benchmark_id is None:
         raise ValueError("historical robustness沒有benchmark parameter binding")
-    source = settings.param_sources[str(arm.param_source)]
+    source = settings.parameter_sources[str(arm.param_source)]
     family = str(source.canonical_family or "").strip()
     mode = str(source.canonical_evaluation_mode or "").strip()
     if not family or not mode:
