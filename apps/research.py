@@ -82,6 +82,17 @@ def _prepare_strategy_model_prerequisites(*, profile_id: str) -> int:
     )
 
 
+def _prepare_strategy_model_upstream_prerequisites(*, profile_id: str) -> int:
+    _, handler = _load_provider_handler("strategy_upstream_handler")
+    return int(
+        handler(
+            program_name="apps/research.py compare upstream",
+            profile_ids=(str(profile_id),),
+        )
+        or 0
+    )
+
+
 def _auto_preparable_model_blockers(resolved_plan) -> tuple[object, ...]:
     return tuple(
         action
@@ -252,7 +263,13 @@ def _strategy_multi_seed_robustness_menu(robustness_id: str) -> int:
             return 0
         try:
             if choice == "1":
-                run_multi_seed_robustness(robustness_id=robustness_id, confirm=True)
+                run_multi_seed_robustness(
+                    robustness_id=robustness_id,
+                    confirm=True,
+                    model_upstream_preparer=lambda: _prepare_strategy_model_upstream_prerequisites(
+                        profile_id=robustness.profile_id
+                    ),
+                )
             elif choice == "2":
                 show_multi_seed_robustness_status(robustness_id=robustness_id)
             elif choice == "3":
@@ -600,8 +617,13 @@ def main(argv=None) -> int:
                 show_multi_seed_robustness_status,
             )
             if action == "run":
+                robustness = get_strategy_multi_seed_robustness_settings(robustness_id)
                 run_multi_seed_robustness(
-                    robustness_id=robustness_id, confirm=is_interactive_console()
+                    robustness_id=robustness_id,
+                    confirm=is_interactive_console(),
+                    model_upstream_preparer=lambda: _prepare_strategy_model_upstream_prerequisites(
+                        profile_id=robustness.profile_id
+                    ),
                 )
                 return 0
             if action in {"status", "show"}:

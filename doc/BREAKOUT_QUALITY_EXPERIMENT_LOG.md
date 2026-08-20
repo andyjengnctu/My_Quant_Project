@@ -9746,4 +9746,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 防護：同一benchmark/DL/seed且同一fitting identity若再次產生不同checkpoint SHA，直接FAIL，不可靜默覆蓋；舊cache若training identity已改變則視為stale，可由目前合法initial fold原子替換。shared cache不進production parameter/model truth、不改scientific fingerprint，只屬execution reuse metadata。
 - 驗證：新增PIT synthetic釘死`score_end`差異可共享training identity但training phase改變不可共享；Strategy Compare synthetic釘死OOS/Rolling兩profile共享唯一cache root、只跨mode傳checkpoint不傳score。實際4-seed benchmark evidence仍待使用者長跑，研究決策不在本輪提前宣告。
 - 決策：**IMPLEMENTED / READY_FOR_OOS_BENCHMARK**。正式順序仍是OOS先跑；只有OOS結果仍可能改變GO/REJECT/promotion時才跑Rolling，此時Rolling應重用同seed 2021 strategy member與E/K/M initial checkpoint，只新增2022+ annual work。
+### 2026-08-21 — Robustness cold-start upstream auto-prepare wiring
+- 實機症狀：使用者清空`outputs/`與`models/`後，從`Extending-Window Multi-seed Robustness Test → OOS Test`執行，planner能辨識`dataset_summary.json`與Dataset artifacts缺失，卻把三個MR-13E/K/M `model-upstream`直接列為`BLOCKED`並要求手動回模型訓練入口；這違反2026-08-20已定的單次確認／自動補依賴契約。
+- 根因：normal Strategy Compare已有`_prepare_strategy_compare_model_upstream()`呼叫canonical model-training Dataset／Target builder，但`strategy_multi_seed_robustness.py`仍只使用`model_upstream_prerequisite_blockers()`，把`producer_work_type=model_training`的可確定補建節點誤當不可處理blocker；period resolver又在Dataset尚未建立前直接讀`dataset_summary.json`，使plan無法進入PREPARABLE。
+- 修正：Robustness planner改直接讀shared artifact readiness registry；缺少／過期且producer為canonical model-training的Dataset／Target列為`BUILD/REBUILD`，比較期間先顯示「待自動補建後解析」，整體狀態為`PREPARABLE`。`apps/research.py`透過research provider新增upstream-only handler，在使用者唯一一次執行確認後呼叫既有canonical model-training upstream preparation，完成後重新驗證，再續接canonical Strategy Parameter BUILD／benchmark params／isolated same-seed training與replay。
+- 邊界：Robustness沒有複製Dataset／Target builder、沒有建立新Label、沒有改target／architecture／loss／seed；upstream-only handler也不建立production checkpoint/PIT score。若原始OHLCV truth本身不存在、builder失敗或補建後readiness仍不合法，流程立即停止並保留已完成工件。
+- 防回歸：既有Strategy Compare synthetic加入「missing canonical upstream必須PREPARABLE且要求provider callback」案例；CLI synthetic確認formal robustness run一定注入upstream preparer。未新增MR/SR/Cxx identity，不改`end_to_end_v1`四seed、300 trials/fold、Round B shared initial checkpoint與Compare Suite。
+- 決策：**ENGINEERING_BUG_FIXED / COLD_START_AUTO_PREPARE_RESTORED / READY_FOR_OOS_BENCHMARK**。
 

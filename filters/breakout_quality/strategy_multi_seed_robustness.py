@@ -25,7 +25,7 @@ import subprocess
 import sys
 from threading import Lock
 import time
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -140,8 +140,11 @@ from filters.breakout_quality.strategy_comparison import (
 )
 from filters.breakout_quality.strategy_compare_reporting import capacity_summary
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
+from filters.breakout_quality.artifact_dependency_registry import (
+    PRODUCER_MODEL_TRAINING,
+    collect_model_upstream_readiness,
+)
 from filters.breakout_quality.strategy_compare_preparation import (
-    model_upstream_prerequisite_blockers,
     prepare_strategy_parameter_artifacts,
 )
 
@@ -839,6 +842,13 @@ def _contract_paired_contrasts(
 
 
 def _model_upstream_rows(settings, stochastic_arms) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """Render canonical model-upstream truth as reusable or auto-preparable work.
+
+    Dataset/Target truth remains owned by the model-training provider.  Robustness only
+    plans the dependency here; the formal app injects the provider callback after the
+    user's single execution confirmation.
+    """
+
     rows: list[tuple[str, str, str]] = []
     blockers: list[str] = []
     seen: set[tuple[str, str]] = set()
@@ -848,7 +858,7 @@ def _model_upstream_rows(settings, stochastic_arms) -> tuple[list[tuple[str, str
         if key in seen:
             continue
         seen.add(key)
-        reasons = model_upstream_prerequisite_blockers(
+        readiness = collect_model_upstream_readiness(
             PROJECT_ROOT,
             filter_id=str(dl.filter_id),
             model_architecture=str(dl.model_architecture),
@@ -856,30 +866,46 @@ def _model_upstream_rows(settings, stochastic_arms) -> tuple[list[tuple[str, str
             dataset=str(settings.dataset),
             max_tickers=0,
         )
-        if reasons:
-            blockers.extend(reasons)
+        pending = [item for item in readiness if not item.ready]
+        if pending:
+            non_preparable = [
+                item for item in pending
+                if str(item.producer_work_type) != PRODUCER_MODEL_TRAINING
+            ]
+            if non_preparable:
+                reasons = [item.description for item in non_preparable]
+                blockers.extend(reasons)
+                rows.append((
+                    "BLOCKED",
+                    f"model-upstream:{dl.experiment_profile}",
+                    "；".join(reasons),
+                ))
+                continue
+            action = "BUILD" if all(not item.path.is_file() for item in pending) else "REBUILD"
             rows.append((
-                "BLOCKED",
+                action,
                 f"model-upstream:{dl.experiment_profile}",
-                "；".join(reasons),
+                "；".join(item.description for item in pending)
+                + "；確認後由canonical model-training provider自動補建，再自動re-plan",
             ))
+            continue
+
+        profile = get_breakout_quality_experiment_profile(str(dl.experiment_profile))
+        if str(profile.training_sample_scope) == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+            description = (
+                "重用canonical Dataset／source OHLCV truth；daily windows與固定target由"
+                "canonical trainer即時計算，不需要legacy market-set工件"
+            )
         else:
-            profile = get_breakout_quality_experiment_profile(str(dl.experiment_profile))
-            if str(profile.training_sample_scope) == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
-                description = (
-                    "重用canonical Dataset／source OHLCV truth；daily windows與固定target由"
-                    "canonical trainer即時計算，不需要legacy market-set工件"
-                )
-            else:
-                description = (
-                    "重用canonical Dataset／Continuous Target truth；isolated trainer不得建立"
-                    "新的Label／Target定義"
-                )
-            rows.append((
-                "REUSE",
-                f"model-upstream:{dl.experiment_profile}",
-                description,
-            ))
+            description = (
+                "重用canonical Dataset／Continuous Target truth；isolated trainer不得建立"
+                "新的Label／Target定義"
+            )
+        rows.append((
+            "REUSE",
+            f"model-upstream:{dl.experiment_profile}",
+            description,
+        ))
     return rows, blockers
 
 
@@ -1003,18 +1029,27 @@ def _render_robustness_execution_plan(
     )
     upstream_rows, upstream_blockers = _model_upstream_rows(settings, model_arms)
     blockers = [*param_blockers, *benchmark_blockers, *upstream_blockers]
-    try:
-        start, end = _comparison_period_from_upstream(settings, model_arms, status)
-        period_text = f"{start} ～ {end}"
-        period_error = None
-    except (FileNotFoundError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+    upstream_pending = any(row[0] in {"BUILD", "REBUILD"} for row in upstream_rows)
+    if upstream_pending and not upstream_blockers:
         start = end = None
-        period_text = f"BLOCKED: {type(exc).__name__}: {exc}"
-        period_error = str(exc)
-        blockers.append(str(exc))
+        period_text = "待自動補建canonical Dataset／Target後解析"
+        period_error = None
+    else:
+        try:
+            start, end = _comparison_period_from_upstream(settings, model_arms, status)
+            period_text = f"{start} ～ {end}"
+            period_error = None
+        except (FileNotFoundError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+            start = end = None
+            period_text = f"BLOCKED: {type(exc).__name__}: {exc}"
+            period_error = str(exc)
+            blockers.append(str(exc))
 
-    pending_param = any(row[0] in {"BUILD", "REBUILD"} for row in (*param_rows, *benchmark_rows))
-    overall = "BLOCKED" if blockers else "PREPARABLE" if pending_param else "READY"
+    pending_work = any(
+        row[0] in {"BUILD", "REBUILD"}
+        for row in (*param_rows, *benchmark_rows, *upstream_rows)
+    )
+    overall = "BLOCKED" if blockers else "PREPARABLE" if pending_work else "READY"
     rows = [*param_rows, *benchmark_rows, *upstream_rows]
     for arm in fixed_arms:
         rows.append((
@@ -1090,6 +1125,7 @@ def _render_robustness_execution_plan(
         "benchmark_param_bindings": benchmark_bindings,
         "comparison_period": None if start is None else {"start": start, "end": end},
         "period_error": period_error,
+        "model_upstream_prepare_required": bool(upstream_pending),
     }
 
 
@@ -3732,7 +3768,12 @@ def _manifest_progress_payload(
     return payload
 
 
-def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool = True) -> dict[str, Any]:
+def run_multi_seed_robustness(
+    *,
+    robustness_id: str | None = None,
+    confirm: bool = True,
+    model_upstream_preparer: Callable[[], int] | None = None,
+) -> dict[str, Any]:
     cfg = get_strategy_multi_seed_robustness_settings(robustness_id)
     if not cfg.enabled:
         raise RuntimeError("Multiple-seed robustness目前由config關閉")
@@ -3750,8 +3791,7 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
     print("\n" + plan_text)
     if plan["overall_status"] == "BLOCKED":
         raise RuntimeError(
-            "Multiple-seed robustness前置BLOCKED；請先由正式模型訓練入口準備上游真理工件，"
-            "或修復無builder的策略參數工件。"
+            "Multiple-seed robustness前置BLOCKED；存在無法由正式builder確定性補建的依賴。"
         )
     if confirm:
         try:
@@ -3764,6 +3804,32 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
             print("輸入無效，本次不執行。")
             return {}
 
+    if bool(plan.get("model_upstream_prepare_required")):
+        if model_upstream_preparer is None:
+            raise RuntimeError(
+                "Multiple-seed robustness需要canonical model-training provider補建Dataset／Target，"
+                "但目前呼叫端未提供upstream preparer；請由apps/research.py正式入口執行。"
+            )
+        upstream_code = int(model_upstream_preparer() or 0)
+        if upstream_code != 0:
+            raise RuntimeError(
+                "Multiple-seed robustness canonical model upstream自動補建失敗: "
+                f"returncode={upstream_code}"
+            )
+
+    post_upstream_rows, post_upstream_blockers = _model_upstream_rows(
+        settings, model_arms
+    )
+    post_upstream_pending = [
+        row for row in post_upstream_rows if row[0] in {"BUILD", "REBUILD"}
+    ]
+    if post_upstream_blockers or post_upstream_pending:
+        detail = [*post_upstream_blockers, *(row[2] for row in post_upstream_pending)]
+        raise RuntimeError(
+            "Multiple-seed robustness模型上游工件在自動補建後仍未就緒: "
+            + "；".join(detail)
+        )
+
     status = prepare_strategy_parameter_artifacts(
         project_root=PROJECT_ROOT,
         settings=settings,
@@ -3771,15 +3837,6 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         required_source_ids=tuple(plan["required_param_sources"]),
         status_refresher=lambda: collect_artifact_status(settings=settings),
     )
-    post_upstream_rows, post_upstream_blockers = _model_upstream_rows(
-        settings, model_arms
-    )
-    del post_upstream_rows
-    if post_upstream_blockers:
-        raise RuntimeError(
-            "Multiple-seed robustness模型上游工件在前置後仍BLOCKED: "
-            + "；".join(post_upstream_blockers)
-        )
     resolved_params = dict(status.get("resolved_arm_parameter_paths") or {})
     missing_params = sorted(
         arm.arm_id for arm in fixed_arms

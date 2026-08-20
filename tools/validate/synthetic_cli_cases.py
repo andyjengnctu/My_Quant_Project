@@ -1102,8 +1102,10 @@ def validate_dataset_cli_contract_case(_base_params):
         app_strategy_compare.get_strategy_multi_seed_robustness_settings().robustness_id
     )
 
-    def _record_robustness_run(*, robustness_id, confirm):
-        robustness_calls.append(("run", robustness_id, bool(confirm)))
+    def _record_robustness_run(*, robustness_id, confirm, model_upstream_preparer):
+        robustness_calls.append(
+            ("run", robustness_id, bool(confirm), callable(model_upstream_preparer))
+        )
         return {}
 
     def _record_robustness_status(*, robustness_id):
@@ -1146,7 +1148,7 @@ def validate_dataset_cli_contract_case(_base_params):
             0,
             0,
             [
-                ("run", default_robustness_id, False),
+                ("run", default_robustness_id, False, True),
                 ("status", default_robustness_id),
                 ("latest", default_robustness_id),
             ],

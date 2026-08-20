@@ -1293,6 +1293,52 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     }
 
     from filters.breakout_quality import strategy_multi_seed_robustness as robustness_module
+    from filters.breakout_quality.artifact_dependency_registry import PRODUCER_MODEL_TRAINING
+
+    with tempfile.TemporaryDirectory() as missing_robustness_upstream_temp:
+        pending_upstream = SimpleNamespace(
+            ready=False,
+            producer_work_type=PRODUCER_MODEL_TRAINING,
+            path=Path(missing_robustness_upstream_temp) / "dataset_summary.json",
+            description="canonical Dataset需更新：synthetic missing",
+        )
+        model_sensitive_arms = robustness_module._model_seed_sensitive_arms(
+            robustness_profile, robustness_settings, robustness_stochastic
+        )
+        robustness_status = robustness_module.collect_artifact_status(
+            settings=robustness_profile
+        )
+        with patch.object(
+            robustness_module,
+            "collect_model_upstream_readiness",
+            return_value=(pending_upstream,),
+        ):
+            upstream_rows, upstream_blockers = robustness_module._model_upstream_rows(
+                robustness_profile, model_sensitive_arms
+            )
+            _plan_text, auto_upstream_plan = robustness_module._render_robustness_execution_plan(
+                cfg=robustness_settings,
+                settings=robustness_profile,
+                status=robustness_status,
+                fixed_arms=robustness_fixed,
+                stochastic_arms=robustness_stochastic,
+            )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_robustness_missing_canonical_upstream_is_auto_preparable_not_manual_blocker",
+        True,
+        bool(upstream_rows)
+        and all(row[0] in {"BUILD", "REBUILD"} for row in upstream_rows)
+        and upstream_blockers == []
+        and auto_upstream_plan["overall_status"] == "PREPARABLE"
+        and bool(auto_upstream_plan["model_upstream_prepare_required"])
+        and auto_upstream_plan["period_error"] is None
+        and auto_upstream_plan["comparison_period"] is None
+        and "model_upstream_preparer" in robustness_source
+        and "strategy_upstream_handler" in research_provider_source
+        and "prepare_strategy_compare_model_upstream_artifacts" in model_app_source
+        and "_prepare_strategy_model_upstream_prerequisites" in app_source,
+    )
 
     configured_seed_count = int(robustness_settings.seed_count)
     configured_generator_seed = int(robustness_settings.seed_generator_seed)

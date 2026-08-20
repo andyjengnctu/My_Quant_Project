@@ -2932,6 +2932,58 @@ def _strategy_compare_required_model_sources(profile_ids: tuple[str, ...] | None
     return tuple(comparisons), tuple(dedup.values())
 
 
+def prepare_strategy_compare_model_upstream_artifacts(
+    *,
+    program_name: str,
+    profile_ids: tuple[str, ...],
+) -> int:
+    """Prepare only canonical Dataset/Target truth required by Strategy Compare.
+
+    This is the cross-work-type provider hook used by multi-seed robustness before
+    isolated per-seed training.  It intentionally does not build canonical model
+    checkpoints, PIT scores, or select a model; those remain separate downstream work.
+    """
+
+    comparisons, sources = _strategy_compare_required_model_sources(
+        tuple(str(value) for value in profile_ids)
+    )
+    if not sources:
+        print("目前策略比較設定沒有需要準備的模型上游工件。")
+        return 0
+    datasets = {comparison.dataset for comparison in comparisons}
+    if len(datasets) != 1:
+        raise ValueError(f"Strategy Compare profiles dataset不一致: {sorted(datasets)}")
+    dataset_profile = str(next(iter(datasets)))
+    seen: set[tuple[str, str, str]] = set()
+    for dl_id, source in sources:
+        identity = (
+            str(source.filter_id),
+            str(source.model_architecture),
+            str(source.experiment_profile),
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        workflow = get_breakout_quality_workflow_settings(
+            experiment_profile=str(source.experiment_profile)
+        )
+        if (
+            str(workflow.filter_id) != str(source.filter_id)
+            or str(workflow.model_architecture) != str(source.model_architecture)
+        ):
+            raise ValueError(
+                f"Strategy Compare model source與workflow identity不一致: {dl_id}"
+            )
+        code = _prepare_strategy_compare_model_upstream(
+            program_name,
+            workflow=workflow,
+            dataset_profile=dataset_profile,
+        )
+        if code != 0:
+            return int(code)
+    return 0
+
+
 def prepare_strategy_compare_model_artifacts(
     *,
     program_name: str,
@@ -3345,6 +3397,7 @@ __all__ = [
     "COMMAND_MODULES",
     "main",
     "prepare_strategy_compare_model_artifacts",
+    "prepare_strategy_compare_model_upstream_artifacts",
     "run_model_training_menu",
     "show_model_status",
 ]

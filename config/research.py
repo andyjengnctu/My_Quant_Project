@@ -20,6 +20,7 @@ MODEL_RESEARCH_PROVIDERS: dict[str, dict[str, str]] = {
         "status_handler": "show_model_status",
         "cli_handler": "main",
         "strategy_prerequisite_handler": "prepare_strategy_compare_model_artifacts",
+        "strategy_upstream_handler": "prepare_strategy_compare_model_upstream_artifacts",
     },
 }
 
@@ -32,6 +33,7 @@ class ModelResearchProvider:
     status_handler: str
     cli_handler: str
     strategy_prerequisite_handler: str
+    strategy_upstream_handler: str
 
 
 def get_active_model_research_provider() -> ModelResearchProvider:
@@ -43,7 +45,14 @@ def get_active_model_research_provider() -> ModelResearchProvider:
         raise ValueError(f"ACTIVE_MODEL_ID尚未登記research provider: {model_id}")
     values = {
         key: str(raw.get(key) or "").strip()
-        for key in ("module", "menu_handler", "status_handler", "cli_handler", "strategy_prerequisite_handler")
+        for key in (
+            "module",
+            "menu_handler",
+            "status_handler",
+            "cli_handler",
+            "strategy_prerequisite_handler",
+            "strategy_upstream_handler",
+        )
     }
     missing = [key for key, value in values.items() if not value]
     if missing:
