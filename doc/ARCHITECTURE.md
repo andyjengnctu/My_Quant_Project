@@ -204,7 +204,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 - `core/`：核心規則、帳務、價格、統計、path 與共用 helper；不得放 UI orchestration 或 validate 腳本。
 - `tools/`：Audit、CLI／GUI、下載、validate、local regression與legacy import compatibility wrapper；canonical portfolio replay、optimizer library與Breakout Quality training／PIT application service均位於`services/`，正式domain與services不得反向依賴`tools/`。
 - `config/`：共用政策與執行預設。
-- `models/`：模型工件與 Strategy Parameter SSOT 根目錄。所有current策略參數只能位於`models/strategy_params/`；沒有 path override 時，預設active參數解析到`models/strategy_params/full/trade/state/active.json`。`models/*.json` root-level策略檔只屬一次性legacy migration input，migration完成後可刪且current runtime不得掃描或fallback。
+- `models/`：模型工件與 Strategy Parameter SSOT 根目錄。所有current策略參數只能位於`models/strategy_params/`；沒有 path override 時，預設active參數解析到`models/strategy_params/full/trade/state/active.json`。`models/*.json` root-level策略檔只屬一次性legacy migration input；migration由`apps/research.py optimizer migrate-strategy-params`明確觸發，cleanup必須通過canonical manifest + SHA／migration-lineage readiness gate。Round 3後current runtime與`ensure_strategy_parameter_artifact()`均不得掃描、fallback或自動migration root legacy JSON。
 - `doc/`：架構、常用指令與 formal checklist 文件。
 
 ## 正式入口

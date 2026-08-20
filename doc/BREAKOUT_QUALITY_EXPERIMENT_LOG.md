@@ -9687,6 +9687,17 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Canonical Strategy Parameter manifest schema升至v2並納入`state_artifacts` SHA。舊root檔migration完成且canonical檔驗證通過後可刪除；historical `models/research/...`仍只作明確compatibility，不得current REUSE。
 
 
+### 2026-08-20 — Strategy Parameter Artifact SSOT Round 3：explicit migration / READY-gated legacy cleanup
+
+- 基準：`test-branch-1_20260820_203414_656531a.zip`，SHA256=`841e9883b0fb3693e4411892023b18dfe68ad261c16b4d65a8d48bf85ffd3c4c`。本輪為Strategy Parameter SSOT工程收尾，不新增MR／SR／Cxx identity，不改search space、seed、trial count、C61～C63、模型science或production params。
+- 發現Round 2殘留缺口：`ensure_strategy_parameter_artifact()`在canonical target缺失時仍會呼叫legacy migration，因此current Strategy Compare執行途中仍可能掃描`models/*.json` root。這與最終`current runtime不得掃描/fallback legacy root`契約不一致。
+- Round 3修正：current ensure移除所有implicit root migration；只保留canonical REUSE、Optimizer-owned Min Rolling BUILD／RESUME與Optimizer-owned OOS deterministic derivation。Legacy migration改成明確一次性maintenance，由`apps/research.py optimizer migrate-strategy-params`觸發。
+- Cleanup safety由「target存在即可刪」升級為READY gate：canonical target必須存在；manifest必須是Optimizer-owned且family/mode一致；manifest必須pin住target path + SHA；legacy source還必須以content SHA相同或manifest中精確的`migration_only + source path + source SHA`證明已migration。Trade active/candidate legacy state因沒有migration lineage欄位，只接受內容SHA一致後列入removable，避免已有不同canonical state時誤刪未證實保存的舊root內容。
+- Migration finalizer永不自動刪除使用者檔案；只回傳`READY_FOR_CLEANUP / BLOCKED`與removable/blockers。實際legacy root刪除仍由使用者在READY後以明確`Remove-Item`執行。
+- Strategy Compare current config／preparation human-readable wording同步移除「current會migration」語意；formal synthetic contract同步新增「current ensure不得scan legacy，explicit migration後cleanup才READY」回歸保護。
+- Decision：`STRATEGY_PARAM_SSOT_ROUND3_COMPLETE / CURRENT_LEGACY_SCAN_REMOVED / EXPLICIT_MIGRATION_ONLY / READY_GATED_CLEANUP / PRODUCTION_UNCHANGED`。
+
+
 ### 2026-08-20 — Current Compare加入DL-off Base-Finalists-Agree references
 
 - 使用者決策：current Compare的無DL比較對象除既有`base-finalist-best`外，也要納入`base-finalists-agree`，且OOS／Rolling／Robustness仍必須共用同一Compare Suite。

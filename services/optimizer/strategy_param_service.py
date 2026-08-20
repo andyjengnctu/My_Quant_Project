@@ -37,6 +37,7 @@ from core.strategy_param_artifacts import (
     resolve_strategy_param_benchmark_dir,
     resolve_strategy_param_benchmark_manifest_path,
     resolve_strategy_param_dir,
+    resolve_strategy_param_manifest_path,
     resolve_strategy_param_state_path,
     STRATEGY_PARAM_STATE_FILENAME_BY_NAME,
 )
@@ -330,18 +331,37 @@ def migrate_legacy_strategy_parameter_artifacts(project_root: str | Path, *, fam
 
 
 
+def _load_json_object(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def collect_legacy_root_strategy_parameter_cleanup_plan(project_root: str | Path) -> dict[str, Any]:
-    """Return legacy root strategy JSONs that are safe to delete after migration."""
+    """Return only root legacy strategy JSONs proven safe to delete.
+
+    A legacy file is removable only when its canonical target is pinned by the
+    Optimizer-owned manifest and either (a) the bytes still match or (b) the
+    manifest explicitly preserves the exact migration source path + SHA.  Mere
+    target existence is intentionally insufficient.
+    """
     root = Path(project_root).resolve()
     models_root = root / "models"
-    mappings: dict[Path, Path] = {}
+    mappings: list[dict[str, Any]] = []
     for mode in ("study", "full", "rolling", "oos", "trade"):
         for policy in POLICY_FILENAME_BY_NAME:
-            source = models_root / _legacy_policy_filename(policy, evaluation_mode=mode)
-            target = resolve_strategy_param_artifact_path(
-                root, family="full", evaluation_mode=mode, policy=policy
-            )
-            mappings[source] = target
+            mappings.append({
+                "kind": "policy",
+                "family": "full",
+                "evaluation_mode": mode,
+                "policy": policy,
+                "source": models_root / _legacy_policy_filename(policy, evaluation_mode=mode),
+                "target": resolve_strategy_param_artifact_path(
+                    root, family="full", evaluation_mode=mode, policy=policy
+                ),
+            })
     state_legacy = {
         "active": "run_best_params.json",
         "active_summary": "run_best_summary.json",
@@ -353,22 +373,76 @@ def collect_legacy_root_strategy_parameter_cleanup_plan(project_root: str | Path
         "candidate_val_score_best_summary": "candidate_val_score_best_summary.json",
     }
     for artifact, legacy_name in state_legacy.items():
-        mappings[models_root / legacy_name] = resolve_strategy_param_state_path(
-            root, artifact=artifact
-        )
+        mappings.append({
+            "kind": "state",
+            "family": "full",
+            "evaluation_mode": "trade",
+            "state_artifact": artifact,
+            "source": models_root / legacy_name,
+            "target": resolve_strategy_param_state_path(root, artifact=artifact),
+        })
+
     removable: list[dict[str, str]] = []
     blockers: list[dict[str, str]] = []
-    for source, target in sorted(mappings.items(), key=lambda item: item[0].name.lower()):
+    for item in sorted(mappings, key=lambda row: str(row["source"]).lower()):
+        source = Path(item["source"])
+        target = Path(item["target"])
         if not source.is_file():
             continue
-        record = {
-            "source": _project_relative(root, source),
-            "target": _project_relative(root, target),
-        }
-        if target.is_file():
-            removable.append(record)
+        source_rel = _project_relative(root, source)
+        target_rel = _project_relative(root, target)
+        base_record = {"source": source_rel, "target": target_rel}
+        if not target.is_file():
+            blockers.append({**base_record, "reason": "canonical_target_missing"})
+            continue
+
+        family = str(item["family"])
+        mode = str(item["evaluation_mode"])
+        manifest_path = resolve_strategy_param_manifest_path(
+            root, family=family, evaluation_mode=mode
+        )
+        manifest = _load_json_object(manifest_path)
+        if manifest is None:
+            blockers.append({**base_record, "reason": "canonical_manifest_missing_or_invalid"})
+            continue
+        if (
+            str(manifest.get("producer") or "") != "optimizer"
+            or str(manifest.get("family") or "") != family
+            or str(manifest.get("evaluation_mode") or "") != mode
+        ):
+            blockers.append({**base_record, "reason": "canonical_manifest_identity_mismatch"})
+            continue
+
+        target_sha = compute_strategy_param_file_sha256(target)
+        source_sha = compute_strategy_param_file_sha256(source)
+        if item["kind"] == "policy":
+            policy = str(item["policy"])
+            manifest_record = dict(dict(manifest.get("artifacts") or {}).get(policy) or {})
         else:
-            blockers.append(record)
+            state_name = str(item["state_artifact"])
+            manifest_record = dict(dict(manifest.get("state_artifacts") or {}).get(state_name) or {})
+        if (
+            str(manifest_record.get("path") or "") != target_rel
+            or str(manifest_record.get("sha256") or "") != target_sha
+        ):
+            blockers.append({**base_record, "reason": "canonical_manifest_target_not_pinned"})
+            continue
+
+        evidence = "content_sha_match" if source_sha == target_sha else ""
+        if not evidence and item["kind"] == "policy":
+            source_record = dict(manifest_record.get("source") or {})
+            if (
+                bool(source_record.get("migration_only"))
+                and str(source_record.get("path") or "") == source_rel
+                and str(source_record.get("sha256") or "") == source_sha
+            ):
+                evidence = "manifest_migration_lineage"
+        if not evidence:
+            blockers.append({**base_record, "reason": "legacy_source_not_proven_migrated"})
+            continue
+
+        removable.append({**base_record, "evidence": evidence})
+
     return {
         "status": "READY" if not blockers else "BLOCKED",
         "removable": removable,
@@ -396,6 +470,21 @@ def migrate_all_legacy_strategy_parameter_artifacts(project_root: str | Path) ->
         "project_root": str(root),
         "results": results,
     }
+
+def finalize_legacy_strategy_parameter_migration(project_root: str | Path) -> dict[str, Any]:
+    """Run the explicit one-time migration and return a READY-gated cleanup plan.
+
+    This function never deletes user files.  Deletion remains an explicit local
+    operation after the returned cleanup plan is READY.
+    """
+    migration = migrate_all_legacy_strategy_parameter_artifacts(project_root)
+    cleanup = collect_legacy_root_strategy_parameter_cleanup_plan(project_root)
+    return {
+        "status": "READY_FOR_CLEANUP" if cleanup["status"] == "READY" else "BLOCKED",
+        "migration": migration,
+        "cleanup": cleanup,
+    }
+
 
 def _freeze_rolling_policy_to_oos(
     root: Path,
@@ -522,11 +611,11 @@ def ensure_strategy_parameter_artifact(
     evaluation_mode: str,
     policy: str,
 ) -> dict[str, Any]:
-    """Resolve a canonical artifact, migrating an existing legacy truth if necessary.
+    """Resolve/build only the canonical current strategy-parameter truth.
 
-    Missing artifacts are not recomputed here by Research.  The caller can report the
-    canonical Optimizer work type as the required producer.  This prevents a second
-    Research-owned optimizer policy from appearing.
+    Legacy discovery is deliberately excluded from this current execution path.
+    One-time migration must be performed explicitly with
+    ``migrate_all_legacy_strategy_parameter_artifacts`` before legacy root cleanup.
     """
     root = Path(project_root).resolve()
     family = normalize_strategy_param_family(family)
@@ -534,10 +623,6 @@ def ensure_strategy_parameter_artifact(
     policy = normalize_strategy_param_policy(policy)
     target = resolve_strategy_param_artifact_path(root, family=family, evaluation_mode=mode, policy=policy)
     action = "REUSE"
-    migration = None
-    if not target.is_file():
-        migration = migrate_legacy_strategy_parameter_artifacts(root, family=family, evaluation_mode=mode)
-        action = "MIGRATE" if target.is_file() else "MISSING"
     derived_source = None
     if not target.is_file() and mode == "rolling" and family == "min":
         _build_canonical_min_rolling(root)
@@ -557,7 +642,8 @@ def ensure_strategy_parameter_artifact(
         action = "DERIVE" if target.is_file() else "MISSING"
     if not target.is_file():
         raise FileNotFoundError(
-            "缺少canonical策略參數工件；Optimizer service無法由既有truth建立："
+            "缺少canonical策略參數工件；current流程不掃描legacy root。"
+            "請先由Optimizer正式流程建立，或執行一次性Strategy Parameter SSOT migration："
             f"family={family}, mode={mode}, policy={policy}, target={_project_relative(root, target)}"
         )
     source_records = None if derived_source is None else {policy: derived_source}
@@ -572,7 +658,7 @@ def ensure_strategy_parameter_artifact(
         "path": target,
         "manifest_path": manifest,
         "sha256": compute_strategy_param_file_sha256(target),
-        "migration": migration,
+        "migration": None,
     }
 
 
@@ -947,5 +1033,6 @@ __all__ = [
     "migrate_legacy_trade_state_artifacts",
     "migrate_all_legacy_strategy_parameter_artifacts",
     "collect_legacy_root_strategy_parameter_cleanup_plan",
+    "finalize_legacy_strategy_parameter_migration",
     "refresh_strategy_parameter_manifest",
 ]

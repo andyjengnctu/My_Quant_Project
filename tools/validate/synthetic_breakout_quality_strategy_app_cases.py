@@ -540,14 +540,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     from core.strategy_param_artifacts import (
         POLICY_FILENAME_BY_NAME,
         resolve_strategy_param_artifact_path,
+        resolve_strategy_param_state_path,
     )
     from services.optimizer.outer_rolling_oos import (
         get_optimizer_nonrolling_policy_paramset_filename,
         get_optimizer_policy_paramset_filename,
     )
+    from services.optimizer.strategy_param_repository import refresh_strategy_parameter_manifest
     from services.optimizer.strategy_param_service import (
         collect_legacy_root_strategy_parameter_cleanup_plan,
-        migrate_all_legacy_strategy_parameter_artifacts,
+        ensure_strategy_parameter_artifact,
+        finalize_legacy_strategy_parameter_migration,
     )
 
     with tempfile.TemporaryDirectory() as migration_tmp:
@@ -593,13 +596,31 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             (
                 migration_models / get_optimizer_policy_paramset_filename(policy_name)
             ).write_text(json.dumps(rolling_payload), encoding="utf-8")
+        (migration_models / "run_best_params.json").write_text(
+            json.dumps({"high_len": 201}), encoding="utf-8"
+        )
 
-        migration_result = migrate_all_legacy_strategy_parameter_artifacts(
-            migration_root
+        pre_migration_target = resolve_strategy_param_artifact_path(
+            migration_root,
+            family="full",
+            evaluation_mode="rolling",
+            policy="base_finalist_best",
         )
-        cleanup_plan = collect_legacy_root_strategy_parameter_cleanup_plan(
-            migration_root
-        )
+        current_ensure_scanned_legacy = False
+        try:
+            ensure_strategy_parameter_artifact(
+                migration_root,
+                family="full",
+                evaluation_mode="rolling",
+                policy="base_finalist_best",
+            )
+            current_ensure_scanned_legacy = pre_migration_target.is_file()
+        except FileNotFoundError:
+            current_ensure_scanned_legacy = pre_migration_target.is_file()
+
+        finalize_result = finalize_legacy_strategy_parameter_migration(migration_root)
+        migration_result = dict(finalize_result.get("migration") or {})
+        cleanup_plan = dict(finalize_result.get("cleanup") or {})
         migrated_oos_payloads = []
         for policy_name in POLICY_FILENAME_BY_NAME:
             target = resolve_strategy_param_artifact_path(
@@ -617,7 +638,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             results, "synthetic_breakout_quality", case_id,
             "legacy_oos_all_policies_migrate_before_root_cleanup_even_when_period_ends_latest",
             True,
-            str(migration_result.get("status")) == "PASS"
+            not current_ensure_scanned_legacy
+            and str(finalize_result.get("status")) == "READY_FOR_CLEANUP"
+            and str(migration_result.get("status")) == "PASS"
             and str(cleanup_plan.get("status")) == "READY"
             and not list(cleanup_plan.get("blockers") or [])
             and len(migrated_oos_payloads) == len(POLICY_FILENAME_BY_NAME)
@@ -629,6 +652,31 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 == "2026-03-02"
                 for payload in migrated_oos_payloads
             ),
+        )
+
+        canonical_trade_active = resolve_strategy_param_state_path(
+            migration_root, artifact="active"
+        )
+        canonical_trade_active.write_text(
+            json.dumps({"high_len": 250}), encoding="utf-8"
+        )
+        refresh_strategy_parameter_manifest(
+            migration_root, family="full", evaluation_mode="trade"
+        )
+        diverged_cleanup_plan = collect_legacy_root_strategy_parameter_cleanup_plan(
+            migration_root
+        )
+        diverged_blockers = {
+            str(row.get("source") or ""): str(row.get("reason") or "")
+            for row in list(diverged_cleanup_plan.get("blockers") or [])
+        }
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "legacy_root_cleanup_blocks_unproven_diverged_trade_state",
+            True,
+            str(diverged_cleanup_plan.get("status")) == "BLOCKED"
+            and diverged_blockers.get("models/run_best_params.json")
+            == "legacy_source_not_proven_migrated",
         )
 
     add_check(

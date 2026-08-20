@@ -411,4 +411,12 @@ outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_
 
 ## Strategy Parameter SSOT 一次性 migration
 
-舊`models/*.json`策略參數只作一次性migration source；current正式位置為`models/strategy_params/`。Migration必須呼叫`services.optimizer.strategy_param_service.migrate_all_legacy_strategy_parameter_artifacts()`，不得手動Move-Item後略過manifest/source SHA。完成migration並通過驗證後，才可刪除legacy root strategy JSON；current runtime不得再從root fallback。
+舊`models/*.json`策略參數只作一次性migration source；current正式位置為`models/strategy_params/`。正式一次性入口為：
+
+```powershell
+python apps/research.py optimizer migrate-strategy-params
+```
+
+此入口只呼叫Optimizer-owned migration service並做cleanup readiness驗證，不刪檔。Cleanup gate只有在canonical target存在、Optimizer manifest identity正確、target SHA由manifest pin住，且legacy source可由內容SHA或migration lineage證明已保存時才會回報`READY_FOR_CLEANUP`。完成後才可依回報的`removable`清單執行`Remove-Item`。
+
+Round 3完成後，current `ensure_strategy_parameter_artifact()`不再掃描、fallback或自動migration `models/*.json` root；current Strategy Compare只接受canonical truth、Optimizer current build／resume與Optimizer-owned OOS derivation。若canonical工件缺失，必須先由Optimizer正式流程建立或執行上述一次性migration，不得讓Research在current執行途中偷偷讀legacy root。

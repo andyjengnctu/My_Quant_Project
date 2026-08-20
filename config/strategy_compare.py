@@ -410,7 +410,7 @@ STRATEGY_COMPARE_PREPARATION = {
 
 STRATEGY_PARAM_SOURCES = {
     # Current strategy parameter SSOT.  Optimizer is the only producer; Research/
-    # Strategy Compare only resolves/migrates these canonical identities.
+    # Strategy Compare only resolves/delegates these canonical identities; legacy migration is explicit one-time maintenance.
     "full_oos": {
         "path_template": None,
         "description": "Canonical Optimizer Full OOS strategy params (2020 cutoff, 2021→latest).",

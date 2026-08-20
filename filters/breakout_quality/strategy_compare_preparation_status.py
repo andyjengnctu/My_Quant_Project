@@ -873,7 +873,7 @@ def _collect_parameter_artifact_status(
                 action = "BLOCKED"
             if builder.builder_type == "canonical_optimizer_strategy_params":
                 description = (
-                    "由canonical Optimizer parameter service解析／遷移策略參數工件"
+                    "由canonical Optimizer parameter service解析／建立策略參數工件"
                     f"｜policies={','.join(policies)}"
                 )
             else:

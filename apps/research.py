@@ -98,10 +98,48 @@ def _non_model_blockers(resolved_plan) -> tuple[object, ...]:
     )
 
 
+def _run_strategy_param_migration() -> int:
+    from services.optimizer.strategy_param_service import (
+        finalize_legacy_strategy_parameter_migration,
+    )
+
+    result = finalize_legacy_strategy_parameter_migration(PROJECT_ROOT)
+    cleanup = dict(result.get("cleanup") or {})
+    print("\n====================================================================================================")
+    print(" Strategy Parameter SSOT Migration")
+    print("====================================================================================================")
+    print(f"Status            ：{result.get('status')}")
+    print(f"Cleanup gate      ：{cleanup.get('status')}")
+    removable = list(cleanup.get("removable") or [])
+    blockers = list(cleanup.get("blockers") or [])
+    print(f"可安全移除legacy ：{len(removable)}")
+    print(f"Cleanup blockers  ：{len(blockers)}")
+    if removable:
+        print("\n可安全移除：")
+        for row in removable:
+            print(f"- {row.get('source')} -> {row.get('target')} [{row.get('evidence')}]")
+    if blockers:
+        print("\n尚不可移除：")
+        for row in blockers:
+            print(f"- {row.get('source')} -> {row.get('target')} [{row.get('reason')}]")
+    print("\n此步驟只migration與驗證，不會刪除legacy檔案。Cleanup gate必須READY後才可執行Remove-Item。")
+    return 0 if str(result.get("status")) == "READY_FOR_CLEANUP" else 1
+
+
 def _run_optimizer(args: list[str] | None = None) -> int:
+    routed = list(args or [])
+    if routed and str(routed[0]).strip().lower() in {
+        "migrate-strategy-params",
+        "migrate_strategy_params",
+        "strategy-param-migration",
+    }:
+        if len(routed) > 1:
+            raise ValueError(f"strategy-param migration不支援額外參數: {' '.join(routed[1:])}")
+        return _run_strategy_param_migration()
+
     from tools.optimizer import main as optimizer_main
 
-    routed_args = ["apps/research.py optimizer", *(args or [])]
+    routed_args = ["apps/research.py optimizer", *routed]
     return int(optimizer_main(argv=routed_args) or 0)
 
 
@@ -475,6 +513,7 @@ def _print_help(program_name: str) -> None:
     print("說明: Research 單一正式入口；互動選單只選工作類型，研究標的與設定由 config/ 決定。")
     print("  model      目前 active model 的模型訓練／驗證；後續參數原樣轉交model provider")
     print("  optimizer  策略參數最佳化；後續參數原樣轉交既有 ml_optimizer service")
+    print("             一次性SSOT migration：optimizer migrate-strategy-params")
     print("  compare    策略組合比較；可接 [profile] run/status、robustness run/status/latest 或 integration run/status/latest")
     print("  audit      目前 config 指定 Audit module；可接 run、status 或 latest")
     print("  status     查看目前設定與工件狀態")
