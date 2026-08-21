@@ -3150,9 +3150,21 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         if maintenance_count_valid and maintenance_candidate_count > 0
         else "CLEAN"
     )
+    retired_dedicated_tests = maintenance.get("retired_dedicated_tests")
+    maintenance_lists = (
+        maintenance.get("stale_modules"),
+        maintenance.get("disabled_audits"),
+        maintenance.get("oversized_transient_tests"),
+        retired_dedicated_tests,
+    )
+    maintenance_category_count = (
+        sum(len(items) for items in maintenance_lists)
+        if all(isinstance(items, list) for items in maintenance_lists)
+        else None
+    )
     check(
         "transient_code_maintenance_scan_is_advisory_and_internally_consistent",
-        (True, True, True, True),
+        (True, True, True, True, True, True),
         (
                     maintenance_count_valid,
                     maintenance.get("status") == maintenance_expected_status,
@@ -3160,6 +3172,10 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
                     if maintenance_count_valid
                     else False,
                     maintenance.get("advisory_only") is True,
+                    isinstance(retired_dedicated_tests, list),
+                    maintenance_category_count == maintenance_candidate_count
+                    if maintenance_count_valid and maintenance_category_count is not None
+                    else False,
                 ),
     )
 

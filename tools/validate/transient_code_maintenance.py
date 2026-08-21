@@ -8,6 +8,7 @@ permanent maintenance burden.
 from __future__ import annotations
 
 import ast
+import re
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
@@ -85,9 +86,16 @@ def _import_edges(project_root: Path, index: dict[str, Path]) -> dict[str, set[s
 
 def _active_dynamic_audit_modules() -> set[str]:
     from config.audit import get_audit_module_ids, get_enabled_audit_definitions
-    from tools.audit.catalog import get_audit_entry
+    from tools.audit.catalog import AUDIT_CATALOG, get_audit_entry
 
-    modules: set[str] = set()
+    # Research-mode catalog commands are dynamically routed by the model application
+    # even though they are not config-driven formal Audits.  Treat every exposed CLI
+    # entry as current reachability, then add enabled formal handlers.
+    modules = {
+        entry.module
+        for entry in AUDIT_CATALOG.values()
+        if entry.cli_command
+    }
     for module_id in get_audit_module_ids(enabled_only=True):
         for definition in get_enabled_audit_definitions(module_id):
             modules.add(get_audit_entry(definition.audit_type).module)
@@ -121,6 +129,82 @@ def _catalog_modes_by_module() -> dict[str, list[str]]:
     for entry in AUDIT_CATALOG.values():
         modes[entry.module].append(entry.mode)
     return {key: sorted(set(values)) for key, values in modes.items()}
+
+
+def _retired_dedicated_test_candidates(
+    project_root: Path,
+    index: dict[str, Path],
+) -> list[dict[str, str]]:
+    """Find retired checklist tests whose dedicated validator still exists.
+
+    The checklist lifecycle is the source of retirement state.  A validator reused by
+    any currently active T-row is not a candidate, so shared generic contracts are not
+    penalized when one historical requirement is retired.
+    """
+
+    checklist = project_root / "doc" / "TEST_SUITE_CHECKLIST.md"
+    if not checklist.is_file():
+        return []
+    text = checklist.read_text(encoding="utf-8", errors="ignore")
+    lines = text.splitlines()
+
+    active_validators: set[str] = set()
+    in_current_tests = False
+    for line in lines:
+        if line.startswith("### T."):
+            in_current_tests = True
+            continue
+        if in_current_tests and line.startswith("## G."):
+            break
+        if in_current_tests and line.startswith("| T"):
+            active_validators.update(
+                re.findall(r"`?(validate_[A-Za-z0-9_]+)`?", line)
+            )
+
+    latest_status: dict[str, str] = {}
+    validators_by_test: dict[str, set[str]] = defaultdict(set)
+    for line in lines:
+        if not line.startswith("| 20"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) != 5 or not cells[1].startswith("T"):
+            continue
+        test_id = cells[1]
+        status = cells[3].split("->")[-1].strip()
+        latest_status[test_id] = status
+        validators_by_test[test_id].update(
+            re.findall(r"`?(validate_[A-Za-z0-9_]+)`?", line)
+        )
+
+    function_paths: dict[str, str] = {}
+    for module, path in index.items():
+        if not module.startswith("tools.validate"):
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, SyntaxError):
+            continue
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                function_paths[node.name] = path.relative_to(project_root).as_posix()
+
+    candidates: list[dict[str, str]] = []
+    for test_id, status in sorted(latest_status.items()):
+        if status != "N/A":
+            continue
+        for validator in sorted(validators_by_test.get(test_id, ())):
+            path = function_paths.get(validator)
+            if path is None or validator in active_validators:
+                continue
+            candidates.append(
+                {
+                    "test_id": test_id,
+                    "validator": validator,
+                    "path": path,
+                    "reason": "retired_checklist_test_has_unshared_validator_definition",
+                }
+            )
+    return candidates
 
 
 def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
@@ -182,7 +266,14 @@ def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
                     }
                 )
 
-    candidate_count = len(stale_modules) + len(disabled_audits) + len(oversized_transient_tests)
+    retired_dedicated_tests = _retired_dedicated_test_candidates(root, index)
+
+    candidate_count = (
+        len(stale_modules)
+        + len(disabled_audits)
+        + len(oversized_transient_tests)
+        + len(retired_dedicated_tests)
+    )
     return {
         "status": "REVIEW" if candidate_count else "CLEAN",
         "needs_slimming": bool(candidate_count),
@@ -190,10 +281,12 @@ def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
         "stale_modules": stale_modules,
         "disabled_audits": disabled_audits,
         "oversized_transient_tests": oversized_transient_tests,
+        "retired_dedicated_tests": retired_dedicated_tests,
         "advisory_only": True,
         "policy": (
             "Remove only after the research decision is recorded and the module is no longer "
-            "reachable from current runtime or an active formal Audit."
+            "reachable from current runtime or an active formal Audit. Retired dedicated "
+            "validators should be replaced by reusable generic contracts when their math remains useful."
         ),
     }
 

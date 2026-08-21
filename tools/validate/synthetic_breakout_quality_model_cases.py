@@ -2095,99 +2095,66 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
 
 
 
-def validate_breakout_quality_mr13l_decomposed_component_contract_case(_base_params):
-    """Pin MR-13L as primary two-component regression of the MR-13H target."""
+def validate_breakout_quality_reusable_model_component_contract_case(_base_params):
+    """Protect reusable ranker components without pinning closed experiment identities."""
 
-    case_id = "BREAKOUT_QUALITY_MR13L_DECOMPOSED_COMPONENT"
+    case_id = "BREAKOUT_QUALITY_REUSABLE_MODEL_COMPONENTS"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config.breakout_quality import (
-        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-        BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
-        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
         TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
-        get_breakout_quality_model_research_settings,
     )
+    from config.strategy_compare import get_strategy_comparison_settings
+    from core.params_io import params_to_json_dict
+    from core.strategy_params import V16StrategyParams
+    from filters.breakout_quality.continuous_target import (
+        DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
+        build_daily_full_horizon_equal_rank_mfe_low_adverse_contract,
+    )
+    from filters.breakout_quality.daily_ranker_data import build_equal_rank_mfe_low_adverse_target
+    from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.models.runtime import require_torch
+    from filters.breakout_quality.models.spec import INCEPTION_TIME_RISK_CONTEXT_V1, INCEPTION_TIME_V1
     from filters.breakout_quality.ranker_training_contract import training_semantics
+    from filters.breakout_quality.risk_normalized_target import (
+        RISK_GEOMETRY_CONTEXT_FEATURES,
+        RiskParamPeriod,
+        _params_for_period,
+        build_risk_target_contract,
+        compute_risk_geometry,
+        load_min_roos_risk_schedule,
+        risk_normalized_target_from_future_path,
+    )
+    from services.breakout_quality import ranker_training as ranker_api
     from services.breakout_quality import train_continuous_ranker as training_module
 
-    profile_h = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    # Dual-component regression is a reusable learning formulation: two physical-R
+    # outputs, equal primary MSE, and a fixed favorable-minus-adverse runtime score.
+    dual_profile = SimpleNamespace(
+        name="synthetic_dual_component",
+        training_objective=TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
+        loss_name="dual_mse_raw_r",
+        raw_r_huber_delta_r=None,
     )
-    profile_l = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE
-    )
-    spec_l = get_continuous_ranker_research_spec(
-        DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE
-    )
-    active_research = get_breakout_quality_model_research_settings()
-
-    check(
-        "mr13l_profile_is_registered_and_active_resolver_does_not_change_production_workflow",
-        (
-                    DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
-                    BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-                ),
-        (
-                    profile_l.name,
-                    active_research.experiment_profile,
-                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-                ),
+    dual_contract = dict(
+        training_semantics(dual_profile).get("dual_component_r_regression_contract") or {}
     )
     check(
-        "mr13l_keeps_mr13h_target_universe_and_architecture_but_changes_learning_formulation",
+        "dual_component_regression_has_equal_primary_components_and_fixed_runtime_score",
         (
-                    "MR-13L",
-                    DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-                    DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
-                    TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
-                    "dual_mse_raw_r",
-                    "mean_daily_spearman",
-                    False,
-                    profile_h.model_architecture,
-                    profile_h.training_sample_scope,
-                    profile_h.training_label_scope,
-                ),
+            "mean_mse_over_two_primary_r_components",
+            "equal_by_mean_reduction_no_lambda",
+            "predicted_favorable_mfe_r_minus_predicted_adverse_to_peak_r",
+        ),
         (
-                    spec_l.model_research_id,
-                    spec_l.reference_profile_name,
-                    profile_l.continuous_target_id,
-                    profile_l.training_objective,
-                    profile_l.loss_name,
-                    profile_l.epoch_selection_metric,
-                    bool(spec_l.selection_pit_authorized),
-                    profile_l.model_architecture,
-                    profile_l.training_sample_scope,
-                    profile_l.training_label_scope,
-                ),
+            dual_contract.get("loss"),
+            dual_contract.get("component_weighting"),
+            dual_contract.get("runtime_score"),
+        ),
     )
-
-    semantics = training_semantics(profile_l)
-    dual_contract = dict(semantics.get("dual_component_r_regression_contract") or {})
-    check(
-        "mr13l_two_components_are_primary_equal_weight_raw_r_targets_without_auxiliary_lambda",
-        (
-                    "mean_mse_over_two_primary_r_components",
-                    "equal_by_mean_reduction_no_lambda",
-                    "predicted_favorable_mfe_r_minus_predicted_adverse_to_peak_r",
-                    None,
-                    None,
-                ),
-        (
-                    dual_contract.get("loss"),
-                    dual_contract.get("component_weighting"),
-                    dual_contract.get("runtime_score"),
-                    semantics.get("pairwise_contract"),
-                    semantics.get("raw_r_regression_contract"),
-                ),
-    )
-
-    # The decomposition is not a new economic target.  The two physical-R
-    # components must reconstruct the exact MR-13H scalar target row by row.
     group_table = pd.DataFrame(
         {
             "target_adverse_r": [0.25, 1.10, 0.0],
@@ -2195,28 +2162,20 @@ def validate_breakout_quality_mr13l_decomposed_component_contract_case(_base_par
         }
     )
     raw_target = np.asarray([1.50, 2.30, 0.80], dtype=np.float32)
-    percentile_target = np.asarray([0.2, 0.8, 0.5], dtype=np.float32)
     component_target = training_module._training_target_for_profile(
-        profile_l, raw_target, percentile_target, group_table
+        dual_profile,
+        raw_target,
+        np.asarray([0.2, 0.8, 0.5], dtype=np.float32),
+        group_table,
     )
     reconstructed = component_target[:, LABEL_PASS] - component_target[:, LABEL_REJECT]
     check(
-        "mr13l_component_targets_reconstruct_mr13h_scalar_target_exactly",
+        "dual_component_targets_reconstruct_composite_r_exactly",
         tuple(round(float(x), 6) for x in raw_target),
-        tuple(round(float(x), 6) for x in reconstructed.astype(np.float32)),
+        tuple(round(float(x), 6) for x in reconstructed),
     )
-    check(
-        "mr13l_component_target_output_order_matches_existing_two_neuron_identity",
-        ((0.25, 1.75), (1.10, 3.40), (0.0, 0.80)),
-        tuple(tuple(round(float(x), 6) for x in row) for row in component_target),
-    )
-
     fake_logits = np.asarray([[0.4, 2.0], [1.2, 3.5]], dtype=np.float32)
-    with patch.object(
-        training_module,
-        "strict_parallel_batched_logits",
-        return_value=fake_logits,
-    ):
+    with patch.object(training_module, "strict_parallel_batched_logits", return_value=fake_logits):
         prediction = training_module.predict_dual_component_r(
             None,
             None,
@@ -2227,35 +2186,253 @@ def validate_breakout_quality_mr13l_decomposed_component_contract_case(_base_par
             plan=None,
         )
     check(
-        "mr13l_runtime_score_is_only_predicted_mfe_minus_predicted_adverse",
+        "dual_component_prediction_exposes_components_and_difference_score",
+        ((2.0, 3.5), (0.4, 1.2), (1.6, 2.3)),
         (
-                    (2.0, 3.5),
-                    (0.4, 1.2),
-                    (1.6, 2.3),
-                ),
-        (
-                    tuple(round(float(x), 6) for x in prediction["predicted_favorable_r"]),
-                    tuple(round(float(x), 6) for x in prediction["predicted_adverse_r"]),
-                    tuple(round(float(x), 6) for x in prediction["model_score"]),
-                ),
+            tuple(round(float(x), 6) for x in prediction["predicted_favorable_r"]),
+            tuple(round(float(x), 6) for x in prediction["predicted_adverse_r"]),
+            tuple(round(float(x), 6) for x in prediction["model_score"]),
+        ),
     )
 
-    model_source = read_source_text("filters/breakout_quality/models/inception_time.py")
-    train_source = read_source_text("services/breakout_quality/train_continuous_ranker.py")
+    # Equal-rank is retained as a generic target transform, not as a permanent MR recipe.
+    dates = pd.to_datetime(["2020-01-02", "2020-01-02", "2020-01-02", "2020-01-03"])
+    composite, mfe_pct, low_adv_pct = build_equal_rank_mfe_low_adverse_target(
+        np.asarray([3.0, 2.0, 1.0, 4.0], dtype=np.float64),
+        np.asarray([2.0, 0.5, 1.0, 0.2], dtype=np.float64),
+        np.ones(4, dtype=bool),
+        dates,
+    )
     check(
-        "mr13l_reuses_existing_two_output_architecture_and_is_not_rejected_auxiliary_head_pattern",
-        (True, True, False),
+        "equal_rank_target_uses_same_date_component_percentiles_and_fixed_half_weights",
         (
-                    "nn.Linear(classifier_input, 2)" in model_source,
-                    "F.mse_loss(logits.float(), target, reduction=\"mean\")" in train_source,
-                    "auxiliary" in str(dual_contract).lower() or "lambda" in str(dual_contract.get("loss") or "").lower(),
-                ),
+            (1.0, 0.5, 0.0, 0.5),
+            (0.0, 1.0, 0.5, 0.5),
+            (0.5, 0.75, 0.25, 0.5),
+        ),
+        (
+            tuple(round(float(x), 6) for x in mfe_pct),
+            tuple(round(float(x), 6) for x in low_adv_pct),
+            tuple(round(float(x), 6) for x in composite),
+        ),
+    )
+    equal_rank_contract = build_daily_full_horizon_equal_rank_mfe_low_adverse_contract(
+        DEFAULT_LABEL_POLICY
+    )
+    check(
+        "equal_rank_target_contract_has_no_weight_tuning_or_strategy_membership",
+        (DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID, 0.5, 0.5, "none", False),
+        (
+            equal_rank_contract["target_id"],
+            float(equal_rank_contract["component_weights"]["mfe_percentile"]),
+            float(equal_rank_contract["component_weights"]["low_adverse_percentile"]),
+            equal_rank_contract["weight_tuning"],
+            bool(equal_rank_contract["requires_strategy_candidate_membership"]),
+        ),
     )
 
-    summary["model_research_id"] = spec_l.model_research_id
-    summary["active_model_research"] = active_research.experiment_profile
+    # Risk-normalized target/context remains reusable independently of the closed experiments
+    # that first exercised it.
+    risk_contract = build_risk_target_contract(
+        horizon_bars=int(DEFAULT_LABEL_POLICY.label_horizon_bars),
+        param_policy="base-finalist-best",
+    )
+    check(
+        "risk_normalized_target_uses_only_initial_risk_fields_and_canonical_accounting",
+        (["atr_len", "atr_times_init"], False, True, False),
+        (
+            list(risk_contract["risk_fields"]),
+            "high_len" in risk_contract["risk_fields"],
+            "canonical" in str(risk_contract["accounting"]),
+            bool(risk_contract["strategy_exit_path_used"]),
+        ),
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        param_payload = params_to_json_dict(V16StrategyParams())
+        param_payload.update({"atr_len": 14, "atr_times_init": 2.0})
+        strategy_settings = get_strategy_comparison_settings("selection_pit")
+        for source_id, years in (("selection_min_roos", range(2014, 2021)), ("min_roos", range(2021, 2027))):
+            source = strategy_settings.parameter_sources[source_id]
+            path = temp_root / str(source.path_template).format(param_filename="roos_base_best.json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "meta": {},
+                        "summary": {},
+                        "params_ensemble_by_effective_date": {
+                            f"{year}-01-01": [{"params": dict(param_payload)}] for year in years
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+        risk_schedule = load_min_roos_risk_schedule(temp_root, param_policy="base-finalist-best")
+    check(
+        "risk_schedule_reuses_historical_and_current_min_parameter_sources_without_backfill",
+        (13, "2014-01-01", "2026-01-01", 14, 2.0),
+        (
+            len(risk_schedule),
+            risk_schedule[0].start_date.date().isoformat(),
+            risk_schedule[-1].start_date.date().isoformat(),
+            risk_schedule[0].atr_len,
+            risk_schedule[0].atr_times_init,
+        ),
+    )
+    period = RiskParamPeriod(
+        start_date=pd.Timestamp("2020-01-01"),
+        end_date=pd.Timestamp("2020-12-31"),
+        atr_len=14,
+        atr_times_init=2.0,
+        source_id="synthetic",
+        params_signature="synthetic",
+    )
+    geometry = compute_risk_geometry(
+        ticker="2330",
+        decision_date="2020-06-01",
+        reference_price=100.0,
+        atr=2.5,
+        period=period,
+    )
+    check(
+        "risk_geometry_context_is_five_dimensional_finite_and_bounded",
+        (True, 5, True, True),
+        (
+            bool(geometry.valid),
+            len(geometry.context),
+            bool(all(math.isfinite(value) for value in geometry.context)),
+            bool(0.0 < float(geometry.context[4]) <= 1.0),
+        ),
+    )
+    params = _params_for_period(period)
+    horizon = int(DEFAULT_LABEL_POLICY.label_horizon_bars)
+    future_dates = pd.date_range("2020-06-02", periods=horizon, freq="B")
+    safe_target, safe_valid, _ = risk_normalized_target_from_future_path(
+        ticker="2330",
+        decision_date="2020-06-01",
+        reference_price=geometry.reference_price,
+        stop_price=geometry.stop_price,
+        qty=geometry.qty,
+        planned_initial_risk_milli=geometry.planned_initial_risk_milli,
+        future_high=np.full(horizon, 105.0, dtype=np.float64),
+        future_low=np.full(horizon, 99.0, dtype=np.float64),
+        future_dates=future_dates,
+        params=params,
+    )
+    stop_target, stop_valid, stop_reason = risk_normalized_target_from_future_path(
+        ticker="2330",
+        decision_date="2020-06-01",
+        reference_price=geometry.reference_price,
+        stop_price=geometry.stop_price,
+        qty=geometry.qty,
+        planned_initial_risk_milli=geometry.planned_initial_risk_milli,
+        future_high=np.full(horizon, 120.0, dtype=np.float64),
+        future_low=np.full(horizon, 94.0, dtype=np.float64),
+        future_dates=future_dates,
+        params=params,
+    )
+    check(
+        "risk_normalized_target_deducts_cost_and_prioritizes_same_bar_stop",
+        (True, True, True, "stop_first"),
+        (
+            bool(safe_valid and safe_target < 0.8),
+            bool(stop_valid),
+            bool(math.isclose(float(stop_target), -1.0, rel_tol=0.0, abs_tol=1e-12)),
+            stop_reason,
+        ),
+    )
+    torch, _nn = require_torch()
+    sequence_model = build_active_model(10, 0, architecture=INCEPTION_TIME_V1)
+    context_model = build_active_model(
+        10, len(RISK_GEOMETRY_CONTEXT_FEATURES), architecture=INCEPTION_TIME_RISK_CONTEXT_V1
+    )
+    x = torch.zeros((2, int(DEFAULT_LABEL_POLICY.feature_window_bars), 10), dtype=torch.float32)
+    check(
+        "risk_context_architecture_accepts_five_dimensional_context_without_changing_output_schema",
+        ((2, 2), (2, 2)),
+        (
+            tuple(sequence_model(x, torch.empty((2, 0), dtype=torch.float32)).shape),
+            tuple(
+                context_model(
+                    x,
+                    torch.zeros((2, len(RISK_GEOMETRY_CONTEXT_FEATURES)), dtype=torch.float32),
+                ).shape
+            ),
+        ),
+    )
+
+    # Pareto supervision is retained as a generic pairwise reduction. Trade-off/tie pairs
+    # contribute no gradient, and only strict same-date dominance is scored.
+    pareto_table = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2020-01-02"] * 4),
+            "target_favorable_r": [5.0, 3.0, 4.0, 2.0],
+            "target_adverse_r": [0.2, 0.8, 1.5, 0.1],
+        }
+    )
+    economic_target = np.asarray([4.8, 2.2, 2.5, 1.9], dtype=np.float32)
+    pareto_components = ranker_api.build_pareto_component_percentile_targets(
+        pareto_table, economic_target
+    )
+    check(
+        "pareto_targets_are_same_date_mfe_and_low_adverse_percentiles",
+        (
+            (1.0, 0.333333, 0.666667, 0.0),
+            (0.666667, 0.333333, 0.0, 1.0),
+        ),
+        (
+            tuple(round(float(x), 6) for x in pareto_components[:, 0]),
+            tuple(round(float(x), 6) for x in pareto_components[:, 1]),
+        ),
+    )
+    correct = ranker_api.pareto_pair_concordance_metrics(
+        np.arange(4, dtype=np.int64),
+        pareto_table,
+        economic_target,
+        np.asarray([0.9, 0.2, 0.1, 0.99], dtype=np.float32),
+    )
+    reversed_result = ranker_api.pareto_pair_concordance_metrics(
+        np.arange(4, dtype=np.int64),
+        pareto_table,
+        economic_target,
+        np.asarray([0.0, 0.8, 0.7, 0.99], dtype=np.float32),
+    )
+    check(
+        "pareto_concordance_counts_only_strict_dominance_pairs",
+        (2, 6, round(2 / 6, 6), 1.0, 0.0),
+        (
+            int(correct["comparable_pair_count"]),
+            int(correct["all_pair_count"]),
+            round(float(correct["comparable_pair_rate"]), 6),
+            round(float(correct["mean_daily_pareto_pair_concordance"]), 6),
+            round(float(reversed_result["mean_daily_pareto_pair_concordance"]), 6),
+        ),
+    )
+    margins = torch.as_tensor([0.9, 0.2, 0.1, 0.99], dtype=torch.float32)
+    target_tensor = torch.as_tensor(pareto_components, dtype=torch.float32)
+    pareto_loss, pair_count = training_module._pairwise_logistic_loss(
+        torch,
+        margins,
+        target_tensor,
+        pareto_table["date"].to_numpy(),
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+    )
+    check(
+        "pareto_pairwise_reduction_excludes_tradeoff_and_tie_pairs_from_gradient",
+        (2, True),
+        (int(pair_count), bool(pareto_loss is not None and torch.isfinite(pareto_loss).item())),
+    )
+
+    summary["components"] = (
+        "dual_component_regression",
+        "equal_rank_target",
+        "risk_normalized_context",
+        "pareto_pairwise",
+    )
     summary["training_performed"] = False
     return results, summary
+
 
 
 def validate_breakout_quality_mr13m_low_adverse_ranker_contract_case(_base_params):
@@ -2404,446 +2581,8 @@ def validate_breakout_quality_mr13m_low_adverse_ranker_contract_case(_base_param
     return results, summary
 
 
-def validate_breakout_quality_mr13n_equal_rank_composite_contract_case(_base_params):
-    """Pin MR-13N as a fixed equal-rank combination of MFE and low-adverse."""
-
-    case_id = "BREAKOUT_QUALITY_MR13N_EQUAL_RANK_COMPOSITE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
-
-    from config.breakout_quality import (
-        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-        BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        get_breakout_quality_model_research_settings,
-    )
-    from filters.breakout_quality.daily_ranker_data import (
-        build_equal_rank_mfe_low_adverse_target,
-    )
-    from filters.breakout_quality.continuous_target import (
-        DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
-        build_daily_full_horizon_equal_rank_mfe_low_adverse_contract,
-    )
-
-    profile_h = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    profile_n = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    spec_n = get_continuous_ranker_research_spec(
-        DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    active_research = get_breakout_quality_model_research_settings()
-
-    fixed_fields = (
-        "optimizer_name",
-        "training_sampling_mode",
-        "training_objective",
-        "loss_name",
-        "epoch_selection_metric",
-        "training_label_scope",
-        "training_sample_scope",
-        "model_architecture",
-    )
-    check(
-        "mr13n_profile_is_registered_and_active_resolver_does_not_change_production_workflow",
-        (
-                    DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-                    BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-                ),
-        (
-                    profile_n.name,
-                    active_research.experiment_profile,
-                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-                ),
-    )
-    check(
-        "mr13n_keeps_mr13h_training_contract_except_target_identity",
-        tuple(getattr(profile_h, field) for field in fixed_fields),
-        tuple(getattr(profile_n, field) for field in fixed_fields),
-    )
-    check(
-        "mr13n_identity_fixed_pairwise_stage_and_reference_evaluation_are_explicit",
-        (
-                    "MR-13N",
-                    DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
-                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-                    None,
-                    DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-                    False,
-                ),
-        (
-                    spec_n.model_research_id,
-                    profile_n.continuous_target_id,
-                    spec_n.pairwise_reduction,
-                    spec_n.reference_profile_name,
-                    spec_n.evaluation_reference_profile_name,
-                    bool(spec_n.selection_pit_authorized),
-                ),
-    )
-
-    dates = pd.to_datetime(
-        ["2020-01-02", "2020-01-02", "2020-01-02", "2020-01-03"]
-    )
-    valid = np.ones(4, dtype=bool)
-    favorable_r = np.asarray([3.0, 2.0, 1.0, 4.0], dtype=np.float64)
-    low_adverse_r = np.asarray([-2.0, -0.5, -1.0, -0.2], dtype=np.float64)
-    composite, mfe_pct, low_adv_pct = build_equal_rank_mfe_low_adverse_target(
-        favorable_r,
-        -low_adverse_r,
-        valid,
-        dates,
-    )
-    check(
-        "mr13n_same_date_component_percentiles_and_equal_weight_composite_are_exact",
-        (
-                    (1.0, 0.5, 0.0, 0.5),
-                    (0.0, 1.0, 0.5, 0.5),
-                    (0.5, 0.75, 0.25, 0.5),
-                ),
-        (
-                    tuple(round(float(x), 6) for x in mfe_pct),
-                    tuple(round(float(x), 6) for x in low_adv_pct),
-                    tuple(round(float(x), 6) for x in composite),
-                ),
-    )
-
-    contract = build_daily_full_horizon_equal_rank_mfe_low_adverse_contract(
-        DEFAULT_LABEL_POLICY
-    )
-    check(
-        "mr13n_contract_is_fixed_equal_rank_strategy_agnostic_and_has_no_weight_tuning",
-        (
-                    DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
-                    0.5,
-                    0.5,
-                    "none",
-                    False,
-                    "unitless_same_date_rank_composite",
-                ),
-        (
-                    contract["target_id"],
-                    float(contract["component_weights"]["mfe_percentile"]),
-                    float(contract["component_weights"]["low_adverse_percentile"]),
-                    contract["weight_tuning"],
-                    bool(contract["requires_strategy_candidate_membership"]),
-                    contract["unit"],
-                ),
-    )
-
-    daily_source = read_source_text("filters/breakout_quality/daily_ranker_data.py")
-    train_source = read_source_text("services/breakout_quality/train_daily_ranker.py")
-    check(
-        "mr13n_reference_economic_target_is_post_checkpoint_evaluation_only",
-        (True, True, False),
-        (
-                    "evaluation_reference_profile = (" in train_source,
-                    "used_for_training_or_epoch_selection\": False" in train_source,
-                    "evaluation_reference_profile_name" in daily_source,
-                ),
-    )
-
-    summary["model_research_id"] = spec_n.model_research_id
-    summary["active_model_research"] = active_research.experiment_profile
-    summary["training_performed"] = False
-    return results, summary
 
 
-def validate_breakout_quality_risk_normalized_13ij_contract_case(_base_params):
-    """Pin MR-13I/J universal target/accounting/context attribution."""
-
-    case_id = "BREAKOUT_QUALITY_RISK_NORMALIZED_13IJ"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
-
-    from config.breakout_quality import (
-        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-        BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        get_breakout_quality_workflow_settings,
-    )
-    from filters.breakout_quality.models.active import build_active_model
-    from filters.breakout_quality.models.runtime import require_torch
-    from filters.breakout_quality.risk_normalized_target import (
-        DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
-        RISK_GEOMETRY_CONTEXT_FEATURES,
-        RiskParamPeriod,
-        _params_for_period,
-        build_risk_target_contract,
-        compute_risk_geometry,
-        load_min_roos_risk_schedule,
-        risk_normalized_target_from_future_path,
-    )
-
-    profile_e = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    profile_i = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    profile_j = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    spec_i = get_continuous_ranker_research_spec(profile_i.name)
-    spec_j = get_continuous_ranker_research_spec(profile_j.name)
-
-    common_fields = (
-        "optimizer_name",
-        "training_sampling_mode",
-        "training_objective",
-        "loss_name",
-        "epoch_selection_metric",
-        "training_label_scope",
-        "training_sample_scope",
-    )
-    check(
-        "mr13i_keeps_mr13e_universe_objective_and_loss_and_changes_target_only",
-        (
-                    tuple(getattr(profile_e, field) for field in common_fields),
-                    DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
-                    "MR-13I",
-                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-                ),
-        (
-                    tuple(getattr(profile_i, field) for field in common_fields),
-                    profile_i.continuous_target_id,
-                    spec_i.model_research_id,
-                    spec_i.pairwise_reduction,
-                ),
-    )
-    check(
-        "mr13j_target_and_training_contract_equal_mr13i_while_architecture_adds_context",
-        (
-                    profile_i.continuous_target_id,
-                    tuple(getattr(profile_i, field) for field in common_fields),
-                    "inception_time_risk_context_v1",
-                    "MR-13J",
-                ),
-        (
-                    profile_j.continuous_target_id,
-                    tuple(getattr(profile_j, field) for field in common_fields),
-                    profile_j.model_architecture,
-                    spec_j.model_research_id,
-                ),
-    )
-    from config.breakout_quality import get_breakout_quality_model_research_settings
-    active_research = get_breakout_quality_model_research_settings()
-    check(
-        "model_research_profile_resolves_from_config_without_changing_production_workflow",
-        (
-                    BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-                ),
-        (
-                    active_research.experiment_profile,
-                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-                ),
-    )
-
-    contract = build_risk_target_contract(
-        horizon_bars=int(DEFAULT_LABEL_POLICY.label_horizon_bars),
-        param_policy="base-finalist-best",
-    )
-    check(
-        "risk_target_uses_only_min_roos_initial_risk_fields_and_canonical_accounting",
-        (
-                    ["atr_len", "atr_times_init"],
-                    False,
-                    True,
-                    False,
-                ),
-        (
-                    list(contract["risk_fields"]),
-                    "high_len" in contract["risk_fields"],
-                    "canonical" in str(contract["accounting"]),
-                    bool(contract["strategy_exit_path_used"]),
-                ),
-    )
-
-    from config.strategy_compare import get_strategy_comparison_settings
-    from core.params_io import params_to_json_dict
-    from core.strategy_params import V16StrategyParams
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_root = Path(temp_dir)
-        param_payload = params_to_json_dict(V16StrategyParams())
-        param_payload.update({
-            "atr_len": 14,
-            "atr_times_init": 2.0,
-            "high_len": 201,
-            "atr_buy_tol": 1.5,
-            "atr_times_trail": 3.0,
-        })
-        strategy_settings = get_strategy_comparison_settings("selection_pit")
-        for source_id, years in (
-            ("selection_min_roos", range(2014, 2021)),
-            ("min_roos", range(2021, 2027)),
-        ):
-            source = strategy_settings.parameter_sources[source_id]
-            path = temp_root / str(source.path_template).format(
-                param_filename="roos_base_best.json"
-            )
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                json.dumps({
-                    "meta": {},
-                    "summary": {},
-                    "params_ensemble_by_effective_date": {
-                        f"{year}-01-01": [{"params": dict(param_payload)}]
-                        for year in years
-                    },
-                }),
-                encoding="utf-8",
-            )
-        risk_schedule = load_min_roos_risk_schedule(
-            temp_root, param_policy="base-finalist-best"
-        )
-    check(
-        "risk_schedule_reuses_strategy_compare_param_sources_without_future_backfill",
-        (13, "2014-01-01", "2026-01-01", 14, 2.0),
-        (
-                    len(risk_schedule),
-                    risk_schedule[0].start_date.date().isoformat(),
-                    risk_schedule[-1].start_date.date().isoformat(),
-                    risk_schedule[0].atr_len,
-                    risk_schedule[0].atr_times_init,
-                ),
-    )
-
-    period = RiskParamPeriod(
-        start_date=pd.Timestamp("2020-01-01"),
-        end_date=pd.Timestamp("2020-12-31"),
-        atr_len=14,
-        atr_times_init=2.0,
-        source_id="synthetic",
-        params_signature="synthetic",
-    )
-    geometry = compute_risk_geometry(
-        ticker="2330",
-        decision_date="2020-06-01",
-        reference_price=100.0,
-        atr=2.5,
-        period=period,
-    )
-    check(
-        "risk_geometry_is_five_dimensional_finite_and_encodes_capital_cost_capacity",
-        (True, 5, True, True, True),
-        (
-                    bool(geometry.valid),
-                    len(geometry.context),
-                    bool(all(math.isfinite(value) for value in geometry.context)),
-                    bool(float(geometry.context[2]) > 1.0 and float(geometry.context[3]) > 0.0),
-                    bool(0.0 < float(geometry.context[4]) <= 1.0),
-                ),
-    )
-    params = _params_for_period(period)
-    horizon = int(DEFAULT_LABEL_POLICY.label_horizon_bars)
-    dates = pd.date_range("2020-06-02", periods=horizon, freq="B")
-    safe_target, safe_valid, _ = risk_normalized_target_from_future_path(
-        ticker="2330",
-        decision_date="2020-06-01",
-        reference_price=geometry.reference_price,
-        stop_price=geometry.stop_price,
-        qty=geometry.qty,
-        planned_initial_risk_milli=geometry.planned_initial_risk_milli,
-        future_high=np.full(horizon, 105.0, dtype=np.float64),
-        future_low=np.full(horizon, 99.0, dtype=np.float64),
-        future_dates=dates,
-        params=params,
-    )
-    stop_target, stop_valid, stop_reason = risk_normalized_target_from_future_path(
-        ticker="2330",
-        decision_date="2020-06-01",
-        reference_price=geometry.reference_price,
-        stop_price=geometry.stop_price,
-        qty=geometry.qty,
-        planned_initial_risk_milli=geometry.planned_initial_risk_milli,
-        future_high=np.full(horizon, 120.0, dtype=np.float64),
-        future_low=np.full(horizon, 94.0, dtype=np.float64),
-        future_dates=dates,
-        params=params,
-    )
-    # Gross price-only favorable-minus-adverse would be 0.8R before fees when D=5.
-    check(
-        "risk_target_deducts_canonical_cost_and_same_bar_stop_is_adverse_first",
-        (True, True, True, "stop_first"),
-        (
-                    bool(safe_valid and safe_target < 0.8),
-                    bool(stop_valid),
-                    bool(math.isclose(float(stop_target), -1.0, rel_tol=0.0, abs_tol=1e-12)),
-                    stop_reason,
-                ),
-    )
-
-    settings_i = get_breakout_quality_workflow_settings(experiment_profile=profile_i.name)
-    settings_j = get_breakout_quality_workflow_settings(experiment_profile=profile_j.name)
-    torch, _nn = require_torch()
-    model_i = build_active_model(10, 0, architecture=settings_i.model_architecture)
-    model_j = build_active_model(
-        10,
-        len(RISK_GEOMETRY_CONTEXT_FEATURES),
-        architecture=settings_j.model_architecture,
-    )
-    x = torch.zeros((2, int(DEFAULT_LABEL_POLICY.feature_window_bars), 10), dtype=torch.float32)
-    logits_i = model_i(x, torch.empty((2, 0), dtype=torch.float32))
-    logits_j = model_j(
-        x,
-        torch.zeros((2, len(RISK_GEOMETRY_CONTEXT_FEATURES)), dtype=torch.float32),
-    )
-    check(
-        "mr13i_and_mr13j_model_heads_accept_zero_vs_five_dimensional_context",
-        ((2, 2), (2, 2)),
-        (tuple(logits_i.shape), tuple(logits_j.shape)),
-    )
-
-    from services.breakout_quality import train_continuous_ranker as continuous_ranker_trainer
-    args_j = continuous_ranker_trainer.parse_args([
-        "--model-architecture", settings_j.model_architecture,
-        "--experiment-profile", profile_j.name,
-    ])
-    try:
-        continuous_ranker_trainer.validate_args(args_j)
-        daily_context_profile_allowed = True
-    except ValueError:
-        daily_context_profile_allowed = False
-    event_context_args = continuous_ranker_trainer.parse_args([
-        "--model-architecture", settings_j.model_architecture,
-        "--experiment-profile", STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
-    ])
-    try:
-        continuous_ranker_trainer.validate_args(event_context_args)
-        event_context_rejected = False
-    except ValueError as exc:
-        event_context_rejected = "event continuous ranker" in str(exc)
-    check(
-        "continuous_ranker_dispatch_allows_daily_risk_context_but_keeps_event_ranker_sequence_only",
-        (True, True),
-        (daily_context_profile_allowed, event_context_rejected),
-    )
-
-    application_source = read_source_text("tools/filters/breakout_quality/application.py")
-    risk_source = read_source_text("filters/breakout_quality/risk_normalized_target.py")
-    check(
-        "model_app_preflights_risk_params_and_risk_target_has_no_services_reverse_dependency",
-        (True, False),
-        (
-                    "load_min_roos_risk_schedule(PROJECT_ROOT)" in application_source
-                    and "[Risk params] BLOCKED" in application_source,
-                    "from services." in risk_source or "import services." in risk_source,
-                ),
-    )
-
-    summary["active_model_research"] = active_research.experiment_profile
-    summary["mr13j_status"] = (
-        "active" if active_research.experiment_profile == profile_j.name else "implemented_not_active"
-    )
-    return results, summary
 
 def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_params):
     """Pin the profile-driven continuous-ranker boundary before adding new Daily MR variants."""
@@ -2940,153 +2679,3 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
     return results, summary
 
 
-def validate_breakout_quality_mr13o_pareto_pairwise_contract_case(_base_params):
-    """Pin MR-13O as strict Pareto-dominance pairwise supervision without a mixing weight."""
-
-    case_id = "BREAKOUT_QUALITY_MR13O_PARETO_PAIRWISE"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
-
-    from config.breakout_quality import (
-        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-        BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
-        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
-        TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
-        get_breakout_quality_model_research_settings,
-    )
-    from filters.breakout_quality.ranker_training_contract import training_semantics
-    from services.breakout_quality import ranker_training as ranker_api
-
-    profile_h = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    profile_o = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE
-    )
-    spec_o = get_continuous_ranker_research_spec(
-        DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE
-    )
-    active_research = get_breakout_quality_model_research_settings()
-
-    check(
-        "mr13o_profile_remains_registered_while_active_research_returns_to_current_rolling_primary_and_production_workflow_remains_unchanged",
-        (
-                    DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
-                    BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-                ),
-        (
-                    profile_o.name,
-                    active_research.experiment_profile,
-                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-                ),
-    )
-    fixed_fields = (
-        "optimizer_name",
-        "training_sampling_mode",
-        "continuous_target_id",
-        "loss_name",
-        "training_label_scope",
-        "training_sample_scope",
-        "model_architecture",
-    )
-    check(
-        "mr13o_keeps_mr13h_economic_target_architecture_and_data_contract",
-        tuple(getattr(profile_h, field) for field in fixed_fields),
-        tuple(getattr(profile_o, field) for field in fixed_fields),
-    )
-    check(
-        "mr13o_identity_objective_epoch_metric_pair_scope_and_pit_stage_are_explicit",
-        (
-                    "MR-13O",
-                    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
-                    "mean_daily_pareto_pair_concordance",
-                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
-                    False,
-                ),
-        (
-                    spec_o.model_research_id,
-                    profile_o.training_objective,
-                    profile_o.epoch_selection_metric,
-                    spec_o.pairwise_reduction,
-                    bool(spec_o.selection_pit_authorized),
-                ),
-    )
-
-    dates = pd.to_datetime(["2020-01-02"] * 4)
-    group_table = pd.DataFrame(
-        {
-            "date": dates,
-            "target_favorable_r": [5.0, 3.0, 4.0, 2.0],
-            "target_adverse_r": [0.2, 0.8, 1.5, 0.1],
-        }
-    )
-    economic_target = np.asarray([4.8, 2.2, 2.5, 1.9], dtype=np.float32)
-    components = ranker_api.build_pareto_component_percentile_targets(
-        group_table, economic_target
-    )
-    check(
-        "mr13o_component_targets_are_same_date_mfe_and_low_adverse_percentiles",
-        (
-                    (1.0, 0.333333, 0.666667, 0.0),
-                    (0.666667, 0.333333, 0.0, 1.0),
-                ),
-        (
-                    tuple(round(float(x), 6) for x in components[:, 0]),
-                    tuple(round(float(x), 6) for x in components[:, 1]),
-                ),
-    )
-
-    correct = ranker_api.pareto_pair_concordance_metrics(
-        np.arange(4, dtype=np.int64),
-        group_table,
-        economic_target,
-        np.asarray([0.9, 0.2, 0.1, 0.99], dtype=np.float32),
-    )
-    reversed_result = ranker_api.pareto_pair_concordance_metrics(
-        np.arange(4, dtype=np.int64),
-        group_table,
-        economic_target,
-        np.asarray([0.0, 0.8, 0.7, 0.99], dtype=np.float32),
-    )
-    check(
-        "mr13o_only_strict_dominance_pairs_count_and_tradeoff_pairs_are_ignored",
-        (2, 6, round(2 / 6, 6), 1.0, 0.0),
-        (
-                    int(correct["comparable_pair_count"]),
-                    int(correct["all_pair_count"]),
-                    round(float(correct["comparable_pair_rate"]), 6),
-                    round(float(correct["mean_daily_pareto_pair_concordance"]), 6),
-                    round(float(reversed_result["mean_daily_pareto_pair_concordance"]), 6),
-                ),
-    )
-
-    semantics = training_semantics(profile_o)
-    pairwise = dict(semantics.get("pairwise_contract") or {})
-    check(
-        "mr13o_training_semantics_have_no_mfe_adverse_mix_weight",
-        (
-                    "same_date_strict_pareto_dominance_pairs",
-                    ["same_date_mfe_percentile", "same_date_low_adverse_percentile"],
-                    "excluded_no_gradient",
-                    "excluded_no_gradient",
-                    "mean_daily_pareto_pair_concordance",
-                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
-                ),
-        (
-                    pairwise.get("pair_scope"),
-                    pairwise.get("target_components"),
-                    pairwise.get("tradeoff_pair_handling"),
-                    pairwise.get("tie_handling"),
-                    pairwise.get("epoch_selection"),
-                    pairwise.get("pair_weighting"),
-                ),
-    )
-
-    summary["model_research_id"] = spec_o.model_research_id
-    summary["active_model_research"] = active_research.experiment_profile
-    summary["training_performed"] = False
-    return results, summary

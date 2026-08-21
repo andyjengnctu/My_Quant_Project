@@ -763,6 +763,7 @@ def main(argv=None) -> int:
                 [item["path"] for item in maintenance_summary["stale_modules"]]
                 + [item["path"] for item in maintenance_summary["oversized_transient_tests"]]
                 + [f"{item['module_id']}/{item['audit_id']}" for item in maintenance_summary["disabled_audits"]]
+                + [item["path"] for item in maintenance_summary.get("retired_dedicated_tests", [])]
             )
             or "(none)"
         ),
