@@ -120,6 +120,30 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         ),
     )
 
+    missing_daily_history_rejected = False
+    try:
+        _resolve_training_universe_start(
+            SimpleNamespace(
+                summary={},
+                profile=SimpleNamespace(
+                    training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+                ),
+            ),
+            selection_start=pd.Timestamp("2011-01-01"),
+        )
+    except ValueError as exc:
+        missing_daily_history_rejected = (
+            "不得fallback到optimizer selection_start_date" in str(exc)
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "daily_universal_missing_training_universe_start_fails_closed_without_optimizer_fallback",
+        True,
+        missing_daily_history_rejected,
+    )
+
     event_profile = get_breakout_quality_experiment_profile(
         STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
     )

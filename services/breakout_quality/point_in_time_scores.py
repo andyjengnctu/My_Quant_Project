@@ -299,10 +299,20 @@ def _iso_timestamp(value: Any, *, field_name: str) -> pd.Timestamp:
 
 
 def _resolve_training_universe_start(bundle, *, selection_start: pd.Timestamp) -> pd.Timestamp:
-    """Resolve the actual model-history lower bound independently of optimizer selection policy."""
+    """Resolve model-history lower bound without leaking optimizer period policy into Daily Universal."""
 
-    raw = dict(getattr(bundle, "summary", {}) or {}).get("training_universe_start_date")
+    summary = dict(getattr(bundle, "summary", {}) or {})
+    raw = summary.get("training_universe_start_date")
+    daily_scope = (
+        str(getattr(getattr(bundle, "profile", None), "training_sample_scope", ""))
+        == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    )
     if raw in {None, ""}:
+        if daily_scope:
+            raise ValueError(
+                "daily ranker summary缺少training_universe_start_date；"
+                "Daily Universal不得fallback到optimizer selection_start_date"
+            )
         return pd.Timestamp(selection_start).normalize()
     return _iso_timestamp(raw, field_name="training_universe_start_date")
 
