@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .checks import bind_checks
+
 from .synthetic_breakout_quality_support import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
@@ -49,7 +51,6 @@ from .synthetic_breakout_quality_support import (
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
-    add_check,
     ast,
     build_daily_full_horizon_opportunity_contract,
     build_daily_full_horizon_pure_mfe_contract,
@@ -82,46 +83,34 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_CONTINUOUS_TARGET"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
     contract = spec.contract_payload()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "continuous_target_id_is_versioned",
-        STRATEGY_ALIGNED_TARGET_ID,
-        contract["target_id"],
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check("continuous_target_id_is_versioned", STRATEGY_ALIGNED_TARGET_ID, contract["target_id"])
+    check(
         "continuous_target_uses_no_split_or_oos_parameters",
         (False, False, "none", "none"),
         (
-            contract["split_derived_parameters"],
-            contract["oos_derived_parameters"],
-            contract["normalization"],
-            contract["clipping"],
-        ),
+                    contract["split_derived_parameters"],
+                    contract["oos_derived_parameters"],
+                    contract["normalization"],
+                    contract["clipping"],
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_target_inherits_current_horizon_and_risk_budget",
         (
-            int(DEFAULT_LABEL_POLICY.label_horizon_bars),
-            abs(float(DEFAULT_LABEL_POLICY.max_adverse_return)),
-            float(DEFAULT_LABEL_POLICY.min_mfe_return)
-            / abs(float(DEFAULT_LABEL_POLICY.max_adverse_return)),
-        ),
+                    int(DEFAULT_LABEL_POLICY.label_horizon_bars),
+                    abs(float(DEFAULT_LABEL_POLICY.max_adverse_return)),
+                    float(DEFAULT_LABEL_POLICY.min_mfe_return)
+                    / abs(float(DEFAULT_LABEL_POLICY.max_adverse_return)),
+                ),
         (
-            int(contract["horizon_bars"]),
-            float(contract["risk_budget_return"]),
-            float(contract["full_horizon_time_penalty_r"]),
-        ),
+                    int(contract["horizon_bars"]),
+                    float(contract["risk_budget_return"]),
+                    float(contract["full_horizon_time_penalty_r"]),
+                ),
         tol=1e-12,
     )
 
@@ -142,19 +131,16 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
         - 0.02 / risk_budget
         - float(spec.full_horizon_time_penalty_r) * (4.0 / float(horizon - 1))
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_target_rewards_fast_favorable_move_net_of_adverse_path",
         (True, 5, 0.20, 0.02, round(expected_early_target, 12)),
         (
-            bool(early.valid),
-            int(early.opportunity_bar),
-            round(float(early.favorable_return), 12),
-            round(float(early.adverse_return_to_peak), 12),
-            round(float(early.target_raw_r), 12),
-        ),
+                    bool(early.valid),
+                    int(early.opportunity_bar),
+                    round(float(early.favorable_return), 12),
+                    round(float(early.adverse_return_to_peak), 12),
+                    round(float(early.target_raw_r), 12),
+                ),
         tol=1e-9,
     )
 
@@ -167,21 +153,14 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
         available_bars=horizon,
         spec=spec,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_target_time_penalty_offsets_minimum_move_at_horizon_end",
         (True, horizon, 0.0),
         (bool(late.valid), int(late.opportunity_bar), round(float(late.target_raw_r), 12)),
         tol=1e-9,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "continuous_target_prefers_early_larger_opportunity",
-        True,
         float(early.target_raw_r) > float(late.target_raw_r),
     )
 
@@ -195,20 +174,17 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
         available_bars=horizon,
         spec=spec,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_target_same_bar_risk_touch_excludes_high",
         (True, 0.0, 0.10, 1, 1, -1.0),
         (
-            bool(adverse_first.valid),
-            float(adverse_first.favorable_return),
-            float(adverse_first.adverse_return_to_peak),
-            int(adverse_first.opportunity_bar),
-            int(adverse_first.first_risk_breach_bar),
-            float(adverse_first.target_raw_r),
-        ),
+                    bool(adverse_first.valid),
+                    float(adverse_first.favorable_return),
+                    float(adverse_first.adverse_return_to_peak),
+                    int(adverse_first.opportunity_bar),
+                    int(adverse_first.first_risk_breach_bar),
+                    float(adverse_first.target_raw_r),
+                ),
         tol=1e-12,
     )
 
@@ -219,17 +195,14 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
         available_bars=horizon - 1,
         spec=spec,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_target_insufficient_future_is_invalid",
         (False, "insufficient_future", True),
         (
-            bool(insufficient.valid),
-            str(insufficient.reason),
-            bool(math.isnan(insufficient.target_raw_r)),
-        ),
+                    bool(insufficient.valid),
+                    str(insufficient.reason),
+                    bool(math.isnan(insufficient.target_raw_r)),
+                ),
     )
 
     anchors = np.array([100.0, 100.0, 100.0, 100.0], dtype=np.float64)
@@ -254,19 +227,16 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
         np.array_equal(target_arrays[key], repeated_arrays[key], equal_nan=True)
         for key in target_arrays
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_target_group_arrays_are_deterministic_and_group_scoped",
         ((4,), np.dtype(np.float32), np.dtype(np.bool_), [True, True, True, False], True),
         (
-            target_arrays["target_raw_r"].shape,
-            target_arrays["target_raw_r"].dtype,
-            target_arrays["valid_mask"].dtype,
-            target_arrays["valid_mask"].tolist(),
-            deterministic,
-        ),
+                    target_arrays["target_raw_r"].shape,
+                    target_arrays["target_raw_r"].dtype,
+                    target_arrays["valid_mask"].dtype,
+                    target_arrays["valid_mask"].tolist(),
+                    deterministic,
+                ),
     )
 
     project_root = Path(__file__).resolve().parents[2]
@@ -290,63 +260,48 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
             "point_in_time_scores.py",
         )
     ]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "continuous_target_builder_is_canonical_service_without_historical_audit_or_strategy_compare_dependency",
-        True,
         bool(
-            "build_strategy_aligned_target_artifacts" in builder_source
-            and "build_strategy_aligned_no_time_target_artifacts" in builder_source
-            and "historical_research_gate_required" in builder_source
-            and "from tools.audit" not in builder_source
-            and "import tools.audit" not in builder_source
-            and "from filters.breakout_quality.strategy_compare" not in builder_source
-            and "import filters.breakout_quality.strategy_compare" not in builder_source
-            and "target_time_penalty_ablation" not in builder_source
-        ),
+                    "build_strategy_aligned_target_artifacts" in builder_source
+                    and "build_strategy_aligned_no_time_target_artifacts" in builder_source
+                    and "historical_research_gate_required" in builder_source
+                    and "from tools.audit" not in builder_source
+                    and "import tools.audit" not in builder_source
+                    and "from filters.breakout_quality.strategy_compare" not in builder_source
+                    and "import filters.breakout_quality.strategy_compare" not in builder_source
+                    and "target_time_penalty_ablation" not in builder_source
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "prepare_continuous_target_routes_only_to_canonical_service_builder",
-        True,
         bool(
-            "services.breakout_quality.continuous_target_builder" in prepare_source
-            and "tools.audit.breakout_quality.continuous_target" not in prepare_source
-            and "approved-workflow-rebuild" not in prepare_source
-        ),
+                    "services.breakout_quality.continuous_target_builder" in prepare_source
+                    and "tools.audit.breakout_quality.continuous_target" not in prepare_source
+                    and "approved-workflow-rebuild" not in prepare_source
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "retired_11c_to_11f_target_audit_implementations_are_not_runtime_or_catalog_commands",
-        True,
         bool(
-            all(not path.exists() for path in retired_paths)
-            and "audit-continuous-target" not in catalog_source
-            and "audit-qualified-candidate-set" not in catalog_source
-            and "audit-target-attribution" not in catalog_source
-            and "audit-target-time-ablation" not in catalog_source
-            and "audit-no-time-target" not in catalog_source
-            and 'module="services.breakout_quality.point_in_time_audit"' in catalog_source
-        ),
+                    all(not path.exists() for path in retired_paths)
+                    and "audit-continuous-target" not in catalog_source
+                    and "audit-qualified-candidate-set" not in catalog_source
+                    and "audit-target-attribution" not in catalog_source
+                    and "audit-target-time-ablation" not in catalog_source
+                    and "audit-no-time-target" not in catalog_source
+                    and 'module="services.breakout_quality.point_in_time_audit"' in catalog_source
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_target_output_path_remains_target_version_scoped",
         ("breakout_quality_v1", "continuous_targets", STRATEGY_ALIGNED_TARGET_ID),
         tuple(
-            resolve_continuous_target_dir(
-                Path("/tmp/project"),
-                "breakout_quality_v1",
-            ).parts[-3:]
-        ),
+                    resolve_continuous_target_dir(
+                        Path("/tmp/project"),
+                        "breakout_quality_v1",
+                    ).parts[-3:]
+                ),
     )
 
     summary["target_id"] = STRATEGY_ALIGNED_TARGET_ID
@@ -357,63 +312,55 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_CONTINUOUS_RANKER"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     profile = get_breakout_quality_experiment_profile(
         STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_is_named_training_profile_not_model_architecture",
         (
-            TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
-            STRATEGY_ALIGNED_TARGET_ID,
-            "mse",
-            "mean_daily_spearman",
-            False,
-        ),
+                    TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+                    STRATEGY_ALIGNED_TARGET_ID,
+                    "mse",
+                    "mean_daily_spearman",
+                    False,
+                ),
         (
-            profile.training_objective,
-            profile.continuous_target_id,
-            profile.loss_name,
-            profile.epoch_selection_metric,
-            STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
-            in SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
-        ),
+                    profile.training_objective,
+                    profile.continuous_target_id,
+                    profile.loss_name,
+                    profile.epoch_selection_metric,
+                    STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
+                    in SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+                ),
     )
 
     pass_profile = get_breakout_quality_experiment_profile(
         STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "pass_conditional_ranker_is_named_profile_with_no_time_target_and_pass_scope",
         (
-            TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
-            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
-            TRAINING_LABEL_SCOPE_PASS_ONLY,
-            False,
-        ),
+                    TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+                    STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+                    TRAINING_LABEL_SCOPE_PASS_ONLY,
+                    False,
+                ),
         (
-            pass_profile.training_objective,
-            pass_profile.continuous_target_id,
-            pass_profile.training_label_scope,
-            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
-            in SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
-        ),
+                    pass_profile.training_objective,
+                    pass_profile.continuous_target_id,
+                    pass_profile.training_label_scope,
+                    STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+                    in SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+                ),
     )
 
     raw = np.asarray([1.0, 3.0, 2.0, 5.0, 5.0, 9.0], dtype=np.float32)
     valid = np.ones((6,), dtype=bool)
     dates = pd.Series(["2020-01-02"] * 3 + ["2021-05-03"] * 3)
     percentiles = build_daily_percentile_targets(raw, valid, dates)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_daily_percentile_spans_zero_one_and_averages_ties",
         (0.0, 1.0, 0.5, 0.25, 0.25, 1.0),
         tuple(round(float(value), 6) for value in percentiles),
@@ -433,21 +380,18 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     pass_mask = np.zeros((6,), dtype=bool)
     pass_mask[scoped_ids] = True
     pass_percentiles = build_daily_percentile_targets(raw, pass_mask, dates)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "pass_conditional_ranker_percentiles_use_only_same_date_pass_groups",
         (0, 2, 4, 5, 0.0, 1.0, 0.0, 1.0, True, True),
         (
-            int(scoped_ids[0]), int(scoped_ids[1]), int(scoped_ids[2]), int(scoped_ids[3]),
-            round(float(pass_percentiles[0]), 6),
-            round(float(pass_percentiles[2]), 6),
-            round(float(pass_percentiles[4]), 6),
-            round(float(pass_percentiles[5]), 6),
-            bool(np.isnan(pass_percentiles[1])),
-            bool(np.isnan(pass_percentiles[3])),
-        ),
+                    int(scoped_ids[0]), int(scoped_ids[1]), int(scoped_ids[2]), int(scoped_ids[3]),
+                    round(float(pass_percentiles[0]), 6),
+                    round(float(pass_percentiles[2]), 6),
+                    round(float(pass_percentiles[4]), 6),
+                    round(float(pass_percentiles[5]), 6),
+                    bool(np.isnan(pass_percentiles[1])),
+                    bool(np.isnan(pass_percentiles[3])),
+                ),
     )
 
     singleton_percentile = build_daily_percentile_targets(
@@ -455,10 +399,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         np.asarray([True], dtype=bool),
         pd.Series(["2022-08-08"]),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_singleton_date_uses_neutral_half_percentile",
         (0.5,),
         tuple(float(value) for value in singleton_percentile),
@@ -467,10 +408,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     changed_oos = raw.copy()
     changed_oos[3:] = np.asarray([-100.0, 500.0, 0.0], dtype=np.float32)
     changed_percentiles = build_daily_percentile_targets(changed_oos, valid, dates)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_same_date_transform_prevents_cross_split_distribution_leakage",
         tuple(percentiles[:3]),
         tuple(changed_percentiles[:3]),
@@ -514,17 +452,14 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             expected_dataset_policy={"policy": "synthetic"},
             expected_dataset_artifacts=dataset_artifacts,
         )
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
+        check(
             "continuous_ranker_strictly_loads_versioned_target_arrays",
             (STRATEGY_ALIGNED_TARGET_ID, tuple(raw), tuple(valid)),
             (
-                loaded_manifest["target_contract"]["target_id"],
-                tuple(loaded_raw),
-                tuple(loaded_valid),
-            ),
+                            loaded_manifest["target_contract"]["target_id"],
+                            tuple(loaded_raw),
+                            tuple(loaded_valid),
+                        ),
         )
         stale_dataset_artifacts = {
             "events_csv": {
@@ -543,14 +478,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             stale_dataset_rejected = False
         except ValueError as exc:
             stale_dataset_rejected = "Dataset artifact" in str(exc)
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
-            "continuous_ranker_rejects_target_from_different_dataset_artifacts",
-            True,
-            stale_dataset_rejected,
-        )
+        check_true("continuous_ranker_rejects_target_from_different_dataset_artifacts", stale_dataset_rejected)
 
         raw_path.write_bytes(raw_path.read_bytes() + b"tamper")
         try:
@@ -563,14 +491,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             tamper_rejected = False
         except ValueError as exc:
             tamper_rejected = "size" in str(exc) or "SHA256" in str(exc)
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
-            "continuous_ranker_rejects_tampered_target_artifact",
-            True,
-            tamper_rejected,
-        )
+        check_true("continuous_ranker_rejects_tampered_target_artifact", tamper_rejected)
 
     app_path = Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py"
     tree = read_source_ast(app_path)
@@ -581,10 +502,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         if any(isinstance(target, ast.Name) and target.id == "COMMAND_MODULES" for target in node.targets):
             command_modules = ast.literal_eval(node.value)
             break
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_research_command_is_registered",
         "services.breakout_quality.ranker_cli",
         command_modules.get("train-continuous-ranker"),
@@ -630,31 +548,26 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             prefetch_workers=BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS,
         )
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "continuous_ranker_multiworker_prefetch_preserves_exact_batch_identity_and_values",
-        True,
         BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES == 8
-        and BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS == 4
-        and len(serial_batches) == len(prefetched_batches)
-        and all(np.array_equal(a[0], b[0]) for a, b in zip(serial_batches, prefetched_batches))
-        and all(np.array_equal(a[1], b[1]) for a, b in zip(serial_batches, prefetched_batches))
-        and "torch.cuda.Stream" in ranker_source
-        and "non_blocking=True" in ranker_source
-        and ".pin_memory()" in ranker_source,
+                and BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS == 4
+                and len(serial_batches) == len(prefetched_batches)
+                and all(np.array_equal(a[0], b[0]) for a, b in zip(serial_batches, prefetched_batches))
+                and all(np.array_equal(a[1], b[1]) for a, b in zip(serial_batches, prefetched_batches))
+                and "torch.cuda.Stream" in ranker_source
+                and "non_blocking=True" in ranker_source
+                and ".pin_memory()" in ranker_source,
     )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_reuses_active_two_logit_head_and_pass_probability",
         (True, True, True),
         (
-            "self.classifier = nn.Linear(classifier_input, 2)" in inception_source,
-            "torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]" in ranker_source,
-            '"model_state_dict"' in ranker_source and "torch.save(" in ranker_source,
-        ),
+                    "self.classifier = nn.Linear(classifier_input, 2)" in inception_source,
+                    "torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]" in ranker_source,
+                    '"model_state_dict"' in ranker_source and "torch.save(" in ranker_source,
+                ),
     )
     train_source = (
         project_root
@@ -675,19 +588,16 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         / "breakout_quality"
         / "export_scores.py"
     ).read_text(encoding="utf-8")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_is_cli_only_and_does_not_pollute_interactive_menu",
         (True, True, True, True),
         (
-            command_modules.get("train-continuous-ranker")
-            == "services.breakout_quality.ranker_cli",
-            'print("[10] 11B 同日 Percentile Ranker（research-only）")' not in app_source,
-            'elif choice == "10":' not in app_source,
-            "_interactive_train_continuous_ranker" not in app_source,
-        ),
+                    command_modules.get("train-continuous-ranker")
+                    == "services.breakout_quality.ranker_cli",
+                    'print("[10] 11B 同日 Percentile Ranker（research-only）")' not in app_source,
+                    'elif choice == "10":' not in app_source,
+                    "_interactive_train_continuous_ranker" not in app_source,
+                ),
     )
 
     from filters.breakout_quality.contract import RUNTIME_SCOPE_WORKFLOW
@@ -705,55 +615,46 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             "daily_eligible_stock_days" in str(exc)
         )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "event_scope_continuous_ranker_stays_out_of_binary_runtime_while_daily_runtime_export_is_separate",
         (True, True, True, True),
         (
-            "SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES" in train_source,
-            "research-only continuous ranker artifact不得載入正式binary runtime contract" in artifact_source,
-            "SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES" in app_source,
-            event_scope_runtime_export_rejected,
-        ),
+                    "SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES" in train_source,
+                    "research-only continuous ranker artifact不得載入正式binary runtime contract" in artifact_source,
+                    "SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES" in app_source,
+                    event_scope_runtime_export_rejected,
+                ),
     )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_is_research_only_and_oos_follows_checkpoint_write",
         (True, True, True, True, True, True),
         (
-            '"eligible": False' in ranker_source,
-            "OOS target transformation and model inference occur only after" in ranker_source,
-            "torch.save(" in ranker_source
-            and ranker_source.index("torch.save(")
-            < ranker_source.index("OOS target transformation and model inference occur only after"),
-            'score_frame["group_index"].duplicated().any()' in ranker_source,
-            'label_scope=profile.training_label_scope' in ranker_source,
-            '"label_conditional": {}' in ranker_source,
-        ),
+                    '"eligible": False' in ranker_source,
+                    "OOS target transformation and model inference occur only after" in ranker_source,
+                    "torch.save(" in ranker_source
+                    and ranker_source.index("torch.save(")
+                    < ranker_source.index("OOS target transformation and model inference occur only after"),
+                    'score_frame["group_index"].duplicated().any()' in ranker_source,
+                    'label_scope=profile.training_label_scope' in ranker_source,
+                    '"label_conditional": {}' in ranker_source,
+                ),
     )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "pass_conditional_ranker_is_cli_only_and_uses_existing_command",
         (True, True, True, True),
         (
-            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
-            in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
-            get_continuous_ranker_research_spec(
-                STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
-            ).trainer_family
-            == CONTINUOUS_RANKER_TRAINER_EVENT,
-            "11G" not in app_source[app_source.index("def _interactive_model_research"):app_source.index("def run_model_training_menu")],
-            command_modules.get("train-continuous-ranker")
-            == "services.breakout_quality.ranker_cli",
-        ),
+                    STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+                    in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
+                    get_continuous_ranker_research_spec(
+                        STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+                    ).trainer_family
+                    == CONTINUOUS_RANKER_TRAINER_EVENT,
+                    "11G" not in app_source[app_source.index("def _interactive_model_research"):app_source.index("def run_model_training_menu")],
+                    command_modules.get("train-continuous-ranker")
+                    == "services.breakout_quality.ranker_cli",
+                ),
     )
 
     ranker_api_source = (
@@ -776,46 +677,34 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         "daily_top_k_metrics",
         "calculate_spearman",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "ranker_training_public_api_is_single_shared_boundary_without_private_cross_module_calls",
-        True,
         all(name in ranker_api_source for name in public_api_names)
-        and "ranker_training as ranker_api" in pipeline_source
-        and "ranker_training as ranker_api" in daily_source
-        and "ranker_impl._" not in pipeline_source
-        and "ranker_impl._" not in daily_source
-        and "ranker_impl=" not in daily_source
-        and "ranker_impl=sys.modules" not in ranker_source,
+                and "ranker_training as ranker_api" in pipeline_source
+                and "ranker_training as ranker_api" in daily_source
+                and "ranker_impl._" not in pipeline_source
+                and "ranker_impl._" not in daily_source
+                and "ranker_impl=" not in daily_source
+                and "ranker_impl=sys.modules" not in ranker_source,
     )
 
     from services.breakout_quality import ranker_training as ranker_training_api
     from services.breakout_quality import train_continuous_ranker as canonical_ranker
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "continuous_ranker_run_does_not_rebind_shared_public_api_names",
-        True,
         not (set(public_api_names) & set(canonical_ranker.run.__code__.co_varnames)),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "legacy_private_ranker_names_alias_the_public_training_api_without_second_implementation",
-        True,
         canonical_ranker._select_epoch is ranker_training_api.select_epoch
-        and canonical_ranker._fit_final is ranker_training_api.fit_final
-        and canonical_ranker._predict_scores is ranker_training_api.predict_scores
-        and canonical_ranker._split_metrics is ranker_training_api.split_metrics
-        and canonical_ranker._training_semantics is ranker_training_api.training_semantics
-        and canonical_ranker._training_output_paths is ranker_training_api.resolve_training_output_paths
-        and canonical_ranker._daily_rank_metrics is ranker_training_api.daily_rank_metrics
-        and canonical_ranker._daily_top_k_metrics is ranker_training_api.daily_top_k_metrics
-        and canonical_ranker._spearman is ranker_training_api.calculate_spearman,
+                and canonical_ranker._fit_final is ranker_training_api.fit_final
+                and canonical_ranker._predict_scores is ranker_training_api.predict_scores
+                and canonical_ranker._split_metrics is ranker_training_api.split_metrics
+                and canonical_ranker._training_semantics is ranker_training_api.training_semantics
+                and canonical_ranker._training_output_paths is ranker_training_api.resolve_training_output_paths
+                and canonical_ranker._daily_rank_metrics is ranker_training_api.daily_rank_metrics
+                and canonical_ranker._daily_top_k_metrics is ranker_training_api.daily_top_k_metrics
+                and canonical_ranker._spearman is ranker_training_api.calculate_spearman,
     )
 
     summary["profile"] = STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
@@ -827,6 +716,7 @@ def validate_breakout_quality_all_event_no_time_ranker_contract_case(_base_param
     case_id = "BREAKOUT_QUALITY_ALL_EVENT_NO_TIME_RANKER"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from tools.filters.breakout_quality.train_continuous_ranker import (
         _profile_contract,
@@ -838,30 +728,27 @@ def validate_breakout_quality_all_event_no_time_ranker_contract_case(_base_param
     profile = get_breakout_quality_experiment_profile(
         STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "all_event_no_time_profile_uses_existing_target_and_all_label_scope",
         (
-            TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
-            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
-            TRAINING_LABEL_SCOPE_ALL,
-            TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
-            "mse",
-            "mean_daily_spearman",
-            False,
-        ),
+                    TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+                    STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+                    TRAINING_LABEL_SCOPE_ALL,
+                    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+                    "mse",
+                    "mean_daily_spearman",
+                    False,
+                ),
         (
-            profile.training_objective,
-            profile.continuous_target_id,
-            profile.training_label_scope,
-            profile.training_sample_scope,
-            profile.loss_name,
-            profile.epoch_selection_metric,
-            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE
-            in SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
-        ),
+                    profile.training_objective,
+                    profile.continuous_target_id,
+                    profile.training_label_scope,
+                    profile.training_sample_scope,
+                    profile.loss_name,
+                    profile.epoch_selection_metric,
+                    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE
+                    in SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+                ),
     )
 
     group_table = pd.DataFrame(
@@ -875,23 +762,13 @@ def validate_breakout_quality_all_event_no_time_ranker_contract_case(_base_param
         group_table,
         label_scope=TRAINING_LABEL_SCOPE_ALL,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "all_event_scope_keeps_pass_and_reject_groups",
-        (0, 1, 2),
-        tuple(int(value) for value in ids),
-    )
+    check("all_event_scope_keeps_pass_and_reject_groups", (0, 1, 2), tuple(int(value) for value in ids))
 
     raw = np.asarray([1.0, 9.0, 5.0], dtype=np.float32)
     pct = build_daily_percentile_targets(
         raw, np.ones(3, dtype=bool), group_table["date"]
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "all_event_daily_percentile_ranks_across_binary_labels",
         (0.0, 1.0, 0.5),
         tuple(float(value) for value in pct),
@@ -901,10 +778,7 @@ def validate_breakout_quality_all_event_no_time_ranker_contract_case(_base_param
         ["--experiment-profile", STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE]
     )
     contract = _profile_contract(profile)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr12a_cli_profile_identity_is_explicit_and_research_only",
         (STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE, "12A", "all_labels"),
         (args.experiment_profile, contract["phase"], contract["metric_scope"]),
@@ -918,6 +792,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_PAIRWISE_RANKER"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from filters.breakout_quality.models.factory import require_torch
     from config.strategy_compare import get_strategy_comparison_settings
@@ -954,49 +829,43 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     profile = get_breakout_quality_experiment_profile(
         STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr12b_profile_changes_only_learning_objective_with_same_target_scope_architecture_family",
         (
-            TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
-            TRAINING_LABEL_SCOPE_ALL,
-            TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
-            "pairwise_logistic",
-            "mean_daily_spearman",
-            False,
-        ),
+                    TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+                    STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+                    TRAINING_LABEL_SCOPE_ALL,
+                    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+                    "pairwise_logistic",
+                    "mean_daily_spearman",
+                    False,
+                ),
         (
-            profile.training_objective,
-            profile.continuous_target_id,
-            profile.training_label_scope,
-            profile.training_sample_scope,
-            profile.loss_name,
-            profile.epoch_selection_metric,
-            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
-            in SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
-        ),
+                    profile.training_objective,
+                    profile.continuous_target_id,
+                    profile.training_label_scope,
+                    profile.training_sample_scope,
+                    profile.loss_name,
+                    profile.epoch_selection_metric,
+                    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
+                    in SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+                ),
     )
 
     semantics = _training_semantics(profile)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr12b_pairwise_artifact_semantics_are_explicit_and_runtime_score_is_unchanged",
         (
-            "same_date_non_tied_target_pairs",
-            "equal_pair_weight",
-            "pass_logit_minus_reject_logit",
-            "whole_date_pack_no_date_split",
-            "softmax_pass_probability",
-        ),
+                    "same_date_non_tied_target_pairs",
+                    "equal_pair_weight",
+                    "pass_logit_minus_reject_logit",
+                    "whole_date_pack_no_date_split",
+                    "softmax_pass_probability",
+                ),
         tuple(
-            semantics["pairwise_contract"][key]
-            for key in ("pair_scope", "pair_weighting", "model_margin", "batching", "runtime_score")
-        ),
+                    semantics["pairwise_contract"][key]
+                    for key in ("pair_scope", "pair_weighting", "model_margin", "batching", "runtime_score")
+                ),
     )
     assert semantics["pairwise_contract"] == PAIRWISE_TRAINING_CONTRACT
 
@@ -1004,10 +873,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         ["--experiment-profile", STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE]
     )
     contract = _profile_contract(profile)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr12b_cli_and_registry_identity_are_explicit",
         (STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE, "12B", "all_labels"),
         (args.experiment_profile, contract["phase"], contract["metric_scope"]),
@@ -1025,14 +891,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     date_batch_counts = []
     for _date, day in pd.DataFrame({"date": dates, "group_id": np.arange(8)}).groupby("date"):
         date_batch_counts.append(len({batch_by_group[int(group_id)] for group_id in day["group_id"]}))
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "pairwise_training_batches_never_split_same_date_competition_set",
-        (1, 1, 1),
-        tuple(date_batch_counts),
-    )
+    check("pairwise_training_batches_never_split_same_date_competition_set", (1, 1, 1), tuple(date_batch_counts))
 
     torch, _nn = require_torch()
     targets = torch.tensor([0.0, 0.5, 1.0, 0.0, 1.0], dtype=torch.float32)
@@ -1042,18 +901,15 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     good_loss, good_pairs = _pairwise_logistic_loss(torch, good_margin, targets, loss_dates)
     bad_loss, bad_pairs = _pairwise_logistic_loss(torch, bad_margin, targets, loss_dates)
     good_loss.backward()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "pairwise_logistic_prefers_correct_within_day_order_and_has_finite_gradient",
         (True, 4, 4, True),
         (
-            bool(float(good_loss.detach().cpu().item()) < float(bad_loss.detach().cpu().item())),
-            int(good_pairs),
-            int(bad_pairs),
-            bool(torch.isfinite(good_margin.grad).all().item()),
-        ),
+                    bool(float(good_loss.detach().cpu().item()) < float(bad_loss.detach().cpu().item())),
+                    int(good_pairs),
+                    int(bad_pairs),
+                    bool(torch.isfinite(good_margin.grad).all().item()),
+                ),
     )
 
     report_dates = np.asarray(["2024-02-01"] * 6 + ["2024-02-02"] * 6 + ["2024-02-05"] * 2)
@@ -1070,21 +926,18 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         top_k=3,
         boundary_width=2,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_top_k_report_measures_perfect_order_and_k_boundary",
         (1.0, 1.0, 1.0, 2, 2, 1, True),
         (
-            round(float(report_metrics["ndcg_at_k"]), 6),
-            round(float(report_metrics["oracle_top_k_overlap"]), 6),
-            round(float(report_metrics["boundary_concordance"]), 6),
-            int(report_metrics["competition_date_count"]),
-            int(report_metrics["boundary_date_count"]),
-            int(report_metrics["excluded_non_competition_date_count"]),
-            bool(float(report_metrics["boundary_raw_target_gap"]) > 0.0),
-        ),
+                    round(float(report_metrics["ndcg_at_k"]), 6),
+                    round(float(report_metrics["oracle_top_k_overlap"]), 6),
+                    round(float(report_metrics["boundary_concordance"]), 6),
+                    int(report_metrics["competition_date_count"]),
+                    int(report_metrics["boundary_date_count"]),
+                    int(report_metrics["excluded_non_competition_date_count"]),
+                    bool(float(report_metrics["boundary_raw_target_gap"]) > 0.0),
+                ),
     )
 
     random_baseline = exact_random_top_k_baseline(
@@ -1092,19 +945,16 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         np.asarray([6, 5, 4, 3, 2, 1], dtype=np.float64),
         top_k=3,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_random_baseline_is_exact_not_monte_carlo",
         (True, 0.0, 0.5, 0.5, 0.0),
         (
-            bool(0.0 < float(random_baseline["ndcg_at_k"]) < 1.0),
-            float(random_baseline["top_k_raw_target_lift"]),
-            float(random_baseline["oracle_top_k_overlap"]),
-            float(random_baseline["boundary_concordance"]),
-            float(random_baseline["boundary_raw_target_gap"]),
-        ),
+                    bool(0.0 < float(random_baseline["ndcg_at_k"]) < 1.0),
+                    float(random_baseline["top_k_raw_target_lift"]),
+                    float(random_baseline["oracle_top_k_overlap"]),
+                    float(random_baseline["boundary_concordance"]),
+                    float(random_baseline["boundary_raw_target_gap"]),
+                ),
     )
 
     with tempfile.TemporaryDirectory() as td:
@@ -1146,16 +996,13 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
                 model_id="synthetic",
                 profile=STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
             )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_quality_comparison_uses_target_evaluable_subset_not_runtime_score_universe",
         (["A", "B"], True),
         (
-            comparable_frame["ticker"].tolist(),
-            bool(np.isfinite(comparable_frame["target_raw_r"].to_numpy(dtype=np.float64)).all()),
-        ),
+                    comparable_frame["ticker"].tolist(),
+                    bool(np.isfinite(comparable_frame["target_raw_r"].to_numpy(dtype=np.float64)).all()),
+                ),
     )
 
     with (
@@ -1192,25 +1039,22 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         configured_comparison = (
             get_breakout_quality_continuous_ranker_comparison_settings()
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_p2_comparison_settings_follow_isolated_config_override",
         (
-            ("CFG-A", "CFG-B", "CFG-C"),
-            "CFG-REFERENCE",
-            ("CFG-B", "CFG-A"),
-            "Config comparison",
-            (1, 4, 9),
-        ),
+                    ("CFG-A", "CFG-B", "CFG-C"),
+                    "CFG-REFERENCE",
+                    ("CFG-B", "CFG-A"),
+                    "Config comparison",
+                    (1, 4, 9),
+                ),
         (
-            configured_comparison.model_ids,
-            configured_comparison.reference_arm,
-            configured_comparison.summary_pair,
-            configured_comparison.menu_label,
-            configured_comparison.fixed_k_values,
-        ),
+                    configured_comparison.model_ids,
+                    configured_comparison.reference_arm,
+                    configured_comparison.summary_pair,
+                    configured_comparison.menu_label,
+                    configured_comparison.fixed_k_values,
+                ),
     )
 
     paired_frame = pd.DataFrame(
@@ -1234,18 +1078,15 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     )
     ba = paired_eval["paired_contrasts"]["MR-12B_minus_MR-12A"]["metrics"]
     cb = paired_eval["paired_contrasts"]["MR-12C_minus_MR-12B"]["metrics"]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_p2_uses_same_day_paired_deltas",
         (1, True, True, 1.0),
         (
-            int(paired_eval["competition_date_count"]),
-            bool(float(ba["ndcg_at_k"]["mean_delta"]) > 0.0),
-            bool(float(cb["ndcg_at_k"]["mean_delta"]) < 0.0),
-            float(paired_eval["models"]["MR-12B"]["boundary_concordance"]),
-        ),
+                    int(paired_eval["competition_date_count"]),
+                    bool(float(ba["ndcg_at_k"]["mean_delta"]) > 0.0),
+                    bool(float(cb["ndcg_at_k"]["mean_delta"]) < 0.0),
+                    float(paired_eval["models"]["MR-12B"]["boundary_concordance"]),
+                ),
     )
 
     fixed_prefix = _evaluate_fixed_k_sweep(
@@ -1254,26 +1095,23 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         k_values=(1, 2, 3),
         boundary_width=2,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_p2_fixed_k_prefix_sweep_reuses_same_oos_candidate_universe",
         (("1", "2", "3"), 1, True, True),
         (
-            tuple(sorted(fixed_prefix, key=int)),
-            int(fixed_prefix["1"]["competition_date_count"]),
-            bool(
-                float(
-                    fixed_prefix["1"]["paired_contrasts"]["MR-12B_minus_MR-12A"]["metrics"]["ndcg_at_k"]["mean_delta"]
-                ) >= 0.0
-            ),
-            bool(
-                float(
-                    fixed_prefix["3"]["paired_contrasts"]["MR-12C_minus_MR-12B"]["metrics"]["ndcg_at_k"]["mean_delta"]
-                ) < 0.0
-            ),
-        ),
+                    tuple(sorted(fixed_prefix, key=int)),
+                    int(fixed_prefix["1"]["competition_date_count"]),
+                    bool(
+                        float(
+                            fixed_prefix["1"]["paired_contrasts"]["MR-12B_minus_MR-12A"]["metrics"]["ndcg_at_k"]["mean_delta"]
+                        ) >= 0.0
+                    ),
+                    bool(
+                        float(
+                            fixed_prefix["3"]["paired_contrasts"]["MR-12C_minus_MR-12B"]["metrics"]["ndcg_at_k"]["mean_delta"]
+                        ) < 0.0
+                    ),
+                ),
     )
 
     with tempfile.TemporaryDirectory() as td:
@@ -1343,40 +1181,34 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         model_ids=("MR-12A", "MR-12B", "MR-12C"),
         boundary_width=2,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_dynamic_k_uses_runtime_score_event_date_for_later_occurrences",
         (8, (2,), 2, 1.0, 8, 4, 1.0, 1.0, ("2",), 2),
         (
-            int(len(dynamic_frame)),
-            tuple(sorted(set(int(value) for value in dynamic_frame["dynamic_k"]))),
-            int(dynamic_coverage["full_score_coverage_date_count"]),
-            float(dynamic_coverage["full_score_coverage_rate"]),
-            int(dynamic_coverage["runtime_score_event_date_row_count"]),
-            int(dynamic_coverage["score_event_date_differs_from_signal_date_row_count"]),
-            float(dynamic_coverage["common_complete_candidate_row_rate"]),
-            float(dynamic_coverage["reference_runtime_scored_candidate_row_rate"]),
-            tuple(sorted(dynamic_strata)),
-            int(dynamic_strata["2"]["competition_date_count"]),
-        ),
+                    int(len(dynamic_frame)),
+                    tuple(sorted(set(int(value) for value in dynamic_frame["dynamic_k"]))),
+                    int(dynamic_coverage["full_score_coverage_date_count"]),
+                    float(dynamic_coverage["full_score_coverage_rate"]),
+                    int(dynamic_coverage["runtime_score_event_date_row_count"]),
+                    int(dynamic_coverage["score_event_date_differs_from_signal_date_row_count"]),
+                    float(dynamic_coverage["common_complete_candidate_row_rate"]),
+                    float(dynamic_coverage["reference_runtime_scored_candidate_row_rate"]),
+                    tuple(sorted(dynamic_strata)),
+                    int(dynamic_strata["2"]["competition_date_count"]),
+                ),
     )
     dynamic_strata_table = _render_dynamic_k_strata_table(
         dynamic_strata,
         summary_pair=("MR-12B", "MR-12A"),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_dynamic_k_strata_console_renderer_uses_shared_table_contract",
         (True, True, True),
         (
-            bool(dynamic_strata_table.strip()),
-            "MR-12B NDCG" in dynamic_strata_table,
-            "Boundary Δ" in dynamic_strata_table,
-        ),
+                    bool(dynamic_strata_table.strip()),
+                    "MR-12B NDCG" in dynamic_strata_table,
+                    "Boundary Δ" in dynamic_strata_table,
+                ),
     )
     reference_subset = _evaluate_reference_subset_attribution(
         dynamic_frame,
@@ -1391,20 +1223,17 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     reference_k2 = dict(reference_subset.get("2") or {})
     reference_event_k2 = dict(reference_k2.get("event_universe") or {})
     reference_orderable_k2 = dict(reference_k2.get("orderable_universe") or {})
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_reference_subset_attribution_holds_dates_and_k_constant_across_universes",
         (("2",), 2, 2, 2, True, True),
         (
-            tuple(sorted(reference_subset)),
-            int(reference_k2.get("reference_common_complete_date_count", 0)),
-            int(reference_event_k2.get("competition_date_count", 0)),
-            int(reference_orderable_k2.get("competition_date_count", 0)),
-            bool(reference_subset_table.strip()),
-            "Orderable NDCG Δ" in reference_subset_table,
-        ),
+                    tuple(sorted(reference_subset)),
+                    int(reference_k2.get("reference_common_complete_date_count", 0)),
+                    int(reference_event_k2.get("competition_date_count", 0)),
+                    int(reference_orderable_k2.get("competition_date_count", 0)),
+                    bool(reference_subset_table.strip()),
+                    "Orderable NDCG Δ" in reference_subset_table,
+                ),
     )
 
     score_date_frame = pd.DataFrame(
@@ -1439,22 +1268,19 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     cross_delta = dict(
         (cross_scope.get("contrasts") or {}).get("MR-12B_minus_MR-12A") or {}
     ).get("pairwise_concordance_delta")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_orderable_score_date_comparability_separates_within_date_from_cross_date_pairs",
         (0.5, 1, 1.0, 1.0, 0.0, -1.0, True, True),
         (
-            round(float(score_date_diag.get("carried_candidate_row_rate")), 6),
-            int(score_date_diag.get("mixed_score_event_date_count", 0)),
-            float(score_date_diag.get("mixed_score_event_date_rate")),
-            float(score_date_diag.get("k1_mixed_score_event_date_rate")),
-            round(float(same_delta), 6),
-            round(float(cross_delta), 6),
-            "Cross score-date" in score_date_table,
-            "K=1 cross score-date" in score_date_table,
-        ),
+                    round(float(score_date_diag.get("carried_candidate_row_rate")), 6),
+                    int(score_date_diag.get("mixed_score_event_date_count", 0)),
+                    float(score_date_diag.get("mixed_score_event_date_rate")),
+                    float(score_date_diag.get("k1_mixed_score_event_date_rate")),
+                    round(float(same_delta), 6),
+                    round(float(cross_delta), 6),
+                    "Cross score-date" in score_date_table,
+                    "K=1 cross score-date" in score_date_table,
+                ),
     )
 
     from filters.breakout_quality.workflow_io import PROJECT_ROOT as breakout_project_root
@@ -1462,17 +1288,14 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         pd.DataFrame(),
         breakout_project_root / "outputs" / "filters" / "breakout_quality" / "synthetic_missing_trade",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_missing_trade_reason_uses_project_relative_display_path",
         (False, True, False),
         (
-            bool(missing_trade.get("available")),
-            str(missing_trade.get("reason", "")).startswith("not found: outputs/"),
-            str(breakout_project_root).replace("\\", "/") in str(missing_trade.get("reason", "")),
-        ),
+                    bool(missing_trade.get("available")),
+                    str(missing_trade.get("reason", "")).startswith("not found: outputs/"),
+                    str(breakout_project_root).replace("\\", "/") in str(missing_trade.get("reason", "")),
+                ),
     )
 
     strategy = get_strategy_comparison_settings()
@@ -1482,37 +1305,31 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         ("C19", "CONT12B", "resource-aware-continuous-max-dl"),
         ("C20", "CONT12B", "resource-aware-continuous-max-dl-feasible-ascent"),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr12a_and_mr12b_historical_c17_c18_selector_matrix_remains_registered",
         historical_arm_contract,
         tuple(
-            (
-                arm_id,
-                strategy.arms.get(arm_id).dl_id if strategy.arms.get(arm_id) is not None else None,
-                strategy.arms.get(arm_id).dl_runtime_mode if strategy.arms.get(arm_id) is not None else None,
-            )
-            for arm_id, _dl_id, _runtime_mode in historical_arm_contract
-        ),
+                    (
+                        arm_id,
+                        strategy.arms.get(arm_id).dl_id if strategy.arms.get(arm_id) is not None else None,
+                        strategy.arms.get(arm_id).dl_runtime_mode if strategy.arms.get(arm_id) is not None else None,
+                    )
+                    for arm_id, _dl_id, _runtime_mode in historical_arm_contract
+                ),
     )
     required_contrasts = {
         "C19-C17": ("C19", "C17"),
         "C20-C18": ("C20", "C18"),
         "C20-C19": ("C20", "C19"),
     }
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr12b_historical_strategy_matrix_is_registered_independent_of_active_config",
         required_contrasts,
         {
-            contrast_id: (strategy.contrasts[contrast_id].left, strategy.contrasts[contrast_id].right)
-            for contrast_id in required_contrasts
-            if contrast_id in strategy.contrasts
-        },
+                    contrast_id: (strategy.contrasts[contrast_id].left, strategy.contrasts[contrast_id].right)
+                    for contrast_id in required_contrasts
+                    if contrast_id in strategy.contrasts
+                },
     )
 
     summary["profile"] = STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
@@ -1527,6 +1344,7 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
     case_id = "BREAKOUT_QUALITY_DAILY_FULL_LIST_NDCG_PAIRWISE"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config.breakout_quality import (
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
@@ -1560,37 +1378,28 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
         "training_label_scope",
         "training_sample_scope",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13e_changes_only_pairwise_reduction_while_daily_profile_contract_stays_fixed",
         tuple(getattr(profile_a, field) for field in fixed_fields),
         tuple(getattr(profile_e, field) for field in fixed_fields),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13e_research_identity_and_full_list_delta_ndcg_reduction_are_explicit",
         (
-            "MR-13E",
-            spec_a.trainer_family,
-            spec_a.score_semantic_id,
-            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-        ),
+                    "MR-13E",
+                    spec_a.trainer_family,
+                    spec_a.score_semantic_id,
+                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+                ),
         (
-            spec_e.model_research_id,
-            spec_e.trainer_family,
-            spec_e.score_semantic_id,
-            spec_e.pairwise_reduction,
-        ),
+                    spec_e.model_research_id,
+                    spec_e.trainer_family,
+                    spec_e.score_semantic_id,
+                    spec_e.pairwise_reduction,
+                ),
     )
     from services.breakout_quality.train_continuous_ranker import training_semantics
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13e_artifact_semantics_disclose_full_list_delta_ndcg_weighting",
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         training_semantics(profile_e)["pairwise_contract"]["pair_weighting"],
@@ -1747,25 +1556,19 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
         except ValueError:
             wrong_weighting_rejected = True
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "runtime_oos_contract_uses_same_profile_driven_pairwise_semantics_as_trainer",
         (True, True, True),
         (
-            canonical_runtime_contract_passed,
-            historical_schema_contract_passed,
-            wrong_weighting_rejected,
-        ),
+                    canonical_runtime_contract_passed,
+                    historical_schema_contract_passed,
+                    wrong_weighting_rejected,
+                ),
     )
     args = parse_continuous_ranker_args(
         ["--experiment-profile", DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE]
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13e_is_available_through_existing_profile_driven_cli",
         DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         args.experiment_profile,
@@ -1806,17 +1609,14 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
     expected_weights = weight_matrix[comparable]
     expected_loss = (pair_losses * expected_weights).sum() / expected_weights.sum()
     actual_loss.backward()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "full_list_delta_ndcg_loss_matches_raw_percentile_full_rank_swap_weighting",
         (round(float(expected_loss.detach().cpu().item()), 12), 6, True),
         (
-            round(float(actual_loss.detach().cpu().item()), 12),
-            int(actual_count),
-            bool(torch.isfinite(margins.grad).all().item()),
-        ),
+                    round(float(actual_loss.detach().cpu().item()), 12),
+                    int(actual_count),
+                    bool(torch.isfinite(margins.grad).all().item()),
+                ),
         tol=1e-10,
     )
 
@@ -1831,12 +1631,8 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
     )
     top_adjacent_weight = float(correct_weight_matrix[0, 1].item())
     bottom_adjacent_weight = float(correct_weight_matrix[2, 3].item())
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "full_list_delta_ndcg_naturally_prioritizes_top_positions_without_k_boundary_or_lambda",
-        True,
         bool(top_adjacent_weight > bottom_adjacent_weight > 0.0),
     )
 
@@ -1853,6 +1649,7 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
     case_id = "BREAKOUT_QUALITY_MR13H_NO_BREACH_TARGET"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
     horizon = int(spec.horizon_bars)
@@ -1877,24 +1674,17 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
         available_bars=horizon,
         spec=spec,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13h_keeps_risk_breach_as_diagnostic_but_does_not_truncate_later_peak",
         (5, 20, 1.4),
         (
-            int(new_target.first_risk_breach_bar),
-            int(new_target.opportunity_bar),
-            round(float(new_target.target_raw_r), 6),
-        ),
+                    int(new_target.first_risk_breach_bar),
+                    int(new_target.opportunity_bar),
+                    round(float(new_target.target_raw_r), 6),
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "mr13e_reference_still_truncates_before_first_breach",
-        True,
         bool(old_target.opportunity_bar < new_target.first_risk_breach_bar),
     )
 
@@ -1914,21 +1704,18 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
         available_bars=horizon,
         spec=spec,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "no_breach_path_is_exactly_unchanged_by_mr13h",
         (
-            old_no_breach.target_raw_r,
-            old_no_breach.opportunity_bar,
-            old_no_breach.adverse_return_to_peak,
-        ),
+                    old_no_breach.target_raw_r,
+                    old_no_breach.opportunity_bar,
+                    old_no_breach.adverse_return_to_peak,
+                ),
         (
-            new_no_breach.target_raw_r,
-            new_no_breach.opportunity_bar,
-            new_no_breach.adverse_return_to_peak,
-        ),
+                    new_no_breach.target_raw_r,
+                    new_no_breach.opportunity_bar,
+                    new_no_breach.adverse_return_to_peak,
+                ),
         tol=1e-12,
     )
 
@@ -1955,23 +1742,20 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
         spec=spec,
         target_id=DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "vectorized_daily_target_matches_scalar_semantics_for_both_targets",
         (
-            round(float(old_target.target_raw_r), 6),
-            round(float(new_target.target_raw_r), 6),
-            new_target.first_risk_breach_bar,
-            new_target.opportunity_bar,
-        ),
+                    round(float(old_target.target_raw_r), 6),
+                    round(float(new_target.target_raw_r), 6),
+                    new_target.first_risk_breach_bar,
+                    new_target.opportunity_bar,
+                ),
         (
-            round(float(old_batch.target_raw_r[0]), 6),
-            round(float(new_batch.target_raw_r[0]), 6),
-            int(new_batch.first_risk_breach_bar[0]),
-            int(new_batch.opportunity_bar[0]),
-        ),
+                    round(float(old_batch.target_raw_r[0]), 6),
+                    round(float(new_batch.target_raw_r[0]), 6),
+                    int(new_batch.first_risk_breach_bar[0]),
+                    int(new_batch.opportunity_bar[0]),
+                ),
     )
 
     profile_e = get_breakout_quality_experiment_profile(
@@ -1989,10 +1773,7 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
         "training_label_scope",
         "training_sample_scope",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13h_keeps_mr13e_training_profile_fixed_except_target_identity",
         tuple(getattr(profile_e, field) for field in fixed_fields),
         tuple(getattr(profile_h, field) for field in fixed_fields),
@@ -2000,54 +1781,45 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
     spec_h = get_continuous_ranker_research_spec(
         DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13h_identity_reference_and_pairwise_reduction_are_explicit",
         (
-            "MR-13H",
-            DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-            DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
-            True,
-        ),
+                    "MR-13H",
+                    DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+                    DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+                    True,
+                ),
         (
-            spec_h.model_research_id,
-            spec_h.reference_profile_name,
-            spec_h.pairwise_reduction,
-            profile_h.continuous_target_id,
-            bool(spec_h.selection_pit_authorized),
-        ),
+                    spec_h.model_research_id,
+                    spec_h.reference_profile_name,
+                    spec_h.pairwise_reduction,
+                    profile_h.continuous_target_id,
+                    bool(spec_h.selection_pit_authorized),
+                ),
     )
     from config.breakout_quality import BREAKOUT_QUALITY_CONTINUOUS_RANKER_PIT_GATE_PROFILES
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13h_uses_single_profile_pit_authorization_not_mr13e_same_target_batch",
         False,
         DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
-        in {profile for _model_id, profile in BREAKOUT_QUALITY_CONTINUOUS_RANKER_PIT_GATE_PROFILES},
+                in {profile for _model_id, profile in BREAKOUT_QUALITY_CONTINUOUS_RANKER_PIT_GATE_PROFILES},
     )
 
     contract = build_daily_full_horizon_opportunity_contract(DEFAULT_LABEL_POLICY)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13h_contract_discloses_full_horizon_no_breach_semantics",
         (
-            DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
-            True,
-            int(DEFAULT_LABEL_POLICY.label_horizon_bars),
-        ),
+                    DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+                    True,
+                    int(DEFAULT_LABEL_POLICY.label_horizon_bars),
+                ),
         (
-            contract["target_id"],
-            "diagnostic only" in str(contract["risk_rule"]).lower()
-            and "never truncates" in str(contract["risk_rule"]).lower(),
-            int(contract["horizon_bars"]),
-        ),
+                    contract["target_id"],
+                    "diagnostic only" in str(contract["risk_rule"]).lower()
+                    and "never truncates" in str(contract["risk_rule"]).lower(),
+                    int(contract["horizon_bars"]),
+                ),
     )
 
     from services.breakout_quality.daily_target_comparison import (
@@ -2071,32 +1843,26 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
     metrics, _daily = _comparison_metrics(
         audit_frame, top_k=1, risk_barrier_return=-0.10, barrier_band_return=0.01
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "label_audit_reports_breach_change_and_no_breach_invariant_without_training",
         (0.5, 0.5, 0.0),
         (
-            float(metrics["risk_breach_rate"]),
-            float(metrics["changed_target_rate"]),
-            float(metrics["no_breach_max_abs_target_delta_r"]),
-        ),
+                    float(metrics["risk_breach_rate"]),
+                    float(metrics["changed_target_rate"]),
+                    float(metrics["no_breach_max_abs_target_delta_r"]),
+                ),
         tol=1e-12,
     )
     cliff = dict(metrics["barrier_cliff"])
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "label_audit_reports_configured_just_above_vs_just_below_barrier_cliff",
         (1, 1, 0.0, 1.0),
         (
-            int(dict(cliff["just_above"])["sample_count"]),
-            int(dict(cliff["just_below"])["sample_count"]),
-            round(float(dict(cliff["just_above"])["changed_target_rate"]), 6),
-            round(float(dict(cliff["just_below"])["changed_target_rate"]), 6),
-        ),
+                    int(dict(cliff["just_above"])["sample_count"]),
+                    int(dict(cliff["just_below"])["sample_count"]),
+                    round(float(dict(cliff["just_above"])["changed_target_rate"]), 6),
+                    round(float(dict(cliff["just_below"])["changed_target_rate"]), 6),
+                ),
     )
 
     pure_mfe = daily_full_horizon_pure_mfe_target_from_cached_path(
@@ -2106,25 +1872,22 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
         available_bars=horizon,
         spec=spec,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13k_keeps_mr13h_peak_and_diagnostics_but_removes_exact_adverse_r_penalty",
         (
-            new_target.opportunity_bar,
-            new_target.first_risk_breach_bar,
-            round(float(new_target.favorable_return), 6),
-            round(float(new_target.adverse_return_to_peak), 6),
-            round(float(new_target.adverse_return_to_peak) / float(spec.risk_budget_return), 6),
-        ),
+                    new_target.opportunity_bar,
+                    new_target.first_risk_breach_bar,
+                    round(float(new_target.favorable_return), 6),
+                    round(float(new_target.adverse_return_to_peak), 6),
+                    round(float(new_target.adverse_return_to_peak) / float(spec.risk_budget_return), 6),
+                ),
         (
-            pure_mfe.opportunity_bar,
-            pure_mfe.first_risk_breach_bar,
-            round(float(pure_mfe.favorable_return), 6),
-            round(float(pure_mfe.adverse_return_to_peak), 6),
-            round(float(pure_mfe.target_raw_r - new_target.target_raw_r), 6),
-        ),
+                    pure_mfe.opportunity_bar,
+                    pure_mfe.first_risk_breach_bar,
+                    round(float(pure_mfe.favorable_return), 6),
+                    round(float(pure_mfe.adverse_return_to_peak), 6),
+                    round(float(pure_mfe.target_raw_r - new_target.target_raw_r), 6),
+                ),
     )
     pure_batch = compute_daily_opportunity_target_batch(
         frame,
@@ -2132,10 +1895,7 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
         spec=spec,
         target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13k_vectorized_pure_mfe_matches_scalar_semantics",
         round(float(pure_mfe.target_raw_r), 6),
         round(float(pure_batch.target_raw_r[0]), 6),
@@ -2146,38 +1906,32 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
     spec_k = get_continuous_ranker_research_spec(
         DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13k_is_target_only_change_from_mr13h_and_pit_is_authorized_after_forward_go",
         (
-            tuple(getattr(profile_h, field) for field in fixed_fields),
-            "MR-13K",
-            DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-            DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-            True,
-        ),
+                    tuple(getattr(profile_h, field) for field in fixed_fields),
+                    "MR-13K",
+                    DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                    True,
+                ),
         (
-            tuple(getattr(profile_k, field) for field in fixed_fields),
-            spec_k.model_research_id,
-            spec_k.reference_profile_name,
-            profile_k.continuous_target_id,
-            bool(spec_k.selection_pit_authorized),
-        ),
+                    tuple(getattr(profile_k, field) for field in fixed_fields),
+                    spec_k.model_research_id,
+                    spec_k.reference_profile_name,
+                    profile_k.continuous_target_id,
+                    bool(spec_k.selection_pit_authorized),
+                ),
     )
     pure_contract = build_daily_full_horizon_pure_mfe_contract(DEFAULT_LABEL_POLICY)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13k_contract_discloses_pure_mfe_without_adverse_penalty",
         (DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID, False, False),
         (
-            pure_contract["target_id"],
-            bool(pure_contract["adverse_penalty_included"]),
-            "adverse_return" in str(pure_contract["formula"]),
-        ),
+                    pure_contract["target_id"],
+                    bool(pure_contract["adverse_penalty_included"]),
+                    "adverse_return" in str(pure_contract["formula"]),
+                ),
     )
 
     persisted_candidate = np.asarray([500.0], dtype=np.float32).astype(np.float64)
@@ -2193,16 +1947,13 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
         persisted_adverse,
         risk_budget_return=float(spec.risk_budget_return),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13k_label_audit_accepts_only_float32_quantization_error_not_fixed_magic_tolerance",
         (True, True),
         (
-            bool(persisted_error[0] > 2e-6),
-            bool(persisted_error[0] <= persisted_tolerance[0]),
-        ),
+                    bool(persisted_error[0] > 2e-6),
+                    bool(persisted_error[0] <= persisted_tolerance[0]),
+                ),
     )
 
     candidate_profile_name = DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
@@ -2268,19 +2019,16 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
                 / str(audit_payload["artifacts"]["json"])
             ).read_text(encoding="utf-8")
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13k_label_audit_preserves_string_target_ids_through_numeric_relation_check_and_json_write",
         (
-            DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-            DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
-        ),
+                    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                    DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+                ),
         (
-            audit_json["candidate_target_id"],
-            audit_json["reference_target_id"],
-        ),
+                    audit_json["candidate_target_id"],
+                    audit_json["reference_target_id"],
+                ),
     )
 
     from filters.breakout_quality.daily_ranker_data import (
@@ -2291,10 +2039,7 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
     resolved_training_start = resolve_daily_training_universe_start(
         benchmark_dates, feature_window_bars=300
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "daily_universal_training_start_is_data_driven_by_complete_benchmark_feature_window",
         pd.Timestamp(benchmark_dates[299]).normalize(),
         resolved_training_start,
@@ -2325,12 +2070,8 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
             "training_universe_start_date" in str(exc)
             and "selection_start_date" in str(exc)
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "daily_ranker_split_rejects_missing_training_universe_start_instead_of_optimizer_fallback",
-        True,
         missing_training_start_rejected,
     )
 
@@ -2342,10 +2083,7 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
         ),
         inner_validation_months=24,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "daily_ranker_split_uses_data_driven_training_universe_start_not_optimizer_selection_start",
         "2004-09-08",
         valid_split.report["selection_start_date"],
@@ -2363,6 +2101,7 @@ def validate_breakout_quality_mr13l_decomposed_component_contract_case(_base_par
     case_id = "BREAKOUT_QUALITY_MR13L_DECOMPOSED_COMPONENT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config.breakout_quality import (
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
@@ -2386,74 +2125,65 @@ def validate_breakout_quality_mr13l_decomposed_component_contract_case(_base_par
     )
     active_research = get_breakout_quality_model_research_settings()
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13l_profile_is_registered_and_active_resolver_does_not_change_production_workflow",
         (
-            DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        ),
+                    DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
+                    BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+                ),
         (
-            profile_l.name,
-            active_research.experiment_profile,
-            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        ),
+                    profile_l.name,
+                    active_research.experiment_profile,
+                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13l_keeps_mr13h_target_universe_and_architecture_but_changes_learning_formulation",
         (
-            "MR-13L",
-            DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-            DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
-            TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
-            "dual_mse_raw_r",
-            "mean_daily_spearman",
-            False,
-            profile_h.model_architecture,
-            profile_h.training_sample_scope,
-            profile_h.training_label_scope,
-        ),
+                    "MR-13L",
+                    DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                    DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+                    TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
+                    "dual_mse_raw_r",
+                    "mean_daily_spearman",
+                    False,
+                    profile_h.model_architecture,
+                    profile_h.training_sample_scope,
+                    profile_h.training_label_scope,
+                ),
         (
-            spec_l.model_research_id,
-            spec_l.reference_profile_name,
-            profile_l.continuous_target_id,
-            profile_l.training_objective,
-            profile_l.loss_name,
-            profile_l.epoch_selection_metric,
-            bool(spec_l.selection_pit_authorized),
-            profile_l.model_architecture,
-            profile_l.training_sample_scope,
-            profile_l.training_label_scope,
-        ),
+                    spec_l.model_research_id,
+                    spec_l.reference_profile_name,
+                    profile_l.continuous_target_id,
+                    profile_l.training_objective,
+                    profile_l.loss_name,
+                    profile_l.epoch_selection_metric,
+                    bool(spec_l.selection_pit_authorized),
+                    profile_l.model_architecture,
+                    profile_l.training_sample_scope,
+                    profile_l.training_label_scope,
+                ),
     )
 
     semantics = training_semantics(profile_l)
     dual_contract = dict(semantics.get("dual_component_r_regression_contract") or {})
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13l_two_components_are_primary_equal_weight_raw_r_targets_without_auxiliary_lambda",
         (
-            "mean_mse_over_two_primary_r_components",
-            "equal_by_mean_reduction_no_lambda",
-            "predicted_favorable_mfe_r_minus_predicted_adverse_to_peak_r",
-            None,
-            None,
-        ),
+                    "mean_mse_over_two_primary_r_components",
+                    "equal_by_mean_reduction_no_lambda",
+                    "predicted_favorable_mfe_r_minus_predicted_adverse_to_peak_r",
+                    None,
+                    None,
+                ),
         (
-            dual_contract.get("loss"),
-            dual_contract.get("component_weighting"),
-            dual_contract.get("runtime_score"),
-            semantics.get("pairwise_contract"),
-            semantics.get("raw_r_regression_contract"),
-        ),
+                    dual_contract.get("loss"),
+                    dual_contract.get("component_weighting"),
+                    dual_contract.get("runtime_score"),
+                    semantics.get("pairwise_contract"),
+                    semantics.get("raw_r_regression_contract"),
+                ),
     )
 
     # The decomposition is not a new economic target.  The two physical-R
@@ -2470,18 +2200,12 @@ def validate_breakout_quality_mr13l_decomposed_component_contract_case(_base_par
         profile_l, raw_target, percentile_target, group_table
     )
     reconstructed = component_target[:, LABEL_PASS] - component_target[:, LABEL_REJECT]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13l_component_targets_reconstruct_mr13h_scalar_target_exactly",
         tuple(round(float(x), 6) for x in raw_target),
         tuple(round(float(x), 6) for x in reconstructed.astype(np.float32)),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13l_component_target_output_order_matches_existing_two_neuron_identity",
         ((0.25, 1.75), (1.10, 3.40), (0.0, 0.80)),
         tuple(tuple(round(float(x), 6) for x in row) for row in component_target),
@@ -2502,36 +2226,30 @@ def validate_breakout_quality_mr13l_decomposed_component_contract_case(_base_par
             batch_size=2,
             plan=None,
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13l_runtime_score_is_only_predicted_mfe_minus_predicted_adverse",
         (
-            (2.0, 3.5),
-            (0.4, 1.2),
-            (1.6, 2.3),
-        ),
+                    (2.0, 3.5),
+                    (0.4, 1.2),
+                    (1.6, 2.3),
+                ),
         (
-            tuple(round(float(x), 6) for x in prediction["predicted_favorable_r"]),
-            tuple(round(float(x), 6) for x in prediction["predicted_adverse_r"]),
-            tuple(round(float(x), 6) for x in prediction["model_score"]),
-        ),
+                    tuple(round(float(x), 6) for x in prediction["predicted_favorable_r"]),
+                    tuple(round(float(x), 6) for x in prediction["predicted_adverse_r"]),
+                    tuple(round(float(x), 6) for x in prediction["model_score"]),
+                ),
     )
 
     model_source = read_source_text("filters/breakout_quality/models/inception_time.py")
     train_source = read_source_text("services/breakout_quality/train_continuous_ranker.py")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13l_reuses_existing_two_output_architecture_and_is_not_rejected_auxiliary_head_pattern",
         (True, True, False),
         (
-            "nn.Linear(classifier_input, 2)" in model_source,
-            "F.mse_loss(logits.float(), target, reduction=\"mean\")" in train_source,
-            "auxiliary" in str(dual_contract).lower() or "lambda" in str(dual_contract.get("loss") or "").lower(),
-        ),
+                    "nn.Linear(classifier_input, 2)" in model_source,
+                    "F.mse_loss(logits.float(), target, reduction=\"mean\")" in train_source,
+                    "auxiliary" in str(dual_contract).lower() or "lambda" in str(dual_contract.get("loss") or "").lower(),
+                ),
     )
 
     summary["model_research_id"] = spec_l.model_research_id
@@ -2546,6 +2264,7 @@ def validate_breakout_quality_mr13m_low_adverse_ranker_contract_case(_base_param
     case_id = "BREAKOUT_QUALITY_MR13M_LOW_ADVERSE_RANKER"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config.breakout_quality import (
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
@@ -2581,47 +2300,38 @@ def validate_breakout_quality_mr13m_low_adverse_ranker_contract_case(_base_param
         "training_sample_scope",
         "model_architecture",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13m_profile_is_registered_and_active_resolver_does_not_change_production_workflow",
         (
-            DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        ),
+                    DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                    BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+                ),
         (
-            profile_m.name,
-            active_research.experiment_profile,
-            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        ),
+                    profile_m.name,
+                    active_research.experiment_profile,
+                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13m_keeps_mr13h_training_contract_except_target_identity",
         tuple(getattr(profile_h, field) for field in fixed_fields),
         tuple(getattr(profile_m, field) for field in fixed_fields),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13m_identity_target_pairwise_semantics_and_pit_stage_are_explicit",
         (
-            "MR-13M",
-            DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
-            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-            True,
-        ),
+                    "MR-13M",
+                    DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+                    True,
+                ),
         (
-            spec_m.model_research_id,
-            profile_m.continuous_target_id,
-            spec_m.pairwise_reduction,
-            bool(spec_m.selection_pit_authorized),
-        ),
+                    spec_m.model_research_id,
+                    profile_m.continuous_target_id,
+                    spec_m.pairwise_reduction,
+                    bool(spec_m.selection_pit_authorized),
+                ),
     )
 
     target_spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
@@ -2635,25 +2345,22 @@ def validate_breakout_quality_mr13m_low_adverse_ranker_contract_case(_base_param
     adverse_only = daily_full_horizon_low_adverse_target_from_cached_path(
         highs, lows, anchor_price=100.0, available_bars=horizon, spec=target_spec
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13m_reuses_exact_mr13h_peak_and_diagnostics_but_target_is_negative_adverse_r_only",
         (
-            source.opportunity_bar,
-            source.first_risk_breach_bar,
-            round(float(source.favorable_return), 6),
-            round(float(source.adverse_return_to_peak), 6),
-            round(-float(source.adverse_return_to_peak) / float(target_spec.risk_budget_return), 6),
-        ),
+                    source.opportunity_bar,
+                    source.first_risk_breach_bar,
+                    round(float(source.favorable_return), 6),
+                    round(float(source.adverse_return_to_peak), 6),
+                    round(-float(source.adverse_return_to_peak) / float(target_spec.risk_budget_return), 6),
+                ),
         (
-            adverse_only.opportunity_bar,
-            adverse_only.first_risk_breach_bar,
-            round(float(adverse_only.favorable_return), 6),
-            round(float(adverse_only.adverse_return_to_peak), 6),
-            round(float(adverse_only.target_raw_r), 6),
-        ),
+                    adverse_only.opportunity_bar,
+                    adverse_only.first_risk_breach_bar,
+                    round(float(adverse_only.favorable_return), 6),
+                    round(float(adverse_only.adverse_return_to_peak), 6),
+                    round(float(adverse_only.target_raw_r), 6),
+                ),
     )
 
     dates = pd.date_range("2020-01-01", periods=horizon + 3, freq="D")
@@ -2673,28 +2380,22 @@ def validate_breakout_quality_mr13m_low_adverse_ranker_contract_case(_base_param
         spec=target_spec,
         target_id=DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13m_vectorized_target_matches_scalar_negative_adverse_semantics",
         round(float(adverse_only.target_raw_r), 6),
         round(float(batch.target_raw_r[0]), 6),
     )
     contract = build_daily_full_horizon_low_adverse_contract(DEFAULT_LABEL_POLICY)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13m_contract_is_strategy_agnostic_and_excludes_mfe_reward",
         (DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID, False, True, False, False),
         (
-            contract["target_id"],
-            bool(contract["mfe_reward_included"]),
-            bool(contract["higher_is_better"]),
-            bool(contract["requires_strategy_candidate_membership"]),
-            "favorable_return /" in str(contract["formula"]),
-        ),
+                    contract["target_id"],
+                    bool(contract["mfe_reward_included"]),
+                    bool(contract["higher_is_better"]),
+                    bool(contract["requires_strategy_candidate_membership"]),
+                    "favorable_return /" in str(contract["formula"]),
+                ),
     )
 
     summary["model_research_id"] = spec_m.model_research_id
@@ -2709,6 +2410,7 @@ def validate_breakout_quality_mr13n_equal_rank_composite_contract_case(_base_par
     case_id = "BREAKOUT_QUALITY_MR13N_EQUAL_RANK_COMPOSITE"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config.breakout_quality import (
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
@@ -2746,51 +2448,42 @@ def validate_breakout_quality_mr13n_equal_rank_composite_contract_case(_base_par
         "training_sample_scope",
         "model_architecture",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13n_profile_is_registered_and_active_resolver_does_not_change_production_workflow",
         (
-            DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        ),
+                    DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                    BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+                ),
         (
-            profile_n.name,
-            active_research.experiment_profile,
-            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        ),
+                    profile_n.name,
+                    active_research.experiment_profile,
+                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13n_keeps_mr13h_training_contract_except_target_identity",
         tuple(getattr(profile_h, field) for field in fixed_fields),
         tuple(getattr(profile_n, field) for field in fixed_fields),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13n_identity_fixed_pairwise_stage_and_reference_evaluation_are_explicit",
         (
-            "MR-13N",
-            DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
-            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-            None,
-            DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-            False,
-        ),
+                    "MR-13N",
+                    DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
+                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+                    None,
+                    DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                    False,
+                ),
         (
-            spec_n.model_research_id,
-            profile_n.continuous_target_id,
-            spec_n.pairwise_reduction,
-            spec_n.reference_profile_name,
-            spec_n.evaluation_reference_profile_name,
-            bool(spec_n.selection_pit_authorized),
-        ),
+                    spec_n.model_research_id,
+                    profile_n.continuous_target_id,
+                    spec_n.pairwise_reduction,
+                    spec_n.reference_profile_name,
+                    spec_n.evaluation_reference_profile_name,
+                    bool(spec_n.selection_pit_authorized),
+                ),
     )
 
     dates = pd.to_datetime(
@@ -2805,62 +2498,53 @@ def validate_breakout_quality_mr13n_equal_rank_composite_contract_case(_base_par
         valid,
         dates,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13n_same_date_component_percentiles_and_equal_weight_composite_are_exact",
         (
-            (1.0, 0.5, 0.0, 0.5),
-            (0.0, 1.0, 0.5, 0.5),
-            (0.5, 0.75, 0.25, 0.5),
-        ),
+                    (1.0, 0.5, 0.0, 0.5),
+                    (0.0, 1.0, 0.5, 0.5),
+                    (0.5, 0.75, 0.25, 0.5),
+                ),
         (
-            tuple(round(float(x), 6) for x in mfe_pct),
-            tuple(round(float(x), 6) for x in low_adv_pct),
-            tuple(round(float(x), 6) for x in composite),
-        ),
+                    tuple(round(float(x), 6) for x in mfe_pct),
+                    tuple(round(float(x), 6) for x in low_adv_pct),
+                    tuple(round(float(x), 6) for x in composite),
+                ),
     )
 
     contract = build_daily_full_horizon_equal_rank_mfe_low_adverse_contract(
         DEFAULT_LABEL_POLICY
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13n_contract_is_fixed_equal_rank_strategy_agnostic_and_has_no_weight_tuning",
         (
-            DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
-            0.5,
-            0.5,
-            "none",
-            False,
-            "unitless_same_date_rank_composite",
-        ),
+                    DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
+                    0.5,
+                    0.5,
+                    "none",
+                    False,
+                    "unitless_same_date_rank_composite",
+                ),
         (
-            contract["target_id"],
-            float(contract["component_weights"]["mfe_percentile"]),
-            float(contract["component_weights"]["low_adverse_percentile"]),
-            contract["weight_tuning"],
-            bool(contract["requires_strategy_candidate_membership"]),
-            contract["unit"],
-        ),
+                    contract["target_id"],
+                    float(contract["component_weights"]["mfe_percentile"]),
+                    float(contract["component_weights"]["low_adverse_percentile"]),
+                    contract["weight_tuning"],
+                    bool(contract["requires_strategy_candidate_membership"]),
+                    contract["unit"],
+                ),
     )
 
     daily_source = read_source_text("filters/breakout_quality/daily_ranker_data.py")
     train_source = read_source_text("services/breakout_quality/train_daily_ranker.py")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13n_reference_economic_target_is_post_checkpoint_evaluation_only",
         (True, True, False),
         (
-            "evaluation_reference_profile = (" in train_source,
-            "used_for_training_or_epoch_selection\": False" in train_source,
-            "evaluation_reference_profile_name" in daily_source,
-        ),
+                    "evaluation_reference_profile = (" in train_source,
+                    "used_for_training_or_epoch_selection\": False" in train_source,
+                    "evaluation_reference_profile_name" in daily_source,
+                ),
     )
 
     summary["model_research_id"] = spec_n.model_research_id
@@ -2875,6 +2559,7 @@ def validate_breakout_quality_risk_normalized_13ij_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_RISK_NORMALIZED_13IJ"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config.breakout_quality import (
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
@@ -2918,80 +2603,68 @@ def validate_breakout_quality_risk_normalized_13ij_contract_case(_base_params):
         "training_label_scope",
         "training_sample_scope",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13i_keeps_mr13e_universe_objective_and_loss_and_changes_target_only",
         (
-            tuple(getattr(profile_e, field) for field in common_fields),
-            DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
-            "MR-13I",
-            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-        ),
+                    tuple(getattr(profile_e, field) for field in common_fields),
+                    DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
+                    "MR-13I",
+                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+                ),
         (
-            tuple(getattr(profile_i, field) for field in common_fields),
-            profile_i.continuous_target_id,
-            spec_i.model_research_id,
-            spec_i.pairwise_reduction,
-        ),
+                    tuple(getattr(profile_i, field) for field in common_fields),
+                    profile_i.continuous_target_id,
+                    spec_i.model_research_id,
+                    spec_i.pairwise_reduction,
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13j_target_and_training_contract_equal_mr13i_while_architecture_adds_context",
         (
-            profile_i.continuous_target_id,
-            tuple(getattr(profile_i, field) for field in common_fields),
-            "inception_time_risk_context_v1",
-            "MR-13J",
-        ),
+                    profile_i.continuous_target_id,
+                    tuple(getattr(profile_i, field) for field in common_fields),
+                    "inception_time_risk_context_v1",
+                    "MR-13J",
+                ),
         (
-            profile_j.continuous_target_id,
-            tuple(getattr(profile_j, field) for field in common_fields),
-            profile_j.model_architecture,
-            spec_j.model_research_id,
-        ),
+                    profile_j.continuous_target_id,
+                    tuple(getattr(profile_j, field) for field in common_fields),
+                    profile_j.model_architecture,
+                    spec_j.model_research_id,
+                ),
     )
     from config.breakout_quality import get_breakout_quality_model_research_settings
     active_research = get_breakout_quality_model_research_settings()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "model_research_profile_resolves_from_config_without_changing_production_workflow",
         (
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        ),
+                    BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+                ),
         (
-            active_research.experiment_profile,
-            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        ),
+                    active_research.experiment_profile,
+                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+                ),
     )
 
     contract = build_risk_target_contract(
         horizon_bars=int(DEFAULT_LABEL_POLICY.label_horizon_bars),
         param_policy="base-finalist-best",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "risk_target_uses_only_min_roos_initial_risk_fields_and_canonical_accounting",
         (
-            ["atr_len", "atr_times_init"],
-            False,
-            True,
-            False,
-        ),
+                    ["atr_len", "atr_times_init"],
+                    False,
+                    True,
+                    False,
+                ),
         (
-            list(contract["risk_fields"]),
-            "high_len" in contract["risk_fields"],
-            "canonical" in str(contract["accounting"]),
-            bool(contract["strategy_exit_path_used"]),
-        ),
+                    list(contract["risk_fields"]),
+                    "high_len" in contract["risk_fields"],
+                    "canonical" in str(contract["accounting"]),
+                    bool(contract["strategy_exit_path_used"]),
+                ),
     )
 
     from config.strategy_compare import get_strategy_comparison_settings
@@ -3031,19 +2704,16 @@ def validate_breakout_quality_risk_normalized_13ij_contract_case(_base_params):
         risk_schedule = load_min_roos_risk_schedule(
             temp_root, param_policy="base-finalist-best"
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "risk_schedule_reuses_strategy_compare_param_sources_without_future_backfill",
         (13, "2014-01-01", "2026-01-01", 14, 2.0),
         (
-            len(risk_schedule),
-            risk_schedule[0].start_date.date().isoformat(),
-            risk_schedule[-1].start_date.date().isoformat(),
-            risk_schedule[0].atr_len,
-            risk_schedule[0].atr_times_init,
-        ),
+                    len(risk_schedule),
+                    risk_schedule[0].start_date.date().isoformat(),
+                    risk_schedule[-1].start_date.date().isoformat(),
+                    risk_schedule[0].atr_len,
+                    risk_schedule[0].atr_times_init,
+                ),
     )
 
     period = RiskParamPeriod(
@@ -3061,19 +2731,16 @@ def validate_breakout_quality_risk_normalized_13ij_contract_case(_base_params):
         atr=2.5,
         period=period,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "risk_geometry_is_five_dimensional_finite_and_encodes_capital_cost_capacity",
         (True, 5, True, True, True),
         (
-            bool(geometry.valid),
-            len(geometry.context),
-            bool(all(math.isfinite(value) for value in geometry.context)),
-            bool(float(geometry.context[2]) > 1.0 and float(geometry.context[3]) > 0.0),
-            bool(0.0 < float(geometry.context[4]) <= 1.0),
-        ),
+                    bool(geometry.valid),
+                    len(geometry.context),
+                    bool(all(math.isfinite(value) for value in geometry.context)),
+                    bool(float(geometry.context[2]) > 1.0 and float(geometry.context[3]) > 0.0),
+                    bool(0.0 < float(geometry.context[4]) <= 1.0),
+                ),
     )
     params = _params_for_period(period)
     horizon = int(DEFAULT_LABEL_POLICY.label_horizon_bars)
@@ -3103,18 +2770,15 @@ def validate_breakout_quality_risk_normalized_13ij_contract_case(_base_params):
         params=params,
     )
     # Gross price-only favorable-minus-adverse would be 0.8R before fees when D=5.
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "risk_target_deducts_canonical_cost_and_same_bar_stop_is_adverse_first",
         (True, True, True, "stop_first"),
         (
-            bool(safe_valid and safe_target < 0.8),
-            bool(stop_valid),
-            bool(math.isclose(float(stop_target), -1.0, rel_tol=0.0, abs_tol=1e-12)),
-            stop_reason,
-        ),
+                    bool(safe_valid and safe_target < 0.8),
+                    bool(stop_valid),
+                    bool(math.isclose(float(stop_target), -1.0, rel_tol=0.0, abs_tol=1e-12)),
+                    stop_reason,
+                ),
     )
 
     settings_i = get_breakout_quality_workflow_settings(experiment_profile=profile_i.name)
@@ -3132,10 +2796,7 @@ def validate_breakout_quality_risk_normalized_13ij_contract_case(_base_params):
         x,
         torch.zeros((2, len(RISK_GEOMETRY_CONTEXT_FEATURES)), dtype=torch.float32),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13i_and_mr13j_model_heads_accept_zero_vs_five_dimensional_context",
         ((2, 2), (2, 2)),
         (tuple(logits_i.shape), tuple(logits_j.shape)),
@@ -3160,10 +2821,7 @@ def validate_breakout_quality_risk_normalized_13ij_contract_case(_base_params):
         event_context_rejected = False
     except ValueError as exc:
         event_context_rejected = "event continuous ranker" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_ranker_dispatch_allows_daily_risk_context_but_keeps_event_ranker_sequence_only",
         (True, True),
         (daily_context_profile_allowed, event_context_rejected),
@@ -3171,17 +2829,14 @@ def validate_breakout_quality_risk_normalized_13ij_contract_case(_base_params):
 
     application_source = read_source_text("tools/filters/breakout_quality/application.py")
     risk_source = read_source_text("filters/breakout_quality/risk_normalized_target.py")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "model_app_preflights_risk_params_and_risk_target_has_no_services_reverse_dependency",
         (True, False),
         (
-            "load_min_roos_risk_schedule(PROJECT_ROOT)" in application_source
-            and "[Risk params] BLOCKED" in application_source,
-            "from services." in risk_source or "import services." in risk_source,
-        ),
+                    "load_min_roos_risk_schedule(PROJECT_ROOT)" in application_source
+                    and "[Risk params] BLOCKED" in application_source,
+                    "from services." in risk_source or "import services." in risk_source,
+                ),
     )
 
     summary["active_model_research"] = active_research.experiment_profile
@@ -3196,6 +2851,7 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
     case_id = "BREAKOUT_QUALITY_MULTI_DL_RANKER_ARCHITECTURE"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config.breakout_quality import (
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
@@ -3218,10 +2874,7 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
         if get_breakout_quality_experiment_profile(name).training_objective
         in CONTINUOUS_RANKER_TRAINING_OBJECTIVES
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "continuous_profile_and_research_spec_registry_are_one_to_one",
         continuous_profiles,
         tuple(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES),
@@ -3234,40 +2887,34 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
     mr13b = get_continuous_ranker_research_spec(
         DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "existing_pairwise_research_identity_and_reduction_remain_explicit",
         (
-            "MR-12B", CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
-            "MR-13A", CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
-            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
-            "daily_opportunity_rank",
-        ),
+                    "MR-12B", CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+                    "MR-13A", CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+                    "daily_opportunity_rank",
+                ),
         (
-            mr12b.model_research_id, mr12b.pairwise_reduction,
-            mr13a.model_research_id, mr13a.trainer_family,
-            mr13a.pairwise_reduction, mr13a.score_semantic_id,
-        ),
+                    mr12b.model_research_id, mr12b.pairwise_reduction,
+                    mr13a.model_research_id, mr13a.trainer_family,
+                    mr13a.pairwise_reduction, mr13a.score_semantic_id,
+                ),
     )
 
     project_root = Path(__file__).resolve().parents[2]
     daily_source = (project_root / "services" / "breakout_quality" / "train_daily_ranker.py").read_text(encoding="utf-8")
     cli_source = (project_root / "services" / "breakout_quality" / "ranker_cli.py").read_text(encoding="utf-8")
     continuous_source = (project_root / "services" / "breakout_quality" / "train_continuous_ranker.py").read_text(encoding="utf-8")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "daily_trainer_and_dispatch_are_profile_driven",
         (False, False, True, True),
         (
-            "MR-13A" in daily_source,
-            "daily_universal_no_time_pairwise" in daily_source,
-            "get_continuous_ranker_research_spec" in cli_source,
-            "SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES" in continuous_source,
-        ),
+                    "MR-13A" in daily_source,
+                    "daily_universal_no_time_pairwise" in daily_source,
+                    "get_continuous_ranker_research_spec" in cli_source,
+                    "SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES" in continuous_source,
+                ),
     )
     from config.breakout_quality import TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING
 
@@ -3286,12 +2933,8 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
         if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR:
             continue
         non_default_owners.setdefault(reduction, []).append(spec.model_research_id)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "non_default_pairwise_reductions_have_explicit_mr_owners_without_identity_collision",
-        True,
         all(owners and len(owners) == len(set(owners)) for owners in non_default_owners.values()),
     )
     return results, summary
@@ -3303,6 +2946,7 @@ def validate_breakout_quality_mr13o_pareto_pairwise_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_MR13O_PARETO_PAIRWISE"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config.breakout_quality import (
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
@@ -3327,21 +2971,18 @@ def validate_breakout_quality_mr13o_pareto_pairwise_contract_case(_base_params):
     )
     active_research = get_breakout_quality_model_research_settings()
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13o_profile_remains_registered_while_active_research_returns_to_current_rolling_primary_and_production_workflow_remains_unchanged",
         (
-            DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        ),
+                    DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
+                    BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+                ),
         (
-            profile_o.name,
-            active_research.experiment_profile,
-            BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        ),
+                    profile_o.name,
+                    active_research.experiment_profile,
+                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+                ),
     )
     fixed_fields = (
         "optimizer_name",
@@ -3352,33 +2993,27 @@ def validate_breakout_quality_mr13o_pareto_pairwise_contract_case(_base_params):
         "training_sample_scope",
         "model_architecture",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13o_keeps_mr13h_economic_target_architecture_and_data_contract",
         tuple(getattr(profile_h, field) for field in fixed_fields),
         tuple(getattr(profile_o, field) for field in fixed_fields),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13o_identity_objective_epoch_metric_pair_scope_and_pit_stage_are_explicit",
         (
-            "MR-13O",
-            TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
-            "mean_daily_pareto_pair_concordance",
-            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
-            False,
-        ),
+                    "MR-13O",
+                    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
+                    "mean_daily_pareto_pair_concordance",
+                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+                    False,
+                ),
         (
-            spec_o.model_research_id,
-            profile_o.training_objective,
-            profile_o.epoch_selection_metric,
-            spec_o.pairwise_reduction,
-            bool(spec_o.selection_pit_authorized),
-        ),
+                    spec_o.model_research_id,
+                    profile_o.training_objective,
+                    profile_o.epoch_selection_metric,
+                    spec_o.pairwise_reduction,
+                    bool(spec_o.selection_pit_authorized),
+                ),
     )
 
     dates = pd.to_datetime(["2020-01-02"] * 4)
@@ -3393,19 +3028,16 @@ def validate_breakout_quality_mr13o_pareto_pairwise_contract_case(_base_params):
     components = ranker_api.build_pareto_component_percentile_targets(
         group_table, economic_target
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13o_component_targets_are_same_date_mfe_and_low_adverse_percentiles",
         (
-            (1.0, 0.333333, 0.666667, 0.0),
-            (0.666667, 0.333333, 0.0, 1.0),
-        ),
+                    (1.0, 0.333333, 0.666667, 0.0),
+                    (0.666667, 0.333333, 0.0, 1.0),
+                ),
         (
-            tuple(round(float(x), 6) for x in components[:, 0]),
-            tuple(round(float(x), 6) for x in components[:, 1]),
-        ),
+                    tuple(round(float(x), 6) for x in components[:, 0]),
+                    tuple(round(float(x), 6) for x in components[:, 1]),
+                ),
     )
 
     correct = ranker_api.pareto_pair_concordance_metrics(
@@ -3420,44 +3052,38 @@ def validate_breakout_quality_mr13o_pareto_pairwise_contract_case(_base_params):
         economic_target,
         np.asarray([0.0, 0.8, 0.7, 0.99], dtype=np.float32),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13o_only_strict_dominance_pairs_count_and_tradeoff_pairs_are_ignored",
         (2, 6, round(2 / 6, 6), 1.0, 0.0),
         (
-            int(correct["comparable_pair_count"]),
-            int(correct["all_pair_count"]),
-            round(float(correct["comparable_pair_rate"]), 6),
-            round(float(correct["mean_daily_pareto_pair_concordance"]), 6),
-            round(float(reversed_result["mean_daily_pareto_pair_concordance"]), 6),
-        ),
+                    int(correct["comparable_pair_count"]),
+                    int(correct["all_pair_count"]),
+                    round(float(correct["comparable_pair_rate"]), 6),
+                    round(float(correct["mean_daily_pareto_pair_concordance"]), 6),
+                    round(float(reversed_result["mean_daily_pareto_pair_concordance"]), 6),
+                ),
     )
 
     semantics = training_semantics(profile_o)
     pairwise = dict(semantics.get("pairwise_contract") or {})
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mr13o_training_semantics_have_no_mfe_adverse_mix_weight",
         (
-            "same_date_strict_pareto_dominance_pairs",
-            ["same_date_mfe_percentile", "same_date_low_adverse_percentile"],
-            "excluded_no_gradient",
-            "excluded_no_gradient",
-            "mean_daily_pareto_pair_concordance",
-            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
-        ),
+                    "same_date_strict_pareto_dominance_pairs",
+                    ["same_date_mfe_percentile", "same_date_low_adverse_percentile"],
+                    "excluded_no_gradient",
+                    "excluded_no_gradient",
+                    "mean_daily_pareto_pair_concordance",
+                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+                ),
         (
-            pairwise.get("pair_scope"),
-            pairwise.get("target_components"),
-            pairwise.get("tradeoff_pair_handling"),
-            pairwise.get("tie_handling"),
-            pairwise.get("epoch_selection"),
-            pairwise.get("pair_weighting"),
-        ),
+                    pairwise.get("pair_scope"),
+                    pairwise.get("target_components"),
+                    pairwise.get("tradeoff_pair_handling"),
+                    pairwise.get("tie_handling"),
+                    pairwise.get("epoch_selection"),
+                    pairwise.get("pair_weighting"),
+                ),
     )
 
     summary["model_research_id"] = spec_o.model_research_id

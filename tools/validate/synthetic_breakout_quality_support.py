@@ -409,7 +409,7 @@ from filters.breakout_quality.splits import (
     resolve_breakout_quality_outer_policy,
 )
 
-from .checks import add_check
+from .checks import add_check, bind_checks
 
 
 CONFIGURED_EXPERIMENT = get_breakout_quality_experiment_profile(

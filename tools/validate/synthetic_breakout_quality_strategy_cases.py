@@ -40,7 +40,7 @@ from .synthetic_breakout_quality_support import (
     _source_has_render_menu_item_call,
     _to_json_native,
     _validate_requested_param_policy,
-    add_check,
+    bind_checks,
     build_static_active_param_ensemble_payload,
     build_trade_attribution,
     calc_projected_capital_metrics,
@@ -67,6 +67,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_STRATEGY_COMPARISON"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     base = V16StrategyParams()
     common = {
@@ -80,14 +81,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         single_switch_only = True
     except ValueError:
         single_switch_only = False
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "controlled_pair_only_toggles_quality_filter",
-        True,
-        single_switch_only,
-    )
+    check_true("controlled_pair_only_toggles_quality_filter", single_switch_only)
 
     try:
         _assert_controlled_param_pair(
@@ -97,14 +91,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         extra_difference_rejected = False
     except ValueError as exc:
         extra_difference_rejected = "high_len" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "additional_param_difference_is_rejected",
-        True,
-        extra_difference_rejected,
-    )
+    check_true("additional_param_difference_is_rejected", extra_difference_rejected)
 
     synthetic_period_contract = SimpleNamespace(
         execution_start=pd.Timestamp("2025-01-03").date(),
@@ -112,10 +99,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         available_from=pd.Timestamp("2025-01-02").date(),
         available_through=pd.Timestamp("2025-12-31").date(),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "strategy_comparison_starts_at_execution_window_not_signal_score_anchor",
         ("2025-01-03", "2025-12-31"),
         _resolve_comparison_period(synthetic_period_contract),
@@ -130,18 +114,15 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     )
     ranking_left = params_to_json_dict(ranking_pair[1])
     ranking_right = params_to_json_dict(ranking_pair[2])
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "score_ranking_pair_only_toggles_ranking_and_keeps_hard_filter_off",
         (False, False, False, True),
         (
-            ranking_left["use_breakout_quality_filter"],
-            ranking_right["use_breakout_quality_filter"],
-            ranking_left["use_breakout_quality_ranking"],
-            ranking_right["use_breakout_quality_ranking"],
-        ),
+                    ranking_left["use_breakout_quality_filter"],
+                    ranking_right["use_breakout_quality_filter"],
+                    ranking_left["use_breakout_quality_ranking"],
+                    ranking_right["use_breakout_quality_ranking"],
+                ),
     )
 
     all_off_pair = _build_controlled_param_source_pair(
@@ -205,19 +186,16 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             program_name="apps/research.py model",
         )
     export_call = post_train_calls[0]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "binary_model_post_train_exports_forward_scores_without_strategy_replay",
         (0, ("export-scores",), True, True),
         (
-            post_train_rc,
-            tuple(call[0] for call in post_train_calls),
-            "forward_oos" in export_call[1]
-            and binary_menu_settings.experiment_profile in export_call[1],
-            "strategy-compare" not in tuple(call[0] for call in post_train_calls),
-        ),
+                    post_train_rc,
+                    tuple(call[0] for call in post_train_calls),
+                    "forward_oos" in export_call[1]
+                    and binary_menu_settings.experiment_profile in export_call[1],
+                    "strategy-compare" not in tuple(call[0] for call in post_train_calls),
+                ),
     )
 
     project_root = Path(__file__).resolve().parents[2]
@@ -227,25 +205,21 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     trade_path_train_source = app_source.split(
         "def _interactive_trade_path_train_and_report", 1
     )[1].split("def _interactive_trade_path_existing_report", 1)[0]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "binary_menu_training_flow_builds_trade_path_label_and_complete_model_artifacts_only",
-        True,
         all(
-            token in trade_path_train_source
-            for token in (
-                "build-trade-path-labels",
-                '"train"',
-                '"export-scores"',
-                '"report"',
-                'scope="forward_oos"',
-                "本流程不執行策略績效比較",
-            )
-        )
-        and "_run_binary_post_train_validation" not in trade_path_train_source
-        and "strategy-compare" not in trade_path_train_source,
+                    token in trade_path_train_source
+                    for token in (
+                        "build-trade-path-labels",
+                        '"train"',
+                        '"export-scores"',
+                        '"report"',
+                        'scope="forward_oos"',
+                        "本流程不執行策略績效比較",
+                    )
+                )
+                and "_run_binary_post_train_validation" not in trade_path_train_source
+                and "strategy-compare" not in trade_path_train_source,
     )
 
     report_calls = []
@@ -267,19 +241,16 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             request=export_request,
             export_research_scores=True,
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "existing_trade_path_model_report_exports_research_and_forward_scores_without_replay",
         (0, ("export-scores", "report", "export-scores"), True, True),
         (
-            trade_path_report_rc,
-            tuple(call[0] for call in report_calls),
-            "research" in report_calls[0][1]
-            and "forward_oos" in report_calls[2][1],
-            "strategy-compare" not in tuple(call[0] for call in report_calls),
-        ),
+                    trade_path_report_rc,
+                    tuple(call[0] for call in report_calls),
+                    "research" in report_calls[0][1]
+                    and "forward_oos" in report_calls[2][1],
+                    "strategy-compare" not in tuple(call[0] for call in report_calls),
+                ),
     )
 
     existing_binary_source = app_source.split(
@@ -288,24 +259,20 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     binary_menu_source = app_source.split(
         "def _interactive_binary_model_research", 1
     )[1].split("def _interactive_model_research", 1)[0]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "binary_model_menu_supports_trade_path_existing_model_report_without_strategy_replay",
-        True,
         all(
-            token in binary_menu_source
-            for token in (
-                "建立新Label",
-                "使用既有模型",
-                "查看Label與事件生命週期摘要",
-                "_interactive_trade_path_existing_report",
-            )
-        )
-        and "_run_trade_path_model_report" in existing_binary_source
-        and "strategy-compare" not in existing_binary_source
-        and "_run_binary_post_train_validation" not in existing_binary_source,
+                    token in binary_menu_source
+                    for token in (
+                        "建立新Label",
+                        "使用既有模型",
+                        "查看Label與事件生命週期摘要",
+                        "_interactive_trade_path_existing_report",
+                    )
+                )
+                and "_run_trade_path_model_report" in existing_binary_source
+                and "strategy-compare" not in existing_binary_source
+                and "_run_binary_post_train_validation" not in existing_binary_source,
     )
 
     existing_model_calls = []
@@ -343,27 +310,24 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
                 workflow_settings=binary_menu_settings,
             )
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "binary_existing_trade_path_model_menu_completes_research_report_and_forward_scores_only",
         (
-            0,
-            ("export-scores", "report", "export-scores"),
-            True,
-            True,
-        ),
+                    0,
+                    ("export-scores", "report", "export-scores"),
+                    True,
+                    True,
+                ),
         (
-            existing_model_rc,
-            tuple(call[0] for call in existing_model_calls),
-            "research" in existing_model_calls[0][1]
-            and "forward_oos" in existing_model_calls[2][1],
-            "--include-oos" in existing_model_calls[1][1]
-            and "strategy-compare" not in tuple(
-                call[0] for call in existing_model_calls
-            ),
-        ),
+                    existing_model_rc,
+                    tuple(call[0] for call in existing_model_calls),
+                    "research" in existing_model_calls[0][1]
+                    and "forward_oos" in existing_model_calls[2][1],
+                    "--include-oos" in existing_model_calls[1][1]
+                    and "strategy-compare" not in tuple(
+                        call[0] for call in existing_model_calls
+                    ),
+                ),
     )
 
     # Regression: hard-filter comparison has no score-ranking capture audit.
@@ -512,18 +476,15 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
                 output_dir_override=hard_filter_root / "comparison",
                 quiet=False,
             )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "hard_filter_strategy_compare_passes_none_capture_audit_to_shared_console",
         (None, True),
         (
-            hard_filter_console_capture[0]
-            if hard_filter_console_capture
-            else "console-not-called",
-            "quality_filter" in hard_filter_result,
-        ),
+                    hard_filter_console_capture[0]
+                    if hard_filter_console_capture
+                    else "console-not-called",
+                    "quality_filter" in hard_filter_result,
+                ),
     )
 
     all_off_output_name = _comparison_output_dir_name(
@@ -533,26 +494,23 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         ranking_policy="score",
         optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "canonical_all_off_score_ranking_keeps_optional_filters_off_and_isolates_output",
         (
-            (False, False, False, False, False),
-            (False, False, False, False, False),
-            (False, True),
-            True,
-        ),
+                    (False, False, False, False, False),
+                    (False, False, False, False, False),
+                    (False, True),
+                    True,
+                ),
         (
-            tuple(all_off_left[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
-            tuple(all_off_right[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
-            (
-                all_off_left["use_breakout_quality_ranking"],
-                all_off_right["use_breakout_quality_ranking"],
-            ),
-            all_off_output_name.endswith("_optional_entry_filters_all_off"),
-        ),
+                    tuple(all_off_left[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
+                    tuple(all_off_right[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
+                    (
+                        all_off_left["use_breakout_quality_ranking"],
+                        all_off_right["use_breakout_quality_ranking"],
+                    ),
+                    all_off_output_name.endswith("_optional_entry_filters_all_off"),
+                ),
     )
 
 
@@ -567,16 +525,13 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         {"ticker": "A", "sort_value": 0.20, "proj_cost": 100.0, "use_breakout_quality_ranking": True, "breakout_quality_score": 0.90},
         {"ticker": "B", "sort_value": 0.10, "proj_cost": 80.0, "use_breakout_quality_ranking": True, "breakout_quality_score": 0.40},
     ]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "single_param_score_ranking_precedes_existing_overage_sort",
         (["B", "A"], ["A", "B"]),
         (
-            [row["ticker"] for row in sort_candidate_rows(baseline_sort_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD)],
-            [row["ticker"] for row in sort_candidate_rows(ranking_sort_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD)],
-        ),
+                    [row["ticker"] for row in sort_candidate_rows(baseline_sort_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD)],
+                    [row["ticker"] for row in sort_candidate_rows(ranking_sort_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD)],
+                ),
     )
 
     projected_fraction, deployment_rate = calc_projected_capital_metrics(
@@ -584,10 +539,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         sizing_capital=1000.0,
         max_position_cap_pct=0.30,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "capital_deployment_uses_canonical_projected_cost_and_position_cap",
         (0.15, 0.50),
         (round(projected_fraction, 6), round(deployment_rate, 6)),
@@ -627,27 +579,21 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         dict(row, breakout_quality_ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET)
         for row in capital_rows
     ]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "capital_adjusted_score_multiplies_score_by_formal_deployment_rate",
         ["C", "B", "A"],
         [
-            row["ticker"]
-            for row in sort_candidate_rows(r2_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD)
-        ],
+                    row["ticker"]
+                    for row in sort_candidate_rows(r2_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD)
+                ],
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "capital_bucket_policy_uses_daily_tercile_then_score",
         ["C", "B", "A"],
         [
-            row["ticker"]
-            for row in sort_candidate_rows(r3_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD)
-        ],
+                    row["ticker"]
+                    for row in sort_candidate_rows(r3_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD)
+                ],
     )
 
     missing_capital_rows = [
@@ -666,18 +612,15 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             "breakout_quality_rank": {"available": False},
         },
     ]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "capital_aware_missing_scores_preserve_original_buy_sort_fallback",
         ["B", "A"],
         [
-            row["ticker"]
-            for row in sort_candidate_rows(
-                missing_capital_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD
-            )
-        ],
+                    row["ticker"]
+                    for row in sort_candidate_rows(
+                        missing_capital_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD
+                    )
+                ],
     )
 
     ensemble_rank_rows = []
@@ -702,10 +645,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
                 },
             })
     ensemble_ranked = _aggregate_ensemble_candidate_rows(ensemble_rank_rows, min_agree=3)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "ensemble_votes_remain_first_and_score_only_reorders_equal_vote_candidates",
         [("C", 6), ("A", 6), ("B", 5)],
         [(row["ticker"], row["ensemble_vote_count"]) for row in ensemble_ranked],
@@ -746,21 +686,15 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     ensemble_capital_ranked = _aggregate_ensemble_candidate_rows(
         ensemble_capital_rows, min_agree=1
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "ensemble_vote_precedes_capital_adjusted_score_and_equal_votes_use_r2",
         [("C", 3), ("B", 2), ("A", 2)],
         [
-            (row["ticker"], row["ensemble_vote_count"])
-            for row in ensemble_capital_ranked
-        ],
+                    (row["ticker"], row["ensemble_vote_count"])
+                    for row in ensemble_capital_ranked
+                ],
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "ensemble_candidate_preserves_member_specific_original_quality_ranks",
         [f"m{idx}" for idx in range(6)],
         sorted(ensemble_ranked[0]["ensemble_member_quality_rank_by_key"]),
@@ -874,29 +808,26 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         partial_ensemble_rows, min_agree=2
     )
     partial_by_ticker = {row["ticker"]: row for row in partial_ensemble_ranked}
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "partial_ensemble_score_availability_falls_back_without_excluding_candidate",
         (
-            ["B", "C", "A"],
-            False,
-            "partial_ensemble_member_score_availability",
-            "partial_available_fallback",
-            1,
-            1,
-            ["m0", "m1"],
-        ),
+                    ["B", "C", "A"],
+                    False,
+                    "partial_ensemble_member_score_availability",
+                    "partial_available_fallback",
+                    1,
+                    1,
+                    ["m0", "m1"],
+                ),
         (
-            [row["ticker"] for row in partial_ensemble_ranked],
-            partial_by_ticker["A"]["breakout_quality_rank"]["available"],
-            partial_by_ticker["A"]["breakout_quality_rank"]["unavailable_reason"],
-            partial_by_ticker["A"]["ensemble_quality_score_availability"],
-            partial_by_ticker["A"]["ensemble_quality_score_available_member_count"],
-            partial_by_ticker["A"]["ensemble_quality_score_unavailable_member_count"],
-            sorted(partial_by_ticker["A"]["ensemble_member_quality_rank_by_key"]),
-        ),
+                    [row["ticker"] for row in partial_ensemble_ranked],
+                    partial_by_ticker["A"]["breakout_quality_rank"]["available"],
+                    partial_by_ticker["A"]["breakout_quality_rank"]["unavailable_reason"],
+                    partial_by_ticker["A"]["ensemble_quality_score_availability"],
+                    partial_by_ticker["A"]["ensemble_quality_score_available_member_count"],
+                    partial_by_ticker["A"]["ensemble_quality_score_unavailable_member_count"],
+                    sorted(partial_by_ticker["A"]["ensemble_member_quality_rank_by_key"]),
+                ),
     )
 
     same_date_inconsistent_rows = [dict(row) for row in partial_ensemble_rows[:2]]
@@ -910,12 +841,8 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         same_date_inconsistency_rejected = False
     except ValueError as exc:
         same_date_inconsistency_rejected = "ticker／score_date" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "same_ticker_same_score_date_availability_mismatch_remains_fail_fast",
-        True,
         same_date_inconsistency_rejected,
     )
 
@@ -985,22 +912,16 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
                 signal_date=reentry_trigger_date,
                 signal_state=reentry_signal,
             )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "reentry_keeps_trigger_date_but_inherits_original_breakout_score_date",
         ("2022-01-17", "2021-12-30", 0.731),
         (
-            pd.Timestamp(reentry_signal["signal_date"]).strftime("%Y-%m-%d"),
-            inherited_rank["score_date"],
-            inherited_rank["score"],
-        ),
+                    pd.Timestamp(reentry_signal["signal_date"]).strftime("%Y-%m-%d"),
+                    inherited_rank["score_date"],
+                    inherited_rank["score"],
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "reentry_ranking_uses_inherited_score_without_runtime_lookup_on_trigger_date",
         ("2021-12-30", 0.731),
         (resolved_reentry_rank["score_date"], resolved_reentry_rank["score"]),
@@ -1018,14 +939,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         missing_member_rank_rejected = False
     except ValueError as exc:
         missing_member_rank_rejected = "member=m1" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "ensemble_reentry_rejects_partial_member_quality_rank_mapping",
-        True,
-        missing_member_rank_rejected,
-    )
+    check_true("ensemble_reentry_rejects_partial_member_quality_rank_mapping", missing_member_rank_rejected)
 
     ensemble_source = build_static_active_param_ensemble_payload(
         members=[
@@ -1061,21 +975,18 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             ensemble_no_filter["params_ensemble"], ensemble_quality["params_ensemble"]
         )
     ]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "static_trade_ensemble_preserves_members_and_only_toggles_filter",
         (
-            "static_active_param_ensemble",
-            [(False, True, 201, 201, 0.01, 0.01), (False, True, 205, 205, 0.01, 0.01)],
-            (2, 2),
-        ),
+                    "static_active_param_ensemble",
+                    [(False, True, 201, 201, 0.01, 0.01), (False, True, 205, 205, 0.01, 0.01)],
+                    (2, 2),
+                ),
         (
-            ensemble_kind,
-            ensemble_switches,
-            (ensemble_policy["seed_count"], ensemble_policy["min_agree"]),
-        ),
+                    ensemble_kind,
+                    ensemble_switches,
+                    (ensemble_policy["seed_count"], ensemble_policy["min_agree"]),
+                ),
     )
 
     broken_ensemble = json.loads(json.dumps(ensemble_quality))
@@ -1085,14 +996,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         ensemble_extra_difference_rejected = False
     except ValueError as exc:
         ensemble_extra_difference_rejected = "high_len" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "ensemble_additional_member_difference_is_rejected",
-        True,
-        ensemble_extra_difference_rejected,
-    )
+    check_true("ensemble_additional_member_difference_is_rejected", ensemble_extra_difference_rejected)
 
     rolling_single_payload = {
         "schema_type": "rolling_oos_param_set",
@@ -1124,19 +1028,16 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         )
     rolling_single_left = rolling_single_pair[1]["params_by_effective_date"]["2022-01-01"]
     rolling_single_right = rolling_single_pair[2]["params_by_effective_date"]["2022-01-01"]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "rolling_oos_single_param_schedule_is_supported_without_changing_effective_dates",
         ("rolling_oos_param_schedule", False, True, 205, 205),
         (
-            rolling_single_pair[0],
-            rolling_single_left["use_breakout_quality_filter"],
-            rolling_single_right["use_breakout_quality_filter"],
-            rolling_single_left["high_len"],
-            rolling_single_right["high_len"],
-        ),
+                    rolling_single_pair[0],
+                    rolling_single_left["use_breakout_quality_filter"],
+                    rolling_single_right["use_breakout_quality_filter"],
+                    rolling_single_left["high_len"],
+                    rolling_single_right["high_len"],
+                ),
     )
 
     rolling_payload = {
@@ -1188,34 +1089,31 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     rolling_all_off_right = rolling_all_off_pair[2][
         "params_ensemble_by_effective_date"
     ]["2021-01-01"][0]["params"]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "rolling_optional_entry_filter_gate_keeps_schedule_and_forces_all_five_filters_off",
         (
-            "rolling_active_param_ensemble",
-            (False, False, False, False, False),
-            (False, False, False, False, False),
-            (False, True),
-            2,
-        ),
+                    "rolling_active_param_ensemble",
+                    (False, False, False, False, False),
+                    (False, False, False, False, False),
+                    (False, True),
+                    2,
+                ),
         (
-            rolling_all_off_pair[0],
-            tuple(
-                rolling_all_off_left[field]
-                for field in OPTIONAL_ENTRY_FILTER_FIELDS
-            ),
-            tuple(
-                rolling_all_off_right[field]
-                for field in OPTIONAL_ENTRY_FILTER_FIELDS
-            ),
-            (
-                rolling_all_off_left["use_breakout_quality_ranking"],
-                rolling_all_off_right["use_breakout_quality_ranking"],
-            ),
-            len(rolling_all_off_pair[1]["params_ensemble_by_effective_date"]),
-        ),
+                    rolling_all_off_pair[0],
+                    tuple(
+                        rolling_all_off_left[field]
+                        for field in OPTIONAL_ENTRY_FILTER_FIELDS
+                    ),
+                    tuple(
+                        rolling_all_off_right[field]
+                        for field in OPTIONAL_ENTRY_FILTER_FIELDS
+                    ),
+                    (
+                        rolling_all_off_left["use_breakout_quality_ranking"],
+                        rolling_all_off_right["use_breakout_quality_ranking"],
+                    ),
+                    len(rolling_all_off_pair[1]["params_ensemble_by_effective_date"]),
+                ),
     )
     rolling_dl_filter_pair = _build_controlled_param_source_pair(
         rolling_source,
@@ -1231,33 +1129,30 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     rolling_dl_right = rolling_dl_filter_pair[2][
         "params_ensemble_by_effective_date"
     ]["2021-01-01"][0]["params"]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "rolling_binary_dl_replacement_gate_keeps_original_sort_and_forces_optional_filters_off",
         (
-            "rolling_active_param_ensemble",
-            (False, False, False, False, False),
-            (False, False, False, False, False),
-            (False, True),
-            (False, False),
-            2,
-        ),
+                    "rolling_active_param_ensemble",
+                    (False, False, False, False, False),
+                    (False, False, False, False, False),
+                    (False, True),
+                    (False, False),
+                    2,
+                ),
         (
-            rolling_dl_filter_pair[0],
-            tuple(rolling_dl_left[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
-            tuple(rolling_dl_right[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
-            (
-                rolling_dl_left["use_breakout_quality_filter"],
-                rolling_dl_right["use_breakout_quality_filter"],
-            ),
-            (
-                rolling_dl_left["use_breakout_quality_ranking"],
-                rolling_dl_right["use_breakout_quality_ranking"],
-            ),
-            len(rolling_dl_filter_pair[1]["params_ensemble_by_effective_date"]),
-        ),
+                    rolling_dl_filter_pair[0],
+                    tuple(rolling_dl_left[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
+                    tuple(rolling_dl_right[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
+                    (
+                        rolling_dl_left["use_breakout_quality_filter"],
+                        rolling_dl_right["use_breakout_quality_filter"],
+                    ),
+                    (
+                        rolling_dl_left["use_breakout_quality_ranking"],
+                        rolling_dl_right["use_breakout_quality_ranking"],
+                    ),
+                    len(rolling_dl_filter_pair[1]["params_ensemble_by_effective_date"]),
+                ),
     )
 
     rolling_rule_ablation_pair = _build_controlled_param_source_pair(
@@ -1279,49 +1174,46 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     rolling_rule_right = rolling_rule_ablation_pair[2][
         "params_ensemble_by_effective_date"
     ]["2021-01-01"][0]["params"]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "rolling_binary_dl_rule_ablation_applies_same_history_reentry_kc_overrides_to_both_sides",
         (
-            (False, False, False),
-            (False, False, False),
-            (False, True),
-            (False, False),
-            2,
-        ),
+                    (False, False, False),
+                    (False, False, False),
+                    (False, True),
+                    (False, False),
+                    2,
+                ),
         (
-            tuple(
-                rolling_rule_left[field]
-                for field in (
-                    "use_history_threshold",
-                    "use_breakout_reclaim_reentry",
-                    "use_kc",
-                )
-            ),
-            tuple(
-                rolling_rule_right[field]
-                for field in (
-                    "use_history_threshold",
-                    "use_breakout_reclaim_reentry",
-                    "use_kc",
-                )
-            ),
-            (
-                rolling_rule_left["use_breakout_quality_filter"],
-                rolling_rule_right["use_breakout_quality_filter"],
-            ),
-            (
-                rolling_rule_left["use_breakout_quality_ranking"],
-                rolling_rule_right["use_breakout_quality_ranking"],
-            ),
-            len(
-                rolling_rule_ablation_pair[1][
-                    "params_ensemble_by_effective_date"
-                ]
-            ),
-        ),
+                    tuple(
+                        rolling_rule_left[field]
+                        for field in (
+                            "use_history_threshold",
+                            "use_breakout_reclaim_reentry",
+                            "use_kc",
+                        )
+                    ),
+                    tuple(
+                        rolling_rule_right[field]
+                        for field in (
+                            "use_history_threshold",
+                            "use_breakout_reclaim_reentry",
+                            "use_kc",
+                        )
+                    ),
+                    (
+                        rolling_rule_left["use_breakout_quality_filter"],
+                        rolling_rule_right["use_breakout_quality_filter"],
+                    ),
+                    (
+                        rolling_rule_left["use_breakout_quality_ranking"],
+                        rolling_rule_right["use_breakout_quality_ranking"],
+                    ),
+                    len(
+                        rolling_rule_ablation_pair[1][
+                            "params_ensemble_by_effective_date"
+                        ]
+                    ),
+                ),
     )
 
     finalist_best_payload = json.loads(json.dumps(rolling_payload))
@@ -1337,18 +1229,15 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     finalist_best_contract = _validate_requested_param_policy(
         finalist_best_source, PARAM_POLICY_BASE_FINALIST_BEST
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "finalist_best_score_ranking_policy_requires_single_runtime_member",
         ("base_finalist_best", 1, 1, 1),
         (
-            finalist_best_contract["selector"],
-            finalist_best_contract["member_count_min"],
-            finalist_best_contract["member_count_max"],
-            finalist_best_contract["min_agree"],
-        ),
+                    finalist_best_contract["selector"],
+                    finalist_best_contract["member_count_min"],
+                    finalist_best_contract["member_count_max"],
+                    finalist_best_contract["min_agree"],
+                ),
     )
 
     try:
@@ -1359,14 +1248,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         wrong_selector_rejected = False
     except ValueError as exc:
         wrong_selector_rejected = "selector" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "finalist_best_policy_rejects_finalists_agree_source",
-        True,
-        wrong_selector_rejected,
-    )
+    check_true("finalist_best_policy_rejects_finalists_agree_source", wrong_selector_rejected)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         root_path = Path(tmp_dir)
@@ -1388,84 +1270,72 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         root_path, family="full", evaluation_mode="rolling", policy="base_finalists_agree"
     )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "score_ranking_param_policy_resolves_canonical_ssot_filenames",
         (expected_best.name, expected_agree.name),
         (resolved_best.name, resolved_agree.name),
     )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "score_ranking_param_policies_use_isolated_output_directories",
         (
-            "strategy_compare_score_ranking_base_finalist_best",
-            "strategy_compare_score_ranking_base_finalists_agree",
-        ),
+                    "strategy_compare_score_ranking_base_finalist_best",
+                    "strategy_compare_score_ranking_base_finalists_agree",
+                ),
         (
-            _comparison_output_dir_name(
-                COMPARISON_MODE_SCORE_RANKING,
-                _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
-                param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
-            ),
-            _comparison_output_dir_name(
-                COMPARISON_MODE_SCORE_RANKING,
-                _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
-                param_policy=PARAM_POLICY_BASE_FINALISTS_AGREE,
-            ),
-        ),
+                    _comparison_output_dir_name(
+                        COMPARISON_MODE_SCORE_RANKING,
+                        _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
+                        param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+                    ),
+                    _comparison_output_dir_name(
+                        COMPARISON_MODE_SCORE_RANKING,
+                        _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
+                        param_policy=PARAM_POLICY_BASE_FINALISTS_AGREE,
+                    ),
+                ),
     )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "capital_aware_ranking_policies_use_isolated_output_directories",
         (
-            "strategy_compare_score_ranking_base_finalist_best_capital_adjusted_score",
-            "strategy_compare_score_ranking_base_finalist_best_capital_bucket_then_score",
-        ),
+                    "strategy_compare_score_ranking_base_finalist_best_capital_adjusted_score",
+                    "strategy_compare_score_ranking_base_finalist_best_capital_bucket_then_score",
+                ),
         (
-            _comparison_output_dir_name(
-                COMPARISON_MODE_SCORE_RANKING,
-                _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
-                param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
-                ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
-            ),
-            _comparison_output_dir_name(
-                COMPARISON_MODE_SCORE_RANKING,
-                _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
-                param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
-                ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
-            ),
-        ),
+                    _comparison_output_dir_name(
+                        COMPARISON_MODE_SCORE_RANKING,
+                        _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
+                        param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+                        ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
+                    ),
+                    _comparison_output_dir_name(
+                        COMPARISON_MODE_SCORE_RANKING,
+                        _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
+                        param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+                        ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
+                    ),
+                ),
     )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "hard_filter_param_policies_use_isolated_output_directories",
         (
-            "strategy_compare_base_finalist_best",
-            "strategy_compare_base_finalists_agree",
-        ),
+                    "strategy_compare_base_finalist_best",
+                    "strategy_compare_base_finalists_agree",
+                ),
         (
-            _comparison_output_dir_name(
-                COMPARISON_MODE_HARD_FILTER,
-                _comparison_labels(COMPARISON_MODE_HARD_FILTER),
-                param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
-            ),
-            _comparison_output_dir_name(
-                COMPARISON_MODE_HARD_FILTER,
-                _comparison_labels(COMPARISON_MODE_HARD_FILTER),
-                param_policy=PARAM_POLICY_BASE_FINALISTS_AGREE,
-            ),
-        ),
+                    _comparison_output_dir_name(
+                        COMPARISON_MODE_HARD_FILTER,
+                        _comparison_labels(COMPARISON_MODE_HARD_FILTER),
+                        param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+                    ),
+                    _comparison_output_dir_name(
+                        COMPARISON_MODE_HARD_FILTER,
+                        _comparison_labels(COMPARISON_MODE_HARD_FILTER),
+                        param_policy=PARAM_POLICY_BASE_FINALISTS_AGREE,
+                    ),
+                ),
     )
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1476,10 +1346,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             compare_root,
             comparison_mode=COMPARISON_MODE_HARD_FILTER,
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "hard_filter_policy_specific_output_is_discoverable",
         expected_compare_dir.name,
         discovered_compare_dir.name,
@@ -1487,19 +1354,16 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
 
     rolling_left = rolling_pair[1]["params_ensemble_by_effective_date"]["2021-01-01"][0]["params"]
     rolling_right = rolling_pair[2]["params_ensemble_by_effective_date"]["2021-01-01"][0]["params"]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "rolling_oos_active_param_ensemble_is_supported_without_changing_schedule",
         ("rolling_active_param_ensemble", False, True, 2, 2),
         (
-            rolling_pair[0],
-            rolling_left["use_breakout_quality_filter"],
-            rolling_right["use_breakout_quality_filter"],
-            rolling_pair[5]["seed_count"],
-            rolling_pair[5]["min_agree"],
-        ),
+                    rolling_pair[0],
+                    rolling_left["use_breakout_quality_filter"],
+                    rolling_right["use_breakout_quality_filter"],
+                    rolling_pair[5]["seed_count"],
+                    rolling_pair[5]["min_agree"],
+                ),
     )
 
     capacity = _capacity_summary({
@@ -1518,23 +1382,20 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             },
         ]
     })
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "daily_candidate_and_position_gap_summary",
         (2, 1.5, 1, 2, 15, 2, 16, 2.0, 0),
         (
-            capacity["sim_day_count"],
-            capacity["avg_orderable_candidates"],
-            capacity["zero_orderable_candidate_days"],
-            capacity["candidate_supply_gap_days"],
-            capacity["candidate_supply_gap_slot_days"],
-            capacity["underfilled_end_days"],
-            capacity["end_position_gap_slot_days"],
-            capacity["avg_end_positions"],
-            capacity["full_position_days"],
-        ),
+                    capacity["sim_day_count"],
+                    capacity["avg_orderable_candidates"],
+                    capacity["zero_orderable_candidate_days"],
+                    capacity["candidate_supply_gap_days"],
+                    capacity["candidate_supply_gap_slot_days"],
+                    capacity["underfilled_end_days"],
+                    capacity["end_position_gap_slot_days"],
+                    capacity["avg_end_positions"],
+                    capacity["full_position_days"],
+                ),
     )
 
     normalized_years = _normalize_yearly_completeness(pd.DataFrame([
@@ -1551,14 +1412,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             "end_date": "2026-03-02",
         },
     ]))
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "comparison_partial_final_year_is_not_marked_full",
-        [True, False],
-        list(normalized_years["is_full_year"]),
-    )
+    check("comparison_partial_final_year_is_not_marked_full", [True, False], list(normalized_years["is_full_year"]))
 
     no_filter_history = pd.DataFrame([
         {"Date": "2025-01-03", "Ticker": "A", "Type": "買進 (新訊號, EV:1.00R)", "買訊日": "2025-01-02", "候選日": "2025-01-03", "進場類型": "normal", "成交價": 10.0},
@@ -1587,43 +1441,34 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         no_filter_portfolio_total_r=3.0,
         quality_filter_portfolio_total_r=0.5,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "trade_attribution_partitions_common_and_exclusive_round_trips",
         (1, 2, 1, 3, 2),
         tuple(attribution["trade_partition"][key] for key in (
-            "common_count", "no_filter_only_count", "quality_filter_only_count",
-            "no_filter_total_count", "quality_filter_total_count",
-        )),
+                    "common_count", "no_filter_only_count", "quality_filter_only_count",
+                    "no_filter_total_count", "quality_filter_total_count",
+                )),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "trade_attribution_reconciles_portfolio_total_r",
         (3.0, 1.0, 0.5, -2.5, 0.0),
         (
-            attribution["r_attribution"]["excluded_winner_r"],
-            attribution["r_attribution"]["avoided_loser_r_abs"],
-            attribution["r_attribution"]["replacement_loser_r_abs"],
-            attribution["r_attribution"]["exclusive_selection_delta_r"],
-            attribution["r_attribution"]["reconciliation_error_r"],
-        ),
+                    attribution["r_attribution"]["excluded_winner_r"],
+                    attribution["r_attribution"]["avoided_loser_r_abs"],
+                    attribution["r_attribution"]["replacement_loser_r_abs"],
+                    attribution["r_attribution"]["exclusive_selection_delta_r"],
+                    attribution["r_attribution"]["reconciliation_error_r"],
+                ),
         tol=1e-12,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "trade_attribution_distinguishes_direct_filter_rejects",
         (2, 0, 0),
         (
-            attribution["r_attribution"]["direct_filter_reject_count"],
-            attribution["r_attribution"]["portfolio_path_displacement_count"],
-            attribution["r_attribution"]["score_lookup_unavailable_count"],
-        ),
+                    attribution["r_attribution"]["direct_filter_reject_count"],
+                    attribution["r_attribution"]["portfolio_path_displacement_count"],
+                    attribution["r_attribution"]["score_lookup_unavailable_count"],
+                ),
     )
 
     native_payload = _to_json_native({
@@ -1631,22 +1476,12 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         "date": pd.Timestamp("2026-07-26"),
         "non_finite": np.float64(np.nan),
     })
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "comparison_json_payload_is_native_and_strict",
         {"number": 1.25, "date": "2026-07-26T00:00:00", "non_finite": None},
         native_payload,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "comparison_json_number_is_builtin_float",
-        True,
-        type(native_payload["number"]) is float,
-    )
+    check_true("comparison_json_number_is_builtin_float", type(native_payload["number"]) is float)
 
     summary["controlled_param_difference"] = ["use_breakout_quality_filter"]
     return results, summary
@@ -1655,6 +1490,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
     case_id = "BREAKOUT_QUALITY_BINARY_DL_PARAM_ADAPTATION"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
     base = V16StrategyParams()
 
     from filters.breakout_quality.binary_pit_score_store import (
@@ -1744,33 +1580,30 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         },
         oos_start_date="2021-01-01",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "binary_dl_four_by_two_min_roos_fold_contract",
         (
-            tuple(MIN_ROOS_SEARCH_FIELDS),
-            False,
-            True,
-            True,
-            True,
-            True,
-            workflow_settings.experiment_profile,
-        ),
+                    tuple(MIN_ROOS_SEARCH_FIELDS),
+                    False,
+                    True,
+                    True,
+                    True,
+                    True,
+                    workflow_settings.experiment_profile,
+                ),
         (
-            tuple(MIN_ROOS_SEARCH_FIELDS),
-            p2_fixed["use_breakout_quality_filter"],
-            p3_fixed["use_breakout_quality_filter"],
-            all(not p2_fixed[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
-            all(
-                p3_fixed.get(key) == value
-                for key, value in ALL_RULE_FILTERS_OFF_OVERRIDES.items()
-            ),
-            resolved_fold_spec["fixed_strategy_param_overrides"]
-            ["use_breakout_quality_filter"],
-            param_adapt_args.experiment_profile,
-        ),
+                    tuple(MIN_ROOS_SEARCH_FIELDS),
+                    p2_fixed["use_breakout_quality_filter"],
+                    p3_fixed["use_breakout_quality_filter"],
+                    all(not p2_fixed[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
+                    all(
+                        p3_fixed.get(key) == value
+                        for key, value in ALL_RULE_FILTERS_OFF_OVERRIDES.items()
+                    ),
+                    resolved_fold_spec["fixed_strategy_param_overrides"]
+                    ["use_breakout_quality_filter"],
+                    param_adapt_args.experiment_profile,
+                ),
     )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -1813,22 +1646,19 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         stamped_completed_payload = json.loads(
             completed_params_path.read_text(encoding="utf-8")
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "completed_min_roos_month_bucket_artifact_is_reused_after_postrun_validation_failure",
         (True, "min_roos_training", "2021-12-01"),
         (
-            reused_completed_payload is not None,
-            dict(
-                stamped_completed_payload.get("breakout_quality_param_adaptation")
-                or {}
-            ).get("mode"),
-            dict(reused_completed_payload.get("meta") or {}).get("last_oos_date")
-            if isinstance(reused_completed_payload, dict)
-            else None,
-        ),
+                    reused_completed_payload is not None,
+                    dict(
+                        stamped_completed_payload.get("breakout_quality_param_adaptation")
+                        or {}
+                    ).get("mode"),
+                    dict(reused_completed_payload.get("meta") or {}).get("last_oos_date")
+                    if isinstance(reused_completed_payload, dict)
+                    else None,
+                ),
     )
 
     class _RiskOnlySession:
@@ -1864,25 +1694,22 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
 
     risk_trial = _RiskOnlyTrial()
     risk_params = build_trial_params(_RiskOnlySession(p2_fixed), risk_trial)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "binary_dl_four_by_two_searches_only_min_roos_fields",
         (
-            set(MIN_ROOS_SEARCH_FIELDS),
-            int(BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["low"]),
-            False,
-            False,
-            False,
-        ),
+                    set(MIN_ROOS_SEARCH_FIELDS),
+                    int(BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["low"]),
+                    False,
+                    False,
+                    False,
+                ),
         (
-            set(risk_trial.calls),
-            risk_params.high_len,
-            risk_params.use_bb,
-            risk_params.use_kc,
-            risk_params.use_breakout_quality_filter,
-        ),
+                    set(risk_trial.calls),
+                    risk_params.high_len,
+                    risk_params.use_bb,
+                    risk_params.use_kc,
+                    risk_params.use_breakout_quality_filter,
+                ),
     )
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1995,19 +1822,16 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         except RuntimeError as exc:
             mismatch_rejected = "NON_RETRYABLE_RUNTIME_IDENTITY_ERROR" in str(exc)
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "binary_dl_pit_store_and_optimizer_runtime_identity",
         (2, (True, True, False), (True, True, False), BINARY_PIT_SCORE_SOURCE, True),
         (
-            len(indexed),
-            tuple(direct_pass),
-            tuple(runtime_pass),
-            scenario_context.score_source,
-            mismatch_rejected,
-        ),
+                    len(indexed),
+                    tuple(direct_pass),
+                    tuple(runtime_pass),
+                    scenario_context.score_source,
+                    mismatch_rejected,
+                ),
     )
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -2164,25 +1988,22 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
                     "scores_path": str(scores_path),
                 },
             )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "binary_dl_strategy_compare_uses_pit_source_and_trade_count",
         (
-            BINARY_PIT_SCORE_SOURCE,
-            None,
-            BINARY_PIT_SCORE_SOURCE,
-            2,
-            1,
-        ),
+                    BINARY_PIT_SCORE_SOURCE,
+                    None,
+                    BINARY_PIT_SCORE_SOURCE,
+                    2,
+                    1,
+                ),
         (
-            direct_comparison["metadata"]["score_source"],
-            scenario_calls[0].get("filter_source"),
-            scenario_calls[1]["filter_source"]["score_source"],
-            direct_comparison["no_filter"]["trade_count"],
-            direct_comparison["quality_filter"]["trade_count"],
-        ),
+                    direct_comparison["metadata"]["score_source"],
+                    scenario_calls[0].get("filter_source"),
+                    scenario_calls[1]["filter_source"]["score_source"],
+                    direct_comparison["no_filter"]["trade_count"],
+                    direct_comparison["quality_filter"]["trade_count"],
+                ),
     )
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -2246,23 +2067,20 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
                 },
             )
         env_after = tuple(os.environ.get(key) for key in env_keys)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "binary_dl_strategy_compare_propagates_pit_source_to_spawned_workers",
         (
-            BINARY_PIT_SCORE_SOURCE,
-            str(manifest_path),
-            str(scores_path),
-            env_before,
-        ),
+                    BINARY_PIT_SCORE_SOURCE,
+                    str(manifest_path),
+                    str(scores_path),
+                    env_before,
+                ),
         (
-            worker_probe["score_source"],
-            worker_probe["manifest_path"],
-            worker_probe["scores_path"],
-            env_after,
-        ),
+                    worker_probe["score_source"],
+                    worker_probe["manifest_path"],
+                    worker_probe["scores_path"],
+                    env_after,
+                ),
     )
 
     coverage_contract = {
@@ -2303,29 +2121,26 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         )
     except ValueError as exc:
         no_overlap_rejected = "完全沒有重疊" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "binary_dl_pit_partial_optimizer_history_uses_audited_dl_off_fallback",
         (
-            {"start": "2011-01-01", "end": "2025-12-31"},
-            "pass_through_dl_off",
-            {
-                "bootstrap_fallback_only": 0,
-                "partial_score_history": 6,
-                "full_score_history": 0,
-            },
-            True,
-            True,
-        ),
+                    {"start": "2011-01-01", "end": "2025-12-31"},
+                    "pass_through_dl_off",
+                    {
+                        "bootstrap_fallback_only": 0,
+                        "partial_score_history": 6,
+                        "full_score_history": 0,
+                    },
+                    True,
+                    True,
+                ),
         (
-            partial_pit["optimizer_required_period"],
-            partial_coverage["pre_coverage_policy"],
-            partial_coverage["coverage_mode_counts"],
-            stale_tail_rejected,
-            no_overlap_rejected,
-        ),
+                    partial_pit["optimizer_required_period"],
+                    partial_coverage["pre_coverage_policy"],
+                    partial_coverage["coverage_mode_counts"],
+                    stale_tail_rejected,
+                    no_overlap_rejected,
+                ),
     )
 
     from tools.filters.breakout_quality.build_binary_point_in_time_scores import (
@@ -2358,17 +2173,14 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         )
     except ValueError as exc:
         mixed_eligible_rejected = "混合eligible binary label" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "binary_pit_trade_path_group_ignores_excluded_rows_but_rejects_eligible_conflicts",
         ([1, 2, 4], [1, 0, -1], True),
         (
-            trade_path_group_table["event_row"].astype(int).tolist(),
-            trade_path_group_table["label"].astype(int).tolist(),
-            mixed_eligible_rejected,
-        ),
+                    trade_path_group_table["event_row"].astype(int).tolist(),
+                    trade_path_group_table["label"].astype(int).tolist(),
+                    mixed_eligible_rejected,
+                ),
     )
 
     pit_events = pd.DataFrame(
@@ -2475,19 +2287,16 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             fold_dir=Path(tmpdir),
         )
     pit_frame = pit_fold_result["frame"]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "binary_dl_pit_fold_cutoff_precedes_score_and_exports_identity",
         ("2019-12-31", "2020-01-02", 0.75, True),
         (
-            pit_fold_result["model_information_cutoff"],
-            pit_frame.iloc[0]["date"],
-            round(float(pit_frame.iloc[0]["dl_quality_score"]), 2),
-            pd.Timestamp(pit_fold_result["model_information_cutoff"])
-            < pd.Timestamp(pit_frame.iloc[0]["date"]),
-        ),
+                    pit_fold_result["model_information_cutoff"],
+                    pit_frame.iloc[0]["date"],
+                    round(float(pit_frame.iloc[0]["dl_quality_score"]), 2),
+                    pd.Timestamp(pit_fold_result["model_information_cutoff"])
+                    < pd.Timestamp(pit_frame.iloc[0]["date"]),
+                ),
     )
 
     synthetic_adapted = {
@@ -2646,45 +2455,42 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         )
         report_text = report_path.read_text(encoding="utf-8")
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "binary_dl_four_by_two_gate_orchestration_and_report",
         (
-            2,
-            (False, True),
-            4,
-            ("current", "all-off", "all-off", "all-off"),
-            (False, True, True, True),
-            (BINARY_PIT_SCORE_SOURCE,) * 4,
-            ("2021-01-01",) * 4,
-            ("2025-12-31",) * 4,
-            4,
-            "FOUR_BY_TWO_COMPLETE",
-            True,
-            True,
-        ),
+                    2,
+                    (False, True),
+                    4,
+                    ("current", "all-off", "all-off", "all-off"),
+                    (False, True, True, True),
+                    (BINARY_PIT_SCORE_SOURCE,) * 4,
+                    ("2021-01-01",) * 4,
+                    ("2025-12-31",) * 4,
+                    4,
+                    "FOUR_BY_TWO_COMPLETE",
+                    True,
+                    True,
+                ),
         (
-            len(optimizer_calls),
-            tuple(call["training_dl_enabled"] for call in optimizer_calls),
-            len(comparison_calls),
-            tuple(call["optional_entry_filter_policy"] for call in comparison_calls),
-            tuple(
-                bool(call.get("shared_param_overrides"))
-                for call in comparison_calls
-            ),
-            tuple(
-                str((call.get("hard_filter_source") or {}).get("score_source"))
-                for call in comparison_calls
-            ),
-            tuple(str(call.get("comparison_start_date")) for call in comparison_calls),
-            tuple(str(call.get("comparison_end_date")) for call in comparison_calls),
-            len(orchestration_result["matrix"]),
-            orchestration_result["status"],
-            all(token in report_text for token in ("A0", "B0", "A3", "B3", "B3−A2")),
-            all(token in report_text for token in ("100", "90", "binary_point_in_time（八操作點一致；process workers已傳遞）")),
-        ),
+                    len(optimizer_calls),
+                    tuple(call["training_dl_enabled"] for call in optimizer_calls),
+                    len(comparison_calls),
+                    tuple(call["optional_entry_filter_policy"] for call in comparison_calls),
+                    tuple(
+                        bool(call.get("shared_param_overrides"))
+                        for call in comparison_calls
+                    ),
+                    tuple(
+                        str((call.get("hard_filter_source") or {}).get("score_source"))
+                        for call in comparison_calls
+                    ),
+                    tuple(str(call.get("comparison_start_date")) for call in comparison_calls),
+                    tuple(str(call.get("comparison_end_date")) for call in comparison_calls),
+                    len(orchestration_result["matrix"]),
+                    orchestration_result["status"],
+                    all(token in report_text for token in ("A0", "B0", "A3", "B3", "B3−A2")),
+                    all(token in report_text for token in ("100", "90", "binary_point_in_time（八操作點一致；process workers已傳遞）")),
+                ),
     )
 
     summary["workflow"] = "binary_dl_filter_four_parameters_by_two_states"
@@ -2695,6 +2501,7 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_TRADE_PATH_LABEL"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from filters.breakout_quality.contract import (
         TRADE_PATH_FILTER_ID,
@@ -2777,55 +2584,49 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         incomplete_schedule_rejected = True
     else:
         incomplete_schedule_rejected = False
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "trade_path_historical_teacher_accepts_canonical_oos_boundary_and_validates_effective_schedule",
         (
-            expected_teacher_dates[0],
-            expected_teacher_dates[-1],
-            len(expected_teacher_dates),
-            True,
-        ),
+                    expected_teacher_dates[0],
+                    expected_teacher_dates[-1],
+                    len(expected_teacher_dates),
+                    True,
+                ),
         (
-            accepted_dates[0],
-            accepted_dates[-1],
-            len(accepted_dates),
-            incomplete_schedule_rejected,
-        ),
+                    accepted_dates[0],
+                    accepted_dates[-1],
+                    len(accepted_dates),
+                    incomplete_schedule_rejected,
+                ),
     )
 
     policy = expected_label_policy_for_filter_id(TRADE_PATH_FILTER_ID)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "trade_path_label_identity_and_policy_are_isolated_from_9a",
         (
-            TRADE_PATH_FILTER_ID,
-            TRADE_PATH_LABEL_OBJECTIVE,
-            "pending",
-            "reuse_original_event",
-            TRADE_PATH_LABEL_CONTRACT_VERSION,
-            "realized_net_r_gt_zero",
-            "realized_net_r_le_zero",
-            "formal_single_stock_forced_closeout",
-            "same_explicit_single_stock_sizing_capital",
-            "exclude_from_binary_training",
-        ),
+                    TRADE_PATH_FILTER_ID,
+                    TRADE_PATH_LABEL_OBJECTIVE,
+                    "pending",
+                    "reuse_original_event",
+                    TRADE_PATH_LABEL_CONTRACT_VERSION,
+                    "realized_net_r_gt_zero",
+                    "realized_net_r_le_zero",
+                    "formal_single_stock_forced_closeout",
+                    "same_explicit_single_stock_sizing_capital",
+                    "exclude_from_binary_training",
+                ),
         (
-            TRADE_PATH_RESEARCH_FILTER_ID,
-            policy.get("label_objective"),
-            policy.get("initial_miss_buy_status"),
-            policy.get("continuation_event_identity"),
-            policy.get("label_contract_version"),
-            policy.get("filled_positive_rule"),
-            policy.get("filled_nonpositive_rule"),
-            policy.get("filled_data_end_rule"),
-            policy.get("sizing_capital_rule"),
-            policy.get("unfilled_terminal_rule"),
-        ),
+                    TRADE_PATH_RESEARCH_FILTER_ID,
+                    policy.get("label_objective"),
+                    policy.get("initial_miss_buy_status"),
+                    policy.get("continuation_event_identity"),
+                    policy.get("label_contract_version"),
+                    policy.get("filled_positive_rule"),
+                    policy.get("filled_nonpositive_rule"),
+                    policy.get("filled_data_end_rule"),
+                    policy.get("sizing_capital_rule"),
+                    policy.get("unfilled_terminal_rule"),
+                ),
     )
 
     params = V16StrategyParams(
@@ -2873,31 +2674,28 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         teacher_effective_date="2020-01-01",
         precomputed_signals=(atr, buy_condition, sell_condition, buy_limits),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "trade_path_initial_miss_remains_pending_then_continuation_fill_gets_one_terminal_label",
         (
-            LABEL_PASS,
-            TRADE_PATH_LABEL_STATUS_PASS,
-            TRADE_PATH_REASON_REALIZED_NET_PROFIT,
-            "CONTINUATION_FILL",
-            1,
-            True,
-            "IND_SELL",
-            True,
-        ),
+                    LABEL_PASS,
+                    TRADE_PATH_LABEL_STATUS_PASS,
+                    TRADE_PATH_REASON_REALIZED_NET_PROFIT,
+                    "CONTINUATION_FILL",
+                    1,
+                    True,
+                    "IND_SELL",
+                    True,
+                ),
         (
-            result.label,
-            result.status,
-            result.reason,
-            result.fill_type,
-            result.continuation_wait_bars,
-            result.initial_missed_buy,
-            result.exit_reason,
-            bool(result.realized_net_r is not None and result.realized_net_r > 0.0),
-        ),
+                    result.label,
+                    result.status,
+                    result.reason,
+                    result.fill_type,
+                    result.continuation_wait_bars,
+                    result.initial_missed_buy,
+                    result.exit_reason,
+                    bool(result.realized_net_r is not None and result.realized_net_r > 0.0),
+                ),
     )
 
     _stats, single_trade_logs = run_v16_backtest(
@@ -2908,29 +2706,26 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         ticker="2330",
     )
     single_trade = single_trade_logs[0]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "trade_path_continuation_completed_path_matches_single_stock_entry_exit_and_accounting",
         (
-            result.fill_date,
-            result.entry_price,
-            result.exit_date,
-            result.exit_price,
-            result.exit_reason,
-            result.realized_net_pnl,
-            result.realized_net_r,
-        ),
+                    result.fill_date,
+                    result.entry_price,
+                    result.exit_date,
+                    result.exit_price,
+                    result.exit_reason,
+                    result.realized_net_pnl,
+                    result.realized_net_r,
+                ),
         (
-            pd.Timestamp(single_trade["entry_date"]).strftime("%Y-%m-%d"),
-            float(single_trade["entry_price"]),
-            pd.Timestamp(single_trade["exit_date"]).strftime("%Y-%m-%d"),
-            float(single_trade["exit_price"]),
-            str(single_trade["exit_reason"]),
-            float(single_trade["pnl"]),
-            float(single_trade["r_mult"]),
-        ),
+                    pd.Timestamp(single_trade["entry_date"]).strftime("%Y-%m-%d"),
+                    float(single_trade["entry_price"]),
+                    pd.Timestamp(single_trade["exit_date"]).strftime("%Y-%m-%d"),
+                    float(single_trade["exit_price"]),
+                    str(single_trade["exit_reason"]),
+                    float(single_trade["pnl"]),
+                    float(single_trade["r_mult"]),
+                ),
     )
 
     partial_tp_params = replace(params, tp_percent=0.5, atr_times_trail=1.0)
@@ -2977,27 +2772,24 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         ticker="2330",
     )
     partial_tp_trade = partial_tp_logs[0]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "trade_path_partial_take_profit_then_indicator_exit_matches_single_stock",
         (
-            "INITIAL_FILL",
-            "IND_SELL",
-            float(partial_tp_trade["entry_price"]),
-            float(partial_tp_trade["exit_price"]),
-            float(partial_tp_trade["pnl"]),
-            float(partial_tp_trade["r_mult"]),
-        ),
+                    "INITIAL_FILL",
+                    "IND_SELL",
+                    float(partial_tp_trade["entry_price"]),
+                    float(partial_tp_trade["exit_price"]),
+                    float(partial_tp_trade["pnl"]),
+                    float(partial_tp_trade["r_mult"]),
+                ),
         (
-            partial_tp_result.fill_type,
-            partial_tp_result.exit_reason,
-            partial_tp_result.entry_price,
-            partial_tp_result.exit_price,
-            partial_tp_result.realized_net_pnl,
-            partial_tp_result.realized_net_r,
-        ),
+                    partial_tp_result.fill_type,
+                    partial_tp_result.exit_reason,
+                    partial_tp_result.entry_price,
+                    partial_tp_result.exit_price,
+                    partial_tp_result.realized_net_pnl,
+                    partial_tp_result.realized_net_r,
+                ),
     )
 
     reject_frame = pd.DataFrame(
@@ -3031,27 +2823,24 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         ticker="2330",
     )
     reject_trade = reject_logs[0]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "trade_path_negative_completed_path_is_reject_and_matches_single_stock",
         (
-            LABEL_REJECT,
-            TRADE_PATH_LABEL_STATUS_REJECT,
-            TRADE_PATH_REASON_REALIZED_NET_NONPOSITIVE,
-            "STOP",
-            float(reject_trade["pnl"]),
-            float(reject_trade["r_mult"]),
-        ),
+                    LABEL_REJECT,
+                    TRADE_PATH_LABEL_STATUS_REJECT,
+                    TRADE_PATH_REASON_REALIZED_NET_NONPOSITIVE,
+                    "STOP",
+                    float(reject_trade["pnl"]),
+                    float(reject_trade["r_mult"]),
+                ),
         (
-            reject_result.label,
-            reject_result.status,
-            reject_result.reason,
-            reject_result.exit_reason,
-            reject_result.realized_net_pnl,
-            reject_result.realized_net_r,
-        ),
+                    reject_result.label,
+                    reject_result.status,
+                    reject_result.reason,
+                    reject_result.exit_reason,
+                    reject_result.realized_net_pnl,
+                    reject_result.realized_net_r,
+                ),
     )
 
     data_end_frame = pd.DataFrame(
@@ -3085,25 +2874,22 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         ticker="2330",
     )
     data_end_trade = data_end_logs[0]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "trade_path_filled_at_data_end_uses_formal_single_stock_forced_closeout",
         (
-            True,
-            "FORCED_CLOSEOUT",
-            float(data_end_trade["exit_price"]),
-            float(data_end_trade["pnl"]),
-            float(data_end_trade["r_mult"]),
-        ),
+                    True,
+                    "FORCED_CLOSEOUT",
+                    float(data_end_trade["exit_price"]),
+                    float(data_end_trade["pnl"]),
+                    float(data_end_trade["r_mult"]),
+                ),
         (
-            data_end_result.forced_closeout,
-            data_end_result.exit_reason,
-            data_end_result.exit_price,
-            data_end_result.realized_net_pnl,
-            data_end_result.realized_net_r,
-        ),
+                    data_end_result.forced_closeout,
+                    data_end_result.exit_reason,
+                    data_end_result.exit_price,
+                    data_end_result.realized_net_pnl,
+                    data_end_result.realized_net_r,
+                ),
     )
 
     unfilled_frame = data_end_frame.copy()
@@ -3123,28 +2909,25 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         teacher_effective_date="2020-01-01",
         precomputed_signals=(data_end_atr, data_end_buy, data_end_sell, data_end_limits),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "trade_path_missed_buy_without_fill_is_excluded_not_reject",
         (
-            LABEL_INVALID,
-            TRADE_PATH_LABEL_STATUS_EXCLUDED,
-            True,
-            True,
-            None,
-        ),
+                    LABEL_INVALID,
+                    TRADE_PATH_LABEL_STATUS_EXCLUDED,
+                    True,
+                    True,
+                    None,
+                ),
         (
-            unfilled_result.label,
-            unfilled_result.status,
-            unfilled_result.reason in {
-                TRADE_PATH_REASON_UNFILLED_DATA_END,
-                "unfilled_terminated",
-            },
-            unfilled_result.initial_missed_buy,
-            unfilled_result.realized_net_r,
-        ),
+                    unfilled_result.label,
+                    unfilled_result.status,
+                    unfilled_result.reason in {
+                        TRADE_PATH_REASON_UNFILLED_DATA_END,
+                        "unfilled_terminated",
+                    },
+                    unfilled_result.initial_missed_buy,
+                    unfilled_result.realized_net_r,
+                ),
     )
 
     excluded_update = build_trade_path_excluded_event_update(
@@ -3152,18 +2935,15 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         end_date="2020-01-01",
         teacher_effective_date=None,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "trade_path_reason_registry_covers_all_terminal_statuses_and_builder_exclusions",
         (11, {"PASS", "REJECT", "EXCLUDED"}, LABEL_INVALID, "EXCLUDED"),
         (
-            len(TRADE_PATH_LABEL_REASON_STATUS),
-            set(TRADE_PATH_LABEL_REASON_STATUS.values()),
-            excluded_update["label"],
-            excluded_update["label_status"],
-        ),
+                    len(TRADE_PATH_LABEL_REASON_STATUS),
+                    set(TRADE_PATH_LABEL_REASON_STATUS.values()),
+                    excluded_update["label"],
+                    excluded_update["label_status"],
+                ),
     )
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -3182,18 +2962,15 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         invalid_shard = _load_valid_ticker_shard(
             shard_path, expected_event_indices={1, 2, 3}
         )
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
+        check(
             "trade_path_resume_reuses_only_complete_ticker_shards",
             ([1, 2], True),
             (
-                []
-                if valid_shard is None
-                else valid_shard["_event_index"].astype(int).tolist(),
-                invalid_shard is None,
-            ),
+                            []
+                            if valid_shard is None
+                            else valid_shard["_event_index"].astype(int).tolist(),
+                            invalid_shard is None,
+                        ),
         )
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -3203,16 +2980,13 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
             "inception_time_v1",
             "unique_group_sampling",
         )
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
+        check(
             "trade_path_artifact_paths_keep_filter_identity",
             (TRADE_PATH_RESEARCH_FILTER_ID, True),
             (
-                artifact_paths.filter_id,
-                TRADE_PATH_RESEARCH_FILTER_ID in str(artifact_paths.model_dir),
-            ),
+                            artifact_paths.filter_id,
+                            TRADE_PATH_RESEARCH_FILTER_ID in str(artifact_paths.model_dir),
+                        ),
         )
 
 
@@ -3224,67 +2998,55 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
     binary_pit_source = (
         project_root / "services" / "breakout_quality" / "binary_point_in_time_scores.py"
     ).read_text(encoding="utf-8")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "trade_path_menu_completes_model_artifacts_and_strategy_comparison_stays_separate",
-        True,
         _source_has_render_menu_item_call(
-            app_source,
-            index=1,
-            label="建立新Label → 重新訓練 → 模型預測報表",
-            default=True,
-        )
-        and _source_has_render_menu_item_call(
-            app_source,
-            index=2,
-            label="使用既有模型 → 更新Scores → 模型預測報表",
-        )
-        and _source_has_render_menu_item_call(
-            app_source,
-            index=3,
-            label="查看Label與事件生命週期摘要",
-        )
-        and all(
-            token in app_source
-            for token in (
-                '"build-trade-path-labels"',
-                "本流程不執行策略績效比較",
-                "apps/research.py compare",
-            )
-        )
-        and "strategy-trade-path-label-gate" not in app_source,
+                    app_source,
+                    index=1,
+                    label="建立新Label → 重新訓練 → 模型預測報表",
+                    default=True,
+                )
+                and _source_has_render_menu_item_call(
+                    app_source,
+                    index=2,
+                    label="使用既有模型 → 更新Scores → 模型預測報表",
+                )
+                and _source_has_render_menu_item_call(
+                    app_source,
+                    index=3,
+                    label="查看Label與事件生命週期摘要",
+                )
+                and all(
+                    token in app_source
+                    for token in (
+                        '"build-trade-path-labels"',
+                        "本流程不執行策略績效比較",
+                        "apps/research.py compare",
+                    )
+                )
+                and "strategy-trade-path-label-gate" not in app_source,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "trade_path_builder_reuses_formal_lifecycle_and_never_overwrites_9a",
-        True,
         all(
-            token in builder_source
-            for token in (
-                "source_filter_id == target_filter_id",
-                "TRADE_PATH_RESEARCH_FILTER_ID",
-                "derived_feature_bank_trade_path_relabel",
-                "initial_miss_buy_status",
-                "formal_single_stock_forced_closeout",
-                "same_explicit_single_stock_sizing_capital",
-                "exclude_from_binary_training",
-                "build_signal_cache",
-                "simulate_realized_trade_path_label",
-            )
-        ),
+                    token in builder_source
+                    for token in (
+                        "source_filter_id == target_filter_id",
+                        "TRADE_PATH_RESEARCH_FILTER_ID",
+                        "derived_feature_bank_trade_path_relabel",
+                        "initial_miss_buy_status",
+                        "formal_single_stock_forced_closeout",
+                        "same_explicit_single_stock_sizing_capital",
+                        "exclude_from_binary_training",
+                        "build_signal_cache",
+                        "simulate_realized_trade_path_label",
+                    )
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "trade_path_binary_pit_uses_filter_specific_label_policy",
-        True,
         "expected_label_policy_for_filter_id(str(args.filter_id))" in binary_pit_source
-        and "expected_policy=DEFAULT_LABEL_POLICY.as_manifest_payload()" not in binary_pit_source,
+                and "expected_policy=DEFAULT_LABEL_POLICY.as_manifest_payload()" not in binary_pit_source,
     )
 
     summary["label_id"] = TRADE_PATH_LABEL_ID
@@ -3297,6 +3059,7 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
     case_id = "BREAKOUT_QUALITY_LEGACY_RESEARCH_CLEANUP"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
     project_root = Path(__file__).resolve().parents[2]
 
     retired_paths = (
@@ -3318,14 +3081,7 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         not (project_root / relative_path).exists()
         for relative_path in retired_paths
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "retired_research_cli_audit_and_temp_output_are_absent",
-        tuple(True for _ in retired_paths),
-        retired_absent,
-    )
+    check("retired_research_cli_audit_and_temp_output_are_absent", tuple(True for _ in retired_paths), retired_absent)
 
     current_paths = (
         "filters/breakout_quality/strategy_comparison.py",
@@ -3335,10 +3091,7 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         "tools/audit/catalog.py",
         "tools/validate/transient_code_maintenance.py",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "current_strategy_model_and_generic_audit_framework_remain_available",
         tuple(True for _ in current_paths),
         tuple((project_root / relative_path).exists() for relative_path in current_paths),
@@ -3352,10 +3105,7 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         "filters/breakout_quality/models/moment.py",
         "config/compatibility/strategy_compare_history.py",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "required_historical_reconstruction_compatibility_is_preserved",
         tuple(True for _ in compatibility_paths),
         tuple((project_root / relative_path).exists() for relative_path in compatibility_paths),
@@ -3378,16 +3128,13 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         "audit-candidate-counterfactual",
         "audit-selection-pressure",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "retired_research_cli_is_not_routable_or_advertised",
         (False, False),
         (
-            any(token in application_source for token in retired_command_tokens),
-            any(token in current_docs for token in retired_command_tokens),
-        ),
+                    any(token in application_source for token in retired_command_tokens),
+                    any(token in current_docs for token in retired_command_tokens),
+                ),
     )
 
     from tools.validate.transient_code_maintenance import summarize_transient_code_maintenance
@@ -3403,20 +3150,17 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         if maintenance_count_valid and maintenance_candidate_count > 0
         else "CLEAN"
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "transient_code_maintenance_scan_is_advisory_and_internally_consistent",
         (True, True, True, True),
         (
-            maintenance_count_valid,
-            maintenance.get("status") == maintenance_expected_status,
-            maintenance.get("needs_slimming") == bool(maintenance_candidate_count)
-            if maintenance_count_valid
-            else False,
-            maintenance.get("advisory_only") is True,
-        ),
+                    maintenance_count_valid,
+                    maintenance.get("status") == maintenance_expected_status,
+                    maintenance.get("needs_slimming") == bool(maintenance_candidate_count)
+                    if maintenance_count_valid
+                    else False,
+                    maintenance.get("advisory_only") is True,
+                ),
     )
 
     summary["retired_paths"] = list(retired_paths)
@@ -3429,6 +3173,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     case_id = "BREAKOUT_QUALITY_STRATEGY_READABLE_REPORT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
     project_root = Path(__file__).resolve().parents[2]
 
     contracts = (
@@ -3462,20 +3207,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 "core.console_report" in source,
             )
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "all_formal_strategy_results_have_persistent_markdown_simple_report",
-        True,
         all(row[1] for row in contract_rows),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "all_formal_strategy_results_have_console_readable_renderer",
-        True,
         all(row[2] and row[3] for row in contract_rows),
     )
 
@@ -3485,16 +3222,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     reporting_source = (
         project_root / "filters/breakout_quality/strategy_compare_reporting.py"
     ).read_text(encoding="utf-8")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "strategy_compare_run_and_reuse_share_canonical_pair_readable_report_renderer",
-        True,
         "materialize_strategy_pair_readable_report" in comparison_source
-        and "render_strategy_pair_simple_report" in comparison_source
-        and "materialize_strategy_pair_readable_report" in reporting_source
-        and 'pair_dir / "strategy_comparison.md"' in comparison_source,
+                and "render_strategy_pair_simple_report" in comparison_source
+                and "materialize_strategy_pair_readable_report" in reporting_source
+                and 'pair_dir / "strategy_comparison.md"' in comparison_source,
     )
 
     diagnostics_source = (
@@ -3518,63 +3251,55 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         comparison_source.index("def render_strategy_aggregate_report("):
         comparison_source.index("def _run_directory(")
     ]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "strategy_compare_main_report_surfaces_core_r_conversion_and_compact_execution",
-        True,
         '"strategy_diagnostics.md"' in comparison_source
-        and "核心策略結果" in render_report_source
-        and "R 預測／轉化" in render_report_source
-        and "資金／執行" in render_report_source
-        and "5. 執行摘要" in render_report_source
-        and "render_strategy_run_execution_table" in render_report_source
-        and "報表分工" not in render_report_source
-        and "render_strategy_r_analysis_table" in render_report_source
-        and "metrics=CORE_STRATEGY_RESULT_METRICS" in comparison_source
-        and "_contrast_table(" not in render_report_source
-        and "_resource_aware_table(" not in render_report_source
-        and "_selector_timing_table(" not in render_report_source
-        and "R_ANALYSIS_GROUPED_SECTIONS" in diagnostics_source
-        and "R_ANALYSIS_MERGED_METRICS" in diagnostics_source
-        and '("實際交易", R_ACTUAL_TRADE_METRICS)' in report_metrics_source
-        and '("模型預測", R_MODEL_PREDICTION_METRICS)' in report_metrics_source
-        and '("選股轉換", R_SELECTION_TRANSLATION_METRICS)' in report_metrics_source
-        and 'top_headers = ["分群", ""]' in diagnostics_source
-        and 'bottom_headers = ["編號", "比較對象"]' in diagnostics_source
-        and "best_worst_signals" in diagnostics_source
-        and "_render_metric_notes" not in diagnostics_source
-        and 'lines = ["註解", "----"]' not in diagnostics_source
-        and '"top_target_r": _finite(metrics.get("top_decile_target_mean"))' in diagnostics_source
-        and '"bottom_target_r": _finite(metrics.get("bottom_decile_target_mean"))' in diagnostics_source
-        and '"top_target_r": top' in diagnostics_source
-        and '"bottom_target_r": bottom' in diagnostics_source
-        and '"r_conversion_efficiency", "RCE"' in report_metrics_source
-        and "paired_trade_r_conversion_diagnostic" in diagnostics_source
-        and "backfill_pair_r_conversion_diagnostic" in comparison_source
-        and "Target %ile" in report_metrics_source
-        and "Top-K" in report_metrics_source
-        and "Opp gap" in report_metrics_source
-        and "Top-R" in report_metrics_source
-        and "Bottom-R" in report_metrics_source
-        and "DL選擇R" in report_metrics_source,
+                and "核心策略結果" in render_report_source
+                and "R 預測／轉化" in render_report_source
+                and "資金／執行" in render_report_source
+                and "5. 執行摘要" in render_report_source
+                and "render_strategy_run_execution_table" in render_report_source
+                and "報表分工" not in render_report_source
+                and "render_strategy_r_analysis_table" in render_report_source
+                and "metrics=CORE_STRATEGY_RESULT_METRICS" in comparison_source
+                and "_contrast_table(" not in render_report_source
+                and "_resource_aware_table(" not in render_report_source
+                and "_selector_timing_table(" not in render_report_source
+                and "R_ANALYSIS_GROUPED_SECTIONS" in diagnostics_source
+                and "R_ANALYSIS_MERGED_METRICS" in diagnostics_source
+                and '("實際交易", R_ACTUAL_TRADE_METRICS)' in report_metrics_source
+                and '("模型預測", R_MODEL_PREDICTION_METRICS)' in report_metrics_source
+                and '("選股轉換", R_SELECTION_TRANSLATION_METRICS)' in report_metrics_source
+                and 'top_headers = ["分群", ""]' in diagnostics_source
+                and 'bottom_headers = ["編號", "比較對象"]' in diagnostics_source
+                and "best_worst_signals" in diagnostics_source
+                and "_render_metric_notes" not in diagnostics_source
+                and 'lines = ["註解", "----"]' not in diagnostics_source
+                and '"top_target_r": _finite(metrics.get("top_decile_target_mean"))' in diagnostics_source
+                and '"bottom_target_r": _finite(metrics.get("bottom_decile_target_mean"))' in diagnostics_source
+                and '"top_target_r": top' in diagnostics_source
+                and '"bottom_target_r": bottom' in diagnostics_source
+                and '"r_conversion_efficiency", "RCE"' in report_metrics_source
+                and "paired_trade_r_conversion_diagnostic" in diagnostics_source
+                and "backfill_pair_r_conversion_diagnostic" in comparison_source
+                and "Target %ile" in report_metrics_source
+                and "Top-K" in report_metrics_source
+                and "Opp gap" in report_metrics_source
+                and "Top-R" in report_metrics_source
+                and "Bottom-R" in report_metrics_source
+                and "DL選擇R" in report_metrics_source,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "strategy_compare_progress_and_final_report_share_high_level_wall_time_summary",
-        True,
         "arm_execution_timing" in comparison_source
-        and '"execution_summary": execution_summary' in comparison_source
-        and 'f"[RUN] {on_arm.arm_id} {on_arm.name} "' in comparison_source
-        and 'f"[DONE] {on_arm.arm_id} {on_arm.name} "' in comparison_source
-        and 'elapsed={format_elapsed(' in comparison_source
-        and 'total={format_elapsed(' in comparison_source
-        and 'render_section("5. 執行摘要")' in comparison_source
-        and "render_strategy_run_execution_table" in comparison_source
-        and "_selector_timing_table(" not in render_report_source,
+                and '"execution_summary": execution_summary' in comparison_source
+                and 'f"[RUN] {on_arm.arm_id} {on_arm.name} "' in comparison_source
+                and 'f"[DONE] {on_arm.arm_id} {on_arm.name} "' in comparison_source
+                and 'elapsed={format_elapsed(' in comparison_source
+                and 'total={format_elapsed(' in comparison_source
+                and 'render_section("5. 執行摘要")' in comparison_source
+                and "render_strategy_run_execution_table" in comparison_source
+                and "_selector_timing_table(" not in render_report_source,
     )
 
     strategy_compare_config_source = (project_root / "config/strategy_compare.py").read_text(encoding="utf-8")
@@ -3587,64 +3312,52 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     rolling_robustness = get_strategy_multi_seed_robustness_settings("extending_window_rolling")
     oos_cache_root = str(oos_robustness.initial_checkpoint_cache_root or "").strip()
     rolling_cache_root = str(rolling_robustness.initial_checkpoint_cache_root or "").strip()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "current_oos_and_rolling_robustness_share_benchmark_initial_checkpoint_cache",
-        True,
         bool(oos_cache_root)
-        and oos_cache_root == rolling_cache_root
-        and not Path(oos_cache_root).is_absolute()
-        and '"initial_checkpoint_cache_root"' in strategy_compare_config_source
-        and "--checkpoint-reuse-source-fold-dir" in multi_seed_source
-        and "cross_mode_initial_checkpoint_reuse" in point_in_time_source
-        and "source_score_reused" in point_in_time_source
-        and "source_score_reused" in multi_seed_source,
+                and oos_cache_root == rolling_cache_root
+                and not Path(oos_cache_root).is_absolute()
+                and '"initial_checkpoint_cache_root"' in strategy_compare_config_source
+                and "--checkpoint-reuse-source-fold-dir" in multi_seed_source
+                and "cross_mode_initial_checkpoint_reuse" in point_in_time_source
+                and "source_score_reused" in point_in_time_source
+                and "source_score_reused" in multi_seed_source,
     )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "multi_seed_robustness_reuses_strategy_compare_canonical_report_renderers_and_keeps_seed_extensions_separate",
-        True,
         "render_strategy_aggregate_report" in multi_seed_source
-        and "common_strategy_report" in multi_seed_source
-        and "RoMD完整統計" in multi_seed_source
-        and "設定中的同seed contrasts" in multi_seed_source
-        and "歷年報酬跨seed完整統計" in multi_seed_source
-        and "_upgrade_derived_report_summary" in multi_seed_source
-        and "report_refreshed_at_utc" in multi_seed_source,
+                and "common_strategy_report" in multi_seed_source
+                and "RoMD完整統計" in multi_seed_source
+                and "設定中的同seed contrasts" in multi_seed_source
+                and "歷年報酬跨seed完整統計" in multi_seed_source
+                and "_upgrade_derived_report_summary" in multi_seed_source
+                and "report_refreshed_at_utc" in multi_seed_source,
     )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "strategy_reports_share_metric_registry_and_project_wide_color_semantics",
-        True,
         "PORTFOLIO_RESULT_METRICS" in report_metrics_source
-        and "CORE_STRATEGY_RESULT_METRICS" in report_metrics_source
-        and "PAIR_MAIN_METRICS" in report_metrics_source
-        and "from core.report_metrics import" in comparison_source
-        and "_report_reference_arm_id" in comparison_source
-        and "best_worst_signals" in comparison_source
-        and "styled_signal" in comparison_source
-        and 'target="markdown"' in comparison_source
-        and 'target="console"' in comparison_source
-        and "判讀基準" not in render_report_source
-        and "from core.report_metrics import PAIR_MAIN_METRICS" in reporting_source
-        and "from core.report_style import" in reporting_source
-        and "from core.report_style import" in multi_seed_source
-        and "from core.report_style import" in pit_audit_source
-        and "from core.report_style import" in model_report_source
-        and "from core.report_style import" in strategy_dashboard_source
-        and "from core.report_style import" in optimizer_callbacks_source
-        and "from core.report_style import" in outer_roos_source
-        and "SIGNAL_POSITIVE" in report_style_source
-        and "markdown_signal" in report_style_source
-        and not any(marker in report_style_source for marker in ("🟢", "🔴", "🟡", "⚪")),
+                and "CORE_STRATEGY_RESULT_METRICS" in report_metrics_source
+                and "PAIR_MAIN_METRICS" in report_metrics_source
+                and "from core.report_metrics import" in comparison_source
+                and "_report_reference_arm_id" in comparison_source
+                and "best_worst_signals" in comparison_source
+                and "styled_signal" in comparison_source
+                and 'target="markdown"' in comparison_source
+                and 'target="console"' in comparison_source
+                and "判讀基準" not in render_report_source
+                and "from core.report_metrics import PAIR_MAIN_METRICS" in reporting_source
+                and "from core.report_style import" in reporting_source
+                and "from core.report_style import" in multi_seed_source
+                and "from core.report_style import" in pit_audit_source
+                and "from core.report_style import" in model_report_source
+                and "from core.report_style import" in strategy_dashboard_source
+                and "from core.report_style import" in optimizer_callbacks_source
+                and "from core.report_style import" in outer_roos_source
+                and "SIGNAL_POSITIVE" in report_style_source
+                and "markdown_signal" in report_style_source
+                and not any(marker in report_style_source for marker in ("🟢", "🔴", "🟡", "⚪")),
     )
     from filters.breakout_quality.strategy_compare_diagnostics import (
         paired_trade_r_conversion_diagnostic,
@@ -3672,17 +3385,13 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     rce_diag = paired_trade_r_conversion_diagnostic(
         baseline_trades, active_trades, baseline_targets, active_targets
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "rce_uses_same_exclusive_completed_trade_universe_for_target_and_realized_edges",
-        True,
         rce_diag.get("comparison_basis") == "target_covered_exclusive_realized_trade_mean_r"
-        and abs(float(rce_diag.get("paired_target_selection_edge_r")) - 1.0) < 1e-12
-        and abs(float(rce_diag.get("paired_realized_selection_edge_r")) - 2.0) < 1e-12
-        and abs(float(rce_diag.get("exclusive_selection_delta_r")) - 2.0) < 1e-12
-        and abs(float(rce_diag.get("r_conversion_efficiency")) - 2.0) < 1e-12,
+                and abs(float(rce_diag.get("paired_target_selection_edge_r")) - 1.0) < 1e-12
+                and abs(float(rce_diag.get("paired_realized_selection_edge_r")) - 2.0) < 1e-12
+                and abs(float(rce_diag.get("exclusive_selection_delta_r")) - 2.0) < 1e-12
+                and abs(float(rce_diag.get("r_conversion_efficiency")) - 2.0) < 1e-12,
     )
 
     partial_baseline_targets = baseline_targets.copy()
@@ -3703,31 +3412,23 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     partial_rce = paired_trade_r_conversion_diagnostic(
         baseline_trades, partial_active_trades, partial_baseline_targets, partial_active_targets
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "rce_excludes_missing_target_trade_from_both_edges_without_100pct_coverage_gate",
-        True,
         partial_rce.get("complete_target_coverage") is False
-        and int(partial_rce.get("active_only_count") or 0) == 2
-        and int(partial_rce.get("active_only_target_covered_count") or 0) == 1
-        and abs(float(partial_rce.get("target_coverage_rate")) - (2.0 / 3.0)) < 1e-12
-        and abs(float(partial_rce.get("paired_target_selection_edge_r")) - 1.0) < 1e-12
-        and abs(float(partial_rce.get("paired_realized_selection_edge_r")) - 2.0) < 1e-12
-        and abs(float(partial_rce.get("r_conversion_efficiency")) - 2.0) < 1e-12,
+                and int(partial_rce.get("active_only_count") or 0) == 2
+                and int(partial_rce.get("active_only_target_covered_count") or 0) == 1
+                and abs(float(partial_rce.get("target_coverage_rate")) - (2.0 / 3.0)) < 1e-12
+                and abs(float(partial_rce.get("paired_target_selection_edge_r")) - 1.0) < 1e-12
+                and abs(float(partial_rce.get("paired_realized_selection_edge_r")) - 2.0) < 1e-12
+                and abs(float(partial_rce.get("r_conversion_efficiency")) - 2.0) < 1e-12,
     )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "strategy_diagnostics_reuse_existing_canonical_artifacts_without_raw_recalculation",
-        True,
         '"raw_market_or_trade_recalculation": False' in diagnostics_source
-        and '"audit"' in diagnostics_source
-        and '"report"' in diagnostics_source
-        and "selection_diagnostics" in diagnostics_source,
+                and '"audit"' in diagnostics_source
+                and '"report"' in diagnostics_source
+                and "selection_diagnostics" in diagnostics_source,
     )
 
     summary["strategy_output_contracts"] = [row[0] for row in contract_rows]

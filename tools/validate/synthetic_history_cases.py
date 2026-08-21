@@ -1,3 +1,4 @@
+from .checks import bind_checks
 from datetime import datetime
 
 import numpy as np
@@ -23,6 +24,7 @@ def validate_synthetic_history_ev_threshold_case(base_params):
     case_id = "SYNTH_HISTORY_EV_THRESHOLD"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_history_ev_threshold", case_id)
 
     is_candidate, expected_value, win_rate, trade_count = evaluate_history_candidate_metrics(
         trade_count=1,
@@ -33,10 +35,10 @@ def validate_synthetic_history_ev_threshold_case(base_params):
         params=params,
     )
 
-    add_check(results, "synthetic_history_ev_threshold", case_id, "expected_value_equals_threshold", 0.5, expected_value)
-    add_check(results, "synthetic_history_ev_threshold", case_id, "win_rate_equals_threshold", 1.0, win_rate)
-    add_check(results, "synthetic_history_ev_threshold", case_id, "trade_count_preserved", 1, trade_count)
-    add_check(results, "synthetic_history_ev_threshold", case_id, "candidate_allowed_when_ev_equals_threshold", True, is_candidate)
+    check("expected_value_equals_threshold", 0.5, expected_value)
+    check("win_rate_equals_threshold", 1.0, win_rate)
+    check("trade_count_preserved", 1, trade_count)
+    check_true("candidate_allowed_when_ev_equals_threshold", is_candidate)
 
     summary["candidate_allowed"] = bool(is_candidate)
     summary["expected_value"] = expected_value
@@ -52,6 +54,7 @@ def validate_synthetic_proj_cost_cash_capped_case(base_params):
     case_id = "SYNTH_PROJ_COST_CASH_CAPPED_ORDER"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_proj_cost_cash_capped", case_id)
 
     sizing_equity = 1_000_000.0
     available_cash = 50_000.0
@@ -105,46 +108,14 @@ def validate_synthetic_proj_cost_cash_capped_case(base_params):
     cash_capped_top_reserved_cost = cash_capped_rank_rows[0]["reserved_cost"] if cash_capped_rank_rows else None
     cash_capped_top_qty = cash_capped_rank_rows[0]["qty"] if cash_capped_rank_rows else None
 
-    add_check(
-        results,
-        "synthetic_proj_cost_cash_capped",
-        case_id,
-        "stale_proj_cost_top_ticker",
-        "9802",
-        stale_top_ticker,
-    )
-    add_check(
-        results,
-        "synthetic_proj_cost_cash_capped",
-        case_id,
-        "cash_capped_proj_cost_top_ticker",
-        "9801",
-        cash_capped_top_ticker,
-    )
-    add_check(
-        results,
-        "synthetic_proj_cost_cash_capped",
-        case_id,
-        "proj_cost_order_reversal_detected",
-        True,
-        stale_top_ticker != cash_capped_top_ticker,
-    )
-    add_check(
-        results,
-        "synthetic_proj_cost_cash_capped",
-        case_id,
+    check("stale_proj_cost_top_ticker", "9802", stale_top_ticker)
+    check("cash_capped_proj_cost_top_ticker", "9801", cash_capped_top_ticker)
+    check_true("proj_cost_order_reversal_detected", stale_top_ticker != cash_capped_top_ticker)
+    check_true(
         "cash_capped_reserved_cost_within_available_cash",
-        True,
         cash_capped_top_reserved_cost is not None and cash_capped_top_reserved_cost <= available_cash,
     )
-    add_check(
-        results,
-        "synthetic_proj_cost_cash_capped",
-        case_id,
-        "cash_capped_qty_positive",
-        True,
-        cash_capped_top_qty is not None and cash_capped_top_qty > 0,
-    )
+    check_true("cash_capped_qty_positive", cash_capped_top_qty is not None and cash_capped_top_qty > 0)
 
     summary["stale_top_ticker"] = stale_top_ticker
     summary["cash_capped_top_ticker"] = cash_capped_top_ticker
@@ -158,6 +129,7 @@ def validate_synthetic_pit_same_day_exit_excluded_case(base_params):
     case_id = "SYNTH_PIT_SAME_DAY_EXIT_EXCLUDED"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_pit_same_day_exit_excluded", case_id)
 
     exit_dates = [
         datetime(2024, 1, 2),
@@ -184,15 +156,19 @@ def validate_synthetic_pit_same_day_exit_excluded_case(base_params):
         params,
     )
 
-    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "same_day_trade_count_excludes_same_day_exit", 0, same_day_trade_count)
-    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "same_day_expected_value_excludes_same_day_exit", 0.0, same_day_ev)
-    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "same_day_win_rate_excludes_same_day_exit", 0.0, same_day_win_rate)
-    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "same_day_candidate_uses_pre_exit_history_only", True, same_day_candidate, note="PIT 統計在 exit_date 當天不得偷看同日剛結束的交易。")
+    check("same_day_trade_count_excludes_same_day_exit", 0, same_day_trade_count)
+    check("same_day_expected_value_excludes_same_day_exit", 0.0, same_day_ev)
+    check("same_day_win_rate_excludes_same_day_exit", 0.0, same_day_win_rate)
+    check_true(
+        "same_day_candidate_uses_pre_exit_history_only",
+        same_day_candidate,
+        note="PIT 統計在 exit_date 當天不得偷看同日剛結束的交易。",
+    )
 
-    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "next_day_trade_count_includes_prior_exit", 1, next_day_trade_count)
-    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "next_day_expected_value_includes_prior_exit", 1.0, next_day_ev)
-    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "next_day_win_rate_includes_prior_exit", 1.0, next_day_win_rate)
-    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "next_day_candidate_includes_prior_exit", True, next_day_candidate)
+    check("next_day_trade_count_includes_prior_exit", 1, next_day_trade_count)
+    check("next_day_expected_value_includes_prior_exit", 1.0, next_day_ev)
+    check("next_day_win_rate_includes_prior_exit", 1.0, next_day_win_rate)
+    check_true("next_day_candidate_includes_prior_exit", next_day_candidate)
 
     summary["same_day_trade_count"] = int(same_day_trade_count)
     summary["next_day_trade_count"] = int(next_day_trade_count)
@@ -209,6 +185,7 @@ def validate_synthetic_single_backtest_not_gated_by_own_history_case(base_params
     case_id = "SYNTH_SINGLE_BACKTEST_NOT_GATED_BY_OWN_HISTORY"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_single_backtest_not_gated_by_own_history", case_id)
 
     df = pd.DataFrame(
         {
@@ -229,10 +206,10 @@ def validate_synthetic_single_backtest_not_gated_by_own_history_case(base_params
 
     stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals)
 
-    add_check(results, "synthetic_single_backtest_not_gated_by_own_history", case_id, "trade_executes_even_when_history_threshold_unmet", 1, int(stats["trade_count"]))
-    add_check(results, "synthetic_single_backtest_not_gated_by_own_history", case_id, "history_filter_result_can_still_be_false_after_trade", False, bool(stats["is_candidate"]))
-    add_check(results, "synthetic_single_backtest_not_gated_by_own_history", case_id, "position_closed_after_indicator_sell", 0, int(stats["current_position"]))
-    add_check(results, "synthetic_single_backtest_not_gated_by_own_history", case_id, "winning_trade_recorded", True, float(stats["asset_growth"]) > 0.0)
+    check("trade_executes_even_when_history_threshold_unmet", 1, int(stats["trade_count"]))
+    check("history_filter_result_can_still_be_false_after_trade", False, bool(stats["is_candidate"]))
+    check("position_closed_after_indicator_sell", 0, int(stats["current_position"]))
+    check_true("winning_trade_recorded", float(stats["asset_growth"]) > 0.0)
 
     summary["trade_count"] = int(stats["trade_count"])
     summary["is_candidate"] = bool(stats["is_candidate"])
@@ -256,6 +233,7 @@ def validate_synthetic_single_backtest_uses_compounding_capital_case(base_params
     case_id = "SYNTH_SINGLE_BACKTEST_COMPOUNDING_CAPITAL"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_single_backtest_compounding_capital", case_id)
 
     df = pd.DataFrame(
         {
@@ -283,10 +261,10 @@ def validate_synthetic_single_backtest_uses_compounding_capital_case(base_params
 
     stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals)
 
-    add_check(results, "synthetic_single_backtest_compounding_capital", case_id, "trade_count_after_two_round_trips", 2, int(stats["trade_count"]))
-    add_check(results, "synthetic_single_backtest_compounding_capital", case_id, "asset_growth_uses_compounding_capital_when_flag_true", 21.0, float(stats["asset_growth"]))
-    add_check(results, "synthetic_single_backtest_compounding_capital", case_id, "score_uses_compounded_trade_sequence", 10.5, float(stats["score"]))
-    add_check(results, "synthetic_single_backtest_compounding_capital", case_id, "final_setup_today_survives_after_compounding_replays", True, bool(stats["is_setup_today"]))
+    check("trade_count_after_two_round_trips", 2, int(stats["trade_count"]))
+    check("asset_growth_uses_compounding_capital_when_flag_true", 21.0, float(stats["asset_growth"]))
+    check("score_uses_compounded_trade_sequence", 10.5, float(stats["score"]))
+    check_true("final_setup_today_survives_after_compounding_replays", bool(stats["is_setup_today"]))
 
     summary["trade_count"] = int(stats["trade_count"])
     summary["asset_growth"] = float(stats["asset_growth"])
@@ -305,6 +283,7 @@ def validate_synthetic_portfolio_history_filter_only_case(base_params):
     case_id = "SYNTH_PORTFOLIO_HISTORY_FILTER_ONLY"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_portfolio_history_filter_only", case_id)
 
     from .synthetic_portfolio_common import build_synthetic_half_tp_full_year_case
     from .synthetic_fixtures import write_synthetic_csv_bundle
@@ -331,10 +310,18 @@ def validate_synthetic_portfolio_history_filter_only_case(base_params):
             precomputed_stats=scanner_ref_stats,
         )
 
-        add_check(results, "synthetic_portfolio_history_filter_only", case_id, "single_backtest_trade_executes_even_when_history_threshold_unmet", True, int(single_stats["trade_count"]) > 0)
-        add_check(results, "synthetic_portfolio_history_filter_only", case_id, "single_backtest_history_gate_remains_false", False, bool(single_stats["is_candidate"]))
-        add_check(results, "synthetic_portfolio_history_filter_only", case_id, "scanner_reference_candidate_remains_false", False, bool(scanner_ref_stats["is_candidate"]))
-        add_check(results, "synthetic_portfolio_history_filter_only", case_id, "scanner_tool_rejects_non_candidate_history_gate", None, None if scanner_result is None else scanner_result.get("status"), note="history filter 僅能作用於投組層 / scanner，不得回頭阻斷單股回測本身。")
+        check_true(
+            "single_backtest_trade_executes_even_when_history_threshold_unmet",
+            int(single_stats["trade_count"]) > 0,
+        )
+        check("single_backtest_history_gate_remains_false", False, bool(single_stats["is_candidate"]))
+        check("scanner_reference_candidate_remains_false", False, bool(scanner_ref_stats["is_candidate"]))
+        check(
+            "scanner_tool_rejects_non_candidate_history_gate",
+            None,
+            None if scanner_result is None else scanner_result.get("status"),
+            note="history filter 僅能作用於投組層 / scanner，不得回頭阻斷單股回測本身。",
+        )
 
     summary["single_trade_count"] = int(single_stats["trade_count"])
     summary["scanner_status"] = None if scanner_result is None else scanner_result.get("status")
@@ -353,6 +340,7 @@ def validate_synthetic_pit_multiple_same_day_exits_case(base_params):
     case_id = "SYNTH_PIT_MULTIPLE_SAME_DAY_EXITS"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_pit_multiple_same_day_exits", case_id)
 
     trade_logs = [
         {"exit_date": datetime(2024, 1, 3), "pnl": 120.0, "r_mult": 1.2},
@@ -377,20 +365,24 @@ def validate_synthetic_pit_multiple_same_day_exits_case(base_params):
         params,
     )
 
-    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "same_day_trade_count_excludes_all_same_day_exits", 0, same_day_trade_count)
-    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "same_day_candidate_stays_blocked_without_prior_day_history", False, same_day_candidate)
-    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "same_day_expected_value_excludes_all_same_day_exits", 0.0, same_day_ev)
-    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "same_day_win_rate_excludes_all_same_day_exits", 0.0, same_day_win_rate)
+    check("same_day_trade_count_excludes_all_same_day_exits", 0, same_day_trade_count)
+    check("same_day_candidate_stays_blocked_without_prior_day_history", False, same_day_candidate)
+    check("same_day_expected_value_excludes_all_same_day_exits", 0.0, same_day_ev)
+    check("same_day_win_rate_excludes_all_same_day_exits", 0.0, same_day_win_rate)
 
-    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "next_day_trade_count_includes_only_prior_day_exits", 2, next_day_trade_count)
-    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "next_day_expected_value_uses_prior_day_batch_only", 0.15, next_day_ev, tol=1e-9)
-    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "next_day_win_rate_uses_prior_day_batch_only", 0.5, next_day_win_rate, tol=1e-9)
-    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "next_day_candidate_uses_prior_day_batch_only", True, next_day_candidate, note="同日多筆 exit 也必須整批排除，僅能在下一交易日一起進入 PIT 歷史。")
+    check("next_day_trade_count_includes_only_prior_day_exits", 2, next_day_trade_count)
+    check("next_day_expected_value_uses_prior_day_batch_only", 0.15, next_day_ev, tol=1e-9)
+    check("next_day_win_rate_uses_prior_day_batch_only", 0.5, next_day_win_rate, tol=1e-9)
+    check_true(
+        "next_day_candidate_uses_prior_day_batch_only",
+        next_day_candidate,
+        note="同日多筆 exit 也必須整批排除，僅能在下一交易日一起進入 PIT 歷史。",
+    )
 
-    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "after_all_trade_count_includes_later_day_exit", 3, after_all_trade_count)
-    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "after_all_expected_value_includes_full_history", 0.5, after_all_ev, tol=1e-9)
-    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "after_all_win_rate_includes_full_history", 2.0 / 3.0, after_all_win_rate, tol=1e-9)
-    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "after_all_candidate_includes_full_history", True, after_all_candidate)
+    check("after_all_trade_count_includes_later_day_exit", 3, after_all_trade_count)
+    check("after_all_expected_value_includes_full_history", 0.5, after_all_ev, tol=1e-9)
+    check("after_all_win_rate_includes_full_history", 2.0 / 3.0, after_all_win_rate, tol=1e-9)
+    check_true("after_all_candidate_includes_full_history", after_all_candidate)
 
     summary["next_day_trade_count"] = int(next_day_trade_count)
     summary["after_all_trade_count"] = int(after_all_trade_count)
@@ -406,6 +398,7 @@ def validate_synthetic_lookahead_prev_day_only_case(base_params):
     case_id = "SYNTH_LOOKAHEAD_PREV_DAY_ONLY"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_lookahead_prev_day_only", case_id)
 
     exit_dates = [
         datetime(2024, 1, 2),
@@ -432,14 +425,18 @@ def validate_synthetic_lookahead_prev_day_only_case(base_params):
         params,
     )
 
-    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "same_day_trade_count_uses_previous_day_only", 0, same_day_trade_count)
-    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "same_day_candidate_blocked_without_prior_history", False, same_day_candidate)
-    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "same_day_expected_value_excludes_same_day_exit", 0.0, same_day_ev)
-    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "same_day_win_rate_excludes_same_day_exit", 0.0, same_day_win_rate)
-    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "next_day_trade_count_includes_prior_exit", 1, next_day_trade_count)
-    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "next_day_candidate_unlocked_by_prior_exit_only", True, next_day_candidate, note="盤前決策只能讀前一日已完成歷史，不得偷看同日才剛結束的交易。")
-    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "next_day_expected_value_includes_prior_exit", 1.0, next_day_ev)
-    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "next_day_win_rate_includes_prior_exit", 1.0, next_day_win_rate)
+    check("same_day_trade_count_uses_previous_day_only", 0, same_day_trade_count)
+    check("same_day_candidate_blocked_without_prior_history", False, same_day_candidate)
+    check("same_day_expected_value_excludes_same_day_exit", 0.0, same_day_ev)
+    check("same_day_win_rate_excludes_same_day_exit", 0.0, same_day_win_rate)
+    check("next_day_trade_count_includes_prior_exit", 1, next_day_trade_count)
+    check_true(
+        "next_day_candidate_unlocked_by_prior_exit_only",
+        next_day_candidate,
+        note="盤前決策只能讀前一日已完成歷史，不得偷看同日才剛結束的交易。",
+    )
+    check("next_day_expected_value_includes_prior_exit", 1.0, next_day_ev)
+    check("next_day_win_rate_includes_prior_exit", 1.0, next_day_win_rate)
 
     summary["same_day_trade_count"] = int(same_day_trade_count)
     summary["next_day_trade_count"] = int(next_day_trade_count)
@@ -452,6 +449,7 @@ def validate_synthetic_setup_index_prev_day_only_case(base_params):
     case_id = "SYNTH_SETUP_INDEX_PREV_DAY_ONLY"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_setup_index_prev_day_only", case_id)
 
     index = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"])
     packed_df = pd.DataFrame(
@@ -481,9 +479,9 @@ def validate_synthetic_setup_index_prev_day_only_case(base_params):
     day_two_entries = packed_index.get(index[1], [])
     day_three_entries = packed_index.get(index[2], [])
 
-    add_check(results, "synthetic_setup_index_prev_day_only", case_id, "same_day_setup_not_exposed_to_same_day_schedule", [], day_two_entries)
-    add_check(results, "synthetic_setup_index_prev_day_only", case_id, "next_day_schedule_contains_previous_day_setup_only", [("2330", 1, 2)], day_three_entries)
-    add_check(results, "synthetic_setup_index_prev_day_only", case_id, "packed_and_dict_paths_match", dict_index, packed_index)
+    check("same_day_setup_not_exposed_to_same_day_schedule", [], day_two_entries)
+    check("next_day_schedule_contains_previous_day_setup_only", [("2330", 1, 2)], day_three_entries)
+    check("packed_and_dict_paths_match", dict_index, packed_index)
 
     summary["scheduled_dates"] = [dt.strftime("%Y-%m-%d") for dt in packed_index.keys()]
     return results, summary

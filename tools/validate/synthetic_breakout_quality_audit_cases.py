@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .checks import bind_checks
+
 from .synthetic_breakout_quality_support import add_check
 
 
@@ -20,23 +22,20 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     case_id = "AUDIT_FRAMEWORK"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     validate_audit_config()
     definitions = get_audit_definitions("breakout_quality")
     enabled = get_enabled_audit_definitions("breakout_quality")
     validate_audit_catalog(definitions)
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "formal_audit_config_is_config_driven_and_uses_stable_output_root",
-        True,
         bool(
-            get_audit_module_ids()[0] == "breakout_quality"
-            and len(definitions) >= len(enabled)
-            and AUDIT_OUTPUT_ROOT == "outputs/audit"
-        ),
+                    get_audit_module_ids()[0] == "breakout_quality"
+                    and len(definitions) >= len(enabled)
+                    and AUDIT_OUTPUT_ROOT == "outputs/audit"
+                ),
     )
 
     status = collect_audit_status(module_id="breakout_quality")
@@ -51,22 +50,15 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         )
         else "BLOCKED"
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "audit_runner_overall_status_follows_current_enabled_definitions_without_fixed_audit_id",
         expected_overall,
         status.get("overall_status"),
     )
 
     commands = get_domain_cli_commands("breakout_quality")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "research_audit_utilities_remain_catalogued_alongside_formal_gate",
-        True,
         bool("regime-audit" in commands and "audit-point-in-time-scores" in commands),
     )
 

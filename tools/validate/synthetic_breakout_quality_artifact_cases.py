@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .checks import bind_checks
+
 from .synthetic_breakout_quality_support import (
     ARTIFACT_CONTRACT_VERSION,
     BASELINE_EXPERIMENT_PROFILE,
@@ -849,6 +851,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_RUNTIME_ARTIFACT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     filter_id = "synthetic_quality"
     runtime_fixture_architecture = "inception_time_v1"
@@ -877,22 +880,11 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
             )
             research_score_path = resolve_filter_research_score_path(project_root, filter_id)
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
+            check_true(
                 "research_output_cannot_replace_canonical_runtime_score",
-                True,
                 research_score_path != paths.score_path and "outputs" in research_score_path.parts,
             )
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
-                "path_resolution_has_no_output_side_effect",
-                False,
-                (project_root / "outputs").exists(),
-            )
+            check("path_resolution_has_no_output_side_effect", False, (project_root / "outputs").exists())
             legacy_model_dir = (
                 models_dir
                 / "filters"
@@ -932,14 +924,10 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 loaded_paths=canonical_baseline_paths,
                 project_root=project_root,
             )
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
+            check_true(
                 "legacy_baseline_fallback_is_read_only_for_forward_export",
-                True,
                 legacy_forward_write_rejected
-                and canonical_forward_paths.model_dir == canonical_baseline_paths.model_dir,
+                                and canonical_forward_paths.model_dir == canonical_baseline_paths.model_dir,
             )
             (legacy_model_dir / "manifest.json").unlink()
             paths.model_dir.mkdir(parents=True, exist_ok=True)
@@ -1252,16 +1240,13 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
             _clear_breakout_quality_caches()
 
             runtime_contract = load_runtime_artifact_contract(str(project_root), filter_id)
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
+            check(
                 "runtime_score_signal_anchor_precedes_oos_execution_start",
                 ("2025-01-02", "2025-01-03"),
                 (
-                    runtime_contract.required_signal_start.isoformat(),
-                    runtime_contract.execution_start.isoformat(),
-                ),
+                                    runtime_contract.required_signal_start.isoformat(),
+                                    runtime_contract.execution_start.isoformat(),
+                                ),
             )
             anchor_score = lookup_breakout_quality_candidate_score(
                 project_root=str(project_root),
@@ -1270,10 +1255,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 high_len=high_len,
                 filter_id=filter_id,
             )
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
+            check(
                 "pre_execution_signal_anchor_score_is_runtime_available",
                 (True, 0.55),
                 (bool(anchor_score["available"]), round(float(anchor_score["score"]), 2)),
@@ -1291,14 +1273,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 bad_signal_start_rejected = False
             except ValueError as exc:
                 bad_signal_start_rejected = "required_signal_start" in str(exc)
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
-                "required_signal_start_tamper_fails_fast",
-                True,
-                bad_signal_start_rejected,
-            )
+            check_true("required_signal_start_tamper_fails_fast", bad_signal_start_rejected)
 
             manifest["runtime_eligibility"] = {
                 **original_runtime_eligibility,
@@ -1311,14 +1286,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 bad_execution_start_rejected = False
             except ValueError as exc:
                 bad_execution_start_rejected = "execution_start" in str(exc)
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
-                "execution_start_tamper_fails_fast",
-                True,
-                bad_execution_start_rejected,
-            )
+            check_true("execution_start_tamper_fails_fast", bad_execution_start_rejected)
             manifest["runtime_eligibility"] = original_runtime_eligibility
             paths.manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
             _clear_breakout_quality_caches()
@@ -1343,8 +1311,8 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 project_root=str(project_root),
                 filter_id=filter_id,
             )
-            add_check(results, "synthetic_breakout_quality", case_id, "canonical_score_path_only", [True, True, False, True], pass_at_050.tolist())
-            add_check(results, "synthetic_breakout_quality", case_id, "active_threshold_controls_decision", [True, False, False, True], pass_at_070.tolist())
+            check("canonical_score_path_only", [True, True, False, True], pass_at_050.tolist())
+            check("active_threshold_controls_decision", [True, False, False, True], pass_at_070.tolist())
 
             alternate_high_len = int(high_len) + 5
             shared_only_frame = pd.DataFrame(
@@ -1396,10 +1364,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 project_root=str(project_root),
                 filter_id=filter_id,
             )
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
+            check(
                 "sequence_only_runtime_uses_ticker_date_shared_score",
                 [True, True, False, True],
                 shared_lookup.tolist(),
@@ -1456,14 +1421,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 inconsistent_shared_rejected = False
             except ValueError as exc:
                 inconsistent_shared_rejected = "同一 ticker/date 出現不一致分數" in str(exc)
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
-                "shared_group_score_inconsistency_fails_fast",
-                True,
-                inconsistent_shared_rejected,
-            )
+            check_true("shared_group_score_inconsistency_fails_fast", inconsistent_shared_rejected)
 
             shared_only_frame.to_csv(paths.score_path, index=False, encoding="utf-8-sig")
             manifest["score_table"] = shared_score_record
@@ -1486,14 +1444,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 legacy_exact_key_rejected = False
             except ValueError as exc:
                 legacy_exact_key_rejected = "ticker/date/high_len event" in str(exc)
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
-                "legacy_runtime_keeps_exact_ticker_date_high_len_lookup",
-                True,
-                legacy_exact_key_rejected,
-            )
+            check_true("legacy_runtime_keeps_exact_ticker_date_high_len_lookup", legacy_exact_key_rejected)
             manifest["score_inference_execution"] = {
                 "inference_unit": "unique_ticker_date_feature_group",
                 "shared_group_score_broadcast": True,
@@ -1616,10 +1567,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 str(project_root),
                 filter_id,
             )
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
+            check(
                 "inner_validation_model_contract_supported",
                 TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
                 validation_contract.manifest["training_mode"],
@@ -1713,10 +1661,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 model_architecture=legacy_ts2vec_architecture,
                 experiment_profile=paths.experiment_profile,
             )
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
+            check(
                 "legacy_ts2vec_artifact_contract_supported",
                 legacy_ts2vec_architecture,
                 legacy_ts2vec_contract.manifest["model_architecture"],
@@ -1796,17 +1741,14 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 model_architecture=moment_architecture,
                 experiment_profile=paths.experiment_profile,
             )
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
+            check(
                 "moment_external_checkpoint_artifact_contract_supported",
                 (moment_architecture, MOMENT_CHECKPOINT_SHA256, True),
                 (
-                    moment_contract.manifest["model_architecture"],
-                    moment_contract.manifest["external_pretrained_encoder"]["checkpoint"]["sha256"],
-                    moment_contract.manifest["external_pretrained_encoder"]["encoder_frozen_downstream"],
-                ),
+                                    moment_contract.manifest["model_architecture"],
+                                    moment_contract.manifest["external_pretrained_encoder"]["checkpoint"]["sha256"],
+                                    moment_contract.manifest["external_pretrained_encoder"]["encoder_frozen_downstream"],
+                                ),
             )
             stale_moment_manifest = json.loads(json.dumps(moment_manifest, ensure_ascii=False))
             stale_moment_manifest["external_pretrained_encoder"]["checkpoint"]["sha256"] = "0" * 64
@@ -1824,14 +1766,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 stale_moment_checkpoint_rejected = False
             except ValueError as exc:
                 stale_moment_checkpoint_rejected = "external checkpoint record" in str(exc)
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
-                "moment_checkpoint_hash_tamper_is_rejected",
-                True,
-                stale_moment_checkpoint_rejected,
-            )
+            check_true("moment_checkpoint_hash_tamper_is_rejected", stale_moment_checkpoint_rejected)
             moment_paths.manifest_path.write_text(
                 json.dumps(moment_manifest, ensure_ascii=False), encoding="utf-8"
             )
@@ -1909,21 +1844,18 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 model_architecture=mantis_architecture,
                 experiment_profile=paths.experiment_profile,
             )
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
+            check(
                 "mantis_external_checkpoint_artifact_contract_supported",
                 (mantis_architecture, MANTIS_V2_CHECKPOINT_SHA256, True),
                 (
-                    mantis_contract.manifest["model_architecture"],
-                    mantis_contract.manifest["external_pretrained_encoder"][
-                        "checkpoint"
-                    ]["sha256"],
-                    mantis_contract.manifest["external_pretrained_encoder"][
-                        "encoder_frozen_downstream"
-                    ],
-                ),
+                                    mantis_contract.manifest["model_architecture"],
+                                    mantis_contract.manifest["external_pretrained_encoder"][
+                                        "checkpoint"
+                                    ]["sha256"],
+                                    mantis_contract.manifest["external_pretrained_encoder"][
+                                        "encoder_frozen_downstream"
+                                    ],
+                                ),
             )
 
             stale_mantis_manifest = json.loads(
@@ -1949,14 +1881,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 stale_mantis_checkpoint_rejected = (
                     "external checkpoint record" in str(exc)
                 )
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
-                "mantis_checkpoint_hash_tamper_is_rejected",
-                True,
-                stale_mantis_checkpoint_rejected,
-            )
+            check_true("mantis_checkpoint_hash_tamper_is_rejected", stale_mantis_checkpoint_rejected)
             mantis_paths.manifest_path.write_text(
                 json.dumps(mantis_manifest, ensure_ascii=False),
                 encoding="utf-8",
@@ -1984,14 +1909,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 stale_pretraining_profile_rejected = False
             except ValueError as exc:
                 stale_pretraining_profile_rejected = "pretraining_profile" in str(exc)
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
-                "pretraining_profile_tamper_is_rejected",
-                True,
-                stale_pretraining_profile_rejected,
-            )
+            check_true("pretraining_profile_tamper_is_rejected", stale_pretraining_profile_rejected)
             legacy_ts2vec_paths.manifest_path.write_text(
                 json.dumps(legacy_ts2vec_manifest, ensure_ascii=False),
                 encoding="utf-8",
@@ -2014,14 +1932,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 stale_sampling_rejected = False
             except ValueError as exc:
                 stale_sampling_rejected = "unique-group 契約不一致" in str(exc)
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
-                "training_sampling_contract_tamper_is_rejected",
-                True,
-                stale_sampling_rejected,
-            )
+            check_true("training_sampling_contract_tamper_is_rejected", stale_sampling_rejected)
             paths.manifest_path.write_text(
                 json.dumps(manifest, ensure_ascii=False),
                 encoding="utf-8",
@@ -2050,14 +1961,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 stale_architecture_rejected = (
                     "model_architecture" in str(exc) and "工件路徑" in str(exc)
                 )
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
-                "stale_model_architecture_is_rejected",
-                True,
-                stale_architecture_rejected,
-            )
+            check_true("stale_model_architecture_is_rejected", stale_architecture_rejected)
             paths.manifest_path.write_text(
                 json.dumps(manifest, ensure_ascii=False),
                 encoding="utf-8",
@@ -2079,14 +1983,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 stale_policy_rejected = False
             except ValueError as exc:
                 stale_policy_rejected = "model policy" in str(exc)
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
-                "stale_model_policy_is_rejected",
-                True,
-                stale_policy_rejected,
-            )
+            check_true("stale_model_policy_is_rejected", stale_policy_rejected)
             paths.manifest_path.write_text(
                 json.dumps(manifest, ensure_ascii=False),
                 encoding="utf-8",
@@ -2107,7 +2004,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 missing_rejected = False
             except ValueError as exc:
                 missing_rejected = "缺少正式候選事件" in str(exc)
-            add_check(results, "synthetic_breakout_quality", case_id, "missing_candidate_fails_fast", True, missing_rejected)
+            check_true("missing_candidate_fails_fast", missing_rejected)
 
             stale_frame = pd.DataFrame(index=pd.to_datetime(["2025-01-06"]))
             no_candidate_after_coverage = build_pass_condition_from_score_table(
@@ -2119,14 +2016,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 project_root=str(project_root),
                 filter_id=filter_id,
             )
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
-                "no_candidate_after_coverage_does_not_require_score",
-                [True],
-                no_candidate_after_coverage.tolist(),
-            )
+            check("no_candidate_after_coverage_does_not_require_score", [True], no_candidate_after_coverage.tolist())
             try:
                 build_pass_condition_from_score_table(
                     stale_frame,
@@ -2140,7 +2030,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 stale_rejected = False
             except ValueError as exc:
                 stale_rejected = "已過期" in str(exc)
-            add_check(results, "synthetic_breakout_quality", case_id, "uncovered_candidate_fails_fast", True, stale_rejected)
+            check_true("uncovered_candidate_fails_fast", stale_rejected)
 
             unavailable_path = paths.score_path.with_name(
                 DEFAULT_UNAVAILABLE_SCORE_FILENAME
@@ -2212,14 +2102,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
             audited_reject_score = float(
                 audited_scores.loc[("2330", "2025-01-04", high_len), SCORE_COLUMN]
             )
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
-                "unscorable_runtime_candidate_is_audited_and_rejected",
-                0.0,
-                audited_reject_score,
-            )
+            check("unscorable_runtime_candidate_is_audited_and_rejected", 0.0, audited_reject_score)
 
             tampered_audit_score_frame = audit_score_frame.copy()
             tampered_audit_score_frame.loc[
@@ -2249,14 +2132,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 nonzero_unscorable_score_rejected = False
             except ValueError as exc:
                 nonzero_unscorable_score_rejected = "保守分數為 0.0" in str(exc)
-            add_check(
-                results,
-                "synthetic_breakout_quality",
-                case_id,
-                "unscorable_runtime_candidate_nonzero_score_is_rejected",
-                True,
-                nonzero_unscorable_score_rejected,
-            )
+            check_true("unscorable_runtime_candidate_nonzero_score_is_rejected", nonzero_unscorable_score_rejected)
 
             score_frame.to_csv(paths.score_path, index=False, encoding="utf-8-sig")
             manifest["score_table"] = score_record
@@ -2279,7 +2155,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 research_rejected = False
             except ValueError as exc:
                 research_rejected = "不可用於正式 runtime" in str(exc)
-            add_check(results, "synthetic_breakout_quality", case_id, "research_artifact_rejected", True, research_rejected)
+            check_true("research_artifact_rejected", research_rejected)
 
     _clear_breakout_quality_caches()
     _validate_signal_runtime_wiring(results, case_id)

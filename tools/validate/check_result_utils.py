@@ -60,6 +60,18 @@ def add_check(results, module_name, ticker, metric, expected, actual, tol=FLOAT_
     })
 
 
+def bind_checks(results, module_name, ticker):
+    """Bind stable result/category/case context for dense contract validators."""
+
+    def check(metric, expected, actual, tol=FLOAT_TOL, note=""):
+        add_check(results, module_name, ticker, metric, expected, actual, tol=tol, note=note)
+
+    def check_true(metric, actual, tol=FLOAT_TOL, note=""):
+        add_check(results, module_name, ticker, metric, True, actual, tol=tol, note=note)
+
+    return check, check_true
+
+
 def add_skip_result(results, module_name, ticker, metric, note):
     results.append({
         "ticker": ticker,

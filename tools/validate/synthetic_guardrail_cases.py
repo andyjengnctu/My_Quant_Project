@@ -1,9 +1,9 @@
+from .checks import bind_checks
 from core.config import V16StrategyParams
 from core.backtest_core import run_v16_backtest
 from core.params_io import build_params_from_mapping, params_to_json_dict
 
 from .checks import (
-    add_check,
     add_fail_result,
     make_consistency_params,
 )
@@ -22,9 +22,10 @@ def validate_synthetic_param_guardrail_case(base_params):
     case = build_synthetic_param_guardrail_case(base_params)
     results = []
     summary = {"ticker": case["case_id"], "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_param_guardrail", case["case_id"])
 
     valid_params = build_params_from_mapping(case["base_payload"])
-    add_check(results, "synthetic_param_guardrail", case["case_id"], "valid_payload_loads", True, isinstance(valid_params, V16StrategyParams))
+    check_true("valid_payload_loads", isinstance(valid_params, V16StrategyParams))
 
     invalid_cases = [
         ("tp_percent_ge_1_rejected", {**case["base_payload"], "tp_percent": 1.0}, "tp_percent"),
@@ -39,9 +40,9 @@ def validate_synthetic_param_guardrail_case(base_params):
 
     runtime_valid_payload = {**case["base_payload"], "optimizer_max_workers": 3, "scanner_max_workers": 4, "scanner_live_capital": 2_500_000.0}
     runtime_params = build_params_from_mapping(runtime_valid_payload)
-    add_check(results, "synthetic_param_guardrail", case["case_id"], "runtime_optimizer_max_workers_loads", 3, getattr(runtime_params, "optimizer_max_workers", None))
-    add_check(results, "synthetic_param_guardrail", case["case_id"], "runtime_scanner_max_workers_loads", 4, getattr(runtime_params, "scanner_max_workers", None))
-    add_check(results, "synthetic_param_guardrail", case["case_id"], "runtime_scanner_live_capital_loads", 2_500_000.0, getattr(runtime_params, "scanner_live_capital", None))
+    check("runtime_optimizer_max_workers_loads", 3, getattr(runtime_params, "optimizer_max_workers", None))
+    check("runtime_scanner_max_workers_loads", 4, getattr(runtime_params, "scanner_max_workers", None))
+    check("runtime_scanner_live_capital_loads", 2_500_000.0, getattr(runtime_params, "scanner_live_capital", None))
 
     runtime_invalid_cases = [
         ("optimizer_max_workers_zero_rejected", {**case["base_payload"], "optimizer_max_workers": 0}, "optimizer_max_workers"),
@@ -62,7 +63,7 @@ def validate_synthetic_param_guardrail_case(base_params):
                 "非法參數不應成功載入。"
             )
         except ValueError as e:
-            add_check(results, "synthetic_param_guardrail", case["case_id"], metric_name, True, expected_field in str(e))
+            check_true(metric_name, expected_field in str(e))
 
     for metric_name, payload, expected_field in invalid_cases:
         try:
@@ -77,14 +78,7 @@ def validate_synthetic_param_guardrail_case(base_params):
                 "直接建立 V16StrategyParams 也不應繞過 guardrail。"
             )
         except ValueError as e:
-            add_check(
-                results,
-                "synthetic_param_guardrail",
-                case["case_id"],
-                f"direct_dataclass_{metric_name}",
-                True,
-                expected_field in str(e)
-            )
+            check_true(f"direct_dataclass_{metric_name}", expected_field in str(e))
 
     runtime_mutation_params = V16StrategyParams()
     try:
@@ -99,7 +93,7 @@ def validate_synthetic_param_guardrail_case(base_params):
             "runtime worker 設定直接改欄位也不應繞過 guardrail。"
         )
     except ValueError as e:
-        add_check(results, "synthetic_param_guardrail", case["case_id"], "direct_runtime_attr_guardrail", True, "optimizer_max_workers" in str(e))
+        check_true("direct_runtime_attr_guardrail", "optimizer_max_workers" in str(e))
 
     runtime_capital_params = V16StrategyParams()
     try:
@@ -114,7 +108,7 @@ def validate_synthetic_param_guardrail_case(base_params):
             "scanner live capital 直接改欄位也不應繞過 guardrail。"
         )
     except ValueError as e:
-        add_check(results, "synthetic_param_guardrail", case["case_id"], "direct_runtime_scanner_live_capital_guardrail", True, "scanner_live_capital" in str(e))
+        check_true("direct_runtime_scanner_live_capital_guardrail", "scanner_live_capital" in str(e))
 
     invalid_direct_setattr_cases = [
         ("direct_setattr_use_bb_string_rejected", "use_bb", "abc", "use_bb"),
@@ -136,7 +130,7 @@ def validate_synthetic_param_guardrail_case(base_params):
                 "直接改 dataclass 欄位不應繞過型別 guardrail。"
             )
         except ValueError as e:
-            add_check(results, "synthetic_param_guardrail", case["case_id"], metric_name, True, expected_field in str(e))
+            check_true(metric_name, expected_field in str(e))
 
     mutation_params = V16StrategyParams()
     try:
@@ -151,10 +145,10 @@ def validate_synthetic_param_guardrail_case(base_params):
             "未知屬性 typo 不應靜默掛到 params 物件上。"
         )
     except AttributeError as e:
-        add_check(results, "synthetic_param_guardrail", case["case_id"], "unknown_attr_typo_rejected", True, "tp_precent" in str(e))
+        check_true("unknown_attr_typo_rejected", "tp_precent" in str(e))
 
     default_params_arg = run_v16_backtest.__defaults__[0] if run_v16_backtest.__defaults__ else None
-    add_check(results, "synthetic_param_guardrail", case["case_id"], "run_v16_backtest_default_params_is_none", True, default_params_arg is None)
+    check_true("run_v16_backtest_default_params_is_none", default_params_arg is None)
 
     summary["guardrail_cases"] = (len(invalid_cases) * 2) + len(runtime_invalid_cases) + len(invalid_direct_setattr_cases) + 5
     return results, summary
@@ -164,6 +158,7 @@ def validate_use_compounding_failfast_guardrail_case(base_params):
     case_id = "USE_COMPOUNDING_FAILFAST_GUARDRAIL"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_param_guardrail", case_id)
 
     invalid_payload = {**case["base_payload"], "use_compounding": False}
 
@@ -179,7 +174,7 @@ def validate_use_compounding_failfast_guardrail_case(base_params):
             "use_compounding=False 不可在 JSON 載入路徑被接受後靜默忽略。"
         )
     except ValueError as e:
-        add_check(results, "synthetic_param_guardrail", case_id, "json_false_rejected", True, "use_compounding" in str(e))
+        check_true("json_false_rejected", "use_compounding" in str(e))
 
     try:
         V16StrategyParams(**invalid_payload)
@@ -193,7 +188,7 @@ def validate_use_compounding_failfast_guardrail_case(base_params):
             "use_compounding=False 不可在 dataclass 建立路徑被接受後靜默忽略。"
         )
     except ValueError as e:
-        add_check(results, "synthetic_param_guardrail", case_id, "dataclass_false_rejected", True, "use_compounding" in str(e))
+        check_true("dataclass_false_rejected", "use_compounding" in str(e))
 
     params = V16StrategyParams()
     try:
@@ -208,7 +203,7 @@ def validate_use_compounding_failfast_guardrail_case(base_params):
             "use_compounding=False 不可在 setattr 路徑被接受後靜默忽略。"
         )
     except ValueError as e:
-        add_check(results, "synthetic_param_guardrail", case_id, "setattr_false_rejected", True, "use_compounding" in str(e))
+        check_true("setattr_false_rejected", "use_compounding" in str(e))
 
     summary["guardrail_cases"] = 3
     return results, summary

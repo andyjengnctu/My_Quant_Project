@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .checks import bind_checks
+
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -62,6 +64,7 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
     case_id = "STRATEGY_COMPARE_RESOLVED_PLAN_TRANSITION"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     base = get_strategy_comparison_settings("forward_oos")
     current_dl_arms = tuple(arm for arm in base.enabled_arms if arm.dl_enabled)
@@ -82,12 +85,8 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
             current_arm = candidate
             retired_same_source = retired
             break
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "fixture_has_current_dl_arm_with_retired_same_source_arm",
-        True,
         current_arm is not None and retired_same_source is not None,
     )
     if current_arm is None or retired_same_source is None:
@@ -189,19 +188,15 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
         reduced_binding = dict(
             (reduced_status.get("continuous_score_overrides") or {}).get(dl_id) or {}
         )
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
+        check_true(
             "retiring_unrelated_same_source_arm_preserves_artifact_and_period_binding",
-            True,
             bool(expanded_binding)
-            and bool(reduced_binding)
-            and expanded_binding.get("sha256") == reduced_binding.get("sha256") == score_sha
-            and expanded_binding.get("score_path") == reduced_binding.get("score_path")
-            and expanded_status.get("comparison_period")
-            == reduced_status.get("comparison_period")
-            == {"start": "2021-01-01", "end": "2021-01-05"},
+                        and bool(reduced_binding)
+                        and expanded_binding.get("sha256") == reduced_binding.get("sha256") == score_sha
+                        and expanded_binding.get("score_path") == reduced_binding.get("score_path")
+                        and expanded_status.get("comparison_period")
+                        == reduced_status.get("comparison_period")
+                        == {"start": "2021-01-01", "end": "2021-01-05"},
         )
 
         ready_status = deepcopy(reduced_status)
@@ -225,15 +220,11 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
         )
         detached = resolved.status_dict()
         detached["comparison_period"]["start"] = "2099-01-01"
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
+        check_true(
             "resolved_plan_is_immutable_and_ready_contract_is_complete",
-            True,
             resolved.overall_status == "READY"
-            and resolved.comparison_period.get("start") == "2021-01-01"
-            and resolved.comparison_period.get("end") == "2021-01-05",
+                        and resolved.comparison_period.get("start") == "2021-01-01"
+                        and resolved.comparison_period.get("end") == "2021-01-05",
         )
 
         broken = deepcopy(ready_status)
@@ -248,26 +239,15 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
             missing_period_rejected = "comparison period" in str(exc)
         else:
             missing_period_rejected = False
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
-            "ready_plan_rejects_missing_comparison_period_before_execution",
-            True,
-            missing_period_rejected,
-        )
+        check_true("ready_plan_rejects_missing_comparison_period_before_execution", missing_period_rejected)
 
     app_source = (Path(__file__).resolve().parents[2] / "apps" / "research.py").read_text(
         encoding="utf-8"
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "interactive_status_and_run_share_same_resolved_plan",
-        True,
         "resolved_plan = resolve_comparison_plan(settings=settings)" in app_source
-        and "resolved_plan=resolved_plan" in app_source,
+                and "resolved_plan=resolved_plan" in app_source,
     )
 
     summary["profile_id"] = base.profile_id

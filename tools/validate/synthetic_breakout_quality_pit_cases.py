@@ -15,7 +15,7 @@ from .synthetic_breakout_quality_support import (
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     _resolve_candidate_quality_ranking,
-    add_check,
+    bind_checks,
     ast,
     build_file_manifest,
     get_breakout_quality_experiment_profile,
@@ -35,6 +35,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     case_id = "BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_BUILDER"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config import breakout_quality as workflow_config
     from config.breakout_quality import get_breakout_quality_workflow_settings
@@ -97,27 +98,20 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         _validate_group_consistency(consistent_terminal_events)
     except ValueError:
         all_missing_label_end_accepted = False
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "point_in_time_group_consistency_accepts_all_missing_terminal_label_end",
-        True,
         all_missing_label_end_accepted,
     )
 
     synthetic_history_bundle = SimpleNamespace(
         summary={"training_universe_start_date": "2004-09-08"}
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "rolling_available_history_start_uses_data_driven_training_universe_not_optimizer_selection_start",
         pd.Timestamp("2004-09-08"),
         _resolve_training_universe_start(
-            synthetic_history_bundle, selection_start=pd.Timestamp("2011-01-01")
-        ),
+                    synthetic_history_bundle, selection_start=pd.Timestamp("2011-01-01")
+                ),
     )
 
     missing_daily_history_rejected = False
@@ -135,12 +129,8 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         missing_daily_history_rejected = (
             "不得fallback到optimizer selection_start_date" in str(exc)
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "daily_universal_missing_training_universe_start_fails_closed_without_optimizer_fallback",
-        True,
         missing_daily_history_rejected,
     )
 
@@ -161,16 +151,13 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         },
         profile=event_profile,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "forward_oos_runtime_score_universe_does_not_require_future_target_completion",
         ([0, 1, 2], [0]),
         (
-            resolve_forward_oos_score_group_ids(forward_bundle).tolist(),
-            resolve_forward_oos_target_evaluable_group_ids(forward_bundle).tolist(),
-        ),
+                    resolve_forward_oos_score_group_ids(forward_bundle).tolist(),
+                    resolve_forward_oos_target_evaluable_group_ids(forward_bundle).tolist(),
+                ),
     )
 
     mixed_label_end_rejected = False
@@ -180,12 +167,8 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         _validate_group_consistency(inconsistent_terminal_events)
     except ValueError as exc:
         mixed_label_end_rejected = "invalid_groups=1" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "point_in_time_group_consistency_rejects_mixed_missing_and_completed_label_end",
-        True,
         mixed_label_end_rejected,
     )
 
@@ -196,25 +179,22 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     ):
         binary_settings = workflow_config.get_breakout_quality_workflow_settings()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "workflow_binary_profile_resolves_classification_and_hard_filter",
         (
-            "binary_classification",
-            None,
-            "hard-filter",
-            "canonical_runtime",
-            "original",
-        ),
+                    "binary_classification",
+                    None,
+                    "hard-filter",
+                    "canonical_runtime",
+                    "original",
+                ),
         (
-            binary_settings.training_objective,
-            binary_settings.continuous_target_id,
-            binary_settings.strategy_comparison_mode,
-            binary_settings.strategy_score_source,
-            binary_settings.strategy_buy_sort,
-        ),
+                    binary_settings.training_objective,
+                    binary_settings.continuous_target_id,
+                    binary_settings.strategy_comparison_mode,
+                    binary_settings.strategy_score_source,
+                    binary_settings.strategy_buy_sort,
+                ),
     )
     with patch.object(
         workflow_config,
@@ -222,71 +202,62 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
     ):
         continuous_settings = workflow_config.get_breakout_quality_workflow_settings()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "workflow_continuous_profile_resolves_point_in_time_score_ranking",
         (
-            "daily_percentile_regression",
-            "strategy_aligned_opportunity_no_time_r_v1",
-            "score-ranking",
-            "selection_point_in_time",
-            "breakout_quality_score_desc",
-        ),
+                    "daily_percentile_regression",
+                    "strategy_aligned_opportunity_no_time_r_v1",
+                    "score-ranking",
+                    "selection_point_in_time",
+                    "breakout_quality_score_desc",
+                ),
         (
-            continuous_settings.training_objective,
-            continuous_settings.continuous_target_id,
-            continuous_settings.strategy_comparison_mode,
-            continuous_settings.strategy_score_source,
-            continuous_settings.strategy_buy_sort,
-        ),
+                    continuous_settings.training_objective,
+                    continuous_settings.continuous_target_id,
+                    continuous_settings.strategy_comparison_mode,
+                    continuous_settings.strategy_score_source,
+                    continuous_settings.strategy_buy_sort,
+                ),
     )
     daily_settings = workflow_config.get_breakout_quality_workflow_settings(
         experiment_profile=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "daily_universal_profile_enables_model_layer_pit_without_changing_strategy_identity",
         (
-            "daily_pairwise_ranking",
-            "daily_eligible_stock_days",
-            True,
-            settings.experiment_profile,
-        ),
+                    "daily_pairwise_ranking",
+                    "daily_eligible_stock_days",
+                    True,
+                    settings.experiment_profile,
+                ),
         (
-            daily_settings.training_objective,
-            daily_settings.training_sample_scope,
-            daily_settings.supports_point_in_time_scores,
-            workflow_config.BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        ),
+                    daily_settings.training_objective,
+                    daily_settings.training_sample_scope,
+                    daily_settings.supports_point_in_time_scores,
+                    workflow_config.BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+                ),
     )
     parsed = parse_point_in_time_args([])
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "point_in_time_cli_defaults_follow_current_workflow_config",
         (
-            settings.filter_id,
-            settings.model_architecture,
-            settings.experiment_profile,
-            settings.seed,
-            settings.point_in_time_score_start_date,
-            settings.point_in_time_fold_months,
-            settings.point_in_time_inner_validation_months,
-        ),
+                    settings.filter_id,
+                    settings.model_architecture,
+                    settings.experiment_profile,
+                    settings.seed,
+                    settings.point_in_time_score_start_date,
+                    settings.point_in_time_fold_months,
+                    settings.point_in_time_inner_validation_months,
+                ),
         (
-            parsed.filter_id,
-            parsed.model_architecture,
-            parsed.experiment_profile,
-            parsed.seed,
-            parsed.score_start_date,
-            parsed.fold_months,
-            parsed.inner_validation_months,
-        ),
+                    parsed.filter_id,
+                    parsed.model_architecture,
+                    parsed.experiment_profile,
+                    parsed.seed,
+                    parsed.score_start_date,
+                    parsed.fold_months,
+                    parsed.inner_validation_months,
+                ),
     )
 
     periods = _build_fold_periods(
@@ -294,21 +265,18 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         pd.Timestamp("2020-03-15"),
         fold_months=1,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "point_in_time_fold_periods_are_contiguous_and_calendar_month_based",
         [
-            ("2019-12-31", "2019-12-31"),
-            ("2020-01-01", "2020-01-31"),
-            ("2020-02-01", "2020-02-29"),
-            ("2020-03-01", "2020-03-15"),
-        ],
+                    ("2019-12-31", "2019-12-31"),
+                    ("2020-01-01", "2020-01-31"),
+                    ("2020-02-01", "2020-02-29"),
+                    ("2020-03-01", "2020-03-15"),
+                ],
         [
-            (str(item["score_start"].date()), str(item["score_end"].date()))
-            for item in periods
-        ],
+                    (str(item["score_start"].date()), str(item["score_end"].date()))
+                    for item in periods
+                ],
     )
 
     oos_periods = _build_fold_periods(
@@ -318,10 +286,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         fold_anchor=pd.Timestamp("2021-01-01"),
         single_score_block=True,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "point_in_time_single_score_block_keeps_2021_to_latest_as_one_fold",
         [("2021-01-01", "2026-03-02")],
         [(str(item["score_start"].date()), str(item["score_end"].date())) for item in oos_periods],
@@ -333,19 +298,16 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         fold_months=12,
         single_score_block=False,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "point_in_time_current_rolling_uses_2021_to_latest_annual_folds_with_partial_tail",
         [
-            ("2021-01-01", "2021-12-31"),
-            ("2022-01-01", "2022-12-31"),
-            ("2023-01-01", "2023-12-31"),
-            ("2024-01-01", "2024-12-31"),
-            ("2025-01-01", "2025-12-31"),
-            ("2026-01-01", "2026-03-02"),
-        ],
+                    ("2021-01-01", "2021-12-31"),
+                    ("2022-01-01", "2022-12-31"),
+                    ("2023-01-01", "2023-12-31"),
+                    ("2024-01-01", "2024-12-31"),
+                    ("2025-01-01", "2025-12-31"),
+                    ("2026-01-01", "2026-03-02"),
+                ],
         [(str(item["score_start"].date()), str(item["score_end"].date())) for item in rolling_periods],
     )
 
@@ -378,12 +340,8 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             and (snapshot_dir / "selection_point_in_time_coverage.csv").is_file()
             and (snapshot_dir / "selection_point_in_time_audit.md").is_file()
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "point_in_time_narrower_current_period_snapshots_broader_historical_aggregate_before_refresh",
-        True,
         snapshot_ok,
     )
 
@@ -432,34 +390,28 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         fold_months=1,
         validation_months=2,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "point_in_time_auto_start_selects_earliest_month_meeting_real_split_counts",
         ("2020-05-01", 5, {"inner_train": 2, "validation": 2, "score": 1}),
         (
-            str(resolved_auto_start.date()),
-            auto_diagnostics["candidate_months_checked"],
-            auto_diagnostics["first_fold_group_counts"],
-        ),
+                    str(resolved_auto_start.date()),
+                    auto_diagnostics["candidate_months_checked"],
+                    auto_diagnostics["first_fold_group_counts"],
+                ),
     )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "point_in_time_fold_identity_is_date_stable_when_history_is_extended",
         (
-            "fold_20140101_20141231",
-            "fold_20140101_20141231",
-            "fold_20140101_20141231",
-        ),
+                    "fold_20140101_20141231",
+                    "fold_20140101_20141231",
+                    "fold_20140101_20141231",
+                ),
         (
-            original_fold["fold_id"],
-            extended_fold["fold_id"],
-            _stable_fold_id(pd.Timestamp("2014-01-01"), pd.Timestamp("2014-12-31")),
-        ),
+                    original_fold["fold_id"],
+                    extended_fold["fold_id"],
+                    _stable_fold_id(pd.Timestamp("2014-01-01"), pd.Timestamp("2014-12-31")),
+                ),
     )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -548,25 +500,22 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             if migrated is not None
             else {}
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "compatible_legacy_fold_is_hash_checked_and_migrated_to_stable_id",
         (
-            True,
-            {"fold_20140101_20141231"},
-            "fold_20140101_20141231",
-            "fold_000",
-            "stable-fingerprint",
-        ),
+                    True,
+                    {"fold_20140101_20141231"},
+                    "fold_20140101_20141231",
+                    "fold_000",
+                    "stable-fingerprint",
+                ),
         (
-            migrated is not None,
-            set(migrated_frame.get("fold_id", pd.Series(dtype=str)).astype(str)),
-            dict(migrated_checkpoint.get("fold_contract") or {}).get("fold_id"),
-            dict(migrated_manifest.get("migration") or {}).get("source_fold_id"),
-            migrated_manifest.get("contract_fingerprint"),
-        ),
+                    migrated is not None,
+                    set(migrated_frame.get("fold_id", pd.Series(dtype=str)).astype(str)),
+                    dict(migrated_checkpoint.get("fold_contract") or {}).get("fold_id"),
+                    dict(migrated_manifest.get("migration") or {}).get("source_fold_id"),
+                    migrated_manifest.get("contract_fingerprint"),
+                ),
     )
 
     group_table = pd.DataFrame(
@@ -637,18 +586,15 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "score_end": pd.Timestamp("2014-12-31"),
     }
     ids = _fold_group_ids(bundle, fold, validation_months=24)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "point_in_time_split_requires_completed_labels_before_each_information_boundary",
         ([0], [2, 3], [0, 1, 2, 3], [5, 6]),
         (
-            ids["train_ids"].tolist(),
-            ids["validation_ids"].tolist(),
-            ids["final_ids"].tolist(),
-            ids["score_ids"].tolist(),
-        ),
+                    ids["train_ids"].tolist(),
+                    ids["validation_ids"].tolist(),
+                    ids["final_ids"].tolist(),
+                    ids["score_ids"].tolist(),
+                ),
     )
 
     daily_group_table = group_table.copy()
@@ -663,18 +609,15 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         event_group_index=np.arange(len(daily_group_table), dtype=np.int64),
     )
     daily_ids = _fold_group_ids(daily_bundle, fold, validation_months=24)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "daily_point_in_time_split_uses_all_target_valid_stock_days_and_same_label_end_embargo",
         ([0], [2, 3], [0, 1, 2, 3], [5, 6]),
         (
-            daily_ids["train_ids"].tolist(),
-            daily_ids["validation_ids"].tolist(),
-            daily_ids["final_ids"].tolist(),
-            daily_ids["score_ids"].tolist(),
-        ),
+                    daily_ids["train_ids"].tolist(),
+                    daily_ids["validation_ids"].tolist(),
+                    daily_ids["final_ids"].tolist(),
+                    daily_ids["score_ids"].tolist(),
+                ),
     )
 
     inference_target_valid = np.ones(len(daily_group_table), dtype=bool)
@@ -691,18 +634,15 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     inference_daily_ids = _fold_group_ids(
         inference_daily_bundle, fold, validation_months=24
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "daily_pit_future_target_validity_controls_training_but_not_score_presence",
         ([0], [2], [0, 1, 2], [5, 6]),
         (
-            inference_daily_ids["train_ids"].tolist(),
-            inference_daily_ids["validation_ids"].tolist(),
-            inference_daily_ids["final_ids"].tolist(),
-            inference_daily_ids["score_ids"].tolist(),
-        ),
+                    inference_daily_ids["train_ids"].tolist(),
+                    inference_daily_ids["validation_ids"].tolist(),
+                    inference_daily_ids["final_ids"].tolist(),
+                    inference_daily_ids["score_ids"].tolist(),
+                ),
     )
 
     daily_score_contract = build_score_eligibility_contract(
@@ -711,25 +651,22 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     event_score_contract = build_score_eligibility_contract(
         STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "pit_score_eligibility_contract_is_profile_driven_and_future_target_independent",
         (
-            "feature_history_only",
-            False,
-            True,
-            "canonical_breakout_event_membership",
-            False,
-        ),
+                    "feature_history_only",
+                    False,
+                    True,
+                    "canonical_breakout_event_membership",
+                    False,
+                ),
         (
-            daily_score_contract["eligibility_basis"],
-            daily_score_contract["future_target_required_for_score"],
-            daily_score_contract["target_valid_required_for_training"],
-            event_score_contract["eligibility_basis"],
-            event_score_contract["future_target_required_for_score"],
-        ),
+                    daily_score_contract["eligibility_basis"],
+                    daily_score_contract["future_target_required_for_score"],
+                    daily_score_contract["target_valid_required_for_training"],
+                    event_score_contract["eligibility_basis"],
+                    event_score_contract["future_target_required_for_score"],
+                ),
     )
 
     training_contract = {
@@ -784,50 +721,40 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     cross_mode_score_horizon_contract["observed_periods"]["score"]["end"] = "2026-03-02"
     cross_mode_score_horizon_contract["group_counts"]["score"] = 400
     cross_mode_score_horizon_contract["event_row_counts"]["score"] = 400
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "daily_pit_training_identity_ignores_score_end_for_oos_rolling_initial_checkpoint_reuse",
-        True,
         _fold_training_contract_is_compatible(
-            training_contract, expected_contract=cross_mode_score_horizon_contract
-        ),
+                    training_contract, expected_contract=cross_mode_score_horizon_contract
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "daily_pit_checkpoint_reuse_allows_score_only_expansion_but_rejects_training_change",
         (True, False),
         (
-            _fold_training_contract_is_compatible(
-                training_contract, expected_contract=expanded_score_contract
-            ),
-            _fold_training_contract_is_compatible(
-                training_contract, expected_contract=changed_training_contract
-            ),
-        ),
+                    _fold_training_contract_is_compatible(
+                        training_contract, expected_contract=expanded_score_contract
+                    ),
+                    _fold_training_contract_is_compatible(
+                        training_contract, expected_contract=changed_training_contract
+                    ),
+                ),
     )
 
     legacy_cutoff_contract = json.loads(json.dumps(training_contract))
     legacy_cutoff_contract["source_contract"].pop("training_universe_start_date", None)
     changed_universe_contract = json.loads(json.dumps(training_contract))
     changed_universe_contract["source_contract"]["training_universe_start_date"] = "2011-01-01"
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "daily_pit_fold_reuse_rejects_missing_or_old_training_universe_identity",
         (False, False),
         (
-            _fold_training_contract_is_compatible(
-                legacy_cutoff_contract, expected_contract=training_contract
-            ),
-            _fold_training_contract_is_compatible(
-                changed_universe_contract, expected_contract=training_contract
-            ),
-        ),
+                    _fold_training_contract_is_compatible(
+                        legacy_cutoff_contract, expected_contract=training_contract
+                    ),
+                    _fold_training_contract_is_compatible(
+                        changed_universe_contract, expected_contract=training_contract
+                    ),
+                ),
     )
 
     class _SyntheticRankerModel:
@@ -951,36 +878,30 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             if cross_mode_rescored is not None
             else ""
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "daily_pit_cross_mode_reuse_preserves_exact_checkpoint_sha_and_rescores_only",
         (True, True, False, source_sha),
         (
-            cross_mode_rescored is not None,
-            bool(dict(cross_mode_manifest.get("migration") or {}).get("source_checkpoint_sha_preserved")),
-            bool(dict(cross_mode_manifest.get("migration") or {}).get("source_score_reused")),
-            target_sha,
-        ),
+                    cross_mode_rescored is not None,
+                    bool(dict(cross_mode_manifest.get("migration") or {}).get("source_checkpoint_sha_preserved")),
+                    bool(dict(cross_mode_manifest.get("migration") or {}).get("source_score_reused")),
+                    target_sha,
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "daily_pit_checkpoint_reuse_round_trip_rescores_expanded_universe_without_refit",
         (True, 2, "expanded_daily_score_universe_checkpoint_reuse", 2, 30),
         (
-            rescored is not None,
-            len(rescored_frame),
-            dict(rescored_manifest.get("migration") or {}).get("kind"),
-            dict(rewritten_checkpoint.get("fold_contract") or {})
-            .get("group_counts", {})
-            .get("score"),
-            dict(rewritten_checkpoint.get("fold_contract") or {})
-            .get("group_counts", {})
-            .get("final_refit"),
-        ),
+                    rescored is not None,
+                    len(rescored_frame),
+                    dict(rescored_manifest.get("migration") or {}).get("kind"),
+                    dict(rewritten_checkpoint.get("fold_contract") or {})
+                    .get("group_counts", {})
+                    .get("score"),
+                    dict(rewritten_checkpoint.get("fold_contract") or {})
+                    .get("group_counts", {})
+                    .get("final_refit"),
+                ),
     )
 
     fold_contract = {
@@ -1018,23 +939,20 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         score_start=pd.Timestamp("2014-01-01"),
         score_end=pd.Timestamp("2014-12-31"),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "point_in_time_score_output_has_no_future_target_and_complete_unique_coverage",
         (True, 2, 1.0, 0, 0, 0),
         (
-            not bool(
-                {"label", "target_raw_r", "target_daily_percentile"}
-                & set(REQUIRED_SCORE_COLUMNS)
-            ),
-            coverage["scored_group_count"],
-            coverage["coverage_rate"],
-            coverage["duplicate_group_count"],
-            coverage["missing_group_count"],
-            coverage["extra_group_count"],
-        ),
+                    not bool(
+                        {"label", "target_raw_r", "target_daily_percentile"}
+                        & set(REQUIRED_SCORE_COLUMNS)
+                    ),
+                    coverage["scored_group_count"],
+                    coverage["coverage_rate"],
+                    coverage["duplicate_group_count"],
+                    coverage["missing_group_count"],
+                    coverage["extra_group_count"],
+                ),
     )
 
     duplicate_rejected = False
@@ -1047,14 +965,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         )
     except ValueError as exc:
         duplicate_rejected = "重複group" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "point_in_time_combined_output_rejects_duplicate_groups",
-        True,
-        duplicate_rejected,
-    )
+    check_true("point_in_time_combined_output_rejects_duplicate_groups", duplicate_rejected)
 
     identity_mismatch_rejected = False
     mismatched = validated.copy()
@@ -1068,14 +979,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         )
     except ValueError as exc:
         identity_mismatch_rejected = "identity不一致" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "point_in_time_combined_output_rejects_ticker_date_identity_mismatch",
-        True,
-        identity_mismatch_rejected,
-    )
+    check_true("point_in_time_combined_output_rejects_ticker_date_identity_mismatch", identity_mismatch_rejected)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         orderable_path = Path(tmp_dir) / "orderable.csv"
@@ -1101,30 +1005,24 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             filter_id=settings.filter_id,
             target_id=settings.continuous_target_id,
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "point_in_time_orderable_coverage_uses_canonical_target_date",
         (True, 2, 1, 0.5),
         (
-            orderable["available"],
-            orderable["candidate_count"],
-            orderable["scored_candidate_count"],
-            orderable["coverage_rate"],
-        ),
+                    orderable["available"],
+                    orderable["candidate_count"],
+                    orderable["scored_candidate_count"],
+                    orderable["coverage_rate"],
+                ),
         tol=1e-12,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "point_in_time_orderable_coverage_ignores_existing_candidate_score_column",
         (True, "selection_point_in_time_scores"),
         (
-            orderable["candidate_artifact_has_existing_breakout_quality_score"],
-            orderable["coverage_score_source"],
-        ),
+                    orderable["candidate_artifact_has_existing_breakout_quality_score"],
+                    orderable["coverage_score_source"],
+                ),
     )
 
     yearly_rows = [
@@ -1223,64 +1121,52 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     colored_report_console = render_point_in_time_console(report_payload, color=True)
     compact_report_console = render_point_in_time_compact_console(report_payload)
     report_markdown = render_point_in_time_markdown(report_payload)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "point_in_time_audit_outputs_readable_console_summary",
-        True,
         all(
-            text in report_console
-            for text in (
-                "Selection Point-in-time 模型評估報表",
-                "核心排序能力",
-                "年度穩定性",
-                "Fold 分布與漂移",
-                "策略 optimizer：未執行",
-            )
-        ),
+                    text in report_console
+                    for text in (
+                        "Selection Point-in-time 模型評估報表",
+                        "核心排序能力",
+                        "年度穩定性",
+                        "Fold 分布與漂移",
+                        "策略 optimizer：未執行",
+                    )
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "point_in_time_audit_console_uses_shared_status_colors",
-        True,
         all(
-            token in colored_report_console
-            for token in (
-                "\x1b[96m",
-                "\x1b[92m",
-                "\x1b[93m",
-            )
-        )
-        and "\x1b[" not in report_console,
+                    token in colored_report_console
+                    for token in (
+                        "\x1b[96m",
+                        "\x1b[92m",
+                        "\x1b[93m",
+                    )
+                )
+                and "\x1b[" not in report_console,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "point_in_time_audit_compact_console_avoids_repeated_detail_tables",
-        True,
         all(
-            text in compact_report_console
-            for text in (
-                "PIT 模型驗證",
-                "核心排序",
-                "年度穩定",
-                "模型 Gate",
-                "執行策略績效驗證",
-            )
-        )
-        and all(
-            text not in compact_report_console
-            for text in (
-                "Current Breakout Quality Workflow",
-                "Fold 分布與漂移",
-                "fold_000",
-                "完整指標 JSON",
-            )
-        ),
+                    text in compact_report_console
+                    for text in (
+                        "PIT 模型驗證",
+                        "核心排序",
+                        "年度穩定",
+                        "模型 Gate",
+                        "執行策略績效驗證",
+                    )
+                )
+                and all(
+                    text not in compact_report_console
+                    for text in (
+                        "Current Breakout Quality Workflow",
+                        "Fold 分布與漂移",
+                        "fold_000",
+                        "完整指標 JSON",
+                    )
+                ),
     )
     project_root = Path(__file__).resolve().parents[2]
     ranker_source = (
@@ -1303,60 +1189,45 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     continuous_target_prepare_source = (
         project_root / "tools" / "filters" / "breakout_quality" / "prepare_continuous_target.py"
     ).read_text(encoding="utf-8")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "point_in_time_resume_wires_torch_only_to_legacy_migration",
         (False, True),
         (
-            "torch_module" in pit_builder_call_keywords.get("_load_reusable_fold", set()),
-            "torch_module" in pit_builder_call_keywords.get(
-                "_migrate_compatible_legacy_fold", set()
-            ),
-        ),
+                    "torch_module" in pit_builder_call_keywords.get("_load_reusable_fold", set()),
+                    "torch_module" in pit_builder_call_keywords.get(
+                        "_migrate_compatible_legacy_fold", set()
+                    ),
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "point_in_time_compact_training_output_is_one_line_per_new_fold",
-        True,
         ranker_source.count("if not compact_console:") >= 4
-        and "fold_progress.print_line(" in pit_builder_source
-        and "best epoch=" in pit_builder_source
-        and "PIT Scores 完成" in pit_builder_source,
+                and "fold_progress.print_line(" in pit_builder_source
+                and "best epoch=" in pit_builder_source
+                and "PIT Scores 完成" in pit_builder_source,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "point_in_time_continuous_target_compact_output_is_owned_by_canonical_service",
-        True,
         "if compact_console_enabled():" in continuous_target_builder_source
-        and "Continuous Target 完成" in continuous_target_builder_source
-        and "Selection mean=" in continuous_target_builder_source
-        and '"oos_evaluated": False' in continuous_target_builder_source
-        and "services.breakout_quality.continuous_target_builder" in continuous_target_prepare_source
-        and "tools.audit.breakout_quality.continuous_target" not in continuous_target_prepare_source,
+                and "Continuous Target 完成" in continuous_target_builder_source
+                and "Selection mean=" in continuous_target_builder_source
+                and '"oos_evaluated": False' in continuous_target_builder_source
+                and "services.breakout_quality.continuous_target_builder" in continuous_target_prepare_source
+                and "tools.audit.breakout_quality.continuous_target" not in continuous_target_prepare_source,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "point_in_time_audit_outputs_complete_markdown_report",
-        True,
         all(
-            text in report_markdown
-            for text in (
-                "# Breakout Quality Rolling Point-in-time 模型評估報表",
-                "## 2. 核心排序能力",
-                "## 3. 年度穩定性（",
-                "## 4. Fold 分布與漂移",
-                "## 7. 研究邊界與下一步",
-                "## 8. 工件",
-            )
-        ),
+                    text in report_markdown
+                    for text in (
+                        "# Breakout Quality Rolling Point-in-time 模型評估報表",
+                        "## 2. 核心排序能力",
+                        "## 3. 年度穩定性（",
+                        "## 4. Fold 分布與漂移",
+                        "## 7. 研究邊界與下一步",
+                        "## 8. 工件",
+                    )
+                ),
     )
 
     summary["workflow"] = "selection_point_in_time_scores"
@@ -1367,6 +1238,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
     case_id = "BREAKOUT_QUALITY_SELECTION_POINT_IN_TIME_SCORE_SORT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from core.buy_sort import (
         BUY_LIMIT_OVERAGE_SORT_METHOD,
@@ -1409,10 +1281,10 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
          "sort_value": 0.05, "proj_cost": 100.0},
     ]
     sort_candidate_rows(ranking_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD)
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "point_in_time_score_sort_desc_tie_and_missing_fallback_contract",
-        ["A", "C", "D", "B"], [row["ticker"] for row in ranking_rows],
+        ["A", "C", "D", "B"],
+        [row["ticker"] for row in ranking_rows],
     )
 
     unavailable_rank = {
@@ -1473,27 +1345,26 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
         prev_close=99.0,
         quality_rank=unavailable_rank,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "point_in_time_missing_score_is_preserved_for_continuation_and_candidate_fallback",
         (
-            False,
-            None,
-            "missing_ticker_date_score",
-            "selection_point_in_time",
-            "selection_point_in_time",
-            False,
-            None,
-        ),
+                    False,
+                    None,
+                    "missing_ticker_date_score",
+                    "selection_point_in_time",
+                    "selection_point_in_time",
+                    False,
+                    None,
+                ),
         (
-            inherited_unavailable_rank["available"],
-            inherited_unavailable_rank["score"],
-            inherited_unavailable_rank["unavailable_reason"],
-            inherited_unavailable_rank["score_source"],
-            resolved_inherited_unavailable_rank["score_source"],
-            unavailable_candidate["breakout_quality_rank"]["available"],
-            unavailable_candidate["breakout_quality_score"],
-        ),
+                    inherited_unavailable_rank["available"],
+                    inherited_unavailable_rank["score"],
+                    inherited_unavailable_rank["unavailable_reason"],
+                    inherited_unavailable_rank["score_source"],
+                    resolved_inherited_unavailable_rank["score_source"],
+                    unavailable_candidate["breakout_quality_rank"]["available"],
+                    unavailable_candidate["breakout_quality_score"],
+                ),
     )
 
     default_source = get_breakout_quality_ranking_source_context().score_source
@@ -1504,8 +1375,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
     ):
         inside_source = get_breakout_quality_ranking_source_context().score_source
     restored_source = get_breakout_quality_ranking_source_context().score_source
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "point_in_time_ranking_source_context_is_scoped_and_restored",
         ("canonical_runtime", "selection_point_in_time", "canonical_runtime"),
         (default_source, inside_source, restored_source),
@@ -1548,8 +1418,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
                 information_date=pd.Timestamp("2020-01-09"),
                 high_len=275,
             )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "pit_runtime_score_date_is_event_anchor_for_mr12b_and_latest_information_date_for_mr13a",
         ["2020-01-02", "2020-01-09"],
         lookup_dates,
@@ -1592,8 +1461,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
                 information_date=pd.Timestamp("2020-01-09"),
                 signal_state=inherited_daily_state,
             )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "daily_pit_continuation_refreshes_score_instead_of_reusing_breakout_day_rank",
         (1, 0.9, "2020-01-09"),
         (refreshed_lookup.call_count, refreshed_rank["score"], refreshed_rank["score_date"]),
@@ -1616,8 +1484,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
         _validate_score_eligibility_contract({}, profile=daily_profile)
     except ValueError as exc:
         legacy_daily_rejected = "重新建立PIT Scores" in str(exc)
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "strategy_loader_requires_future_independent_daily_pit_score_eligibility_contract",
         (True, True),
         (current_daily_accepted, legacy_daily_rejected),
@@ -1648,10 +1515,10 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
             )
         except ValueError as exc:
             stale_binding_rejected = "SHA256" in str(exc)
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "point_in_time_audit_is_bound_to_exact_source_artifact_hashes",
-        (True, True), (exact_binding_accepted, stale_binding_rejected),
+        (True, True),
+        (exact_binding_accepted, stale_binding_rejected),
     )
 
     gate = derive_point_in_time_model_validation_gate({
@@ -1664,8 +1531,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
             "positive_spread_year_count": 7,
         },
     })
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "point_in_time_model_gate_uses_only_target_ordering_evidence",
         ("PASS", False, False),
         (gate["status"], gate["strategy_metrics_used"], gate["future_target_used_for_runtime_sort"]),
@@ -1698,18 +1564,17 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
             lookup=diagnostic_lookup_input,
         )
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "point_in_time_strategy_diagnostic_uses_original_score_date_after_replay",
         (1.0, 1.0, 0.0, False, "2020-01-01", "2020-01-01"),
         (
-            diagnostic_metrics["orderable_score_coverage_rate"],
-            diagnostic_metrics["target_top_k_retention_mean"],
-            diagnostic_metrics["target_opportunity_gap_r_mean"],
-            diagnostic_metrics["future_target_used_for_runtime_sort"],
-            diagnostic_orderable.loc[0, "score_event_date"],
-            diagnostic_selected.loc[0, "score_event_date"],
-        ),
+                    diagnostic_metrics["orderable_score_coverage_rate"],
+                    diagnostic_metrics["target_top_k_retention_mean"],
+                    diagnostic_metrics["target_opportunity_gap_r_mean"],
+                    diagnostic_metrics["future_target_used_for_runtime_sort"],
+                    diagnostic_orderable.loc[0, "score_event_date"],
+                    diagnostic_selected.loc[0, "score_event_date"],
+                ),
     )
 
     true_score_mismatch_rejected = False
@@ -1734,8 +1599,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
                 "pit_score=0.8",
             )
         )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "point_in_time_strategy_diagnostic_rejects_true_score_mismatch_with_identity",
         (True, True),
         (true_score_mismatch_rejected, mismatch_message_has_identity),

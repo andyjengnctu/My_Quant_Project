@@ -14,7 +14,7 @@ from .synthetic_breakout_quality_support import (
     UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     V16StrategyParams,
     _resolve_candidate_quality_ranking,
-    add_check,
+    bind_checks,
     ast,
     build_file_manifest,
     get_breakout_quality_experiment_profile,
@@ -39,6 +39,7 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
     case_id = "BREAKOUT_QUALITY_SINGLE_SEED_SINGLE_ENTRY"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     project_root = Path(__file__).resolve().parents[2]
     canonical_config_path = project_root / "config" / "breakout_quality.py"
@@ -48,27 +49,20 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
     strategy_app_path = project_root / "apps" / "research.py"
     strategy_config_path = project_root / "config" / "strategy_compare.py"
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "single_seed_contract_has_one_editable_setting_and_no_workflow_seed",
         (1, False),
         (
-            canonical_source.count("BREAKOUT_QUALITY_RANDOM_SEED ="),
-            "BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED" in canonical_source,
-        ),
+                    canonical_source.count("BREAKOUT_QUALITY_RANDOM_SEED ="),
+                    "BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED" in canonical_source,
+                ),
     )
 
     from config import breakout_quality as breakout_quality_config
 
     configured_seed = breakout_quality_config.resolve_breakout_quality_random_seed()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "single_seed_contract_resolves_nonnegative_integer",
-        True,
         isinstance(configured_seed, int) and configured_seed >= 0,
     )
 
@@ -86,10 +80,7 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
         ):
             continuous_seed = breakout_quality_config.get_breakout_quality_workflow_settings().seed
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "single_seed_contract_applies_override_to_all_profiles",
         (7, 7, 7),
         (overridden_seed, binary_seed, continuous_seed),
@@ -102,26 +93,15 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
             negative_seed_rejected = True
         else:
             negative_seed_rejected = False
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "single_seed_contract_rejects_negative_seed",
-        True,
-        negative_seed_rejected,
-    )
+    check_true("single_seed_contract_rejects_negative_seed", negative_seed_rejected)
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "model_and_strategy_apps_are_separate_entries",
-        True,
         canonical_app_path.is_file()
-        and strategy_app_path.is_file()
-        and strategy_config_path.is_file()
-        and '"strategy-compare"' not in canonical_app_source
-        and "apps/research.py compare" in canonical_app_source,
+                and strategy_app_path.is_file()
+                and strategy_config_path.is_file()
+                and '"strategy-compare"' not in canonical_app_source
+                and "apps/research.py compare" in canonical_app_source,
     )
 
     strategy_compare_source = (
@@ -130,19 +110,15 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
         / "breakout_quality"
         / "strategy_compare_engine.py"
     ).read_text(encoding="utf-8")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "single_seed_contract_strategy_gate_rejects_seed_mismatch",
-        True,
         all(
-            token in strategy_compare_source
-            for token in (
-                "int(pit_contract.seed) != int(workflow_settings.seed)",
-                "Selection PIT工件seed與目前workflow不一致",
-            )
-        ),
+                    token in strategy_compare_source
+                    for token in (
+                        "int(pit_contract.seed) != int(workflow_settings.seed)",
+                        "Selection PIT工件seed與目前workflow不一致",
+                    )
+                ),
     )
 
     summary["seed_source"] = "config.breakout_quality.BREAKOUT_QUALITY_RANDOM_SEED"
@@ -153,6 +129,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     case_id = "STRATEGY_COMPARE_CONFIG_DRIVEN_APP"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     project_root = Path(__file__).resolve().parents[2]
     config_path = project_root / "config" / "strategy_compare.py"
@@ -216,18 +193,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                             f"{audit_path.relative_to(project_root)}:{node.lineno}:{imported_name}"
                         )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "audit_modules_do_not_cross_import_other_audit_private_helpers",
-        [],
-        private_cross_audit_imports,
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check("audit_modules_do_not_cross_import_other_audit_private_helpers", [], private_cross_audit_imports)
+    check(
         "audit_modules_use_public_ranker_and_strategy_compare_owners",
         ([], []),
         (legacy_ranker_imports, private_strategy_compare_engine_imports),
@@ -235,19 +202,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     from services.breakout_quality import continuous_target_builder, continuous_target_metrics
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "continuous_target_build_logic_is_owned_by_service_layer_not_audit_namespace",
-        True,
         bool(
-            callable(continuous_target_builder.build_strategy_aligned_target_artifacts)
-            and callable(continuous_target_builder.build_strategy_aligned_no_time_target_artifacts)
-            and callable(continuous_target_metrics.distribution_metrics)
-            and not (project_root / "tools" / "audit" / "breakout_quality" / "continuous_target.py").exists()
-            and not (project_root / "tools" / "audit" / "breakout_quality" / "no_time_continuous_target.py").exists()
-        ),
+                    callable(continuous_target_builder.build_strategy_aligned_target_artifacts)
+                    and callable(continuous_target_builder.build_strategy_aligned_no_time_target_artifacts)
+                    and callable(continuous_target_metrics.distribution_metrics)
+                    and not (project_root / "tools" / "audit" / "breakout_quality" / "continuous_target.py").exists()
+                    and not (project_root / "tools" / "audit" / "breakout_quality" / "no_time_continuous_target.py").exists()
+                ),
     )
 
     config_source = config_path.read_text(encoding="utf-8")
@@ -294,22 +257,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             on_arm=score_ranking_arm,
         )
     }
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "formal_score_ranking_pairs_persist_execution_selector_trace_and_repair_search_certificate_sidecars_and_cache_requires_them",
-        True,
-        (
-            "score_ranking_execution.csv" in score_ranking_cache_files
-            and "score_ranking_selector_trace.csv" in score_ranking_cache_files
-            and "score_ranking_repair_search_certificate.csv" in score_ranking_cache_files
-            and "capture_execution_diagnostics=(" in orchestration_source
-            and 'runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING' in orchestration_source
-            and 'output_dir / "score_ranking_execution.csv"' in strategy_compare_source
-            and 'output_dir / "score_ranking_selector_trace.csv"' in strategy_compare_source
-            and 'output_dir / "score_ranking_repair_search_certificate.csv"' in strategy_compare_source
-        ),
+        "score_ranking_execution.csv" in score_ranking_cache_files
+                    and "score_ranking_selector_trace.csv" in score_ranking_cache_files
+                    and "score_ranking_repair_search_certificate.csv" in score_ranking_cache_files
+                    and "capture_execution_diagnostics=(" in orchestration_source
+                    and 'runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING' in orchestration_source
+                    and 'output_dir / "score_ranking_execution.csv"' in strategy_compare_source
+                    and 'output_dir / "score_ranking_selector_trace.csv"' in strategy_compare_source
+                    and 'output_dir / "score_ranking_repair_search_certificate.csv"' in strategy_compare_source,
     )
     configured_roos_builders = [
         source.builder
@@ -322,18 +279,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "selection_historical_full_roos",
         }
     ]
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "all_roos_builders_use_training_policy_trials_single_source",
-        True,
         bool(configured_roos_builders)
-        and all(
-            int(builder.options.get("trials_per_fold") or 0)
-            == int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
-            for builder in configured_roos_builders
-        )
-        and '"trials_per_fold": 200' not in config_source
-        and '"baseline_trials_per_fold"' not in config_source,
+                and all(
+                    int(builder.options.get("trials_per_fold") or 0)
+                    == int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
+                    for builder in configured_roos_builders
+                )
+                and '"trials_per_fold": 200' not in config_source
+                and '"baseline_trials_per_fold"' not in config_source,
     )
     from config.execution_policy import (
         DEFAULT_FIXED_RISK,
@@ -348,39 +303,35 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         for source in settings.parameter_sources.values()
         if source.builder is not None
     ]
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "strategy_compare_profile_membership_is_single_activation_source",
-        True,
         all("enabled" not in raw for raw in strategy_config.STRATEGY_COMPARE_ARMS.values())
-        and all("enabled" not in raw for raw in strategy_config.STRATEGY_COMPARE_CONTRASTS.values())
-        and all("enabled" not in raw for raw in strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS.values())
-        and all("enabled" not in raw for raw in strategy_history.HISTORICAL_STRATEGY_COMPARE_CONTRASTS.values())
-        and all(
-            (lambda resolved, expected: (
-                {arm.arm_id for arm in resolved.enabled_arms} == set(expected[0])
-                and {contrast.contrast_id for contrast in resolved.enabled_contrasts} == set(expected[1])
-            ))(
-                strategy_config.get_strategy_comparison_settings(profile_id),
-                strategy_config._resolved_profile_matrix(dict(raw_profile)),
-            )
-            for profile_id, raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.items()
-        ),
+                and all("enabled" not in raw for raw in strategy_config.STRATEGY_COMPARE_CONTRASTS.values())
+                and all("enabled" not in raw for raw in strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS.values())
+                and all("enabled" not in raw for raw in strategy_history.HISTORICAL_STRATEGY_COMPARE_CONTRASTS.values())
+                and all(
+                    (lambda resolved, expected: (
+                        {arm.arm_id for arm in resolved.enabled_arms} == set(expected[0])
+                        and {contrast.contrast_id for contrast in resolved.enabled_contrasts} == set(expected[1])
+                    ))(
+                        strategy_config.get_strategy_comparison_settings(profile_id),
+                        strategy_config._resolved_profile_matrix(dict(raw_profile)),
+                    )
+                    for profile_id, raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.items()
+                ),
     )
     menu_profiles = strategy_config.get_strategy_comparison_menu_profiles()
     menu_labels = tuple(str(item["label"]) for item in menu_profiles)
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "strategy_compare_main_menu_exposes_only_generic_config_selected_stages",
-        True,
         tuple(item["profile_id"] for item in menu_profiles)
-        == tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS)
-        and tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS)
-        == ("extending_window_oos", "extending_window_rolling")
-        and len(menu_labels) == 2
-        and "OOS Test" in menu_labels[0]
-        and "Rolling Test" in menu_labels[1]
-        and all("MR-" not in label for label in menu_labels),
+                == tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS)
+                and tuple(strategy_config.STRATEGY_COMPARE_MENU_PROFILE_IDS)
+                == ("extending_window_oos", "extending_window_rolling")
+                and len(menu_labels) == 2
+                and "OOS Test" in menu_labels[0]
+                and "Rolling Test" in menu_labels[1]
+                and all("MR-" not in label for label in menu_labels),
     )
     active_arm_ids = {
         str(arm_id)
@@ -413,30 +364,28 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         if dict(strategy_config.STRATEGY_COMPARE_ARMS[arm_id].get("dl_runtime_options") or {}).get("safety_dl_id")
     )
     active_dl_ids.discard("")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "strategy_compare_active_and_historical_catalogs_are_physically_separated",
-        True,
         set(strategy_config.STRATEGY_COMPARE_ARMS) == active_arm_ids
-        and set(strategy_config.STRATEGY_COMPARE_CONTRASTS) == active_contrast_ids
-        and set(strategy_config.STRATEGY_PARAM_SOURCES) == active_param_ids
-        and set(strategy_config.STRATEGY_DL_SOURCES) == active_dl_ids
-        and not set(strategy_config.STRATEGY_COMPARE_ARMS).intersection(
-            strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS
-        )
-        and not set(strategy_config.STRATEGY_COMPARE_CONTRASTS).intersection(
-            strategy_history.HISTORICAL_STRATEGY_COMPARE_CONTRASTS
-        )
-        and not set(strategy_config.STRATEGY_PARAM_SOURCES).intersection(
-            strategy_history.HISTORICAL_STRATEGY_PARAM_SOURCES
-        )
-        and not set(strategy_config.STRATEGY_DL_SOURCES).intersection(
-            strategy_history.HISTORICAL_STRATEGY_DL_SOURCES
-        )
-        and set(settings.arms)
-        == active_arm_ids.union(strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS)
-        and set(settings.contrasts)
-        == active_contrast_ids.union(strategy_history.HISTORICAL_STRATEGY_COMPARE_CONTRASTS),
+                and set(strategy_config.STRATEGY_COMPARE_CONTRASTS) == active_contrast_ids
+                and set(strategy_config.STRATEGY_PARAM_SOURCES) == active_param_ids
+                and set(strategy_config.STRATEGY_DL_SOURCES) == active_dl_ids
+                and not set(strategy_config.STRATEGY_COMPARE_ARMS).intersection(
+                    strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS
+                )
+                and not set(strategy_config.STRATEGY_COMPARE_CONTRASTS).intersection(
+                    strategy_history.HISTORICAL_STRATEGY_COMPARE_CONTRASTS
+                )
+                and not set(strategy_config.STRATEGY_PARAM_SOURCES).intersection(
+                    strategy_history.HISTORICAL_STRATEGY_PARAM_SOURCES
+                )
+                and not set(strategy_config.STRATEGY_DL_SOURCES).intersection(
+                    strategy_history.HISTORICAL_STRATEGY_DL_SOURCES
+                )
+                and set(settings.arms)
+                == active_arm_ids.union(strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS)
+                and set(settings.contrasts)
+                == active_contrast_ids.union(strategy_history.HISTORICAL_STRATEGY_COMPARE_CONTRASTS),
     )
 
     from core.strategy_param_artifacts import (
@@ -488,64 +437,60 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
     param_compatibility_source = param_compatibility_path.read_text(encoding="utf-8")
     param_repository_service_source = param_repository_service_path.read_text(encoding="utf-8")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "current_strategy_parameter_domain_has_optimizer_owned_artifact_and_training_ssot",
-        True,
         current_param_identities
-        == {
-            (family, mode)
-            for family in STRATEGY_PARAM_FAMILIES
-            for mode in ("oos", "rolling")
-        }
-        and all(
-            raw.get("path_template") is None
-            and raw.get("identity_manifest_path") is None
-            and str((raw.get("builder") or {}).get("builder_type"))
-            == "canonical_optimizer_strategy_params"
-            for raw in current_param_sources.values()
-        )
-        and all(not options for options in current_param_builder_options)
-        and int(rolling_policy_snapshot["optimizer_seed"])
-        == int(OPTIMIZER_RANDOM_SEED_DEFAULT)
-        and int(rolling_policy_snapshot["trials_per_fold"])
-        == int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
-        and int(oos_policy_snapshot["optimizer_seed"])
-        == int(OPTIMIZER_RANDOM_SEED_DEFAULT)
-        and int(oos_policy_snapshot["trials_per_fold"])
-        == int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
-        and all(
-            resolve_strategy_param_artifact_path(
-                project_root, family=family, evaluation_mode="oos", policy="base_finalist_best"
-            )
-            == resolve_strategy_param_artifact_path(
-                project_root, family=family, evaluation_mode="rolling", policy="base_finalist_best"
-            )
-            for family in STRATEGY_PARAM_FAMILIES
-        )
-        and normalize_strategy_param_evaluation_mode("roos") == "rolling"
-        and "sys.modules[__name__] = _optimizer_impl" in param_compatibility_source
-        and "def ensure_strategy_parameter_artifact(" in param_repository_service_source
-        and "from config.training_policy import" in param_repository_service_source
-        and "trials_per_fold" not in json.dumps(current_param_builder_options, sort_keys=True),
+                == {
+                    (family, mode)
+                    for family in STRATEGY_PARAM_FAMILIES
+                    for mode in ("oos", "rolling")
+                }
+                and all(
+                    raw.get("path_template") is None
+                    and raw.get("identity_manifest_path") is None
+                    and str((raw.get("builder") or {}).get("builder_type"))
+                    == "canonical_optimizer_strategy_params"
+                    for raw in current_param_sources.values()
+                )
+                and all(not options for options in current_param_builder_options)
+                and int(rolling_policy_snapshot["optimizer_seed"])
+                == int(OPTIMIZER_RANDOM_SEED_DEFAULT)
+                and int(rolling_policy_snapshot["trials_per_fold"])
+                == int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
+                and int(oos_policy_snapshot["optimizer_seed"])
+                == int(OPTIMIZER_RANDOM_SEED_DEFAULT)
+                and int(oos_policy_snapshot["trials_per_fold"])
+                == int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
+                and all(
+                    resolve_strategy_param_artifact_path(
+                        project_root, family=family, evaluation_mode="oos", policy="base_finalist_best"
+                    )
+                    == resolve_strategy_param_artifact_path(
+                        project_root, family=family, evaluation_mode="rolling", policy="base_finalist_best"
+                    )
+                    for family in STRATEGY_PARAM_FAMILIES
+                )
+                and normalize_strategy_param_evaluation_mode("roos") == "rolling"
+                and "sys.modules[__name__] = _optimizer_impl" in param_compatibility_source
+                and "def ensure_strategy_parameter_artifact(" in param_repository_service_source
+                and "from config.training_policy import" in param_repository_service_source
+                and "trials_per_fold" not in json.dumps(current_param_builder_options, sort_keys=True),
     )
 
     model_paths_source = model_paths_path.read_text(encoding="utf-8")
     optimizer_main_source = optimizer_main_path.read_text(encoding="utf-8")
     runtime_promotion_source = runtime_promotion_path.read_text(encoding="utf-8")
     param_manifest_repository_source = param_manifest_repository_path.read_text(encoding="utf-8")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "current_strategy_parameter_runtime_retires_models_root_json_and_keeps_optimizer_as_state_writer",
-        True,
         "STRATEGY_PARAM_CANONICAL_RELATIVE_DIR" in model_paths_source
-        and "full/trade/state/active.json" not in model_paths_source
-        and "resolve_models_dir(project_root, environ=env), \"run_best_params.json\"" not in model_paths_source
-        and "os.path.join(MODELS_DIR, \"run_best_params.json\")" not in optimizer_main_source
-        and "write_strategy_parameter_state_artifact" in runtime_promotion_source
-        and "resolve_active_params_path" not in runtime_promotion_source
-        and "def write_strategy_parameter_state_artifact(" in param_manifest_repository_source
-        and "def migrate_all_legacy_strategy_parameter_artifacts(" in param_repository_service_source,
+                and "full/trade/state/active.json" not in model_paths_source
+                and "resolve_models_dir(project_root, environ=env), \"run_best_params.json\"" not in model_paths_source
+                and "os.path.join(MODELS_DIR, \"run_best_params.json\")" not in optimizer_main_source
+                and "write_strategy_parameter_state_artifact" in runtime_promotion_source
+                and "resolve_active_params_path" not in runtime_promotion_source
+                and "def write_strategy_parameter_state_artifact(" in param_manifest_repository_source
+                and "def migrate_all_legacy_strategy_parameter_artifacts(" in param_repository_service_source,
     )
 
     from core.active_param_ensemble import ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE
@@ -715,40 +660,29 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             path.parent.relative_to(shared_policy_root).as_posix()
             for path in shared_work_root.rglob("synthetic_search_done.json")
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "canonical_strategy_param_policies_share_one_optimizer_search_per_schedule_segment",
-        True,
         shared_best["action"] == "BUILD"
-        and shared_agree["action"] == "BUILD"
-        and len(shared_search_events) == 1
-        and shared_markers == [
-            "outputs/optimizer/strategy_param_schedule/full/shared_policy_search/schedule_2021_forward",
-        ]
-        and str(shared_best_payload.get("selector")) == "base_finalist_best"
-        and str(shared_agree_payload.get("selector")) == "base_finalists_agree"
-        and shared_agree_ready is True
-        and shared_agree_status == "READY",
+                and shared_agree["action"] == "BUILD"
+                and len(shared_search_events) == 1
+                and shared_markers == [
+                    "outputs/optimizer/strategy_param_schedule/full/shared_policy_search/schedule_2021_forward",
+                ]
+                and str(shared_best_payload.get("selector")) == "base_finalist_best"
+                and str(shared_agree_payload.get("selector")) == "base_finalists_agree"
+                and shared_agree_ready is True
+                and shared_agree_status == "READY",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "canonical_strategy_param_identity_rejects_wrong_policy_selector_even_when_sha_is_repinned",
         (False, "POLICY_SELECTOR_MISMATCH"),
         (corrupted_agree_ready, corrupted_agree_status),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "wrong_policy_selector_auto_rebuilds_from_shared_search_without_rerunning_optimizer",
-        True,
         repaired_agree["action"] == "REBUILD"
-        and str(repaired_agree_payload.get("selector")) == "base_finalists_agree"
-        and len(shared_search_events) == 1,
+                and str(repaired_agree_payload.get("selector")) == "base_finalists_agree"
+                and len(shared_search_events) == 1,
     )
 
     import services.optimizer.outer_rolling_oos as outer_rolling_module
@@ -776,19 +710,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 color=False,
             )
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "disabled_production_seed_ensemble_reports_effective_single_seed_and_hides_duplicate_table",
-        True,
         effective_seed_policy["enabled"] is False
-        and int(effective_seed_policy["seed_count"]) == 1
-        and int(effective_seed_policy["min_agree"]) == 1
-        and disabled_seed_tables == ""
-        and "seeds=1" in disabled_seed_summary
-        and "min_agree=1" in disabled_seed_summary
-        and "seed_ensemble=off" in disabled_seed_summary,
+                and int(effective_seed_policy["seed_count"]) == 1
+                and int(effective_seed_policy["min_agree"]) == 1
+                and disabled_seed_tables == ""
+                and "seeds=1" in disabled_seed_summary
+                and "min_agree=1" in disabled_seed_summary
+                and "seed_ensemble=off" in disabled_seed_summary,
     )
 
     with tempfile.TemporaryDirectory() as min_policy_path_tmp:
@@ -811,14 +741,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 canonical_family="min",
             )
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "min_optimizer_arm_resolves_requested_policy_instead_of_hardcoding_base_best",
-        True,
         isolated_agree_path.name == "roos_base_finalists_agree.json"
-        and canonical_agree_path.name == "min_base_finalists_agree.json",
+                and canonical_agree_path.name == "min_base_finalists_agree.json",
     )
 
     with tempfile.TemporaryDirectory() as migration_tmp:
@@ -920,24 +846,22 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 if target.is_file()
                 else {}
             )
-        add_check(
-            results, "synthetic_breakout_quality", case_id,
+        check_true(
             "legacy_oos_all_policies_migrate_before_root_cleanup_even_when_period_ends_latest",
-            True,
             not current_ensure_scanned_legacy
-            and str(finalize_result.get("status")) == "READY_FOR_CLEANUP"
-            and str(migration_result.get("status")) == "PASS"
-            and str(cleanup_plan.get("status")) == "READY"
-            and not list(cleanup_plan.get("blockers") or [])
-            and len(migrated_oos_payloads) == len(POLICY_FILENAME_BY_NAME)
-            and all(
-                payload.get("mode") == "rolling"
-                and str((payload.get("folds") or [{}])[0].get("effective_start"))
-                == "2021-01-01"
-                and str((payload.get("folds") or [{}])[0].get("effective_end"))
-                == "2026-03-02"
-                for payload in migrated_oos_payloads
-            ),
+                        and str(finalize_result.get("status")) == "READY_FOR_CLEANUP"
+                        and str(migration_result.get("status")) == "PASS"
+                        and str(cleanup_plan.get("status")) == "READY"
+                        and not list(cleanup_plan.get("blockers") or [])
+                        and len(migrated_oos_payloads) == len(POLICY_FILENAME_BY_NAME)
+                        and all(
+                            payload.get("mode") == "rolling"
+                            and str((payload.get("folds") or [{}])[0].get("effective_start"))
+                            == "2021-01-01"
+                            and str((payload.get("folds") or [{}])[0].get("effective_end"))
+                            == "2026-03-02"
+                            for payload in migrated_oos_payloads
+                        ),
         )
 
         # Actual strategy-param divergence must remain blocked even though
@@ -955,14 +879,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             str(row.get("source") or ""): str(row.get("reason") or "")
             for row in list(diverged_oos_plan.get("blockers") or [])
         }
-        add_check(
-            results, "synthetic_breakout_quality", case_id,
+        check_true(
             "legacy_oos_cleanup_blocks_true_strategy_param_divergence",
-            True,
             str(diverged_oos_plan.get("status")) == "BLOCKED"
-            and diverged_oos_blockers.get(
-                "models/strategy_params/full/oos/base_best.json"
-            ) == "legacy_source_not_proven_migrated",
+                        and diverged_oos_blockers.get(
+                            "models/strategy_params/full/oos/base_best.json"
+                        ) == "legacy_source_not_proven_migrated",
         )
 
         # Re-running the explicit migration must preserve a genuinely different
@@ -984,21 +906,19 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             if archived_row
             else None
         )
-        add_check(
-            results, "synthetic_breakout_quality", case_id,
+        check_true(
             "legacy_oos_true_divergence_is_byte_preserved_before_cleanup_ready",
-            True,
             str(archived_finalize.get("status")) == "READY_FOR_CLEANUP"
-            and str(archived_cleanup.get("status")) == "READY"
-            and archived_row is not None
-            and archive_path is not None
-            and archive_path.is_file()
-            and archive_path.read_bytes() == diverged_oos_path.read_bytes()
-            and any(
-                str(row.get("source") or "") == archived_source
-                and str(row.get("evidence") or "") == "historical_oos_archive_sha_match"
-                for row in list(archived_cleanup.get("removable") or [])
-            ),
+                        and str(archived_cleanup.get("status")) == "READY"
+                        and archived_row is not None
+                        and archive_path is not None
+                        and archive_path.is_file()
+                        and archive_path.read_bytes() == diverged_oos_path.read_bytes()
+                        and any(
+                            str(row.get("source") or "") == archived_source
+                            and str(row.get("evidence") or "") == "historical_oos_archive_sha_match"
+                            for row in list(archived_cleanup.get("removable") or [])
+                        ),
         )
         diverged_oos_path.write_text(json.dumps(original_oos_payload), encoding="utf-8")
 
@@ -1018,57 +938,51 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             str(row.get("source") or ""): str(row.get("reason") or "")
             for row in list(diverged_cleanup_plan.get("blockers") or [])
         }
-        add_check(
-            results, "synthetic_breakout_quality", case_id,
+        check_true(
             "legacy_root_cleanup_blocks_unproven_diverged_trade_state",
-            True,
             str(diverged_cleanup_plan.get("status")) == "BLOCKED"
-            and diverged_blockers.get("models/run_best_params.json")
-            == "legacy_source_not_proven_migrated",
+                        and diverged_blockers.get("models/run_best_params.json")
+                        == "legacy_source_not_proven_migrated",
         )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "strategy_execution_and_optimizer_defaults_have_config_ssot",
-        True,
         int(workflow_settings.strategy_max_positions) == int(DEFAULT_PORTFOLIO_MAX_POSITIONS)
-        and str(workflow_settings.strategy_rotation) == str(DEFAULT_PORTFOLIO_ROTATION)
-        and float(workflow_settings.strategy_fixed_risk) == float(DEFAULT_FIXED_RISK)
-        and float(workflow_settings.strategy_max_position_cap_pct) == float(DEFAULT_MAX_POSITION_CAP_PCT)
-        and all(
-            "fixed_risk" not in options
-            or float(options["fixed_risk"]) == float(DEFAULT_FIXED_RISK)
-            for options in builder_options
-        )
-        and all(
-            "max_position_cap_pct" not in options
-            or float(options["max_position_cap_pct"]) == float(DEFAULT_MAX_POSITION_CAP_PCT)
-            for options in builder_options
-        )
-        and all(
-            "optimizer_seed" not in options
-            or int(options["optimizer_seed"]) == int(OPTIMIZER_RANDOM_SEED_DEFAULT)
-            for options in builder_options
-        ),
+                and str(workflow_settings.strategy_rotation) == str(DEFAULT_PORTFOLIO_ROTATION)
+                and float(workflow_settings.strategy_fixed_risk) == float(DEFAULT_FIXED_RISK)
+                and float(workflow_settings.strategy_max_position_cap_pct) == float(DEFAULT_MAX_POSITION_CAP_PCT)
+                and all(
+                    "fixed_risk" not in options
+                    or float(options["fixed_risk"]) == float(DEFAULT_FIXED_RISK)
+                    for options in builder_options
+                )
+                and all(
+                    "max_position_cap_pct" not in options
+                    or float(options["max_position_cap_pct"]) == float(DEFAULT_MAX_POSITION_CAP_PCT)
+                    for options in builder_options
+                )
+                and all(
+                    "optimizer_seed" not in options
+                    or int(options["optimizer_seed"]) == int(OPTIMIZER_RANDOM_SEED_DEFAULT)
+                    for options in builder_options
+                ),
     )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "portfolio_replay_service_boundary_has_canonical_implementation_and_tool_alias_only",
-        True,
         portfolio_replay_service_path.is_file()
-        and optimizer_raw_service_path.is_file()
-        and optimizer_trial_service_path.is_file()
-        and optimizer_walk_forward_service_path.is_file()
-        and "from services.portfolio_replay import (" in replay_source
-        and "from filters.breakout_quality.strategy_compare_replay import (" in strategy_compare_source
-        and "from tools.portfolio_sim.simulation_runner import (" not in replay_source
-        and "from tools." not in portfolio_replay_service_source
-        and "import tools." not in portfolio_replay_service_source
-        and "from tools." not in optimizer_raw_service_source
-        and "from tools." not in optimizer_trial_service_source
-        and "from tools." not in optimizer_walk_forward_service_source
-        and "sys.modules[__name__] = _impl" in portfolio_replay_wrapper_source,
+                and optimizer_raw_service_path.is_file()
+                and optimizer_trial_service_path.is_file()
+                and optimizer_walk_forward_service_path.is_file()
+                and "from services.portfolio_replay import (" in replay_source
+                and "from filters.breakout_quality.strategy_compare_replay import (" in strategy_compare_source
+                and "from tools.portfolio_sim.simulation_runner import (" not in replay_source
+                and "from tools." not in portfolio_replay_service_source
+                and "import tools." not in portfolio_replay_service_source
+                and "from tools." not in optimizer_raw_service_source
+                and "from tools." not in optimizer_trial_service_source
+                and "from tools." not in optimizer_walk_forward_service_source
+                and "sys.modules[__name__] = _impl" in portfolio_replay_wrapper_source,
     )
 
     canonical_service_paths = (
@@ -1093,20 +1007,18 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                     for alias in node.names:
                         if str(alias.name).startswith("tools"):
                             forbidden_reverse_imports.append(f"{source_path.relative_to(project_root)}:{node.lineno}:{alias.name}")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "formal_domain_and_services_do_not_reverse_depend_on_tools",
-        True,
         all(path.is_file() for path in canonical_service_paths)
-        and not forbidden_reverse_imports
-        and "from services.breakout_quality.point_in_time_scores import (" not in preparation_source
-        and "from services.breakout_quality.point_in_time_audit import (" not in preparation_source
-        and "build_selection_point_in_time_scores" not in preparation_source
-        and "audit_selection_point_in_time_scores" not in preparation_source
-        and "from services.breakout_quality.binary_point_in_time_scores import (" in param_service_source
-        and "from services.optimizer.outer_rolling_oos import" in param_service_source
-        and "from services.optimizer.runtime import" in param_service_source
-        and "from services.optimizer.session_factory import (" in param_service_source,
+                and not forbidden_reverse_imports
+                and "from services.breakout_quality.point_in_time_scores import (" not in preparation_source
+                and "from services.breakout_quality.point_in_time_audit import (" not in preparation_source
+                and "build_selection_point_in_time_scores" not in preparation_source
+                and "audit_selection_point_in_time_scores" not in preparation_source
+                and "from services.breakout_quality.binary_point_in_time_scores import (" in param_service_source
+                and "from services.optimizer.outer_rolling_oos import" in param_service_source
+                and "from services.optimizer.runtime import" in param_service_source
+                and "from services.optimizer.session_factory import (" in param_service_source,
     )
 
     import importlib
@@ -1116,16 +1028,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     legacy_optimizer_module = importlib.import_module("tools.optimizer.outer_rolling_oos")
     canonical_pit_module = importlib.import_module("services.breakout_quality.point_in_time_scores")
     legacy_pit_module = importlib.import_module("tools.filters.breakout_quality.build_point_in_time_scores")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "service_migration_preserves_legacy_module_aliases_and_project_root",
-        True,
         canonical_train_module is legacy_train_module
-        and canonical_optimizer_module is legacy_optimizer_module
-        and canonical_pit_module is legacy_pit_module
-        and importlib.import_module("filters.breakout_quality.strategy_param_training")
-            is importlib.import_module("services.optimizer.strategy_param_training")
-        and Path(canonical_train_module.PROJECT_ROOT).resolve() == project_root.resolve(),
+                and canonical_optimizer_module is legacy_optimizer_module
+                and canonical_pit_module is legacy_pit_module
+                and importlib.import_module("filters.breakout_quality.strategy_param_training")
+                    is importlib.import_module("services.optimizer.strategy_param_training")
+                and Path(canonical_train_module.PROJECT_ROOT).resolve() == project_root.resolve(),
     )
 
     engine_tree = read_source_ast(engine_path)
@@ -1145,76 +1055,66 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "_load_reusable_no_filter_baseline",
         "run_standalone_baseline",
     }
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "strategy_compare_engine_delegates_sources_reporting_and_diagnostics_to_single_owner_modules",
-        True,
         all(path.is_file() for path in (contracts_path, sources_path, reporting_path, diagnostics_path, replay_path))
-        and not moved_strategy_compare_functions.intersection(engine_defined_functions)
-        and "from filters.breakout_quality.strategy_compare_contracts import (" in strategy_compare_source
-        and "from filters.breakout_quality.strategy_compare_sources import (" in strategy_compare_source
-        and "from filters.breakout_quality.strategy_compare_reporting import (" in strategy_compare_source
-        and "from filters.breakout_quality.strategy_compare_diagnostics import (" in strategy_compare_source
-        and "from filters.breakout_quality.strategy_compare_replay import (" in strategy_compare_source
-        and "def comparison_switch_spec(" in contracts_source
-        and "def _build_controlled_param_source_pair(" in sources_source
-        and "def _scenario_summary(" in reporting_source
-        and "def _strategy_selection_diagnostics(" in diagnostics_source
-        and "def _run_scenario(" in replay_source
-        and "def run_standalone_baseline(" in replay_source
-        and "from filters.breakout_quality.strategy_compare_reporting import (" in orchestration_source
-        and "from filters.breakout_quality.strategy_compare_sources import (" in preparation_source
-        and "from filters.breakout_quality.strategy_compare_sources import (" in param_service_source,
+                and not moved_strategy_compare_functions.intersection(engine_defined_functions)
+                and "from filters.breakout_quality.strategy_compare_contracts import (" in strategy_compare_source
+                and "from filters.breakout_quality.strategy_compare_sources import (" in strategy_compare_source
+                and "from filters.breakout_quality.strategy_compare_reporting import (" in strategy_compare_source
+                and "from filters.breakout_quality.strategy_compare_diagnostics import (" in strategy_compare_source
+                and "from filters.breakout_quality.strategy_compare_replay import (" in strategy_compare_source
+                and "def comparison_switch_spec(" in contracts_source
+                and "def _build_controlled_param_source_pair(" in sources_source
+                and "def _scenario_summary(" in reporting_source
+                and "def _strategy_selection_diagnostics(" in diagnostics_source
+                and "def _run_scenario(" in replay_source
+                and "def run_standalone_baseline(" in replay_source
+                and "from filters.breakout_quality.strategy_compare_reporting import (" in orchestration_source
+                and "from filters.breakout_quality.strategy_compare_sources import (" in preparation_source
+                and "from filters.breakout_quality.strategy_compare_sources import (" in param_service_source,
     )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "comparison_config_lists_individual_arms_contrasts_and_preparation_without_active_id",
-        True,
         "ACTIVE_STRATEGY_COMPARISON_ID" not in config_source
-        and len(settings.arms) >= 2
-        and all(isinstance(arm.enabled, bool) for arm in settings.arms.values())
-        and all(isinstance(item.enabled, bool) for item in settings.contrasts.values())
-        and isinstance(settings.preparation.auto_prepare, bool)
-        and any(source.builder is not None for source in settings.parameter_sources.values())
-        and any(source.forward_scores_builder is not None for source in settings.dl_sources.values()),
+                and len(settings.arms) >= 2
+                and all(isinstance(arm.enabled, bool) for arm in settings.arms.values())
+                and all(isinstance(item.enabled, bool) for item in settings.contrasts.values())
+                and isinstance(settings.preparation.auto_prepare, bool)
+                and any(source.builder is not None for source in settings.parameter_sources.values())
+                and any(source.forward_scores_builder is not None for source in settings.dl_sources.values()),
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "strategy_app_menu_is_generic_and_model_app_has_no_strategy_route",
-        True,
         all(token in app_source for token in (
-            "執行目前比較設定", "查看設定、工件與預計動作", "config/strategy_compare.py",
-            "get_strategy_comparison_profiles", "查看目前Framework設定與工件狀態",
-        ))
-        and "C1" not in app_source and "TP1" not in app_source
-        and '"strategy-compare"' not in model_app_source
-        and "run_strategy_comparison" not in model_app_source,
+                    "執行目前比較設定", "查看設定、工件與預計動作", "config/strategy_compare.py",
+                    "get_strategy_comparison_profiles", "查看目前Framework設定與工件狀態",
+                ))
+                and "C1" not in app_source and "TP1" not in app_source
+                and '"strategy-compare"' not in model_app_source
+                and "run_strategy_comparison" not in model_app_source,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "strategy_compare_official_entry_is_in_quick_gate_help_registry",
-        True,
         '([sys.executable, "apps/research.py", "compare", "--help"]' in quick_gate_source
-        and '"apps/research.py",' in quick_gate_source.split("INLINE_CLI_TARGETS = {", 1)[1],
+                and '"apps/research.py",' in quick_gate_source.split("INLINE_CLI_TARGETS = {", 1)[1],
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "deterministic_prerequisites_use_formal_shared_services_without_model_training",
-        True,
         all(path.is_file() for path in (
-            preparation_path, export_service_path, param_service_path, param_repository_service_path,
-            param_compatibility_path, workflow_io_path, optimizer_policy_path,
-        ))
-        and "prepare_strategy_comparison_artifacts" in orchestration_source
-        and "export_forward_oos_scores" in preparation_source
-        and "prepare_strategy_parameter_source" in preparation_source
-        and all(token not in preparation_source for token in (
-            "build_trade_path_labels", "train_model", "build_dataset",
-        ))
-        and not legacy_export_path.exists()
-        and not legacy_param_path.exists()
-        and '"export-scores": "filters.breakout_quality.export_scores"' in model_app_source,
+                    preparation_path, export_service_path, param_service_path, param_repository_service_path,
+                    param_compatibility_path, workflow_io_path, optimizer_policy_path,
+                ))
+                and "prepare_strategy_comparison_artifacts" in orchestration_source
+                and "export_forward_oos_scores" in preparation_source
+                and "prepare_strategy_parameter_source" in preparation_source
+                and all(token not in preparation_source for token in (
+                    "build_trade_path_labels", "train_model", "build_dataset",
+                ))
+                and not legacy_export_path.exists()
+                and not legacy_param_path.exists()
+                and '"export-scores": "filters.breakout_quality.export_scores"' in model_app_source,
     )
     current_modes = strategy_config.get_strategy_rolling_test_modes()
     current_comparisons = tuple(
@@ -1239,59 +1139,55 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     point_in_time_service_source = (
         project_root / "services" / "breakout_quality" / "point_in_time_scores.py"
     ).read_text(encoding="utf-8")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "strategy_compare_auto_orchestrates_canonical_model_prerequisites_without_owning_training_logic",
-        True,
         bool(current_required_pit_sources)
-        and all(source.threshold is None for source in current_required_pit_sources)
-        and "load_selection_point_in_time_ranking_contract" in preparation_source
-        and "producer_work_type=(" in preparation_source
-        and '"model_training"' in preparation_source
-        and "build_selection_point_in_time_scores" not in preparation_source
-        and "audit_selection_point_in_time_scores" not in preparation_source
-        and "def prepare_strategy_compare_model_artifacts" in model_app_source
-        and "build_selection_point_in_time_scores" in model_prepare_source
-        and "audit_selection_point_in_time_scores" in model_prepare_source
-        and "resume=True" in model_prepare_source
-        and "point_in_time_score_start_date" in model_prepare_source
-        and "point_in_time_score_end_date" in model_prepare_source
-        and "point_in_time_fold_months" in model_prepare_source
-        and "point_in_time_single_score_block" in model_prepare_source
-        and "_prepare_strategy_model_prerequisites" in app_source
-        and 'strategy_prerequisite_handler' in research_provider_source
-        and "canonical model-training service" in preparation_source
-        and "canonical model-training service" in point_in_time_service_source
-        and any(source.artifact_contract is not None for source in settings.parameter_sources.values()),
+                and all(source.threshold is None for source in current_required_pit_sources)
+                and "load_selection_point_in_time_ranking_contract" in preparation_source
+                and "producer_work_type=(" in preparation_source
+                and '"model_training"' in preparation_source
+                and "build_selection_point_in_time_scores" not in preparation_source
+                and "audit_selection_point_in_time_scores" not in preparation_source
+                and "def prepare_strategy_compare_model_artifacts" in model_app_source
+                and "build_selection_point_in_time_scores" in model_prepare_source
+                and "audit_selection_point_in_time_scores" in model_prepare_source
+                and "resume=True" in model_prepare_source
+                and "point_in_time_score_start_date" in model_prepare_source
+                and "point_in_time_score_end_date" in model_prepare_source
+                and "point_in_time_fold_months" in model_prepare_source
+                and "point_in_time_single_score_block" in model_prepare_source
+                and "_prepare_strategy_model_prerequisites" in app_source
+                and 'strategy_prerequisite_handler' in research_provider_source
+                and "canonical model-training service" in preparation_source
+                and "canonical model-training service" in point_in_time_service_source
+                and any(source.artifact_contract is not None for source in settings.parameter_sources.values()),
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "canonical_model_prerequisite_handler_covers_all_current_oos_and_rolling_sources",
-        True,
         "_strategy_compare_required_model_sources" in model_app_source
-        and "get_strategy_comparison_menu_profiles" in model_app_source
-        and "SCORE_SOURCE_SELECTION_POINT_IN_TIME" in model_prepare_source
-        and "build_selection_point_in_time_scores" in model_prepare_source
-        and "audit_selection_point_in_time_scores" in model_prepare_source
-        and all(
-            comparison.profile_id == str(mode["profile_id"])
-            and all(
-                source.score_source == "selection_point_in_time"
-                and (source.point_in_time_score_start_date or None) == (mode.get("score_start_date") or None)
-                and (source.point_in_time_score_end_date or None) == (mode.get("score_end_date") or None)
-                and int(source.point_in_time_fold_months or 0) == int(mode["fold_months"])
-                and bool(source.point_in_time_single_score_block) == bool(mode.get("single_score_block"))
-                for source in comparison.dl_sources.values()
-                if source.dl_id in {
-                    str(arm.dl_id)
-                    for arm in comparison.enabled_arms
-                    if arm.dl_enabled and arm.dl_id
-                }
-            )
-            for mode, comparison in zip(current_modes, current_comparisons)
-        )
-        and "train-continuous-ranker" not in preparation_source
-        and "strategy_prerequisite_handler" in research_provider_source,
+                and "get_strategy_comparison_menu_profiles" in model_app_source
+                and "SCORE_SOURCE_SELECTION_POINT_IN_TIME" in model_prepare_source
+                and "build_selection_point_in_time_scores" in model_prepare_source
+                and "audit_selection_point_in_time_scores" in model_prepare_source
+                and all(
+                    comparison.profile_id == str(mode["profile_id"])
+                    and all(
+                        source.score_source == "selection_point_in_time"
+                        and (source.point_in_time_score_start_date or None) == (mode.get("score_start_date") or None)
+                        and (source.point_in_time_score_end_date or None) == (mode.get("score_end_date") or None)
+                        and int(source.point_in_time_fold_months or 0) == int(mode["fold_months"])
+                        and bool(source.point_in_time_single_score_block) == bool(mode.get("single_score_block"))
+                        for source in comparison.dl_sources.values()
+                        if source.dl_id in {
+                            str(arm.dl_id)
+                            for arm in comparison.enabled_arms
+                            if arm.dl_enabled and arm.dl_id
+                        }
+                    )
+                    for mode, comparison in zip(current_modes, current_comparisons)
+                )
+                and "train-continuous-ranker" not in preparation_source
+                and "strategy_prerequisite_handler" in research_provider_source,
     )
     from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
     import apps.research as research_app_module
@@ -1348,67 +1244,61 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         auto_prepare_result = research_app_module._run_current_comparison(
             profile_id="extending_window_oos", confirm=True
         )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "single_seed_strategy_compare_auto_prepares_model_prerequisites_then_replans_with_one_confirmation",
-        True,
         auto_prepare_result == {"status": "ok"}
-        and resolve_plan_mock.call_count == 1
-        and auto_prepare_mock.call_count == 1
-        and replay_mock.call_count == 1
-        and confirm_mock.call_count == 1
-        and "所有必要自動前置" in app_source,
+                and resolve_plan_mock.call_count == 1
+                and auto_prepare_mock.call_count == 1
+                and replay_mock.call_count == 1
+                and confirm_mock.call_count == 1
+                and "所有必要自動前置" in app_source,
     )
 
     selection_min_roos_source = settings.parameter_sources.get("selection_min_roos")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "selection_historical_p2_parameter_source_has_formal_auto_builder",
-        True,
         selection_min_roos_source is not None
-        and selection_min_roos_source.builder is not None
-        and selection_min_roos_source.builder.builder_type == "selection_historical_p2"
-        and str(selection_min_roos_source.builder.options.get("parameter_set")) == "p2_history"
-        and int(selection_min_roos_source.builder.options.get("trials_per_fold") or 0) >= 1
-        and int(selection_min_roos_source.builder.options.get("train_window_months") or 0) >= 1
-        and int(selection_min_roos_source.builder.options.get("oos_months") or 0) >= 1
-        and "prepare_selection_historical_p2_params" in preparation_source
-        and all(token in param_service_source for token in (
-            "restore_selection_historical_p2_from_completed_strategy_compare",
-            "completed_strategy_pair_exact_sha",
-            "_build_min_roos_schedule_contract",
-            "MIN_ROOS_SEARCH_FIELDS",
-            "Selection Min ROOS缺少；自動建立／接續單階段rolling params",
-        )),
+                and selection_min_roos_source.builder is not None
+                and selection_min_roos_source.builder.builder_type == "selection_historical_p2"
+                and str(selection_min_roos_source.builder.options.get("parameter_set")) == "p2_history"
+                and int(selection_min_roos_source.builder.options.get("trials_per_fold") or 0) >= 1
+                and int(selection_min_roos_source.builder.options.get("train_window_months") or 0) >= 1
+                and int(selection_min_roos_source.builder.options.get("oos_months") or 0) >= 1
+                and "prepare_selection_historical_p2_params" in preparation_source
+                and all(token in param_service_source for token in (
+                    "restore_selection_historical_p2_from_completed_strategy_compare",
+                    "completed_strategy_pair_exact_sha",
+                    "_build_min_roos_schedule_contract",
+                    "MIN_ROOS_SEARCH_FIELDS",
+                    "Selection Min ROOS缺少；自動建立／接續單階段rolling params",
+                )),
     )
     selection_full_roos_source = settings.parameter_sources.get("selection_full_roos")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "selection_historical_full_roos_has_independent_auto_builder_and_profile",
-        True,
         selection_full_roos_source is not None
-        and selection_full_roos_source.builder is not None
-        and selection_full_roos_source.builder.builder_type == "selection_historical_full_roos"
-        and str(selection_full_roos_source.builder.options.get("parameter_set")) == "p4_history"
-        and "prepare_selection_historical_full_roos_params" in preparation_source
-        and "FULL_ROOS_SEARCH_FIELDS" in param_service_source
-        and "selection_full_roos_training" in param_service_source
-        and {item["profile_id"] for item in strategy_config.get_strategy_comparison_profiles()}
-        == set(strategy_config.STRATEGY_COMPARE_PROFILES)
-        and all(
-            (lambda resolved, expected: (
-                {arm.arm_id for arm in resolved.enabled_arms} == set(expected[0])
-                and {item.contrast_id for item in resolved.enabled_contrasts} == set(expected[1])
-                and resolved.output_root == str(raw_profile["output_root"])
-                and resolved.reuse_output_roots == tuple(raw_profile.get("reuse_output_roots", ()))
-            ))(
-                strategy_config.get_strategy_comparison_settings(profile_id),
-                strategy_config._resolved_profile_matrix(dict(raw_profile)),
-            )
-            for profile_id, raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.items()
-        )
-        and "def _comparison_runs_roots(" in reuse_source
-        and "def _comparison_runs_roots(" not in orchestration_source,
+                and selection_full_roos_source.builder is not None
+                and selection_full_roos_source.builder.builder_type == "selection_historical_full_roos"
+                and str(selection_full_roos_source.builder.options.get("parameter_set")) == "p4_history"
+                and "prepare_selection_historical_full_roos_params" in preparation_source
+                and "FULL_ROOS_SEARCH_FIELDS" in param_service_source
+                and "selection_full_roos_training" in param_service_source
+                and {item["profile_id"] for item in strategy_config.get_strategy_comparison_profiles()}
+                == set(strategy_config.STRATEGY_COMPARE_PROFILES)
+                and all(
+                    (lambda resolved, expected: (
+                        {arm.arm_id for arm in resolved.enabled_arms} == set(expected[0])
+                        and {item.contrast_id for item in resolved.enabled_contrasts} == set(expected[1])
+                        and resolved.output_root == str(raw_profile["output_root"])
+                        and resolved.reuse_output_roots == tuple(raw_profile.get("reuse_output_roots", ()))
+                    ))(
+                        strategy_config.get_strategy_comparison_settings(profile_id),
+                        strategy_config._resolved_profile_matrix(dict(raw_profile)),
+                    )
+                    for profile_id, raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.items()
+                )
+                and "def _comparison_runs_roots(" in reuse_source
+                and "def _comparison_runs_roots(" not in orchestration_source,
     )
 
     display_alignment_groups = {}
@@ -1426,17 +1316,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         else:
             display_names = tuple(settings_for_alignment.arms[arm_id].name for arm_id in alignment_ids)
         display_alignment_groups.setdefault(group, []).append(display_names)
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "configured_core_arm_display_alignment_groups_stay_aligned",
-        True,
         bool(display_alignment_groups)
-        and all(
-            bool(group_names)
-            and all(names == group_names[0] for names in group_names)
-            and len(set(group_names[0])) == len(group_names[0])
-            for group_names in display_alignment_groups.values()
-        ),
+                and all(
+                    bool(group_names)
+                    and all(names == group_names[0] for names in group_names)
+                    and len(set(group_names[0])) == len(group_names[0])
+                    for group_names in display_alignment_groups.values()
+                ),
     )
 
     robustness_path = (
@@ -1500,29 +1388,27 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and tuple(mode_settings.fixed_arm_ids) == tuple(mode_settings.consensus_reference_arm_ids)
             and tuple(mode_settings.stochastic_arm_ids) == tuple(mode_settings.benchmark_strategy_arm_ids)
         )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_robustness_matrix_is_rolling_mode_config_driven_without_mutating_single_seed_arm_identity",
-        True,
         robustness_path.is_file()
-        and expected_enabled_robustness_ids.issubset(configured_robustness_ids)
-        and enabled_robustness_ids == expected_enabled_robustness_ids
-        and robustness_settings.robustness_id in expected_enabled_robustness_ids
-        and all(robustness_mode_contracts)
-        and "romd_reference_baselines" in config_source
-        and all(
-            "fixed_arm_ids" not in raw
-            and "stochastic_arm_ids" not in raw
-            and "paired_contrasts" not in raw
-            and "seed_count" not in raw
-            and "seed_generator_seed" not in raw
-            and str(raw.get("benchmark_id") or "")
-            and str(raw.get("suite_id") or "") == "extending_current"
-            for rid, raw in strategy_config.STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES.items()
-            if rid in expected_enabled_robustness_ids
-        )
-        and "MULTI_SEED_ROBUSTNESS_ARM_IDS" not in config_source
-        and all(token not in robustness_source for token in ("\"C20\"", "\"C29\"", "\"MR-12B\"", "\"MR-13A\"")),
+                and expected_enabled_robustness_ids.issubset(configured_robustness_ids)
+                and enabled_robustness_ids == expected_enabled_robustness_ids
+                and robustness_settings.robustness_id in expected_enabled_robustness_ids
+                and all(robustness_mode_contracts)
+                and "romd_reference_baselines" in config_source
+                and all(
+                    "fixed_arm_ids" not in raw
+                    and "stochastic_arm_ids" not in raw
+                    and "paired_contrasts" not in raw
+                    and "seed_count" not in raw
+                    and "seed_generator_seed" not in raw
+                    and str(raw.get("benchmark_id") or "")
+                    and str(raw.get("suite_id") or "") == "extending_current"
+                    for rid, raw in strategy_config.STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES.items()
+                    if rid in expected_enabled_robustness_ids
+                )
+                and "MULTI_SEED_ROBUSTNESS_ARM_IDS" not in config_source
+                and all(token not in robustness_source for token in ("\"C20\"", "\"C29\"", "\"MR-12B\"", "\"MR-13A\"")),
     )
 
     # Downstream synthetic cases exercise the configured default robustness mode.
@@ -1583,34 +1469,28 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 fixed_arms=robustness_fixed,
                 stochastic_arms=robustness_stochastic,
             )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_robustness_missing_canonical_upstream_is_auto_preparable_not_manual_blocker",
-        True,
         bool(upstream_rows)
-        and all(row[0] in {"BUILD", "REBUILD", "RESUME"} for row in upstream_rows)
-        and upstream_blockers == []
-        and auto_upstream_plan["overall_status"] == "PREPARABLE"
-        and bool(auto_upstream_plan["model_upstream_prepare_required"])
-        and auto_upstream_plan["period_error"] is None
-        and auto_upstream_plan["comparison_period"] is None
-        and "model_upstream_preparer" in robustness_source
-        and "strategy_upstream_handler" in research_provider_source
-        and "prepare_strategy_compare_model_upstream_artifacts" in model_app_source
-        and "_prepare_strategy_model_upstream_prerequisites" in app_source,
+                and all(row[0] in {"BUILD", "REBUILD", "RESUME"} for row in upstream_rows)
+                and upstream_blockers == []
+                and auto_upstream_plan["overall_status"] == "PREPARABLE"
+                and bool(auto_upstream_plan["model_upstream_prepare_required"])
+                and auto_upstream_plan["period_error"] is None
+                and auto_upstream_plan["comparison_period"] is None
+                and "model_upstream_preparer" in robustness_source
+                and "strategy_upstream_handler" in research_provider_source
+                and "prepare_strategy_compare_model_upstream_artifacts" in model_app_source
+                and "_prepare_strategy_model_upstream_prerequisites" in app_source,
     )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_robustness_replans_fresh_period_before_optimizer_parameter_dispatch",
-        True,
-        (
-            "period_override = {\"start\": str(comparison_start), \"end\": str(comparison_end)}" in robustness_source
-            and "comparison_period_override=period_override" in robustness_source
-            and robustness_source.find("comparison_start, comparison_end = _comparison_period_from_upstream")
-            < robustness_source.find("status = prepare_strategy_parameter_artifacts(")
-            and "collect_model_upstream_preparation_plan" in robustness_source
-        ),
+        "period_override = {\"start\": str(comparison_start), \"end\": str(comparison_end)}" in robustness_source
+                    and "comparison_period_override=period_override" in robustness_source
+                    and robustness_source.find("comparison_start, comparison_end = _comparison_period_from_upstream")
+                    < robustness_source.find("status = prepare_strategy_parameter_artifacts(")
+                    and "collect_model_upstream_preparation_plan" in robustness_source,
     )
 
     configured_seed_count = int(robustness_settings.seed_count)
@@ -1624,16 +1504,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     seeds_c = robustness_module.resolve_multi_seed_values(
         seed_count=configured_seed_count, generator_seed=configured_generator_seed + 1
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_values_are_deterministically_generated_unique_and_not_best_seed_selection",
-        True,
         seeds_a == seeds_b == tuple(robustness_settings.resolved_seeds)
-        and seeds_a != seeds_c
-        and len(seeds_a) == len(set(seeds_a)) == configured_seed_count
-        and all(seed > 0 for seed in seeds_a)
-        and "best_seed =" not in robustness_source.lower()
-        and "selected_best_seed" not in robustness_source.lower(),
+                and seeds_a != seeds_c
+                and len(seeds_a) == len(set(seeds_a)) == configured_seed_count
+                and all(seed > 0 for seed in seeds_a)
+                and "best_seed =" not in robustness_source.lower()
+                and "selected_best_seed" not in robustness_source.lower(),
     )
 
     from config.training_policy import get_robustness_benchmark_policy_snapshot
@@ -1651,16 +1529,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         arm=benchmark_binding_arm,
         seed=benchmark_seed,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "robustness_execution_plan_reads_canonical_parameter_sources_field",
-        True,
         benchmark_binding["arm_id"] == benchmark_binding_arm.arm_id
-        and benchmark_binding["seed"] == benchmark_seed
-        and benchmark_binding["family"]
-            == str(robustness_profile.parameter_sources[str(benchmark_binding_arm.param_source)].canonical_family)
-        and benchmark_binding["evaluation_mode"]
-            == str(robustness_profile.parameter_sources[str(benchmark_binding_arm.param_source)].canonical_evaluation_mode),
+                and benchmark_binding["seed"] == benchmark_seed
+                and benchmark_binding["family"]
+                    == str(robustness_profile.parameter_sources[str(benchmark_binding_arm.param_source)].canonical_family)
+                and benchmark_binding["evaluation_mode"]
+                    == str(robustness_profile.parameter_sources[str(benchmark_binding_arm.param_source)].canonical_evaluation_mode),
     )
     with tempfile.TemporaryDirectory() as benchmark_tmp:
         benchmark_root = Path(benchmark_tmp)
@@ -1681,26 +1557,24 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             family="full",
             evaluation_mode="oos",
         )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "robustness_benchmark_seed_policy_and_strategy_parameter_namespace_are_single_ssot",
-        True,
         benchmark_policy["benchmark_id"] == robustness_settings.benchmark_id
-        and tuple(int(value) for value in benchmark_policy["resolved_seeds"])
-            == tuple(robustness_settings.resolved_seeds)
-        and int(benchmark_policy["strategy_trials_per_fold"])
-            == int(robustness_settings.strategy_trials_per_fold)
-        and benchmark_manifest["producer"] == "optimizer"
-        and benchmark_manifest["benchmark_seed"] == benchmark_seed
-        and benchmark_manifest["training_policy"]["optimizer_seed"] == benchmark_seed
-        and benchmark_manifest["training_policy"]["trials_per_fold"]
-            == int(robustness_settings.strategy_trials_per_fold)
-        and benchmark_manifest["training_policy"]["benchmark_seed_override"] is True
-        and benchmark_manifest["artifacts"]["base_finalist_best"]["path"].startswith(
-            "models/strategy_params/benchmark/"
-        )
-        and "Robustness Benchmark Round 1只完成scientific contract" not in robustness_source
-        and "ensure_robustness_benchmark_strategy_parameter_artifact" in robustness_source,
+                and tuple(int(value) for value in benchmark_policy["resolved_seeds"])
+                    == tuple(robustness_settings.resolved_seeds)
+                and int(benchmark_policy["strategy_trials_per_fold"])
+                    == int(robustness_settings.strategy_trials_per_fold)
+                and benchmark_manifest["producer"] == "optimizer"
+                and benchmark_manifest["benchmark_seed"] == benchmark_seed
+                and benchmark_manifest["training_policy"]["optimizer_seed"] == benchmark_seed
+                and benchmark_manifest["training_policy"]["trials_per_fold"]
+                    == int(robustness_settings.strategy_trials_per_fold)
+                and benchmark_manifest["training_policy"]["benchmark_seed_override"] is True
+                and benchmark_manifest["artifacts"]["base_finalist_best"]["path"].startswith(
+                    "models/strategy_params/benchmark/"
+                )
+                and "Robustness Benchmark Round 1只完成scientific contract" not in robustness_source
+                and "ensure_robustness_benchmark_strategy_parameter_artifact" in robustness_source,
     )
 
     from services.optimizer import strategy_param_service as strategy_param_service_module
@@ -1812,31 +1686,27 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         round2_min_rolling = strategy_param_service_module.ensure_robustness_benchmark_strategy_parameter_artifact(
             evaluation_mode="rolling", **common_round2_min
         )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "robustness_optimizer_producer_uses_one_full_schedule_and_refreshes_latest_coverage",
-        True,
         round2_oos["action"] == "BUILD"
-        and round2_rolling["action"] == "REUSE"
-        and round2_oos["initial_2021_member_sha256"] == round2_rolling["initial_2021_member_sha256"]
-        and round2_oos_reuse["action"] == "REUSE"
-        and round2_oos_extended["action"] == "BUILD"
-        and str(dict(oos_extended_payload.get("meta") or {}).get("last_oos_date")) == "2026-04-30",
+                and round2_rolling["action"] == "REUSE"
+                and round2_oos["initial_2021_member_sha256"] == round2_rolling["initial_2021_member_sha256"]
+                and round2_oos_reuse["action"] == "REUSE"
+                and round2_oos_extended["action"] == "BUILD"
+                and str(dict(oos_extended_payload.get("meta") or {}).get("last_oos_date")) == "2026-04-30",
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "current_min_optimizer_producers_disable_strategy_compare_recovery_without_fake_output_roots",
-        True,
         canonical_min_rolling["action"] == "BUILD"
-        and round2_min_oos["action"] == "BUILD"
-        and round2_min_rolling["action"] == "REUSE"
-        and round2_min_oos["initial_2021_member_sha256"]
-            == round2_min_rolling["initial_2021_member_sha256"]
-        and min_recovery_flags == [False, False]
-        and "no_recovery" not in param_repository_service_source
-        and param_repository_service_source.count("recover_completed_strategy_compare=False") == 2
-        and "source_params_path=dependency_path" in preparation_source
-        and "source_params_path=project_relative_display_path" not in preparation_source,
+                and round2_min_oos["action"] == "BUILD"
+                and round2_min_rolling["action"] == "REUSE"
+                and round2_min_oos["initial_2021_member_sha256"]
+                    == round2_min_rolling["initial_2021_member_sha256"]
+                and min_recovery_flags == [False, False]
+                and "no_recovery" not in param_repository_service_source
+                and param_repository_service_source.count("recover_completed_strategy_compare=False") == 2
+                and "source_params_path=dependency_path" in preparation_source
+                and "source_params_path=project_relative_display_path" not in preparation_source,
     )
 
     shared_source_arm = robustness_profile.arms["C59"]
@@ -1869,26 +1739,24 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     shared_source_groups = {
         dl_id: arm_ids for dl_id, arm_ids in group_arms.items() if len(arm_ids) > 1
     }
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_training_deduplicates_same_dl_source_per_seed_then_fans_out_to_multiple_runtime_arms",
-        True,
         bool(group_arms)
-        and len(dedupe_units) == len(source_groups) * len(dedupe_seeds)
-        and sum(len(unit["replay_arms"]) for unit in dedupe_units)
-            == len(shared_dl_stochastic) * len(dedupe_seeds)
-        and all(
-            dedupe_unit_replays[(dl_id, seed)] == arm_ids
-            for dl_id, arm_ids in group_arms.items()
-            for seed in dedupe_seeds
-        )
-        and all(
-            sum(1 for unit in dedupe_units if str(unit["dl_id"]) == dl_id and int(unit["seed"]) == seed) == 1
-            for dl_id in group_arms
-            for seed in dedupe_seeds
-        )
-        and "replay_arms" in robustness_source
-        and "training_cleanup_targets" in robustness_source,
+                and len(dedupe_units) == len(source_groups) * len(dedupe_seeds)
+                and sum(len(unit["replay_arms"]) for unit in dedupe_units)
+                    == len(shared_dl_stochastic) * len(dedupe_seeds)
+                and all(
+                    dedupe_unit_replays[(dl_id, seed)] == arm_ids
+                    for dl_id, arm_ids in group_arms.items()
+                    for seed in dedupe_seeds
+                )
+                and all(
+                    sum(1 for unit in dedupe_units if str(unit["dl_id"]) == dl_id and int(unit["seed"]) == seed) == 1
+                    for dl_id in group_arms
+                    for seed in dedupe_seeds
+                )
+                and "replay_arms" in robustness_source
+                and "training_cleanup_targets" in robustness_source,
     )
 
     robustness_model_sensitive = tuple(
@@ -1904,52 +1772,48 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         run_root=Path("/tmp/extending_window_rolling_run"),
         comparison_start="2021-01-01", comparison_end="2025-12-31", reuse_completed=True,
     ))
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_operational_dual_model_profile_trains_both_same_seed_sources_before_single_strategy_replay",
-        True,
         tuple(arm.arm_id for arm in robustness_model_sensitive)
-            == tuple(robustness_settings.model_seed_sensitive_arm_ids)
-        and all(arm.dl_enabled for arm in robustness_model_sensitive)
-        and any(
-            str(item["left"]) in robustness_settings.model_seed_sensitive_arm_ids
-            and str(item["right"]) in robustness_settings.model_seed_sensitive_arm_ids
-            for item in robustness_settings.paired_contrasts
-        )
-        and len(operational_groups) == 3
-        and len(operational_units) == 3 * len(dedupe_seeds)
-        and sum(len(unit["replay_arms"]) for unit in operational_units) == 3 * len(dedupe_seeds)
-        and "queue_replay_if_ready" in robustness_source
-        and "trained_artifacts" in robustness_source
-        and "_arm_training_dl_ids" in robustness_source,
+                    == tuple(robustness_settings.model_seed_sensitive_arm_ids)
+                and all(arm.dl_enabled for arm in robustness_model_sensitive)
+                and any(
+                    str(item["left"]) in robustness_settings.model_seed_sensitive_arm_ids
+                    and str(item["right"]) in robustness_settings.model_seed_sensitive_arm_ids
+                    for item in robustness_settings.paired_contrasts
+                )
+                and len(operational_groups) == 3
+                and len(operational_units) == 3 * len(dedupe_seeds)
+                and sum(len(unit["replay_arms"]) for unit in operational_units) == 3 * len(dedupe_seeds)
+                and "queue_replay_if_ready" in robustness_source
+                and "trained_artifacts" in robustness_source
+                and "_arm_training_dl_ids" in robustness_source,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_activation_is_decoupled_from_single_seed_arm_roles_and_uses_only_current_operational_profile_arms",
-        True,
         strategy_config.STRATEGY_COMPARE_SCHEMA_VERSION >= 50
-        and robustness_profile.suite_id == robustness_settings.suite_id == "extending_current"
-        and all(
-            robustness_profile.arms[arm_id].robustness_role == "off"
-            for arm_id in robustness_settings.stochastic_arm_ids
-        )
-        and set(robustness_settings.fixed_arm_ids).isdisjoint(robustness_settings.stochastic_arm_ids)
-        and set(robustness_settings.fixed_arm_ids).union(robustness_settings.stochastic_arm_ids)
-            == {arm.arm_id for arm in robustness_profile.enabled_arms}
-        and all(
-            (not robustness_profile.arms[arm_id].dl_enabled)
-            for arm_id in robustness_settings.fixed_arm_ids
-        )
-        and tuple(robustness_settings.stochastic_arm_ids)
-            == tuple(robustness_settings.benchmark_strategy_arm_ids)
-        and all(
-            robustness_profile.arms[arm_id].dl_enabled
-            for arm_id in robustness_settings.model_seed_sensitive_arm_ids
-        )
-        and all(
-            not robustness_profile.arms[arm_id].dl_enabled
-            for arm_id in robustness_settings.consensus_reference_arm_ids
-        ),
+                and robustness_profile.suite_id == robustness_settings.suite_id == "extending_current"
+                and all(
+                    robustness_profile.arms[arm_id].robustness_role == "off"
+                    for arm_id in robustness_settings.stochastic_arm_ids
+                )
+                and set(robustness_settings.fixed_arm_ids).isdisjoint(robustness_settings.stochastic_arm_ids)
+                and set(robustness_settings.fixed_arm_ids).union(robustness_settings.stochastic_arm_ids)
+                    == {arm.arm_id for arm in robustness_profile.enabled_arms}
+                and all(
+                    (not robustness_profile.arms[arm_id].dl_enabled)
+                    for arm_id in robustness_settings.fixed_arm_ids
+                )
+                and tuple(robustness_settings.stochastic_arm_ids)
+                    == tuple(robustness_settings.benchmark_strategy_arm_ids)
+                and all(
+                    robustness_profile.arms[arm_id].dl_enabled
+                    for arm_id in robustness_settings.model_seed_sensitive_arm_ids
+                )
+                and all(
+                    not robustness_profile.arms[arm_id].dl_enabled
+                    for arm_id in robustness_settings.consensus_reference_arm_ids
+                ),
     )
 
     synthetic_period = {"start": "2001-01-01", "end": "2001-12-31"}
@@ -1978,29 +1842,26 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             comparison_period=synthetic_period,
             artifact_identities={},
         )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "multi_seed_retention_policy_changes_do_not_change_scientific_fingerprint",
         (True, True),
         (
-            retention_contract_a["fingerprint"] == retention_contract_b["fingerprint"],
-            retention_contract_a["retention"]["keep_attribution_source"]
-            != retention_contract_b["retention"]["keep_attribution_source"],
-        ),
+                    retention_contract_a["fingerprint"] == retention_contract_b["fingerprint"],
+                    retention_contract_a["retention"]["keep_attribution_source"]
+                    != retention_contract_b["retention"]["keep_attribution_source"],
+                ),
     )
     report_settings = robustness_module._report_settings_for_contract(
         retention_contract_a, robustness_profile
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "current_multi_seed_report_preserves_compare_suite_arms_contrasts_and_contract_version",
-        True,
         retention_contract_a.get("suite_id") == robustness_profile.suite_id == "extending_current"
-        and int(retention_contract_a.get("scientific_contract_version") or 0) >= 3
-        and tuple(arm.arm_id for arm in report_settings.enabled_arms)
-            == tuple(arm.arm_id for arm in robustness_profile.enabled_arms)
-        and tuple(item.contrast_id for item in report_settings.enabled_contrasts)
-            == tuple(item.contrast_id for item in robustness_profile.enabled_contrasts),
+                and int(retention_contract_a.get("scientific_contract_version") or 0) >= 3
+                and tuple(arm.arm_id for arm in report_settings.enabled_arms)
+                    == tuple(arm.arm_id for arm in robustness_profile.enabled_arms)
+                and tuple(item.contrast_id for item in report_settings.enabled_contrasts)
+                    == tuple(item.contrast_id for item in robustness_profile.enabled_contrasts),
     )
 
     def _robustness_metrics(romd, total_return, win_rate):
@@ -2188,46 +2049,44 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )
     ) if len(configured_pairs) != 1 else True
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_report_uses_mean_for_all_strategy_metrics_and_full_romd_distribution_with_same_seed_benchmarks",
-        True,
         math.isclose(
-            mean_by_arm[min_reference_arm.arm_id]["return_over_max_drawdown"],
-            stochastic_expected_mean[min_reference_arm.arm_id],
-        )
-        and romd_by_arm[min_reference_arm.arm_id]["std"] is not None
-        and full_reference_arm is not None
-        and romd_by_arm[full_reference_arm.arm_id]["std"] is not None
-        and stochastic_distribution_ok
-        and all(
-            romd_by_arm[arm.arm_id]["beats_min_count"]
-            == sum(
-                stochastic_expected_by_seed[arm.arm_id][seed]
-                > stochastic_expected_by_seed[min_reference_arm.arm_id][seed]
-                for seed in (101, 202)
-            )
-            and romd_by_arm[arm.arm_id]["beats_full_count"]
-            == sum(
-                stochastic_expected_by_seed[arm.arm_id][seed]
-                > stochastic_expected_by_seed[full_reference_arm.arm_id][seed]
-                for seed in (101, 202)
-            )
-            for arm in robustness_stochastic
-        )
-        and synthetic_summary["contract"]["romd_reference_baselines"]["min"]["arm_id"]
-        == min_reference_arm.arm_id
-        and synthetic_summary["contract"]["romd_reference_baselines"]["full"]["arm_id"]
-        == full_reference_arm.arm_id
-        and paired_comparisons_ok
-        and legacy_pair_fields_ok
-        and len(synthetic_summary["yearly_statistics"]) >= len(robustness_fixed) * 2 + len(robustness_stochastic) * 2
-        and len(synthetic_summary["yearly_same_seed_comparison"]) == len(configured_pairs) * 2
-        and math.isclose(fixed_yearly_side[0]["return_pct"], 1.25)
-        and math.isclose(stochastic_yearly_side[0]["return_pct"], 9.75)
-        and robustness_source.count('result_side="no_filter"') >= 2
-        and "_load_direct_selection_r(" in robustness_source
-        and "active_trades_filename=runtime_spec[\"active_trades_filename\"]" in robustness_source,
+                    mean_by_arm[min_reference_arm.arm_id]["return_over_max_drawdown"],
+                    stochastic_expected_mean[min_reference_arm.arm_id],
+                )
+                and romd_by_arm[min_reference_arm.arm_id]["std"] is not None
+                and full_reference_arm is not None
+                and romd_by_arm[full_reference_arm.arm_id]["std"] is not None
+                and stochastic_distribution_ok
+                and all(
+                    romd_by_arm[arm.arm_id]["beats_min_count"]
+                    == sum(
+                        stochastic_expected_by_seed[arm.arm_id][seed]
+                        > stochastic_expected_by_seed[min_reference_arm.arm_id][seed]
+                        for seed in (101, 202)
+                    )
+                    and romd_by_arm[arm.arm_id]["beats_full_count"]
+                    == sum(
+                        stochastic_expected_by_seed[arm.arm_id][seed]
+                        > stochastic_expected_by_seed[full_reference_arm.arm_id][seed]
+                        for seed in (101, 202)
+                    )
+                    for arm in robustness_stochastic
+                )
+                and synthetic_summary["contract"]["romd_reference_baselines"]["min"]["arm_id"]
+                == min_reference_arm.arm_id
+                and synthetic_summary["contract"]["romd_reference_baselines"]["full"]["arm_id"]
+                == full_reference_arm.arm_id
+                and paired_comparisons_ok
+                and legacy_pair_fields_ok
+                and len(synthetic_summary["yearly_statistics"]) >= len(robustness_fixed) * 2 + len(robustness_stochastic) * 2
+                and len(synthetic_summary["yearly_same_seed_comparison"]) == len(configured_pairs) * 2
+                and math.isclose(fixed_yearly_side[0]["return_pct"], 1.25)
+                and math.isclose(stochastic_yearly_side[0]["return_pct"], 9.75)
+                and robustness_source.count('result_side="no_filter"') >= 2
+                and "_load_direct_selection_r(" in robustness_source
+                and "active_trades_filename=runtime_spec[\"active_trades_filename\"]" in robustness_source,
     )
 
     rendered_common_report = robustness_module.render_multi_seed_robustness_report(synthetic_summary)
@@ -2255,69 +2114,63 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     upgraded_common_report = robustness_module.render_multi_seed_robustness_report(
         upgraded_historical_summary
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_report_reuses_canonical_strategy_sections_and_upgrades_historical_results_without_train_or_replay",
-        True,
         synthetic_summary.get("schema_version") == robustness_module.ROBUSTNESS_SCHEMA_VERSION
-        and bool(synthetic_summary.get("common_strategy_report"))
-        and upgraded_historical_summary.get("schema_version") == robustness_module.ROBUSTNESS_SCHEMA_VERSION
-        and bool(upgraded_historical_summary.get("common_strategy_report"))
-        and all(
-            section in rendered_common_report and section in upgraded_common_report
-            for section in (
-                "策略績效比較",
-                "1. 核心策略結果",
-                "2. R 預測／轉化",
-                "3. 資金／執行",
-                "4. 年度結果",
-                "5. RoMD完整統計",
-            )
-        )
-        and "## " not in rendered_common_report
-        and "## " not in upgraded_common_report
-        and "render_strategy_aggregate_report(" in robustness_source
-        and "_print_report_tables(summary)" in robustness_source,
+                and bool(synthetic_summary.get("common_strategy_report"))
+                and upgraded_historical_summary.get("schema_version") == robustness_module.ROBUSTNESS_SCHEMA_VERSION
+                and bool(upgraded_historical_summary.get("common_strategy_report"))
+                and all(
+                    section in rendered_common_report and section in upgraded_common_report
+                    for section in (
+                        "策略績效比較",
+                        "1. 核心策略結果",
+                        "2. R 預測／轉化",
+                        "3. 資金／執行",
+                        "4. 年度結果",
+                        "5. RoMD完整統計",
+                    )
+                )
+                and "## " not in rendered_common_report
+                and "## " not in upgraded_common_report
+                and "render_strategy_aggregate_report(" in robustness_source
+                and "_print_report_tables(summary)" in robustness_source,
     )
 
     rendered_plain_report = robustness_module.render_multi_seed_robustness_report(
         synthetic_summary, target="plain"
     )
     multi_seed_extension = rendered_common_report.split("5. RoMD完整統計", 1)[-1]
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_unique_sections_reuse_project_color_semantics_and_plain_fallback",
-        True,
         "#188038" in multi_seed_extension
-        and "#C62828" in multi_seed_extension
-        and "<span" not in rendered_plain_report
-        and "ROBUSTNESS_ROMD_DISTRIBUTION_METRICS" in robustness_source
-        and "ROBUSTNESS_SEED_DELTA_METRICS" in robustness_source
-        and "best_worst_signals" in robustness_source
-        and "styled_signal" in robustness_source,
+                and "#C62828" in multi_seed_extension
+                and "<span" not in rendered_plain_report
+                and "ROBUSTNESS_ROMD_DISTRIBUTION_METRICS" in robustness_source
+                and "ROBUSTNESS_SEED_DELTA_METRICS" in robustness_source
+                and "best_worst_signals" in robustness_source
+                and "styled_signal" in robustness_source,
     )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_work_artifacts_are_isolated_and_retention_is_config_driven_with_optional_compact_attribution",
-        True,
         all(token in robustness_source for token in (
-            "--model-output-dir", "--research-output-dir",
-            "keep_checkpoints", "keep_scores", "keep_replay_details", "keep_attribution_source",
-            "seed_results.csv", "seed_yearly_returns.csv", "robustness_summary.json", "robustness_report.md",
-            "attribution_source", "_write_compact_attribution_source", "REBUILD ATTRIBUTION",
-            "ThreadPoolExecutor", "CPU strategy replay",
-        ))
-        and all(isinstance(value, bool) for value in (
-            robustness_settings.keep_checkpoints,
-            robustness_settings.keep_scores,
-            robustness_settings.keep_replay_details,
-            robustness_settings.keep_attribution_source,
-        ))
-        and "STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE" in config_source
-        and "get_strategy_multi_seed_robustness_profiles" in app_source
-        and "compare robustness" in app_source
-        and "quiet=True" in robustness_source,
+                    "--model-output-dir", "--research-output-dir",
+                    "keep_checkpoints", "keep_scores", "keep_replay_details", "keep_attribution_source",
+                    "seed_results.csv", "seed_yearly_returns.csv", "robustness_summary.json", "robustness_report.md",
+                    "attribution_source", "_write_compact_attribution_source", "REBUILD ATTRIBUTION",
+                    "ThreadPoolExecutor", "CPU strategy replay",
+                ))
+                and all(isinstance(value, bool) for value in (
+                    robustness_settings.keep_checkpoints,
+                    robustness_settings.keep_scores,
+                    robustness_settings.keep_replay_details,
+                    robustness_settings.keep_attribution_source,
+                ))
+                and "STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE" in config_source
+                and "get_strategy_multi_seed_robustness_profiles" in app_source
+                and "compare robustness" in app_source
+                and "quiet=True" in robustness_source,
     )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -2389,10 +2242,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and all((attribution_dir / f"{role}.csv.gz").is_file() for role in compact_manifest["files"])
             and not any("orderable" in path.name or "score" in path.name for path in attribution_dir.iterdir())
         )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_compact_attribution_source_keeps_only_audit_required_active_replay_artifacts",
-        True,
         compact_files_ok,
     )
 
@@ -2422,16 +2273,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "actual_initial_risk_total_milli": 8_000_000,
         "entry_fill_price": 100.0,
     }])
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "entry_execution_diagnostics_capture_risk_utilization_and_cash_binding_without_changing_runtime",
-        True,
         len(synthetic_execution_frame) == 1
-        and int(synthetic_execution_frame.iloc[0]["execution_order"]) == 7
-        and bool(synthetic_execution_frame.iloc[0]["entry_budget_cash_binding"])
-        and "ENTRY_BUDGET_CASH" in str(synthetic_execution_frame.iloc[0]["binding_signature"])
-        and pd.notna(synthetic_execution_frame.iloc[0]["risk_budget"])
-        and pd.notna(synthetic_execution_frame.iloc[0]["actual_risk_utilization"]),
+                and int(synthetic_execution_frame.iloc[0]["execution_order"]) == 7
+                and bool(synthetic_execution_frame.iloc[0]["entry_budget_cash_binding"])
+                and "ENTRY_BUDGET_CASH" in str(synthetic_execution_frame.iloc[0]["binding_signature"])
+                and pd.notna(synthetic_execution_frame.iloc[0]["risk_budget"])
+                and pd.notna(synthetic_execution_frame.iloc[0]["actual_risk_utilization"]),
     )
 
     existing_observation = {key: 1.0 for _label, key, _unit in robustness_module.MEAN_METRICS}
@@ -2461,41 +2310,36 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )
     except RuntimeError:
         rebuild_identity_drift_blocked = True
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "multi_seed_attribution_rebuild_reuses_scientific_observation_only_when_metrics_years_and_training_identity_match",
         (True, True),
         (rebuild_identity_match, rebuild_identity_drift_blocked),
     )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_pipeline_allows_config_driven_two_gpu_trainers_without_changing_cpu_replay_policy",
-        True,
         1 <= robustness_settings.gpu_train_workers <= 2
-        and robustness_settings.cpu_replay_workers >= 1
-        and "training_executor = ThreadPoolExecutor(" in robustness_source
-        and "max_workers=int(cfg.gpu_train_workers)" in robustness_source
-        and "replay_executor = ThreadPoolExecutor(" in robustness_source
-        and "max_workers=int(cfg.cpu_replay_workers)" in robustness_source
-        and "training_futures" in robustness_source
-        and "_terminate_active_trainers" in robustness_source
-        and "gpu_train_workers" in config_source
-        and "STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS" in config_source,
+                and robustness_settings.cpu_replay_workers >= 1
+                and "training_executor = ThreadPoolExecutor(" in robustness_source
+                and "max_workers=int(cfg.gpu_train_workers)" in robustness_source
+                and "replay_executor = ThreadPoolExecutor(" in robustness_source
+                and "max_workers=int(cfg.cpu_replay_workers)" in robustness_source
+                and "training_futures" in robustness_source
+                and "_terminate_active_trainers" in robustness_source
+                and "gpu_train_workers" in config_source
+                and "STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS" in config_source,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_selection_pit_preserves_partial_folds_and_exposes_fold_progress",
-        True,
         'is_selection_pit = str(dl.score_source) == "selection_point_in_time"' in robustness_source
-        and "PIT builder本身具備fold-level resume" in robustness_source
-        and 'shutil.rmtree(model_dir / "folds"' not in robustness_source.split("def _train_one_unit", 1)[1].split("def _training_units", 1)[0]
-        and "def _pit_saved_fold_progress" in robustness_source
-        and "PIT saved folds=" in robustness_source
-        and 'item["pit_saved_folds"]' in robustness_source
-        and 'item["pit_expected_folds"]' in robustness_source
-        and "if now >= next_print and (training_futures or replay_futures or ready_replays):" in robustness_source
-        and 'tag = "[TRAIN]" if training_futures else "[REPLAY]"' in robustness_source,
+                and "PIT builder本身具備fold-level resume" in robustness_source
+                and 'shutil.rmtree(model_dir / "folds"' not in robustness_source.split("def _train_one_unit", 1)[1].split("def _training_units", 1)[0]
+                and "def _pit_saved_fold_progress" in robustness_source
+                and "PIT saved folds=" in robustness_source
+                and 'item["pit_saved_folds"]' in robustness_source
+                and 'item["pit_expected_folds"]' in robustness_source
+                and "if now >= next_print and (training_futures or replay_futures or ready_replays):" in robustness_source
+                and 'tag = "[TRAIN]" if training_futures else "[REPLAY]"' in robustness_source,
     )
 
     from tools.filters.breakout_quality import train_continuous_ranker as ranker_train_module
@@ -2533,15 +2377,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             experiment_profile="daily_universal_no_time_pairwise",
             score_path_override=str(isolated_score),
         )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_training_and_score_lookup_support_isolated_paths_without_touching_canonical_model",
-        True,
         isolated_paths.model_dir == isolated_model.resolve()
-        and isolated_output == isolated_research.resolve()
-        and math.isclose(float(isolated_lookup["score"]), 0.77)
-        and isolated_lookup["available"]
-        and isolated_lookup["continuous_target_id"] == "daily_opportunity_no_time_r_v1",
+                and isolated_output == isolated_research.resolve()
+                and math.isclose(float(isolated_lookup["score"]), 0.77)
+                and isolated_lookup["available"]
+                and isolated_lookup["continuous_target_id"] == "daily_opportunity_no_time_r_v1",
     )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -2575,16 +2417,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             str(pit_score), manifest_path=str(pit_manifest)
         )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "isolated_selection_pit_lookup_caches_same_file_revision_and_invalidates_rebuild",
-        True,
         pit_first is pit_second
-        and pit_rebuilt is not pit_first
-        and math.isclose(
-            float(pit_rebuilt.loc[("2330", "2020-01-02"), "breakout_quality_score"]),
-            0.812345,
-        ),
+                and pit_rebuilt is not pit_first
+                and math.isclose(
+                    float(pit_rebuilt.loc[("2330", "2020-01-02"), "breakout_quality_score"]),
+                    0.812345,
+                ),
     )
 
     from filters.breakout_quality import ranking_score_store as ranking_store_module
@@ -2667,15 +2507,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             )
         ranking_store_module.load_selection_point_in_time_ranking_contract.cache_clear()
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "selection_pit_override_keeps_score_manifest_coverage_and_audit_in_same_mode_namespace",
-        True,
         override_contract.score_path == override_score.resolve()
-        and override_contract.manifest_path == override_manifest.resolve()
-        and override_contract.audit_path == override_audit.resolve()
-        and override_contract.available_from == "2016-01-01"
-        and override_contract.available_through == "2025-12-31",
+                and override_contract.manifest_path == override_manifest.resolve()
+                and override_contract.audit_path == override_audit.resolve()
+                and override_contract.available_from == "2016-01-01"
+                and override_contract.available_through == "2025-12-31",
     )
 
     from filters.breakout_quality.strategy_compare_engine import (
@@ -2702,62 +2540,52 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )
     except ValueError:
         late_execution_rejected = True
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_isolated_score_override_separates_calendar_execution_start_from_first_trading_score_date",
-        True,
         isolated_execution_start == "2021-01-01"
-        and isolated_available_from == "2021-01-04"
-        and isolated_available_through == "2026-03-02"
-        and late_execution_rejected
-        and '"execution_start": str(artifacts.get("score_execution_start") or "")' in robustness_source
-        and 'continuous_score_execution_start_override=' in robustness_source
-        and 'primary_override.get("execution_start") or job["score_execution_start"]' in robustness_source
-        and "outer_oos_policy" in robustness_source,
+                and isolated_available_from == "2021-01-04"
+                and isolated_available_through == "2026-03-02"
+                and late_execution_rejected
+                and '"execution_start": str(artifacts.get("score_execution_start") or "")' in robustness_source
+                and 'continuous_score_execution_start_override=' in robustness_source
+                and 'primary_override.get("execution_start") or job["score_execution_start"]' in robustness_source
+                and "outer_oos_policy" in robustness_source,
     )
     engine_source = (
         project_root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
     ).read_text(encoding="utf-8")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_override_coverage_metadata_keeps_execution_start_distinct_from_first_score",
-        True,
         '"required_start": continuous_score_override["execution_start"]' in engine_source
-        and '"first_scored_event": continuous_score_override["available_from"]' in engine_source,
+                and '"first_scored_event": continuous_score_override["available_from"]' in engine_source,
     )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "strategy_compare_selection_pit_replay_uses_inspection_contract_and_pins_validated_paths_without_relaxing_global_runtime_loader",
-        True,
         "require_model_validation_pass=False" in engine_source
-        and '"score_path_override": str(pit_contract.score_path)' in engine_source
-        and '"score_manifest_path_override": str(pit_contract.manifest_path)' in engine_source
-        and "load_selection_point_in_time_ranking_contract(" in engine_source,
+                and '"score_path_override": str(pit_contract.score_path)' in engine_source
+                and '"score_manifest_path_override": str(pit_contract.manifest_path)' in engine_source
+                and "load_selection_point_in_time_ranking_contract(" in engine_source,
     )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "selection_pit_multi_seed_uses_isolated_period_scoped_pit_scores_and_dynamic_menu_profile",
-        True,
         '"selection_pit"' in config_source
-        and "--point-in-time-dir-override" in robustness_source
-        and "--score-start-date" in robustness_source
-        and "--score-end-date" in robustness_source
-        and "selection_pit_score_path_override" in engine_source
-        and "selection_pit_manifest_path_override" in engine_source
-        and "get_strategy_multi_seed_robustness_profiles" in app_source
-        and "_pit_fold_count_for_period" in robustness_source,
+                and "--point-in-time-dir-override" in robustness_source
+                and "--score-start-date" in robustness_source
+                and "--score-end-date" in robustness_source
+                and "selection_pit_score_path_override" in engine_source
+                and "selection_pit_manifest_path_override" in engine_source
+                and "get_strategy_multi_seed_robustness_profiles" in app_source
+                and "_pit_fold_count_for_period" in robustness_source,
     )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "selection_pit_multi_seed_skips_non_runtime_future_target_join_during_per_seed_replay",
-        True,
         "capture_selection_target_diagnostics=True" in engine_source
-        and "and bool(capture_selection_target_diagnostics)" in engine_source
-        and "capture_selection_target_diagnostics=False" in robustness_source
-        and "daily-universal profile" in robustness_source,
+                and "and bool(capture_selection_target_diagnostics)" in engine_source
+                and "capture_selection_target_diagnostics=False" in robustness_source
+                and "daily-universal profile" in robustness_source,
     )
 
     from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
@@ -2822,32 +2650,26 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             prep_calls == [f"param:{build_source}"]
             and prepared["preparation_plan"] is second_plan
         )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_parameter_preparation_ignores_normal_dl_blockers_and_reuses_canonical_param_builder",
-        True,
         parameter_only_prepare_ok
-        and "prepare_strategy_parameter_artifacts" in robustness_source
-        and "請先由Strategy Compare正式前置建立" not in robustness_source,
+                and "prepare_strategy_parameter_artifacts" in robustness_source
+                and "請先由Strategy Compare正式前置建立" not in robustness_source,
     )
 
     current_mode = next(
         item for item in rolling_modes
         if str(item["profile_id"]) == str(robustness_profile.profile_id)
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_current_mode_period_contract_is_config_driven",
-        True,
-        (
-            robustness_profile.start_date is None
-            and robustness_profile.end_date is None
-            and str(current_mode.get("score_start_date")) == "2021-01-01"
-            and str(current_mode.get("score_end_date")).lower() == "auto"
-            and int(current_mode.get("fold_months") or 0) == 12
-            and bool(current_mode.get("single_score_block"))
-                == (str(current_mode.get("mode_id")) == "oos")
-        ),
+        robustness_profile.start_date is None
+                    and robustness_profile.end_date is None
+                    and str(current_mode.get("score_start_date")) == "2021-01-01"
+                    and str(current_mode.get("score_end_date")).lower() == "auto"
+                    and int(current_mode.get("fold_months") or 0) == 12
+                    and bool(current_mode.get("single_score_block"))
+                        == (str(current_mode.get("mode_id")) == "oos"),
     )
 
     dataset_profile_mismatch_rejected = False
@@ -2867,12 +2689,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 )
             except RuntimeError:
                 dataset_profile_mismatch_rejected = True
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "multi_seed_dataset_tail_fallback_rejects_dataset_profile_mismatch",
-        True,
-        dataset_profile_mismatch_rejected,
-    )
+    check_true("multi_seed_dataset_tail_fallback_rejects_dataset_profile_mismatch", dataset_profile_mismatch_rejected)
 
     valid_resume_rows = []
     resume_seeds = (101, 202)
@@ -2896,36 +2713,30 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )
     except ValueError:
         duplicate_rejected = True
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_resume_rejects_duplicate_or_foreign_seed_result_observations",
-        True,
         duplicate_rejected
-        and '"failed_stage": "resume_preflight_or_fixed_baseline"' in robustness_source
-        and '"failed_stage": "summary_or_report_finalization"' in robustness_source,
+                and '"failed_stage": "resume_preflight_or_fixed_baseline"' in robustness_source
+                and '"failed_stage": "summary_or_report_finalization"' in robustness_source,
     )
 
     confirm_index = robustness_source.find("按 Enter 執行全部前置、訓練與回放")
     parameter_prepare_index = robustness_source.find("status = prepare_strategy_parameter_artifacts(")
     run_dir_index = robustness_source.find("run_root.mkdir(parents=True, exist_ok=True)")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_shows_one_plan_confirmation_before_parameter_build_and_run_artifact_creation",
-        True,
         confirm_index >= 0
-        and parameter_prepare_index > confirm_index
-        and run_dir_index > parameter_prepare_index
-        and robustness_source.count("按 Enter 執行全部前置、訓練與回放") == 1,
+                and parameter_prepare_index > confirm_index
+                and run_dir_index > parameter_prepare_index
+                and robustness_source.count("按 Enter 執行全部前置、訓練與回放") == 1,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_replay_failure_is_resumable_and_stops_overlapped_training_process",
-        True,
         '"status": "FAILED"' in robustness_source
-        and '"resumable": True' in robustness_source
-        and "proc.terminate()" in robustness_source
-        and "proc.kill()" in robustness_source
-        and "subprocess.TimeoutExpired" in robustness_source,
+                and '"resumable": True' in robustness_source
+                and "proc.terminate()" in robustness_source
+                and "proc.kill()" in robustness_source
+                and "subprocess.TimeoutExpired" in robustness_source,
     )
 
     with patch.object(
@@ -2973,12 +2784,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 comparison_period={"start": "2021-01-01", "end": "2025-12-22"},
                 artifact_identities={operational_param_key: {"sha256": "a"}},
             )["fingerprint"]
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multi_seed_fingerprint_changes_with_oos_period_param_identity_and_effective_training_defaults",
-        True,
         len({fingerprint_base, fingerprint_period, fingerprint_param, fingerprint_training}) == 4
-        and fingerprint_display_only == fingerprint_base,
+                and fingerprint_display_only == fingerprint_base,
     )
 
     from filters.breakout_quality import strategy_param_training as strategy_param_training_module
@@ -3066,32 +2875,30 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     full_search_fields = set(
         selection_full_payload["breakout_quality_param_adaptation"]["search_fields"]
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "selection_historical_full_roos_builder_runs_once_reuses_and_excludes_fixed_fields",
-        True,
         len(optimizer_calls) == 1
-        and not bool(selection_full_first["summary"]["optimizer_search_reused"])
-        and bool(selection_full_second["summary"]["optimizer_search_reused"])
-        and int(selection_full_second["summary"]["folds"]) == 7
-        and selection_full_payload["breakout_quality_param_adaptation"]["mode"]
-        == "selection_full_roos_training"
-        and selection_full_payload["breakout_quality_param_adaptation"]["parameter_set"]
-        == "P4_HISTORY"
-        and {"high_len", "atr_len", "atr_buy_tol", "atr_times_init", "atr_times_trail"}
-        <= full_search_fields
-        and all(
-            field not in full_search_fields
-            for field in (
-                "use_breakout_buy",
-                "use_breakout_quality_filter",
-                "use_breakout_quality_ranking",
-                "use_history_threshold",
-                "min_history_trades",
-                "min_history_ev",
-                "min_history_win_rate",
-            )
-        ),
+                and not bool(selection_full_first["summary"]["optimizer_search_reused"])
+                and bool(selection_full_second["summary"]["optimizer_search_reused"])
+                and int(selection_full_second["summary"]["folds"]) == 7
+                and selection_full_payload["breakout_quality_param_adaptation"]["mode"]
+                == "selection_full_roos_training"
+                and selection_full_payload["breakout_quality_param_adaptation"]["parameter_set"]
+                == "P4_HISTORY"
+                and {"high_len", "atr_len", "atr_buy_tol", "atr_times_init", "atr_times_trail"}
+                <= full_search_fields
+                and all(
+                    field not in full_search_fields
+                    for field in (
+                        "use_breakout_buy",
+                        "use_breakout_quality_filter",
+                        "use_breakout_quality_ranking",
+                        "use_history_threshold",
+                        "min_history_trades",
+                        "min_history_ev",
+                        "min_history_win_rate",
+                    )
+                ),
     )
 
     from .synthetic_breakout_quality_strategy_reuse_cases import (
@@ -3103,16 +2910,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         project_root=project_root,
     )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "preparation_builds_parameter_identity_first_and_replans_before_historical_pit_rebuild",
-        True,
         all(token in (preparation_source + (project_root / "services" / "research" / "artifact_orchestrator.py").read_text(encoding="utf-8")) for token in (
-            "status_refresher",
-            "execution_priority",
-            "next_runnable_action",
-            "current = plan_refresher()",
-        )),
+                    "status_refresher",
+                    "execution_priority",
+                    "next_runnable_action",
+                    "current = plan_refresher()",
+                )),
     )
 
     from filters.breakout_quality.artifact_dependency_registry import (
@@ -3124,39 +2929,35 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ARTIFACT_SELECTION_PIT_SCORE,
         required_upstream_artifact_types,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "artifact_dependency_registry_owns_model_truth_and_score_chain",
-        True,
         artifact_registry_path.is_file()
-        and all(token in artifact_registry_source for token in (
-            "ARTIFACT_DEPENDENCY_REGISTRY",
-            "collect_model_upstream_readiness",
-            "dependency_types_for",
-        ))
-        and set((
-            ARTIFACT_DATASET_CORE, ARTIFACT_CONTINUOUS_TARGET, ARTIFACT_MODEL_CHECKPOINT,
-            ARTIFACT_FORWARD_SCORE, ARTIFACT_SELECTION_PIT_SCORE, ARTIFACT_SELECTION_PIT_AUDIT,
-        )).issubset(set(__import__(
-            "filters.breakout_quality.artifact_dependency_registry",
-            fromlist=["ARTIFACT_DEPENDENCY_REGISTRY"],
-        ).ARTIFACT_DEPENDENCY_REGISTRY))
-        and required_upstream_artifact_types(
-            "strategy_aligned_no_time_all_event_pairwise"
-        ) == (ARTIFACT_DATASET_CORE, ARTIFACT_CONTINUOUS_TARGET)
-        and required_upstream_artifact_types(
-            "daily_universal_no_time_pairwise"
-        ) == (ARTIFACT_DATASET_CORE,),
+                and all(token in artifact_registry_source for token in (
+                    "ARTIFACT_DEPENDENCY_REGISTRY",
+                    "collect_model_upstream_readiness",
+                    "dependency_types_for",
+                ))
+                and set((
+                    ARTIFACT_DATASET_CORE, ARTIFACT_CONTINUOUS_TARGET, ARTIFACT_MODEL_CHECKPOINT,
+                    ARTIFACT_FORWARD_SCORE, ARTIFACT_SELECTION_PIT_SCORE, ARTIFACT_SELECTION_PIT_AUDIT,
+                )).issubset(set(__import__(
+                    "filters.breakout_quality.artifact_dependency_registry",
+                    fromlist=["ARTIFACT_DEPENDENCY_REGISTRY"],
+                ).ARTIFACT_DEPENDENCY_REGISTRY))
+                and required_upstream_artifact_types(
+                    "strategy_aligned_no_time_all_event_pairwise"
+                ) == (ARTIFACT_DATASET_CORE, ARTIFACT_CONTINUOUS_TARGET)
+                and required_upstream_artifact_types(
+                    "daily_universal_no_time_pairwise"
+                ) == (ARTIFACT_DATASET_CORE,),
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "strategy_and_model_work_share_artifact_upstream_readiness_registry",
-        True,
         "collect_model_upstream_readiness" in preparation_source
-        and "collect_model_upstream_preparation_plan" in model_app_source
-        and "run_research_artifact_preparation" in model_app_source
-        and "model-upstream:" in preparation_source
-        and "source_upstream_dependencies" in preparation_source,
+                and "collect_model_upstream_preparation_plan" in model_app_source
+                and "run_research_artifact_preparation" in model_app_source
+                and "model-upstream:" in preparation_source
+                and "source_upstream_dependencies" in preparation_source,
     )
 
     from filters.breakout_quality.strategy_compare_preparation_status import (
@@ -3179,17 +2980,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             experiment_profile="daily_universal_no_time_pairwise",
             dataset="full",
         )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "model_upstream_missing_is_detected_for_auto_orchestration_before_runtime",
-        True,
         len(event_blockers) == 2
-        and any("canonical Dataset" in item for item in event_blockers)
-        and any("Continuous Target" in item for item in event_blockers)
-        and len(daily_blockers) == 1
-        and any("canonical Dataset" in item for item in daily_blockers)
-        and not any("market-set" in item for item in daily_blockers)
-        and "Research dependency graph" in preparation_source,
+                and any("canonical Dataset" in item for item in event_blockers)
+                and any("Continuous Target" in item for item in event_blockers)
+                and len(daily_blockers) == 1
+                and any("canonical Dataset" in item for item in daily_blockers)
+                and not any("market-set" in item for item in daily_blockers)
+                and "Research dependency graph" in preparation_source,
     )
     contract_example = {
         "breakout_quality_param_adaptation": {
@@ -3219,22 +3018,18 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "training_dl_enabled": False,
         }
     }
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "parameter_artifact_subset_contract_accepts_expected_identity_and_rejects_mismatch",
-        True,
         _validate_expected_artifact_contract(contract_example, expected_contract) is None
-        and _validate_expected_artifact_contract(bad_contract, expected_contract) is not None,
+                and _validate_expected_artifact_contract(bad_contract, expected_contract) is not None,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "preparation_plan_has_ready_preparable_blocked_and_single_confirmation_contract",
-        True,
         "StrategyPreparationPlan.from_actions(actions)" in preparation_source
-        and 'failure_prefix="策略比較前置"' in preparation_source
-        and 'f"{failure_prefix}失敗:' in (project_root / "services" / "research" / "artifact_orchestrator.py").read_text(encoding="utf-8")
-        and "按 Enter 執行（含所有必要自動前置）；輸入 0 返回" in app_source
-        and "render_execution_plan" in app_source,
+                and 'failure_prefix="策略比較前置"' in preparation_source
+                and 'f"{failure_prefix}失敗:' in (project_root / "services" / "research" / "artifact_orchestrator.py").read_text(encoding="utf-8")
+                and "按 Enter 執行（含所有必要自動前置）；輸入 0 返回" in app_source
+                and "render_execution_plan" in app_source,
     )
 
     from filters.breakout_quality import strategy_comparison as strategy_comparison_module
@@ -3265,27 +3060,23 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "config_fingerprint": "synthetic",
         },
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "blocked_execution_plan_marks_nonexecuted_build_run_and_report_rows_as_not_run",
-        True,
         blocked_render_plan.overall_status == "BLOCKED"
-        and "BLOCKED" in blocked_plan_text
-        and blocked_plan_text.count("NOT_RUN")
-        >= 1 + len(settings.enabled_arms) + len(settings.enabled_contrasts)
-        and "REPORT" not in blocked_plan_text
-        and "\nRUN" not in blocked_plan_text,
+                and "BLOCKED" in blocked_plan_text
+                and blocked_plan_text.count("NOT_RUN")
+                >= 1 + len(settings.enabled_arms) + len(settings.enabled_contrasts)
+                and "REPORT" not in blocked_plan_text
+                and "\nRUN" not in blocked_plan_text,
     )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "post_preparation_refresh_uses_canonical_resolved_plan_boundary",
-        True,
         all(token in orchestration_source for token in (
-            "resolved_plan = resolve_comparison_plan(",
-            "ResolvedComparisonPlan.from_status(",
-            "READY has already passed ResolvedComparisonPlan.validate_contract()",
-        )),
+                    "resolved_plan = resolve_comparison_plan(",
+                    "ResolvedComparisonPlan.from_status(",
+                    "READY has already passed ResolvedComparisonPlan.validate_contract()",
+                )),
     )
 
     execution_pairs = strategy_comparison_module._execution_pairs(settings)
@@ -3319,62 +3110,57 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         if group["off"] is not None
         for on_arm in group["on"]
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "enabled_arms_build_canonical_execution_pairs_before_replay",
         expected_execution_pairs,
         tuple(
-            (param_source, rule_policy, off_arm.arm_id, on_arm.arm_id)
-            for param_source, rule_policy, off_arm, on_arm in execution_pairs
-        ),
+                    (param_source, rule_policy, off_arm.arm_id, on_arm.arm_id)
+                    for param_source, rule_policy, off_arm, on_arm in execution_pairs
+                ),
     )
 
     portfolio_source = (
         project_root / "core" / "portfolio_entry_selection_max_dl.py"
     ).read_text(encoding="utf-8")
     max_dl_source = portfolio_source.split("def _max_dl_execution_order", 1)[1]
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "max_dl_feasible_ascent_resource_floor_is_same_param_baseline_not_min_roos_specific",
-        True,
         "same_param_exact_resource_baseline" in strategy_compare_source
-        and "canonical_same_param_exact_cash_cap_baseline" in strategy_compare_source
-        and "min_roos_exact_resource_baseline" not in strategy_compare_source
-        and "canonical_min_roos_exact_cash_cap_baseline" not in strategy_compare_source
-        and "同參數DL-off baseline" in max_dl_source
-        and "seed不符合Min ROOS資源契約" not in max_dl_source
-        and settings.arms["C30"].param_source == "full_roos"
-        and settings.arms["C31"].param_source == "full_roos"
-        and settings.arms["C30"].dl_runtime_mode
-        == settings.arms["C31"].dl_runtime_mode
-        == "resource-aware-continuous-max-dl-feasible-ascent",
+                and "canonical_same_param_exact_cash_cap_baseline" in strategy_compare_source
+                and "min_roos_exact_resource_baseline" not in strategy_compare_source
+                and "canonical_min_roos_exact_cash_cap_baseline" not in strategy_compare_source
+                and "同參數DL-off baseline" in max_dl_source
+                and "seed不符合Min ROOS資源契約" not in max_dl_source
+                and settings.arms["C30"].param_source == "full_roos"
+                and settings.arms["C31"].param_source == "full_roos"
+                and settings.arms["C30"].dl_runtime_mode
+                == settings.arms["C31"].dl_runtime_mode
+                == "resource-aware-continuous-max-dl-feasible-ascent",
     )
 
     a9_source = settings.dl_sources.get("A9")
     a9_param_source = settings.parameter_sources.get("min_dl_a9_roos")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "a9_has_matched_runtime_and_separate_min_a9_parameter_source",
-        True,
         a9_source is not None
-        and a9_source.filter_id == "breakout_quality_v1"
-        and a9_source.model_architecture == "inception_time_v1"
-        and a9_source.experiment_profile == "unique_group_sampling"
-        and a9_source.forward_scores_builder is not None
-        and a9_param_source is not None
-        and a9_param_source.trained_with_dl_id == "A9"
-        and a9_param_source.builder is not None
-        and a9_param_source.builder.options.get("p3_variant") == "A9"
-        and "p3_dl_on_trained/A9" in str(a9_param_source.path_template)
-        and {"C7", "C8", "C9", "C10", "C11", "C12", "C14", "C15", "C16", "C17", "C18"}.issubset(set(settings.arms))
-        and all(arm.enabled for arm in settings.enabled_arms)
-        and all(arm.arm_id in settings.arms for arm in settings.enabled_arms)
-        and settings.dl_sources["CONT11G"].score_source == "continuous_ranker_oos"
-        and settings.dl_sources["CONT11G"].threshold is None
-        and settings.dl_sources["CONT11G"].experiment_profile == "strategy_aligned_no_time_pass_magnitude_mse"
-        and settings.dl_sources["CONT12A"].score_source == "continuous_ranker_oos"
-        and settings.dl_sources["CONT12A"].threshold is None
-        and settings.dl_sources["CONT12A"].experiment_profile == "strategy_aligned_no_time_all_event_mse",
+                and a9_source.filter_id == "breakout_quality_v1"
+                and a9_source.model_architecture == "inception_time_v1"
+                and a9_source.experiment_profile == "unique_group_sampling"
+                and a9_source.forward_scores_builder is not None
+                and a9_param_source is not None
+                and a9_param_source.trained_with_dl_id == "A9"
+                and a9_param_source.builder is not None
+                and a9_param_source.builder.options.get("p3_variant") == "A9"
+                and "p3_dl_on_trained/A9" in str(a9_param_source.path_template)
+                and {"C7", "C8", "C9", "C10", "C11", "C12", "C14", "C15", "C16", "C17", "C18"}.issubset(set(settings.arms))
+                and all(arm.enabled for arm in settings.enabled_arms)
+                and all(arm.arm_id in settings.arms for arm in settings.enabled_arms)
+                and settings.dl_sources["CONT11G"].score_source == "continuous_ranker_oos"
+                and settings.dl_sources["CONT11G"].threshold is None
+                and settings.dl_sources["CONT11G"].experiment_profile == "strategy_aligned_no_time_pass_magnitude_mse"
+                and settings.dl_sources["CONT12A"].score_source == "continuous_ranker_oos"
+                and settings.dl_sources["CONT12A"].threshold is None
+                and settings.dl_sources["CONT12A"].experiment_profile == "strategy_aligned_no_time_all_event_mse",
     )
 
     from dataclasses import replace as _replace_strategy_arm
@@ -3389,12 +3175,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         mismatched_dl_aware_runtime_rejected = "訓練時相同的DL runtime" in str(exc)
     else:
         mismatched_dl_aware_runtime_rejected = False
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "dl_aware_parameters_reject_cross_version_runtime_pairing",
-        True,
-        mismatched_dl_aware_runtime_rejected,
-    )
+    check_true("dl_aware_parameters_reject_cross_version_runtime_pairing", mismatched_dl_aware_runtime_rejected)
 
     expected_display_names = {
         "C3": "Min ROOS",
@@ -3412,14 +3193,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "C17": "Min ROOS: All-event Continuous max-DL constrained basket",
         "C18": "Min ROOS: All-event Continuous max-DL feasible-ascent",
     }
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "min_roos_display_names_follow_training_identity_then_runtime_suffix_contract",
-        True,
         all(
-            str(settings.arms[arm_id].name) == name
-            for arm_id, name in expected_display_names.items()
-        ),
+                    str(settings.arms[arm_id].name) == name
+                    for arm_id, name in expected_display_names.items()
+                ),
     )
 
     from core.exact_accounting import build_buy_ledger_from_price
@@ -3504,19 +3283,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         max_positions=10,
         params=resource_params,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "resource_aware_a9_only_intervenes_when_cash_is_binding_and_increases_pass_reserved_capital",
-        True,
         resource_diag["mode"] == "dl-selection"
-        and resource_diag["changed"]
-        and resource_baseline["cash_is_binding"]
-        and resource_selected["cash_is_binding"]
-        and resource_selected["pass_reserved_cost_milli"] > resource_baseline["pass_reserved_cost_milli"]
-        and resource_order[0]["ticker"] == "P1"
-        and slot_diag["mode"] == "capital-utilization"
-        and not slot_diag["changed"]
-        and [row["ticker"] for row in slot_order] == ["R1", "R2", "P1"],
+                and resource_diag["changed"]
+                and resource_baseline["cash_is_binding"]
+                and resource_selected["cash_is_binding"]
+                and resource_selected["pass_reserved_cost_milli"] > resource_baseline["pass_reserved_cost_milli"]
+                and resource_order[0]["ticker"] == "P1"
+                and slot_diag["mode"] == "capital-utilization"
+                and not slot_diag["changed"]
+                and [row["ticker"] for row in slot_order] == ["R1", "R2", "P1"],
     )
 
 
@@ -3608,18 +3385,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         free_slots=4,
         params=resource_params,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "resource_aware_best_improvement_evaluates_all_current_promotions_and_beats_first_improvement_case",
-        True,
         greedy_diag["selector"] == "greedy-first-improvement"
-        and basket_diag["selector"] == "best-improvement-basket"
-        and greedy_diag["mode"] == basket_diag["mode"] == "dl-selection"
-        and basket_diag["basket_search_states"] > 0
-        and basket_selected["cash_is_binding"]
-        and basket_selected["pass_reserved_cost_milli"] > greedy_selected["pass_reserved_cost_milli"]
-        and [row["ticker"] for row in greedy_selected["selected_rows"]] == ["P1", "P2", "P4"]
-        and [row["ticker"] for row in basket_selected["selected_rows"]] == ["P2", "P4", "P5"],
+                and basket_diag["selector"] == "best-improvement-basket"
+                and greedy_diag["mode"] == basket_diag["mode"] == "dl-selection"
+                and basket_diag["basket_search_states"] > 0
+                and basket_selected["cash_is_binding"]
+                and basket_selected["pass_reserved_cost_milli"] > greedy_selected["pass_reserved_cost_milli"]
+                and [row["ticker"] for row in greedy_selected["selected_rows"]] == ["P1", "P2", "P4"]
+                and [row["ticker"] for row in basket_selected["selected_rows"]] == ["P2", "P4", "P5"],
     )
 
     same_param_direct_delta = strategy_comparison_module._same_param_direct_selection_delta(
@@ -3646,8 +3421,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "direct_selection_delta_r": -6.12,
         },
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "direct_selection_r_is_only_comparable_within_same_parameter_runtime_universe",
         (-6.12, None),
         (same_param_direct_delta, cross_param_direct_delta),
@@ -3679,8 +3453,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     continuous_presort = sort_candidate_rows(
         continuous_presort_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "resource_aware_continuous_presort_preserves_min_roos_before_resource_gate",
         ["M1", "M2"],
         [row["ticker"] for row in continuous_presort],
@@ -3714,17 +3487,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         max_positions=10,
         params=resource_params,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "resource_aware_continuous_only_ranks_on_cash_binding_days_and_preserves_capital_utilization_first",
-        True,
         continuous_diag["mode"] == "dl-selection"
-        and continuous_selected["cash_is_binding"]
-        and continuous_diag["selected_score_sum"] >= continuous_diag["baseline_selected_score_sum"]
-        and continuous_diag["promoted_pass_count"] == 0
-        and continuous_slot_diag["mode"] == "capital-utilization"
-        and not continuous_slot_diag["changed"]
-        and [row["ticker"] for row in continuous_slot_order] == ["R1", "R2", "Q1"],
+                and continuous_selected["cash_is_binding"]
+                and continuous_diag["selected_score_sum"] >= continuous_diag["baseline_selected_score_sum"]
+                and continuous_diag["promoted_pass_count"] == 0
+                and continuous_slot_diag["mode"] == "capital-utilization"
+                and not continuous_slot_diag["changed"]
+                and [row["ticker"] for row in continuous_slot_order] == ["R1", "R2", "Q1"],
     )
 
     capital_preserving_slot_rows = [
@@ -3754,20 +3525,18 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         free_slots=1,
         params=resource_params,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "capital_preserving_continuous_can_improve_slot_binding_day_without_reducing_count_or_reserved_capital",
-        True,
         capital_preserving_slot_diag["mode"] == "dl-selection"
-        and capital_preserving_slot_diag["changed"]
-        and capital_preserving_slot_diag["resource_preservation_required"]
-        and capital_preserving_slot_diag["selected_count_preserved"]
-        and capital_preserving_slot_diag["reserved_capital_preserved"]
-        and capital_preserving_slot_diag["selected_count"]
-        >= capital_preserving_slot_diag["baseline_selected_count"]
-        and capital_preserving_slot_diag["reserved_cost_milli"]
-        >= capital_preserving_slot_diag["baseline_reserved_cost_milli"]
-        and capital_preserving_slot_selected["selected_rows"][0]["ticker"] == "Q1",
+                and capital_preserving_slot_diag["changed"]
+                and capital_preserving_slot_diag["resource_preservation_required"]
+                and capital_preserving_slot_diag["selected_count_preserved"]
+                and capital_preserving_slot_diag["reserved_capital_preserved"]
+                and capital_preserving_slot_diag["selected_count"]
+                >= capital_preserving_slot_diag["baseline_selected_count"]
+                and capital_preserving_slot_diag["reserved_cost_milli"]
+                >= capital_preserving_slot_diag["baseline_reserved_cost_milli"]
+                and capital_preserving_slot_selected["selected_rows"][0]["ticker"] == "Q1",
     )
 
     capital_preserving_reject_rows = [
@@ -3790,19 +3559,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             params=resource_params,
         )
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "capital_preserving_continuous_rejects_higher_score_basket_when_reserved_capital_would_fall",
-        True,
         capital_preserving_reject_diag["mode"] == "dl-selection"
-        and not capital_preserving_reject_diag["changed"]
-        and capital_preserving_reject_diag["resource_preservation_required"]
-        and capital_preserving_reject_diag["selected_count_preserved"]
-        and capital_preserving_reject_diag["reserved_capital_preserved"]
-        and capital_preserving_reject_diag["reserved_cost_milli"]
-        == capital_preserving_reject_diag["baseline_reserved_cost_milli"]
-        and [row["ticker"] for row in capital_preserving_reject_order]
-        == ["R1", "Q1"],
+                and not capital_preserving_reject_diag["changed"]
+                and capital_preserving_reject_diag["resource_preservation_required"]
+                and capital_preserving_reject_diag["selected_count_preserved"]
+                and capital_preserving_reject_diag["reserved_capital_preserved"]
+                and capital_preserving_reject_diag["reserved_cost_milli"]
+                == capital_preserving_reject_diag["baseline_reserved_cost_milli"]
+                and [row["ticker"] for row in capital_preserving_reject_order]
+                == ["R1", "Q1"],
     )
 
     max_dl_seed = (
@@ -3876,24 +3643,22 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 oracle_key,
                 [row["ticker"] for row in execution_order],
             )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "max_dl_constrained_basket_uses_fixed_min_roos_k_and_exact_reserve_floor_with_independent_bruteforce_matched_one_step_repair",
-        True,
         max_dl_oracle is not None
-        and max_dl_diag["mode"] == "dl-selection"
-        and max_dl_diag["max_dl_eligible"]
-        and max_dl_diag["max_dl_repair_steps"] == 1
-        and not max_dl_diag["max_dl_fallback_to_baseline"]
-        and max_dl_diag["pre_market_order_limit"]
-        == max_dl_baseline["selected_count"]
-        and len(max_dl_order) == len(max_dl_rows)
-        and len(max_dl_action_rows) == max_dl_baseline["selected_count"]
-        and max_dl_selected["selected_count"] == max_dl_baseline["selected_count"]
-        and max_dl_selected["reserved_cost_milli"]
-        >= max_dl_baseline["reserved_cost_milli"]
-        and [row["ticker"] for row in max_dl_action_rows] == max_dl_oracle[1]
-        and [row["ticker"] for row in max_dl_action_rows] == ["T0", "T2", "T6"],
+                and max_dl_diag["mode"] == "dl-selection"
+                and max_dl_diag["max_dl_eligible"]
+                and max_dl_diag["max_dl_repair_steps"] == 1
+                and not max_dl_diag["max_dl_fallback_to_baseline"]
+                and max_dl_diag["pre_market_order_limit"]
+                == max_dl_baseline["selected_count"]
+                and len(max_dl_order) == len(max_dl_rows)
+                and len(max_dl_action_rows) == max_dl_baseline["selected_count"]
+                and max_dl_selected["selected_count"] == max_dl_baseline["selected_count"]
+                and max_dl_selected["reserved_cost_milli"]
+                >= max_dl_baseline["reserved_cost_milli"]
+                and [row["ticker"] for row in max_dl_action_rows] == max_dl_oracle[1]
+                and [row["ticker"] for row in max_dl_action_rows] == ["T0", "T2", "T6"],
     )
     max_dl_mechanism = build_max_dl_repair_mechanism_diagnostic(
         max_dl_rows,
@@ -3903,28 +3668,26 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         resource_selection_diag=max_dl_diag,
     )
     repair_trace = list((max_dl_mechanism or {}).get("repair_steps_trace") or [])
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "max_dl_one_step_repair_certificate_reuses_exhaustive_production_single_swap_search_without_global_combinatorial_oracle",
-        True,
         bool(
-            max_dl_mechanism is not None
-            and max_dl_mechanism.get("status") == "AVAILABLE"
-            and max_dl_mechanism.get("actual_repair_steps") == 1
-            and max_dl_mechanism.get("actual_repair_replacement_distance") == 1
-            and max_dl_mechanism.get("classification") == "EXACT_ONE_SWAP_RESOURCE_CONSTRAINT"
-            and len(repair_trace) == 1
-            and int(repair_trace[0].get("evaluated_swap_count", 0)) > 0
-            and int(repair_trace[0].get("feasible_swap_count", 0)) > 0
-            and bool(repair_trace[0].get("after_feasible", False))
-            and "global_best_score_sum" not in max_dl_mechanism
-            and "exact_oracle_evaluated_states" not in max_dl_mechanism
-            and math.isclose(
-                float(max_dl_mechanism.get("repair_seed_score_sum")),
-                float(max_dl_oracle[0][0]),
-                abs_tol=1e-12,
-            )
-        ),
+                    max_dl_mechanism is not None
+                    and max_dl_mechanism.get("status") == "AVAILABLE"
+                    and max_dl_mechanism.get("actual_repair_steps") == 1
+                    and max_dl_mechanism.get("actual_repair_replacement_distance") == 1
+                    and max_dl_mechanism.get("classification") == "EXACT_ONE_SWAP_RESOURCE_CONSTRAINT"
+                    and len(repair_trace) == 1
+                    and int(repair_trace[0].get("evaluated_swap_count", 0)) > 0
+                    and int(repair_trace[0].get("feasible_swap_count", 0)) > 0
+                    and bool(repair_trace[0].get("after_feasible", False))
+                    and "global_best_score_sum" not in max_dl_mechanism
+                    and "exact_oracle_evaluated_states" not in max_dl_mechanism
+                    and math.isclose(
+                        float(max_dl_mechanism.get("repair_seed_score_sum")),
+                        float(max_dl_oracle[0][0]),
+                        abs_tol=1e-12,
+                    )
+                ),
     )
 
     max_dl_direct_rows = [
@@ -3953,15 +3716,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         max_dl_direct_order,
         max_dl_direct_diag,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "max_dl_constrained_basket_keeps_full_orderable_universe_but_only_action_prefix_can_create_orders",
-        True,
         max_dl_direct_diag["direct_score_order_feasible"]
-        and max_dl_direct_diag["pre_market_order_limit"] == 2
-        and len(max_dl_direct_order) == 3
-        and len(max_dl_direct_action) == 2
-        and {row["ticker"] for row in max_dl_direct_action} == {"D1", "D2"},
+                and max_dl_direct_diag["pre_market_order_limit"] == 2
+                and len(max_dl_direct_order) == 3
+                and len(max_dl_direct_action) == 2
+                and {row["ticker"] for row in max_dl_direct_action} == {"D1", "D2"},
     )
 
 
@@ -4012,18 +3773,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         pnl_action, available_cash=350_000.0, sizing_equity=2_000_000.0,
         free_slots=2, params=resource_params,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "expected_pnl_selector_changes_only_basket_objective_while_preserving_same_k_r0_and_prefers_larger_deployable_expected_profit",
-        True,
         [row["ticker"] for row in score_action] == ["EP_A", "EP_B"]
-        and [row["ticker"] for row in pnl_action] == ["EP_B", "EP_C"]
-        and pnl_diag.get("basket_objective") == "expected_pnl"
-        and score_diag.get("basket_objective") == "score"
-        and pnl_diag["pre_market_order_limit"] == score_diag["pre_market_order_limit"] == 2
-        and pnl_selected["selected_count"] == score_selected["selected_count"] == 2
-        and pnl_selected["reserved_cost_milli"] >= score_diag["baseline_reserved_cost_milli"]
-        and score_selected["reserved_cost_milli"] >= score_diag["baseline_reserved_cost_milli"],
+                and [row["ticker"] for row in pnl_action] == ["EP_B", "EP_C"]
+                and pnl_diag.get("basket_objective") == "expected_pnl"
+                and score_diag.get("basket_objective") == "score"
+                and pnl_diag["pre_market_order_limit"] == score_diag["pre_market_order_limit"] == 2
+                and pnl_selected["selected_count"] == score_selected["selected_count"] == 2
+                and pnl_selected["reserved_cost_milli"] >= score_diag["baseline_reserved_cost_milli"]
+                and score_selected["reserved_cost_milli"] >= score_diag["baseline_reserved_cost_milli"],
     )
 
     excess_alpha_seed = (
@@ -4074,18 +3833,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         excess_action, available_cash=350_000.0, sizing_equity=2_000_000.0,
         free_slots=2, params=resource_params,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "excess_alpha_selector_changes_only_basket_objective_while_preserving_same_k_r0_and_balances_relative_quality_with_deployable_risk",
-        True,
         [row["ticker"] for row in excess_score_action] == ["EA_A", "EA_B"]
-        and [row["ticker"] for row in excess_action] == ["EA_B", "EA_C"]
-        and excess_diag.get("basket_objective") == "excess_alpha"
-        and excess_score_diag.get("basket_objective") == "score"
-        and excess_diag["pre_market_order_limit"] == excess_score_diag["pre_market_order_limit"] == 2
-        and excess_selected["selected_count"] == excess_score_selected["selected_count"] == 2
-        and excess_selected["reserved_cost_milli"] >= excess_score_diag["baseline_reserved_cost_milli"]
-        and excess_score_selected["reserved_cost_milli"] >= excess_score_diag["baseline_reserved_cost_milli"],
+                and [row["ticker"] for row in excess_action] == ["EA_B", "EA_C"]
+                and excess_diag.get("basket_objective") == "excess_alpha"
+                and excess_score_diag.get("basket_objective") == "score"
+                and excess_diag["pre_market_order_limit"] == excess_score_diag["pre_market_order_limit"] == 2
+                and excess_selected["selected_count"] == excess_score_selected["selected_count"] == 2
+                and excess_selected["reserved_cost_milli"] >= excess_score_diag["baseline_reserved_cost_milli"]
+                and excess_score_selected["reserved_cost_milli"] >= excess_score_diag["baseline_reserved_cost_milli"],
     )
 
     no_r0_seed = (
@@ -4135,19 +3892,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         free_slots=2,
         params=resource_params,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "excess_alpha_no_r0_keeps_k_and_true_cash_feasibility_but_removes_r0_floor_and_r0_minimum_repair",
-        True,
         [row["ticker"] for row in no_r0_action] == ["NR_A", "NR_B"]
-        and [row["ticker"] for row in with_r0_action] != ["NR_A", "NR_B"]
-        and no_r0_diag.get("basket_objective") == "excess_alpha"
-        and no_r0_diag.get("resource_preservation_required") is False
-        and int(no_r0_diag.get("max_dl_repair_steps", -1)) == 0
-        and int(no_r0_diag.get("max_dl_repair_evaluations", -1)) == 0
-        and no_r0_diag.get("pre_market_order_limit") == 2
-        and no_r0_selected["selected_count"] == 2
-        and no_r0_selected["reserved_cost_milli"] < int(no_r0_diag["baseline_reserved_cost_milli"]),
+                and [row["ticker"] for row in with_r0_action] != ["NR_A", "NR_B"]
+                and no_r0_diag.get("basket_objective") == "excess_alpha"
+                and no_r0_diag.get("resource_preservation_required") is False
+                and int(no_r0_diag.get("max_dl_repair_steps", -1)) == 0
+                and int(no_r0_diag.get("max_dl_repair_evaluations", -1)) == 0
+                and no_r0_diag.get("pre_market_order_limit") == 2
+                and no_r0_selected["selected_count"] == 2
+                and no_r0_selected["reserved_cost_milli"] < int(no_r0_diag["baseline_reserved_cost_milli"]),
     )
 
     constrained_seed = (
@@ -4213,20 +3968,18 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         if brute_best_key is None or combo_key > brute_best_key:
             brute_best_key = combo_key
             brute_best = combo_result
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "excess_alpha_constrained_solver_matches_exhaustive_canonical_k_r0_oracle_and_certifies_global_optimum",
-        True,
         constrained_diag.get("basket_objective") == "excess_alpha"
-        and constrained_diag.get("resource_preservation_required") is True
-        and constrained_diag.get("constrained_solver_optimality_certified") is True
-        and int(constrained_diag.get("max_dl_repair_steps", -1)) == 0
-        and int(constrained_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
-        and constrained_result["selected_count"] == 2
-        and constrained_result["reserved_cost_milli"] >= constrained_baseline["reserved_cost_milli"]
-        and brute_best is not None
-        and [row["ticker"] for row in constrained_result["selected_rows"]]
-        == [row["ticker"] for row in brute_best["selected_rows"]],
+                and constrained_diag.get("resource_preservation_required") is True
+                and constrained_diag.get("constrained_solver_optimality_certified") is True
+                and int(constrained_diag.get("max_dl_repair_steps", -1)) == 0
+                and int(constrained_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
+                and constrained_result["selected_count"] == 2
+                and constrained_result["reserved_cost_milli"] >= constrained_baseline["reserved_cost_milli"]
+                and brute_best is not None
+                and [row["ticker"] for row in constrained_result["selected_rows"]]
+                == [row["ticker"] for row in brute_best["selected_rows"]],
     )
 
     score_constrained_rows = [
@@ -4285,21 +4038,19 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         if score_brute_best_key is None or combo_key > score_brute_best_key:
             score_brute_best_key = combo_key
             score_brute_best = combo_result
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "mr13e_score_constrained_solver_matches_exhaustive_canonical_k_r0_oracle_and_reuses_exact_solver_without_calibration",
-        True,
         score_constrained_diag.get("basket_objective") == "score"
-        and score_constrained_diag.get("resource_preservation_required") is True
-        and score_constrained_diag.get("constrained_solver_optimality_certified") is True
-        and score_constrained_diag.get("constrained_solver_seed_source") == "c35-feasible-ascent"
-        and int(score_constrained_diag.get("max_dl_repair_steps", -1)) == 0
-        and int(score_constrained_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
-        and score_constrained_result["selected_count"] == 2
-        and score_constrained_result["reserved_cost_milli"] >= score_constrained_baseline["reserved_cost_milli"]
-        and score_brute_best is not None
-        and [row["ticker"] for row in score_constrained_result["selected_rows"]]
-        == [row["ticker"] for row in score_brute_best["selected_rows"]],
+                and score_constrained_diag.get("resource_preservation_required") is True
+                and score_constrained_diag.get("constrained_solver_optimality_certified") is True
+                and score_constrained_diag.get("constrained_solver_seed_source") == "c35-feasible-ascent"
+                and int(score_constrained_diag.get("max_dl_repair_steps", -1)) == 0
+                and int(score_constrained_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
+                and score_constrained_result["selected_count"] == 2
+                and score_constrained_result["reserved_cost_milli"] >= score_constrained_baseline["reserved_cost_milli"]
+                and score_brute_best is not None
+                and [row["ticker"] for row in score_constrained_result["selected_rows"]]
+                == [row["ticker"] for row in score_brute_best["selected_rows"]],
     )
 
     dual_safety_policy = "resource-aware-continuous-score-safety-constrained-optimal"
@@ -4384,21 +4135,19 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         if dual_brute_key is None or combo_key > dual_brute_key:
             dual_brute_key = combo_key
             dual_brute_best = combo_result
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "dual_model_safety_exact_solver_preserves_baseline_safety_floor_and_maximizes_primary_score_without_weighting",
-        True,
         dual_safety_diag.get("basket_objective") == "score"
-        and dual_safety_diag.get("safety_floor_enabled") is True
-        and dual_safety_diag.get("safety_floor_contract") == "baseline_coverage_and_score_sum_floor_v1"
-        and dual_safety_diag.get("safety_floor_violation") is False
-        and dual_safety_diag.get("constrained_solver_optimality_certified") is True
-        and dual_safety_diag.get("selected_safety_scored_count") >= dual_safety_diag.get("baseline_safety_scored_count")
-        and float(dual_safety_diag.get("selected_safety_score_sum")) + 1e-12 >= float(dual_safety_diag.get("baseline_safety_score_sum"))
-        and dual_brute_best is not None
-        and [row["ticker"] for row in dual_safety_result["selected_rows"]]
-        == [row["ticker"] for row in dual_brute_best["selected_rows"]]
-        == ["S1", "S2"],
+                and dual_safety_diag.get("safety_floor_enabled") is True
+                and dual_safety_diag.get("safety_floor_contract") == "baseline_coverage_and_score_sum_floor_v1"
+                and dual_safety_diag.get("safety_floor_violation") is False
+                and dual_safety_diag.get("constrained_solver_optimality_certified") is True
+                and dual_safety_diag.get("selected_safety_scored_count") >= dual_safety_diag.get("baseline_safety_scored_count")
+                and float(dual_safety_diag.get("selected_safety_score_sum")) + 1e-12 >= float(dual_safety_diag.get("baseline_safety_score_sum"))
+                and dual_brute_best is not None
+                and [row["ticker"] for row in dual_safety_result["selected_rows"]]
+                == [row["ticker"] for row in dual_brute_best["selected_rows"]]
+                == ["S1", "S2"],
     )
 
     residual_safety_policy = "resource-aware-continuous-score-residual-safety-constrained-optimal"
@@ -4487,27 +4236,25 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         if residual_brute_key is None or combo_key > residual_brute_key:
             residual_brute_key = combo_key
             residual_brute_best = combo_result
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "dual_model_residual_safety_uses_same_day_rank_ols_floor_and_preserves_primary_exact_objective",
-        True,
         residual_diag.get("basket_objective") == "score"
-        and residual_diag.get("safety_score_mode") == "residual"
-        and residual_diag.get("safety_floor_contract") == "baseline_residual_coverage_and_score_sum_floor_v1"
-        and residual_diag.get("residual_safety_transform") == "same_day_rank_ols_v1"
-        and int(residual_diag.get("residual_safety_fit_pair_count", 0)) == 6
-        and math.isclose(
-            float(residual_diag.get("residual_safety_fit_slope")),
-            float(residual_fit.get("residual_safety_fit_slope")),
-            rel_tol=0.0, abs_tol=1e-12,
-        )
-        and residual_diag.get("safety_floor_violation") is False
-        and residual_diag.get("constrained_solver_optimality_certified") is True
-        and residual_brute_best is not None
-        and [row["ticker"] for row in residual_result["selected_rows"]]
-        == [row["ticker"] for row in residual_brute_best["selected_rows"]]
-        and "K1" in [row["ticker"] for row in residual_result["selected_rows"]]
-        and "S1" in [row["ticker"] for row in residual_result["selected_rows"]],
+                and residual_diag.get("safety_score_mode") == "residual"
+                and residual_diag.get("safety_floor_contract") == "baseline_residual_coverage_and_score_sum_floor_v1"
+                and residual_diag.get("residual_safety_transform") == "same_day_rank_ols_v1"
+                and int(residual_diag.get("residual_safety_fit_pair_count", 0)) == 6
+                and math.isclose(
+                    float(residual_diag.get("residual_safety_fit_slope")),
+                    float(residual_fit.get("residual_safety_fit_slope")),
+                    rel_tol=0.0, abs_tol=1e-12,
+                )
+                and residual_diag.get("safety_floor_violation") is False
+                and residual_diag.get("constrained_solver_optimality_certified") is True
+                and residual_brute_best is not None
+                and [row["ticker"] for row in residual_result["selected_rows"]]
+                == [row["ticker"] for row in residual_brute_best["selected_rows"]]
+                and "K1" in [row["ticker"] for row in residual_result["selected_rows"]]
+                and "S1" in [row["ticker"] for row in residual_result["selected_rows"]],
     )
 
     score_no_r0_rows = [
@@ -4556,21 +4303,19 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         if score_no_r0_brute_key is None or combo_key > score_no_r0_brute_key:
             score_no_r0_brute_key = combo_key
             score_no_r0_brute_best = combo_result
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "mr13e_score_no_r0_exact_matches_exhaustive_k_cash_oracle_without_r0_repair",
-        True,
         score_no_r0_diag.get("basket_objective") == "score"
-        and score_no_r0_diag.get("resource_preservation_required") is False
-        and score_no_r0_diag.get("constrained_solver_optimality_certified") is True
-        and score_no_r0_diag.get("constrained_solver_seed_source")
-        == "objective-top-k-if-cash-feasible-else-baseline"
-        and int(score_no_r0_diag.get("max_dl_repair_steps", -1)) == 0
-        and int(score_no_r0_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
-        and score_no_r0_result["selected_count"] == 2
-        and score_no_r0_brute_best is not None
-        and [row["ticker"] for row in score_no_r0_result["selected_rows"]]
-        == [row["ticker"] for row in score_no_r0_brute_best["selected_rows"]],
+                and score_no_r0_diag.get("resource_preservation_required") is False
+                and score_no_r0_diag.get("constrained_solver_optimality_certified") is True
+                and score_no_r0_diag.get("constrained_solver_seed_source")
+                == "objective-top-k-if-cash-feasible-else-baseline"
+                and int(score_no_r0_diag.get("max_dl_repair_steps", -1)) == 0
+                and int(score_no_r0_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
+                and score_no_r0_result["selected_count"] == 2
+                and score_no_r0_brute_best is not None
+                and [row["ticker"] for row in score_no_r0_result["selected_rows"]]
+                == [row["ticker"] for row in score_no_r0_brute_best["selected_rows"]],
     )
 
     score_capital_rows = [
@@ -4619,19 +4364,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         if score_capital_brute_key is None or combo_key > score_capital_brute_key:
             score_capital_brute_key = combo_key
             score_capital_brute_best = combo_result
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "mr13e_score_times_canonical_reserved_capital_no_r0_exact_matches_exhaustive_k_cash_oracle",
-        True,
         score_capital_diag.get("basket_objective") == "score_capital"
-        and score_capital_diag.get("resource_preservation_required") is False
-        and score_capital_diag.get("constrained_solver_optimality_certified") is True
-        and int(score_capital_diag.get("max_dl_repair_steps", -1)) == 0
-        and int(score_capital_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
-        and score_capital_result["selected_count"] == 2
-        and score_capital_brute_best is not None
-        and [row["ticker"] for row in score_capital_result["selected_rows"]]
-        == [row["ticker"] for row in score_capital_brute_best["selected_rows"]],
+                and score_capital_diag.get("resource_preservation_required") is False
+                and score_capital_diag.get("constrained_solver_optimality_certified") is True
+                and int(score_capital_diag.get("max_dl_repair_steps", -1)) == 0
+                and int(score_capital_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
+                and score_capital_result["selected_count"] == 2
+                and score_capital_brute_best is not None
+                and [row["ticker"] for row in score_capital_result["selected_rows"]]
+                == [row["ticker"] for row in score_capital_brute_best["selected_rows"]],
     )
 
     pareto_rows = [
@@ -4722,23 +4465,21 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         return (coverage, quality_norm * capital_norm, quality, capital_milli, stable)
 
     pareto_brute_best = max(pareto_feasible, key=_pareto_oracle_final_key)
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "mr13e_basket_level_pareto_no_r0_exact_matches_exhaustive_normalized_quality_capital_oracle",
-        True,
         pareto_diag.get("basket_objective") == "score_capital_pareto"
-        and pareto_diag.get("pareto_selection_method") == "normalized_product_v1"
-        and pareto_diag.get("resource_preservation_required") is False
-        and pareto_diag.get("constrained_solver_optimality_certified") is True
-        and int(pareto_diag.get("max_dl_repair_steps", -1)) == 0
-        and int(pareto_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
-        and pareto_result["selected_count"] == 2
-        and [row["ticker"] for row in pareto_result["selected_rows"]]
-        == [row["ticker"] for row in pareto_brute_best["selected_rows"]]
-        and math.isclose(float(pareto_diag.get("pareto_quality_min")), float(pareto_quality_min))
-        and math.isclose(float(pareto_diag.get("pareto_quality_max")), float(pareto_quality_max))
-        and int(pareto_diag.get("pareto_capital_min_milli")) == int(pareto_capital_min)
-        and int(pareto_diag.get("pareto_capital_max_milli")) == int(pareto_capital_max),
+                and pareto_diag.get("pareto_selection_method") == "normalized_product_v1"
+                and pareto_diag.get("resource_preservation_required") is False
+                and pareto_diag.get("constrained_solver_optimality_certified") is True
+                and int(pareto_diag.get("max_dl_repair_steps", -1)) == 0
+                and int(pareto_diag.get("max_dl_feasible_ascent_steps", -1)) == 0
+                and pareto_result["selected_count"] == 2
+                and [row["ticker"] for row in pareto_result["selected_rows"]]
+                == [row["ticker"] for row in pareto_brute_best["selected_rows"]]
+                and math.isclose(float(pareto_diag.get("pareto_quality_min")), float(pareto_quality_min))
+                and math.isclose(float(pareto_diag.get("pareto_quality_max")), float(pareto_quality_max))
+                and int(pareto_diag.get("pareto_capital_min_milli")) == int(pareto_capital_min)
+                and int(pareto_diag.get("pareto_capital_max_milli")) == int(pareto_capital_max),
     )
 
     multi_swap_seed = (
@@ -4799,22 +4540,20 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c41_multi_key = _excess_alpha_basket_quality_key(
         c41_multi_result, base_rank=c41_multi_rank
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "excess_alpha_exact_solver_escapes_c39_one_swap_local_optimum_with_strictly_better_multi_swap_feasible_basket",
-        True,
         [row["ticker"] for row in c39_multi_result["selected_rows"]]
-        == ["MS2", "MS5", "MS8", "MS9"]
-        and [row["ticker"] for row in c41_multi_result["selected_rows"]]
-        == ["MS0", "MS3", "MS8", "MS9"]
-        and len(
-            set(row["ticker"] for row in c39_multi_result["selected_rows"])
-            ^ set(row["ticker"] for row in c41_multi_result["selected_rows"])
-        ) == 4
-        and c41_multi_key > c39_multi_key
-        and c41_multi_diag.get("constrained_solver_optimality_certified") is True
-        and int(c41_multi_diag.get("max_dl_repair_steps", -1)) == 0
-        and int(c41_multi_diag.get("max_dl_feasible_ascent_steps", -1)) == 0,
+                == ["MS2", "MS5", "MS8", "MS9"]
+                and [row["ticker"] for row in c41_multi_result["selected_rows"]]
+                == ["MS0", "MS3", "MS8", "MS9"]
+                and len(
+                    set(row["ticker"] for row in c39_multi_result["selected_rows"])
+                    ^ set(row["ticker"] for row in c41_multi_result["selected_rows"])
+                ) == 4
+                and c41_multi_key > c39_multi_key
+                and c41_multi_diag.get("constrained_solver_optimality_certified") is True
+                and int(c41_multi_diag.get("max_dl_repair_steps", -1)) == 0
+                and int(c41_multi_diag.get("max_dl_feasible_ascent_steps", -1)) == 0,
     )
 
     selection_excess_settings = strategy_config.get_strategy_comparison_settings("selection_pit")
@@ -4822,118 +4561,108 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c39 = selection_excess_settings.arms["C39"]
     c40 = selection_excess_settings.arms["C40"]
     c41 = selection_excess_settings.arms["C41"]
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "sr_c39_is_selection_only_frozen_mr13e_excess_alpha_with_same_k_r0_and_direct_c35_contrast",
-        True,
         not c39.enabled
-        and c39.dl_id == "CONT13E_PIT"
-        and c39.dl_runtime_mode == "resource-aware-continuous-excess-alpha-feasible-ascent"
-        and dict(c39.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") == "CONT13E_PIT"
-        and dict(c39.dl_runtime_options or {}).get("preserve_k_r0") is True
-        and dict(c39.dl_runtime_options or {}).get("negative_expected_excess_r_allowed") is True
-        and dict(c39.dl_runtime_options or {}).get("selection_only") is True
-        and c39.robustness_role == "off"
-        and "C39-C35" in selection_excess_settings.contrasts
-        and "C39" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
+                and c39.dl_id == "CONT13E_PIT"
+                and c39.dl_runtime_mode == "resource-aware-continuous-excess-alpha-feasible-ascent"
+                and dict(c39.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") == "CONT13E_PIT"
+                and dict(c39.dl_runtime_options or {}).get("preserve_k_r0") is True
+                and dict(c39.dl_runtime_options or {}).get("negative_expected_excess_r_allowed") is True
+                and dict(c39.dl_runtime_options or {}).get("selection_only") is True
+                and c39.robustness_role == "off"
+                and "C39-C35" in selection_excess_settings.contrasts
+                and "C39" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "sr_c40_is_selection_only_c39_no_r0_ablation_with_same_expected_excess_alpha_objective_and_k",
-        True,
         not c40.enabled
-        and c40.dl_id == c39.dl_id == "CONT13E_PIT"
-        and c40.dl_runtime_mode == "resource-aware-continuous-excess-alpha-no-r0-feasible-ascent"
-        and dict(c40.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") == "CONT13E_PIT"
-        and dict(c40.dl_runtime_options or {}).get("preserve_k") is True
-        and dict(c40.dl_runtime_options or {}).get("preserve_r0") is False
-        and dict(c40.dl_runtime_options or {}).get("r0_minimum_repair") is False
-        and dict(c40.dl_runtime_options or {}).get("negative_expected_excess_r_allowed") is True
-        and dict(c40.dl_runtime_options or {}).get("selection_only") is True
-        and c40.robustness_role == "off"
-        and "C40-C39" in selection_excess_settings.contrasts
-        and "C40-C35" in selection_excess_settings.contrasts
-        and "C40" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
+                and c40.dl_id == c39.dl_id == "CONT13E_PIT"
+                and c40.dl_runtime_mode == "resource-aware-continuous-excess-alpha-no-r0-feasible-ascent"
+                and dict(c40.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") == "CONT13E_PIT"
+                and dict(c40.dl_runtime_options or {}).get("preserve_k") is True
+                and dict(c40.dl_runtime_options or {}).get("preserve_r0") is False
+                and dict(c40.dl_runtime_options or {}).get("r0_minimum_repair") is False
+                and dict(c40.dl_runtime_options or {}).get("negative_expected_excess_r_allowed") is True
+                and dict(c40.dl_runtime_options or {}).get("selection_only") is True
+                and c40.robustness_role == "off"
+                and "C40-C39" in selection_excess_settings.contrasts
+                and "C40-C35" in selection_excess_settings.contrasts
+                and "C40" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "sr_c41_is_selection_only_exact_constrained_solver_ablation_with_same_c39_objective_k_r0_and_calibration",
-        True,
         not c41.enabled
-        and c41.dl_id == c39.dl_id == "CONT13E_PIT"
-        and c41.dl_runtime_mode == "resource-aware-continuous-excess-alpha-constrained-optimal"
-        and dict(c41.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") == "CONT13E_PIT"
-        and dict(c41.dl_runtime_options or {}).get("preserve_k_r0") is True
-        and dict(c41.dl_runtime_options or {}).get("constrained_solver") == "exact_branch_and_bound_v1"
-        and dict(c41.dl_runtime_options or {}).get("negative_expected_excess_r_allowed") is True
-        and dict(c41.dl_runtime_options or {}).get("selection_only") is True
-        and c41.robustness_role == "off"
-        and "C41-C39" in selection_excess_settings.contrasts
-        and "C41-C35" in selection_excess_settings.contrasts
-        and "C41" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
+                and c41.dl_id == c39.dl_id == "CONT13E_PIT"
+                and c41.dl_runtime_mode == "resource-aware-continuous-excess-alpha-constrained-optimal"
+                and dict(c41.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") == "CONT13E_PIT"
+                and dict(c41.dl_runtime_options or {}).get("preserve_k_r0") is True
+                and dict(c41.dl_runtime_options or {}).get("constrained_solver") == "exact_branch_and_bound_v1"
+                and dict(c41.dl_runtime_options or {}).get("negative_expected_excess_r_allowed") is True
+                and dict(c41.dl_runtime_options or {}).get("selection_only") is True
+                and c41.robustness_role == "off"
+                and "C41-C39" in selection_excess_settings.contrasts
+                and "C41-C35" in selection_excess_settings.contrasts
+                and "C41" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
     )
 
     c42 = selection_excess_settings.arms["C42"]
     c42_options = dict(c42.dl_runtime_options or {})
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "sr_c42_is_selection_only_mr13e_score_exact_constrained_solver_ablation_without_expected_r_calibration",
-        True,
         c42.enabled
-        and c42.dl_id == c41.dl_id == c39.dl_id == "CONT13E_PIT"
-        and c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
-        and c42_options.get("preserve_k_r0") is True
-        and c42_options.get("constrained_solver") == "exact_branch_and_bound_v1"
-        and c42_options.get("selection_only") is True
-        and not any(
-            key in c42_options
-            for key in (
-                "expected_excess_r_fit_dl_id",
-                "expected_excess_r_calibration_method",
-                "expected_r_fit_dl_id",
-                "expected_r_calibration_method",
-            )
-        )
-        and c42.robustness_role == "off"
-        and "C42-C35" in selection_excess_settings.contrasts
-        and "C42-C41" in selection_excess_settings.contrasts
-        and {"C42-C23", "C42-C32"}.issubset(
-            {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
-        )
-        and "C42" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
+                and c42.dl_id == c41.dl_id == c39.dl_id == "CONT13E_PIT"
+                and c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+                and c42_options.get("preserve_k_r0") is True
+                and c42_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+                and c42_options.get("selection_only") is True
+                and not any(
+                    key in c42_options
+                    for key in (
+                        "expected_excess_r_fit_dl_id",
+                        "expected_excess_r_calibration_method",
+                        "expected_r_fit_dl_id",
+                        "expected_r_calibration_method",
+                    )
+                )
+                and c42.robustness_role == "off"
+                and "C42-C35" in selection_excess_settings.contrasts
+                and "C42-C41" in selection_excess_settings.contrasts
+                and {"C42-C23", "C42-C32"}.issubset(
+                    {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+                )
+                and "C42" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
     )
 
     c46 = selection_excess_settings.arms["C46"]
     c47 = selection_excess_settings.arms["C47"]
     c48 = selection_excess_settings.arms["C48"]
     c48_options = dict(c48.dl_runtime_options or {})
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "sr_c48_rejected_selection_only_pareto_no_r0_remains_historical_and_current_selection_stays_minimal",
-        True,
         not c46.enabled
-        and not c47.enabled
-        and not c48.enabled
-        and c48.dl_id == c42.dl_id == "CONT13E_PIT"
-        and c48.dl_runtime_mode == "resource-aware-continuous-score-capital-pareto-no-r0-constrained-optimal"
-        and c48_options.get("preserve_k") is True
-        and c48_options.get("preserve_r0") is False
-        and c48_options.get("r0_minimum_repair") is False
-        and c48_options.get("constrained_solver") == "exact_branch_and_bound_v1"
-        and c48_options.get("pareto_selection") == "normalized_product_v1"
-        and c48_options.get("pareto_quality") == "score_sum_max_coverage_first"
-        and c48_options.get("pareto_capital") == "canonical_reserved_cost_milli"
-        and c48_options.get("selection_only") is True
-        and {"C32", "C23", "C42", "C57"}
-        == {arm.arm_id for arm in selection_excess_settings.enabled_arms}
-        and "C48-C42" not in {
-            contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts
-        }
-        and "C48-C42" in selection_excess_settings.contrasts
-        and "C48" not in {
-            arm.arm_id
-            for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
-        },
+                and not c47.enabled
+                and not c48.enabled
+                and c48.dl_id == c42.dl_id == "CONT13E_PIT"
+                and c48.dl_runtime_mode == "resource-aware-continuous-score-capital-pareto-no-r0-constrained-optimal"
+                and c48_options.get("preserve_k") is True
+                and c48_options.get("preserve_r0") is False
+                and c48_options.get("r0_minimum_repair") is False
+                and c48_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+                and c48_options.get("pareto_selection") == "normalized_product_v1"
+                and c48_options.get("pareto_quality") == "score_sum_max_coverage_first"
+                and c48_options.get("pareto_capital") == "canonical_reserved_cost_milli"
+                and c48_options.get("selection_only") is True
+                and {"C32", "C23", "C42", "C57"}
+                == {arm.arm_id for arm in selection_excess_settings.enabled_arms}
+                and "C48-C42" not in {
+                    contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts
+                }
+                and "C48-C42" in selection_excess_settings.contrasts
+                and "C48" not in {
+                    arm.arm_id
+                    for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
+                },
     )
 
     c53 = selection_excess_settings.arms["C53"]
@@ -4942,38 +4671,36 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c57_options = dict(c57.dl_runtime_options or {})
     c51_historical = selection_excess_settings.arms["C51"]
     c52_historical = selection_excess_settings.arms["C52"]
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "sr_c57_is_current_c56_selection_counterpart_while_c53_source_only_arm_remains_historical",
-        True,
         not c53.enabled
-        and c53.param_source == c42.param_source == "selection_min_roos"
-        and c53.rule_policy == c42.rule_policy == "all_off"
-        and c53.dl_id == "CONT13K_PIT"
-        and c53.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
-        and c53_options == c42_options
-        and c57.enabled
-        and c57.param_source == c42.param_source == "selection_min_roos"
-        and c57.rule_policy == c42.rule_policy == "all_off"
-        and c57.dl_id == "CONT13K_PIT"
-        and c57.dl_runtime_mode == "resource-aware-continuous-score-residual-safety-constrained-optimal"
-        and c57_options.get("safety_dl_id") == "CONT13M_PIT"
-        and c57_options.get("safety_constraint") == "baseline_residual_coverage_and_score_sum_floor_v1"
-        and c57_options.get("safety_residualization") == "same_day_rank_ols_v1"
-        and c57_options.get("preserve_k_r0") is True
-        and c57_options.get("constrained_solver") == "exact_branch_and_bound_v1"
-        and c57_options.get("selection_only") is True
-        and {"C57-C42", "C57-C23", "C57-C32"}.issubset(
-            {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
-        )
-        and {"C32", "C23", "C42", "C57"}
-        == {arm.arm_id for arm in selection_excess_settings.enabled_arms}
-        and not c51_historical.enabled
-        and not c52_historical.enabled
-        and "CONT13H_PIT" in strategy_config.HISTORICAL_STRATEGY_DL_SOURCES
-        and "CONT13H" in strategy_config.HISTORICAL_STRATEGY_DL_SOURCES
-        and "C51" in strategy_config.HISTORICAL_STRATEGY_COMPARE_ARMS
-        and "C52" in strategy_config.HISTORICAL_STRATEGY_COMPARE_ARMS,
+                and c53.param_source == c42.param_source == "selection_min_roos"
+                and c53.rule_policy == c42.rule_policy == "all_off"
+                and c53.dl_id == "CONT13K_PIT"
+                and c53.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+                and c53_options == c42_options
+                and c57.enabled
+                and c57.param_source == c42.param_source == "selection_min_roos"
+                and c57.rule_policy == c42.rule_policy == "all_off"
+                and c57.dl_id == "CONT13K_PIT"
+                and c57.dl_runtime_mode == "resource-aware-continuous-score-residual-safety-constrained-optimal"
+                and c57_options.get("safety_dl_id") == "CONT13M_PIT"
+                and c57_options.get("safety_constraint") == "baseline_residual_coverage_and_score_sum_floor_v1"
+                and c57_options.get("safety_residualization") == "same_day_rank_ols_v1"
+                and c57_options.get("preserve_k_r0") is True
+                and c57_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+                and c57_options.get("selection_only") is True
+                and {"C57-C42", "C57-C23", "C57-C32"}.issubset(
+                    {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+                )
+                and {"C32", "C23", "C42", "C57"}
+                == {arm.arm_id for arm in selection_excess_settings.enabled_arms}
+                and not c51_historical.enabled
+                and not c52_historical.enabled
+                and "CONT13H_PIT" in strategy_config.HISTORICAL_STRATEGY_DL_SOURCES
+                and "CONT13H" in strategy_config.HISTORICAL_STRATEGY_DL_SOURCES
+                and "C51" in strategy_config.HISTORICAL_STRATEGY_COMPARE_ARMS
+                and "C52" in strategy_config.HISTORICAL_STRATEGY_COMPARE_ARMS,
     )
 
     forward_current_settings = strategy_config.get_strategy_comparison_settings("forward_oos")
@@ -5035,77 +4762,75 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     rolling_full_source = operational_current_settings.parameter_sources[c61_current.param_source]
     selection_robustness_legacy = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
     forward_robustness_legacy = strategy_config.get_strategy_multi_seed_robustness_settings("forward_oos")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "operational_c60_is_current_dual_model_research_line_while_c56_c57_full_flow_is_legacy",
-        True,
         set(suite_arm_ids)
-        == {arm.arm_id for arm in operational_current_settings.enabled_arms}
-        and c61_current.enabled and not c61_current.dl_enabled
-        and c61_current.rule_policy == "formal"
-        and c58_current.enabled and not c58_current.dl_enabled
-        and c59_current.enabled and c59_current.dl_id == "CONT13E_ROLL"
-        and c60_current.enabled
-        and c60_current.param_source == c58_current.param_source == c59_current.param_source
-        and rolling_full_source.canonical_family == "full"
-        and rolling_full_source.canonical_evaluation_mode == "rolling"
-        and rolling_min_source.canonical_family == "min"
-        and rolling_min_source.canonical_evaluation_mode == "rolling"
-        and rolling_full_source.path_template is None
-        and rolling_min_source.path_template is None
-        and rolling_full_source.identity_manifest_path is None
-        and rolling_min_source.identity_manifest_path is None
-        and rolling_full_source.builder is not None
-        and rolling_min_source.builder is not None
-        and rolling_full_source.builder.builder_type == rolling_min_source.builder.builder_type == "canonical_optimizer_strategy_params"
-        and dict(rolling_full_source.builder.options) == {}
-        and dict(rolling_min_source.builder.options) == {}
-        and c60_current.rule_policy == c58_current.rule_policy == c59_current.rule_policy == "all_off"
-        and c60_current.dl_id == "CONT13K_ROLL"
-        and c60_current.dl_runtime_mode == "resource-aware-continuous-score-residual-safety-constrained-optimal"
-        and c60_options.get("safety_dl_id") == "CONT13M_ROLL"
-        and c60_options.get("safety_constraint") == "baseline_residual_coverage_and_score_sum_floor_v1"
-        and c60_options.get("safety_residualization") == "same_day_rank_ols_v1"
-        and c60_options.get("preserve_k_r0") is True
-        and c60_options.get("constrained_solver") == "exact_branch_and_bound_v1"
-        and c60_options.get("selection_only") is True
-        and set(suite_contrast_ids)
-        == {contrast.contrast_id for contrast in operational_current_settings.enabled_contrasts}
-        and operational_robustness_active.enabled
-        and operational_current_settings.suite_id == "extending_current"
-        and operational_robustness_active.suite_id == operational_current_settings.suite_id
-        and tuple(operational_robustness_active.consensus_reference_arm_ids) == resolved_consensus_ids
-        and tuple(operational_robustness_active.fixed_arm_ids) == resolved_consensus_ids
-        and tuple(operational_robustness_active.benchmark_strategy_arm_ids) == resolved_benchmark_ids
-        and tuple(operational_robustness_active.stochastic_arm_ids) == resolved_benchmark_ids
-        and tuple(operational_robustness_active.model_seed_sensitive_arm_ids) == resolved_model_sensitive_ids
-        and tuple(
-            str(item.get("contrast_id") or "")
-            for item in operational_robustness_active.paired_contrasts
-        ) == expected_paired_ids
-        and dl_off_policy_families
-        == {
-            ("full", "base-finalist-best"),
-            ("full", "base-finalists-agree"),
-            ("min", "base-finalist-best"),
-            ("min", "base-finalists-agree"),
-        }
-        and not selection_robustness_legacy.enabled
-        and not forward_robustness_legacy.enabled
-        and c56_current.enabled
-        and c44_current.enabled
-        and not c54_current.enabled
-        and not c55_current.enabled
-        and operational_robustness_active.seed_count
-        == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT
-        and operational_robustness_active.seed_generator_seed
-        == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED
-        and tuple(operational_robustness_active.resolved_seeds)
-        == tuple(strategy_config.ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS)
-        and operational_robustness_active.strategy_trials_per_fold
-        == strategy_config.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
-        and strategy_config.get_strategy_runtime_integration_settings().selection_candidate_arm_id == "C42"
-        and strategy_config.get_strategy_runtime_integration_settings().forward_candidate_arm_id == "C44",
+                == {arm.arm_id for arm in operational_current_settings.enabled_arms}
+                and c61_current.enabled and not c61_current.dl_enabled
+                and c61_current.rule_policy == "formal"
+                and c58_current.enabled and not c58_current.dl_enabled
+                and c59_current.enabled and c59_current.dl_id == "CONT13E_ROLL"
+                and c60_current.enabled
+                and c60_current.param_source == c58_current.param_source == c59_current.param_source
+                and rolling_full_source.canonical_family == "full"
+                and rolling_full_source.canonical_evaluation_mode == "rolling"
+                and rolling_min_source.canonical_family == "min"
+                and rolling_min_source.canonical_evaluation_mode == "rolling"
+                and rolling_full_source.path_template is None
+                and rolling_min_source.path_template is None
+                and rolling_full_source.identity_manifest_path is None
+                and rolling_min_source.identity_manifest_path is None
+                and rolling_full_source.builder is not None
+                and rolling_min_source.builder is not None
+                and rolling_full_source.builder.builder_type == rolling_min_source.builder.builder_type == "canonical_optimizer_strategy_params"
+                and dict(rolling_full_source.builder.options) == {}
+                and dict(rolling_min_source.builder.options) == {}
+                and c60_current.rule_policy == c58_current.rule_policy == c59_current.rule_policy == "all_off"
+                and c60_current.dl_id == "CONT13K_ROLL"
+                and c60_current.dl_runtime_mode == "resource-aware-continuous-score-residual-safety-constrained-optimal"
+                and c60_options.get("safety_dl_id") == "CONT13M_ROLL"
+                and c60_options.get("safety_constraint") == "baseline_residual_coverage_and_score_sum_floor_v1"
+                and c60_options.get("safety_residualization") == "same_day_rank_ols_v1"
+                and c60_options.get("preserve_k_r0") is True
+                and c60_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+                and c60_options.get("selection_only") is True
+                and set(suite_contrast_ids)
+                == {contrast.contrast_id for contrast in operational_current_settings.enabled_contrasts}
+                and operational_robustness_active.enabled
+                and operational_current_settings.suite_id == "extending_current"
+                and operational_robustness_active.suite_id == operational_current_settings.suite_id
+                and tuple(operational_robustness_active.consensus_reference_arm_ids) == resolved_consensus_ids
+                and tuple(operational_robustness_active.fixed_arm_ids) == resolved_consensus_ids
+                and tuple(operational_robustness_active.benchmark_strategy_arm_ids) == resolved_benchmark_ids
+                and tuple(operational_robustness_active.stochastic_arm_ids) == resolved_benchmark_ids
+                and tuple(operational_robustness_active.model_seed_sensitive_arm_ids) == resolved_model_sensitive_ids
+                and tuple(
+                    str(item.get("contrast_id") or "")
+                    for item in operational_robustness_active.paired_contrasts
+                ) == expected_paired_ids
+                and dl_off_policy_families
+                == {
+                    ("full", "base-finalist-best"),
+                    ("full", "base-finalists-agree"),
+                    ("min", "base-finalist-best"),
+                    ("min", "base-finalists-agree"),
+                }
+                and not selection_robustness_legacy.enabled
+                and not forward_robustness_legacy.enabled
+                and c56_current.enabled
+                and c44_current.enabled
+                and not c54_current.enabled
+                and not c55_current.enabled
+                and operational_robustness_active.seed_count
+                == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT
+                and operational_robustness_active.seed_generator_seed
+                == strategy_config.STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED
+                and tuple(operational_robustness_active.resolved_seeds)
+                == tuple(strategy_config.ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS)
+                and operational_robustness_active.strategy_trials_per_fold
+                == strategy_config.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
+                and strategy_config.get_strategy_runtime_integration_settings().selection_candidate_arm_id == "C42"
+                and strategy_config.get_strategy_runtime_integration_settings().forward_candidate_arm_id == "C44",
     )
 
     from filters.breakout_quality.strategy_compare_dl_artifacts import (
@@ -5126,30 +4851,28 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
     oos_primary_dir = oos_current_settings.dl_sources["CONT13K_ROLL"].point_in_time_dirname
     oos_safety_dir = oos_current_settings.dl_sources["CONT13M_ROLL"].point_in_time_dirname
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "oos_test_freezes_2020_cutoff_params_and_keeps_k_m_in_same_pit_namespace",
-        True,
         oos_current_settings.parameter_sources[c61_oos.param_source].canonical_family == "full"
-        and oos_current_settings.parameter_sources[c61_oos.param_source].canonical_evaluation_mode == "oos"
-        and c58_oos.param_source == c59_oos.param_source == c60_oos.param_source
-        and oos_current_settings.parameter_sources[c58_oos.param_source].canonical_family == "min"
-        and oos_current_settings.parameter_sources[c58_oos.param_source].canonical_evaluation_mode == "oos"
-        and oos_current_settings.parameter_sources[c61_oos.param_source].builder is not None
-        and oos_current_settings.parameter_sources[c58_oos.param_source].builder is not None
-        and oos_current_settings.parameter_sources[c61_oos.param_source].builder.builder_type == "canonical_optimizer_strategy_params"
-        and oos_current_settings.parameter_sources[c58_oos.param_source].builder.builder_type == "canonical_optimizer_strategy_params"
-        and dict(oos_current_settings.parameter_sources[c61_oos.param_source].builder.options) == {}
-        and dict(oos_current_settings.parameter_sources[c58_oos.param_source].builder.options) == {}
-        and oos_primary_dir == oos_safety_dir == "point_in_time_oos_2021_forward"
-        and "point_in_time_oos_2021_forward" in str(oos_c60_options.get("safety_score_path_override") or "")
-        and "point_in_time_oos_2021_forward" in str(oos_c60_options.get("safety_score_manifest_path_override") or "")
-        and "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
-            in str(oos_c60_options.get("safety_score_path_override") or "")
-        and operational_current_settings.parameter_sources[c61_current.param_source].canonical_family == "full"
-        and operational_current_settings.parameter_sources[c61_current.param_source].canonical_evaluation_mode == "rolling"
-        and operational_current_settings.parameter_sources[c58_current.param_source].canonical_family == "min"
-        and operational_current_settings.parameter_sources[c58_current.param_source].canonical_evaluation_mode == "rolling",
+                and oos_current_settings.parameter_sources[c61_oos.param_source].canonical_evaluation_mode == "oos"
+                and c58_oos.param_source == c59_oos.param_source == c60_oos.param_source
+                and oos_current_settings.parameter_sources[c58_oos.param_source].canonical_family == "min"
+                and oos_current_settings.parameter_sources[c58_oos.param_source].canonical_evaluation_mode == "oos"
+                and oos_current_settings.parameter_sources[c61_oos.param_source].builder is not None
+                and oos_current_settings.parameter_sources[c58_oos.param_source].builder is not None
+                and oos_current_settings.parameter_sources[c61_oos.param_source].builder.builder_type == "canonical_optimizer_strategy_params"
+                and oos_current_settings.parameter_sources[c58_oos.param_source].builder.builder_type == "canonical_optimizer_strategy_params"
+                and dict(oos_current_settings.parameter_sources[c61_oos.param_source].builder.options) == {}
+                and dict(oos_current_settings.parameter_sources[c58_oos.param_source].builder.options) == {}
+                and oos_primary_dir == oos_safety_dir == "point_in_time_oos_2021_forward"
+                and "point_in_time_oos_2021_forward" in str(oos_c60_options.get("safety_score_path_override") or "")
+                and "point_in_time_oos_2021_forward" in str(oos_c60_options.get("safety_score_manifest_path_override") or "")
+                and "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
+                    in str(oos_c60_options.get("safety_score_path_override") or "")
+                and operational_current_settings.parameter_sources[c61_current.param_source].canonical_family == "full"
+                and operational_current_settings.parameter_sources[c61_current.param_source].canonical_evaluation_mode == "rolling"
+                and operational_current_settings.parameter_sources[c58_current.param_source].canonical_family == "min"
+                and operational_current_settings.parameter_sources[c58_current.param_source].canonical_evaluation_mode == "rolling",
     )
 
     c56_pinned_options = _resolved_ranking_options(
@@ -5173,33 +4896,31 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         },
     )
     c55_reuse_source = reuse_path.read_text(encoding="utf-8")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "c56_c57_secondary_dl_sources_are_required_pinned_and_stage_matched",
-        True,
         {"CONT13E", "CONT13K", "CONT13M"}.issubset(forward_required_dl)
-        and {"CONT13E", "CONT13K", "CONT13M"}.issubset(forward_runtime_dl)
-        and {"CONT13E_PIT", "CONT13K_PIT", "CONT13M_PIT"}.issubset(selection_required_dl)
-        and {"CONT13E_PIT", "CONT13K_PIT", "CONT13M_PIT"}.issubset(selection_runtime_dl)
-        and c56_pinned_options.get("safety_filter_id") == "breakout_quality_v1"
-        and c56_pinned_options.get("safety_score_source") == "continuous_ranker_oos"
-        and c56_pinned_options.get("safety_model_architecture") == "inception_time_v1"
-        and c56_pinned_options.get("safety_experiment_profile")
-        == "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
-        and c56_pinned_options.get("safety_score_path_override")
-        == "models/pinned_cont13m_forward.csv.gz"
-        and c56_pinned_options.get("safety_score_manifest_path_override")
-        == "models/pinned_cont13m_forward_manifest.json"
-        and c56_pinned_options.get("safety_residualization") == "same_day_rank_ols_v1"
-        and c57_pinned_options.get("safety_filter_id") == "breakout_quality_v1"
-        and c57_pinned_options.get("safety_score_source") == "selection_point_in_time"
-        and c57_pinned_options.get("safety_score_path_override")
-        == "models/pinned_cont13m_pit.csv.gz"
-        and c57_pinned_options.get("safety_score_manifest_path_override")
-        == "models/pinned_cont13m_pit_manifest.json"
-        and c57_pinned_options.get("safety_residualization") == "same_day_rank_ols_v1"
-        and '"safety_dl_source"' in c55_reuse_source
-        and "safety_artifact_names" in c55_reuse_source,
+                and {"CONT13E", "CONT13K", "CONT13M"}.issubset(forward_runtime_dl)
+                and {"CONT13E_PIT", "CONT13K_PIT", "CONT13M_PIT"}.issubset(selection_required_dl)
+                and {"CONT13E_PIT", "CONT13K_PIT", "CONT13M_PIT"}.issubset(selection_runtime_dl)
+                and c56_pinned_options.get("safety_filter_id") == "breakout_quality_v1"
+                and c56_pinned_options.get("safety_score_source") == "continuous_ranker_oos"
+                and c56_pinned_options.get("safety_model_architecture") == "inception_time_v1"
+                and c56_pinned_options.get("safety_experiment_profile")
+                == "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise"
+                and c56_pinned_options.get("safety_score_path_override")
+                == "models/pinned_cont13m_forward.csv.gz"
+                and c56_pinned_options.get("safety_score_manifest_path_override")
+                == "models/pinned_cont13m_forward_manifest.json"
+                and c56_pinned_options.get("safety_residualization") == "same_day_rank_ols_v1"
+                and c57_pinned_options.get("safety_filter_id") == "breakout_quality_v1"
+                and c57_pinned_options.get("safety_score_source") == "selection_point_in_time"
+                and c57_pinned_options.get("safety_score_path_override")
+                == "models/pinned_cont13m_pit.csv.gz"
+                and c57_pinned_options.get("safety_score_manifest_path_override")
+                == "models/pinned_cont13m_pit_manifest.json"
+                and c57_pinned_options.get("safety_residualization") == "same_day_rank_ols_v1"
+                and '"safety_dl_source"' in c55_reuse_source
+                and "safety_artifact_names" in c55_reuse_source,
     )
 
 
@@ -5236,19 +4957,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 high_len=60,
                 project_root=str(project_root),
             )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "c56_runtime_looks_up_primary_and_secondary_frozen_scores_with_separate_pinned_paths",
-        True,
         len(c55_runtime_lookup_calls) == 2
-        and c55_runtime_lookup_calls[0].get("score_path_override")
-        == "models/pinned_cont13k_forward.csv.gz"
-        and c55_runtime_lookup_calls[1].get("score_path_override")
-        == "models/pinned_cont13m_forward.csv.gz"
-        and math.isclose(float(c55_runtime_payload.get("score")), 0.75)
-        and math.isclose(float(c55_runtime_payload.get("safety_score")), 0.25)
-        and c55_runtime_payload.get("safety_available") is True
-        and c55_runtime_payload.get("safety_dl_id") == "CONT13M",
+                and c55_runtime_lookup_calls[0].get("score_path_override")
+                == "models/pinned_cont13k_forward.csv.gz"
+                and c55_runtime_lookup_calls[1].get("score_path_override")
+                == "models/pinned_cont13m_forward.csv.gz"
+                and math.isclose(float(c55_runtime_payload.get("score")), 0.75)
+                and math.isclose(float(c55_runtime_payload.get("safety_score")), 0.25)
+                and c55_runtime_payload.get("safety_available") is True
+                and c55_runtime_payload.get("safety_dl_id") == "CONT13M",
     )
 
     c57_runtime_lookup_calls = []
@@ -5284,24 +5003,22 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 high_len=60,
                 project_root=str(project_root),
             )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "c57_runtime_looks_up_primary_and_secondary_pit_scores_with_separate_pinned_score_and_manifest_paths",
-        True,
         len(c57_runtime_lookup_calls) == 2
-        and c57_runtime_lookup_calls[0].get("score_path_override")
-        == "models/pinned_cont13k_pit.csv.gz"
-        and c57_runtime_lookup_calls[0].get("manifest_path_override")
-        == "models/pinned_cont13k_pit_manifest.json"
-        and c57_runtime_lookup_calls[1].get("score_path_override")
-        == "models/pinned_cont13m_pit.csv.gz"
-        and c57_runtime_lookup_calls[1].get("manifest_path_override")
-        == "models/pinned_cont13m_pit_manifest.json"
-        and c57_runtime_lookup_calls[1].get("filter_id") == "breakout_quality_v1"
-        and math.isclose(float(c57_runtime_payload.get("score")), 0.80)
-        and math.isclose(float(c57_runtime_payload.get("safety_score")), 0.35)
-        and c57_runtime_payload.get("safety_available") is True
-        and c57_runtime_payload.get("safety_dl_id") == "CONT13M_PIT",
+                and c57_runtime_lookup_calls[0].get("score_path_override")
+                == "models/pinned_cont13k_pit.csv.gz"
+                and c57_runtime_lookup_calls[0].get("manifest_path_override")
+                == "models/pinned_cont13k_pit_manifest.json"
+                and c57_runtime_lookup_calls[1].get("score_path_override")
+                == "models/pinned_cont13m_pit.csv.gz"
+                and c57_runtime_lookup_calls[1].get("manifest_path_override")
+                == "models/pinned_cont13m_pit_manifest.json"
+                and c57_runtime_lookup_calls[1].get("filter_id") == "breakout_quality_v1"
+                and math.isclose(float(c57_runtime_payload.get("score")), 0.80)
+                and math.isclose(float(c57_runtime_payload.get("safety_score")), 0.35)
+                and c57_runtime_payload.get("safety_available") is True
+                and c57_runtime_payload.get("safety_dl_id") == "CONT13M_PIT",
     )
 
 
@@ -5352,19 +5069,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             selected=forward_diag_selected,
             lookup=forward_diag_lookup,
         )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "forward_oos_strategy_report_joins_embedded_future_target_only_after_replay_for_selection_translation",
-        True,
         math.isclose(float(forward_diag_metrics["orderable_score_coverage_rate"]), 1.0)
-        and math.isclose(float(forward_diag_metrics["selected_target_mean_r"]), 2.0)
-        and math.isclose(float(forward_diag_metrics["selected_target_percentile_mean"]), 1.0)
-        and math.isclose(float(forward_diag_metrics["target_top_k_retention_mean"]), 1.0)
-        and math.isclose(float(forward_diag_metrics["target_opportunity_gap_r_mean"]), 0.0)
-        and bool(forward_diag_metrics["future_target_used_for_runtime_sort"]) is False
-        and "score_source in {" in strategy_compare_source
-        and "SCORE_SOURCE_CONTINUOUS_RANKER_OOS" in strategy_compare_source
-        and "_continuous_forward_target_lookup(" in strategy_compare_source,
+                and math.isclose(float(forward_diag_metrics["selected_target_mean_r"]), 2.0)
+                and math.isclose(float(forward_diag_metrics["selected_target_percentile_mean"]), 1.0)
+                and math.isclose(float(forward_diag_metrics["target_top_k_retention_mean"]), 1.0)
+                and math.isclose(float(forward_diag_metrics["target_opportunity_gap_r_mean"]), 0.0)
+                and bool(forward_diag_metrics["future_target_used_for_runtime_sort"]) is False
+                and "score_source in {" in strategy_compare_source
+                and "SCORE_SOURCE_CONTINUOUS_RANKER_OOS" in strategy_compare_source
+                and "_continuous_forward_target_lookup(" in strategy_compare_source,
     )
 
     target_aware_report = render_strategy_r_analysis_table({
@@ -5391,72 +5106,66 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         for line in target_aware_report.splitlines()
         if line.startswith(("A ", "B ", "C "))
     }
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "r_analysis_best_worst_coloring_is_target_identity_aware_while_actual_trade_metrics_remain_cross_arm",
-        True,
         "<span" not in target_aware_lines.get("A", "")
-        and "<span" in target_aware_lines.get("B", "")
-        and "<span" in target_aware_lines.get("C", ""),
+                and "<span" in target_aware_lines.get("B", "")
+                and "<span" in target_aware_lines.get("C", ""),
     )
 
 
     c43 = selection_excess_settings.arms["C43"]
     c43_options = dict(c43.dl_runtime_options or {})
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "sr_c43_is_selection_only_mr13a_score_exact_constrained_solver_ablation_using_same_generic_solver_as_c42",
-        True,
         not c43.enabled
-        and c43.dl_id == c28.dl_id == "CONT13A_PIT"
-        and c43.param_source == c28.param_source == c42.param_source == "selection_min_roos"
-        and c43.rule_policy == c28.rule_policy == c42.rule_policy == "all_off"
-        and c43.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
-        and c43_options == c42_options
-        and c43_options.get("preserve_k_r0") is True
-        and c43_options.get("constrained_solver") == "exact_branch_and_bound_v1"
-        and c43_options.get("selection_only") is True
-        and not any(
-            key in c43_options
-            for key in (
-                "expected_excess_r_fit_dl_id",
-                "expected_excess_r_calibration_method",
-                "expected_r_fit_dl_id",
-                "expected_r_calibration_method",
-            )
-        )
-        and c43.robustness_role == "off"
-        and "C43-C28" in selection_excess_settings.contrasts
-        and "C42-C43" in selection_excess_settings.contrasts
-        and "C43" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
+                and c43.dl_id == c28.dl_id == "CONT13A_PIT"
+                and c43.param_source == c28.param_source == c42.param_source == "selection_min_roos"
+                and c43.rule_policy == c28.rule_policy == c42.rule_policy == "all_off"
+                and c43.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+                and c43_options == c42_options
+                and c43_options.get("preserve_k_r0") is True
+                and c43_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+                and c43_options.get("selection_only") is True
+                and not any(
+                    key in c43_options
+                    for key in (
+                        "expected_excess_r_fit_dl_id",
+                        "expected_excess_r_calibration_method",
+                        "expected_r_fit_dl_id",
+                        "expected_r_calibration_method",
+                    )
+                )
+                and c43.robustness_role == "off"
+                and "C43-C28" in selection_excess_settings.contrasts
+                and "C42-C43" in selection_excess_settings.contrasts
+                and "C43" not in {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms},
     )
 
     c32_full = selection_excess_settings.arms["C32"]
     c45 = selection_excess_settings.arms["C45"]
     c45_options = dict(c45.dl_runtime_options or {})
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "sr_c45_rejected_full_roos_transfer_is_historical_only_and_preserves_exact_solver_identity",
-        True,
         not c45.enabled
-        and c45.dl_id == c42.dl_id == "CONT13E_PIT"
-        and c45.param_source == c32_full.param_source == "selection_full_roos"
-        and c45.rule_policy == c32_full.rule_policy == "formal"
-        and c45.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
-        and c45_options == c42_options
-        and c45_options.get("preserve_k_r0") is True
-        and c45_options.get("constrained_solver") == "exact_branch_and_bound_v1"
-        and c45_options.get("selection_only") is True
-        and c45.robustness_role == "off"
-        and {"C45-C32", "C45-C42"}.issubset(selection_excess_settings.contrasts)
-        and not {"C45-C32", "C45-C42"}.intersection(
-            {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
-        )
-        and "C45" not in {arm.arm_id for arm in selection_excess_settings.enabled_arms}
-        and "C45" not in {
-            arm.arm_id
-            for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
-        },
+                and c45.dl_id == c42.dl_id == "CONT13E_PIT"
+                and c45.param_source == c32_full.param_source == "selection_full_roos"
+                and c45.rule_policy == c32_full.rule_policy == "formal"
+                and c45.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+                and c45_options == c42_options
+                and c45_options.get("preserve_k_r0") is True
+                and c45_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+                and c45_options.get("selection_only") is True
+                and c45.robustness_role == "off"
+                and {"C45-C32", "C45-C42"}.issubset(selection_excess_settings.contrasts)
+                and not {"C45-C32", "C45-C42"}.intersection(
+                    {contrast.contrast_id for contrast in selection_excess_settings.enabled_contrasts}
+                )
+                and "C45" not in {arm.arm_id for arm in selection_excess_settings.enabled_arms}
+                and "C45" not in {
+                    arm.arm_id
+                    for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
+                },
     )
 
     forward_exact_settings = strategy_config.get_strategy_comparison_settings("forward_oos")
@@ -5464,38 +5173,36 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     c36_forward = forward_exact_settings.arms["C36"]
     c44 = forward_exact_settings.arms["C44"]
     c44_options = dict(c44.dl_runtime_options or {})
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "sr_c44_is_forward_mr13e_score_exact_constrained_solver_ablation_using_same_generic_solver_as_c42_and_retains_mr12b_anchor",
-        True,
         c44.enabled
-        and c44.dl_id == c36_forward.dl_id == "CONT13E"
-        and c44.param_source == c36_forward.param_source == c20_forward.param_source == "min_roos"
-        and c44.rule_policy == c36_forward.rule_policy == c20_forward.rule_policy == "all_off"
-        and c44.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
-        and c44_options.get("preserve_k_r0") is True
-        and c44_options.get("constrained_solver") == "exact_branch_and_bound_v1"
-        and c44_options.get("selection_only") is False
-        and {k: v for k, v in c44_options.items() if k != "selection_only"}
-            == {k: v for k, v in c42_options.items() if k != "selection_only"}
-        and not any(
-            key in c44_options
-            for key in (
-                "expected_excess_r_fit_dl_id",
-                "expected_excess_r_calibration_method",
-                "expected_r_fit_dl_id",
-                "expected_r_calibration_method",
-            )
-        )
-        and c44.robustness_role == "off"
-        and not c20_forward.enabled
-        and not c36_forward.enabled
-        and c20_forward.dl_id == "CONT12B"
-        and {"C44-C20", "C44-C36"}.issubset(forward_exact_settings.contrasts)
-        and {"C44-C3", "C44-C1"}.issubset(
-            {contrast.contrast_id for contrast in forward_exact_settings.enabled_contrasts}
-        )
-        and "C43" not in {arm.arm_id for arm in forward_exact_settings.enabled_arms},
+                and c44.dl_id == c36_forward.dl_id == "CONT13E"
+                and c44.param_source == c36_forward.param_source == c20_forward.param_source == "min_roos"
+                and c44.rule_policy == c36_forward.rule_policy == c20_forward.rule_policy == "all_off"
+                and c44.dl_runtime_mode == c42.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+                and c44_options.get("preserve_k_r0") is True
+                and c44_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+                and c44_options.get("selection_only") is False
+                and {k: v for k, v in c44_options.items() if k != "selection_only"}
+                    == {k: v for k, v in c42_options.items() if k != "selection_only"}
+                and not any(
+                    key in c44_options
+                    for key in (
+                        "expected_excess_r_fit_dl_id",
+                        "expected_excess_r_calibration_method",
+                        "expected_r_fit_dl_id",
+                        "expected_r_calibration_method",
+                    )
+                )
+                and c44.robustness_role == "off"
+                and not c20_forward.enabled
+                and not c36_forward.enabled
+                and c20_forward.dl_id == "CONT12B"
+                and {"C44-C20", "C44-C36"}.issubset(forward_exact_settings.contrasts)
+                and {"C44-C3", "C44-C1"}.issubset(
+                    {contrast.contrast_id for contrast in forward_exact_settings.enabled_contrasts}
+                )
+                and "C43" not in {arm.arm_id for arm in forward_exact_settings.enabled_arms},
     )
 
     from filters.breakout_quality.rank_calibration import (
@@ -5512,40 +5219,36 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         np.asarray([-0.8, -0.1, 0.4, 0.2], dtype=np.float64),
     )
     curve_predictions = curve.predict(np.asarray([0.2, 0.5, 0.8, 1.0], dtype=np.float64))
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "excess_r_calibration_uses_full_daily_eligible_mean_and_monotonic_pava_without_absolute_r_baseline",
-        True,
         math.isclose(float(canonical_excess["daily_target_mean_r"].iloc[0]), 2.0, abs_tol=1e-12)
-        and np.allclose(
-            canonical_excess["target_excess_r"].to_numpy(dtype=np.float64),
-            np.asarray([-2.0, -1.0, 3.0], dtype=np.float64),
-        )
-        and math.isclose(float(canonical_excess["target_excess_r"].sum()), 0.0, abs_tol=1e-12)
-        and bool((np.diff(curve_predictions) >= -1e-12).all())
-        and int(curve_summary["isotonic_block_count"]) < 4,
+                and np.allclose(
+                    canonical_excess["target_excess_r"].to_numpy(dtype=np.float64),
+                    np.asarray([-2.0, -1.0, 3.0], dtype=np.float64),
+                )
+                and math.isclose(float(canonical_excess["target_excess_r"].sum()), 0.0, abs_tol=1e-12)
+                and bool((np.diff(curve_predictions) >= -1e-12).all())
+                and int(curve_summary["isotonic_block_count"]) < 4,
     )
 
     selection_expected_settings = strategy_config.get_strategy_comparison_settings("selection_pit")
     forward_expected_settings = strategy_config.get_strategy_comparison_settings("forward_oos")
     c37 = selection_expected_settings.arms["C37"]
     c38 = forward_expected_settings.arms["C38"]
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "frozen_mr13e_expected_pnl_arms_keep_same_ranker_identity_and_pit_fit_source_contract",
-        True,
         (not c37.enabled) and (not c38.enabled)
-        and "C37" in strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS
-        and "C38" in strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS
-        and c37.dl_id == "CONT13E_PIT"
-        and c38.dl_id == "CONT13E"
-        and c37.dl_runtime_mode == c38.dl_runtime_mode
-        == "resource-aware-continuous-expected-pnl-feasible-ascent"
-        and dict(c37.dl_runtime_options or {}).get("expected_r_fit_dl_id") == "CONT13E_PIT"
-        and dict(c38.dl_runtime_options or {}).get("expected_r_fit_dl_id") == "CONT13E_PIT"
-        and dict(c37.dl_runtime_options or {}).get("preserve_k_r0") is True
-        and dict(c38.dl_runtime_options or {}).get("preserve_k_r0") is True
-        and c37.robustness_role == c38.robustness_role == "off",
+                and "C37" in strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS
+                and "C38" in strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS
+                and c37.dl_id == "CONT13E_PIT"
+                and c38.dl_id == "CONT13E"
+                and c37.dl_runtime_mode == c38.dl_runtime_mode
+                == "resource-aware-continuous-expected-pnl-feasible-ascent"
+                and dict(c37.dl_runtime_options or {}).get("expected_r_fit_dl_id") == "CONT13E_PIT"
+                and dict(c38.dl_runtime_options or {}).get("expected_r_fit_dl_id") == "CONT13E_PIT"
+                and dict(c37.dl_runtime_options or {}).get("preserve_k_r0") is True
+                and dict(c38.dl_runtime_options or {}).get("preserve_k_r0") is True
+                and c37.robustness_role == c38.robustness_role == "off",
     )
 
     from services.breakout_quality import expected_r_calibration as expected_r_calibration_service
@@ -5621,18 +5324,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             phase_id="forward_oos",
             expected_forward_frozen_cutoff_exclusive="2022-01-01",
         )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "forward_expected_r_calibration_fits_only_mature_selection_pit_target_and_never_requires_forward_target",
-        True,
         calibration_manifest.get("fit_contract", {}).get("forward_target_used_for_fit") is False
-        and calibration_manifest.get("fit_contract", {}).get("forward_frozen_cutoff_exclusive") == "2021-01-01"
-        and calibration_manifest.get("source_artifacts", {}).get("fit_score_source") == "selection_point_in_time"
-        and calibration_manifest.get("fit_rows", [{}])[0].get("sample_count") == 4
-        and set(calibration_lookup["group_index"].astype(int)) == {101, 102}
-        and calibration_lookup["calibration_cutoff_exclusive"].astype(str).eq("2021-01-01").all()
-        and forward_cutoff_ready
-        and not forward_wrong_cutoff_ready,
+                and calibration_manifest.get("fit_contract", {}).get("forward_frozen_cutoff_exclusive") == "2021-01-01"
+                and calibration_manifest.get("source_artifacts", {}).get("fit_score_source") == "selection_point_in_time"
+                and calibration_manifest.get("fit_rows", [{}])[0].get("sample_count") == 4
+                and set(calibration_lookup["group_index"].astype(int)) == {101, 102}
+                and calibration_lookup["calibration_cutoff_exclusive"].astype(str).eq("2021-01-01").all()
+                and forward_cutoff_ready
+                and not forward_wrong_cutoff_ready,
     )
 
     with tempfile.TemporaryDirectory() as selection_calibration_tmp:
@@ -5708,17 +5409,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             expected_selection_runtime_start_date="2014-01-01",
         )
     selection_fit_rows = selection_calibration_manifest.get("fit_rows", [])
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "selection_expected_r_calibration_uses_configured_strategy_start_and_expanding_mature_target_only",
-        True,
         selection_calibration_manifest.get("fit_contract", {}).get("selection_runtime_start_date") == "2014-07-01"
-        and [row.get("cutoff_exclusive") for row in selection_fit_rows] == ["2014-07-01", "2015-01-01"]
-        and [row.get("sample_count") for row in selection_fit_rows] == [2, 4]
-        and selection_calibration_lookup["date"].astype(str).min() == "2014-07-02"
-        and set(selection_calibration_lookup["group_index"].astype(int)) == {3, 4, 5, 6}
-        and selection_start_ready
-        and not selection_wrong_start_ready,
+                and [row.get("cutoff_exclusive") for row in selection_fit_rows] == ["2014-07-01", "2015-01-01"]
+                and [row.get("sample_count") for row in selection_fit_rows] == [2, 4]
+                and selection_calibration_lookup["date"].astype(str).min() == "2014-07-02"
+                and set(selection_calibration_lookup["group_index"].astype(int)) == {3, 4, 5, 6}
+                and selection_start_ready
+                and not selection_wrong_start_ready,
     )
 
     ascent_gap_seed = (
@@ -5748,31 +5447,27 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     ascent_gap_action = select_resource_aware_action_candidates(
         ascent_gap_order, ascent_gap_diag
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "max_dl_feasible_ascent_improves_c17_local_repair_without_changing_k_or_resource_floor",
-        True,
         [row["ticker"] for row in ascent_gap_action] == ["X1", "X3", "X5"]
-        and ascent_gap_diag["max_dl_feasible_ascent_steps"] > 0
-        and ascent_gap_diag["max_dl_feasible_ascent_evaluations"] > 0
-        and ascent_gap_diag["max_dl_feasible_ascent_local_optimum"]
-        and not ascent_gap_diag["max_dl_fallback_to_baseline"]
-        and ascent_gap_diag["selector_elapsed_ns"] > 0
-        and ascent_gap_diag["selected_count"] == ascent_gap_diag["baseline_selected_count"]
-        and ascent_gap_diag["reserved_cost_milli"] >= ascent_gap_diag["baseline_reserved_cost_milli"],
+                and ascent_gap_diag["max_dl_feasible_ascent_steps"] > 0
+                and ascent_gap_diag["max_dl_feasible_ascent_evaluations"] > 0
+                and ascent_gap_diag["max_dl_feasible_ascent_local_optimum"]
+                and not ascent_gap_diag["max_dl_fallback_to_baseline"]
+                and ascent_gap_diag["selector_elapsed_ns"] > 0
+                and ascent_gap_diag["selected_count"] == ascent_gap_diag["baseline_selected_count"]
+                and ascent_gap_diag["reserved_cost_milli"] >= ascent_gap_diag["baseline_reserved_cost_milli"],
     )
     trace_baskets = dict(ascent_gap_diag.get("_selector_trace_baskets") or {})
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "max_dl_selector_exposes_transient_raw_repair_and_ascent_membership_without_changing_final_action",
-        True,
         bool(
-            [row["ticker"] for row in trace_baskets.get("raw_top_n", [])]
-            and len(trace_baskets.get("raw_top_n", [])) == ascent_gap_diag["pre_market_order_limit"]
-            and len(trace_baskets.get("minimum_repair_seed", [])) == ascent_gap_diag["pre_market_order_limit"]
-            and [row["ticker"] for row in trace_baskets.get("feasible_ascent_final", [])]
-            == [row["ticker"] for row in ascent_gap_action]
-        ),
+                    [row["ticker"] for row in trace_baskets.get("raw_top_n", [])]
+                    and len(trace_baskets.get("raw_top_n", [])) == ascent_gap_diag["pre_market_order_limit"]
+                    and len(trace_baskets.get("minimum_repair_seed", [])) == ascent_gap_diag["pre_market_order_limit"]
+                    and [row["ticker"] for row in trace_baskets.get("feasible_ascent_final", [])]
+                    == [row["ticker"] for row in ascent_gap_action]
+                ),
     )
 
     fallback_ascent_seed = (
@@ -5820,19 +5515,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     fallback_c18_action = select_resource_aware_action_candidates(
         fallback_c18_order, fallback_c18_diag
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "max_dl_feasible_ascent_continues_dl_optimization_after_c17_seed_fallback",
-        True,
         fallback_c17_diag["max_dl_fallback_to_baseline"]
-        and fallback_c18_diag["max_dl_seed_fallback"]
-        and not fallback_c18_diag["max_dl_fallback_to_baseline"]
-        and fallback_c18_diag["max_dl_feasible_ascent_steps"] > 0
-        and fallback_c18_diag["selected_score_sum"] > fallback_c17_diag["selected_score_sum"]
-        and [row["ticker"] for row in fallback_c17_action] == ["F1", "F2"]
-        and [row["ticker"] for row in fallback_c18_action] == ["F2", "F3"]
-        and fallback_c18_diag["selected_count"] == fallback_c18_diag["baseline_selected_count"]
-        and fallback_c18_diag["reserved_cost_milli"] >= fallback_c18_diag["baseline_reserved_cost_milli"],
+                and fallback_c18_diag["max_dl_seed_fallback"]
+                and not fallback_c18_diag["max_dl_fallback_to_baseline"]
+                and fallback_c18_diag["max_dl_feasible_ascent_steps"] > 0
+                and fallback_c18_diag["selected_score_sum"] > fallback_c17_diag["selected_score_sum"]
+                and [row["ticker"] for row in fallback_c17_action] == ["F1", "F2"]
+                and [row["ticker"] for row in fallback_c18_action] == ["F2", "F3"]
+                and fallback_c18_diag["selected_count"] == fallback_c18_diag["baseline_selected_count"]
+                and fallback_c18_diag["reserved_cost_milli"] >= fallback_c18_diag["baseline_reserved_cost_milli"],
     )
 
 
@@ -5863,19 +5556,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     ascent_gap_action = select_resource_aware_action_candidates(
         ascent_gap_order, ascent_gap_diag
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "max_dl_feasible_ascent_improves_c17_local_repair_without_changing_k_or_resource_floor",
-        True,
         [row["ticker"] for row in max_dl_action_rows] == ["T0", "T2", "T6"]
-        and [row["ticker"] for row in ascent_gap_action] == ["X1", "X3", "X5"]
-        and ascent_gap_diag["max_dl_feasible_ascent_steps"] > 0
-        and ascent_gap_diag["max_dl_feasible_ascent_evaluations"] > 0
-        and ascent_gap_diag["max_dl_feasible_ascent_local_optimum"]
-        and not ascent_gap_diag["max_dl_fallback_to_baseline"]
-        and ascent_gap_diag["selector_elapsed_ns"] > 0
-        and ascent_gap_diag["selected_count"] == ascent_gap_diag["baseline_selected_count"]
-        and ascent_gap_diag["reserved_cost_milli"] >= ascent_gap_diag["baseline_reserved_cost_milli"],
+                and [row["ticker"] for row in ascent_gap_action] == ["X1", "X3", "X5"]
+                and ascent_gap_diag["max_dl_feasible_ascent_steps"] > 0
+                and ascent_gap_diag["max_dl_feasible_ascent_evaluations"] > 0
+                and ascent_gap_diag["max_dl_feasible_ascent_local_optimum"]
+                and not ascent_gap_diag["max_dl_fallback_to_baseline"]
+                and ascent_gap_diag["selector_elapsed_ns"] > 0
+                and ascent_gap_diag["selected_count"] == ascent_gap_diag["baseline_selected_count"]
+                and ascent_gap_diag["reserved_cost_milli"] >= ascent_gap_diag["baseline_reserved_cost_milli"],
     )
 
     fallback_ascent_seed = (
@@ -5923,19 +5614,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     fallback_c18_action = select_resource_aware_action_candidates(
         fallback_c18_order, fallback_c18_diag
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "max_dl_feasible_ascent_continues_dl_optimization_after_c17_seed_fallback",
-        True,
         fallback_c17_diag["max_dl_fallback_to_baseline"]
-        and fallback_c18_diag["max_dl_seed_fallback"]
-        and not fallback_c18_diag["max_dl_fallback_to_baseline"]
-        and fallback_c18_diag["max_dl_feasible_ascent_steps"] > 0
-        and fallback_c18_diag["selected_score_sum"] > fallback_c17_diag["selected_score_sum"]
-        and [row["ticker"] for row in fallback_c17_action] == ["F1", "F2"]
-        and [row["ticker"] for row in fallback_c18_action] == ["F2", "F3"]
-        and fallback_c18_diag["selected_count"] == fallback_c18_diag["baseline_selected_count"]
-        and fallback_c18_diag["reserved_cost_milli"] >= fallback_c18_diag["baseline_reserved_cost_milli"],
+                and fallback_c18_diag["max_dl_seed_fallback"]
+                and not fallback_c18_diag["max_dl_fallback_to_baseline"]
+                and fallback_c18_diag["max_dl_feasible_ascent_steps"] > 0
+                and fallback_c18_diag["selected_score_sum"] > fallback_c17_diag["selected_score_sum"]
+                and [row["ticker"] for row in fallback_c17_action] == ["F1", "F2"]
+                and [row["ticker"] for row in fallback_c18_action] == ["F2", "F3"]
+                and fallback_c18_diag["selected_count"] == fallback_c18_diag["baseline_selected_count"]
+                and fallback_c18_diag["reserved_cost_milli"] >= fallback_c18_diag["baseline_reserved_cost_milli"],
     )
 
     mocked_pair_payload = {
@@ -6032,14 +5721,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             output_dir=Path(report_tmp),
         )
         readable_report_text = readable_report_path.read_text(encoding="utf-8")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "strategy_pair_outputs_always_materialize_markdown_and_console_simple_report",
-        True,
         "Breakout Quality Score 排序策略經濟效果對照" in rendered_pair_summary
-        and "主要結果" in rendered_pair_summary
-        and readable_report_path.name == "strategy_comparison.md"
-        and "# Breakout Quality Score 排序策略經濟效果對照" in readable_report_text,
+                and "主要結果" in rendered_pair_summary
+                and readable_report_path.name == "strategy_comparison.md"
+                and "# Breakout Quality Score 排序策略經濟效果對照" in readable_report_text,
     )
 
     mocked_baseline_payload = {
@@ -6124,23 +5811,21 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             status=dict(ready_status),
             auto_prepare=False,
         )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "ready_orchestration_executes_each_config_pair_and_writes_all_enabled_arms",
-        True,
         mocked_run.call_count == len(execution_pairs)
-        and mocked_baseline_run.call_count
-        == len(strategy_comparison_module._standalone_baseline_arms(settings))
-        and all(
-            call.kwargs.get("comparison_start_date") == "2021-01-01"
-            and call.kwargs.get("comparison_end_date") == "2021-12-31"
-            and call.kwargs.get("score_source")
-            == settings.dl_sources[pair_contract[3].dl_id].score_source
-            for pair_contract, call in zip(execution_pairs, mocked_run.call_args_list)
-        )
-        and set(replay_payload["scenarios"])
-        == {arm.arm_id for arm in settings.enabled_arms}
-        and replay_payload["status"] == "COMPLETED",
+                and mocked_baseline_run.call_count
+                == len(strategy_comparison_module._standalone_baseline_arms(settings))
+                and all(
+                    call.kwargs.get("comparison_start_date") == "2021-01-01"
+                    and call.kwargs.get("comparison_end_date") == "2021-12-31"
+                    and call.kwargs.get("score_source")
+                    == settings.dl_sources[pair_contract[3].dl_id].score_source
+                    for pair_contract, call in zip(execution_pairs, mocked_run.call_args_list)
+                )
+                and set(replay_payload["scenarios"])
+                == {arm.arm_id for arm in settings.enabled_arms}
+                and replay_payload["status"] == "COMPLETED",
     )
 
     seen_baseline_groups = set()
@@ -6163,12 +5848,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 and baseline_reuse_dir is None
             )
         seen_baseline_groups.add(group_key)
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "same_run_multiple_dl_arms_reuse_one_shared_baseline_after_first_pair",
-        True,
-        baseline_reuse_contract_ok,
-    )
+    check_true("same_run_multiple_dl_arms_reuse_one_shared_baseline_after_first_pair", baseline_reuse_contract_ok)
 
     from .synthetic_breakout_quality_strategy_reuse_cases import (
         append_completed_pair_cache_contract_checks,
@@ -6290,14 +5970,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             mismatched_baseline_rejected = True
         else:
             mismatched_baseline_rejected = False
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "shared_baseline_reuse_rehydrates_canonical_artifacts_and_rejects_contract_mismatch",
-        True,
         baseline_summary.get("total_return_pct") == 10.0
-        and len(baseline_payload["equity_curve"]) == 2
-        and len(baseline_orderable) == 1
-        and mismatched_baseline_rejected,
+                and len(baseline_payload["equity_curve"]) == 2
+                and len(baseline_orderable) == 1
+                and mismatched_baseline_rejected,
     )
 
     # Exercise shared-baseline aggregation with an isolated synthetic enabled
@@ -6415,16 +6093,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 == 10.0
             )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "multiple_dl_sources_require_identical_replayed_shared_baseline",
-        True,
         shared_baseline_fixture_available and repeated_baseline_mismatch_rejected,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "shared_baseline_consistency_ignores_only_volatile_selector_cpu_timing",
-        True,
         shared_baseline_fixture_available and volatile_timing_ignored,
     )
 
@@ -6488,16 +6162,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         for arm in settings.enabled_arms
         if arm.arm_id != switch_target_arm_id
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "individual_dl_arm_and_contrast_switches_are_runtime_effective",
         expected_reduced_arm_ids,
         tuple(arm.arm_id for arm in reduced_settings.enabled_arms),
-        note=(
-            "SKIP: fewer than two enabled DL arms"
-            if switch_target_arm_id is None
-            else ""
-        ),
+        note="SKIP: fewer than two enabled DL arms"
+                    if switch_target_arm_id is None
+                    else "",
     )
 
     reduced_enabled_ids = {
@@ -6528,18 +6199,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             name="enabled definition",
         )
     base_fingerprint = strategy_comparison_fingerprint(reduced_settings)
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "config_fingerprint_uses_effective_enabled_definitions_only",
-        True,
         disabled_definition_arm_id is not None
-        and enabled_definition_arm_id is not None
-        and strategy_comparison_fingerprint(
-            replace(reduced_settings, arms=disabled_arms_changed)
-        ) == base_fingerprint
-        and strategy_comparison_fingerprint(
-            replace(reduced_settings, arms=enabled_arms_changed)
-        ) != base_fingerprint,
+                and enabled_definition_arm_id is not None
+                and strategy_comparison_fingerprint(
+                    replace(reduced_settings, arms=disabled_arms_changed)
+                ) == base_fingerprint
+                and strategy_comparison_fingerprint(
+                    replace(reduced_settings, arms=enabled_arms_changed)
+                ) != base_fingerprint,
     )
 
     summary["config_path"] = "config/strategy_compare.py"
@@ -6552,6 +6221,7 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
     case_id = "BREAKOUT_QUALITY_DAILY_PIT_STRATEGY_RUNTIME"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config import strategy_compare as strategy_config
     from core.extended_signals import attach_breakout_quality_rank
@@ -6593,23 +6263,22 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         _validate_score_eligibility_contract({}, profile=daily_profile)
     except ValueError as exc:
         legacy_daily_rejected = "重新建立PIT Scores" in str(exc)
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "daily_pit_score_presence_depends_only_on_past_feature_history_contract",
         (
-            "feature_history_only", False, True,
-            "canonical_breakout_event_membership", False,
-            True, True,
-        ),
+                    "feature_history_only", False, True,
+                    "canonical_breakout_event_membership", False,
+                    True, True,
+                ),
         (
-            daily_contract["eligibility_basis"],
-            daily_contract["future_target_required_for_score"],
-            daily_contract["target_valid_required_for_training"],
-            event_contract["eligibility_basis"],
-            event_contract["future_target_required_for_score"],
-            current_daily_accepted,
-            legacy_daily_rejected,
-        ),
+                    daily_contract["eligibility_basis"],
+                    daily_contract["future_target_required_for_score"],
+                    daily_contract["target_valid_required_for_training"],
+                    event_contract["eligibility_basis"],
+                    event_contract["future_target_required_for_score"],
+                    current_daily_accepted,
+                    legacy_daily_rejected,
+                ),
     )
 
     group_table = pd.DataFrame([
@@ -6637,14 +6306,13 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         },
         validation_months=24,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "daily_pit_target_invalid_rows_are_excluded_from_training_but_still_scored",
         ([0], [1], [0, 1], [3, 4]),
         (
-            ids["train_ids"].tolist(), ids["validation_ids"].tolist(),
-            ids["final_ids"].tolist(), ids["score_ids"].tolist(),
-        ),
+                    ids["train_ids"].tolist(), ids["validation_ids"].tolist(),
+                    ids["final_ids"].tolist(), ids["score_ids"].tolist(),
+                ),
     )
 
     lookup_dates = []
@@ -6681,10 +6349,10 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
                 ticker="2330", signal_date=pd.Timestamp("2020-01-02"),
                 information_date=pd.Timestamp("2020-01-09"), high_len=275,
             )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "mr12b_keeps_event_score_date_while_mr13a_refreshes_latest_completed_information_date",
-        ["2020-01-02", "2020-01-09"], lookup_dates,
+        ["2020-01-02", "2020-01-09"],
+        lookup_dates,
     )
 
     daily_params = replace(
@@ -6724,8 +6392,7 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
                 information_date=pd.Timestamp("2020-01-09"),
                 signal_state=daily_state,
             )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "daily_continuation_recomputes_rank_each_day_instead_of_inheriting_event_score",
         (1, 0.9, "2020-01-09"),
         (lookup.call_count, refreshed["score"], refreshed["score_date"]),
@@ -6881,15 +6548,14 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
             )
         except AssertionError:
             daily_lookup_uses_precomputed_score_period = False
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "mr13a_forward_oos_contract_uses_daily_gzip_artifact_not_event_csv_schema",
         (True, True, True),
         (
-            daily_forward_contract_accepts_canonical_gzip,
-            daily_forward_table_uses_all_oos_rows_without_split_column,
-            daily_lookup_uses_precomputed_score_period,
-        ),
+                    daily_forward_contract_accepts_canonical_gzip,
+                    daily_forward_table_uses_all_oos_rows_without_split_column,
+                    daily_lookup_uses_precomputed_score_period,
+                ),
     )
 
     settings = strategy_config.get_strategy_comparison_settings()
@@ -6898,21 +6564,20 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         settings.arms["C27"], settings.arms["C28"],
     )
     selection_source = settings.dl_sources["CONT13A_PIT"]
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "stage3_selection_daily_pit_arm_definitions_remain_frozen_after_gate",
         (
-            False, False, "CONT13A_PIT", "CONT13A_PIT",
-            c24.param_source, c24.rule_policy, c24.dl_runtime_mode,
-            c25.param_source, c25.rule_policy, c25.dl_runtime_mode,
-            "selection_point_in_time", DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
-        ),
+                    False, False, "CONT13A_PIT", "CONT13A_PIT",
+                    c24.param_source, c24.rule_policy, c24.dl_runtime_mode,
+                    c25.param_source, c25.rule_policy, c25.dl_runtime_mode,
+                    "selection_point_in_time", DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+                ),
         (
-            c27.enabled, c28.enabled, c27.dl_id, c28.dl_id,
-            c27.param_source, c27.rule_policy, c27.dl_runtime_mode,
-            c28.param_source, c28.rule_policy, c28.dl_runtime_mode,
-            selection_source.score_source, selection_source.experiment_profile,
-        ),
+                    c27.enabled, c28.enabled, c27.dl_id, c28.dl_id,
+                    c27.param_source, c27.rule_policy, c27.dl_runtime_mode,
+                    c28.param_source, c28.rule_policy, c28.dl_runtime_mode,
+                    selection_source.score_source, selection_source.experiment_profile,
+                ),
     )
 
     forward_settings = strategy_config.get_strategy_comparison_settings("forward_oos")
@@ -6930,34 +6595,30 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
     configured_forward_contrasts = tuple(
         strategy_config.STRATEGY_COMPARE_PROFILES["forward_oos"]["contrast_ids"]
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "forward_oos_profile_honors_config_and_freezes_min_mr12b_mr13a_runtime_identity",
-        True,
         {arm.arm_id for arm in forward_settings.enabled_arms} == set(configured_forward_arms)
-        and set(active_contrasts) == set(configured_forward_contrasts)
-        and (c20.param_source, c20.rule_policy, c20.dl_id, c20.dl_runtime_mode)
-        == (
-            "min_roos", "all_off", "CONT12B",
-            "resource-aware-continuous-max-dl-feasible-ascent",
-        )
-        and (c29.param_source, c29.rule_policy, c29.dl_id, c29.dl_runtime_mode)
-        == (
-            "min_roos", "all_off", "CONT13A",
-            "resource-aware-continuous-max-dl-feasible-ascent",
-        )
-        and forward_source.score_source == "continuous_ranker_oos"
-        and forward_source.experiment_profile == DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
-        and c30.param_source == "full_roos"
-        and c31.param_source == "full_roos",
+                and set(active_contrasts) == set(configured_forward_contrasts)
+                and (c20.param_source, c20.rule_policy, c20.dl_id, c20.dl_runtime_mode)
+                == (
+                    "min_roos", "all_off", "CONT12B",
+                    "resource-aware-continuous-max-dl-feasible-ascent",
+                )
+                and (c29.param_source, c29.rule_policy, c29.dl_id, c29.dl_runtime_mode)
+                == (
+                    "min_roos", "all_off", "CONT13A",
+                    "resource-aware-continuous-max-dl-feasible-ascent",
+                )
+                and forward_source.score_source == "continuous_ranker_oos"
+                and forward_source.experiment_profile == DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+                and c30.param_source == "full_roos"
+                and c31.param_source == "full_roos",
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "forward_oos_common_period_remains_auto_resolved_from_enabled_dl_sources",
-        True,
         c1.param_source == "full_roos" and not c1.dl_enabled
-        and c3.param_source == "min_roos" and not c3.dl_enabled
-        and forward_settings.start_date is None and forward_settings.end_date is None,
+                and c3.param_source == "min_roos" and not c3.dl_enabled
+                and forward_settings.start_date is None and forward_settings.end_date is None,
     )
 
     project_root = Path(__file__).resolve().parents[2]
@@ -6968,12 +6629,10 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         project_root / "services" / "breakout_quality" /
         "continuous_ranker_pipeline.py"
     ).read_text(encoding="utf-8")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "training_and_strategy_diagnostics_share_domain_layer_profile_sample_provider",
-        True,
         "load_profile_continuous_ranker_data" in strategy_diagnostics_source
-        and "load_profile_continuous_ranker_data" in pipeline_source,
+                and "load_profile_continuous_ranker_data" in pipeline_source,
     )
 
     summary["profile"] = DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
@@ -6986,6 +6645,7 @@ def validate_breakout_quality_mr13e_strategy_source_gate_contract_case(_base_par
     case_id = "BREAKOUT_QUALITY_MR13E_STRATEGY_SOURCE_GATE"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config import strategy_compare as strategy_config
     from config.breakout_quality import get_breakout_quality_workflow_settings
@@ -7001,47 +6661,38 @@ def validate_breakout_quality_mr13e_strategy_source_gate_contract_case(_base_par
     pit_source = selection.dl_sources["CONT13E_PIT"]
     oos_source = forward.dl_sources["CONT13E"]
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "mr13e_strategy_gate_sources_bind_only_to_mr13e_daily_profile",
         (
-            workflow.experiment_profile,
-            "selection_point_in_time",
-            workflow.experiment_profile,
-            "continuous_ranker_oos",
-        ),
+                    workflow.experiment_profile,
+                    "selection_point_in_time",
+                    workflow.experiment_profile,
+                    "continuous_ranker_oos",
+                ),
         (
-            pit_source.experiment_profile,
-            pit_source.score_source,
-            oos_source.experiment_profile,
-            oos_source.score_source,
-        ),
+                    pit_source.experiment_profile,
+                    pit_source.score_source,
+                    oos_source.experiment_profile,
+                    oos_source.score_source,
+                ),
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "mr13e_selection_arm_is_source_only_against_mr12b_and_mr13a",
-        True,
-        (
-            (c35.param_source, c35.rule_policy, c35.dl_runtime_mode)
-            == (c25.param_source, c25.rule_policy, c25.dl_runtime_mode)
-            == (c28.param_source, c28.rule_policy, c28.dl_runtime_mode)
-            and (c25.dl_id, c28.dl_id, c35.dl_id)
-            == ("CONT12B_PIT", "CONT13A_PIT", "CONT13E_PIT")
-            and c35.robustness_role == "off"
-        ),
+        (c35.param_source, c35.rule_policy, c35.dl_runtime_mode)
+                    == (c25.param_source, c25.rule_policy, c25.dl_runtime_mode)
+                    == (c28.param_source, c28.rule_policy, c28.dl_runtime_mode)
+                    and (c25.dl_id, c28.dl_id, c35.dl_id)
+                    == ("CONT12B_PIT", "CONT13A_PIT", "CONT13E_PIT")
+                    and c35.robustness_role == "off",
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "mr13e_forward_arm_is_source_only_against_mr12b_and_mr13a",
-        True,
-        (
-            (c36.param_source, c36.rule_policy, c36.dl_runtime_mode)
-            == (c20.param_source, c20.rule_policy, c20.dl_runtime_mode)
-            == (c29.param_source, c29.rule_policy, c29.dl_runtime_mode)
-            and (c20.dl_id, c29.dl_id, c36.dl_id)
-            == ("CONT12B", "CONT13A", "CONT13E")
-            and c36.robustness_role == "off"
-        ),
+        (c36.param_source, c36.rule_policy, c36.dl_runtime_mode)
+                    == (c20.param_source, c20.rule_policy, c20.dl_runtime_mode)
+                    == (c29.param_source, c29.rule_policy, c29.dl_runtime_mode)
+                    and (c20.dl_id, c29.dl_id, c36.dl_id)
+                    == ("CONT12B", "CONT13A", "CONT13E")
+                    and c36.robustness_role == "off",
     )
     selection_robust = strategy_config.get_strategy_multi_seed_robustness_settings(
         "selection_pit"
@@ -7055,22 +6706,20 @@ def validate_breakout_quality_mr13e_strategy_source_gate_contract_case(_base_par
     forward_robust_profile = strategy_config.get_strategy_comparison_settings(
         forward_robust.profile_id
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "mr13e_multi_seed_profiles_reference_only_enabled_dl_arms_without_mutating_single_seed_roles",
-        True,
         all(
-            arm_id in selection_ids
-            and selection_robust_profile.arms[arm_id].dl_enabled
-            and selection_robust_profile.arms[arm_id].robustness_role == "off"
-            for arm_id in selection_robust.stochastic_arm_ids
-        )
-        and all(
-            arm_id in forward_ids
-            and forward_robust_profile.arms[arm_id].dl_enabled
-            and forward_robust_profile.arms[arm_id].robustness_role == "off"
-            for arm_id in forward_robust.stochastic_arm_ids
-        ),
+                    arm_id in selection_ids
+                    and selection_robust_profile.arms[arm_id].dl_enabled
+                    and selection_robust_profile.arms[arm_id].robustness_role == "off"
+                    for arm_id in selection_robust.stochastic_arm_ids
+                )
+                and all(
+                    arm_id in forward_ids
+                    and forward_robust_profile.arms[arm_id].dl_enabled
+                    and forward_robust_profile.arms[arm_id].robustness_role == "off"
+                    for arm_id in forward_robust.stochastic_arm_ids
+                ),
     )
 
     summary["selection_arm"] = "C42"
@@ -7083,6 +6732,7 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
     case_id = "BREAKOUT_QUALITY_RUNTIME_INTEGRATION_GATE"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config.breakout_quality import (
         get_breakout_quality_workflow_settings,
@@ -7107,61 +6757,49 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
     selection_source = dict(selection["dl_source"])
     forward_source = dict(forward["dl_source"])
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "runtime_integration_candidate_is_same_mr13e_exact_semantics_across_stages",
-        True,
-        (
-            selection_source["experiment_profile"]
-            == forward_source["experiment_profile"]
-            == workflow.experiment_profile
-            and workflow_profile.training_sample_scope
-            == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
-            and selection_source["score_source"] == "selection_point_in_time"
-            and forward_source["score_source"] == "continuous_ranker_oos"
-            and runtime["param_source"] == forward["param_source"]
-            and selection["rule_policy"] == forward["rule_policy"] == "all_off"
-            and selection["dl_runtime_mode"]
-            == forward["dl_runtime_mode"]
-            == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL
-            and dict(selection["dl_runtime_options"]).get("preserve_k_r0") is True
-            and dict(forward["dl_runtime_options"]).get("preserve_k_r0") is True
-            and dict(selection["dl_runtime_options"]).get("constrained_solver")
-            == dict(forward["dl_runtime_options"]).get("constrained_solver")
-            == "exact_branch_and_bound_v1"
-            and dict(selection["dl_runtime_options"]).get("selection_only") is True
-            and dict(forward["dl_runtime_options"]).get("selection_only") is False
-        ),
+        selection_source["experiment_profile"]
+                    == forward_source["experiment_profile"]
+                    == workflow.experiment_profile
+                    and workflow_profile.training_sample_scope
+                    == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+                    and selection_source["score_source"] == "selection_point_in_time"
+                    and forward_source["score_source"] == "continuous_ranker_oos"
+                    and runtime["param_source"] == forward["param_source"]
+                    and selection["rule_policy"] == forward["rule_policy"] == "all_off"
+                    and selection["dl_runtime_mode"]
+                    == forward["dl_runtime_mode"]
+                    == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL
+                    and dict(selection["dl_runtime_options"]).get("preserve_k_r0") is True
+                    and dict(forward["dl_runtime_options"]).get("preserve_k_r0") is True
+                    and dict(selection["dl_runtime_options"]).get("constrained_solver")
+                    == dict(forward["dl_runtime_options"]).get("constrained_solver")
+                    == "exact_branch_and_bound_v1"
+                    and dict(selection["dl_runtime_options"]).get("selection_only") is True
+                    and dict(forward["dl_runtime_options"]).get("selection_only") is False,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "runtime_integration_legacy_gate_is_disabled_after_framework_migration_while_anchor_identity_is_preserved",
-        True,
-        (
-            not cfg.enabled
-            and runtime["experiment_profile"] == workflow.experiment_profile
-            and cfg.comparison_anchor_experiment_profile != workflow.experiment_profile
-            and cfg.selection_profile_id == "selection_pit"
-            and cfg.forward_profile_id == "forward_oos"
-            and selection["candidate_arm_id"] == cfg.selection_candidate_arm_id
-            and forward["candidate_arm_id"] == cfg.forward_candidate_arm_id
-        ),
+        not cfg.enabled
+                    and runtime["experiment_profile"] == workflow.experiment_profile
+                    and cfg.comparison_anchor_experiment_profile != workflow.experiment_profile
+                    and cfg.selection_profile_id == "selection_pit"
+                    and cfg.forward_profile_id == "forward_oos"
+                    and selection["candidate_arm_id"] == cfg.selection_candidate_arm_id
+                    and forward["candidate_arm_id"] == cfg.forward_candidate_arm_id,
     )
     from filters.breakout_quality.runtime import get_breakout_quality_ranking_source_context
 
     runtime_context = get_breakout_quality_ranking_source_context()
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "promoted_workflow_runtime_uses_mr13e_exact_canonical_context",
-        True,
-        (
-            workflow.runtime_strategy_enabled
-            and runtime_context.experiment_profile == workflow.experiment_profile
-            and runtime_context.model_architecture == workflow.model_architecture
-            and runtime_context.score_source == "canonical_runtime"
-            and runtime_context.ranking_policy == workflow.runtime_ranking_policy
-            and dict(runtime_context.ranking_options or {}) == dict(workflow.runtime_ranking_options)
-        ),
+        workflow.runtime_strategy_enabled
+                    and runtime_context.experiment_profile == workflow.experiment_profile
+                    and runtime_context.model_architecture == workflow.model_architecture
+                    and runtime_context.score_source == "canonical_runtime"
+                    and runtime_context.ranking_policy == workflow.runtime_ranking_policy
+                    and dict(runtime_context.ranking_options or {}) == dict(workflow.runtime_ranking_options),
     )
     from filters.breakout_quality.export_scores import parse_args as parse_score_export_args
 
@@ -7173,8 +6811,7 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
             "workflow_runtime",
         ]
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "promoted_mr13e_profile_is_accepted_by_workflow_runtime_score_export_cli",
         (workflow.experiment_profile, "workflow_runtime"),
         (parsed_runtime_export.experiment_profile, parsed_runtime_export.scope),
@@ -7195,10 +6832,8 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
                 "workflow_runtime",
             ],
         )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "promoted_mr13e_workflow_export_dispatches_to_daily_continuous_path",
-        True,
         dispatch_rc == 0 and daily_export.call_count == 1,
     )
 
@@ -7206,27 +6841,19 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
         Path(__file__).resolve().parents[2]
         / "filters" / "breakout_quality" / "export_scores.py"
     ).read_text(encoding="utf-8")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "workflow_runtime_scores_are_separate_from_forward_oos_canonical_scores",
-        True,
-        (
-            '"runtime"' in export_source
-            and '"runtime_manifest.json"' in export_source
-            and "if args.scope == RUNTIME_SCOPE_WORKFLOW" in export_source
-            and "canonical Forward-OOS research score/manifest are not modified" in export_source
-        ),
+        '"runtime"' in export_source
+                    and '"runtime_manifest.json"' in export_source
+                    and "if args.scope == RUNTIME_SCOPE_WORKFLOW" in export_source
+                    and "canonical Forward-OOS research score/manifest are not modified" in export_source,
     )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "workflow_runtime_mr13e_export_uses_daily_continuous_ranker_contract",
-        True,
-        (
-            "load_daily_universal_ranker_data" in export_source
-            and "load_continuous_ranker_oos_contract" in export_source
-            and "ranker_api.predict_scores" in export_source
-            and '"model_score"' in export_source
-        ),
+        "load_daily_universal_ranker_data" in export_source
+                    and "load_continuous_ranker_oos_contract" in export_source
+                    and "ranker_api.predict_scores" in export_source
+                    and '"model_score"' in export_source,
     )
 
     from filters.breakout_quality import workflow_runtime_score_store as runtime_store
@@ -7354,41 +6981,32 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
                 outside_coverage_rejected = False
         runtime_store.load_workflow_runtime_score_bundle.cache_clear()
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "workflow_runtime_daily_score_lookup_preserves_c44_unavailable_semantics",
-        True,
-        (
-            available_rank["available"] is True
-            and available_rank["score"] == 0.75
-            and available_rank["score_source"] == "canonical_runtime"
-            and missing_rank["available"] is False
-            and missing_rank["unavailable_reason"] == "missing_ticker_date_score"
-            and missing_rank["score_source"] == "canonical_runtime"
-            and outside_coverage_rejected
-        ),
+        available_rank["available"] is True
+                    and available_rank["score"] == 0.75
+                    and available_rank["score_source"] == "canonical_runtime"
+                    and missing_rank["available"] is False
+                    and missing_rank["unavailable_reason"] == "missing_ticker_date_score"
+                    and missing_rank["score_source"] == "canonical_runtime"
+                    and outside_coverage_rejected,
     )
     research_source = (Path(__file__).resolve().parents[2] / "apps" / "research.py").read_text(encoding="utf-8")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "runtime_promotion_is_explicit_gate_guarded_menu_action",
-        True,
-        (
-            "套用／更新正式 Runtime" in research_source
-            and "apply_or_refresh_runtime_promotion" in research_source
-            and 'action in {"promote", "apply", "refresh"}' in research_source
-        ),
+        "套用／更新正式 Runtime" in research_source
+                    and "apply_or_refresh_runtime_promotion" in research_source
+                    and 'action in {"promote", "apply", "refresh"}' in research_source,
     )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "runtime_integration_decision_is_strict_three_state",
         ("GO", "BLOCKED", "NO_GO"),
         (
-            _overall_decision([{"status": "PASS"}]),
-            _overall_decision([{"status": "PASS"}, {"status": "BLOCKED"}]),
-            _overall_decision([{"status": "BLOCKED"}, {"status": "FAIL"}]),
-        ),
+                    _overall_decision([{"status": "PASS"}]),
+                    _overall_decision([{"status": "PASS"}, {"status": "BLOCKED"}]),
+                    _overall_decision([{"status": "BLOCKED"}, {"status": "FAIL"}]),
+                ),
     )
 
     certificate_status, certificate_evidence = _exact_certificate_status({
@@ -7399,16 +7017,12 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
         "resource_aware_max_dl_order_count_violation_days": 0,
         "resource_aware_preservation_violation_days": 0,
     })
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "runtime_integration_exact_certificate_uses_exact_active_days_not_max_dl_subset",
-        True,
-        (
-            certificate_status == "PASS"
-            and certificate_evidence["certificate_required_days"] == 8
-            and certificate_evidence["max_dl_eligible_days_diagnostic_only"] == 5
-            and certificate_evidence["certified_days"] == 8
-        ),
+        certificate_status == "PASS"
+                    and certificate_evidence["certificate_required_days"] == 8
+                    and certificate_evidence["max_dl_eligible_days_diagnostic_only"] == 5
+                    and certificate_evidence["certified_days"] == 8,
     )
     violation_status, _ = _exact_certificate_status({
         "resource_aware_dl_selection_days": 5,
@@ -7422,8 +7036,7 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
         "resource_aware_max_dl_eligible_days": 5,
         "resource_aware_constrained_optimality_certified_days": 5,
     })
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check(
         "runtime_integration_exact_certificate_violation_and_missing_evidence_are_distinct",
         ("FAIL", "BLOCKED"),
         (violation_status, missing_status),
@@ -7433,15 +7046,11 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
         Path(__file__).resolve().parents[2]
         / "filters" / "breakout_quality" / "runtime_integration_gate.py"
     ).read_text(encoding="utf-8")
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
+    check_true(
         "runtime_integration_reuses_historical_outputs_without_mutating_runtime_default",
-        True,
-        (
-            "settings.reuse_output_roots" in gate_source
-            and "workflow.experiment_profile =" not in gate_source
-            and "run_runtime_integration_gate" in gate_source
-        ),
+        "settings.reuse_output_roots" in gate_source
+                    and "workflow.experiment_profile =" not in gate_source
+                    and "run_runtime_integration_gate" in gate_source,
     )
 
     summary["candidate_profile"] = runtime["experiment_profile"]

@@ -26,7 +26,7 @@ from config.breakout_quality import (
     DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
     DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
 )
-from .checks import add_check
+from .checks import bind_checks
 
 
 def _capture_stdout(func, *args, **kwargs):
@@ -44,18 +44,20 @@ def _capture_stderr(func, *args, **kwargs):
 
 
 def _assert_value_error(results, category, case_id, metric_name, func, expected_substring):
+    check, check_true = bind_checks(results, category, case_id)
     try:
         func()
     except ValueError as exc:
-        add_check(results, category, case_id, metric_name, True, expected_substring in str(exc))
+        check_true(metric_name, expected_substring in str(exc))
     else:
-        add_check(results, category, case_id, metric_name, True, False)
+        check_true(metric_name, False)
 
 
 def validate_dataset_cli_contract_case(_base_params):
     case_id = "CLI_DATASET_WRAPPER_CONTRACT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "cli_contract", case_id)
 
     app_breakout_quality = importlib.import_module("tools.filters.breakout_quality.application")
     app_strategy_compare = importlib.import_module("apps.research")
@@ -72,13 +74,9 @@ def validate_dataset_cli_contract_case(_base_params):
         app_breakout_quality.main,
         ["apps/research.py model", "--help"],
     )
-    add_check(results, "cli_contract", case_id, "breakout_quality_app_help_rc", 0, rc)
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check("breakout_quality_app_help_rc", 0, rc)
+    check_true(
         "breakout_quality_app_help_usage",
-        True,
         "用法: python apps/research.py model [menu|workflow|<command>] [options]" in help_text,
     )
     with TemporaryDirectory() as tmp_dir:
@@ -92,9 +90,15 @@ def validate_dataset_cli_contract_case(_base_params):
                 elapsed_sec=1.25,
             )
         simple_text = simple_rc.read_text(encoding="utf-8")
-        add_check(results, "cli_contract", case_id, "breakout_quality_app_simple_report_console", True, "Breakout Quality 簡易報表" in simple_stdout)
-        add_check(results, "cli_contract", case_id, "breakout_quality_app_simple_report_markdown", True, simple_rc.is_file() and "# Breakout Quality 簡易報表" in simple_text)
-        add_check(results, "cli_contract", case_id, "breakout_quality_app_simple_report_uses_relative_path", True, "outputs/filters/breakout_quality/synthetic_quality/simple_reports/evaluate.md" in simple_stdout and str(simple_root) not in simple_stdout)
+        check_true("breakout_quality_app_simple_report_console", "Breakout Quality 簡易報表" in simple_stdout)
+        check_true(
+            "breakout_quality_app_simple_report_markdown",
+            simple_rc.is_file() and "# Breakout Quality 簡易報表" in simple_text,
+        )
+        check_true(
+            "breakout_quality_app_simple_report_uses_relative_path",
+            "outputs/filters/breakout_quality/synthetic_quality/simple_reports/evaluate.md" in simple_stdout and str(simple_root) not in simple_stdout,
+        )
 
         ranker_output = app_breakout_quality.resolve_filter_model_output_dir(
             simple_root,
@@ -170,23 +174,20 @@ def validate_dataset_cli_contract_case(_base_params):
                 elapsed_sec=2.5,
             )
         ranker_markdown = ranker_report_path.read_text(encoding="utf-8")
-        add_check(
-            results,
-            "cli_contract",
-            case_id,
+        check(
             "continuous_ranker_simple_report_keeps_existing_metrics_and_adds_top_k_boundary",
             (True, True, True, True, True),
             (
-                "選模 Validation rho" in ranker_stdout and "0.1169" in ranker_stdout
-                and "重訓後原 Validation rho" in ranker_stdout,
-                "完整 Selection 重訓後排序品質" in ranker_stdout and "Pair" in ranker_stdout,
-                "Top-K / K-boundary" in ranker_stdout and "NDCG@K" in ranker_stdout,
-                "Actual Round-trip R" in ranker_stdout,
-                "## 完整 Selection 重訓後排序品質" in ranker_markdown
-                and "## Top-K / K-boundary" in ranker_markdown
-                and "只看候選數>K" in ranker_markdown
-                and "## Actual Round-trip R" in ranker_markdown,
-            ),
+                            "選模 Validation rho" in ranker_stdout and "0.1169" in ranker_stdout
+                            and "重訓後原 Validation rho" in ranker_stdout,
+                            "完整 Selection 重訓後排序品質" in ranker_stdout and "Pair" in ranker_stdout,
+                            "Top-K / K-boundary" in ranker_stdout and "NDCG@K" in ranker_stdout,
+                            "Actual Round-trip R" in ranker_stdout,
+                            "## 完整 Selection 重訓後排序品質" in ranker_markdown
+                            and "## Top-K / K-boundary" in ranker_markdown
+                            and "只看候選數>K" in ranker_markdown
+                            and "## Actual Round-trip R" in ranker_markdown,
+                        ),
         )
 
         dual_output = app_breakout_quality.resolve_filter_model_output_dir(
@@ -230,16 +231,13 @@ def validate_dataset_cli_contract_case(_base_params):
                 returncode=0,
                 elapsed_sec=2.5,
             )
-        add_check(
-            results,
-            "cli_contract",
-            case_id,
+        check(
             "continuous_ranker_dual_component_simple_report_surfaces_primary_oos_component_rhos",
             (True, True),
             (
-                "OOS MFE component rho" in dual_stdout and "0.3812" in dual_stdout,
-                "OOS Adverse component rho" in dual_stdout and "0.0944" in dual_stdout,
-            ),
+                            "OOS MFE component rho" in dual_stdout and "0.3812" in dual_stdout,
+                            "OOS Adverse component rho" in dual_stdout and "0.0944" in dual_stdout,
+                        ),
         )
 
     for command in (
@@ -249,45 +247,31 @@ def validate_dataset_cli_contract_case(_base_params):
         "compare-continuous-rankers",
         "build-binary-point-in-time-scores", "audit-point-in-time-scores",
     ):
-        add_check(
-            results,
-            "cli_contract",
-            case_id,
-            f"breakout_quality_app_help_lists_{command.replace('-', '_')}",
-            True,
-            command in help_text,
-        )
+        check_true(f"breakout_quality_app_help_lists_{command.replace('-', '_')}", command in help_text)
 
     with patch("tools.filters.breakout_quality.application.is_interactive_console", return_value=False):
         rc, no_arg_text = _capture_stdout(
             app_breakout_quality.main,
             ["apps/research.py model"],
         )
-    add_check(results, "cli_contract", case_id, "breakout_quality_noninteractive_no_arg_help_rc", 0, rc)
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "breakout_quality_noninteractive_no_arg_help",
-        True,
-        "Breakout quality Dataset" in no_arg_text,
-    )
+    check("breakout_quality_noninteractive_no_arg_help_rc", 0, rc)
+    check_true("breakout_quality_noninteractive_no_arg_help", "Breakout quality Dataset" in no_arg_text)
 
     with (
         patch("tools.filters.breakout_quality.application.is_interactive_console", return_value=True),
         patch("tools.filters.breakout_quality.application.run_model_training_menu", return_value=31) as mocked_menu,
     ):
         rc = app_breakout_quality.main(["apps/research.py model"])
-    add_check(results, "cli_contract", case_id, "breakout_quality_interactive_no_arg_menu_rc", 31, rc)
-    add_check(results, "cli_contract", case_id, "breakout_quality_interactive_no_arg_menu_called", 1, mocked_menu.call_count)
+    check("breakout_quality_interactive_no_arg_menu_rc", 31, rc)
+    check("breakout_quality_interactive_no_arg_menu_called", 1, mocked_menu.call_count)
 
     with (
         patch("tools.filters.breakout_quality.application.is_interactive_console", return_value=True),
         patch("tools.filters.breakout_quality.application.run_model_training_menu", return_value=32) as mocked_menu,
     ):
         rc = app_breakout_quality.main(["apps/research.py model", "menu"])
-    add_check(results, "cli_contract", case_id, "breakout_quality_explicit_menu_rc", 32, rc)
-    add_check(results, "cli_contract", case_id, "breakout_quality_explicit_menu_called", 1, mocked_menu.call_count)
+    check("breakout_quality_explicit_menu_rc", 32, rc)
+    check("breakout_quality_explicit_menu_called", 1, mocked_menu.call_count)
 
     interactive_commands = []
 
@@ -402,40 +386,27 @@ def validate_dataset_cli_contract_case(_base_params):
                 app_breakout_quality._interactive_model_research,
                 "apps/research.py model",
             )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "breakout_quality_model_research_menu_rc",
-        0,
-        rc,
-    )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check("breakout_quality_model_research_menu_rc", 0, rc)
+    check_true(
         "breakout_quality_continuous_model_research_menu_route_uses_isolated_profile",
-        True,
-        (
-            "build-point-in-time-scores" in [item["command"] for item in interactive_commands]
-            and "audit-point-in-time-scores" in [item["command"] for item in interactive_commands]
-            and any("--single-score-block" in item["args"] and "2021-01-01" in item["args"] for item in interactive_commands if item["command"] == "build-point-in-time-scores")
-            and all(item["compact_console"] == "1" for item in interactive_commands)
-            and interactive_text.count("[Dataset]") == 0
-            and "偵測到 PIT 模型所需 Dataset 尚未就緒" not in interactive_text
-            and "[rebuild]" not in interactive_text
-            and "[relabel]" not in interactive_text
-            and "=== Continuous DL 模型研究與驗證 ===" in interactive_text
-            and "[1]  Extending-Window Test  (Enter)" in interactive_text
-            and "[2]  Fixed-Window Stability Test" in interactive_text
-            and "[3]  查看目前Workflow與工件狀態" in interactive_text
-            and "[5]  Timing Mode｜Rolling 訓練前後比較" in interactive_text
-            and "OOS Test | 2021-01-01→最新" in interactive_text
-            and f"[4]  {configured_ranker_menu_label}" not in interactive_text
-            and "MR-12A/B/C" not in interactive_text
-            and "Audit／診斷" not in interactive_text
-            and "策略組合比較" not in interactive_text
-        ),
+        "build-point-in-time-scores" in [item["command"] for item in interactive_commands]
+                    and "audit-point-in-time-scores" in [item["command"] for item in interactive_commands]
+                    and any("--single-score-block" in item["args"] and "2021-01-01" in item["args"] for item in interactive_commands if item["command"] == "build-point-in-time-scores")
+                    and all(item["compact_console"] == "1" for item in interactive_commands)
+                    and interactive_text.count("[Dataset]") == 0
+                    and "偵測到 PIT 模型所需 Dataset 尚未就緒" not in interactive_text
+                    and "[rebuild]" not in interactive_text
+                    and "[relabel]" not in interactive_text
+                    and "=== Continuous DL 模型研究與驗證 ===" in interactive_text
+                    and "[1]  Extending-Window Test  (Enter)" in interactive_text
+                    and "[2]  Fixed-Window Stability Test" in interactive_text
+                    and "[3]  查看目前Workflow與工件狀態" in interactive_text
+                    and "[5]  Timing Mode｜Rolling 訓練前後比較" in interactive_text
+                    and "OOS Test | 2021-01-01→最新" in interactive_text
+                    and f"[4]  {configured_ranker_menu_label}" not in interactive_text
+                    and "MR-12A/B/C" not in interactive_text
+                    and "Audit／診斷" not in interactive_text
+                    and "策略組合比較" not in interactive_text,
     )
 
     comparison_commands = []
@@ -474,19 +445,16 @@ def validate_dataset_cli_contract_case(_base_params):
                 app_breakout_quality._interactive_model_research,
                 "apps/research.py model",
             )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_legacy_ranker_comparison_is_not_exposed_in_current_operational_model_menu",
         (0, [], True),
         (
-            comparison_rc,
-            comparison_commands,
-            f"[4]  {configured_comparison_menu_label}" not in comparison_text
-            and "Extending-Window Test" in comparison_text
-            and "Fixed-Window Stability Test" in comparison_text,
-        ),
+                    comparison_rc,
+                    comparison_commands,
+                    f"[4]  {configured_comparison_menu_label}" not in comparison_text
+                    and "Extending-Window Test" in comparison_text
+                    and "Fixed-Window Stability Test" in comparison_text,
+                ),
     )
 
     with patch("builtins.input", side_effect=["0"]):
@@ -494,18 +462,15 @@ def validate_dataset_cli_contract_case(_base_params):
             app_breakout_quality._interactive_model_research,
             "apps/research.py model",
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_model_menu_has_no_manual_strategy_prerequisite_preparation_entry",
         (0, True, True),
         (
-            compact_model_menu_rc,
-            "準備策略比較所需模型工件" not in compact_model_menu_text,
-            "[4]  比較目前 Target 與 reference Target" in compact_model_menu_text
-            and "[5]  Timing Mode｜Rolling 訓練前後比較" in compact_model_menu_text,
-        ),
+                    compact_model_menu_rc,
+                    "準備策略比較所需模型工件" not in compact_model_menu_text,
+                    "[4]  比較目前 Target 與 reference Target" in compact_model_menu_text
+                    and "[5]  Timing Mode｜Rolling 訓練前後比較" in compact_model_menu_text,
+                ),
     )
 
     with (
@@ -519,17 +484,14 @@ def validate_dataset_cli_contract_case(_base_params):
             app_breakout_quality._interactive_model_research,
             "apps/research.py model",
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_model_menu_exposes_and_routes_rolling_timing_mode",
         (61, 1, True),
         (
-            rolling_timing_rc,
-            rolling_timing_menu.call_count,
-            "[5]  Timing Mode｜Rolling 訓練前後比較" in rolling_timing_text,
-        ),
+                    rolling_timing_rc,
+                    rolling_timing_menu.call_count,
+                    "[5]  Timing Mode｜Rolling 訓練前後比較" in rolling_timing_text,
+                ),
     )
 
     rolling_timing = importlib.import_module("services.breakout_quality.rolling_timing")
@@ -555,17 +517,14 @@ def validate_dataset_cli_contract_case(_base_params):
     timing_candidate_bad = json.loads(json.dumps(timing_candidate))
     timing_candidate_bad["years"][0]["scores_file_sha256"] = "changed"
     changed_timing = rolling_timing._comparison_payload(timing_baseline, timing_candidate_bad)
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "rolling_timing_compares_speed_without_accepting_changed_results",
         (True, 1.25, False),
         (
-            bool(exact_timing.get("exact_result")),
-            round(float(exact_timing.get("total_speedup_x") or 0.0), 2),
-            bool(changed_timing.get("exact_result")),
-        ),
+                    bool(exact_timing.get("exact_result")),
+                    round(float(exact_timing.get("total_speedup_x") or 0.0), 2),
+                    bool(changed_timing.get("exact_result")),
+                ),
     )
 
     with patch(
@@ -575,10 +534,7 @@ def validate_dataset_cli_contract_case(_base_params):
         numbered_model_rc = app_breakout_quality.run_model_training_menu(
             "apps/research.py model"
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_model_provider_delegates_to_model_menu",
         (37, 1),
         (numbered_model_rc, model_menu.call_count),
@@ -594,10 +550,7 @@ def validate_dataset_cli_contract_case(_base_params):
         continuous_default_rc = app_breakout_quality._interactive_model_research(
             "apps/research.py model"
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_continuous_model_menu_default_routes_to_extending_rolling_test",
         (47, 1),
         (continuous_default_rc, continuous_train_route.call_count),
@@ -615,18 +568,15 @@ def validate_dataset_cli_contract_case(_base_params):
             app_breakout_quality._interactive_model_research,
             "apps/research.py model",
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_model_menu_shows_operational_and_stability_when_active_profile_supports_rolling_pit",
         (0, True, True),
         (
-            no_pit_rc,
-            "[2]  Fixed-Window Stability Test" in no_pit_text,
-            "[1]  Extending-Window Test  (Enter)" in no_pit_text
-            and "[2]  Fixed-Window Stability Test" in no_pit_text,
-        ),
+                    no_pit_rc,
+                    "[2]  Fixed-Window Stability Test" in no_pit_text,
+                    "[1]  Extending-Window Test  (Enter)" in no_pit_text
+                    and "[2]  Fixed-Window Stability Test" in no_pit_text,
+                ),
     )
 
     with (
@@ -646,22 +596,19 @@ def validate_dataset_cli_contract_case(_base_params):
         with redirect_stdout(rejected_status_out):
             app_breakout_quality._print_workflow_status(rejected_profile_settings)
         rejected_status_text = rejected_status_out.getvalue()
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "rejected_no_pit_profile_keeps_rolling_menu_visible_and_blocks_at_execution_boundary",
         (0, False, True, True, False),
         (
-            rejected_rc,
-            rejected_profile_settings.rolling_authorized,
-            "[1]  Extending-Window Test  (Enter)" in rejected_text
-            and "[2]  Fixed-Window Stability Test" in rejected_text
-            and "[5]  Timing Mode｜Rolling 訓練前後比較" in rejected_text,
-            "尚未授權Rolling PIT" in rejected_text,
-            "Extending OOS Test Scores" in rejected_status_text
-            or "Extending-Window Test" in rejected_status_text,
-        ),
+                    rejected_rc,
+                    rejected_profile_settings.rolling_authorized,
+                    "[1]  Extending-Window Test  (Enter)" in rejected_text
+                    and "[2]  Fixed-Window Stability Test" in rejected_text
+                    and "[5]  Timing Mode｜Rolling 訓練前後比較" in rejected_text,
+                    "尚未授權Rolling PIT" in rejected_text,
+                    "Extending OOS Test Scores" in rejected_status_text
+                    or "Extending-Window Test" in rejected_status_text,
+                ),
     )
 
     research_app = importlib.import_module("apps.research")
@@ -670,28 +617,14 @@ def validate_dataset_cli_contract_case(_base_params):
         patch("apps.research._audit_menu", return_value=0) as audit_menu,
     ):
         audit_menu_rc = research_app._interactive_menu()
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "research_audit_menu_route",
-        (0, 1),
-        (audit_menu_rc, audit_menu.call_count),
-    )
+    check("research_audit_menu_route", (0, 1), (audit_menu_rc, audit_menu.call_count))
 
     with (
         patch("builtins.input", side_effect=["5", "0"]),
         patch("apps.research._show_research_status", return_value=0) as status_menu,
     ):
         status_menu_rc = research_app._interactive_menu()
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "research_status_menu_route",
-        (0, 1),
-        (status_menu_rc, status_menu.call_count),
-    )
+    check("research_status_menu_route", (0, 1), (status_menu_rc, status_menu.call_count))
 
     status_output = StringIO()
     current_model_settings = app_breakout_quality.get_breakout_quality_model_research_settings()
@@ -724,22 +657,16 @@ def validate_dataset_cli_contract_case(_base_params):
             and "Legacy Frozen Model / OOS" in rendered_status
             and pit_status_ok
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check_true(
         "breakout_quality_workflow_status_reflects_current_config_without_absolute_paths",
-        True,
-        (
-            "Current Breakout Quality Workflow" in rendered_status
-            and str(current_model_settings.experiment_profile) in rendered_status
-            and str(current_model_settings.training_objective) in rendered_status
-            and str(current_model_settings.training_label_scope) in rendered_status
-            and str(current_model_settings.training_sample_scope) in rendered_status
-            and workflow_status_contract_ok
-            and "C:\\Users\\" not in rendered_status
-            and "/mnt/data/" not in rendered_status
-        ),
+        "Current Breakout Quality Workflow" in rendered_status
+                    and str(current_model_settings.experiment_profile) in rendered_status
+                    and str(current_model_settings.training_objective) in rendered_status
+                    and str(current_model_settings.training_label_scope) in rendered_status
+                    and str(current_model_settings.training_sample_scope) in rendered_status
+                    and workflow_status_contract_ok
+                    and "C:\\Users\\" not in rendered_status
+                    and "/mnt/data/" not in rendered_status,
     )
 
     dataset_prepare_commands = []
@@ -829,44 +756,38 @@ def validate_dataset_cli_contract_case(_base_params):
         dataset_prepare_rc = app_breakout_quality._interactive_model_research(
             "apps/research.py model"
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_continuous_workflow_prepares_missing_dataset_first",
         (
-            0,
-            [
-                "build-dataset",
-                "prepare-continuous-target",
-                "build-point-in-time-scores",
-                "audit-point-in-time-scores",
-            ],
-            dataset_step[1],
-            ["1", "1", "1", "1"],
-        ),
+                    0,
+                    [
+                        "build-dataset",
+                        "prepare-continuous-target",
+                        "build-point-in-time-scores",
+                        "audit-point-in-time-scores",
+                    ],
+                    dataset_step[1],
+                    ["1", "1", "1", "1"],
+                ),
         (
-            dataset_prepare_rc,
-            [item[0] for item in dataset_prepare_commands],
-            dataset_prepare_commands[0][1],
-            [item[3] for item in dataset_prepare_commands],
-        ),
+                    dataset_prepare_rc,
+                    [item[0] for item in dataset_prepare_commands],
+                    dataset_prepare_commands[0][1],
+                    [item[3] for item in dataset_prepare_commands],
+                ),
     )
 
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_dataset_refresh_reasons_are_compacted",
         "既有工件不完整、來源資料已更新、設定已變更",
         app_breakout_quality._compact_dataset_refresh_reason(
-            [
-                "dataset 工件缺少: feature_bank, events",
-                "來源 CSV inventory 已更新: existing=old, current=new",
-                "feature contract 已變更",
-                "feature contract 已變更",
-            ]
-        ),
+                    [
+                        "dataset 工件缺少: feature_bank, events",
+                        "來源 CSV inventory 已更新: existing=old, current=new",
+                        "feature contract 已變更",
+                        "feature contract 已變更",
+                    ]
+                ),
     )
 
     prepare_target_module = importlib.import_module(
@@ -893,17 +814,14 @@ def validate_dataset_cli_contract_case(_base_params):
                 model_research_settings.continuous_target_id,
             ]
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_prepare_continuous_target_rebuilds_then_revalidates",
         (0, 1, model_research_settings.continuous_target_id),
         (
-            prepare_target_rc,
-            build_target.call_count,
-            build_target.call_args.kwargs.get("target_id"),
-        ),
+                    prepare_target_rc,
+                    build_target.call_count,
+                    build_target.call_args.kwargs.get("target_id"),
+                ),
     )
 
     compact_current_output = StringIO()
@@ -932,10 +850,7 @@ def validate_dataset_cli_contract_case(_base_params):
                 model_research_settings.continuous_target_id,
             ]
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_compact_current_target_is_silent",
         (0, ""),
         (compact_current_rc, compact_current_output.getvalue()),
@@ -964,17 +879,14 @@ def validate_dataset_cli_contract_case(_base_params):
         binary_rc = app_breakout_quality._interactive_model_research(
             "apps/research.py model"
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_binary_profile_routes_to_binary_model_submenu",
         (41, 1, binary_model_research_settings),
         (
-            binary_rc,
-            binary_route.call_count,
-            binary_route.call_args.kwargs.get("workflow_settings"),
-        ),
+                    binary_rc,
+                    binary_route.call_count,
+                    binary_route.call_args.kwargs.get("workflow_settings"),
+                ),
     )
 
     with (
@@ -989,35 +901,28 @@ def validate_dataset_cli_contract_case(_base_params):
             "apps/research.py model",
             workflow_settings=binary_model_research_settings,
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "binary_model_menu_enter_default_remains_new_label_train_route",
         (43, 1, True),
         (
-            binary_default_rc,
-            binary_default_route.call_count,
-            "[1]  建立新Label → 重新訓練 → 模型預測報表  (Enter)" in binary_default_text,
-        ),
+                    binary_default_rc,
+                    binary_default_route.call_count,
+                    "[1]  建立新Label → 重新訓練 → 模型預測報表  (Enter)" in binary_default_text,
+                ),
     )
 
     strategy_rc, strategy_help = _capture_stdout(
         app_strategy_compare.main,
         ["apps/research.py", "compare", "--help"],
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check_true(
         "strategy_compare_app_help_is_generic_and_config_driven",
-        True,
         strategy_rc == 0
-        and "[run|status]" in strategy_help
-        and "config/strategy_compare.py" in strategy_help
-        and "integration [run|promote|status|latest]" in strategy_help
-        and "C1" not in strategy_help
-        and "TP1" not in strategy_help,
+                and "[run|status]" in strategy_help
+                and "config/strategy_compare.py" in strategy_help
+                and "integration [run|promote|status|latest]" in strategy_help
+                and "C1" not in strategy_help
+                and "TP1" not in strategy_help,
     )
 
     strategy_calls = []
@@ -1053,37 +958,31 @@ def validate_dataset_cli_contract_case(_base_params):
         forward_status_rc = app_strategy_compare.main(
             ["apps/research.py", "compare", "forward_oos", "status"]
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "strategy_compare_app_separates_profiles_run_and_status",
         (
-            0, 0, 0, 0,
-            [
-                ("run", "selection_pit", False),
-                ("status", "selection_pit"),
-                ("run", "forward_oos", False),
-                ("status", "forward_oos"),
-            ],
-        ),
+                    0, 0, 0, 0,
+                    [
+                        ("run", "selection_pit", False),
+                        ("status", "selection_pit"),
+                        ("run", "forward_oos", False),
+                        ("status", "forward_oos"),
+                    ],
+                ),
         (
-            selection_run_rc,
-            selection_status_rc,
-            forward_run_rc,
-            forward_status_rc,
-            strategy_calls,
-        ),
+                    selection_run_rc,
+                    selection_status_rc,
+                    forward_run_rc,
+                    forward_status_rc,
+                    strategy_calls,
+                ),
     )
 
     strategy_profiles = app_strategy_compare.get_strategy_comparison_profiles()
     menu_profiles = app_strategy_compare.get_strategy_comparison_menu_profiles()
     robustness_profiles = app_strategy_compare.get_strategy_multi_seed_robustness_profiles()
     menu_renderer = importlib.import_module("core.console_report").render_menu_item
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "default_first_menu_item_uses_shared_enter_suffix_format",
         "[1]  synthetic  (Enter)",
         menu_renderer(1, "synthetic", default=True),
@@ -1095,16 +994,13 @@ def validate_dataset_cli_contract_case(_base_params):
         for item in robustness_profiles
     ]
     robustness_profile_id_set = set(robustness_profile_ids)
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "strategy_compare_robustness_order_matches_strategy_profile_order",
         [
-            item["profile_id"]
-            for item in strategy_profiles
-            if item["profile_id"] in robustness_profile_id_set
-        ],
+                    item["profile_id"]
+                    for item in strategy_profiles
+                    if item["profile_id"] in robustness_profile_id_set
+                ],
         robustness_profile_ids,
     )
     menu_profile_count = len(menu_profiles)
@@ -1132,34 +1028,28 @@ def validate_dataset_cli_contract_case(_base_params):
         patch("apps.research._strategy_multi_seed_robustness_menu") as robustness_menu,
     ):
         strategy_robustness_menu_rc = app_strategy_compare._strategy_compare_menu()
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "strategy_compare_interactive_menu_is_rolling_mode_driven",
         (
-            0,
-            1,
-            0,
-            str(first_mode["profile_id"]),
-            0,
-            str(first_mode["robustness_id"]),
-        ),
+                    0,
+                    1,
+                    0,
+                    str(first_mode["profile_id"]),
+                    0,
+                    str(first_mode["robustness_id"]),
+                ),
         (
-            strategy_menu_rc,
-            all_status.call_count,
-            strategy_profile_menu_rc,
-            None if not profile_menu.call_args else str(profile_menu.call_args.args[0]),
-            strategy_robustness_menu_rc,
-            None if not robustness_menu.call_args else str(robustness_menu.call_args.args[0]),
-        ),
+                    strategy_menu_rc,
+                    all_status.call_count,
+                    strategy_profile_menu_rc,
+                    None if not profile_menu.call_args else str(profile_menu.call_args.args[0]),
+                    strategy_robustness_menu_rc,
+                    None if not robustness_menu.call_args else str(robustness_menu.call_args.args[0]),
+                ),
     )
 
     app_source = Path(app_strategy_compare.__file__).read_text(encoding="utf-8")
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "strategy_compare_menu_has_no_combined_multi_seed_robustness_entry",
         False,
         "一次執行全部 Multi-seed robustness" in app_source,
@@ -1206,27 +1096,24 @@ def validate_dataset_cli_contract_case(_base_params):
         robustness_latest_rc = app_strategy_compare.main(
             ["apps/research.py", "compare", "robustness", "latest"]
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "strategy_compare_multi_seed_robustness_cli_routes_run_status_latest",
         (
-            0,
-            0,
-            0,
-            [
-                ("run", default_robustness_id, False, True),
-                ("status", default_robustness_id),
-                ("latest", default_robustness_id),
-            ],
-        ),
+                    0,
+                    0,
+                    0,
+                    [
+                        ("run", default_robustness_id, False, True),
+                        ("status", default_robustness_id),
+                        ("latest", default_robustness_id),
+                    ],
+                ),
         (
-            robustness_run_rc,
-            robustness_status_rc,
-            robustness_latest_rc,
-            robustness_calls,
-        ),
+                    robustness_run_rc,
+                    robustness_status_rc,
+                    robustness_latest_rc,
+                    robustness_calls,
+                ),
     )
 
 
@@ -1278,10 +1165,7 @@ def validate_dataset_cli_contract_case(_base_params):
         integration_latest_rc = app_strategy_compare.main(
             ["apps/research.py", "compare", "integration", "latest"]
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "strategy_compare_runtime_integration_cli_routes_run_promote_status_latest",
         (0, 0, 0, 0, ["run", "promote", "status", "latest"]),
         (integration_run_rc, integration_promote_rc, integration_status_rc, integration_latest_rc, integration_calls),
@@ -1295,16 +1179,13 @@ def validate_dataset_cli_contract_case(_base_params):
         rc = app_breakout_quality.main(
             ["apps/research.py model", "workflow", "--filter-id", "synthetic_quality"]
         )
-    add_check(results, "cli_contract", case_id, "breakout_quality_workflow_rc", 33, rc)
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check("breakout_quality_workflow_rc", 33, rc)
+    check(
         "breakout_quality_workflow_parse_argv",
         ["--filter-id", "synthetic_quality"],
         mocked_parse.call_args.args[0],
     )
-    add_check(results, "cli_contract", case_id, "breakout_quality_workflow_called", 1, mocked_workflow.call_count)
+    check("breakout_quality_workflow_called", 1, mocked_workflow.call_count)
 
     workflow_args = SimpleNamespace(
         filter_id="synthetic_quality",
@@ -1367,107 +1248,66 @@ def validate_dataset_cli_contract_case(_base_params):
     workflow_calls_by_command = {
         command: argv for command, argv, _program_name in workflow_calls
     }
-    add_check(results, "cli_contract", case_id, "breakout_quality_workflow_report_rc", 0, workflow_rc)
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check("breakout_quality_workflow_report_rc", 0, workflow_rc)
+    check(
         "breakout_quality_active_workflow_runs_supervised_stages_only",
         ["train", "export-scores", "report"],
         [call[0] for call in workflow_calls],
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check_true(
         "breakout_quality_workflow_report_includes_oos_flag",
-        True,
         "--include-oos" in workflow_calls_by_command["report"],
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check_true(
         "breakout_quality_workflow_propagates_experiment_to_active_model_stages",
-        True,
         all(
-            "--experiment-profile" in workflow_calls_by_command[command]
-            and ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
-            in workflow_calls_by_command[command]
-            for command in ("train", "export-scores", "report")
-        ),
+                    "--experiment-profile" in workflow_calls_by_command[command]
+                    and ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
+                    in workflow_calls_by_command[command]
+                    for command in ("train", "export-scores", "report")
+                ),
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check_true(
         "breakout_quality_workflow_propagates_parallel_split_evaluation",
-        True,
         "--parallel-split-evaluation" in workflow_calls_by_command["train"],
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check_true(
         "breakout_quality_workflow_propagates_torch_execution_contract",
-        True,
         all(
-            "--device" in workflow_calls_by_command[command]
-            and "cpu" in workflow_calls_by_command[command]
-            and "--no-mixed-precision" in workflow_calls_by_command[command]
-            and "--mixed-precision-dtype" in workflow_calls_by_command[command]
-            and "float16" in workflow_calls_by_command[command]
-            and "--deterministic-algorithms" in workflow_calls_by_command[command]
-            and "--no-allow-tf32" in workflow_calls_by_command[command]
-            for command in ("train", "export-scores")
-        ),
+                    "--device" in workflow_calls_by_command[command]
+                    and "cpu" in workflow_calls_by_command[command]
+                    and "--no-mixed-precision" in workflow_calls_by_command[command]
+                    and "--mixed-precision-dtype" in workflow_calls_by_command[command]
+                    and "float16" in workflow_calls_by_command[command]
+                    and "--deterministic-algorithms" in workflow_calls_by_command[command]
+                    and "--no-allow-tf32" in workflow_calls_by_command[command]
+                    for command in ("train", "export-scores")
+                ),
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check_true(
         "breakout_quality_workflow_propagates_experiment_and_regularization",
-        True,
-        (
-            "--experiment-profile" in workflow_calls_by_command["train"]
-            and ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
-            in workflow_calls_by_command["train"]
-            and "--weight-decay" in workflow_calls_by_command["train"]
-            and "0.0001" in workflow_calls_by_command["train"]
-            and "--gradient-clip-norm" in workflow_calls_by_command["train"]
-            and "1.0" in workflow_calls_by_command["train"]
-        ),
+        "--experiment-profile" in workflow_calls_by_command["train"]
+                    and ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
+                    in workflow_calls_by_command["train"]
+                    and "--weight-decay" in workflow_calls_by_command["train"]
+                    and "0.0001" in workflow_calls_by_command["train"]
+                    and "--gradient-clip-norm" in workflow_calls_by_command["train"]
+                    and "1.0" in workflow_calls_by_command["train"],
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check_true(
         "breakout_quality_workflow_propagates_refit_and_weight_modes",
-        True,
-        (
-            "--final-refit-mode" in workflow_calls_by_command["train"]
-            and "matched_optimizer_steps" in workflow_calls_by_command["train"]
-            and "--class-weight-mode" in workflow_calls_by_command["train"]
-            and "none" in workflow_calls_by_command["train"]
-            and "--time-weight-mode" in workflow_calls_by_command["train"]
-        ),
+        "--final-refit-mode" in workflow_calls_by_command["train"]
+                    and "matched_optimizer_steps" in workflow_calls_by_command["train"]
+                    and "--class-weight-mode" in workflow_calls_by_command["train"]
+                    and "none" in workflow_calls_by_command["train"]
+                    and "--time-weight-mode" in workflow_calls_by_command["train"],
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_active_workflow_shows_each_stage_elapsed",
         3,
         workflow_console.count("[完成]") if "總耗時" in workflow_console else -1,
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "breakout_quality_redirected_workflow_has_no_ansi",
-        False,
-        "\x1b[" in workflow_console,
-    )
+    check("breakout_quality_redirected_workflow_has_no_ansi", False, "\x1b[" in workflow_console)
 
     legacy_workflow_rejections = {}
     for legacy_architecture in (
@@ -1504,12 +1344,8 @@ def validate_dataset_cli_contract_case(_base_params):
             else:
                 legacy_workflow_rejections[legacy_architecture] = False
 
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check_true(
         "breakout_quality_workflow_rejects_legacy_architectures_before_execution",
-        True,
         all(legacy_workflow_rejections.values()),
         note=str(legacy_workflow_rejections),
     )
@@ -1532,14 +1368,7 @@ def validate_dataset_cli_contract_case(_base_params):
         ),
     ):
         valid_moment_pipeline = moment_contract_module.require_moment_pipeline_class()
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "moment_runtime_accepts_exact_package_versions",
-        object,
-        valid_moment_pipeline,
-    )
+    check("moment_runtime_accepts_exact_package_versions", object, valid_moment_pipeline)
 
     def _stale_transformers_version(package_name):
         return {
@@ -1568,14 +1397,7 @@ def validate_dataset_cli_contract_case(_base_params):
         )
     else:
         stale_transformers_rejected = False
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "moment_runtime_rejects_stale_transformers",
-        True,
-        stale_transformers_rejected,
-    )
+    check_true("moment_runtime_rejects_stale_transformers", stale_transformers_rejected)
 
     pretrain_module = importlib.import_module("tools.filters.breakout_quality.pretrain")
     parsed_pretrain = pretrain_module.parse_args(
@@ -1589,17 +1411,11 @@ def validate_dataset_cli_contract_case(_base_params):
     resolved_pretrain_profile, resolved_pretrain_paths = (
         pretrain_module._resolve_pretrained_encoder_output(parsed_pretrain)
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check_true(
         "breakout_quality_pretrain_uses_selected_experiment_profile",
-        True,
-        (
-            resolved_pretrain_profile == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
-            and resolved_pretrain_paths.output_dir.parent.name
-            == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
-        ),
+        resolved_pretrain_profile == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
+                    and resolved_pretrain_paths.output_dir.parent.name
+                    == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     )
 
     train_module = importlib.import_module("tools.filters.breakout_quality.train")
@@ -1611,10 +1427,7 @@ def validate_dataset_cli_contract_case(_base_params):
         elapsed_sec=65.4,
         improved=True,
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_train_epoch_output_is_concise",
         "  Epoch  2/20 | Train Loss 0.667840 | Val Loss 0.693970 | 耗時 01:05.4 | ★ 新最佳",
         epoch_line,
@@ -1625,10 +1438,7 @@ def validate_dataset_cli_contract_case(_base_params):
         train_loss=0.674436,
         elapsed_sec=3723.2,
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_full_refit_output_labels_train_loss",
         "  Epoch  2/2 | Train Loss 0.674436 | 耗時 01:02:03.2",
         full_refit_line,
@@ -1642,14 +1452,10 @@ def validate_dataset_cli_contract_case(_base_params):
         improved=False,
         color=True,
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check_true(
         "breakout_quality_epoch_elapsed_value_is_cyan_only",
-        True,
         "耗時 \x1b[96m00:01.2\x1b[0m" in colored_epoch_line
-        and "Train Loss \x1b[" not in colored_epoch_line,
+                and "Train Loss \x1b[" not in colored_epoch_line,
     )
     build_module = importlib.import_module("tools.filters.breakout_quality.build_dataset")
     build_progress_line = build_module._render_full_build_progress(
@@ -1660,34 +1466,25 @@ def validate_dataset_cli_contract_case(_base_params):
         group_count=678,
         elapsed_sec=65.4,
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_dataset_progress_is_single_line_summary",
         "Dataset 建立  12/100 ( 12.0%) | 2330 | events=12,345 | groups=678 | 01:05.4",
         build_progress_line,
     )
 
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_dataset_skips_are_aggregated",
         "跳過=61（有效資料不足=59；欄位不完整=2）",
         build_module._render_skip_summary(
-            Counter({"有效資料不足": 59, "欄位不完整": 2})
-        ),
+                    Counter({"有效資料不足": 59, "欄位不完整": 2})
+                ),
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_dataset_skip_reason_removes_dynamic_row_count",
         "有效資料不足",
         build_module._skip_reason_label(
-            ValueError("有效資料不足: 清洗後僅剩 356 列")
-        ),
+                    ValueError("有效資料不足: 清洗後僅剩 356 列")
+                ),
     )
 
     console_report_module = importlib.import_module(
@@ -1705,14 +1502,7 @@ def validate_dataset_cli_contract_case(_base_params):
             (("Dataset summary", Path("outputs/example.json")),),
             project_root=Path.cwd(),
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "breakout_quality_compact_console_hides_internal_artifact_paths",
-        "",
-        compact_artifact_output.getvalue(),
-    )
+    check("breakout_quality_compact_console_hides_internal_artifact_paths", "", compact_artifact_output.getvalue())
 
     class _SyntheticTTY(StringIO):
         def isatty(self):
@@ -1726,16 +1516,12 @@ def validate_dataset_cli_contract_case(_base_params):
     progress.update("Dataset 建立完成")
     progress.finish()
     rendered_progress = progress_stream.getvalue()
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check_true(
         "breakout_quality_dataset_progress_bounds_and_reuses_one_terminal_line",
-        True,
         rendered_progress.count("\n") == 1
-        and rendered_progress.count("\r") == 2
-        and "\x1b[2K" not in rendered_progress
-        and "…" in rendered_progress,
+                and rendered_progress.count("\r") == 2
+                and "\x1b[2K" not in rendered_progress
+                and "…" in rendered_progress,
     )
     compact_summary = train_module._render_training_summary(
         split_report={
@@ -1766,38 +1552,26 @@ def validate_dataset_cli_contract_case(_base_params):
             "sampled_row_count": 23072,
         },
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check_true(
         "breakout_quality_train_summary_keeps_key_counts",
-        True,
-        (
-            "Training Sampling：unique_ticker_date；Inner 538,887→16,832；"
-            "Final 729,654→23,072" in compact_summary
-            and "Final Refit：729,654 rows / 23,072 groups" in compact_summary
-            and "OOS（未參與訓練）：591,679 rows / 17,346 groups" in compact_summary
-            and "Final Loss：0.674436" in compact_summary
-        ),
+        "Training Sampling：unique_ticker_date；Inner 538,887→16,832；"
+                    "Final 729,654→23,072" in compact_summary
+                    and "Final Refit：729,654 rows / 23,072 groups" in compact_summary
+                    and "OOS（未參與訓練）：591,679 rows / 17,346 groups" in compact_summary
+                    and "Final Loss：0.674436" in compact_summary,
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_train_summary_omits_raw_dict",
         False,
         "split_report=" in compact_summary or "{'" in compact_summary,
     )
 
     policy_filter_id = app_breakout_quality._policy_filter_id()
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_interactive_filter_id_comes_from_policy",
         app_breakout_quality.normalize_filter_id(
-            app_breakout_quality.BREAKOUT_QUALITY_DEFAULT_FILTER_ID
-        ),
+                    app_breakout_quality.BREAKOUT_QUALITY_DEFAULT_FILTER_ID
+                ),
         policy_filter_id,
     )
     policy_train_settings = app_breakout_quality._policy_train_settings(policy_filter_id)
@@ -1820,10 +1594,7 @@ def validate_dataset_cli_contract_case(_base_params):
         "early_stopping_patience",
         "early_stopping_min_delta",
     )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_interactive_training_settings_come_from_policy",
         tuple(getattr(parsed_train_defaults, name) for name in policy_fields),
         tuple(getattr(policy_train_settings, name) for name in policy_fields),
@@ -1883,33 +1654,30 @@ def validate_dataset_cli_contract_case(_base_params):
         interactive_workflow_rc = app_breakout_quality._interactive_workflow(
             "apps/research.py model"
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_workflow_uses_full_all_oos_without_prompts",
         (
-            0,
-            [(
-                "是否強制完整重建 dataset（即使目前不需要）",
-                False,
-            ), (
-                "確認開始",
-                True,
-            )],
-            1,
-            0,
-            0,
-            0,
-        ),
+                    0,
+                    [(
+                        "是否強制完整重建 dataset（即使目前不需要）",
+                        False,
+                    ), (
+                        "確認開始",
+                        True,
+                    )],
+                    1,
+                    0,
+                    0,
+                    0,
+                ),
         (
-            interactive_workflow_rc,
-            workflow_prompt_labels,
-            mocked_policy_print.call_count,
-            mocked_choice.call_count,
-            mocked_int.call_count,
-            mocked_interactive_workflow.call_count,
-        ),
+                    interactive_workflow_rc,
+                    workflow_prompt_labels,
+                    mocked_policy_print.call_count,
+                    mocked_choice.call_count,
+                    mocked_int.call_count,
+                    mocked_interactive_workflow.call_count,
+                ),
     )
 
     stale_prompt_labels = []
@@ -1949,34 +1717,31 @@ def validate_dataset_cli_contract_case(_base_params):
             "apps/research.py model"
         )
     stale_request = mocked_stale_workflow.call_args.args[0]
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_stale_dataset_auto_rebuilds_with_fixed_full_all_oos",
         (
-            0,
-            [(
-                "確認開始",
-                True,
-            )],
-            False,
-            "full",
-            0,
-            True,
-            1,
-            1,
-        ),
+                    0,
+                    [(
+                        "確認開始",
+                        True,
+                    )],
+                    False,
+                    "full",
+                    0,
+                    True,
+                    1,
+                    1,
+                ),
         (
-            stale_workflow_rc,
-            stale_prompt_labels,
-            bool(stale_request.rebuild_dataset),
-            stale_request.dataset,
-            int(stale_request.max_tickers),
-            bool(stale_request.evaluate_oos),
-            mocked_stale_workflow.call_count,
-            mocked_stale_post_validation.call_count,
-        ),
+                    stale_workflow_rc,
+                    stale_prompt_labels,
+                    bool(stale_request.rebuild_dataset),
+                    stale_request.dataset,
+                    int(stale_request.max_tickers),
+                    bool(stale_request.evaluate_oos),
+                    mocked_stale_workflow.call_count,
+                    mocked_stale_post_validation.call_count,
+                ),
     )
 
     build_dataset_calls = []
@@ -2002,25 +1767,22 @@ def validate_dataset_cli_contract_case(_base_params):
         build_dataset_rc = app_breakout_quality._interactive_build_dataset(
             "apps/research.py model"
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_build_dataset_menu_uses_full_all_without_prompts",
         (
-            0,
-            0,
-            0,
-            "build-dataset",
-            ["--dataset", "full", "--filter-id", "synthetic_quality"],
-        ),
+                    0,
+                    0,
+                    0,
+                    "build-dataset",
+                    ["--dataset", "full", "--filter-id", "synthetic_quality"],
+                ),
         (
-            build_dataset_rc,
-            mocked_build_choice.call_count,
-            mocked_build_int.call_count,
-            build_dataset_calls[-1][0],
-            build_dataset_calls[-1][1],
-        ),
+                    build_dataset_rc,
+                    mocked_build_choice.call_count,
+                    mocked_build_int.call_count,
+                    build_dataset_calls[-1][0],
+                    build_dataset_calls[-1][1],
+                ),
     )
 
 
@@ -2038,18 +1800,15 @@ def validate_dataset_cli_contract_case(_base_params):
         interactive_train_rc = app_breakout_quality._interactive_train(
             "apps/research.py model"
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_train_skips_policy_backed_questions",
         (0, 1, 1, 0),
         (
-            interactive_train_rc,
-            mocked_policy_print.call_count,
-            mocked_confirm.call_count,
-            mocked_train_command.call_count,
-        ),
+                    interactive_train_rc,
+                    mocked_policy_print.call_count,
+                    mocked_confirm.call_count,
+                    mocked_train_command.call_count,
+                ),
     )
 
     report_calls = []
@@ -2073,39 +1832,29 @@ def validate_dataset_cli_contract_case(_base_params):
         report_with_oos_rc = app_breakout_quality._interactive_report(
             "apps/research.py model"
         )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check(
         "breakout_quality_report_fixed_oos_without_prompt",
         (
-            0,
-            0,
-            "report",
-            [
-                "--filter-id",
-                "synthetic_quality",
-                "--experiment-profile",
-                "baseline",
-                "--include-oos",
-            ],
-        ),
+                    0,
+                    0,
+                    "report",
+                    [
+                        "--filter-id",
+                        "synthetic_quality",
+                        "--experiment-profile",
+                        "baseline",
+                        "--include-oos",
+                    ],
+                ),
         (
-            report_with_oos_rc,
-            mocked_prompt.call_count,
-            report_calls[-1][0],
-            report_calls[-1][1],
-        ),
+                    report_with_oos_rc,
+                    mocked_prompt.call_count,
+                    report_calls[-1][0],
+                    report_calls[-1][1],
+                ),
     )
     report_module = importlib.import_module("tools.filters.breakout_quality.report")
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "breakout_quality_report_cli_defaults_to_oos",
-        True,
-        report_module.parse_args([]).include_oos,
-    )
+    check_true("breakout_quality_report_cli_defaults_to_oos", report_module.parse_args([]).include_oos)
 
     with TemporaryDirectory(prefix="breakout_quality_rebuild_detection_") as temp_dir:
         temp_root = Path(temp_dir)
@@ -2227,36 +1976,14 @@ def validate_dataset_cli_contract_case(_base_params):
                 max_tickers=30,
             )
 
-        add_check(
-            results,
-            "cli_contract",
-            case_id,
-            "breakout_quality_unchanged_source_skips_rebuild",
-            [],
-            unchanged_reasons,
-        )
-        add_check(
-            results,
-            "cli_contract",
-            case_id,
-            "breakout_quality_label_policy_change_uses_fast_relabel",
-            "relabel",
-            relabel_plan[0],
-        )
-        add_check(
-            results,
-            "cli_contract",
-            case_id,
+        check("breakout_quality_unchanged_source_skips_rebuild", [], unchanged_reasons)
+        check("breakout_quality_label_policy_change_uses_fast_relabel", "relabel", relabel_plan[0])
+        check_true(
             "breakout_quality_updated_source_requires_rebuild",
-            True,
             any("來源 CSV inventory 已更新" in reason for reason in changed_reasons),
         )
-        add_check(
-            results,
-            "cli_contract",
-            case_id,
+        check_true(
             "breakout_quality_ticker_coverage_change_requires_rebuild",
-            True,
             any("ticker coverage 不符" in reason for reason in coverage_reasons),
         )
 
@@ -2281,23 +2008,9 @@ def validate_dataset_cli_contract_case(_base_params):
                 ["apps/research.py model", command, "--filter-id", "synthetic_quality"]
             )
         metric_command = command.replace("-", "_")
-        add_check(results, "cli_contract", case_id, f"breakout_quality_app_{metric_command}_rc", 23, rc)
-        add_check(
-            results,
-            "cli_contract",
-            case_id,
-            f"breakout_quality_app_{metric_command}_module",
-            expected_module,
-            mocked_import.call_args.args[0],
-        )
-        add_check(
-            results,
-            "cli_contract",
-            case_id,
-            f"breakout_quality_app_{metric_command}_argv",
-            [["--filter-id", "synthetic_quality"]],
-            received_argv,
-        )
+        check(f"breakout_quality_app_{metric_command}_rc", 23, rc)
+        check(f"breakout_quality_app_{metric_command}_module", expected_module, mocked_import.call_args.args[0])
+        check(f"breakout_quality_app_{metric_command}_argv", [["--filter-id", "synthetic_quality"]], received_argv)
 
     _assert_value_error(
         results,
@@ -2320,15 +2033,11 @@ def validate_dataset_cli_contract_case(_base_params):
         app_ml_optimizer.main,
         ["apps/research.py", "optimizer", "--help"],
     )
-    add_check(results, "cli_contract", case_id, "research_optimizer_help_rc", 0, optimizer_rc)
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
+    check("research_optimizer_help_rc", 0, optimizer_rc)
+    check_true(
         "research_optimizer_help_preserves_original_contract",
-        True,
         "用法: python apps/research.py optimizer" in optimizer_help
-        and "reduced|full" in optimizer_help,
+                and "reduced|full" in optimizer_help,
     )
 
     wrapper_cases = [
@@ -2368,29 +2077,29 @@ def validate_dataset_cli_contract_case(_base_params):
 
         rc, help_text = _capture_stdout(module.main, [program, "--help"], **kwargs)
         metric_prefix = program.replace("/", "_").replace(".", "_")
-        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_rc", 0, rc)
-        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_usage", True, f"用法: python {program}" in help_text)
-        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_dataset_choices", True, "reduced|full" in help_text)
+        check(f"{metric_prefix}_help_rc", 0, rc)
+        check_true(f"{metric_prefix}_help_usage", f"用法: python {program}" in help_text)
+        check_true(f"{metric_prefix}_help_dataset_choices", "reduced|full" in help_text)
 
         sentinel = 17
         with patch(case["patch_target"], return_value=sentinel) as mocked:
             rc = module.main([program], **kwargs)
-            add_check(results, "cli_contract", case_id, f"{metric_prefix}_default_passthrough_rc", sentinel, rc)
-            add_check(results, "cli_contract", case_id, f"{metric_prefix}_default_passthrough_called", 1, mocked.call_count)
+            check(f"{metric_prefix}_default_passthrough_rc", sentinel, rc)
+            check(f"{metric_prefix}_default_passthrough_called", 1, mocked.call_count)
             called_argv = mocked.call_args.kwargs.get("argv")
-            add_check(results, "cli_contract", case_id, f"{metric_prefix}_default_passthrough_argv", [program], called_argv)
+            check(f"{metric_prefix}_default_passthrough_argv", [program], called_argv)
 
         with patch(case["patch_target"], return_value=sentinel) as mocked:
             rc = module.main([program, "--dataset", "reduced"], **kwargs)
-            add_check(results, "cli_contract", case_id, f"{metric_prefix}_reduced_passthrough_rc", sentinel, rc)
+            check(f"{metric_prefix}_reduced_passthrough_rc", sentinel, rc)
             called_argv = mocked.call_args.kwargs.get("argv")
-            add_check(results, "cli_contract", case_id, f"{metric_prefix}_reduced_passthrough_argv", [program, "--dataset", "reduced"], called_argv)
+            check(f"{metric_prefix}_reduced_passthrough_argv", [program, "--dataset", "reduced"], called_argv)
 
         with patch(case["patch_target"], return_value=sentinel) as mocked:
             rc = module.main([program, "--dataset=full"], **kwargs)
-            add_check(results, "cli_contract", case_id, f"{metric_prefix}_inline_full_passthrough_rc", sentinel, rc)
+            check(f"{metric_prefix}_inline_full_passthrough_rc", sentinel, rc)
             called_argv = mocked.call_args.kwargs.get("argv")
-            add_check(results, "cli_contract", case_id, f"{metric_prefix}_inline_full_passthrough_argv", [program, "--dataset=full"], called_argv)
+            check(f"{metric_prefix}_inline_full_passthrough_argv", [program, "--dataset=full"], called_argv)
 
         _assert_value_error(
             results,
@@ -2433,6 +2142,7 @@ def validate_local_regression_cli_contract_case(_base_params):
     case_id = "CLI_LOCAL_REGRESSION_CONTRACT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "cli_contract", case_id)
 
     app_package_zip = importlib.import_module("apps.package_zip")
     app_smart_downloader = importlib.import_module("apps.smart_downloader")
@@ -2446,30 +2156,30 @@ def validate_local_regression_cli_contract_case(_base_params):
     preflight_env = importlib.import_module("tools.validate.preflight_env")
 
     rc, help_text = _capture_stdout(run_all.main, ["tools/local_regression/run_all.py", "--help"])
-    add_check(results, "cli_contract", case_id, "run_all_help_rc", 0, rc)
-    add_check(results, "cli_contract", case_id, "run_all_help_mentions_meta_quality", True, "meta_quality" in help_text)
-    add_check(results, "cli_contract", case_id, "run_all_help_mentions_only", True, "--only" in help_text)
+    check("run_all_help_rc", 0, rc)
+    check_true("run_all_help_mentions_meta_quality", "meta_quality" in help_text)
+    check_true("run_all_help_mentions_only", "--only" in help_text)
 
     parsed_default = run_all._parse_cli_args(["tools/local_regression/run_all.py"])
-    add_check(results, "cli_contract", case_id, "run_all_default_only_steps_none", None, parsed_default.get("only_steps"))
+    check("run_all_default_only_steps_none", None, parsed_default.get("only_steps"))
     parsed_dedup = run_all._parse_cli_args(["tools/local_regression/run_all.py", "--only", "quick_gate,quick_gate,meta_quality"])
-    add_check(results, "cli_contract", case_id, "run_all_only_dedup_normalized", ["quick_gate", "meta_quality"], parsed_dedup.get("only_steps"))
+    check("run_all_only_dedup_normalized", ["quick_gate", "meta_quality"], parsed_dedup.get("only_steps"))
     parsed_inline = run_all._parse_cli_args(["tools/local_regression/run_all.py", "--only=ml_smoke,meta_quality"])
-    add_check(results, "cli_contract", case_id, "run_all_only_inline_normalized", ["ml_smoke", "meta_quality"], parsed_inline.get("only_steps"))
+    check("run_all_only_inline_normalized", ["ml_smoke", "meta_quality"], parsed_inline.get("only_steps"))
 
     _assert_value_error(results, "cli_contract", case_id, "run_all_only_missing_value_rejected", lambda: run_all._parse_cli_args(["tools/local_regression/run_all.py", "--only"]), "缺少值")
     _assert_value_error(results, "cli_contract", case_id, "run_all_only_empty_value_rejected", lambda: run_all._parse_cli_args(["tools/local_regression/run_all.py", "--only="]), "不可為空")
     _assert_value_error(results, "cli_contract", case_id, "run_all_unknown_flag_rejected", lambda: run_all._parse_cli_args(["tools/local_regression/run_all.py", "--bad"]), "不支援的參數")
 
     rc, help_text = _capture_stdout(preflight_env.main, ["tools/validate/preflight_env.py", "--help"])
-    add_check(results, "cli_contract", case_id, "preflight_help_rc", 0, rc)
-    add_check(results, "cli_contract", case_id, "preflight_help_mentions_meta_quality", True, "meta_quality" in help_text)
+    check("preflight_help_rc", 0, rc)
+    check_true("preflight_help_mentions_meta_quality", "meta_quality" in help_text)
     parsed_steps_none = preflight_env._parse_cli_steps(["tools/validate/preflight_env.py"])
-    add_check(results, "cli_contract", case_id, "preflight_default_steps_none", None, parsed_steps_none)
+    check("preflight_default_steps_none", None, parsed_steps_none)
     parsed_steps = preflight_env._parse_cli_steps(["tools/validate/preflight_env.py", "--steps", "quick_gate,meta_quality"])
-    add_check(results, "cli_contract", case_id, "preflight_steps_parse", ["quick_gate", "meta_quality"], parsed_steps)
+    check("preflight_steps_parse", ["quick_gate", "meta_quality"], parsed_steps)
     normalized_steps = preflight_env._normalize_local_regression_steps(["quick_gate", "quick_gate", "meta_quality"])
-    add_check(results, "cli_contract", case_id, "preflight_steps_dedup_normalized", ["quick_gate", "meta_quality"], normalized_steps)
+    check("preflight_steps_dedup_normalized", ["quick_gate", "meta_quality"], normalized_steps)
     _assert_value_error(results, "cli_contract", case_id, "preflight_invalid_step_rejected", lambda: preflight_env._normalize_local_regression_steps(["bad"]), "只接受")
 
     no_arg_cases = [
@@ -2485,8 +2195,8 @@ def validate_local_regression_cli_contract_case(_base_params):
     for program, main_func in no_arg_cases:
         metric_prefix = program.replace("/", "_").replace(".", "_")
         rc, help_text = _capture_stdout(main_func, [program, "--help"])
-        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_rc", 0, rc)
-        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_usage", True, f"用法: python {program}" in help_text)
+        check(f"{metric_prefix}_help_rc", 0, rc)
+        check_true(f"{metric_prefix}_help_usage", f"用法: python {program}" in help_text)
         _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_unknown_flag_rejected", lambda main_func=main_func, program=program: main_func([program, "--bad"]), "不支援的參數")
         _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_positional_arg_rejected", lambda main_func=main_func, program=program: main_func([program, "extra"]), "不支援的位置參數")
 
@@ -2498,17 +2208,18 @@ def validate_run_all_cli_error_usage_contract_case(_base_params):
     case_id = "RUN_ALL_CLI_ERROR_USAGE_CONTRACT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "cli_contract", case_id)
 
     run_all = importlib.import_module("tools.local_regression.run_all")
 
     rc, stderr_text = _capture_stderr(run_all.main, ["tools/local_regression/run_all.py", "--bad"])
-    add_check(results, "cli_contract", case_id, "run_all_invalid_flag_main_rc", 2, rc)
-    add_check(results, "cli_contract", case_id, "run_all_invalid_flag_error_usage_mentions_meta_quality", True, "meta_quality" in stderr_text)
-    add_check(results, "cli_contract", case_id, "run_all_invalid_flag_error_usage_mentions_only", True, "--only" in stderr_text)
+    check("run_all_invalid_flag_main_rc", 2, rc)
+    check_true("run_all_invalid_flag_error_usage_mentions_meta_quality", "meta_quality" in stderr_text)
+    check_true("run_all_invalid_flag_error_usage_mentions_only", "--only" in stderr_text)
 
     rc, stderr_text = _capture_stderr(run_all.main, ["tools/local_regression/run_all.py", "--only"])
-    add_check(results, "cli_contract", case_id, "run_all_missing_only_value_rc", 2, rc)
-    add_check(results, "cli_contract", case_id, "run_all_missing_only_value_usage_mentions_meta_quality", True, "meta_quality" in stderr_text)
+    check("run_all_missing_only_value_rc", 2, rc)
+    check_true("run_all_missing_only_value_usage_mentions_meta_quality", "meta_quality" in stderr_text)
 
     return results, summary
 
@@ -2517,6 +2228,7 @@ def validate_package_zip_runtime_contract_case(_base_params):
     case_id = "PACKAGE_ZIP_RUNTIME_CONTRACT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "cli_contract", case_id)
 
     app_package_zip = importlib.import_module("apps.package_zip")
 
@@ -2550,19 +2262,37 @@ def validate_package_zip_runtime_contract_case(_base_params):
 
         new_zip_path = project_root / "feature-runtime-contract_20260404_123456_abc1234.zip"
         archived_root_zips = sorted(path.name for path in (project_root / "arch").glob("*.zip"))
-        add_check(results, "cli_contract", case_id, "package_zip_main_rc", 0, rc)
-        add_check(results, "cli_contract", case_id, "package_zip_output_exists", True, new_zip_path.exists())
-        add_check(results, "cli_contract", case_id, "package_zip_archives_non_bundle_root_zips_only", ["main_20250101_deadbeef.zip", "other_branch_20250102_cafebabe.zip"], archived_root_zips)
-        add_check(results, "cli_contract", case_id, "package_zip_root_old_zip_removed", False, (project_root / "other_branch_20250102_cafebabe.zip").exists())
-        add_check(results, "cli_contract", case_id, "package_zip_root_bundle_preserved", True, (project_root / "to_chatgpt_bundle_20250103_deadbeef.zip").exists())
-        add_check(results, "cli_contract", case_id, "package_zip_root_bundle_not_archived", False, (project_root / "arch" / "to_chatgpt_bundle_20250103_deadbeef.zip").exists())
-        add_check(results, "cli_contract", case_id, "package_zip_cache_dir_removed", False, (project_root / "pkg" / "__pycache__").exists())
-        add_check(results, "cli_contract", case_id, "package_zip_orphan_pyc_removed", False, (project_root / "orphan.pyc").exists())
-        add_check(results, "cli_contract", case_id, "package_zip_stdout_reports_archived_count", True, "[package_zip] archived old root zips=2" in stdout_text)
+        check("package_zip_main_rc", 0, rc)
+        check_true("package_zip_output_exists", new_zip_path.exists())
+        check(
+            "package_zip_archives_non_bundle_root_zips_only",
+            ["main_20250101_deadbeef.zip", "other_branch_20250102_cafebabe.zip"],
+            archived_root_zips,
+        )
+        check(
+            "package_zip_root_old_zip_removed",
+            False,
+            (project_root / "other_branch_20250102_cafebabe.zip").exists(),
+        )
+        check_true(
+            "package_zip_root_bundle_preserved",
+            (project_root / "to_chatgpt_bundle_20250103_deadbeef.zip").exists(),
+        )
+        check(
+            "package_zip_root_bundle_not_archived",
+            False,
+            (project_root / "arch" / "to_chatgpt_bundle_20250103_deadbeef.zip").exists(),
+        )
+        check("package_zip_cache_dir_removed", False, (project_root / "pkg" / "__pycache__").exists())
+        check("package_zip_orphan_pyc_removed", False, (project_root / "orphan.pyc").exists())
+        check_true(
+            "package_zip_stdout_reports_archived_count",
+            "[package_zip] archived old root zips=2" in stdout_text,
+        )
 
         with zipfile.ZipFile(new_zip_path) as zf:
             member_names = sorted(zf.namelist())
-        add_check(results, "cli_contract", case_id, "package_zip_zip_members", ["README.md", "pkg/module.py"], member_names)
+        check("package_zip_zip_members", ["README.md", "pkg/module.py"], member_names)
 
     summary["checks"] = len(results)
     return results, summary
@@ -2573,6 +2303,7 @@ def validate_package_zip_commit_test_suite_orchestration_case(_base_params):
     case_id = "PACKAGE_ZIP_COMMIT_TEST_SUITE_ORCHESTRATION"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "cli_contract", case_id)
 
     app_package_zip = importlib.import_module("apps.package_zip")
 
@@ -2618,31 +2349,36 @@ def validate_package_zip_commit_test_suite_orchestration_case(_base_params):
         new_zip_path = project_root / "feature-workflow_20260405_120000_fedcba9.zip"
         commit_idx = git_commands.index(("commit", "-m", "feat: package workflow"))
         ls_files_idx = git_commands.index(("ls-files", "--cached", "--others", "--exclude-standard", "-z"))
-        add_check(results, "cli_contract", case_id, "package_zip_orchestration_main_rc", 0, rc)
-        add_check(results, "cli_contract", case_id, "package_zip_orchestration_add_called", True, ("add", "-A") in git_commands)
-        add_check(results, "cli_contract", case_id, "package_zip_orchestration_commit_called", True, ("commit", "-m", "feat: package workflow") in git_commands)
-        add_check(results, "cli_contract", case_id, "package_zip_orchestration_commit_precedes_zip_snapshot", True, commit_idx < ls_files_idx)
-        add_check(results, "cli_contract", case_id, "package_zip_orchestration_output_uses_post_commit_sha", True, new_zip_path.exists())
-        add_check(results, "cli_contract", case_id, "package_zip_orchestration_test_suite_called", [[sys.executable, "apps/test_suite.py"]], python_commands)
+        check("package_zip_orchestration_main_rc", 0, rc)
+        check_true("package_zip_orchestration_add_called", ("add", "-A") in git_commands)
+        check_true(
+            "package_zip_orchestration_commit_called",
+            ("commit", "-m", "feat: package workflow") in git_commands,
+        )
+        check_true("package_zip_orchestration_commit_precedes_zip_snapshot", commit_idx < ls_files_idx)
+        check_true("package_zip_orchestration_output_uses_post_commit_sha", new_zip_path.exists())
+        check(
+            "package_zip_orchestration_test_suite_called",
+            [[sys.executable, "apps/test_suite.py"]],
+            python_commands,
+        )
         relative_zip_output = f"[package_zip] output={new_zip_path.name}"
-        add_check(
-            results,
-            "cli_contract",
-            case_id,
+        check_true(
             "package_zip_orchestration_output_is_project_relative",
-            True,
             relative_zip_output in stdout_text and str(project_root).replace("\\", "/") not in stdout_text,
         )
-        add_check(
-            results,
-            "cli_contract",
-            case_id,
+        check_true(
             "package_zip_orchestration_test_suite_after_zip",
-            True,
             stdout_text.index(relative_zip_output) < stdout_text.index("[package_zip] test_suite=pass"),
         )
-        add_check(results, "cli_contract", case_id, "package_zip_orchestration_commit_headline_reported", True, "[package_zip] commit=[feature/workflow fedcba9] feat: package workflow" in stdout_text)
-        add_check(results, "cli_contract", case_id, "package_zip_orchestration_bundle_preserved", True, (project_root / "to_chatgpt_bundle_20250103_deadbeef.zip").exists())
+        check_true(
+            "package_zip_orchestration_commit_headline_reported",
+            "[package_zip] commit=[feature/workflow fedcba9] feat: package workflow" in stdout_text,
+        )
+        check_true(
+            "package_zip_orchestration_bundle_preserved",
+            (project_root / "to_chatgpt_bundle_20250103_deadbeef.zip").exists(),
+        )
 
     run_bundle_source = (Path(__file__).resolve().parents[2] / "apps" / "run_bundle.py").read_text(encoding="utf-8")
     commit_marker = 'print(f"[3/5] Commit current snapshot: {message}")'
@@ -2656,18 +2392,15 @@ def validate_package_zip_commit_test_suite_orchestration_case(_base_params):
         < run_bundle_source.index(package_marker)
         < run_bundle_source.index(test_marker)
     )
-    add_check(results, "cli_contract", case_id, "run_bundle_commits_and_packages_before_formal_test", True, delivery_first_order)
-    add_check(
-        results,
-        "cli_contract", case_id,
+    check_true("run_bundle_commits_and_packages_before_formal_test", delivery_first_order)
+    check_true(
         "run_bundle_formal_failure_keeps_prebuilt_delivery_snapshot",
-        True,
         'run_cmd(["git", "commit", "-m", message]' in run_bundle_source
-        and 'run_cmd([sys.executable, "apps/package_zip.py"]' in run_bundle_source
-        and 'run_cmd([sys.executable, "apps/test_suite.py"]' in run_bundle_source
-        and run_bundle_source.index('run_cmd(["git", "commit", "-m", message]')
-        < run_bundle_source.index('run_cmd([sys.executable, "apps/package_zip.py"]')
-        < run_bundle_source.index('run_cmd([sys.executable, "apps/test_suite.py"]'),
+                and 'run_cmd([sys.executable, "apps/package_zip.py"]' in run_bundle_source
+                and 'run_cmd([sys.executable, "apps/test_suite.py"]' in run_bundle_source
+                and run_bundle_source.index('run_cmd(["git", "commit", "-m", message]')
+                < run_bundle_source.index('run_cmd([sys.executable, "apps/package_zip.py"]')
+                < run_bundle_source.index('run_cmd([sys.executable, "apps/test_suite.py"]'),
     )
 
     summary["checks"] = len(results)
@@ -2678,6 +2411,7 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_APP_SIMPLE_REPORT_CONTRACT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "output_contract", case_id)
     app_breakout_quality = importlib.import_module("tools.filters.breakout_quality.application")
 
     with TemporaryDirectory() as tmp_dir:
@@ -2691,25 +2425,21 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
                 elapsed_sec=1.25,
             )
         markdown = report_path.read_text(encoding="utf-8")
-        add_check(
-            results, "output_contract", case_id,
-            "breakout_quality_app_console_simple_report", True,
+        check_true(
+            "breakout_quality_app_console_simple_report",
             "Breakout Quality 簡易報表" in console_text and "狀態" in console_text,
         )
-        add_check(
-            results, "output_contract", case_id,
-            "breakout_quality_app_persistent_markdown_simple_report", True,
+        check_true(
+            "breakout_quality_app_persistent_markdown_simple_report",
             report_path.is_file() and "# Breakout Quality 簡易報表" in markdown,
         )
-        add_check(
-            results, "output_contract", case_id,
-            "breakout_quality_app_simple_report_paths_are_project_relative", True,
+        check_true(
+            "breakout_quality_app_simple_report_paths_are_project_relative",
             "outputs/filters/breakout_quality/synthetic_quality/simple_reports/evaluate.md" in console_text
-            and str(simple_root) not in console_text,
+                        and str(simple_root) not in console_text,
         )
-        add_check(
-            results, "output_contract", case_id,
-            "breakout_quality_app_simple_report_contains_active_identity", True,
+        check_true(
+            "breakout_quality_app_simple_report_contains_active_identity",
             "synthetic_quality" in markdown and "Objective" in markdown,
         )
 
@@ -2745,14 +2475,12 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
                 elapsed_sec=0.5,
             )
         pit_markdown = pit_report_path.read_text(encoding="utf-8")
-        add_check(
-            results, "output_contract", case_id,
+        check_true(
             "breakout_quality_pit_build_simple_report_uses_manifest_coverage_before_audit_exists",
-            True,
             "Score coverage" in pit_console
-            and "100.00%" in pit_console
-            and "778532" in pit_console
-            and "100.00%" in pit_markdown,
+                        and "100.00%" in pit_console
+                        and "778532" in pit_console
+                        and "100.00%" in pit_markdown,
         )
 
         compare_dir = (
@@ -2815,20 +2543,19 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
                 elapsed_sec=0.5,
             )
         compare_markdown = compare_report_path.read_text(encoding="utf-8")
-        add_check(
-            results, "output_contract", case_id,
+        check(
             "breakout_quality_ranker_comparison_simple_report_is_readable_and_not_single_profile_misleading",
             (True, True, True),
             (
-                "CFG-BASE / CFG-CURRENT" in compare_console
-                and "paired ranking-quality comparison (read-only)" in compare_console,
-                "Dynamic Target基準" in compare_console
-                and "原始score-event-date（非trade-date剩餘機會）" in compare_console
-                and "CFG-CURRENT Dynamic raw-score Boundary" in compare_console
-                and "CFG-CURRENT−CFG-BASE Dynamic raw-score Boundary Δ" in compare_console,
-                "continuous_ranker_comparison.md" in compare_markdown
-                and str(simple_root) not in compare_console,
-            ),
+                            "CFG-BASE / CFG-CURRENT" in compare_console
+                            and "paired ranking-quality comparison (read-only)" in compare_console,
+                            "Dynamic Target基準" in compare_console
+                            and "原始score-event-date（非trade-date剩餘機會）" in compare_console
+                            and "CFG-CURRENT Dynamic raw-score Boundary" in compare_console
+                            and "CFG-CURRENT−CFG-BASE Dynamic raw-score Boundary Δ" in compare_console,
+                            "continuous_ranker_comparison.md" in compare_markdown
+                            and str(simple_root) not in compare_console,
+                        ),
         )
 
     fake_success_module = SimpleNamespace(main=lambda _args: 0)
@@ -2871,14 +2598,9 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             timing_status_rc == 0 and emit_mock.call_count == 0
         )
 
-    add_check(
-        results, "output_contract", case_id,
-        "breakout_quality_app_successful_subcommands_emit_simple_report", True,
-        generic_emit_ok,
-    )
-    add_check(
-        results, "output_contract", case_id,
-        "breakout_quality_timing_run_emits_simple_report_without_status_overwrite", True,
+    check_true("breakout_quality_app_successful_subcommands_emit_simple_report", generic_emit_ok)
+    check_true(
+        "breakout_quality_timing_run_emits_simple_report_without_status_overwrite",
         timing_run_emit_ok and timing_status_does_not_overwrite,
     )
     timing_context = app_breakout_quality._simple_report_context(
@@ -2886,16 +2608,14 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
         ["run"],
     )
     timing_settings = app_breakout_quality.get_breakout_quality_rolling_timing_settings()
-    add_check(
-        results, "output_contract", case_id,
-        "breakout_quality_timing_simple_report_uses_timing_profile_identity", True,
+    check_true(
+        "breakout_quality_timing_simple_report_uses_timing_profile_identity",
         timing_context[2] == str(timing_settings.experiment_profile),
     )
 
     source = Path(app_breakout_quality.__file__).read_text(encoding="utf-8")
-    add_check(
-        results, "output_contract", case_id,
-        "breakout_quality_app_workflow_emits_final_simple_report", True,
+    check_true(
+        "breakout_quality_app_workflow_emits_final_simple_report",
         '"workflow",' in source and "workflow_report_args" in source,
     )
 
@@ -2907,6 +2627,7 @@ def validate_extended_tool_cli_contract_case(_base_params):
     case_id = "CLI_EXTENDED_TOOL_CONTRACT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "cli_contract", case_id)
 
     app_test_suite = importlib.import_module("apps.test_suite")
     app_workbench = importlib.import_module("apps.workbench")
@@ -2926,9 +2647,9 @@ def validate_extended_tool_cli_contract_case(_base_params):
         metric_prefix = program.replace("/", "_").replace(".", "_")
         kwargs = {env_kw: env_value}
         rc, help_text = _capture_stdout(main_func, [program, "--help"], **kwargs)
-        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_rc", 0, rc)
-        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_usage", True, f"用法: python {program}" in help_text)
-        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_dataset_choices", True, "reduced|full" in help_text)
+        check(f"{metric_prefix}_help_rc", 0, rc)
+        check_true(f"{metric_prefix}_help_usage", f"用法: python {program}" in help_text)
+        check_true(f"{metric_prefix}_help_dataset_choices", "reduced|full" in help_text)
         _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_invalid_flag_rejected", lambda main_func=main_func, kwargs=kwargs: main_func([program, "--bad"], **kwargs), "不支援的參數")
         _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_missing_dataset_value_rejected", lambda main_func=main_func, kwargs=kwargs: main_func([program, "--dataset"], **kwargs), "缺少值")
         _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_empty_dataset_value_rejected", lambda main_func=main_func, kwargs=kwargs: main_func([program, "--dataset="], **kwargs), "不能為空")
@@ -2942,8 +2663,8 @@ def validate_extended_tool_cli_contract_case(_base_params):
     for program, main_func, kwargs in no_dataset_cases:
         metric_prefix = program.replace("/", "_").replace(".", "_")
         rc, help_text = _capture_stdout(main_func, [program, "--help"], **kwargs)
-        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_rc", 0, rc)
-        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_usage", True, f"用法: python {program}" in help_text)
+        check(f"{metric_prefix}_help_rc", 0, rc)
+        check_true(f"{metric_prefix}_help_usage", f"用法: python {program}" in help_text)
         _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_invalid_flag_rejected", lambda main_func=main_func, kwargs=kwargs: main_func([program, "--bad"], **kwargs), "不支援的參數")
         _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_positional_arg_rejected", lambda main_func=main_func, kwargs=kwargs: main_func([program, "extra"], **kwargs), "不支援的位置參數")
 

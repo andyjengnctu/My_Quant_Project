@@ -1,6 +1,7 @@
 from .check_result_utils import (
     FLOAT_TOL,
     add_check,
+    bind_checks,
     add_fail_result,
     add_skip_result,
     is_insufficient_data_error,
@@ -35,6 +36,7 @@ from .scanner_expectations import (
 __all__ = [
     "FLOAT_TOL",
     "add_check",
+    "bind_checks",
     "add_fail_result",
     "add_skip_result",
     "is_insufficient_data_error",

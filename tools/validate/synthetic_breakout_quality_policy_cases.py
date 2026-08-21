@@ -103,7 +103,7 @@ from .synthetic_breakout_quality_support import (
     UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     V16StrategyParams,
     _validate_torch_execution_record,
-    add_check,
+    bind_checks,
     apply_training_augmentation,
     ast,
     breakout_quality_common,
@@ -165,6 +165,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     case_id = "BREAKOUT_QUALITY_POLICY_SSOT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     project_root = Path(__file__).resolve().parents[2]
     canonical_config_path = project_root / "config" / "breakout_quality.py"
@@ -177,32 +178,22 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             "breakout_quality_workflow.py",
         )
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "breakout_quality_config_has_one_editable_canonical_module",
-        True,
         bool(
-            canonical_config_path.is_file()
-            and all(not path.exists() for path in removed_legacy_config_paths)
-        ),
+                    canonical_config_path.is_file()
+                    and all(not path.exists() for path in removed_legacy_config_paths)
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "breakout_quality_has_one_user_facing_random_seed_setting",
         (1, False),
         (
-            canonical_source.count("BREAKOUT_QUALITY_RANDOM_SEED ="),
-            "BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED" in canonical_source,
-        ),
+                    canonical_source.count("BREAKOUT_QUALITY_RANDOM_SEED ="),
+                    "BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED" in canonical_source,
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "breakout_quality_strategy_compare_uses_only_canonical_app_entry",
         False,
         (project_root / "apps" / "breakout_quality_strategy_compare.py").exists(),
@@ -218,23 +209,19 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         for node in read_source_ast(canonical_config_path).body
         if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "breakout_quality_user_settings_are_grouped_before_implementation",
-        True,
         bool(
-            user_settings_marker < internal_marker
-            and canonical_source[:internal_marker].count("def ") == 0
-            and canonical_source[:internal_marker].count("class ") == 0
-            and canonical_source[:internal_marker].count(
-                "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE ="
-            )
-            == 1
-            and first_implementation_line
-            > canonical_source[:internal_marker].count("\n")
-        ),
+                    user_settings_marker < internal_marker
+                    and canonical_source[:internal_marker].count("def ") == 0
+                    and canonical_source[:internal_marker].count("class ") == 0
+                    and canonical_source[:internal_marker].count(
+                        "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE ="
+                    )
+                    == 1
+                    and first_implementation_line
+                    > canonical_source[:internal_marker].count("\n")
+                ),
     )
     stale_import_patterns = (
         "from config.breakout_quality_policy import",
@@ -253,24 +240,10 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             source_text = read_source_text(source_path)
             if any(pattern in source_text for pattern in stale_import_patterns):
                 stale_import_files.append(source_path.relative_to(project_root).as_posix())
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "breakout_quality_runtime_imports_use_canonical_config",
-        (),
-        tuple(sorted(stale_import_files)),
-    )
+    check("breakout_quality_runtime_imports_use_canonical_config", (), tuple(sorted(stale_import_files)))
 
     configured_seed = resolve_breakout_quality_random_seed()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "single_seed_is_nonnegative_integer",
-        True,
-        isinstance(configured_seed, int) and configured_seed >= 0,
-    )
+    check_true("single_seed_is_nonnegative_integer", isinstance(configured_seed, int) and configured_seed >= 0)
     from config import breakout_quality as breakout_quality_config
 
     with patch.object(breakout_quality_config, "BREAKOUT_QUALITY_RANDOM_SEED", 7):
@@ -291,10 +264,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             continuous_workflow_seed = (
                 breakout_quality_config.get_breakout_quality_workflow_settings().seed
             )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "single_seed_override_applies_to_all_profiles",
         (7, 7, 7),
         (overridden_seed, binary_workflow_seed, continuous_workflow_seed),
@@ -306,82 +276,47 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             negative_seed_rejected = True
         else:
             negative_seed_rejected = False
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "single_seed_negative_override_rejected",
-        True,
-        negative_seed_rejected,
-    )
+    check_true("single_seed_negative_override_rejected", negative_seed_rejected)
 
     optimizer_values = build_breakout_optimizer_high_len_values()
     quality_values = build_breakout_quality_default_high_len_values()
     search_spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "strategy_default_uses_config",
         int(BREAKOUT_DEFAULT_HIGH_LEN),
         int(BREAKOUT_PARAM_SPECS["high_len"]["default"]),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "optimizer_range_uses_config",
         (int(BREAKOUT_HIGH_LEN_SEARCH_MIN), int(BREAKOUT_HIGH_LEN_SEARCH_MAX), int(BREAKOUT_HIGH_LEN_SEARCH_STEP)),
         (int(search_spec["low"]), int(search_spec["high"]), int(search_spec["step"])),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "quality_coverage_contains_optimizer_grid",
-        True,
-        set(optimizer_values).issubset(set(quality_values)),
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "quality_coverage_contains_strategy_default",
-        True,
-        int(BREAKOUT_DEFAULT_HIGH_LEN) in set(quality_values),
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true("quality_coverage_contains_optimizer_grid", set(optimizer_values).issubset(set(quality_values)))
+    check_true("quality_coverage_contains_strategy_default", int(BREAKOUT_DEFAULT_HIGH_LEN) in set(quality_values))
+    check_true(
         "fixed_threshold_is_user_configured_and_legal",
-        True,
         0.0 <= float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD) <= 1.0,
     )
     inception_kernels = build_breakout_quality_inception_kernel_sizes()
     inception_receptive_field = resolve_breakout_quality_inception_receptive_field_bars()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "inception_receptive_field_policy_is_legal_and_derived_from_config",
-        True,
         bool(
-            int(BREAKOUT_QUALITY_INCEPTION_DEPTH) >= 1
-            and int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY) >= 1
-            and int(BREAKOUT_QUALITY_INCEPTION_DEPTH)
-            % int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY)
-            == 0
-            and int(BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS)
-            <= int(BREAKOUT_QUALITY_FEATURE_WINDOW_BARS)
-            and len(inception_kernels) == 3
-            and all(value >= 3 and value % 2 == 1 for value in inception_kernels)
-            and inception_kernels[0] > inception_kernels[1] > inception_kernels[2]
-            and inception_receptive_field
-            >= int(BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS)
-            and int(BREAKOUT_QUALITY_MARKET_SET_CANDIDATE_QUERY_COUNT) >= 1
-        ),
+                    int(BREAKOUT_QUALITY_INCEPTION_DEPTH) >= 1
+                    and int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY) >= 1
+                    and int(BREAKOUT_QUALITY_INCEPTION_DEPTH)
+                    % int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY)
+                    == 0
+                    and int(BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS)
+                    <= int(BREAKOUT_QUALITY_FEATURE_WINDOW_BARS)
+                    and len(inception_kernels) == 3
+                    and all(value >= 3 and value % 2 == 1 for value in inception_kernels)
+                    and inception_kernels[0] > inception_kernels[1] > inception_kernels[2]
+                    and inception_receptive_field
+                    >= int(BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS)
+                    and int(BREAKOUT_QUALITY_MARKET_SET_CANDIDATE_QUERY_COUNT) >= 1
+                ),
     )
 
     inference_dates = pd.bdate_range("2025-01-01", periods=8)
@@ -435,44 +370,32 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         end_date=event_date,
         require_context=False,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "forward_candidate_without_benchmark_date_is_explicit_conservative_unavailable",
         (0, (0, 5, len(FEATURE_COLUMNS)), 1, "benchmark_date_missing"),
         (
-            len(unavailable_inference.events),
-            unavailable_inference.feature_bank.shape,
-            len(unavailable_inference.unavailable_events),
-            unavailable_inference.unavailable_events.iloc[0]["reason"],
-        ),
+                    len(unavailable_inference.events),
+                    unavailable_inference.feature_bank.shape,
+                    len(unavailable_inference.unavailable_events),
+                    unavailable_inference.unavailable_events.iloc[0]["reason"],
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "same_forward_candidate_is_model_scoreable_when_benchmark_feature_exists",
         (1, (1, 5, len(FEATURE_COLUMNS)), 0),
         (
-            len(scoreable_inference.events),
-            scoreable_inference.feature_bank.shape,
-            len(scoreable_inference.unavailable_events),
-        ),
+                    len(scoreable_inference.events),
+                    scoreable_inference.feature_bank.shape,
+                    len(scoreable_inference.unavailable_events),
+                ),
     )
     configured_model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "model_architecture_is_versioned_and_user_configured",
         DEFAULT_MODEL_ARCHITECTURE,
         configured_model_spec.architecture,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "dataset_policy_does_not_include_model_architecture",
         False,
         "model_architecture" in DEFAULT_LABEL_POLICY.as_manifest_payload(),
@@ -499,18 +422,15 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
         model_spec=get_model_spec("multiscale_cnn_sequence_only_v1"),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "unique_group_sampling_uses_minimum_row_once_per_ticker_date",
         ([0, 2, 3], 3, 2, "minimum_original_event_row_index"),
         (
-            sampled_idx.tolist(),
-            int(sampling_summary["sampled_row_count"]),
-            int(sampling_summary["duplicate_rows_removed"]),
-            sampling_summary["representative_rule"],
-        ),
+                    sampled_idx.tolist(),
+                    int(sampling_summary["sampled_row_count"]),
+                    int(sampling_summary["duplicate_rows_removed"]),
+                    sampling_summary["representative_rule"],
+                ),
     )
     baseline_idx, baseline_sampling_summary = (
         breakout_quality_train._resolve_training_sampling_indices(
@@ -521,17 +441,14 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             model_spec=get_model_spec("multiscale_cnn_sequence_only_v1"),
         )
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "baseline_sampling_preserves_original_rows_and_order",
         (sampling_input_idx.tolist(), True, 0),
         (
-            baseline_idx.tolist(),
-            bool(baseline_sampling_summary["uses_all_eligible_rows"]),
-            int(baseline_sampling_summary["duplicate_rows_removed"]),
-        ),
+                    baseline_idx.tolist(),
+                    bool(baseline_sampling_summary["uses_all_eligible_rows"]),
+                    int(baseline_sampling_summary["duplicate_rows_removed"]),
+                ),
     )
     try:
         breakout_quality_train._resolve_training_sampling_indices(
@@ -544,14 +461,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         context_sampling_rejected = False
     except ValueError as exc:
         context_sampling_rejected = "sequence-only" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "unique_group_sampling_rejects_context_using_architecture",
-        True,
-        context_sampling_rejected,
-    )
+    check_true("unique_group_sampling_rejects_context_using_architecture", context_sampling_rejected)
 
     mixed_sampling_labels = sampling_labels.copy()
     mixed_sampling_labels[1] = LABEL_REJECT
@@ -566,14 +476,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         mixed_label_rejected = False
     except ValueError as exc:
         mixed_label_rejected = "混合 label" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "unique_group_sampling_rejects_mixed_group_labels",
-        True,
-        mixed_label_rejected,
-    )
+    check_true("unique_group_sampling_rejects_mixed_group_labels", mixed_label_rejected)
 
     mixed_group_events = sampling_events.copy()
     mixed_group_events.loc[1, "group_index"] = 999
@@ -588,14 +491,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         mixed_feature_group_rejected = False
     except ValueError as exc:
         mixed_feature_group_rejected = "多個 feature group" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "unique_group_sampling_rejects_mixed_feature_group_mapping",
-        True,
-        mixed_feature_group_rejected,
-    )
+    check_true("unique_group_sampling_rejects_mixed_feature_group_mapping", mixed_feature_group_rejected)
 
     torch, _nn = breakout_quality_train.require_torch()
     tiny_model = build_breakout_quality_model(10, 4, architecture="tiny_cnn_v1")
@@ -708,66 +604,60 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         invalid_patch_length_rejected = False
     except ValueError as exc:
         invalid_patch_length_rejected = "patch size" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "patch_transformer_9f_contract_is_small_supervised_sequence_only",
         (
-            "patch_transformer", 10, 10, 128, 3, 4, 256,
-            "mean", "sinusoidal", False, (5, 2), True, True, 411138,
-        ),
+                    "patch_transformer", 10, 10, 128, 3, 4, 256,
+                    "mean", "sinusoidal", False, (5, 2), True, True, 411138,
+                ),
         (
-            patch_transformer_spec.family,
-            patch_transformer_spec.patch_transformer_patch_size,
-            patch_transformer_spec.patch_transformer_patch_stride,
-            patch_transformer_spec.patch_transformer_embedding_dim,
-            patch_transformer_spec.patch_transformer_depth,
-            patch_transformer_spec.patch_transformer_heads,
-            patch_transformer_spec.patch_transformer_mlp_dim,
-            patch_transformer_spec.patch_transformer_pooling,
-            patch_transformer_spec.patch_transformer_positional_encoding,
-            patch_transformer_spec.use_dataset_context,
-            tuple(patch_logits_a.shape),
-            bool(torch.equal(patch_logits_a, patch_logits_b)),
-            invalid_patch_length_rejected,
-            patch_transformer_parameter_count,
-        ),
+                    patch_transformer_spec.family,
+                    patch_transformer_spec.patch_transformer_patch_size,
+                    patch_transformer_spec.patch_transformer_patch_stride,
+                    patch_transformer_spec.patch_transformer_embedding_dim,
+                    patch_transformer_spec.patch_transformer_depth,
+                    patch_transformer_spec.patch_transformer_heads,
+                    patch_transformer_spec.patch_transformer_mlp_dim,
+                    patch_transformer_spec.patch_transformer_pooling,
+                    patch_transformer_spec.patch_transformer_positional_encoding,
+                    patch_transformer_spec.use_dataset_context,
+                    tuple(patch_logits_a.shape),
+                    bool(torch.equal(patch_logits_a, patch_logits_b)),
+                    invalid_patch_length_rejected,
+                    patch_transformer_parameter_count,
+                ),
     )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "moment_9e_spec_pins_frozen_external_linear_probe_contract",
         (
-            "moment_frozen_linear",
-            MOMENT_REPOSITORY,
-            MOMENT_REVISION,
-            512,
-            8,
-            8,
-            768,
-            12,
-            12,
-            "independent_channel_concat",
-            "mean",
-            False,
-        ),
+                    "moment_frozen_linear",
+                    MOMENT_REPOSITORY,
+                    MOMENT_REVISION,
+                    512,
+                    8,
+                    8,
+                    768,
+                    12,
+                    12,
+                    "independent_channel_concat",
+                    "mean",
+                    False,
+                ),
         (
-            moment_spec.family,
-            moment_spec.moment_repository,
-            moment_spec.moment_revision,
-            moment_spec.moment_input_length,
-            moment_spec.moment_patch_length,
-            moment_spec.moment_patch_stride,
-            moment_spec.moment_embedding_dim,
-            moment_spec.moment_transformer_layers,
-            moment_spec.moment_transformer_heads,
-            moment_spec.moment_channel_aggregation,
-            moment_spec.moment_patch_reduction,
-            moment_spec.use_dataset_context,
-        ),
+                    moment_spec.family,
+                    moment_spec.moment_repository,
+                    moment_spec.moment_revision,
+                    moment_spec.moment_input_length,
+                    moment_spec.moment_patch_length,
+                    moment_spec.moment_patch_stride,
+                    moment_spec.moment_embedding_dim,
+                    moment_spec.moment_transformer_layers,
+                    moment_spec.moment_transformer_heads,
+                    moment_spec.moment_channel_aggregation,
+                    moment_spec.moment_patch_reduction,
+                    moment_spec.use_dataset_context,
+                ),
     )
 
     class _SyntheticMomentPipeline(torch.nn.Module):
@@ -850,58 +740,51 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         )
         moment_reload.load_state_dict(moment_model.state_dict(), strict=True)
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "moment_9e_encoder_is_frozen_context_independent_chunked_and_reloadable",
-        True,
         bool(
-            moment_total_parameter_count == 15363
-            and moment_trainable_parameter_count == 15362
-            and not any(moment_encoder_requires_grad)
-            and all(moment_head_requires_grad)
-            and moment_model.encoder.training is False
-            and getattr(moment_model.encoder, "initialized", False)
-            and tuple(moment_logits_a.shape) == (33, 2)
-            and torch.equal(moment_logits_a, moment_logits_b)
-            and torch.isfinite(moment_logits_a).all()
-            and moment_encoder_unchanged
-            and moment_head_changed
-            and _SyntheticMomentPipeline.forward_batch_sizes == [32, 1, 32, 1]
-            and _SyntheticMomentPipeline.forward_sequence_lengths == [512, 512, 512, 512]
-            and moment_reload.encoder.training is False
-        ),
+                    moment_total_parameter_count == 15363
+                    and moment_trainable_parameter_count == 15362
+                    and not any(moment_encoder_requires_grad)
+                    and all(moment_head_requires_grad)
+                    and moment_model.encoder.training is False
+                    and getattr(moment_model.encoder, "initialized", False)
+                    and tuple(moment_logits_a.shape) == (33, 2)
+                    and torch.equal(moment_logits_a, moment_logits_b)
+                    and torch.isfinite(moment_logits_a).all()
+                    and moment_encoder_unchanged
+                    and moment_head_changed
+                    and _SyntheticMomentPipeline.forward_batch_sizes == [32, 1, 32, 1]
+                    and _SyntheticMomentPipeline.forward_sequence_lengths == [512, 512, 512, 512]
+                    and moment_reload.encoder.training is False
+                ),
     )
 
     mantis_spec = get_model_spec("mantis_v2_frozen_linear_v1")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "mantis_9d_spec_pins_frozen_external_linear_probe_contract",
         (
-            "mantis_v2_frozen_linear",
-            "paris-noah/MantisV2",
-            "99fe0f548960e272fbfa4b82fd9b5b5956779dfd",
-            512,
-            32,
-            2,
-            "combined",
-            "independent_channel_concat",
-            False,
-        ),
+                    "mantis_v2_frozen_linear",
+                    "paris-noah/MantisV2",
+                    "99fe0f548960e272fbfa4b82fd9b5b5956779dfd",
+                    512,
+                    32,
+                    2,
+                    "combined",
+                    "independent_channel_concat",
+                    False,
+                ),
         (
-            mantis_spec.family,
-            mantis_spec.mantis_repository,
-            mantis_spec.mantis_revision,
-            mantis_spec.mantis_input_length,
-            mantis_spec.mantis_num_patches,
-            mantis_spec.mantis_return_transformer_layer,
-            mantis_spec.mantis_output_token,
-            mantis_spec.mantis_channel_aggregation,
-            mantis_spec.use_dataset_context,
-        ),
+                    mantis_spec.family,
+                    mantis_spec.mantis_repository,
+                    mantis_spec.mantis_revision,
+                    mantis_spec.mantis_input_length,
+                    mantis_spec.mantis_num_patches,
+                    mantis_spec.mantis_return_transformer_layer,
+                    mantis_spec.mantis_output_token,
+                    mantis_spec.mantis_channel_aggregation,
+                    mantis_spec.use_dataset_context,
+                ),
     )
     class _SyntheticMantisV2(torch.nn.Module):
         forward_batch_sizes: list[int] = []
@@ -980,58 +863,51 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         )
         mantis_reload.load_state_dict(mantis_model.state_dict(), strict=True)
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "mantis_9d_encoder_is_frozen_context_independent_chunked_and_reloadable",
-        True,
         bool(
-            mantis_total_parameter_count == 10243
-            and mantis_trainable_parameter_count == 10242
-            and not any(mantis_encoder_requires_grad)
-            and all(mantis_head_requires_grad)
-            and mantis_model.encoder.training is False
-            and getattr(mantis_model.encoder, "layers_removed", False)
-            and tuple(mantis_logits_a.shape) == (103, 2)
-            and torch.equal(mantis_logits_a, mantis_logits_b)
-            and torch.isfinite(mantis_logits_a).all()
-            and mantis_encoder_unchanged
-            and mantis_head_changed
-            and _SyntheticMantisV2.forward_batch_sizes == [1024, 6, 1024, 6]
-            and _SyntheticMantisV2.forward_sequence_lengths == [512, 512, 512, 512]
-            and mantis_reload.encoder.training is False
-        ),
+                    mantis_total_parameter_count == 10243
+                    and mantis_trainable_parameter_count == 10242
+                    and not any(mantis_encoder_requires_grad)
+                    and all(mantis_head_requires_grad)
+                    and mantis_model.encoder.training is False
+                    and getattr(mantis_model.encoder, "layers_removed", False)
+                    and tuple(mantis_logits_a.shape) == (103, 2)
+                    and torch.equal(mantis_logits_a, mantis_logits_b)
+                    and torch.isfinite(mantis_logits_a).all()
+                    and mantis_encoder_unchanged
+                    and mantis_head_changed
+                    and _SyntheticMantisV2.forward_batch_sizes == [1024, 6, 1024, 6]
+                    and _SyntheticMantisV2.forward_sequence_lengths == [512, 512, 512, 512]
+                    and mantis_reload.encoder.training is False
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "ts2vec_9c_frozen_probe_has_locked_encoder_and_linear_head",
         (
-            831810,
-            642,
-            831168,
-            "ts2vec_frozen_linear",
-            8,
-            128,
-            320,
-            1021,
-            ("global_max",),
-            False,
-        ),
+                    831810,
+                    642,
+                    831168,
+                    "ts2vec_frozen_linear",
+                    8,
+                    128,
+                    320,
+                    1021,
+                    ("global_max",),
+                    False,
+                ),
         (
-            ts2vec_total_parameter_count,
-            ts2vec_trainable_parameter_count,
-            ts2vec_frozen_parameter_count,
-            ts2vec_spec.family,
-            ts2vec_spec.ts2vec_depth,
-            ts2vec_spec.ts2vec_hidden_dims,
-            ts2vec_spec.ts2vec_output_dims,
-            ts2vec_spec.receptive_field_bars,
-            ts2vec_spec.pooling,
-            ts2vec_spec.use_dataset_context,
-        ),
+                    ts2vec_total_parameter_count,
+                    ts2vec_trainable_parameter_count,
+                    ts2vec_frozen_parameter_count,
+                    ts2vec_spec.family,
+                    ts2vec_spec.ts2vec_depth,
+                    ts2vec_spec.ts2vec_hidden_dims,
+                    ts2vec_spec.ts2vec_output_dims,
+                    ts2vec_spec.receptive_field_bars,
+                    ts2vec_spec.pooling,
+                    ts2vec_spec.use_dataset_context,
+                ),
     )
     ts2vec_encoder_requires_grad = [
         bool(parameter.requires_grad)
@@ -1084,27 +960,23 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         torch, z1, z2, alpha=0.5, temporal_unit=0
     )
     ts2vec_contrastive_loss.backward()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "ts2vec_encoder_is_frozen_context_independent_and_contrastive_loss_is_finite",
-        True,
         bool(
-            not any(ts2vec_encoder_requires_grad)
-            and all(ts2vec_head_requires_grad)
-            and ts2vec_model.encoder.training is False
-            and torch.equal(ts2vec_logits_a, ts2vec_logits_b)
-            and tuple(ts2vec_logits_a.shape) == (4, 2)
-            and torch.isfinite(ts2vec_logits_a).all()
-            and ts2vec_encoder_unchanged
-            and ts2vec_head_changed
-            and torch.isfinite(ts2vec_contrastive_loss)
-            and z1.grad is not None
-            and z2.grad is not None
-            and torch.isfinite(z1.grad).all()
-            and torch.isfinite(z2.grad).all()
-        ),
+                    not any(ts2vec_encoder_requires_grad)
+                    and all(ts2vec_head_requires_grad)
+                    and ts2vec_model.encoder.training is False
+                    and torch.equal(ts2vec_logits_a, ts2vec_logits_b)
+                    and tuple(ts2vec_logits_a.shape) == (4, 2)
+                    and torch.isfinite(ts2vec_logits_a).all()
+                    and ts2vec_encoder_unchanged
+                    and ts2vec_head_changed
+                    and torch.isfinite(ts2vec_contrastive_loss)
+                    and z1.grad is not None
+                    and z2.grad is not None
+                    and torch.isfinite(z1.grad).all()
+                    and torch.isfinite(z2.grad).all()
+                ),
     )
     with tempfile.TemporaryDirectory(prefix="ts2vec_contract_") as temp_dir_text:
         pretrain_root = Path(temp_dir_text)
@@ -1318,96 +1190,83 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             pretraining_date_leak_rejected = False
         except ValueError as exc:
             pretraining_date_leak_rejected = "Selection 結束日後" in str(exc)
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
+        check_true(
             "ts2vec_pretraining_contract_rejects_oos_labels_and_endpoint_leakage",
-            True,
             bool(
-                loaded_pretraining_summary["configuration_fingerprint"]
-                == pretraining_fingerprint
-                and loaded_windows_shape == (4, 300, 10)
-                and loaded_windows_released
-                and len(loaded_index) == 4
-                and loaded_encoder_manifest["oos_windows_used"] is False
-                and loaded_encoder_manifest["pass_reject_labels_used"] is False
-                and pretraining_profile_mismatch_rejected
-                and pretraining_label_leak_rejected
-                and pretraining_oos_leak_rejected
-                and pretraining_date_leak_rejected
-            ),
+                            loaded_pretraining_summary["configuration_fingerprint"]
+                            == pretraining_fingerprint
+                            and loaded_windows_shape == (4, 300, 10)
+                            and loaded_windows_released
+                            and len(loaded_index) == 4
+                            and loaded_encoder_manifest["oos_windows_used"] is False
+                            and loaded_encoder_manifest["pass_reject_labels_used"] is False
+                            and pretraining_profile_mismatch_rejected
+                            and pretraining_label_leak_rejected
+                            and pretraining_oos_leak_rejected
+                            and pretraining_date_leak_rejected
+                        ),
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "ts2vec_pretraining_uses_named_profile_with_valid_ranges",
-        True,
-        (
-            BREAKOUT_QUALITY_PRETRAINING_PROFILE
-            in SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES
-            and CONFIGURED_PRETRAINING.name == BREAKOUT_QUALITY_PRETRAINING_PROFILE
-            and CONFIGURED_PRETRAINING.family == "ts2vec_v1"
-            and CONFIGURED_PRETRAINING.optimizer_name
-            in SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS
-            and CONFIGURED_PRETRAINING.epochs >= 1
-            and CONFIGURED_PRETRAINING.batch_size >= 2
-            and CONFIGURED_PRETRAINING.learning_rate > 0.0
-            and CONFIGURED_PRETRAINING.weight_decay >= 0.0
-            and CONFIGURED_PRETRAINING.gradient_clip_norm >= 0.0
-            and CONFIGURED_PRETRAINING.min_crop_bars >= 2
-            and 0.0 <= CONFIGURED_PRETRAINING.mask_probability < 1.0
-            and 0.0 <= CONFIGURED_PRETRAINING.contrastive_alpha <= 1.0
-            and CONFIGURED_PRETRAINING.temporal_unit >= 0
-            and build_breakout_quality_pretraining_profile_payload(
-                TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE
-            )
-            == CONFIGURED_PRETRAINING.as_manifest_payload()
-            and build_breakout_quality_pretraining_profile_payload(
-                TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE,
-                epochs=3,
-                batch_size=64,
-                learning_rate=0.002,
-                weight_decay=0.01,
-                gradient_clip_norm=0.5,
-                min_crop_bars=40,
-                mask_probability=0.25,
-                contrastive_alpha=0.75,
-                temporal_unit=1,
-            )["epochs"]
-            == 3
-        ),
+        BREAKOUT_QUALITY_PRETRAINING_PROFILE
+                    in SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES
+                    and CONFIGURED_PRETRAINING.name == BREAKOUT_QUALITY_PRETRAINING_PROFILE
+                    and CONFIGURED_PRETRAINING.family == "ts2vec_v1"
+                    and CONFIGURED_PRETRAINING.optimizer_name
+                    in SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS
+                    and CONFIGURED_PRETRAINING.epochs >= 1
+                    and CONFIGURED_PRETRAINING.batch_size >= 2
+                    and CONFIGURED_PRETRAINING.learning_rate > 0.0
+                    and CONFIGURED_PRETRAINING.weight_decay >= 0.0
+                    and CONFIGURED_PRETRAINING.gradient_clip_norm >= 0.0
+                    and CONFIGURED_PRETRAINING.min_crop_bars >= 2
+                    and 0.0 <= CONFIGURED_PRETRAINING.mask_probability < 1.0
+                    and 0.0 <= CONFIGURED_PRETRAINING.contrastive_alpha <= 1.0
+                    and CONFIGURED_PRETRAINING.temporal_unit >= 0
+                    and build_breakout_quality_pretraining_profile_payload(
+                        TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE
+                    )
+                    == CONFIGURED_PRETRAINING.as_manifest_payload()
+                    and build_breakout_quality_pretraining_profile_payload(
+                        TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE,
+                        epochs=3,
+                        batch_size=64,
+                        learning_rate=0.002,
+                        weight_decay=0.01,
+                        gradient_clip_norm=0.5,
+                        min_crop_bars=40,
+                        mask_probability=0.25,
+                        contrastive_alpha=0.75,
+                        temporal_unit=1,
+                    )["epochs"]
+                    == 3,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "modern_tcn_9b_is_capacity_matched_large_kernel_classifier",
         (
-            475394,
-            "modern_tcn",
-            6,
-            96,
-            51,
-            4,
-            301,
-            "batch_norm",
-            ("global_average",),
-            False,
-        ),
+                    475394,
+                    "modern_tcn",
+                    6,
+                    96,
+                    51,
+                    4,
+                    301,
+                    "batch_norm",
+                    ("global_average",),
+                    False,
+                ),
         (
-            modern_tcn_parameter_count,
-            modern_tcn_spec.family,
-            modern_tcn_spec.modern_tcn_depth,
-            modern_tcn_spec.modern_tcn_channels,
-            modern_tcn_spec.modern_tcn_kernel_size,
-            modern_tcn_spec.modern_tcn_expansion_ratio,
-            modern_tcn_spec.receptive_field_bars,
-            modern_tcn_spec.normalization,
-            modern_tcn_spec.pooling,
-            modern_tcn_spec.use_dataset_context,
-        ),
+                    modern_tcn_parameter_count,
+                    modern_tcn_spec.family,
+                    modern_tcn_spec.modern_tcn_depth,
+                    modern_tcn_spec.modern_tcn_channels,
+                    modern_tcn_spec.modern_tcn_kernel_size,
+                    modern_tcn_spec.modern_tcn_expansion_ratio,
+                    modern_tcn_spec.receptive_field_bars,
+                    modern_tcn_spec.normalization,
+                    modern_tcn_spec.pooling,
+                    modern_tcn_spec.use_dataset_context,
+                ),
     )
     modern_depthwise_layers = [
         module
@@ -1421,10 +1280,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     modern_batch_norm_layers = [
         module for module in modern_tcn_model.modules() if isinstance(module, _nn.BatchNorm1d)
     ]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "modern_tcn_uses_six_depthwise_large_kernel_blocks_and_thirteen_batch_norms",
         (6, 13),
         (len(modern_depthwise_layers), len(modern_batch_norm_layers)),
@@ -1451,48 +1307,41 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         for parameter in modern_tcn_model.parameters()
         if parameter.requires_grad
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "modern_tcn_context_invariance_backward_and_strict_reload",
-        True,
         bool(
-            torch.equal(modern_logits_a, modern_logits_b)
-            and tuple(modern_logits_a.shape) == (3, 2)
-            and torch.isfinite(modern_logits_a).all()
-            and modern_gradients_ok
-        ),
+                    torch.equal(modern_logits_a, modern_logits_b)
+                    and tuple(modern_logits_a.shape) == (3, 2)
+                    and torch.isfinite(modern_logits_a).all()
+                    and modern_gradients_ok
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "inception_time_9a_uses_configured_receptive_field_contract",
         (
-            True,
-            "inception_time",
-            int(BREAKOUT_QUALITY_INCEPTION_DEPTH),
-            32,
-            32,
-            build_breakout_quality_inception_kernel_sizes(),
-            int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY),
-            resolve_breakout_quality_inception_receptive_field_bars(),
-            ("global_average",),
-            False,
-        ),
+                    True,
+                    "inception_time",
+                    int(BREAKOUT_QUALITY_INCEPTION_DEPTH),
+                    32,
+                    32,
+                    build_breakout_quality_inception_kernel_sizes(),
+                    int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY),
+                    resolve_breakout_quality_inception_receptive_field_bars(),
+                    ("global_average",),
+                    False,
+                ),
         (
-            inception_parameter_count > 0,
-            inception_spec.family,
-            inception_spec.inception_depth,
-            inception_spec.inception_filters,
-            inception_spec.inception_bottleneck_channels,
-            inception_spec.inception_kernel_sizes,
-            inception_spec.inception_residual_every,
-            inception_spec.receptive_field_bars,
-            inception_spec.pooling,
-            inception_spec.use_dataset_context,
-        ),
+                    inception_parameter_count > 0,
+                    inception_spec.family,
+                    inception_spec.inception_depth,
+                    inception_spec.inception_filters,
+                    inception_spec.inception_bottleneck_channels,
+                    inception_spec.inception_kernel_sizes,
+                    inception_spec.inception_residual_every,
+                    inception_spec.receptive_field_bars,
+                    inception_spec.pooling,
+                    inception_spec.use_dataset_context,
+                ),
     )
     inception_model.eval()
     inception_features = torch.randn(
@@ -1509,17 +1358,13 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         model_spec=inception_spec.as_manifest_payload(),
     )
     inception_reload.load_state_dict(inception_model.state_dict(), strict=True)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "inception_time_context_invariance_forward_and_strict_reload",
-        True,
         bool(
-            torch.equal(inception_logits_a, inception_logits_b)
-            and tuple(inception_logits_a.shape) == (3, 2)
-            and torch.isfinite(inception_logits_a).all()
-        ),
+                    torch.equal(inception_logits_a, inception_logits_b)
+                    and tuple(inception_logits_a.shape) == (3, 2)
+                    and torch.isfinite(inception_logits_a).all()
+                ),
     )
     inception_market_set_model.eval()
     market_sequences = torch.randn((2, 7, int(BREAKOUT_QUALITY_FEATURE_WINDOW_BARS), 5))
@@ -1555,23 +1400,19 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     inception_market_set_reload.load_state_dict(
         inception_market_set_model.state_dict(), strict=True
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "market_set_stage1_is_set_invariant_research_only_and_strict_reloadable",
-        True,
         bool(
-            inception_market_set_parameter_count > inception_parameter_count
-            and inception_market_set_spec.family == "inception_time_market_set"
-            and inception_market_set_spec.requires_market_set
-            and inception_market_set_spec.market_set_temporal_normalization == "group_norm"
-            and inception_market_set_spec.market_set_temporal_normalization_groups == 8
-            and not inception_market_set_spec.use_dataset_context
-            and tuple(market_logits.shape) == (3, 2)
-            and torch.isfinite(market_logits).all()
-            and torch.allclose(market_logits, permuted_logits, atol=1e-6, rtol=1e-6)
-        ),
+                    inception_market_set_parameter_count > inception_parameter_count
+                    and inception_market_set_spec.family == "inception_time_market_set"
+                    and inception_market_set_spec.requires_market_set
+                    and inception_market_set_spec.market_set_temporal_normalization == "group_norm"
+                    and inception_market_set_spec.market_set_temporal_normalization_groups == 8
+                    and not inception_market_set_spec.use_dataset_context
+                    and tuple(market_logits.shape) == (3, 2)
+                    and torch.isfinite(market_logits).all()
+                    and torch.allclose(market_logits, permuted_logits, atol=1e-6, rtol=1e-6)
+                ),
     )
 
     inception_market_set_candidate_model.eval()
@@ -1636,35 +1477,31 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     inception_market_set_candidate_reload.load_state_dict(
         inception_market_set_candidate_model.state_dict(), strict=True
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "market_set_10a_candidate_query_is_dynamic_set_invariant_and_strict_reloadable",
-        True,
         bool(
-            inception_market_set_candidate_parameter_count > inception_parameter_count
-            and inception_market_set_candidate_spec.family == "inception_time_market_set"
-            and inception_market_set_candidate_spec.requires_market_set
-            and inception_market_set_candidate_spec.market_set_query_mode
-            == "candidate_conditioned"
-            and inception_market_set_candidate_spec.market_set_query_count >= 1
-            and not inception_market_set_candidate_spec.use_dataset_context
-            and tuple(candidate_logits.shape) == (3, 2)
-            and torch.isfinite(candidate_logits).all()
-            and torch.equal(
-                candidate_market_embeddings[0], candidate_market_embeddings[1]
-            )
-            and not torch.equal(
-                candidate_market_embeddings[0], candidate_market_embeddings[2]
-            )
-            and torch.allclose(
-                candidate_market_embeddings,
-                candidate_market_embeddings_permuted,
-                atol=5e-6,
-                rtol=5e-6,
-            )
-        ),
+                    inception_market_set_candidate_parameter_count > inception_parameter_count
+                    and inception_market_set_candidate_spec.family == "inception_time_market_set"
+                    and inception_market_set_candidate_spec.requires_market_set
+                    and inception_market_set_candidate_spec.market_set_query_mode
+                    == "candidate_conditioned"
+                    and inception_market_set_candidate_spec.market_set_query_count >= 1
+                    and not inception_market_set_candidate_spec.use_dataset_context
+                    and tuple(candidate_logits.shape) == (3, 2)
+                    and torch.isfinite(candidate_logits).all()
+                    and torch.equal(
+                        candidate_market_embeddings[0], candidate_market_embeddings[1]
+                    )
+                    and not torch.equal(
+                        candidate_market_embeddings[0], candidate_market_embeddings[2]
+                    )
+                    and torch.allclose(
+                        candidate_market_embeddings,
+                        candidate_market_embeddings_permuted,
+                        atol=5e-6,
+                        rtol=5e-6,
+                    )
+                ),
     )
 
     missing_market_rejected = False
@@ -1679,12 +1516,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         )
     except ValueError as exc:
         candidate_missing_market_rejected = "Market Set model" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "market_set_stage1_requires_explicit_market_inputs",
-        True,
         bool(missing_market_rejected and candidate_missing_market_rejected),
     )
 
@@ -1708,16 +1541,12 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     breakout_quality_export_scores._validate_export_scope_model_support(
         RUNTIME_SCOPE_RESEARCH, inception_market_set_candidate_spec
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "market_set_stage1_is_research_only_until_forward_market_bank_exists",
-        True,
         bool(
-            market_forward_scope_rejected
-            and candidate_market_forward_scope_rejected
-        ),
+                    market_forward_scope_rejected
+                    and candidate_market_forward_scope_rejected
+                ),
     )
 
     market_dates = pd.date_range("2024-01-01", periods=305, freq="B")
@@ -1739,17 +1568,13 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     changed_daily, changed_valid = build_market_daily_base_features(
         future_changed, market_dates
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "market_set_daily_features_are_point_in_time_and_future_changes_do_not_rewrite_history",
-        True,
         bool(
-            np.array_equal(original_daily[:-1], changed_daily[:-1])
-            and np.array_equal(original_valid[:-1], changed_valid[:-1])
-            and not np.array_equal(original_daily[-1], changed_daily[-1])
-        ),
+                    np.array_equal(original_daily[:-1], changed_daily[:-1])
+                    and np.array_equal(original_valid[:-1], changed_valid[:-1])
+                    and not np.array_equal(original_daily[-1], changed_daily[-1])
+                ),
     )
 
     synthetic_daily_features = np.stack(
@@ -1772,18 +1597,15 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     shared_market_batch = synthetic_market_bank.materialize_for_group_indices(
         np.asarray([0, 1, 2, 4], dtype=np.int64)
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "market_set_bank_reuses_unique_dates_and_preserves_masks",
         ((3, 3, 300, 5), (3, 3, 300), (3, 3), [0, 0, 1, 2]),
         (
-            tuple(shared_market_batch.sequences.shape),
-            tuple(shared_market_batch.history_mask.shape),
-            tuple(shared_market_batch.valid_stock_mask.shape),
-            shared_market_batch.event_to_market.tolist(),
-        ),
+                    tuple(shared_market_batch.sequences.shape),
+                    tuple(shared_market_batch.history_mask.shape),
+                    tuple(shared_market_batch.valid_stock_mask.shape),
+                    shared_market_batch.event_to_market.tolist(),
+                ),
     )
 
     batch_feature_bank = np.random.default_rng(20260729).normal(
@@ -1811,18 +1633,15 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             group_rows = batch_event_groups[np.asarray(microbatch_rows, dtype=np.int64)]
             date_rows = synthetic_market_bank.market_date_indices_for_group_indices(group_rows)
             max_dates_seen = max(max_dates_seen, int(np.unique(date_rows).size))
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "market_set_microbatches_cap_dates_without_inflating_optimizer_steps",
         (sorted(shuffled_rows.tolist()), 2, 3, 3),
         (
-            sorted(np.concatenate(flattened_optimizer_rows).tolist()),
-            max_dates_seen,
-            max_logical_rows,
-            len(market_optimizer_batches),
-        ),
+                    sorted(np.concatenate(flattened_optimizer_rows).tolist()),
+                    max_dates_seen,
+                    max_logical_rows,
+                    len(market_optimizer_batches),
+                ),
     )
 
     market_context = np.zeros((len(batch_event_groups), 4), dtype=np.float32)
@@ -1835,39 +1654,32 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         workers=1,
         market_set_bank=synthetic_market_bank,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "market_set_unique_group_inference_preserves_event_mapping_and_finite_logits",
-        True,
         bool(
-            tuple(market_group_logits.shape) == (5, 2)
-            and tuple(market_event_to_group.shape) == (len(batch_event_groups),)
-            and np.isfinite(market_group_logits).all()
-            and market_event_to_group.tolist() == batch_event_groups.tolist()
-        ),
+                    tuple(market_group_logits.shape) == (5, 2)
+                    and tuple(market_event_to_group.shape) == (len(batch_event_groups),)
+                    and np.isfinite(market_group_logits).all()
+                    and market_event_to_group.tolist() == batch_event_groups.tolist()
+                ),
     )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "inception_time_group_norm_is_single_change_with_equal_parameter_count",
         (
-            473218,
-            "group_norm",
-            8,
-            "batch_norm",
-            None,
-        ),
+                    473218,
+                    "group_norm",
+                    8,
+                    "batch_norm",
+                    None,
+                ),
         (
-            inception_group_norm_parameter_count,
-            inception_group_norm_spec.normalization,
-            inception_group_norm_spec.normalization_groups,
-            inception_spec.normalization,
-            inception_spec.normalization_groups,
-        ),
+                    inception_group_norm_parameter_count,
+                    inception_group_norm_spec.normalization,
+                    inception_group_norm_spec.normalization_groups,
+                    inception_spec.normalization,
+                    inception_spec.normalization_groups,
+                ),
     )
     group_norm_layers = [
         module
@@ -1882,10 +1694,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     batch_norm_layers = [
         module for module in inception_model.modules() if isinstance(module, _nn.BatchNorm1d)
     ]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "inception_time_group_norm_replaces_all_eight_batch_norm_layers",
         (8, 0, 8),
         (len(group_norm_layers), len(group_norm_batch_norm_layers), len(batch_norm_layers)),
@@ -1916,20 +1725,16 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     inception_group_norm_reload.load_state_dict(
         inception_group_norm_model.state_dict(), strict=True
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "inception_time_group_norm_is_per_sample_context_invariant_and_strict_reloadable",
-        True,
         bool(
-            torch.allclose(
-                group_norm_single, group_norm_with_companion, atol=1e-6, rtol=1e-6
-            )
-            and torch.equal(group_norm_logits_a, group_norm_logits_b)
-            and tuple(group_norm_logits_a.shape) == (3, 2)
-            and torch.isfinite(group_norm_logits_a).all()
-        ),
+                    torch.allclose(
+                        group_norm_single, group_norm_with_companion, atol=1e-6, rtol=1e-6
+                    )
+                    and torch.equal(group_norm_logits_a, group_norm_logits_b)
+                    and tuple(group_norm_logits_a.shape) == (3, 2)
+                    and torch.isfinite(group_norm_logits_a).all()
+                ),
     )
     cpu_execution = resolve_torch_execution_plan(
         torch,
@@ -1939,31 +1744,28 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         deterministic_algorithms=True,
         allow_tf32=False,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "torch_execution_policy_and_cpu_fallback_are_explicit",
         (
-            "auto",
-            True,
-            "auto",
-            True,
-            False,
-            "cpu",
-            False,
-            "float32",
-        ),
+                    "auto",
+                    True,
+                    "auto",
+                    True,
+                    False,
+                    "cpu",
+                    False,
+                    "float32",
+                ),
         (
-            BREAKOUT_QUALITY_TORCH_DEVICE,
-            BREAKOUT_QUALITY_USE_MIXED_PRECISION,
-            BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
-            BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
-            BREAKOUT_QUALITY_ALLOW_TF32,
-            cpu_execution.device_type,
-            cpu_execution.mixed_precision_enabled,
-            cpu_execution.autocast_dtype_name,
-        ),
+                    BREAKOUT_QUALITY_TORCH_DEVICE,
+                    BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+                    BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
+                    BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
+                    BREAKOUT_QUALITY_ALLOW_TF32,
+                    cpu_execution.device_type,
+                    cpu_execution.mixed_precision_enabled,
+                    cpu_execution.autocast_dtype_name,
+                ),
     )
     valid_execution_record = cpu_execution.as_manifest_payload()
     valid_execution_accepted = True
@@ -1992,28 +1794,13 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         )
     except ValueError:
         disabled_mixed_precision_dtype_rejected = True
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "torch_execution_manifest_accepts_valid_cpu_fallback",
-        True,
-        valid_execution_accepted,
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true("torch_execution_manifest_accepts_valid_cpu_fallback", valid_execution_accepted)
+    check_true(
         "torch_execution_manifest_rejects_requested_resolved_device_mismatch",
-        True,
         requested_cuda_resolved_cpu_rejected,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "torch_execution_manifest_rejects_dtype_when_mixed_precision_disabled",
-        True,
         disabled_mixed_precision_dtype_rejected,
     )
     class _FakeCudaMatmul:
@@ -2061,125 +1848,101 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         deterministic_algorithms=True,
         allow_tf32=False,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "torch_execution_auto_prefers_cuda_bfloat16_when_supported",
         ("cuda", True, "bfloat16", True, False, False, False),
         (
-            fake_cuda_execution.device_type,
-            fake_cuda_execution.mixed_precision_enabled,
-            fake_cuda_execution.autocast_dtype_name,
-            _FakeTorchRuntime.deterministic,
-            _FakeTorchRuntime.backends.cudnn.benchmark,
-            _FakeTorchRuntime.backends.cudnn.allow_tf32,
-            _FakeTorchRuntime.backends.cuda.matmul.allow_tf32,
-        ),
+                    fake_cuda_execution.device_type,
+                    fake_cuda_execution.mixed_precision_enabled,
+                    fake_cuda_execution.autocast_dtype_name,
+                    _FakeTorchRuntime.deterministic,
+                    _FakeTorchRuntime.backends.cudnn.benchmark,
+                    _FakeTorchRuntime.backends.cudnn.allow_tf32,
+                    _FakeTorchRuntime.backends.cuda.matmul.allow_tf32,
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "multiscale_cnn_is_medium_capacity_with_long_receptive_field",
-        True,
-        (
-            tiny_parameter_count < multiscale_parameter_count < residual_parameter_count
-            and 15000 <= multiscale_parameter_count <= 25000
-            and get_model_spec("multiscale_cnn_v1").receptive_field_bars >= 240
-            and get_model_spec("multiscale_cnn_v1").normalization == "group_norm"
-            and "max" not in get_model_spec("multiscale_cnn_v1").pooling
-        ),
+        tiny_parameter_count < multiscale_parameter_count < residual_parameter_count
+                    and 15000 <= multiscale_parameter_count <= 25000
+                    and get_model_spec("multiscale_cnn_v1").receptive_field_bars >= 240
+                    and get_model_spec("multiscale_cnn_v1").normalization == "group_norm"
+                    and "max" not in get_model_spec("multiscale_cnn_v1").pooling,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v2_changes_representation_without_changing_capacity",
         (
-            multiscale_parameter_count,
-            ("return_delta", "return_delta", "level"),
-        ),
+                    multiscale_parameter_count,
+                    ("return_delta", "return_delta", "level"),
+                ),
         (
-            multiscale_v2_parameter_count,
-            get_model_spec("multiscale_cnn_v2").branch_input_representations,
-        ),
+                    multiscale_v2_parameter_count,
+                    get_model_spec("multiscale_cnn_v2").branch_input_representations,
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v3_adds_market_relative_returns_without_changing_capacity",
         (
-            multiscale_parameter_count,
-            (
-                "market_relative_return_delta",
-                "market_relative_return_delta",
-                "level",
-            ),
-        ),
+                    multiscale_parameter_count,
+                    (
+                        "market_relative_return_delta",
+                        "market_relative_return_delta",
+                        "level",
+                    ),
+                ),
         (
-            multiscale_v3_parameter_count,
-            get_model_spec("multiscale_cnn_v3").branch_input_representations,
-        ),
+                    multiscale_v3_parameter_count,
+                    get_model_spec("multiscale_cnn_v3").branch_input_representations,
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v4_only_reduces_long_branch_channels",
         (
-            True,
-            (16, 16, 8),
-            (),
-            get_model_spec("multiscale_cnn_v1").receptive_field_bars,
-        ),
+                    True,
+                    (16, 16, 8),
+                    (),
+                    get_model_spec("multiscale_cnn_v1").receptive_field_bars,
+                ),
         (
-            tiny_parameter_count < multiscale_v4_parameter_count < multiscale_parameter_count,
-            get_model_spec("multiscale_cnn_v4").branch_channels,
-            get_model_spec("multiscale_cnn_v4").branch_input_representations,
-            get_model_spec("multiscale_cnn_v4").receptive_field_bars,
-        ),
+                    tiny_parameter_count < multiscale_v4_parameter_count < multiscale_parameter_count,
+                    get_model_spec("multiscale_cnn_v4").branch_channels,
+                    get_model_spec("multiscale_cnn_v4").branch_input_representations,
+                    get_model_spec("multiscale_cnn_v4").receptive_field_bars,
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v5_only_sets_intermediate_long_branch_channels",
         (
-            True,
-            (16, 16, 12),
-            (),
-            get_model_spec("multiscale_cnn_v1").receptive_field_bars,
-        ),
+                    True,
+                    (16, 16, 12),
+                    (),
+                    get_model_spec("multiscale_cnn_v1").receptive_field_bars,
+                ),
         (
-            multiscale_v4_parameter_count
-            < multiscale_v5_parameter_count
-            < multiscale_parameter_count,
-            get_model_spec("multiscale_cnn_v5").branch_channels,
-            get_model_spec("multiscale_cnn_v5").branch_input_representations,
-            get_model_spec("multiscale_cnn_v5").receptive_field_bars,
-        ),
+                    multiscale_v4_parameter_count
+                    < multiscale_v5_parameter_count
+                    < multiscale_parameter_count,
+                    get_model_spec("multiscale_cnn_v5").branch_channels,
+                    get_model_spec("multiscale_cnn_v5").branch_input_representations,
+                    get_model_spec("multiscale_cnn_v5").receptive_field_bars,
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v6_only_increases_long_branch_dropout",
         (
-            multiscale_parameter_count,
-            (),
-            (),
-            (0.25, 0.25, 0.40),
-            get_model_spec("multiscale_cnn_v1").receptive_field_bars,
-        ),
+                    multiscale_parameter_count,
+                    (),
+                    (),
+                    (0.25, 0.25, 0.40),
+                    get_model_spec("multiscale_cnn_v1").receptive_field_bars,
+                ),
         (
-            multiscale_v6_parameter_count,
-            get_model_spec("multiscale_cnn_v6").branch_channels,
-            get_model_spec("multiscale_cnn_v6").branch_input_representations,
-            get_model_spec("multiscale_cnn_v6").branch_dropouts,
-            get_model_spec("multiscale_cnn_v6").receptive_field_bars,
-        ),
+                    multiscale_v6_parameter_count,
+                    get_model_spec("multiscale_cnn_v6").branch_channels,
+                    get_model_spec("multiscale_cnn_v6").branch_input_representations,
+                    get_model_spec("multiscale_cnn_v6").branch_dropouts,
+                    get_model_spec("multiscale_cnn_v6").receptive_field_bars,
+                ),
     )
     v6_branch_dropout_values = tuple(
         float(module.p)
@@ -2187,107 +1950,88 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         for module in branch.network
         if module.__class__.__name__ == "Dropout"
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v6_runtime_branch_dropouts_are_025_025_040",
         (0.25, 0.25, 0.25, 0.25, 0.40, 0.40),
         v6_branch_dropout_values,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v7_only_changes_short_branch_to_return_delta",
         (
-            multiscale_parameter_count,
-            ("return_delta", "level", "level"),
-            (),
-            (),
-            get_model_spec("multiscale_cnn_v1").receptive_field_bars,
-        ),
+                    multiscale_parameter_count,
+                    ("return_delta", "level", "level"),
+                    (),
+                    (),
+                    get_model_spec("multiscale_cnn_v1").receptive_field_bars,
+                ),
         (
-            multiscale_v7_parameter_count,
-            get_model_spec("multiscale_cnn_v7").branch_input_representations,
-            get_model_spec("multiscale_cnn_v7").branch_channels,
-            get_model_spec("multiscale_cnn_v7").branch_dropouts,
-            get_model_spec("multiscale_cnn_v7").receptive_field_bars,
-        ),
+                    multiscale_v7_parameter_count,
+                    get_model_spec("multiscale_cnn_v7").branch_input_representations,
+                    get_model_spec("multiscale_cnn_v7").branch_channels,
+                    get_model_spec("multiscale_cnn_v7").branch_dropouts,
+                    get_model_spec("multiscale_cnn_v7").receptive_field_bars,
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v8_only_changes_medium_branch_to_return_delta",
         (
-            multiscale_parameter_count,
-            ("level", "return_delta", "level"),
-            (),
-            (),
-            get_model_spec("multiscale_cnn_v1").receptive_field_bars,
-        ),
+                    multiscale_parameter_count,
+                    ("level", "return_delta", "level"),
+                    (),
+                    (),
+                    get_model_spec("multiscale_cnn_v1").receptive_field_bars,
+                ),
         (
-            multiscale_v8_parameter_count,
-            get_model_spec("multiscale_cnn_v8").branch_input_representations,
-            get_model_spec("multiscale_cnn_v8").branch_channels,
-            get_model_spec("multiscale_cnn_v8").branch_dropouts,
-            get_model_spec("multiscale_cnn_v8").receptive_field_bars,
-        ),
+                    multiscale_v8_parameter_count,
+                    get_model_spec("multiscale_cnn_v8").branch_input_representations,
+                    get_model_spec("multiscale_cnn_v8").branch_channels,
+                    get_model_spec("multiscale_cnn_v8").branch_dropouts,
+                    get_model_spec("multiscale_cnn_v8").receptive_field_bars,
+                ),
     )
     regime_spec = get_model_spec("multiscale_cnn_regime_context_v1")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "regime_context_architecture_only_adds_zero_initialized_projection",
         (
-            multiscale_parameter_count + len(REGIME_CONTEXT_FEATURES) * 32,
-            REGIME_CONTEXT_FEATURES,
-            REGIME_CONTEXT_LOOKBACK_BARS,
-            REGIME_CONTEXT_ANNUALIZATION_BARS,
-            get_model_spec("multiscale_cnn_v1").receptive_field_bars,
-        ),
+                    multiscale_parameter_count + len(REGIME_CONTEXT_FEATURES) * 32,
+                    REGIME_CONTEXT_FEATURES,
+                    REGIME_CONTEXT_LOOKBACK_BARS,
+                    REGIME_CONTEXT_ANNUALIZATION_BARS,
+                    get_model_spec("multiscale_cnn_v1").receptive_field_bars,
+                ),
         (
-            regime_context_parameter_count,
-            regime_spec.derived_context_features,
-            regime_spec.derived_context_lookback_bars,
-            regime_spec.derived_context_annualization_bars,
-            regime_spec.receptive_field_bars,
-        ),
+                    regime_context_parameter_count,
+                    regime_spec.derived_context_features,
+                    regime_spec.derived_context_lookback_bars,
+                    regime_spec.derived_context_annualization_bars,
+                    regime_spec.receptive_field_bars,
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "regime_context_projection_starts_at_zero",
-        True,
         bool(
-            regime_context_model.derived_context_projection is not None
-            and np.allclose(
-                regime_context_model.derived_context_projection.weight.detach().cpu().numpy(),
-                0.0,
-            )
-        ),
+                    regime_context_model.derived_context_projection is not None
+                    and np.allclose(
+                        regime_context_model.derived_context_projection.weight.detach().cpu().numpy(),
+                        0.0,
+                    )
+                ),
     )
     sequence_only_spec = get_model_spec("multiscale_cnn_sequence_only_v1")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "sequence_only_architecture_removes_only_four_dimensional_dataset_context",
         (
-            multiscale_parameter_count - 4 * int(sequence_only_spec.head_width),
-            False,
-            get_model_spec("multiscale_cnn_v1").receptive_field_bars,
-            get_model_spec("multiscale_cnn_v1").branch_input_representations,
-        ),
+                    multiscale_parameter_count - 4 * int(sequence_only_spec.head_width),
+                    False,
+                    get_model_spec("multiscale_cnn_v1").receptive_field_bars,
+                    get_model_spec("multiscale_cnn_v1").branch_input_representations,
+                ),
         (
-            sequence_only_parameter_count,
-            sequence_only_spec.use_dataset_context,
-            sequence_only_spec.receptive_field_bars,
-            sequence_only_spec.branch_input_representations,
-        ),
+                    sequence_only_parameter_count,
+                    sequence_only_spec.use_dataset_context,
+                    sequence_only_spec.receptive_field_bars,
+                    sequence_only_spec.branch_input_representations,
+                ),
     )
     sequence_only_model.eval()
     sequence_features = torch.randn((3, 300, 10), dtype=torch.float32) * 0.02
@@ -2296,34 +2040,27 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     with torch.no_grad():
         sequence_logits_a = sequence_only_model(sequence_features, sequence_context_a)
         sequence_logits_b = sequence_only_model(sequence_features, sequence_context_b)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "sequence_only_logits_are_independent_of_dataset_context_values",
-        True,
         bool(torch.equal(sequence_logits_a, sequence_logits_b)),
     )
     dual_path_spec = get_model_spec(
         "multiscale_cnn_sequence_only_dual_path_v1"
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "dual_path_architecture_adds_raw_and_window_zscore_paths_without_context",
         (
-            True,
-            ("raw_level", "window_zscore"),
-            1e-5,
-            sequence_only_spec.receptive_field_bars,
-        ),
+                    True,
+                    ("raw_level", "window_zscore"),
+                    1e-5,
+                    sequence_only_spec.receptive_field_bars,
+                ),
         (
-            dual_path_parameter_count > sequence_only_parameter_count,
-            dual_path_spec.sequence_input_paths,
-            dual_path_spec.window_normalization_epsilon,
-            dual_path_spec.receptive_field_bars,
-        ),
+                    dual_path_parameter_count > sequence_only_parameter_count,
+                    dual_path_spec.sequence_input_paths,
+                    dual_path_spec.window_normalization_epsilon,
+                    dual_path_spec.receptive_field_bars,
+                ),
     )
     normalization_input = torch.stack(
         [
@@ -2338,20 +2075,16 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     )
     normalized_mean = torch.mean(normalized_window, dim=2)
     normalized_std = torch.std(normalized_window[:, :2, :], dim=2, unbiased=False)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "window_zscore_is_per_sample_per_channel_and_constant_safe",
-        True,
         bool(
-            torch.allclose(normalized_mean, torch.zeros_like(normalized_mean), atol=1e-6)
-            and torch.allclose(normalized_std, torch.ones_like(normalized_std), atol=1e-6)
-            and torch.equal(
-                normalized_window[:, 2, :],
-                torch.zeros_like(normalized_window[:, 2, :]),
-            )
-        ),
+                    torch.allclose(normalized_mean, torch.zeros_like(normalized_mean), atol=1e-6)
+                    and torch.allclose(normalized_std, torch.ones_like(normalized_std), atol=1e-6)
+                    and torch.equal(
+                        normalized_window[:, 2, :],
+                        torch.zeros_like(normalized_window[:, 2, :]),
+                    )
+                ),
     )
     equivalence_features = torch.randn((4, 300, 10), dtype=torch.float32) * 0.03
     equivalence_context_a = torch.randn((4, 4), dtype=torch.float32)
@@ -2394,18 +2127,14 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             torch.equal(fusion.weight, expected_weight)
             and torch.equal(fusion.bias, torch.zeros_like(fusion.bias))
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "dual_path_starts_as_exact_8f_function_and_ignores_dataset_context",
-        True,
         bool(
-            shared_base_state_equal
-            and fusion_identity
-            and torch.equal(equivalence_base_logits, equivalence_dual_logits_a)
-            and torch.equal(equivalence_dual_logits_a, equivalence_dual_logits_b)
-        ),
+                    shared_base_state_equal
+                    and fusion_identity
+                    and torch.equal(equivalence_base_logits, equivalence_dual_logits_a)
+                    and torch.equal(equivalence_dual_logits_a, equivalence_dual_logits_b)
+                ),
     )
     equivalence_dual_model.train()
     equivalence_dual_model.zero_grad(set_to_none=True)
@@ -2424,14 +2153,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         for fusion in equivalence_dual_model.path_fusions
         if fusion.weight.grad is not None
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "dual_path_normalized_fusion_receives_first_step_gradient",
-        True,
-        normalized_fusion_gradient > 0.0,
-    )
+    check_true("dual_path_normalized_fusion_receives_first_step_gradient", normalized_fusion_gradient > 0.0)
     with torch.no_grad():
         for fusion in equivalence_dual_model.path_fusions:
             fusion.weight[:, int(fusion.out_features):].fill_(0.01)
@@ -2445,37 +2167,24 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         for name, parameter in equivalence_dual_model.named_parameters()
         if name.startswith("normalized_branches.") and parameter.grad is not None
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "dual_path_normalized_branches_receive_gradient_after_fusion_opens",
-        True,
-        normalized_branch_gradient > 0.0,
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true("dual_path_normalized_branches_receive_gradient_after_fusion_opens", normalized_branch_gradient > 0.0)
+    check(
         "multiscale_v1_v2_v3_manifest_specs_remain_backward_compatible",
         False,
         any(
-            "branch_channels" in get_model_spec(architecture).as_manifest_payload()
-            for architecture in (
-                "multiscale_cnn_v1",
-                "multiscale_cnn_v2",
-                "multiscale_cnn_v3",
-            )
-        ),
+                    "branch_channels" in get_model_spec(architecture).as_manifest_payload()
+                    for architecture in (
+                        "multiscale_cnn_v1",
+                        "multiscale_cnn_v2",
+                        "multiscale_cnn_v3",
+                    )
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v1_manifest_spec_remains_backward_compatible",
         False,
         "branch_input_representations"
-        in get_model_spec("multiscale_cnn_v1").as_manifest_payload(),
+                in get_model_spec("multiscale_cnn_v1").as_manifest_payload(),
     )
     regime_sequence = torch.zeros((2, 10, 61), dtype=torch.float32)
     stock_daily_log_return = 0.002
@@ -2496,20 +2205,16 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         ],
         dtype=np.float32,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "regime_context_uses_only_20_60_day_returns_volatility_and_relative_strength",
-        True,
         bool(
-            tuple(derived_regime.shape) == (2, len(REGIME_CONTEXT_FEATURES))
-            and np.allclose(
-                derived_regime.detach().cpu().numpy(),
-                np.tile(expected_regime, (2, 1)),
-                atol=1e-6,
-            )
-        ),
+                    tuple(derived_regime.shape) == (2, len(REGIME_CONTEXT_FEATURES))
+                    and np.allclose(
+                        derived_regime.detach().cpu().numpy(),
+                        np.tile(expected_regime, (2, 1)),
+                        atol=1e-6,
+                    )
+                ),
     )
     torch.manual_seed(314159)
     baseline_initial_model = build_breakout_quality_model(
@@ -2532,29 +2237,21 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and torch.equal(value, regime_initial_model.state_dict()[key])
         for key, value in baseline_initial_model.state_dict().items()
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "regime_context_preserves_v1_initial_common_weights_and_logits",
-        True,
         bool(common_state_equal and torch.equal(baseline_logits, regime_logits)),
     )
     regime_initial_model.train()
     regime_loss = regime_initial_model(initial_features, initial_context).sum()
     regime_loss.backward()
     projection_gradient = regime_initial_model.derived_context_projection.weight.grad
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "regime_context_projection_receives_training_gradient",
-        True,
         bool(
-            projection_gradient is not None
-            and torch.isfinite(projection_gradient).all()
-            and float(torch.sum(torch.abs(projection_gradient)).item()) > 0.0
-        ),
+                    projection_gradient is not None
+                    and torch.isfinite(projection_gradient).all()
+                    and float(torch.sum(torch.abs(projection_gradient)).item()) > 0.0
+                ),
     )
 
     level_sequence = torch.zeros((1, 10, 3), dtype=torch.float32)
@@ -2611,40 +2308,36 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         ],
         dtype=np.float32,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "multiscale_v2_return_delta_transform_matches_canonical_ohlcv_semantics",
-        True,
         bool(
-            np.allclose(
-                return_delta[0, :, 0].detach().cpu().numpy(),
-                np.zeros(10, dtype=np.float32),
-                atol=1e-7,
-            )
-            and np.allclose(
-                return_delta[0, 0:5, 1].detach().cpu().numpy(),
-                expected_second_stock,
-                atol=1e-6,
-            )
-            and np.allclose(
-                return_delta[0, 0:5, 2].detach().cpu().numpy(),
-                expected_third_stock,
-                atol=1e-6,
-            )
-            and np.allclose(
-                return_delta[0, 5:10, 1].detach().cpu().numpy(),
-                expected_second_benchmark,
-                atol=1e-6,
-            )
-            and np.allclose(
-                return_delta[0, 5:10, 2].detach().cpu().numpy(),
-                expected_third_benchmark,
-                atol=1e-6,
-            )
-            and np.isfinite(return_delta.detach().cpu().numpy()).all()
-        ),
+                    np.allclose(
+                        return_delta[0, :, 0].detach().cpu().numpy(),
+                        np.zeros(10, dtype=np.float32),
+                        atol=1e-7,
+                    )
+                    and np.allclose(
+                        return_delta[0, 0:5, 1].detach().cpu().numpy(),
+                        expected_second_stock,
+                        atol=1e-6,
+                    )
+                    and np.allclose(
+                        return_delta[0, 0:5, 2].detach().cpu().numpy(),
+                        expected_third_stock,
+                        atol=1e-6,
+                    )
+                    and np.allclose(
+                        return_delta[0, 5:10, 1].detach().cpu().numpy(),
+                        expected_second_benchmark,
+                        atol=1e-6,
+                    )
+                    and np.allclose(
+                        return_delta[0, 5:10, 2].detach().cpu().numpy(),
+                        expected_third_benchmark,
+                        atol=1e-6,
+                    )
+                    and np.isfinite(return_delta.detach().cpu().numpy()).all()
+                ),
     )
     market_relative_return_delta = (
         build_market_relative_return_delta_representation(torch, level_sequence)
@@ -2653,102 +2346,83 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     expected_second_relative_stock[0:4] -= expected_second_benchmark[0:4]
     expected_third_relative_stock = expected_third_stock.copy()
     expected_third_relative_stock[0:4] -= expected_third_benchmark[0:4]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "multiscale_v3_market_relative_transform_preserves_contract",
-        True,
         bool(
-            np.allclose(
-                market_relative_return_delta[0, :, 0].detach().cpu().numpy(),
-                np.zeros(10, dtype=np.float32),
-                atol=1e-7,
-            )
-            and np.allclose(
-                market_relative_return_delta[0, 0:5, 1].detach().cpu().numpy(),
-                expected_second_relative_stock,
-                atol=1e-6,
-            )
-            and np.allclose(
-                market_relative_return_delta[0, 0:5, 2].detach().cpu().numpy(),
-                expected_third_relative_stock,
-                atol=1e-6,
-            )
-            and np.allclose(
-                market_relative_return_delta[0, 5:10, :].detach().cpu().numpy(),
-                return_delta[0, 5:10, :].detach().cpu().numpy(),
-                atol=1e-7,
-            )
-            and np.isfinite(
-                market_relative_return_delta.detach().cpu().numpy()
-            ).all()
-        ),
+                    np.allclose(
+                        market_relative_return_delta[0, :, 0].detach().cpu().numpy(),
+                        np.zeros(10, dtype=np.float32),
+                        atol=1e-7,
+                    )
+                    and np.allclose(
+                        market_relative_return_delta[0, 0:5, 1].detach().cpu().numpy(),
+                        expected_second_relative_stock,
+                        atol=1e-6,
+                    )
+                    and np.allclose(
+                        market_relative_return_delta[0, 0:5, 2].detach().cpu().numpy(),
+                        expected_third_relative_stock,
+                        atol=1e-6,
+                    )
+                    and np.allclose(
+                        market_relative_return_delta[0, 5:10, :].detach().cpu().numpy(),
+                        return_delta[0, 5:10, :].detach().cpu().numpy(),
+                        atol=1e-7,
+                    )
+                    and np.isfinite(
+                        market_relative_return_delta.detach().cpu().numpy()
+                    ).all()
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v2_forward_shape_matches_existing_contract",
         (2, 2),
         tuple(
-            multiscale_v2_model(
-                torch.zeros((2, 300, 10), dtype=torch.float32),
-                torch.zeros((2, 4), dtype=torch.float32),
-            ).shape
-        ),
+                    multiscale_v2_model(
+                        torch.zeros((2, 300, 10), dtype=torch.float32),
+                        torch.zeros((2, 4), dtype=torch.float32),
+                    ).shape
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v3_forward_shape_matches_existing_contract",
         (2, 2),
         tuple(
-            multiscale_v3_model(
-                torch.zeros((2, 300, 10), dtype=torch.float32),
-                torch.zeros((2, 4), dtype=torch.float32),
-            ).shape
-        ),
+                    multiscale_v3_model(
+                        torch.zeros((2, 300, 10), dtype=torch.float32),
+                        torch.zeros((2, 4), dtype=torch.float32),
+                    ).shape
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v4_forward_shape_matches_existing_contract",
         (2, 2),
         tuple(
-            multiscale_v4_model(
-                torch.zeros((2, 300, 10), dtype=torch.float32),
-                torch.zeros((2, 4), dtype=torch.float32),
-            ).shape
-        ),
+                    multiscale_v4_model(
+                        torch.zeros((2, 300, 10), dtype=torch.float32),
+                        torch.zeros((2, 4), dtype=torch.float32),
+                    ).shape
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v7_forward_shape_matches_existing_contract",
         (2, 2),
         tuple(
-            multiscale_v7_model(
-                torch.zeros((2, 300, 10), dtype=torch.float32),
-                torch.zeros((2, 4), dtype=torch.float32),
-            ).shape
-        ),
+                    multiscale_v7_model(
+                        torch.zeros((2, 300, 10), dtype=torch.float32),
+                        torch.zeros((2, 4), dtype=torch.float32),
+                    ).shape
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v8_forward_shape_matches_existing_contract",
         (2, 2),
         tuple(
-            multiscale_v8_model(
-                torch.zeros((2, 300, 10), dtype=torch.float32),
-                torch.zeros((2, 4), dtype=torch.float32),
-            ).shape
-        ),
+                    multiscale_v8_model(
+                        torch.zeros((2, 300, 10), dtype=torch.float32),
+                        torch.zeros((2, 4), dtype=torch.float32),
+                    ).shape
+                ),
     )
     v7_probe = torch.linspace(-0.2, 0.2, steps=2 * 300 * 10, dtype=torch.float32).reshape(2, 300, 10)
     v7_level_input = v7_probe.transpose(1, 2)
@@ -2769,18 +2443,14 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     finally:
         for hook in v7_hooks:
             hook.remove()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "multiscale_v7_runtime_routes_return_only_to_short_branch",
-        True,
         bool(
-            len(v7_captured_inputs) == 3
-            and torch.allclose(v7_captured_inputs[0], v7_expected_return)
-            and torch.allclose(v7_captured_inputs[1], v7_level_input)
-            and torch.allclose(v7_captured_inputs[2], v7_level_input)
-        ),
+                    len(v7_captured_inputs) == 3
+                    and torch.allclose(v7_captured_inputs[0], v7_expected_return)
+                    and torch.allclose(v7_captured_inputs[1], v7_level_input)
+                    and torch.allclose(v7_captured_inputs[2], v7_level_input)
+                ),
     )
     v8_probe = torch.linspace(-0.2, 0.2, steps=2 * 300 * 10, dtype=torch.float32).reshape(2, 300, 10)
     v8_level_input = v8_probe.transpose(1, 2)
@@ -2801,91 +2471,52 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     finally:
         for hook in v8_hooks:
             hook.remove()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "multiscale_v8_runtime_routes_return_only_to_medium_branch",
-        True,
         bool(
-            len(v8_captured_inputs) == 3
-            and torch.allclose(v8_captured_inputs[0], v8_level_input)
-            and torch.allclose(v8_captured_inputs[1], v8_expected_return)
-            and torch.allclose(v8_captured_inputs[2], v8_level_input)
-        ),
+                    len(v8_captured_inputs) == 3
+                    and torch.allclose(v8_captured_inputs[0], v8_level_input)
+                    and torch.allclose(v8_captured_inputs[1], v8_expected_return)
+                    and torch.allclose(v8_captured_inputs[2], v8_level_input)
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "multiscale_v4_runtime_branch_widths_match_spec",
         (16, 16, 8),
         tuple(
-            int(branch.network[0].conv.out_channels)
-            for branch in multiscale_v4_model.branches
-        ),
+                    int(branch.network[0].conv.out_channels)
+                    for branch in multiscale_v4_model.branches
+                ),
     )
     try:
         build_breakout_quality_model(9, 4, architecture="multiscale_cnn_v2")
         noncanonical_feature_contract_rejected = False
     except ValueError as exc:
         noncanonical_feature_contract_rejected = "canonical 10-column" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "multiscale_v2_rejects_noncanonical_feature_contract",
-        True,
-        noncanonical_feature_contract_rejected,
-    )
+    check_true("multiscale_v2_rejects_noncanonical_feature_contract", noncanonical_feature_contract_rejected)
     try:
         build_breakout_quality_model(9, 4, architecture="multiscale_cnn_v3")
         v3_noncanonical_feature_contract_rejected = False
     except ValueError as exc:
         v3_noncanonical_feature_contract_rejected = "canonical 10-column" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "multiscale_v3_rejects_noncanonical_feature_contract",
-        True,
-        v3_noncanonical_feature_contract_rejected,
-    )
+    check_true("multiscale_v3_rejects_noncanonical_feature_contract", v3_noncanonical_feature_contract_rejected)
     try:
         build_breakout_quality_model(9, 4, architecture="multiscale_cnn_v7")
         v7_noncanonical_feature_contract_rejected = False
     except ValueError as exc:
         v7_noncanonical_feature_contract_rejected = "canonical 10-column" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "multiscale_v7_rejects_noncanonical_feature_contract",
-        True,
-        v7_noncanonical_feature_contract_rejected,
-    )
+    check_true("multiscale_v7_rejects_noncanonical_feature_contract", v7_noncanonical_feature_contract_rejected)
     try:
         build_breakout_quality_model(9, 4, architecture="multiscale_cnn_v8")
         v8_noncanonical_feature_contract_rejected = False
     except ValueError as exc:
         v8_noncanonical_feature_contract_rejected = "canonical 10-column" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "multiscale_v8_rejects_noncanonical_feature_contract",
-        True,
-        v8_noncanonical_feature_contract_rejected,
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true("multiscale_v8_rejects_noncanonical_feature_contract", v8_noncanonical_feature_contract_rejected)
+    check_true(
         "residual_tcn_has_larger_receptive_field_and_parameter_count",
-        True,
         get_model_spec("residual_tcn_v1").receptive_field_bars
-        > get_model_spec("tiny_cnn_v1").receptive_field_bars
-        and residual_parameter_count > tiny_parameter_count,
+                > get_model_spec("tiny_cnn_v1").receptive_field_bars
+                and residual_parameter_count > tiny_parameter_count,
     )
     legacy_architectures = (
         "tiny_cnn_v1",
@@ -2988,169 +2619,150 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     )
     shared_dataset_dir = resolve_filter_output_dir("/project", "synthetic_quality")
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "model_architecture_and_training_experiment_paths_are_separate",
-        True,
-        (
-            len(
-                {path.model_path for path in legacy_paths}
-                | {
-                    modern_paths.model_path,
-                    candidate_market_paths.model_path,
-                    baseline_paths.model_path,
-                    adamw_paths.model_path,
-                    schedule_paths.model_path,
-                    group_norm_paths.model_path,
-                }
-            )
-            == len(legacy_paths) + 6
-            and len(
-                set(legacy_research_paths)
-                | {
-                    modern_research,
-                    candidate_market_research,
-                    baseline_research,
-                    adamw_research,
-                    schedule_research,
-                    group_norm_research,
-                }
-            )
-            == len(legacy_research_paths) + 6
-            and modern_paths.model_architecture == "modern_tcn_v1"
-            and candidate_market_paths.model_architecture
-            == INCEPTION_TIME_MARKET_SET_CANDIDATE_V1
-            and baseline_paths.model_architecture == "inception_time_v1"
-            and adamw_paths.model_architecture == "inception_time_v1"
-            and group_norm_paths.model_architecture
-            == "inception_time_group_norm_v1"
-            and modern_paths.experiment_profile
-            == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
-            and candidate_market_paths.experiment_profile
-            == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
-            and baseline_paths.experiment_profile == "baseline"
-            and adamw_paths.experiment_profile == "adamw_only"
-            and schedule_paths.experiment_profile
-            == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
-            and modern_paths.model_dir.parent.name == "modern_tcn_v1"
-            and candidate_market_paths.model_dir.parent.name
-            == INCEPTION_TIME_MARKET_SET_CANDIDATE_V1
-            and baseline_paths.model_dir.parent.name == "inception_time_v1"
-            and adamw_paths.model_dir.parent.name == "inception_time_v1"
-            and schedule_paths.model_dir.parent.name == "inception_time_v1"
-            and group_norm_paths.model_dir.parent.name
-            == "inception_time_group_norm_v1"
-            and group_norm_paths.model_dir.name
-            == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
-            and modern_paths.model_dir.name
-            == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
-            and candidate_market_paths.model_dir.name
-            == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
-            and baseline_paths.model_dir.name == "baseline"
-            and adamw_paths.model_dir.name == "adamw_only"
-            and schedule_paths.model_dir.name
-            == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
-            and shared_dataset_dir.name == "synthetic_quality"
-        ),
+        len(
+                        {path.model_path for path in legacy_paths}
+                        | {
+                            modern_paths.model_path,
+                            candidate_market_paths.model_path,
+                            baseline_paths.model_path,
+                            adamw_paths.model_path,
+                            schedule_paths.model_path,
+                            group_norm_paths.model_path,
+                        }
+                    )
+                    == len(legacy_paths) + 6
+                    and len(
+                        set(legacy_research_paths)
+                        | {
+                            modern_research,
+                            candidate_market_research,
+                            baseline_research,
+                            adamw_research,
+                            schedule_research,
+                            group_norm_research,
+                        }
+                    )
+                    == len(legacy_research_paths) + 6
+                    and modern_paths.model_architecture == "modern_tcn_v1"
+                    and candidate_market_paths.model_architecture
+                    == INCEPTION_TIME_MARKET_SET_CANDIDATE_V1
+                    and baseline_paths.model_architecture == "inception_time_v1"
+                    and adamw_paths.model_architecture == "inception_time_v1"
+                    and group_norm_paths.model_architecture
+                    == "inception_time_group_norm_v1"
+                    and modern_paths.experiment_profile
+                    == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
+                    and candidate_market_paths.experiment_profile
+                    == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
+                    and baseline_paths.experiment_profile == "baseline"
+                    and adamw_paths.experiment_profile == "adamw_only"
+                    and schedule_paths.experiment_profile
+                    == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
+                    and modern_paths.model_dir.parent.name == "modern_tcn_v1"
+                    and candidate_market_paths.model_dir.parent.name
+                    == INCEPTION_TIME_MARKET_SET_CANDIDATE_V1
+                    and baseline_paths.model_dir.parent.name == "inception_time_v1"
+                    and adamw_paths.model_dir.parent.name == "inception_time_v1"
+                    and schedule_paths.model_dir.parent.name == "inception_time_v1"
+                    and group_norm_paths.model_dir.parent.name
+                    == "inception_time_group_norm_v1"
+                    and group_norm_paths.model_dir.name
+                    == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
+                    and modern_paths.model_dir.name
+                    == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
+                    and candidate_market_paths.model_dir.name
+                    == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
+                    and baseline_paths.model_dir.name == "baseline"
+                    and adamw_paths.model_dir.name == "adamw_only"
+                    and schedule_paths.model_dir.name
+                    == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
+                    and shared_dataset_dir.name == "synthetic_quality",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "only_current_research_architectures_are_active_and_old_architectures_are_legacy",
         (
-            (
-                "inception_time_v1",
-                "inception_time_risk_context_v1",
-                "multiscale_cnn_sequence_only_v1",
-            ),
-            set(legacy_architectures),
-        ),
+                    (
+                        "inception_time_v1",
+                        "inception_time_risk_context_v1",
+                        "multiscale_cnn_sequence_only_v1",
+                    ),
+                    set(legacy_architectures),
+                ),
         (tuple(ACTIVE_MODEL_ARCHITECTURES), set(LEGACY_MODEL_ARCHITECTURES)),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "training_defaults_are_user_configured_and_legal",
-        True,
         int(BREAKOUT_QUALITY_DEFAULT_EPOCHS) >= 1
-        and int(BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE) >= 1
-        and float(BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE) > 0.0
-        and float(BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY) >= 0.0
-        and float(BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM) >= 0.0
-        and isinstance(BREAKOUT_QUALITY_RANDOM_SEED, int)
-        and int(BREAKOUT_QUALITY_RANDOM_SEED) >= 0
-        and int(BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE) >= 1
-        and int(BREAKOUT_QUALITY_EVALUATION_WORKERS) >= 1
-        and isinstance(BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION, bool)
-        and int(BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES) >= 0
-        and isinstance(BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK, bool)
-        and int(BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES) >= 1
-        and BREAKOUT_QUALITY_FINAL_REFIT_MODE in {"matched_optimizer_steps", "selected_epochs"}
-        and BREAKOUT_QUALITY_CLASS_WEIGHT_MODE in {"none", "inverse_frequency"}
-        and BREAKOUT_QUALITY_TIME_WEIGHT_MODE
-        in {"none", "year_balanced_sqrt", TIME_WEIGHT_MODE_DATE_BALANCED}
-        and {"adam", "adamw"}.issubset(set(SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS))
-        and {
-            BASELINE_EXPERIMENT_PROFILE,
-            ADAMW_ONLY_EXPERIMENT_PROFILE,
-            ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
-            HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE,
-            UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
-            UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE,
-        }.issubset(set(SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES))
-        and LR_SCHEDULE_LINEAR_WARMUP_COSINE
-        in SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES
-        and BREAKOUT_QUALITY_EXPERIMENT_PROFILE
-        in SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
-        and CONFIGURED_EXPERIMENT.optimizer_name
-        in SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS,
+                and int(BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE) >= 1
+                and float(BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE) > 0.0
+                and float(BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY) >= 0.0
+                and float(BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM) >= 0.0
+                and isinstance(BREAKOUT_QUALITY_RANDOM_SEED, int)
+                and int(BREAKOUT_QUALITY_RANDOM_SEED) >= 0
+                and int(BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE) >= 1
+                and int(BREAKOUT_QUALITY_EVALUATION_WORKERS) >= 1
+                and isinstance(BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION, bool)
+                and int(BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES) >= 0
+                and isinstance(BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK, bool)
+                and int(BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES) >= 1
+                and BREAKOUT_QUALITY_FINAL_REFIT_MODE in {"matched_optimizer_steps", "selected_epochs"}
+                and BREAKOUT_QUALITY_CLASS_WEIGHT_MODE in {"none", "inverse_frequency"}
+                and BREAKOUT_QUALITY_TIME_WEIGHT_MODE
+                in {"none", "year_balanced_sqrt", TIME_WEIGHT_MODE_DATE_BALANCED}
+                and {"adam", "adamw"}.issubset(set(SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS))
+                and {
+                    BASELINE_EXPERIMENT_PROFILE,
+                    ADAMW_ONLY_EXPERIMENT_PROFILE,
+                    ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
+                    HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE,
+                    UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+                    UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE,
+                }.issubset(set(SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES))
+                and LR_SCHEDULE_LINEAR_WARMUP_COSINE
+                in SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES
+                and BREAKOUT_QUALITY_EXPERIMENT_PROFILE
+                in SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
+                and CONFIGURED_EXPERIMENT.optimizer_name
+                in SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS,
     )
     train_defaults = breakout_quality_train.parse_args([])
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "training_experiment_and_refit_defaults_follow_config",
         (
-            BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-            CONFIGURED_EXPERIMENT.optimizer_name,
-            CONFIGURED_EXPERIMENT.lr_schedule_name,
-            CONFIGURED_EXPERIMENT.augmentation_name,
-            CONFIGURED_EXPERIMENT.training_sampling_mode,
-            CONFIGURED_EXPERIMENT.training_weight_reduction,
-            BREAKOUT_QUALITY_FINAL_REFIT_MODE,
-            BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
-            BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
-        ),
+                    BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+                    CONFIGURED_EXPERIMENT.optimizer_name,
+                    CONFIGURED_EXPERIMENT.lr_schedule_name,
+                    CONFIGURED_EXPERIMENT.augmentation_name,
+                    CONFIGURED_EXPERIMENT.training_sampling_mode,
+                    CONFIGURED_EXPERIMENT.training_weight_reduction,
+                    BREAKOUT_QUALITY_FINAL_REFIT_MODE,
+                    BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
+                    BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
+                ),
         (
-            str(train_defaults.experiment_profile),
-            str(train_defaults.optimizer_name),
-            str(train_defaults.lr_schedule_name),
-            str(train_defaults.augmentation_name),
-            str(CONFIGURED_EXPERIMENT.training_sampling_mode),
-            str(train_defaults.training_weight_reduction),
-            str(train_defaults.final_refit_mode),
-            str(train_defaults.class_weight_mode),
-            str(train_defaults.time_weight_mode),
-        ),
+                    str(train_defaults.experiment_profile),
+                    str(train_defaults.optimizer_name),
+                    str(train_defaults.lr_schedule_name),
+                    str(train_defaults.augmentation_name),
+                    str(CONFIGURED_EXPERIMENT.training_sampling_mode),
+                    str(train_defaults.training_weight_reduction),
+                    str(train_defaults.final_refit_mode),
+                    str(train_defaults.class_weight_mode),
+                    str(train_defaults.time_weight_mode),
+                ),
     )
     configured_augmentation_parameters = CONFIGURED_EXPERIMENT.augmentation_parameters()
     configured_augmentation_plan = build_training_augmentation_plan(
         name=CONFIGURED_EXPERIMENT.augmentation_name,
         parameters=configured_augmentation_parameters,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "configured_augmentation_profile_round_trips_parameters",
         CONFIGURED_EXPERIMENT.as_manifest_payload().get(
-            "augmentation_parameters", {}
-        ),
+                    "augmentation_parameters", {}
+                ),
         configured_augmentation_plan.as_parameters(),
     )
     masking_profile = get_breakout_quality_experiment_profile(
@@ -3184,20 +2796,16 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         for mask in changed_time_masks
         if bool(mask.any())
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "history_masking_is_deterministic_training_only_and_protects_recent_bars",
-        True,
         np.array_equal(augmentation_source, augmentation_before)
-        and np.array_equal(augmented_a, augmented_b)
-        and augmentation_summary_a == augmentation_summary_b
-        and np.array_equal(augmented_a[:, -60:, :], augmentation_source[:, -60:, :])
-        and np.array_equal(augmented_a[:, 0, :], augmentation_source[:, 0, :])
-        and changed_are_contiguous
-        and all(10 <= value <= 30 for value in changed_lengths)
-        and int(augmentation_summary_a["augmented_sample_count"]) == len(changed_lengths),
+                and np.array_equal(augmented_a, augmented_b)
+                and augmentation_summary_a == augmentation_summary_b
+                and np.array_equal(augmented_a[:, -60:, :], augmentation_source[:, -60:, :])
+                and np.array_equal(augmented_a[:, 0, :], augmentation_source[:, 0, :])
+                and changed_are_contiguous
+                and all(10 <= value <= 30 for value in changed_lengths)
+                and int(augmentation_summary_a["augmented_sample_count"]) == len(changed_lengths),
     )
     torch, _nn = breakout_quality_train.require_torch()
     optimizer_probe_model = build_breakout_quality_model(
@@ -3210,10 +2818,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         learning_rate=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE,
         weight_decay=BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "configured_experiment_profile_uses_requested_optimizer_class",
         "AdamW" if CONFIGURED_EXPERIMENT.optimizer_name == "adamw" else "Adam",
         optimizer_probe.__class__.__name__,
@@ -3233,23 +2838,17 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         breakout_quality_train._learning_rate_for_optimizer_step(schedule_plan, step)
         for step in range(100)
     ]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "step_lr_schedule_uses_exact_warmup_and_cosine_endpoints",
-        True,
-        (
-            schedule_plan["warmup_steps"] == 5
-            and np.isclose(schedule_values[0], 0.00006)
-            and np.isclose(schedule_values[4], 0.0003)
-            and np.isclose(schedule_values[5], 0.0003)
-            and np.isclose(schedule_values[-1], 0.00003)
-            and all(
-                schedule_values[index] >= schedule_values[index + 1]
-                for index in range(4, len(schedule_values) - 1)
-            )
-        ),
+        schedule_plan["warmup_steps"] == 5
+                    and np.isclose(schedule_values[0], 0.00006)
+                    and np.isclose(schedule_values[4], 0.0003)
+                    and np.isclose(schedule_values[5], 0.0003)
+                    and np.isclose(schedule_values[-1], 0.00003)
+                    and all(
+                        schedule_values[index] >= schedule_values[index + 1]
+                        for index in range(4, len(schedule_values) - 1)
+                    ),
     )
     no_schedule_plan = breakout_quality_train._build_learning_rate_schedule_plan(
         schedule_name="none",
@@ -3258,22 +2857,18 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         warmup_fraction=0.0,
         minimum_lr_ratio=1.0,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "baseline_lr_schedule_remains_constant",
-        True,
         all(
-            np.isclose(
-                breakout_quality_train._learning_rate_for_optimizer_step(
-                    no_schedule_plan,
-                    step,
+                    np.isclose(
+                        breakout_quality_train._learning_rate_for_optimizer_step(
+                            no_schedule_plan,
+                            step,
+                        ),
+                        0.0003,
+                    )
+                    for step in (0, 49, 99)
                 ),
-                0.0003,
-            )
-            for step in (0, 49, 99)
-        ),
     )
 
     matched_target, minimum_pass = breakout_quality_train._resolve_final_refit_target_steps(
@@ -3282,28 +2877,14 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         selected_optimizer_steps=8422,
         final_batches_per_epoch=5701,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "matched_refit_preserves_selected_optimizer_steps",
-        (8422, False),
-        (matched_target, minimum_pass),
-    )
+    check("matched_refit_preserves_selected_optimizer_steps", (8422, False), (matched_target, minimum_pass))
     minimum_target, minimum_pass = breakout_quality_train._resolve_final_refit_target_steps(
         mode="matched_optimizer_steps",
         selected_epoch=1,
         selected_optimizer_steps=4211,
         final_batches_per_epoch=5701,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "matched_refit_still_uses_all_selection_rows_once",
-        (5701, True),
-        (minimum_target, minimum_pass),
-    )
+    check("matched_refit_still_uses_all_selection_rows_once", (5701, True), (minimum_target, minimum_pass))
     synthetic_weight_events = pd.DataFrame(
         {
             "ticker": ["A", "A", "B", "B", "C", "C", "D", "D", "E", "E"],
@@ -3323,18 +2904,14 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         weight_indices,
         mode="year_balanced_sqrt",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "year_balanced_weights_keep_group_total_and_soften_year_dominance",
-        True,
         bool(
-            abs(float(year_weights.sum()) - 5.0) < 1e-6
-            and year_summary["year_group_counts"] == {"2020": 4, "2021": 1}
-            and year_summary["year_weight_multipliers"]["2021"]
-            > year_summary["year_weight_multipliers"]["2020"]
-        ),
+                    abs(float(year_weights.sum()) - 5.0) < 1e-6
+                    and year_summary["year_group_counts"] == {"2020": 4, "2021": 1}
+                    and year_summary["year_weight_multipliers"]["2021"]
+                    > year_summary["year_weight_multipliers"]["2020"]
+                ),
     )
     date_balance_events = pd.DataFrame(
         {
@@ -3359,105 +2936,81 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         date_weights,
         index=date_balance_events["date"],
     ).groupby(level=0).sum()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "date_balanced_weights_keep_group_total_and_equalize_each_training_date",
-        True,
         bool(
-            abs(float(date_weights.sum()) - 6.0) < 1e-6
-            and date_summary["date_count"] == 3
-            and date_summary["date_group_count_min"] == 1
-            and date_summary["date_group_count_max"] == 3
-            and float(date_totals.max() - date_totals.min()) < 1e-6
-        ),
+                    abs(float(date_weights.sum()) - 6.0) < 1e-6
+                    and date_summary["date_count"] == 3
+                    and date_summary["date_group_count_min"] == 1
+                    and date_summary["date_group_count_max"] == 3
+                    and float(date_totals.max() - date_totals.min()) < 1e-6
+                ),
     )
     date_profile = get_breakout_quality_experiment_profile(
         UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "date_balanced_profile_locks_unique_groups_fixed_denominator_and_weight_mode",
         (
-            TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
-            TIME_WEIGHT_MODE_DATE_BALANCED,
-            TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
-        ),
+                    TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+                    TIME_WEIGHT_MODE_DATE_BALANCED,
+                    TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
+                ),
         (
-            date_profile.training_sampling_mode,
-            date_profile.time_weight_mode,
-            date_profile.training_weight_reduction,
-        ),
+                    date_profile.training_sampling_mode,
+                    date_profile.time_weight_mode,
+                    date_profile.training_weight_reduction,
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "class_weight_none_is_identity",
         [1.0, 1.0],
         breakout_quality_train._class_weights(
-            np.asarray([0, 1], dtype=np.int64),
-            np.ones((2,), dtype=np.float32),
-            mode="none",
-        ).tolist(),
+                    np.asarray([0, 1], dtype=np.int64),
+                    np.ones((2,), dtype=np.float32),
+                    mode="none",
+                ).tolist(),
     )
 
     export_defaults = breakout_quality_export_scores.parse_args([])
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "score_export_performance_defaults_share_training_policy",
         (
-            int(BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE),
-            int(BREAKOUT_QUALITY_EVALUATION_WORKERS),
-            bool(BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK),
-        ),
+                    int(BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE),
+                    int(BREAKOUT_QUALITY_EVALUATION_WORKERS),
+                    bool(BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK),
+                ),
         (
-            int(export_defaults.inference_batch_size),
-            int(export_defaults.inference_workers),
-            bool(export_defaults.preload_feature_bank),
-        ),
+                    int(export_defaults.inference_batch_size),
+                    int(export_defaults.inference_workers),
+                    bool(export_defaults.preload_feature_bank),
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "inner_validation_config_has_legal_types_and_ranges",
-        True,
         isinstance(BREAKOUT_QUALITY_USE_INNER_VALIDATION, bool)
-        and int(BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS) >= 1
-        and int(BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE) >= 0
-        and float(BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA) >= 0.0
-        and int(BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES) >= 1
-        and int(BREAKOUT_QUALITY_LABEL_HORIZON_BARS) >= 1
-        and int(BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS) >= int(BREAKOUT_QUALITY_LABEL_HORIZON_BARS)
-        and float(BREAKOUT_QUALITY_LABEL_MIN_MFE_RETURN) > 0.0
-        and float(BREAKOUT_QUALITY_LABEL_MIN_REWARD_RISK_RATIO) > 1.0
-        and -1.0 < float(BREAKOUT_QUALITY_LABEL_MAX_ADVERSE_RETURN) < 0.0,
+                and int(BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS) >= 1
+                and int(BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE) >= 0
+                and float(BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA) >= 0.0
+                and int(BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES) >= 1
+                and int(BREAKOUT_QUALITY_LABEL_HORIZON_BARS) >= 1
+                and int(BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS) >= int(BREAKOUT_QUALITY_LABEL_HORIZON_BARS)
+                and float(BREAKOUT_QUALITY_LABEL_MIN_MFE_RETURN) > 0.0
+                and float(BREAKOUT_QUALITY_LABEL_MIN_REWARD_RISK_RATIO) > 1.0
+                and -1.0 < float(BREAKOUT_QUALITY_LABEL_MAX_ADVERSE_RETURN) < 0.0,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "dataset_storage_contract_uses_indexed_feature_bank",
         (3, "indexed_feature_bank_npy_v2"),
         (DATASET_STORAGE_SCHEMA_VERSION, DATASET_STORAGE_FORMAT),
     )
     feature_bank = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
     indexed_features = IndexedFeatureBank(feature_bank, np.asarray([0, 1, 0], dtype=np.int32))
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "indexed_feature_bank_reuses_ticker_date_sequence",
-        True,
         indexed_features.shape == (3, 3, 4)
-        and np.array_equal(indexed_features[0], indexed_features[2])
-        and np.array_equal(indexed_features[1], feature_bank[1]),
+                and np.array_equal(indexed_features[0], indexed_features[2])
+                and np.array_equal(indexed_features[1], feature_bank[1]),
     )
     label_policy = BreakoutQualityLabelPolicy(
         feature_window_bars=2,
@@ -3483,74 +3036,47 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         )
         return build_event_label(frame, event_pos=0, policy=label_policy)[:2]
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "risk_adjusted_label_passes_low_risk_moderate_gain",
         (LABEL_PASS, "risk_adjusted_opportunity"),
         _label_case([104.0, 106.0, 108.0], [99.0, 98.0, 97.0]),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "risk_adjusted_label_rejects_insufficient_ratio",
         (LABEL_REJECT, "no_risk_adjusted_opportunity"),
         _label_case([104.0, 106.0, 108.0], [96.0, 94.0, 93.0]),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "risk_adjusted_label_rejects_when_downside_limit_hits_first",
         (LABEL_REJECT, "downside_first"),
         _label_case([104.0, 106.0, 108.0], [90.0, 92.0, 93.0]),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "risk_adjusted_label_uses_conservative_same_bar_order",
         (LABEL_REJECT, "same_bar_adverse_first"),
         _label_case([113.0, 114.0, 115.0], [90.0, 92.0, 93.0]),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "risk_adjusted_label_rejects_below_minimum_mfe",
         (LABEL_REJECT, "no_risk_adjusted_opportunity"),
         _label_case([104.0, 104.5, 104.9], [99.0, 99.0, 99.0]),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "risk_adjusted_label_requires_strictly_more_than_minimum_mfe",
         (LABEL_REJECT, "no_risk_adjusted_opportunity"),
         _label_case([105.0, 105.0, 105.0], [100.0, 100.0, 100.0]),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "risk_adjusted_label_handles_zero_mae_without_division_error",
         (LABEL_PASS, "risk_adjusted_opportunity"),
         _label_case([106.0, 107.0, 108.0], [100.0, 100.0, 100.0]),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "risk_adjusted_label_requires_strictly_more_than_ratio_threshold",
         (LABEL_REJECT, "no_risk_adjusted_opportunity"),
         _label_case([106.0, 106.0, 106.0], [95.0, 95.0, 95.0]),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "risk_adjusted_pass_is_not_reversed_by_later_drawdown",
         (LABEL_PASS, "risk_adjusted_opportunity"),
         _label_case([104.0, 106.0, 107.0], [99.0, 98.0, 89.0]),
@@ -3565,18 +3091,12 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         },
         index=pd.date_range("2025-02-01", periods=3, freq="D"),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "incomplete_future_path_is_invalid_not_a_third_label",
         (LABEL_INVALID, "insufficient_future"),
         build_event_label(invalid_frame, event_pos=0, policy=label_policy)[:2],
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "label_manifest_declares_risk_adjusted_opportunity_objective",
         LABEL_OBJECTIVE,
         label_policy.label_manifest_payload().get("label_objective"),
@@ -3587,10 +3107,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "pass_return_threshold": 0.15,
         "reject_return_threshold": -0.07,
     }
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "legacy_label_policy_remains_readable_for_fast_relabel",
         legacy_policy_payload,
         label_manifest_payload_from_policy_manifest(legacy_policy_payload),
@@ -3602,40 +3119,26 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         available_bars=3,
         policy=label_policy,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "cached_future_path_relabel_matches_risk_adjusted_contract",
         (LABEL_PASS, "risk_adjusted_opportunity", 2.0),
         (cached_result.label, cached_result.reason, cached_result.first_hit_bar),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "label_thresholds_are_separate_from_feature_cache_policy",
-        True,
         "min_mfe_return" not in label_policy.feature_cache_manifest_payload()
-        and "min_reward_risk_ratio" not in label_policy.feature_cache_manifest_payload()
-        and "max_adverse_return" not in label_policy.feature_cache_manifest_payload()
-        and label_policy.label_manifest_payload()["min_mfe_return"] == 0.05
-        and label_policy.label_manifest_payload()["min_reward_risk_ratio"] == 1.20
-        and label_policy.label_manifest_payload()["max_adverse_return"] == -0.10,
+                and "min_reward_risk_ratio" not in label_policy.feature_cache_manifest_payload()
+                and "max_adverse_return" not in label_policy.feature_cache_manifest_payload()
+                and label_policy.label_manifest_payload()["min_mfe_return"] == 0.05
+                and label_policy.label_manifest_payload()["min_reward_risk_ratio"] == 1.20
+                and label_policy.label_manifest_payload()["max_adverse_return"] == -0.10,
     )
     try:
         V16StrategyParams(breakout_quality_filter_id=" ")
         empty_filter_id_rejected = False
     except ValueError as exc:
         empty_filter_id_rejected = "breakout_quality_filter_id" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "empty_filter_id_rejected_without_silent_default",
-        True,
-        empty_filter_id_rejected,
-    )
+    check_true("empty_filter_id_rejected_without_silent_default", empty_filter_id_rejected)
 
     torch, nn = breakout_quality_train.require_torch()
 
@@ -3678,14 +3181,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         evaluation_batch_size=3,
         evaluation_workers=1,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "chunked_full_evaluation_preserves_one_shot_metrics",
-        one_shot_metrics,
-        chunked_metrics,
-    )
+    check("chunked_full_evaluation_preserves_one_shot_metrics", one_shot_metrics, chunked_metrics)
 
     parallel_metrics = breakout_quality_train._evaluate(
         torch,
@@ -3699,14 +3195,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         evaluation_batch_size=3,
         evaluation_workers=4,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "parallel_chunked_evaluation_preserves_serial_metrics",
-        chunked_metrics,
-        parallel_metrics,
-    )
+    check("parallel_chunked_evaluation_preserves_serial_metrics", chunked_metrics, parallel_metrics)
 
     torch.manual_seed(20260712)
     actual_evaluation_model = build_breakout_quality_model(2, 2, architecture="tiny_cnn_v1")
@@ -3739,24 +3228,13 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         evaluation_workers=4,
     )
     state_after_evaluation = actual_evaluation_model.state_dict()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "parallel_actual_model_evaluation_preserves_serial_metrics",
-        actual_serial_metrics,
-        actual_parallel_metrics,
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check("parallel_actual_model_evaluation_preserves_serial_metrics", actual_serial_metrics, actual_parallel_metrics)
+    check_true(
         "parallel_evaluation_does_not_mutate_model_state",
-        True,
         all(
-            torch.equal(state_before_evaluation[key], state_after_evaluation[key])
-            for key in state_before_evaluation
-        ),
+                    torch.equal(state_before_evaluation[key], state_after_evaluation[key])
+                    for key in state_before_evaluation
+                ),
     )
 
     split_train_indices = evaluation_indices[:6]
@@ -3789,10 +3267,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         evaluation_workers=2,
         parallel=True,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "concurrent_train_validation_evaluation_preserves_serial_metrics",
         serial_split_metrics,
         parallel_split_metrics,
@@ -3828,12 +3303,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         batch_size=3,
         workers=4,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "strict_parallel_score_inference_preserves_serial_logits",
-        True,
         np.array_equal(serial_export_logits, parallel_export_logits),
     )
     unique_group_logits, event_to_group = strict_unique_group_batched_logits(
@@ -3845,26 +3316,15 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         workers=4,
     )
     broadcast_logits = unique_group_logits[event_to_group]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "sequence_only_score_export_infers_each_feature_group_once",
-        4,
-        int(unique_group_logits.shape[0]),
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check("sequence_only_score_export_infers_each_feature_group_once", 4, int(unique_group_logits.shape[0]))
+    check_true(
         "sequence_only_score_export_broadcasts_bit_identical_group_logits",
-        True,
         bool(
-            np.array_equal(broadcast_logits[0], broadcast_logits[4])
-            and np.array_equal(broadcast_logits[0], broadcast_logits[8])
-            and np.array_equal(broadcast_logits[1], broadcast_logits[6])
-            and np.array_equal(broadcast_logits[1], broadcast_logits[9])
-        ),
+                    np.array_equal(broadcast_logits[0], broadcast_logits[4])
+                    and np.array_equal(broadcast_logits[0], broadcast_logits[8])
+                    and np.array_equal(broadcast_logits[1], broadcast_logits[6])
+                    and np.array_equal(broadcast_logits[1], broadcast_logits[9])
+                ),
     )
 
     ranking_frame = pd.DataFrame(
@@ -3881,35 +3341,25 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             group_weighted=True,
         )
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "ranking_metrics_preserve_original_first_event_row_score_with_bounded_noise",
-        True,
         bool(np.array_equal(ranking_score, np.asarray([0.6000, 0.4], dtype=np.float64))),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "ranking_metrics_preserve_one_truth_and_weight_per_group",
         ([1.0, 0.0], [1.0, 1.0]),
         (ranking_truth.tolist(), ranking_weights.tolist()),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "ranking_metrics_report_bounded_score_noise_diagnostics",
         {
-            "ranking_unit": "ticker_date_group",
-            "group_score_reduction": "first_event_row_with_bounded_numerical_noise",
-            "group_score_numerical_noise_atol": 0.0005,
-            "multirow_group_count": 2,
-            "nonidentical_score_group_count": 1,
-            "max_within_group_score_span": 0.0004,
-        },
+                    "ranking_unit": "ticker_date_group",
+                    "group_score_reduction": "first_event_row_with_bounded_numerical_noise",
+                    "group_score_numerical_noise_atol": 0.0005,
+                    "multirow_group_count": 2,
+                    "nonidentical_score_group_count": 1,
+                    "max_within_group_score_span": 0.0004,
+                },
         ranking_diagnostics,
     )
     try:
@@ -3923,14 +3373,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         sequence_only_noise_rejected = (
             "unique-group inference 精確廣播相同分數" in str(exc)
         )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "sequence_only_ranking_rejects_any_within_group_score_difference",
-        True,
-        sequence_only_noise_rejected,
-    )
+    check_true("sequence_only_ranking_rejects_any_within_group_score_difference", sequence_only_noise_rejected)
     canonical_first_score_frame = ranking_frame.copy()
     canonical_first_score_frame.loc[1, SCORE_COLUMN] = canonical_first_score_frame.loc[0, SCORE_COLUMN]
     canonical_first_score_frame.loc[3, SCORE_COLUMN] = canonical_first_score_frame.loc[2, SCORE_COLUMN]
@@ -3952,16 +3395,12 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "brier_score",
         "expected_calibration_error_10_bins",
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "bounded_noise_report_preserves_prefixed_ranking_numbers_exactly",
-        True,
         all(
-            noisy_ranking_metrics[key] == canonical_ranking_metrics[key]
-            for key in comparable_ranking_keys
-        ),
+                    noisy_ranking_metrics[key] == canonical_ranking_metrics[key]
+                    for key in comparable_ranking_keys
+                ),
     )
     materially_different_ranking_frame = ranking_frame.copy()
     materially_different_ranking_frame.loc[1, SCORE_COLUMN] = 0.6010
@@ -3973,14 +3412,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         material_group_score_difference_rejected = False
     except ValueError as exc:
         material_group_score_difference_rejected = "超過允許的浮點誤差" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "ranking_metrics_reject_material_group_score_difference",
-        True,
-        material_group_score_difference_rejected,
-    )
+    check_true("ranking_metrics_reject_material_group_score_difference", material_group_score_difference_rejected)
     mixed_ranking_frame = ranking_frame.copy()
     mixed_ranking_frame.loc[1, "label"] = LABEL_REJECT
     try:
@@ -3991,14 +3423,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         mixed_ranking_label_rejected = False
     except ValueError as exc:
         mixed_ranking_label_rejected = "混合 label" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "ranking_metrics_reject_mixed_group_labels",
-        True,
-        mixed_ranking_label_rejected,
-    )
+    check_true("ranking_metrics_reject_mixed_group_labels", mixed_ranking_label_rejected)
     nonfinite_ranking_frame = ranking_frame.copy()
     nonfinite_ranking_frame.loc[1, SCORE_COLUMN] = np.nan
     try:
@@ -4009,25 +3434,14 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         nonfinite_ranking_score_rejected = False
     except ValueError as exc:
         nonfinite_ranking_score_rejected = "NaN 或 infinite score" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "ranking_metrics_reject_nonfinite_group_scores",
-        True,
-        nonfinite_ranking_score_rejected,
-    )
+    check_true("ranking_metrics_reject_nonfinite_group_scores", nonfinite_ranking_score_rejected)
 
     preload_probe = np.asarray([11, 0, 7, 4, 2], dtype=np.int64)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "feature_bank_preload_preserves_values_and_row_mapping",
-        True,
         np.array_equal(indexed_features[preload_probe], preloaded_features[preload_probe])
-        and np.array_equal(evaluation_context, preloaded_context)
-        and np.array_equal(evaluation_labels, preloaded_labels),
+                and np.array_equal(evaluation_context, preloaded_context)
+                and np.array_equal(evaluation_labels, preloaded_labels),
     )
 
     with tempfile.TemporaryDirectory(prefix="breakout_quality_source_inventory_") as temp_dir:
@@ -4047,30 +3461,12 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         )
         inventory_after = build_source_data_inventory(project_root, "reduced")
 
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
-            "source_inventory_is_stable_without_changes",
-            inventory_before,
-            inventory_repeat,
-        )
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
+        check("source_inventory_is_stable_without_changes", inventory_before, inventory_repeat)
+        check_true(
             "source_inventory_detects_csv_update",
-            True,
             inventory_before["csv_inventory_sha256"] != inventory_after["csv_inventory_sha256"],
         )
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
-            "source_inventory_tracks_unique_csv_count",
-            2,
-            inventory_after["csv_file_count"],
-        )
+        check("source_inventory_tracks_unique_csv_count", 2, inventory_after["csv_file_count"])
 
         output_dir = project_root / "outputs" / "filters" / "breakout_quality" / "synthetic_quality"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -4105,14 +3501,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
                 )
             except ValueError as exc:
                 stale_source_rejected = "來源 CSV 已更新" in str(exc)
-        add_check(
-            results,
-            "synthetic_breakout_quality",
-            case_id,
-            "standalone_training_rejects_stale_source_dataset",
-            True,
-            stale_source_rejected,
-        )
+        check_true("standalone_training_rejects_stale_source_dataset", stale_source_rejected)
 
     summary["optimizer_high_len_count"] = len(optimizer_values)
     summary["quality_high_len_count"] = len(quality_values)
@@ -4122,6 +3511,7 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
     case_id = "BREAKOUT_QUALITY_CHRONOLOGICAL_EMBARGO"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     date_and_end = (
         ("2024-12-31", "2025-01-02"),
@@ -4172,41 +3562,28 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
         inner_validation_months=2,
         early_stopping_enabled=False,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "toggle_off_uses_full_selection",
         (6, 0, 6, False, False),
         (
-            len(train_off),
-            len(validation_off),
-            len(refit_off),
-            report_off["inner_validation_used"],
-            report_off["early_stopping_used"],
-        ),
+                    len(train_off),
+                    len(validation_off),
+                    len(refit_off),
+                    report_off["inner_validation_used"],
+                    report_off["early_stopping_used"],
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "toggle_off_selection_oos_embargo_rows",
-        2,
-        report_off["selection_oos_embargo_row_count"],
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check("toggle_off_selection_oos_embargo_rows", 2, report_off["selection_oos_embargo_row_count"])
+    check(
         "toggle_off_role_counts",
         {
-            SELECTION_ROLE_TRAIN: 6,
-            SELECTION_ROLE_VALIDATION: 0,
-            SELECTION_ROLE_INNER_EMBARGO: 0,
-            SELECTION_ROLE_EMBARGO: 2,
-            SELECTION_ROLE_INVALID: 0,
-            SELECTION_ROLE_NOT_APPLICABLE: 6,
-        },
+                    SELECTION_ROLE_TRAIN: 6,
+                    SELECTION_ROLE_VALIDATION: 0,
+                    SELECTION_ROLE_INNER_EMBARGO: 0,
+                    SELECTION_ROLE_EMBARGO: 2,
+                    SELECTION_ROLE_INVALID: 0,
+                    SELECTION_ROLE_NOT_APPLICABLE: 6,
+                },
         report_off["selection_role_counts"],
     )
 
@@ -4225,120 +3602,85 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
         inner_validation_months=2,
         early_stopping_enabled=True,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "toggle_on_period_and_roles",
         ("2025-03-01", 2, 2, 2, 6, True, True),
         (
-            report_on["inner_validation_start_date"],
-            len(train_on),
-            len(validation_on),
-            report_on["inner_train_validation_embargo_row_count"],
-            len(refit_on),
-            report_on["inner_validation_used"],
-            report_on["early_stopping_used"],
-        ),
+                    report_on["inner_validation_start_date"],
+                    len(train_on),
+                    len(validation_on),
+                    report_on["inner_train_validation_embargo_row_count"],
+                    len(refit_on),
+                    report_on["inner_validation_used"],
+                    report_on["early_stopping_used"],
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "toggle_on_refit_recovers_inner_embargo_rows",
-        True,
         set(refit_on.tolist())
-        == set(train_on.tolist())
-        | set(validation_on.tolist())
-        | set(
-            np.flatnonzero(
-                assignments_on["selection_role"].to_numpy()
-                == SELECTION_ROLE_INNER_EMBARGO
-            ).tolist()
-        ),
+                == set(train_on.tolist())
+                | set(validation_on.tolist())
+                | set(
+                    np.flatnonzero(
+                        assignments_on["selection_role"].to_numpy()
+                        == SELECTION_ROLE_INNER_EMBARGO
+                    ).tolist()
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "toggle_on_role_counts",
         {
-            SELECTION_ROLE_TRAIN: 2,
-            SELECTION_ROLE_VALIDATION: 2,
-            SELECTION_ROLE_INNER_EMBARGO: 2,
-            SELECTION_ROLE_EMBARGO: 2,
-            SELECTION_ROLE_INVALID: 0,
-            SELECTION_ROLE_NOT_APPLICABLE: 6,
-        },
+                    SELECTION_ROLE_TRAIN: 2,
+                    SELECTION_ROLE_VALIDATION: 2,
+                    SELECTION_ROLE_INNER_EMBARGO: 2,
+                    SELECTION_ROLE_EMBARGO: 2,
+                    SELECTION_ROLE_INVALID: 0,
+                    SELECTION_ROLE_NOT_APPLICABLE: 6,
+                },
         report_on["selection_role_counts"],
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "inner_train_label_information_before_validation",
-        True,
         pd.to_datetime(events.iloc[train_on]["label_eval_end_date"]).max()
-        < pd.Timestamp(report_on["inner_validation_start_date"]),
+                < pd.Timestamp(report_on["inner_validation_start_date"]),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "final_refit_label_information_before_oos",
-        True,
         pd.to_datetime(events.iloc[refit_on]["label_eval_end_date"]).max()
-        < pd.Timestamp(report_on["oos_start_date"]),
+                < pd.Timestamp(report_on["oos_start_date"]),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "oos_evaluable_and_tail_rows",
-        (2, 2),
-        (len(oos_on), report_on["oos_label_after_end_row_count"]),
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check("oos_evaluable_and_tail_rows", (2, 2), (len(oos_on), report_on["oos_label_after_end_row_count"]))
+    check(
         "outer_and_inner_overlap_forbidden",
         (0, 0, 0, 0),
         (
-            report_on["overlap_group_count"],
-            report_on["overlap_event_date_count"],
-            report_on["inner_train_validation_overlap_group_count"],
-            report_on["inner_train_validation_overlap_event_date_count"],
-        ),
+                    report_on["overlap_group_count"],
+                    report_on["overlap_event_date_count"],
+                    report_on["inner_train_validation_overlap_group_count"],
+                    report_on["inner_train_validation_overlap_event_date_count"],
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "outside_selection_has_no_selection_role",
-        True,
         bool(
-            (
-                assignments_on.loc[
-                    assignments_on["outer_split"] != OUTER_SPLIT_SELECTION,
-                    "selection_role",
-                ]
-                == SELECTION_ROLE_NOT_APPLICABLE
-            ).all()
-        ),
+                    (
+                        assignments_on.loc[
+                            assignments_on["outer_split"] != OUTER_SPLIT_SELECTION,
+                            "selection_role",
+                        ]
+                        == SELECTION_ROLE_NOT_APPLICABLE
+                    ).all()
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "split_assignment_key_unique",
         False,
         bool(
-            assignments_on.duplicated(
-                ["ticker", "date", "high_len"],
-                keep=False,
-            ).any()
-        ),
+                    assignments_on.duplicated(
+                        ["ticker", "date", "high_len"],
+                        keep=False,
+                    ).any()
+                ),
     )
 
     project_root = Path(__file__).resolve().parents[2]
@@ -4353,18 +3695,15 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
             "V16_WF_OOS_END_DATE": "2021-12-31",
         },
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "rolling_fold_reuses_standard_walk_forward_overrides",
         ("2019-01-01", "2020-12-31", "2021-01-01", "2021-12-31"),
         (
-            rolling_fold_policy["selection_start_date"],
-            rolling_fold_policy["selection_end_date"],
-            rolling_fold_policy["oos_start_date"],
-            rolling_fold_policy["effective_oos_end_date"],
-        ),
+                    rolling_fold_policy["selection_start_date"],
+                    rolling_fold_policy["selection_end_date"],
+                    rolling_fold_policy["oos_start_date"],
+                    rolling_fold_policy["effective_oos_end_date"],
+                ),
     )
     summary["split_report_off"] = report_off
     summary["split_report_on"] = report_on
@@ -4374,13 +3713,11 @@ def validate_breakout_quality_active_legacy_model_isolation_contract_case(_base_
     case_id = "BREAKOUT_QUALITY_ACTIVE_LEGACY_MODEL_ISOLATION"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
     project_root = Path(__file__).resolve().parents[2]
     configured_model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     active_spec = get_active_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check(
         "formal_active_model_api_resolves_configured_architecture",
         configured_model_spec.as_manifest_payload(),
         active_spec.as_manifest_payload(),
@@ -4390,40 +3727,19 @@ def validate_breakout_quality_active_legacy_model_isolation_contract_case(_base_
         active_spec_rejects_legacy = False
     except ValueError as exc:
         active_spec_rejects_legacy = "正式新訓練只允許 active architecture" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "formal_active_model_api_rejects_legacy_architecture",
-        True,
-        active_spec_rejects_legacy,
-    )
+    check_true("formal_active_model_api_rejects_legacy_architecture", active_spec_rejects_legacy)
     try:
         build_active_model(10, 4, architecture="tiny_cnn_v1")
         active_builder_rejects_legacy = False
     except ValueError as exc:
         active_builder_rejects_legacy = "正式新訓練只允許 active architecture" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "formal_active_model_builder_rejects_legacy_architecture",
-        True,
-        active_builder_rejects_legacy,
-    )
+    check_true("formal_active_model_builder_rejects_legacy_architecture", active_builder_rejects_legacy)
     try:
         breakout_quality_train.get_model_spec("tiny_cnn_v1")
         binary_trainer_rejects_legacy = False
     except ValueError as exc:
         binary_trainer_rejects_legacy = "正式新訓練只允許 active architecture" in str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "binary_formal_trainer_uses_active_model_spec_api",
-        True,
-        binary_trainer_rejects_legacy,
-    )
+    check_true("binary_formal_trainer_uses_active_model_spec_api", binary_trainer_rejects_legacy)
     active_factory_source = read_source_text(
         project_root / "filters" / "breakout_quality" / "models" / "active.py"
     )
@@ -4436,46 +3752,34 @@ def validate_breakout_quality_active_legacy_model_isolation_contract_case(_base_
     continuous_train_source = read_source_text(
         project_root / "services" / "breakout_quality" / "train_continuous_ranker.py"
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "active_model_factory_does_not_import_legacy_builders",
-        True,
         all(
-            token not in active_factory_source
-            for token in (
-                "models.moment",
-                "models.mantis_v2",
-                "models.ts2vec",
-                "models.tiny_cnn",
-                "models.patch_transformer",
-                "models.modern_tcn",
-                "models.residual_tcn",
-            )
-        ),
+                    token not in active_factory_source
+                    for token in (
+                        "models.moment",
+                        "models.mantis_v2",
+                        "models.ts2vec",
+                        "models.tiny_cnn",
+                        "models.patch_transformer",
+                        "models.modern_tcn",
+                        "models.residual_tcn",
+                    )
+                ),
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "compatibility_factory_lazy_loads_historical_builder_owner",
-        True,
         "from filters.breakout_quality.models.legacy_compatibility import build_legacy_model"
-        in compatibility_factory_source,
+                in compatibility_factory_source,
     )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+    check_true(
         "formal_trainers_do_not_import_compatibility_model_factory",
-        True,
         "filters.breakout_quality.models.factory" not in binary_train_source
-        and "filters.breakout_quality.model import" not in binary_train_source
-        and "filters.breakout_quality.models.factory" not in continuous_train_source
-        and "filters.breakout_quality.model import" not in continuous_train_source
-        and "filters.breakout_quality.models.active" in binary_train_source
-        and "filters.breakout_quality.models.active" in continuous_train_source,
+                and "filters.breakout_quality.model import" not in binary_train_source
+                and "filters.breakout_quality.models.factory" not in continuous_train_source
+                and "filters.breakout_quality.model import" not in continuous_train_source
+                and "filters.breakout_quality.models.active" in binary_train_source
+                and "filters.breakout_quality.models.active" in continuous_train_source,
     )
     return results, summary
 
