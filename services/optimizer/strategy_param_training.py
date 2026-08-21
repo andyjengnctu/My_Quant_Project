@@ -766,6 +766,25 @@ def _temporary_environment(values: dict[str, str]):
     return _Env()
 
 
+def _resolve_optimizer_arm_requested_policy_params_path(
+    *, root: Path, args, active_param_dir: Path, canonical_family: str | None
+) -> Path:
+    policy_name = str(getattr(args, "param_policy", "") or "").strip()
+    policy_spec = PARAM_POLICY_SPECS.get(policy_name)
+    if not isinstance(policy_spec, dict):
+        raise ValueError(f"不支援的策略參數policy: {policy_name!r}")
+    if canonical_family:
+        from core.strategy_param_artifacts import resolve_strategy_param_artifact_path
+
+        return resolve_strategy_param_artifact_path(
+            root,
+            family=str(canonical_family),
+            evaluation_mode="rolling",
+            policy=policy_name,
+        )
+    return active_param_dir / str(policy_spec["filename"])
+
+
 def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifact, output_dir, arm_id, training_dl_enabled, binary_pit):
     canonical_family = str(getattr(args, "canonical_strategy_param_family", "") or "").strip().lower()
     canonical_current = bool(canonical_family) and str(arm_id) == "P2" and not bool(training_dl_enabled)
@@ -798,14 +817,12 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
         binary_pit=binary_pit,
     )
     preflight_path = arm_dir / ("optimizer_preflight.json" if canonical_current else "rolling_preflight.json")
-    if canonical_current:
-        from core.strategy_param_artifacts import resolve_strategy_param_artifact_path
-
-        params_path = resolve_strategy_param_artifact_path(
-            root, family=canonical_family, evaluation_mode="rolling", policy="base_finalist_best"
-        )
-    else:
-        params_path = active_param_dir / "roos_base_best.json"
+    params_path = _resolve_optimizer_arm_requested_policy_params_path(
+        root=root,
+        args=args,
+        active_param_dir=active_param_dir,
+        canonical_family=(canonical_family if canonical_current else None),
+    )
     prior = _load_json(preflight_path)
     reused_params_payload = _reuse_existing_min_roos_params_if_compatible(
         prior_preflight=prior,

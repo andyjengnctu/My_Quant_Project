@@ -834,6 +834,11 @@ def _canonical_manifest_matches_current_schedule(
         return False, "ARTIFACT_MISSING"
     if str(record.get("sha256") or "") != compute_strategy_param_file_sha256(target):
         return False, "ARTIFACT_SHA_MISMATCH"
+    artifact_payload = _load_json_object(target)
+    if artifact_payload is None:
+        return False, "ARTIFACT_PAYLOAD_INVALID"
+    if str(artifact_payload.get("selector") or "") != normalize_strategy_param_policy(policy):
+        return False, "POLICY_SELECTOR_MISMATCH"
     source = dict(record.get("source") or {})
     expected_build_contract = _canonical_schedule_build_contract(
         family=family,
@@ -930,15 +935,19 @@ def _build_canonical_schedule(
         max_position_cap_pct=max_position_cap_pct,
     )
     compare_policy = _compare_policy_name(policy)
+    # base-finalist-best / base-finalists-agree are two selectors over the same
+    # underlying Optimizer search.  Keep one shared work domain per family/build
+    # contract so requesting the second policy reuses the completed search instead
+    # of spending another full 2021 + 2022+ rolling optimization pass.
     work_root = (
         root / "outputs" / "optimizer" / "strategy_param_schedule"
-        / str(family) / str(normalize_strategy_param_policy(policy))
+        / str(family) / "shared_policy_search"
     )
     work_identity = {
-        "schema": "canonical_strategy_schedule_work_v1",
+        "schema": "canonical_strategy_schedule_work_v2",
         "family": family,
-        "policy": normalize_strategy_param_policy(policy),
         "build_contract": contract,
+        "policy_outputs": ["base_finalist_best", "base_finalists_agree"],
     }
     work_contract_path = work_root / "work_contract.json"
     prior_work_identity = _load_json_object(work_contract_path) if work_contract_path.is_file() else None
@@ -946,7 +955,7 @@ def _build_canonical_schedule(
         shutil.rmtree(work_root)
     work_root.mkdir(parents=True, exist_ok=True)
     _write_json(work_contract_path, work_identity)
-    initial_cache = work_root / "initial_2021.json"
+    initial_cache = work_root / f"initial_2021_{normalize_strategy_param_policy(policy)}.json"
 
     def _train(first_date: str, last_date: str, output_dir: Path, *, suffix: str) -> Path:
         common = dict(
@@ -1333,6 +1342,11 @@ def _benchmark_manifest_matches_current_policy(
     if not expected_sha or not target_path.is_file():
         return False
     if expected_sha != compute_strategy_param_file_sha256(target_path):
+        return False
+    artifact_payload = _load_json_object(target_path)
+    if artifact_payload is None:
+        return False
+    if str(artifact_payload.get("selector") or "") != normalize_strategy_param_policy(policy):
         return False
     coverage_end = _benchmark_parameter_coverage_end(target_path)
     if coverage_end is None or str(coverage_end) < str(comparison_end_date):

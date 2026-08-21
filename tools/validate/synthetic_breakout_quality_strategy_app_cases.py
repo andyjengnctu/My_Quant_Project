@@ -558,6 +558,268 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         collect_legacy_root_strategy_parameter_cleanup_plan,
         ensure_strategy_parameter_artifact,
         finalize_legacy_strategy_parameter_migration,
+        validate_strategy_parameter_artifact_identity,
+    )
+
+    # Current base-finalist-best / base-finalists-agree are selectors over one
+    # Optimizer search.  A clean rebuild must run each schedule segment once and
+    # reuse the same work domain when materializing the second policy.
+    import services.optimizer.strategy_param_training as strategy_param_training_module
+
+    shared_search_events = []
+    def _fake_shared_full_optimizer(**kwargs):
+        output_root = Path(kwargs["output_relative_dir"])
+        if not output_root.is_absolute():
+            output_root = Path(kwargs["project_root"]) / output_root
+        active_dir = output_root / "active_params"
+        active_dir.mkdir(parents=True, exist_ok=True)
+        marker = output_root / "synthetic_search_done.json"
+        if not marker.is_file():
+            shared_search_events.append(output_root.as_posix())
+            marker.write_text("{}", encoding="utf-8")
+            start_year = int(str(kwargs["first_oos_date"])[:4])
+            end_year = int(str(kwargs["last_oos_date"])[:4])
+            for selector, filename, high_len in (
+                ("base_finalist_best", "roos_base_best.json", 201),
+                ("base_finalists_agree", "roos_base_finalists_agree.json", 250),
+            ):
+                mapping = {}
+                folds = []
+                for year in range(start_year, end_year + 1):
+                    effective = f"{year}-01-01"
+                    mapping[effective] = [{
+                        "member_index": 1,
+                        "seed": int(kwargs["optimizer_seed"]),
+                        "params": {"high_len": int(high_len)},
+                    }]
+                    folds.append({
+                        "effective_start": effective,
+                        "effective_end": f"{year}-12-31",
+                        "oos_start_date": effective,
+                        "oos_end_date": f"{year}-12-31",
+                    })
+                payload = {
+                    "schema_type": ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
+                    "schema_version": 1,
+                    "mode": "rolling",
+                    "selector": selector,
+                    "params_ensemble_by_effective_date": mapping,
+                    "folds": folds,
+                    "meta": {
+                        "first_oos_date": str(kwargs["first_oos_date"]),
+                        "last_oos_date": str(kwargs["last_oos_date"]),
+                    },
+                    "summary": {
+                        "folds": len(mapping),
+                        "oos_start_date": str(kwargs["first_oos_date"]),
+                        "oos_end_date": str(kwargs["last_oos_date"]),
+                    },
+                }
+                (active_dir / filename).write_text(
+                    json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+                )
+        requested = (
+            "roos_base_best.json"
+            if str(kwargs["param_policy"]) == "base-finalist-best"
+            else "roos_base_finalists_agree.json"
+        )
+        return {"params_path": active_dir / requested}
+
+    with tempfile.TemporaryDirectory() as shared_policy_tmp, patch.object(
+        strategy_param_training_module,
+        "prepare_selection_historical_full_roos_params",
+        side_effect=_fake_shared_full_optimizer,
+    ):
+        shared_policy_root = Path(shared_policy_tmp)
+        shared_common = {
+            "project_root": shared_policy_root,
+            "family": "full",
+            "evaluation_mode": "rolling",
+            "comparison_end_date": "2026-03-02",
+            "dataset": "full",
+            "max_positions": 10,
+            "rotation": "off",
+            "fixed_risk": 0.01,
+            "max_position_cap_pct": 0.30,
+        }
+        shared_best = ensure_strategy_parameter_artifact(
+            policy="base_finalist_best", **shared_common
+        )
+        shared_agree = ensure_strategy_parameter_artifact(
+            policy="base_finalists_agree", **shared_common
+        )
+        shared_best_payload = json.loads(
+            Path(shared_best["path"]).read_text(encoding="utf-8")
+        )
+        shared_agree_payload = json.loads(
+            Path(shared_agree["path"]).read_text(encoding="utf-8")
+        )
+        shared_agree_ready, shared_agree_status, _ = (
+            validate_strategy_parameter_artifact_identity(
+                shared_policy_root,
+                family="full",
+                policy="base_finalists_agree",
+                evaluation_mode="rolling",
+                comparison_end_date="2026-03-02",
+                dataset="full",
+                max_positions=10,
+                rotation="off",
+                fixed_risk=0.01,
+                max_position_cap_pct=0.30,
+            )
+        )
+        shared_manifest_path = Path(shared_agree["manifest_path"])
+        shared_manifest_payload = json.loads(
+            shared_manifest_path.read_text(encoding="utf-8")
+        )
+        shared_source_records = {
+            str(policy_name): dict(dict(record).get("source") or {})
+            for policy_name, record in dict(shared_manifest_payload.get("artifacts") or {}).items()
+        }
+        corrupted_agree_payload = dict(shared_agree_payload)
+        corrupted_agree_payload["selector"] = "base_finalist_best"
+        Path(shared_agree["path"]).write_text(
+            json.dumps(corrupted_agree_payload, ensure_ascii=False), encoding="utf-8"
+        )
+        refresh_strategy_parameter_manifest(
+            shared_policy_root,
+            family="full",
+            evaluation_mode="rolling",
+            source_records=shared_source_records,
+        )
+        corrupted_agree_ready, corrupted_agree_status, _ = (
+            validate_strategy_parameter_artifact_identity(
+                shared_policy_root,
+                family="full",
+                policy="base_finalists_agree",
+                evaluation_mode="rolling",
+                comparison_end_date="2026-03-02",
+                dataset="full",
+                max_positions=10,
+                rotation="off",
+                fixed_risk=0.01,
+                max_position_cap_pct=0.30,
+            )
+        )
+        repaired_agree = ensure_strategy_parameter_artifact(
+            policy="base_finalists_agree", **shared_common
+        )
+        repaired_agree_payload = json.loads(
+            Path(repaired_agree["path"]).read_text(encoding="utf-8")
+        )
+        shared_work_root = (
+            shared_policy_root / "outputs" / "optimizer" / "strategy_param_schedule"
+            / "full" / "shared_policy_search"
+        )
+        shared_markers = sorted(
+            path.parent.relative_to(shared_policy_root).as_posix()
+            for path in shared_work_root.rglob("synthetic_search_done.json")
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "canonical_strategy_param_policies_share_one_optimizer_search_per_schedule_segment",
+        True,
+        shared_best["action"] == "BUILD"
+        and shared_agree["action"] == "BUILD"
+        and len(shared_search_events) == 2
+        and shared_markers == [
+            "outputs/optimizer/strategy_param_schedule/full/shared_policy_search/initial_2021",
+            "outputs/optimizer/strategy_param_schedule/full/shared_policy_search/rolling_tail_2022_plus",
+        ]
+        and str(shared_best_payload.get("selector")) == "base_finalist_best"
+        and str(shared_agree_payload.get("selector")) == "base_finalists_agree"
+        and shared_agree_ready is True
+        and shared_agree_status == "READY",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "canonical_strategy_param_identity_rejects_wrong_policy_selector_even_when_sha_is_repinned",
+        (False, "POLICY_SELECTOR_MISMATCH"),
+        (corrupted_agree_ready, corrupted_agree_status),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "wrong_policy_selector_auto_rebuilds_from_shared_search_without_rerunning_optimizer",
+        True,
+        repaired_agree["action"] == "REBUILD"
+        and str(repaired_agree_payload.get("selector")) == "base_finalists_agree"
+        and len(shared_search_events) == 2,
+    )
+
+    import services.optimizer.outer_rolling_oos as outer_rolling_module
+    with patch.object(
+        outer_rolling_module, "OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED", False
+    ), patch.object(
+        outer_rolling_module, "OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE", 8
+    ), patch.object(
+        outer_rolling_module, "OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE", "auto"
+    ):
+        effective_seed_policy = (
+            outer_rolling_module._effective_rolling_seed_ensemble_policy_payload()
+        )
+        disabled_seed_tables = outer_rolling_module._render_optimizer_results_tables(
+            [], color=False
+        )
+        disabled_seed_summary = (
+            outer_rolling_module.format_optimizer_final_performance_summary(
+                folds=1,
+                seeds=int(effective_seed_policy["seed_count"]),
+                min_agree=int(effective_seed_policy["min_agree"]),
+                completed_folds=1,
+                total_elapsed_sec=1.0,
+                seed_ensemble_enabled=bool(effective_seed_policy["enabled"]),
+                color=False,
+            )
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "disabled_production_seed_ensemble_reports_effective_single_seed_and_hides_duplicate_table",
+        True,
+        effective_seed_policy["enabled"] is False
+        and int(effective_seed_policy["seed_count"]) == 1
+        and int(effective_seed_policy["min_agree"]) == 1
+        and disabled_seed_tables == ""
+        and "seeds=1" in disabled_seed_summary
+        and "min_agree=1" in disabled_seed_summary
+        and "seed_ensemble=off" in disabled_seed_summary,
+    )
+
+    with tempfile.TemporaryDirectory() as min_policy_path_tmp:
+        min_policy_root = Path(min_policy_path_tmp)
+        isolated_active = min_policy_root / "outputs" / "synthetic" / "active_params"
+        agree_args = SimpleNamespace(param_policy="base-finalists-agree")
+        isolated_agree_path = (
+            strategy_param_training_module._resolve_optimizer_arm_requested_policy_params_path(
+                root=min_policy_root,
+                args=agree_args,
+                active_param_dir=isolated_active,
+                canonical_family=None,
+            )
+        )
+        canonical_agree_path = (
+            strategy_param_training_module._resolve_optimizer_arm_requested_policy_params_path(
+                root=min_policy_root,
+                args=agree_args,
+                active_param_dir=isolated_active,
+                canonical_family="min",
+            )
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "min_optimizer_arm_resolves_requested_policy_instead_of_hardcoding_base_best",
+        True,
+        isolated_agree_path.name == "roos_base_finalists_agree.json"
+        and canonical_agree_path.name == "min_base_finalists_agree.json",
     )
 
     with tempfile.TemporaryDirectory() as migration_tmp:

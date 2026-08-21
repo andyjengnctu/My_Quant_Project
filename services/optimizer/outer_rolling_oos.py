@@ -5324,15 +5324,17 @@ def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, in
         table_title=FINALISTS_AGREE_TABLE_TITLE,
         policy_names=FINALISTS_AGREE_RESULT_POLICY_NAMES,
     )
-    seed_ensemble_table = _render_results_table(
-        rows,
-        color=color,
-        include_chain=include_chain,
-        include_oos_avg=include_oos_avg,
-        chained_override=chained_override,
-        table_title=SEED_ENSEMBLE_RESULTS_TABLE_TITLE,
-        policy_names=SEED_ENSEMBLE_RESULT_POLICY_NAMES,
-    )
+    seed_ensemble_table = ""
+    if _is_rolling_random_seed_ensemble_enabled():
+        seed_ensemble_table = _render_results_table(
+            rows,
+            color=color,
+            include_chain=include_chain,
+            include_oos_avg=include_oos_avg,
+            chained_override=chained_override,
+            table_title=SEED_ENSEMBLE_RESULTS_TABLE_TITLE,
+            policy_names=SEED_ENSEMBLE_RESULT_POLICY_NAMES,
+        )
     return "\n\n".join(part for part in (finalist_best_table, finalists_agree_table, seed_ensemble_table) if part)
 
 
@@ -6723,6 +6725,7 @@ def format_optimizer_final_performance_summary(
     completed_replays: int = 0,
     replay_wall_elapsed_sec: float | None = None,
     resource_summary: dict | None = None,
+    seed_ensemble_enabled: bool = True,
     color: bool = True,
 ) -> str:
     """Format final performance/resource summary from the same seed-ensemble schema.
@@ -6745,7 +6748,8 @@ def format_optimizer_final_performance_summary(
         completed_replays=int(completed_replays or 0),
         replay_wall_elapsed_sec=replay_wall_elapsed_sec,
     )
-    line = f"📏 訓練效能摘要: {header} | {_optimizer_resource_usage_suffix(resource_summary)}"
+    ensemble_note = "" if bool(seed_ensemble_enabled) else " | seed_ensemble=off"
+    line = f"📏 訓練效能摘要: {header}{ensemble_note} | {_optimizer_resource_usage_suffix(resource_summary)}"
     return f"{C_CYAN}{line}{C_RESET}" if bool(color) else line
 
 
@@ -7841,6 +7845,17 @@ class _FoldLogSearchProgress:
 
 def _is_rolling_random_seed_ensemble_enabled() -> bool:
     return bool(OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED) and int(OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE or 1) > 1
+
+
+def _effective_rolling_seed_ensemble_policy_payload() -> dict:
+    """Return the effective runtime seed policy, not merely the configured capacity."""
+    requested = _build_seed_ensemble_policy_payload()
+    if _is_rolling_random_seed_ensemble_enabled():
+        return dict(requested)
+    effective = build_seed_ensemble_policy_snapshot(enabled=False, seed_count=1, min_agree=1)
+    effective["seed_mode"] = "single_canonical_optimizer_seed"
+    effective["requested_random_seed_ensemble"] = dict(requested)
+    return effective
 
 
 _build_rolling_seed_ensemble_policy_payload = _build_seed_ensemble_policy_payload
@@ -9689,7 +9704,10 @@ def run_outer_rolling_oos(
         print("\n" + final_report)
     timing_payload = dict((timing_paths or {}).get("payload") or {})
     timing_summary = dict(timing_payload.get("summary") or {})
-    seed_policy = _build_rolling_seed_ensemble_policy_payload()
+    seed_policy = _effective_rolling_seed_ensemble_policy_payload()
+    seed_ensemble_enabled = bool(seed_policy.get("enabled", False))
+    effective_seed_count = int(seed_policy.get("seed_count", 1) or 1)
+    effective_min_agree = int(seed_policy.get("min_agree", effective_seed_count) or effective_seed_count)
     if not seed_ensemble_performance_metrics:
         seed_ensemble_performance_metrics = {
             "completed_trials": int(timing_summary.get("completed_trials", 0) or 0),
@@ -9701,8 +9719,8 @@ def run_outer_rolling_oos(
         }
     print(format_optimizer_final_performance_summary(
         folds=int(fold_count),
-        seeds=int(seed_policy.get("seed_count", 1) or 1),
-        min_agree=int(seed_policy.get("min_agree", seed_policy.get("seed_count", 1)) or 1),
+        seeds=int(effective_seed_count),
+        min_agree=int(effective_min_agree),
         completed_folds=int(len(rows)),
         total_elapsed_sec=float(timing_summary.get("overall_sec", max(0.0, time.perf_counter() - overall_start)) or 0.0),
         completed_trials=int(seed_ensemble_performance_metrics.get("completed_trials", 0) or 0),
@@ -9712,6 +9730,7 @@ def run_outer_rolling_oos(
         completed_replays=int(seed_ensemble_performance_metrics.get("completed_replays", 0) or 0),
         replay_wall_elapsed_sec=seed_ensemble_performance_metrics.get("replay_wall_elapsed_sec"),
         resource_summary=timing_summary,
+        seed_ensemble_enabled=bool(seed_ensemble_enabled),
         color=True,
     ))
     if bool(timing_mode):
