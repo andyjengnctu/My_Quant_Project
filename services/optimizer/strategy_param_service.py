@@ -26,7 +26,7 @@ from core.active_param_ensemble import (
     resolve_active_param_ensemble_mode,
 )
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
-from core.file_integrity import atomic_write_json, canonical_json_sha256
+from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from core.strategy_param_artifacts import (
     POLICY_FILENAME_BY_NAME,
     COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY,
@@ -34,6 +34,7 @@ from core.strategy_param_artifacts import (
     normalize_strategy_param_evaluation_mode,
     normalize_strategy_param_family,
     normalize_strategy_param_policy,
+    normalize_strategy_param_payload_for_persistence,
     resolve_strategy_param_artifact_path,
     resolve_strategy_param_benchmark_artifact_path,
     resolve_strategy_param_benchmark_dir,
@@ -129,7 +130,7 @@ def _optimizer_compare_policy_outputs(source_path: Path) -> dict[str, Path]:
         candidate = source_dir / f"roos_{POLICY_FILENAME_BY_NAME[normalized]}"
         if not candidate.is_file():
             continue
-        payload = _load_json_object(candidate)
+        payload = _load_json_object_permissive(candidate)
         if payload is None:
             raise ValueError(
                 "Optimizer策略參數工作工件不是合法JSON: "
@@ -337,6 +338,15 @@ def migrate_legacy_strategy_parameter_artifacts(project_root: str | Path, *, fam
 
 def _load_json_object(path: Path) -> dict[str, Any] | None:
     try:
+        payload = load_json_strict(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _load_json_object_permissive(path: Path) -> dict[str, Any] | None:
+    """Load legacy/workspace JSON that may contain Python's Infinity constants."""
+    try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
@@ -483,7 +493,7 @@ def _runtime_param_member_signatures(members: Any) -> list[str]:
 
 
 def _legacy_frozen_oos_matches_schedule_initial(source: Path, target: Path) -> bool:
-    legacy = _load_json_object(source)
+    legacy = _load_json_object_permissive(source)
     schedule = _load_json_object(target)
     if (
         legacy is None
@@ -1116,18 +1126,20 @@ def _benchmark_optimizer_work_root(
 
 
 def _copy_json_payload(source: Path, target: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"benchmark策略參數source無法讀取: {source}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError(f"benchmark策略參數source必須是JSON object: {source}")
-    _write_json(target, payload)
-    return payload
+    payload = _load_json_object_permissive(source)
+    if payload is None:
+        raise ValueError(f"策略參數source無法讀取或不是JSON object: {source}")
+    normalized = normalize_strategy_param_payload_for_persistence(payload)
+    if normalized != payload:
+        # One-time repair for work artifacts emitted before strict-JSON publication
+        # was enforced. Runtime params are validated before any normalization.
+        atomic_write_json(source, normalized)
+    _write_json(target, normalized)
+    return normalized
 
 
 def _benchmark_effective_member_sha256(path: Path, effective_date: str = "2021-01-01") -> str:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    payload = load_json_strict(path)
     mapping = dict(payload.get("params_ensemble_by_effective_date") or {})
     members = mapping.get(str(effective_date))
     if not isinstance(members, list) or not members:
@@ -1137,8 +1149,8 @@ def _benchmark_effective_member_sha256(path: Path, effective_date: str = "2021-0
 
 def _benchmark_parameter_coverage_end(path: Path) -> str | None:
     try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload = load_json_strict(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return None
     if not isinstance(payload, dict):
         return None
@@ -1180,8 +1192,8 @@ def _benchmark_manifest_matches_current_policy(
     comparison_end_date: str, build_contract: dict[str, Any],
 ) -> bool:
     try:
-        payload = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload = load_json_strict(manifest_path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return False
     if not isinstance(payload, dict):
         return False

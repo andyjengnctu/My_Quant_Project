@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import copy
-import json
 import os
 from datetime import date, datetime, timedelta
 from typing import Any, Mapping
 
+from core.file_integrity import load_json_strict
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
 from core.raw_universe_contract import build_raw_universe_contract_fields
 
@@ -18,8 +18,7 @@ STATIC_ENSEMBLE_EFFECTIVE_END_DATE = date(9999, 12, 31)
 
 
 def load_json_file(path: str | os.PathLike[str]) -> dict:
-    with open(path, "r", encoding="utf-8") as handle:
-        payload = json.load(handle)
+    payload = load_json_strict(path)
     if not isinstance(payload, dict):
         raise ValueError(f"JSON 根層必須是 object/dict，收到 {type(payload).__name__}")
     return payload
@@ -225,7 +224,7 @@ def load_active_param_ensemble_set(path: str | os.PathLike[str]) -> dict:
 def is_active_param_ensemble_file(path: str | os.PathLike[str]) -> bool:
     try:
         return is_active_param_ensemble_payload(load_json_file(path))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
+    except (OSError, UnicodeDecodeError, ValueError, TypeError):
         return False
 
 

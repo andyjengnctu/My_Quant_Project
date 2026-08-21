@@ -11,6 +11,7 @@ from core.strategy_params import (
 from config.execution_policy import RUNTIME_PARAM_DEFAULTS, RUNTIME_PARAM_TYPES
 from core.log_utils import format_exception_summary
 from core.active_param_ensemble import is_active_param_ensemble_payload
+from core.file_integrity import load_json_strict
 from core.rolling_oos_params import is_rolling_oos_param_set_payload
 
 
@@ -179,8 +180,7 @@ def load_params_from_json(json_file):
         raise FileNotFoundError(f"找不到參數檔: {json_file}")
 
     try:
-        with open(json_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        data = load_json_strict(json_file)
 
         if is_active_param_ensemble_payload(data):
             raise ValueError(

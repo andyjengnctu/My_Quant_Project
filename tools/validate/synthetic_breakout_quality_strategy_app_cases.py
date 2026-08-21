@@ -494,6 +494,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     from core.active_param_ensemble import ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE
+    from core.file_integrity import load_json_strict
+    from core.strategy_param_artifacts import normalize_strategy_param_payload_for_persistence
     from services.optimizer.outer_rolling_oos import (
         get_optimizer_nonrolling_policy_paramset_filename,
         get_optimizer_policy_paramset_filename,
@@ -558,10 +560,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                         "folds": len(mapping),
                         "oos_start_date": str(kwargs["first_oos_date"]),
                         "oos_end_date": str(kwargs["last_oos_date"]),
+                        # Optimizer ranking diagnostics historically allowed -inf
+                        # as a sentinel when a low-trial fold had base_score <= 0.
+                        "local_retention": float("-inf"),
                     },
                 }
                 (active_dir / filename).write_text(
-                    json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+                    json.dumps(payload, ensure_ascii=False, allow_nan=True), encoding="utf-8"
                 )
         requested = (
             "roos_base_best.json"
@@ -593,11 +598,18 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         shared_agree = ensure_strategy_parameter_artifact(
             policy="base_finalists_agree", **shared_common
         )
-        shared_best_payload = json.loads(
-            Path(shared_best["path"]).read_text(encoding="utf-8")
+        shared_best_payload = load_json_strict(Path(shared_best["path"]))
+        shared_agree_payload = load_json_strict(Path(shared_agree["path"]))
+        shared_work_payload_paths = sorted(
+            shared_policy_root.glob(
+                "outputs/optimizer/strategy_param_schedule/canonical/full/**/active_params/roos_base_*.json"
+            )
         )
-        shared_agree_payload = json.loads(
-            Path(shared_agree["path"]).read_text(encoding="utf-8")
+        shared_work_payloads = [load_json_strict(path) for path in shared_work_payload_paths]
+        shared_workspace_has_nonfinite_token = any(
+            "Infinity" in path.read_text(encoding="utf-8")
+            or "NaN" in path.read_text(encoding="utf-8")
+            for path in shared_work_payload_paths
         )
         shared_agree_ready, shared_agree_status, _ = (
             validate_strategy_parameter_artifact_identity(
@@ -672,6 +684,29 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 and str(shared_agree_payload.get("selector")) == "base_finalists_agree"
                 and shared_agree_ready is True
                 and shared_agree_status == "READY",
+    )
+    check_true(
+        "strategy_param_publication_repairs_legacy_nonfinite_diagnostics_to_strict_json_without_retraining",
+        shared_best_payload.get("summary", {}).get("local_retention") is None
+                and shared_agree_payload.get("summary", {}).get("local_retention") is None
+                and bool(shared_work_payloads)
+                and all(
+                    dict(payload.get("summary") or {}).get("local_retention") is None
+                    for payload in shared_work_payloads
+                )
+                and shared_workspace_has_nonfinite_token is False
+                and len(shared_search_events) == 1,
+    )
+    nonfinite_runtime_param_rejected = False
+    try:
+        normalize_strategy_param_payload_for_persistence({
+            "params_ensemble": [{"params": {"high_len": float("inf")}}]
+        })
+    except ValueError:
+        nonfinite_runtime_param_rejected = True
+    check_true(
+        "strategy_param_strict_json_boundary_rejects_nonfinite_runtime_parameter_values",
+        nonfinite_runtime_param_rejected,
     )
     check(
         "canonical_strategy_param_identity_rejects_wrong_policy_selector_even_when_sha_is_repinned",

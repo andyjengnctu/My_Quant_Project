@@ -45,12 +45,25 @@ def atomic_write_json(path: str | Path, payload: Any) -> Path:
     return target
 
 
+def _reject_nonfinite_json_constant(value: str):
+    raise ValueError(f"non-standard JSON numeric constant: {value}")
+
+
+def load_json_strict(path: str | Path) -> Any:
+    """Load RFC-compatible JSON and reject NaN/Infinity constants."""
+    return json.loads(
+        Path(path).read_text(encoding="utf-8"),
+        parse_constant=_reject_nonfinite_json_constant,
+    )
+
+
 def canonical_json_sha256(payload: object, *, length: int | None = None) -> str:
     raw = json.dumps(
         payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
+        allow_nan=False,
         default=str,
     ).encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()
@@ -61,4 +74,4 @@ def canonical_json_sha256(payload: object, *, length: int | None = None) -> str:
     return digest[: int(length)]
 
 
-__all__ = ["atomic_write_json", "canonical_json_sha256", "compute_file_sha256"]
+__all__ = ["atomic_write_json", "canonical_json_sha256", "compute_file_sha256", "load_json_strict"]

@@ -9,6 +9,7 @@ from core.active_param_ensemble import (
     build_active_param_ensemble_schedule,
     is_active_param_ensemble_payload,
 )
+from core.file_integrity import load_json_strict
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.rolling_oos_params import build_active_param_schedule, is_rolling_oos_param_set_payload
 
@@ -110,8 +111,7 @@ def load_portfolio_param_source_from_json(json_file: str | os.PathLike[str], *, 
     a single param.json.
     """
     path = os.fspath(json_file)
-    with open(path, "r", encoding="utf-8") as handle:
-        payload = json.load(handle)
+    payload = load_json_strict(path)
     if not isinstance(payload, Mapping):
         raise ValueError(f"參數檔根層必須是 object/dict，收到 {type(payload).__name__}")
 

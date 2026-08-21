@@ -68,6 +68,7 @@ from core.active_param_ensemble import (
 )
 from core.config import V16StrategyParams
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
+from core.file_integrity import atomic_write_json
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.model_paths import resolve_models_dir
 from core.portfolio_stats import calc_annual_return_pct, calc_curve_stats, calc_plain_romd, calc_portfolio_score
@@ -100,6 +101,7 @@ from core.seed_ensemble_policy import (
     renumber_seed_ensemble_members,
 )
 from core.strategy_params import build_runtime_param_raw_value
+from core.strategy_param_artifacts import normalize_strategy_param_payload_for_persistence
 from core.walk_forward_policy import build_optimizer_runtime_policy
 from services.optimizer.param_cache import build_prep_cache_key
 from services.optimizer.prep import prepare_trial_inputs
@@ -5497,9 +5499,12 @@ def _write_policy_paramset_files(
         else:
             filename = str(PARAMSET_FILENAME_BY_POLICY.get(policy_name, f"roos_{policy_name}.json"))
         path = os.path.join(models_dir, filename)
-        payload = _build_policy_paramset_payload(policy_name=policy_name, rows=rows, config=config, summary=summary)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=4, ensure_ascii=False)
+        payload = normalize_strategy_param_payload_for_persistence(
+            _build_policy_paramset_payload(
+                policy_name=policy_name, rows=rows, config=config, summary=summary
+            )
+        )
+        atomic_write_json(path, payload)
         paths[policy_name] = path
     return paths
 

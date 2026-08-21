@@ -16,7 +16,7 @@ from config.training_policy import (
     get_robustness_benchmark_policy_snapshot,
     get_strategy_parameter_training_policy_snapshot,
 )
-from core.file_integrity import atomic_write_json
+from core.file_integrity import atomic_write_json, load_json_strict
 from core.strategy_param_artifacts import (
     POLICY_FILENAME_BY_NAME,
     STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION,
@@ -64,8 +64,8 @@ def _existing_source_records(
         root, family=family, evaluation_mode=evaluation_mode
     )
     try:
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload = load_json_strict(manifest_path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return {}
     if not isinstance(payload, dict):
         return {}
@@ -85,8 +85,8 @@ def _existing_benchmark_source_records(
         evaluation_mode=evaluation_mode,
     )
     try:
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload = load_json_strict(manifest_path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return {}
     if not isinstance(payload, dict):
         return {}

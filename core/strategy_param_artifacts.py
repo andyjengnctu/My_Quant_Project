@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -19,7 +20,9 @@ from core.active_param_ensemble import (
     is_active_param_ensemble_payload,
     resolve_active_param_ensemble_mode,
 )
+from core.file_integrity import load_json_strict
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
+from core.serialization_utils import json_native_value
 
 STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION = 3
 STRATEGY_PARAM_ROOT_RELATIVE = Path("models") / "strategy_params"
@@ -63,6 +66,93 @@ COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY = {
     "base-finalist-best": "base_finalist_best",
     "base-finalists-agree": "base_finalists_agree",
 }
+
+
+def _assert_finite_strategy_runtime_params(value: Any, *, path: str) -> None:
+    if hasattr(value, "item") and not isinstance(value, (str, bytes, bytearray)):
+        try:
+            value = value.item()
+        except (TypeError, ValueError):
+            pass
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"strategy runtime params含non-finite數值: path={path}, value={value}")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _assert_finite_strategy_runtime_params(item, path=f"{path}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for idx, item in enumerate(value):
+            _assert_finite_strategy_runtime_params(item, path=f"{path}[{idx}]")
+
+
+def normalize_strategy_param_payload_for_persistence(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return strict-JSON strategy-param payload without leaking ranking sentinels.
+
+    Optimizer diagnostics may use +/-inf internally as ordering sentinels. Those values
+    are not valid persisted JSON semantics and become ``null`` at the artifact boundary.
+    Actual runtime parameter maps are stricter: a non-finite parameter is corruption and
+    must fail instead of being silently normalized.
+    """
+    if not isinstance(payload, Mapping):
+        raise ValueError("strategy parameter payload必須是mapping")
+    source = dict(payload)
+
+    direct_params = source.get("params")
+    if isinstance(direct_params, Mapping):
+        _assert_finite_strategy_runtime_params(dict(direct_params), path="params")
+
+    for container_name in ("params_by_effective_date", "params_by_oos_year"):
+        container = source.get(container_name)
+        if isinstance(container, Mapping):
+            for identity, params in container.items():
+                if isinstance(params, Mapping):
+                    _assert_finite_strategy_runtime_params(
+                        dict(params), path=f"{container_name}.{identity}"
+                    )
+
+    ensemble = source.get("params_ensemble_by_effective_date")
+    if isinstance(ensemble, Mapping):
+        for effective_date, members in ensemble.items():
+            if not isinstance(members, list):
+                continue
+            for idx, member in enumerate(members):
+                if not isinstance(member, Mapping):
+                    continue
+                params = member.get("params")
+                if isinstance(params, Mapping):
+                    _assert_finite_strategy_runtime_params(
+                        dict(params),
+                        path=f"params_ensemble_by_effective_date.{effective_date}[{idx}].params",
+                    )
+
+    direct_ensemble = source.get("params_ensemble")
+    if isinstance(direct_ensemble, list):
+        for idx, member in enumerate(direct_ensemble):
+            if not isinstance(member, Mapping):
+                continue
+            params = member.get("params")
+            if isinstance(params, Mapping):
+                _assert_finite_strategy_runtime_params(
+                    dict(params), path=f"params_ensemble[{idx}].params"
+                )
+
+    folds = source.get("folds")
+    if isinstance(folds, list):
+        for idx, fold in enumerate(folds):
+            if not isinstance(fold, Mapping):
+                continue
+            params = fold.get("params")
+            if isinstance(params, Mapping):
+                _assert_finite_strategy_runtime_params(
+                    dict(params), path=f"folds[{idx}].params"
+                )
+
+    normalized = json_native_value(source)
+    if not isinstance(normalized, dict):
+        raise ValueError("strategy parameter payload正規化後必須是JSON object")
+    return normalized
 
 
 def normalize_strategy_param_family(value: str) -> str:
@@ -291,8 +381,8 @@ def load_strategy_param_manifest(project_root: str | Path, *, family: str, evalu
     if not path.is_file():
         return None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload = load_json_strict(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return None
     return payload if isinstance(payload, dict) else None
 
@@ -379,6 +469,7 @@ __all__ = [
     "normalize_strategy_param_family",
     "normalize_strategy_param_evaluation_mode",
     "normalize_strategy_param_policy",
+    "normalize_strategy_param_payload_for_persistence",
     "normalize_strategy_param_benchmark_id",
     "STRATEGY_PARAM_WORK_ROOT_RELATIVE",
     "STRATEGY_PARAM_WORK_SCOPE_CANONICAL",

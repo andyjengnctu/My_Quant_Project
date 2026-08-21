@@ -37,7 +37,8 @@ from config.execution_policy import (
     DEFAULT_PORTFOLIO_MAX_POSITIONS,
     DEFAULT_PORTFOLIO_ROTATION,
 )
-from core.file_integrity import canonical_json_sha256 as _canonical_hash
+from core.file_integrity import atomic_write_json, canonical_json_sha256 as _canonical_hash, load_json_strict
+from core.strategy_param_artifacts import normalize_strategy_param_payload_for_persistence
 from core.active_param_ensemble import (
     build_active_param_ensemble_schedule,
     get_active_param_ensemble_date_range,
@@ -218,8 +219,13 @@ def _parse_args(argv=None):
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False, default=str) + "\n", encoding="utf-8")
+    atomic_write_json(path, payload)
+
+
+def _write_strategy_param_json(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = normalize_strategy_param_payload_for_persistence(payload)
+    atomic_write_json(path, normalized)
+    return normalized
 
 
 def _load_baseline_contract(*, root: Path, args) -> dict[str, Any]:
@@ -238,7 +244,7 @@ def _load_baseline_contract(*, root: Path, args) -> dict[str, Any]:
         )
     if not params_path.is_file():
         raise FileNotFoundError(f"找不到Baseline rolling active params: {params_path}")
-    payload = json.loads(params_path.read_text(encoding="utf-8"))
+    payload = load_json_strict(params_path)
     source = _load_param_source(params_path)
     policy = _validate_requested_param_policy(source, args.param_policy)
     if str(source.get("kind") or "") != "rolling_active_param_ensemble":
@@ -704,7 +710,7 @@ def _validate_min_roos_params(*, path, baseline_contract, fold_overrides, args, 
             f"adaptation={existing_adaptation!r}"
         )
     payload["breakout_quality_param_adaptation"] = expected_adaptation
-    _write_json(path, payload)
+    payload = _write_strategy_param_json(path, payload)
     return payload
 
 
@@ -1543,7 +1549,7 @@ def _prepare_extending_roos_params(
             f"stitched={stitched_coverage_start}~{stitched_coverage_end}, "
             f"expected={historical_coverage_start}~{current_coverage_end}"
         )
-    _write_json(params_path, payload)
+    payload = _write_strategy_param_json(params_path, payload)
 
     manifest = {
         "schema_version": 1,
@@ -1706,7 +1712,7 @@ def prepare_oos_frozen_roos_params(
             f"OOS {display_name} frozen coverage錯誤: "
             f"actual={frozen_start}~{frozen_end}, expected={expected_start}~{source_end}"
         )
-    _write_json(params_path, payload)
+    payload = _write_strategy_param_json(params_path, payload)
     manifest = {
         "schema_version": 1,
         "status": "READY",
@@ -1910,7 +1916,7 @@ def _validate_selection_full_roos_params(*, path: Path, schedule_contract, args)
         "search_fields": list(FULL_ROOS_SEARCH_FIELDS),
         "search_space_sha256": _canonical_hash(BREAKOUT_OPTIMIZER_SEARCH_SPACE),
     }
-    _write_json(path, payload)
+    payload = _write_strategy_param_json(path, payload)
     return payload
 
 
