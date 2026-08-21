@@ -249,6 +249,8 @@ def validate_package_zip_runtime_contract_case(_base_params):
         (project_root / "README.md").write_text("demo\n", encoding="utf-8")
         (project_root / "pkg" / "__pycache__").mkdir()
         (project_root / "pkg" / "__pycache__" / "module.cpython-312.pyc").write_bytes(b"cache")
+        (project_root / "busy" / "__pycache__").mkdir(parents=True)
+        (project_root / "busy" / "__pycache__" / "busy.cpython-312.pyc").write_bytes(b"busy-cache")
         (project_root / "orphan.pyc").write_bytes(b"orphan-cache")
         (project_root / "main_20250101_deadbeef.zip").write_bytes(b"main-old")
         (project_root / "other_branch_20250102_cafebabe.zip").write_bytes(b"other-old")
@@ -262,10 +264,34 @@ def validate_package_zip_runtime_contract_case(_base_params):
             if args == ("rev-parse", "--short", "HEAD"):
                 return SimpleNamespace(stdout="abc1234\n")
             if args == ("ls-files", "--cached", "--others", "--exclude-standard", "-z"):
-                return SimpleNamespace(stdout="pkg/module.py\0README.md\0pkg/__pycache__/module.cpython-312.pyc\0orphan.pyc\0")
+                return SimpleNamespace(
+                    stdout=(
+                        "pkg/module.py\0README.md\0"
+                        "pkg/__pycache__/module.cpython-312.pyc\0"
+                        "busy/__pycache__/busy.cpython-312.pyc\0orphan.pyc\0"
+                    )
+                )
             raise AssertionError(f"unexpected git args: {args}")
 
-        with patch.object(app_package_zip, "PROJECT_ROOT", project_root),              patch.object(app_package_zip, "get_taipei_now", return_value=fake_now),              patch.object(app_package_zip, "_run_git", side_effect=_fake_run_git):
+        real_rmtree = app_package_zip.shutil.rmtree
+        transient_cache_dir = project_root / "pkg" / "__pycache__"
+        busy_cache_dir = project_root / "busy" / "__pycache__"
+        rmtree_attempts = Counter()
+
+        def _windows_rmtree_probe(path, ignore_errors=False):
+            target = Path(path)
+            rmtree_attempts[target] += 1
+            if target == transient_cache_dir and rmtree_attempts[target] == 1:
+                raise OSError(145, "The directory is not empty")
+            if target == busy_cache_dir:
+                raise OSError(145, "The directory is not empty")
+            return real_rmtree(path, ignore_errors=ignore_errors)
+
+        with patch.object(app_package_zip, "PROJECT_ROOT", project_root), \
+             patch.object(app_package_zip, "get_taipei_now", return_value=fake_now), \
+             patch.object(app_package_zip, "_run_git", side_effect=_fake_run_git), \
+             patch.object(app_package_zip.shutil, "rmtree", side_effect=_windows_rmtree_probe), \
+             patch.object(app_package_zip.time, "sleep", return_value=None):
             rc, stdout_text = _capture_stdout(app_package_zip.main, ["apps/package_zip.py"])
 
         new_zip_path = project_root / "feature-runtime-contract_20260404_123456_abc1234.zip"
@@ -291,7 +317,17 @@ def validate_package_zip_runtime_contract_case(_base_params):
             False,
             (project_root / "arch" / "to_chatgpt_bundle_20250103_deadbeef.zip").exists(),
         )
-        check("package_zip_cache_dir_removed", False, (project_root / "pkg" / "__pycache__").exists())
+        check("package_zip_cache_dir_removed", False, transient_cache_dir.exists())
+        check_true(
+            "package_zip_cache_cleanup_retries_transient_winerror_145",
+            rmtree_attempts[transient_cache_dir] >= 2,
+        )
+        check_true(
+            "package_zip_cache_cleanup_persistent_winerror_145_does_not_abort",
+            busy_cache_dir.exists()
+            and "warning=python_cache_cleanup_incomplete" in stdout_text
+            and "package exclusion remains enforced" in stdout_text,
+        )
         check("package_zip_orphan_pyc_removed", False, (project_root / "orphan.pyc").exists())
         check_true(
             "package_zip_stdout_reports_archived_count",

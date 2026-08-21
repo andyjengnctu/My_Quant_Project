@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -23,6 +24,8 @@ ARCHIVE_STRIP_DIR_PREFIXES = {
 ROOT_BUNDLE_PREFIX = "to_chatgpt_bundle_"
 COMMIT_MESSAGE_OPTION = "--commit-message"
 RUN_TEST_SUITE_OPTION = "--run-test-suite"
+CACHE_CLEANUP_MAX_ATTEMPTS = 4
+CACHE_CLEANUP_RETRY_SECONDS = 0.05
 
 
 def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -67,21 +70,65 @@ def _get_head_short_sha() -> str:
     return _run_git("rev-parse", "--short", "HEAD").stdout.strip()
 
 
+def _retry_cache_cleanup(action, path: Path) -> bool:
+    for attempt in range(CACHE_CLEANUP_MAX_ATTEMPTS):
+        try:
+            action(path)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError:
+            if not path.exists():
+                return True
+            if attempt + 1 >= CACHE_CLEANUP_MAX_ATTEMPTS:
+                return False
+            time.sleep(CACHE_CLEANUP_RETRY_SECONDS)
+    return not path.exists()
+
+
+def _remove_cache_dir(cache_dir: Path) -> bool:
+    return _retry_cache_cleanup(
+        lambda path: shutil.rmtree(path, ignore_errors=False),
+        cache_dir,
+    )
+
+
+def _remove_pyc_file(pyc_file: Path) -> bool:
+    return _retry_cache_cleanup(lambda path: path.unlink(), pyc_file)
+
+
 def _remove_python_caches() -> tuple[int, int]:
     removed_cache_dirs = 0
     removed_pyc_files = 0
 
-    for cache_dir in sorted(PROJECT_ROOT.rglob("__pycache__")):
+    cache_dirs = sorted(
+        PROJECT_ROOT.rglob("__pycache__"),
+        key=lambda path: (-len(path.parts), path.as_posix()),
+    )
+    for cache_dir in cache_dirs:
         if not cache_dir.is_dir():
             continue
-        shutil.rmtree(cache_dir, ignore_errors=False)
-        removed_cache_dirs += 1
+        if _remove_cache_dir(cache_dir):
+            removed_cache_dirs += 1
 
     for pyc_file in sorted(PROJECT_ROOT.rglob("*.pyc")):
         if not pyc_file.is_file():
             continue
-        pyc_file.unlink()
-        removed_pyc_files += 1
+        if _remove_pyc_file(pyc_file):
+            removed_pyc_files += 1
+
+    for cache_dir in cache_dirs:
+        if cache_dir.is_dir():
+            _remove_cache_dir(cache_dir)
+
+    retained_cache_dirs = [path for path in PROJECT_ROOT.rglob("__pycache__") if path.is_dir()]
+    retained_pyc_files = [path for path in PROJECT_ROOT.rglob("*.pyc") if path.is_file()]
+    if retained_cache_dirs or retained_pyc_files:
+        print(
+            "[package_zip] warning=python_cache_cleanup_incomplete "
+            f"retained_dirs={len(retained_cache_dirs)} retained_pyc={len(retained_pyc_files)}; "
+            "package exclusion remains enforced"
+        )
 
     return removed_cache_dirs, removed_pyc_files
 
