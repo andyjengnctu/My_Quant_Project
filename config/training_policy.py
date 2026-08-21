@@ -117,8 +117,6 @@ OPTIMIZER_RANDOM_SEED_DEFAULT = 42
 ROBUSTNESS_BENCHMARK_ID = "end_to_end_v1"
 ROBUSTNESS_BENCHMARK_SEED_COUNT = 4
 ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED = 20260810
-ROBUSTNESS_BENCHMARK_STRATEGY_TRIALS_PER_FOLD = 300
-
 
 def resolve_robustness_benchmark_seeds(
     *,
@@ -156,7 +154,8 @@ def get_robustness_benchmark_policy_snapshot() -> dict:
         "seed_count": int(ROBUSTNESS_BENCHMARK_SEED_COUNT),
         "seed_generator_seed": int(ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED),
         "resolved_seeds": [int(value) for value in ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS],
-        "strategy_trials_per_fold": int(ROBUSTNESS_BENCHMARK_STRATEGY_TRIALS_PER_FOLD),
+        # Optimizer budget is not benchmark-owned: always inherit the canonical rolling policy.
+        "strategy_trials_per_fold": int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT),
         "train_window_months": int(OUTER_ROLLING_TRAIN_WINDOW_MONTHS),
         "oos_horizon_months": int(OUTER_ROLLING_OOS_HORIZON_MONTHS),
         "seed_pairing": "same_seed_strategy_optimizer_and_all_dl_sources",

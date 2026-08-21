@@ -9810,3 +9810,10 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 診斷三：Min/P2 `_run_optimizer_arm()`歷史上在非canonical-current分支硬編`roos_base_best.json`，忽略requested `param_policy`，因此`base-finalists-agree`確有可能被誤綁base-best。改為由`PARAM_POLICY_SPECS`解析requested policy filename；canonical Min同樣按requested policy解析正式artifact。另強化canonical／benchmark artifact identity：即使錯誤payload被重新計算SHA並重新pin manifest，只要payload `selector`與宣稱policy不符即拒絕REUSE（canonical回報`POLICY_SELECTOR_MISMATCH`），使受影響舊工件可由Research readiness自動判stale並重建，不需人工刪整個`models/`。
 - Science不變：search space、optimizer seed、trials/fold、120M/12M schedule、OOS freeze、Rolling annual refit、`end_to_end_v1` benchmark四seed與300 trials/fold、MR-13E/K/M與交易語意均未改。本輪屬producer/policy identity與重複計算修正，不新增MR/SR/Cxx identity。
 - Decision：**POLICY_SEARCH_DEDUPED / DISABLED_ENSEMBLE_REPORTING_CORRECTED / MIN_POLICY_BINDING_FIXED / WRONG_SELECTOR_AUTO_REBUILD_ENABLED / FORMAL_RERUN_PENDING**。
+
+
+### 2026-08-21 — Robustness Strategy Optimizer SSOT correction
+
+- 修正Round 2殘留的`2021-only OOS + 2022+ Rolling tail stitch`：current canonical與benchmark策略參數都只建立一份`2021→latest`完整Rolling schedule；OOS只在replay讀取時作in-memory freeze，不再觸發第二次參數訓練或寫出frozen JSON。
+- Robustness benchmark只擁有固定seed題庫；`trials_per_fold`、train window、OOS cadence、search space與Optimizer parallel policy全部繼承canonical Optimizer。移除獨立`ROBUSTNESS_BENCHMARK_STRATEGY_TRIALS_PER_FOLD`數值owner。
+- 直接效果：benchmark策略參數訓練一次交給canonical rolling Optimizer建立全部年度fold，恢復Optimizer既有fold-level parallelism；不開TPE trial-level parallel，以保持各seed TPE trajectory可覆現。舊split producer若已有`initial_2021` Optimizer work，會先搬到新的full-schedule work root再交由canonical resume guard判斷可否接續，避免無條件丟棄已跑的2021 trials。

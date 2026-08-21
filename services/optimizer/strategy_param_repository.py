@@ -187,9 +187,10 @@ def build_strategy_parameter_benchmark_manifest_payload(
         **get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling"),
         "evaluation_mode": "schedule",
         "consumption_modes": ["oos", "rolling"],
+        # The benchmark overrides only the stochastic seed. Optimizer budget/window/cadence
+        # remain owned by the canonical optimizer training policy.
         "optimizer_seed": int(seed),
-        "trials_per_fold": int(benchmark_policy["strategy_trials_per_fold"]),
-        "benchmark_override": True,
+        "benchmark_seed_override": True,
     }
     return {
         "schema_type": "strategy_parameter_robustness_benchmark_artifact_set",

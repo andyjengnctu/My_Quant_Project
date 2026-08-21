@@ -31,7 +31,7 @@ from config.training_policy import (
     ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS,
     ROBUSTNESS_BENCHMARK_SEED_COUNT,
     ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
-    ROBUSTNESS_BENCHMARK_STRATEGY_TRIALS_PER_FOLD,
+    get_strategy_parameter_training_policy_snapshot,
     resolve_robustness_benchmark_seeds,
 )
 from core.strategy_comparison import (
@@ -292,7 +292,6 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "profile_id": "extending_window_oos",
         "suite_id": "extending_current",
         "benchmark_id": ROBUSTNESS_BENCHMARK_ID,
-        "strategy_trials_per_fold": ROBUSTNESS_BENCHMARK_STRATEGY_TRIALS_PER_FOLD,
         "gpu_train_workers": STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS,
         "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
         "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
@@ -317,7 +316,6 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "profile_id": "extending_window_rolling",
         "suite_id": "extending_current",
         "benchmark_id": ROBUSTNESS_BENCHMARK_ID,
-        "strategy_trials_per_fold": ROBUSTNESS_BENCHMARK_STRATEGY_TRIALS_PER_FOLD,
         "gpu_train_workers": STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS,
         "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
         "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
@@ -1169,8 +1167,12 @@ def get_strategy_multi_seed_robustness_settings(
             )
         ),
         strategy_trials_per_fold=(
-            None if raw.get("strategy_trials_per_fold") in (None, "")
-            else int(raw.get("strategy_trials_per_fold"))
+            int(get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling")["trials_per_fold"])
+            if raw.get("benchmark_id") not in (None, "")
+            else (
+                None if raw.get("strategy_trials_per_fold") in (None, "")
+                else int(raw.get("strategy_trials_per_fold"))
+            )
         ),
         gpu_train_workers=int(raw.get("gpu_train_workers", STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS)),
         cpu_replay_workers=int(raw.get("cpu_replay_workers", 0) or 0),

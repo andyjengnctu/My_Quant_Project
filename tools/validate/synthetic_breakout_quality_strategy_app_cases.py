@@ -723,10 +723,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         shared_best["action"] == "BUILD"
         and shared_agree["action"] == "BUILD"
-        and len(shared_search_events) == 2
+        and len(shared_search_events) == 1
         and shared_markers == [
-            "outputs/optimizer/strategy_param_schedule/full/shared_policy_search/initial_2021",
-            "outputs/optimizer/strategy_param_schedule/full/shared_policy_search/rolling_tail_2022_plus",
+            "outputs/optimizer/strategy_param_schedule/full/shared_policy_search/schedule_2021_forward",
         ]
         and str(shared_best_payload.get("selector")) == "base_finalist_best"
         and str(shared_agree_payload.get("selector")) == "base_finalists_agree"
@@ -749,7 +748,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         repaired_agree["action"] == "REBUILD"
         and str(repaired_agree_payload.get("selector")) == "base_finalists_agree"
-        and len(shared_search_events) == 2,
+        and len(shared_search_events) == 1,
     )
 
     import services.optimizer.outer_rolling_oos as outer_rolling_module
@@ -1696,7 +1695,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and benchmark_manifest["training_policy"]["optimizer_seed"] == benchmark_seed
         and benchmark_manifest["training_policy"]["trials_per_fold"]
             == int(robustness_settings.strategy_trials_per_fold)
-        and benchmark_manifest["training_policy"]["benchmark_override"] is True
+        and benchmark_manifest["training_policy"]["benchmark_seed_override"] is True
         and benchmark_manifest["artifacts"]["base_finalist_best"]["path"].startswith(
             "models/strategy_params/benchmark/"
         )
@@ -1815,10 +1814,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "robustness_round2_optimizer_producer_reuses_same_2021_member_and_refreshes_latest_coverage",
+        "robustness_optimizer_producer_uses_one_full_schedule_and_refreshes_latest_coverage",
         True,
         round2_oos["action"] == "BUILD"
-        and round2_rolling["action"] == "BUILD"
+        and round2_rolling["action"] == "REUSE"
         and round2_oos["initial_2021_member_sha256"] == round2_rolling["initial_2021_member_sha256"]
         and round2_oos_reuse["action"] == "REUSE"
         and round2_oos_extended["action"] == "BUILD"
@@ -1830,12 +1829,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         canonical_min_rolling["action"] == "BUILD"
         and round2_min_oos["action"] == "BUILD"
-        and round2_min_rolling["action"] == "BUILD"
+        and round2_min_rolling["action"] == "REUSE"
         and round2_min_oos["initial_2021_member_sha256"]
             == round2_min_rolling["initial_2021_member_sha256"]
-        and min_recovery_flags == [False, False, False, False]
+        and min_recovery_flags == [False, False]
         and "no_recovery" not in param_repository_service_source
-        and param_repository_service_source.count("recover_completed_strategy_compare=False") == 3
+        and param_repository_service_source.count("recover_completed_strategy_compare=False") == 2
         and "source_params_path=dependency_path" in preparation_source
         and "source_params_path=project_relative_display_path" not in preparation_source,
     )
@@ -5104,7 +5103,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and tuple(operational_robustness_active.resolved_seeds)
         == tuple(strategy_config.ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS)
         and operational_robustness_active.strategy_trials_per_fold
-        == strategy_config.ROBUSTNESS_BENCHMARK_STRATEGY_TRIALS_PER_FOLD
+        == strategy_config.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
         and strategy_config.get_strategy_runtime_integration_settings().selection_candidate_arm_id == "C42"
         and strategy_config.get_strategy_runtime_integration_settings().forward_candidate_arm_id == "C44",
     )
