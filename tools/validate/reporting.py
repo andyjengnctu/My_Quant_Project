@@ -24,7 +24,7 @@ def _sanitize_excel_dataframe(df):
             sanitized[column] = sanitized[column].map(_sanitize_excel_cell)
     return sanitized
 
-from core.console_report import project_relative_display_path
+from core.path_utils import project_relative_display_path
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json
 
 
@@ -116,11 +116,18 @@ def print_console_summary(
     print(f"有問題 synthetic case 數: {failed_synthetic_cases}")
     print(f"有問題 system 項目數: {failed_system_items}")
     project_root = Path(__file__).resolve().parents[2]
-    print(f"完整 CSV: {project_relative_display_path(csv_path, project_root=project_root)}")
-    print(
-        "問題 Excel: "
-        + (project_relative_display_path(xlsx_path, project_root=project_root) if xlsx_path else "無，因為沒有 failed 項")
+    csv_display = (
+        project_relative_display_path(csv_path, project_root=project_root)
+        if csv_path
+        else "無（formal PASS 不保存 full-scan CSV）"
     )
+    xlsx_display = (
+        project_relative_display_path(xlsx_path, project_root=project_root)
+        if xlsx_path
+        else "無，因為沒有 failed 項"
+    )
+    print(f"完整 CSV: {csv_display}")
+    print(f"問題 Excel: {xlsx_display}")
 
     if df_failed.empty:
         print("\n失敗項摘要：無")

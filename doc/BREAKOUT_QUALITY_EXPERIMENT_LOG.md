@@ -9787,3 +9787,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - `PORTFOLIO_EXPORT_REPORT_ARTIFACTS`則是上一輪B12將使用者可見path統一為`/`後，synthetic仍以Windows `Path.__str__()`的`\`比對；改成直接使用production同一canonical display helper產生expected path，不改production輸出。
 - GPT獨立回歸：import-cycle contract與portfolio export artifact contract皆0 FAIL；全專案AST與bare-except、critical-helper single-source、reporting contracts及Research/Strategy/PIT/Optimizer/Audit targeted contracts重新驗證。正式本機double check仍由使用者以`apps/run_bundle.py`執行。
 - Decision：**FORMAL_FAILURES_CLOSED / PATH_DISPLAY_SSOT_MOVED_TO_LEAF_CORE / PRODUCTION_RESEARCH_IDENTITY_UNCHANGED / FORMAL_RERUN_PENDING**。
+
+### 2026-08-21 — Formal consistency summary lifecycle closure：optional PASS artifacts + summary-before-render
+- 使用者以 `apps/run_bundle.py` 正式 double check 前版後，`consistency` 回報 `missing_summary_file`、meta quality 僅 `performance_required_step_summaries_present` FAIL。`consistency.log` 顯示實際一致性內容已完成：`PASS=5628 / SKIP=30 / FAIL=0`，崩潰發生在最終 console renderer。
+- 根因：formal shared run 在 `df_failed.empty` 時設計上不保存 full-scan CSV，因此 `csv_path=None` 是合法 PASS 狀態；B12 path SSOT 改造後 `print_console_summary()` 卻無條件把 `None` 傳給 `project_relative_display_path()`，觸發 `TypeError`。同時 `validate_consistency_summary.json` 原本排在 console renderer 之後才寫，故非核心的人讀輸出事故會連帶抹掉 machine-readable step summary。
+- 修正：`tools/validate/reporting.py` 對 optional CSV/XLSX 明確顯示「無」，並直接依賴 leaf SSOT `core.path_utils.project_relative_display_path`；`tools/validate/main.py` 改成先原子寫入 `validate_consistency_summary.json`，再渲染 console。正式 PASS 不為了滿足顯示而額外建立 full-scan CSV，維持既有 bundle 瘦身語意。
+- 防回歸：既有 `VALIDATE_CONSOLE_SUMMARY_REPORTING / T85 / B21` 增加 formal PASS `csv_path=None/xlsx_path=None` 案例；GPT 另以 isolated temp run 驗證 summary 先落盤且 renderer 可正常完成。沒有修改 consistency 計算、交易規則、Research orchestration、模型／策略 identity、seed、trial 或 benchmark science。
+- Decision：**FORMAL_SUMMARY_LIFECYCLE_FIXED / CONSISTENCY_COMPUTATION_UNCHANGED / FORMAL_RERUN_PENDING**。
+

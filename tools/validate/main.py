@@ -414,19 +414,8 @@ def main(argv=None, environ=None):
 
         elapsed_time = time.time() - start_time
 
-        print_console_summary(
-            df_results=df_results,
-            df_failed=df_failed,
-            df_summary=df_summary,
-            csv_path=csv_path,
-            xlsx_path=xlsx_path,
-            elapsed_time=elapsed_time,
-            real_summary_count=scan_stats["total_tickers"],
-            real_tickers=selected_tickers,
-            normalize_ticker_text=normalize_ticker_text,
-            max_console_fail_preview=MAX_CONSOLE_FAIL_PREVIEW,
-        )
-
+        # Persist the machine-readable step truth before rendering human console output.
+        # A non-critical reporting failure must not erase the formal step summary.
         write_local_regression_summary(
             dataset_profile_key=dataset_profile_key,
             dataset_source=dataset_source,
@@ -440,6 +429,19 @@ def main(argv=None, environ=None):
             output_dir=output_dir,
             real_data_coverage_ok=real_data_coverage_ok,
             peak_traced_memory_mb=tracker.snapshot_peak_mb(),
+        )
+
+        print_console_summary(
+            df_results=df_results,
+            df_failed=df_failed,
+            df_summary=df_summary,
+            csv_path=csv_path,
+            xlsx_path=xlsx_path,
+            elapsed_time=elapsed_time,
+            real_summary_count=scan_stats["total_tickers"],
+            real_tickers=selected_tickers,
+            normalize_ticker_text=normalize_ticker_text,
+            max_console_fail_preview=MAX_CONSOLE_FAIL_PREVIEW,
         )
 
         return 1 if ((not df_failed.empty) or (not real_data_coverage_ok)) else 0

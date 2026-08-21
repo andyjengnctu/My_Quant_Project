@@ -82,6 +82,36 @@ def validate_validate_console_summary_reporting_case(_base_params):
     add_check(results, "reporting_schema", case_id, "console_summary_has_fail_preview_sections", True, "失敗項前覽：" in console_text and "失敗真實股票前覽：" in console_text and "失敗 synthetic/system 前覽：" in console_text)
     add_check(results, "reporting_schema", case_id, "console_summary_has_fail_preview_details", True, "EV mismatch" in console_text and "Synthetic fail" in console_text)
 
+    pass_results = pd.DataFrame(
+        [{"ticker": "1101", "module": "stats", "metric": "win_rate", "status": "PASS", "passed": True, "expected": "58.3", "actual": "58.3", "note": ""}]
+    )
+    pass_failed = pass_results.iloc[0:0].copy()
+    pass_summary = pd.DataFrame([{"ticker": "1101", "synthetic": False}])
+    pass_console_text = _capture_output(
+        lambda: print_console_summary(
+            df_results=pass_results,
+            df_failed=pass_failed,
+            df_summary=pass_summary,
+            csv_path=None,
+            xlsx_path=None,
+            elapsed_time=1.23,
+            real_summary_count=1,
+            real_tickers=["1101"],
+            normalize_ticker_text=lambda value: str(value).strip(),
+            max_console_fail_preview=5,
+        )
+    )
+    add_check(
+        results,
+        "reporting_schema",
+        case_id,
+        "formal_pass_console_summary_accepts_missing_optional_artifacts",
+        True,
+        "完整 CSV: 無（formal PASS 不保存 full-scan CSV）" in pass_console_text
+        and "問題 Excel: 無，因為沒有 failed 項" in pass_console_text
+        and "失敗項摘要：無" in pass_console_text,
+    )
+
     summary["console_summary_lines"] = len([line for line in console_text.splitlines() if line.strip()])
     return results, summary
 
