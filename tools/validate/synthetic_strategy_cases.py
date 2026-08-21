@@ -21,6 +21,13 @@ from core.walk_forward_policy import build_optimizer_runtime_policy, load_walk_f
 from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, SYSTEM_SCORE_DISPLAY_MULTIPLIER, V16StrategyParams, format_system_score_for_display, get_score_mdd_denominator_epsilon, get_score_mdd_power
 from config.training_policy import FULL_END_YEAR, OOS_EVALUATION_END_YEAR
 from core.params_io import build_params_from_mapping, params_to_json_dict
+from core.strategy_param_artifacts import (
+    POLICY_FILENAME_BY_NAME,
+    STRATEGY_PARAM_EVALUATION_MODES,
+    STRATEGY_PARAM_FAMILIES,
+    STRATEGY_PARAM_SCHEDULE_MODES,
+    STRATEGY_PARAM_STATE_FILENAME_BY_NAME,
+)
 from core.portfolio_fast_data import build_score_single_stock_profile_fields
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score, calc_score_median_r_multiplier, calc_score_min_full_year_return_multiplier, calc_score_min_month_return_multiplier, calc_score_min_quarter_return_multiplier, calc_score_portfolio_return_multiplier, calc_score_positive_return_multiplier, calc_score_win_rate_multiplier
 from services.optimizer.objective_runner import run_optimizer_objective
@@ -135,36 +142,50 @@ def _extract_reference_param_payloads(payload):
     return members
 
 
-def _is_strategy_param_reference_payload(payload):
-    if not isinstance(payload, dict):
-        return False
-    canonical_fields = set(params_to_json_dict(V16StrategyParams()))
-    return any(
-        isinstance(member, dict) and bool(canonical_fields.intersection(member))
-        for member in _extract_reference_param_payloads(payload)
+def _strategy_param_reference_filenames():
+    """Return parameter artifact filenames derived from the canonical artifact SSOT."""
+
+    names = {
+        filename
+        for filename in STRATEGY_PARAM_STATE_FILENAME_BY_NAME.values()
+        if filename.endswith("_params.json")
+    }
+    for family in STRATEGY_PARAM_FAMILIES:
+        for evaluation_mode in STRATEGY_PARAM_EVALUATION_MODES:
+            for policy_filename in POLICY_FILENAME_BY_NAME.values():
+                if evaluation_mode in STRATEGY_PARAM_SCHEDULE_MODES:
+                    names.add(f"{family}_{policy_filename}")
+                else:
+                    names.add(f"{family}_{evaluation_mode}_{policy_filename}")
+    # Historical ROOS references remain schema-readable compatibility artifacts.
+    names.update(f"roos_{filename}" for filename in POLICY_FILENAME_BY_NAME.values())
+    return frozenset(names)
+
+
+def _is_strategy_param_reference_path(path):
+    name = Path(path).name
+    if name in _strategy_param_reference_filenames():
+        return True
+    family_pattern = "|".join(re.escape(value) for value in STRATEGY_PARAM_FAMILIES)
+    policy_stem_pattern = "|".join(
+        re.escape(Path(filename).stem)
+        for filename in POLICY_FILENAME_BY_NAME.values()
     )
+    return re.fullmatch(
+        rf"(?:{family_pattern})_(?:{policy_stem_pattern})_seed_[1-9][0-9]*\.json",
+        name,
+    ) is not None
 
 
 def _existing_shipped_reference_param_paths():
     root = Path("models") / "strategy_params"
     if not root.is_dir():
         return []
-    paths = []
-    for path in sorted(root.rglob("*.json")):
-        # Strategy-param directories also contain manifests, preflight records,
-        # work contracts and summaries.  Only validate JSON payloads that
-        # actually expose canonical strategy-parameter fields.
-        if "manifest" in path.stem.lower() or path.name.endswith("_summary.json"):
-            continue
-        if "backups" in path.parts:
-            continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            continue
-        if _is_strategy_param_reference_payload(payload):
-            paths.append(path)
-    return paths
+    return [
+        path
+        for path in sorted(root.rglob("*.json"))
+        if "backups" not in path.parts and _is_strategy_param_reference_path(path)
+    ]
 
 
 def _optimizer_export_canonical_decimal_places():
