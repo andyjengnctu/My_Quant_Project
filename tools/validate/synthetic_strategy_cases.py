@@ -135,20 +135,35 @@ def _extract_reference_param_payloads(payload):
     return members
 
 
+def _is_strategy_param_reference_payload(payload):
+    if not isinstance(payload, dict):
+        return False
+    canonical_fields = set(params_to_json_dict(V16StrategyParams()))
+    return any(
+        isinstance(member, dict) and bool(canonical_fields.intersection(member))
+        for member in _extract_reference_param_payloads(payload)
+    )
+
+
 def _existing_shipped_reference_param_paths():
     root = Path("models") / "strategy_params"
     if not root.is_dir():
         return []
     paths = []
     for path in sorted(root.rglob("*.json")):
-        # Manifests are repository metadata, not runtime strategy-param payloads.
-        # Flat SSOT names them <family>_manifest.json / <family>_<mode>_manifest.json
-        # and benchmark manifests include the seed, so exclude by semantic stem.
+        # Strategy-param directories also contain manifests, preflight records,
+        # work contracts and summaries.  Only validate JSON payloads that
+        # actually expose canonical strategy-parameter fields.
         if "manifest" in path.stem.lower() or path.name.endswith("_summary.json"):
             continue
         if "backups" in path.parts:
             continue
-        paths.append(path)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if _is_strategy_param_reference_payload(payload):
+            paths.append(path)
     return paths
 
 
