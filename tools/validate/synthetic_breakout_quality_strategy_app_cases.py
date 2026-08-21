@@ -1695,6 +1695,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             round2_root / "models" / "strategy_params" / "benchmark"
             / str(robustness_settings.benchmark_id) / "_optimizer_work"
         )
+        round2_benchmark_work_exists = round2_benchmark_work.is_dir()
+        round2_models_work_exists = round2_models_work.exists()
     check_true(
         "robustness_optimizer_producer_uses_one_full_schedule_and_refreshes_latest_coverage",
         round2_oos["action"] == "BUILD"
@@ -1702,8 +1704,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 and round2_oos["initial_2021_member_sha256"] == round2_rolling["initial_2021_member_sha256"]
                 and round2_oos_reuse["action"] == "REUSE"
                 and round2_oos_extended["action"] == "BUILD"
-                and round2_benchmark_work.is_dir()
-                and not round2_models_work.exists()
+                and round2_benchmark_work_exists
+                and not round2_models_work_exists
                 and str(dict(oos_extended_payload.get("meta") or {}).get("last_oos_date")) == "2026-04-30",
     )
     check_true(
