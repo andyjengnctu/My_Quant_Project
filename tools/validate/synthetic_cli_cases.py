@@ -330,6 +330,22 @@ def validate_dataset_cli_contract_case(_base_params):
         return 0
 
     breakout_quality_config = importlib.import_module("config.breakout_quality")
+    current_time_validation_profiles = sorted(
+        profile_name
+        for profile_name in breakout_quality_config.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+        if breakout_quality_config.get_continuous_ranker_execution_recipe(
+            profile_name
+        ).current_time_validation_authorized
+    )
+    check_true(
+        "breakout_quality_cli_fixture_has_current_time_validation_profile",
+        bool(current_time_validation_profiles),
+    )
+    current_time_validation_profile = (
+        current_time_validation_profiles[0]
+        if current_time_validation_profiles
+        else STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+    )
     configured_ranker_menu_label = "執行設定中的 Ranker 品質比較"
     with (
         patch.object(
@@ -340,7 +356,7 @@ def validate_dataset_cli_contract_case(_base_params):
         patch.object(
             breakout_quality_config,
             "BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE",
-            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+            current_time_validation_profile,
         ),
         patch.object(
             breakout_quality_config,
@@ -386,6 +402,11 @@ def validate_dataset_cli_contract_case(_base_params):
                 app_breakout_quality._interactive_model_research,
                 "apps/research.py model",
             )
+    # Only the OOS/PIT menu route above needs a current-authorized execution profile.
+    # Keep later target-builder fixtures on their isolated historical target identity.
+    model_research_settings = app_breakout_quality.get_breakout_quality_workflow_settings(
+        experiment_profile=STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+    )
     check("breakout_quality_model_research_menu_rc", 0, rc)
     check_true(
         "breakout_quality_continuous_model_research_menu_route_uses_isolated_profile",
@@ -721,7 +742,7 @@ def validate_dataset_cli_contract_case(_base_params):
         patch.object(
             breakout_quality_config,
             "BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE",
-            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+            current_time_validation_profile,
         ),
         patch.object(
             breakout_quality_config,
@@ -772,7 +793,11 @@ def validate_dataset_cli_contract_case(_base_params):
         (
                     dataset_prepare_rc,
                     [item[0] for item in dataset_prepare_commands],
-                    dataset_prepare_commands[0][1],
+                    (
+                        dataset_prepare_commands[0][1]
+                        if dataset_prepare_commands
+                        else None
+                    ),
                     [item[3] for item in dataset_prepare_commands],
                 ),
     )
