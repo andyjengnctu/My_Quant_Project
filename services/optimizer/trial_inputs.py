@@ -228,8 +228,6 @@ def _build_process_pool_executor(max_workers, raw_data_cache):
     return ProcessPoolExecutor(max_workers=max_workers, **executor_kwargs), pool_start_method, supports_initializer
 
 
-def _build_thread_pool_executor(max_workers):
-    return ThreadPoolExecutor(max_workers=max_workers), 'thread', False
 
 
 def worker_prep_batch(raw_data_cache, tickers, params, include_trade_logs=True, include_pit_stats_index=False, profile_enabled=True):

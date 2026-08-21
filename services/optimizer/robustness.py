@@ -55,9 +55,6 @@ from services.optimizer.study_utils import (
 
 
 
-def _get_progress_colors(session):
-    colors = getattr(session, "colors", None)
-    return colors if isinstance(colors, dict) else {}
 
 
 def _apply_session_fixed_params(session, params):

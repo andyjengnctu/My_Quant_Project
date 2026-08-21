@@ -37,12 +37,6 @@ _build_pit_history_snapshot = build_pit_history_snapshot
 
 
 
-def _resolve_active_tp_half(position):
-    if position.get('qty', 0) <= 0:
-        return np.nan
-    if position.get('sold_half', False):
-        return np.nan
-    return position.get('tp_half', np.nan)
 
 
 def _resolve_chart_tp_line(position):

@@ -348,17 +348,6 @@ def compute_daily_opportunity_target_batch(
     )
 
 
-def _daily_targets_for_positions(
-    frame: pd.DataFrame,
-    positions: np.ndarray,
-    *,
-    spec: StrategyAlignedContinuousTargetSpec,
-    target_id: str,
-) -> tuple[np.ndarray, np.ndarray]:
-    batch = compute_daily_opportunity_target_batch(
-        frame, positions, spec=spec, target_id=target_id
-    )
-    return batch.target_raw_r, batch.valid_mask
 
 
 

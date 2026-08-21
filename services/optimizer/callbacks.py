@@ -241,11 +241,6 @@ def _build_global_strategy_text() -> str:
     return format_global_strategy_text()
 
 
-def _calc_romd(ret_pct: float, mdd_pct: float) -> float:
-    mdd_pct = abs(float(mdd_pct))
-    if mdd_pct <= 0:
-        return 0.0
-    return float(ret_pct) / (mdd_pct + 0.0001)
 
 
 def _benchmark_final_equity(initial_capital: float, bm_return_pct: float) -> float:

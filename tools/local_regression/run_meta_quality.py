@@ -142,20 +142,6 @@ def _find_invalid_summary_table_order(rows: List[List[str]], *, id_col_idx: int,
     return invalid_rows
 
 
-def _extract_checklist_note_entries(note: str) -> List[str]:
-    note_entries: Set[str] = set()
-    for raw_token in re.findall(r"`([^`]+)`", note):
-        token = raw_token.strip().replace("\\", "/")
-        if not token:
-            continue
-        if token.startswith("validate_") or re.fullmatch(r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:py|md|json)", token):
-            note_entries.add(token)
-
-    note_without_backticks = re.sub(r"`[^`]+`", " ", note)
-    note_entries.update(re.findall(r"\bvalidate_[A-Za-z0-9_]+\b", note_without_backticks))
-    note_entries.update(re.findall(r"\b(?:apps|core|doc|tools)/[A-Za-z0-9_./-]+\.(?:py|md|json)\b", note_without_backticks))
-    note_entries.update(re.findall(r"\b[A-Za-z0-9_.-]+\.(?:py|md|json)\b", note_without_backticks))
-    return sorted(note_entries)
 
 
 def _normalize_checklist_test_entry_token(token: str) -> str | None:
@@ -500,8 +486,6 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     }
 
 
-def _extract_backticked_paths(text: str) -> List[str]:
-    return [match.strip() for match in re.findall(r"`([^`]+)`", text) if "/" in match or match.endswith('.py')]
 
 
 from tools.validate.meta_contracts import (

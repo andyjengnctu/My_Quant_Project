@@ -234,46 +234,10 @@ def _read_summary_value(result: dict, key: str, default=None):
     return default
 
 
-def _parsed_module_uses_numpy_alias(parsed_module: ast.AST) -> bool:
-    return any(
-        isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "np"
-        for node in ast.walk(parsed_module)
-    )
 
 
-def _parsed_module_declares_numpy_alias_import(parsed_module: ast.AST) -> bool:
-    for node in getattr(parsed_module, "body", []):
-        if isinstance(node, ast.Import):
-            if any(alias.name == "numpy" and alias.asname == "np" for alias in node.names):
-                return True
-        elif isinstance(node, ast.ImportFrom):
-            if node.module == "numpy" and any(alias.asname == "np" for alias in node.names):
-                return True
-    return False
 
 
-def _find_nonpositive_initial_capital_assignments(parsed_module: ast.AST):
-    hits = []
-    for node in ast.walk(parsed_module):
-        target = None
-        value = None
-        if isinstance(node, ast.Assign):
-            value = node.value
-            for candidate in node.targets:
-                if isinstance(candidate, ast.Attribute) and candidate.attr == "initial_capital":
-                    target = candidate
-                    break
-        elif isinstance(node, ast.AnnAssign):
-            value = node.value
-            if isinstance(node.target, ast.Attribute) and node.target.attr == "initial_capital":
-                target = node.target
-        if target is None or value is None:
-            continue
-        if not isinstance(value, ast.Constant) or not isinstance(value.value, (int, float)):
-            continue
-        if float(value.value) <= 0.0:
-            hits.append({"lineno": getattr(node, "lineno", None), "value": float(value.value)})
-    return hits
 
 
 def _parsed_module_declares_specific_from_import(parsed_module: ast.AST, *, module_name: str, imported_name: str) -> bool:

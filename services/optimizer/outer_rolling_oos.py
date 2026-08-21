@@ -1440,10 +1440,6 @@ def _color_numeric_text(text: str, value: float | int | None) -> str:
     return terminal_signal(str(text), signal_for_signed_value(_safe_float(value, 0.0)), enabled=True)
 
 
-def _format_score(value) -> str:
-    raw_value = _safe_float(value, 0.0)
-    display_value = scale_optimizer_score_for_display(raw_value)
-    return _color_numeric_text(f"{display_value:.{OOS_SCORE_DECIMALS}f}", raw_value)
 
 
 def _format_plain_score(value) -> str:
@@ -1483,14 +1479,6 @@ def _prompt_int(label: str, default: int, *, minimum: int | None = None) -> int:
     return int(value)
 
 
-def _prompt_str(label: str, default: str, *, allowed: tuple[str, ...] | None = None) -> str:
-    if not is_interactive_console():
-        return str(default)
-    raw = input(f"{label:<28} [{default}] : ").strip()
-    value = str(default if raw == "" else raw).strip().lower()
-    if allowed is not None and value not in allowed:
-        raise ValueError(f"{label} 必須是 {allowed}，收到: {value}")
-    return value
 
 
 def _extract_cli_value(argv, option_name: str) -> str:
@@ -1587,12 +1575,6 @@ def _display_month_period(value, end_value=None) -> str:
     return _display_month_value(text)
 
 
-def _compact_year_month_label(text: str) -> str:
-    value = str(text or "").strip()
-    match = re.fullmatch(r"(\d{4})-(\d{2})", value)
-    if not match:
-        return value
-    return f"{match.group(1)[2:]}-{match.group(2)}"
 
 
 def _display_short_date_value(value) -> str:
@@ -1889,13 +1871,6 @@ def _build_rolling_folds(config: OuterRollingConfig) -> list[dict]:
     return folds
 
 
-def _resolve_latest_year_from_dates(dates) -> int | None:
-    years = []
-    for raw_date in list(dates or []):
-        year = int(getattr(raw_date, "year", 0) or 0)
-        if year:
-            years.append(year)
-    return max(years) if years else None
 
 
 def _resolve_latest_date_from_csv_data_dir(data_dir: str) -> pd.Timestamp | None:
@@ -1931,9 +1906,6 @@ def _resolve_latest_date_from_csv_data_dir(data_dir: str) -> pd.Timestamp | None
     return latest_date
 
 
-def _resolve_latest_year_from_csv_data_dir(data_dir: str) -> int | None:
-    latest_date = _resolve_latest_date_from_csv_data_dir(data_dir)
-    return None if latest_date is None else int(latest_date.year)
 
 
 def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None, latest_date=None, default_trials: int, timing_mode: bool = False) -> OuterRollingConfig:
@@ -2035,11 +2007,6 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
         oos_horizon_months=int(oos_horizon_months),
     )
 
-def _selection_start_for_oos(config: OuterRollingConfig, oos_year: int) -> int:
-    # Backward-compatible helper for legacy year-mode callers.  The optimizer now
-    # uses fixed-window only, so selection start is derived from the OOS year and
-    # train window instead of an independent training-start setting.
-    return int(oos_year) - int(config.train_window_years)
 
 
 def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | None = None):
@@ -2494,99 +2461,12 @@ def _write_outer_timing_summary(
     return {"json": json_path, "csv": csv_path if (bool(write_files) and fold_timing_rows) else "", "resource_csv": resource_csv_path, "payload": payload}
 
 
-def _format_resource_usage_line(summary: dict, *, prefix: str = "📏 效能摘要:") -> str:
-    summary = dict(summary or {})
-    if not bool(summary.get("resource_sampling_available", False)):
-        err = str(summary.get("resource_sampling_error", "") or "unavailable")
-        return f"{prefix} {C_CYAN}CPU avg = N/A｜MEM avg = N/A｜HD avg = N/A｜resource={err}{C_RESET}"
-    cpu_avg = float(summary.get("cpu_avg_percent", 0.0) or 0.0)
-    mem_avg = float(summary.get("memory_avg_percent", 0.0) or 0.0)
-    hd_avg = float(summary.get("disk_load_avg_percent", summary.get("disk_busy_avg_percent", 0.0)) or 0.0)
-    return f"{prefix} {C_CYAN}CPU avg = {cpu_avg:.1f}%｜MEM avg = {mem_avg:.1f}%｜HD avg = {hd_avg:.1f}%{C_RESET}"
 
 
-def _timing_phase_summary_from_payload(payload: dict) -> dict:
-    payload = dict(payload or {})
-    summary = dict(payload.get("summary") or {})
-    folds = list(payload.get("folds") or [])
-    rolling_parallel = bool(summary.get("rolling_fold_parallel", False))
-    if rolling_parallel:
-        fold_wall = max((float(row.get("fold_total_sec", 0.0) or 0.0) for row in folds), default=0.0)
-    else:
-        fold_wall = float(summary.get("fold_total_sum_sec", 0.0) or 0.0)
-    total = float(summary.get("overall_sec", 0.0) or 0.0)
-    chain = float(summary.get("active_replay_chain_sec", 0.0) or 0.0)
-    raw = float(summary.get("raw_data_load_once_sec", 0.0) or 0.0)
-    report = float(summary.get("report_write_sec", 0.0) or 0.0)
-    other = max(0.0, total - fold_wall - chain - raw - report)
-    return {
-        "total_sec": total,
-        "fold_wall_sec": fold_wall,
-        "active_replay_chain_sec": chain,
-        "raw_data_load_once_sec": raw,
-        "report_write_sec": report,
-        "other_overhead_sec": other,
-    }
 
 
-def _format_timing_phase_line(payload: dict) -> str:
-    phases = _timing_phase_summary_from_payload(payload)
-    return (
-        f"{C_CYAN}⏱️ 耗時對帳｜"
-        f"total={_fmt_duration(phases['total_sec'])}｜"
-        f"folds={_fmt_duration(phases['fold_wall_sec'])}｜"
-        f"OOS_CHAIN={_fmt_duration(phases['active_replay_chain_sec'])}｜"
-        f"setup/收尾={_fmt_duration(phases['other_overhead_sec'])}{C_RESET}"
-    )
 
 
-def _print_outer_timing_summary(payload: dict, *, include_details: bool = True):
-    summary = dict((payload or {}).get("summary") or {})
-    print(
-        "📏 Outer rolling 測時摘要: "
-        f"{C_CYAN}總時間={float(summary.get('overall_sec', 0.0)):.3f}s{C_RESET}｜"
-        f"optimizer={float(summary.get('optimize_sum_sec', 0.0)):.3f}s｜"
-        f"local_review={float(summary.get('local_min_review_sum_sec', 0.0)):.3f}s｜"
-        f"平均={float(summary.get('avg_optimize_sec_per_completed_trial', 0.0)):.3f}s/completed trial"
-    )
-    if not bool(include_details):
-        return
-    print(
-        "📏 Cache / local-min 摘要｜"
-        f"prep_hit/miss/evict={int(summary.get('prep_cache_hits', 0) or 0)}/"
-        f"{int(summary.get('prep_cache_misses', 0) or 0)}/"
-        f"{int(summary.get('prep_cache_evictions', 0) or 0)}｜"
-        f"hit_rate={float(summary.get('prep_cache_hit_rate', 0.0)):.1%}｜"
-        f"parallel_cache_max={int(summary.get('parallel_worker_prep_cache_max_items', 0) or 0)}｜"
-        f"local_neighbors={int(summary.get('local_min_neighbors_evaluated', 0) or 0)}/"
-        f"{int(summary.get('local_min_neighbors_total', 0) or 0)}｜"
-        f"skip={int(summary.get('local_min_neighbors_skipped', 0) or 0)}｜"
-        f"order_hint={int(summary.get('local_min_order_score_prioritized', 0) or 0)}｜"
-        f"field_hint={int(summary.get('local_min_field_order_score_prioritized', 0) or 0)}｜"
-        f"early/prune={int(summary.get('local_min_early_stops', 0) or 0)}/"
-        f"{int(summary.get('local_min_selection_prunes', 0) or 0)}"
-    )
-    print(
-        "📏 Local-min dependency｜"
-        f"signal={int(summary.get('local_min_dependency_signal_evaluated', 0) or 0)}/"
-        f"{int(summary.get('local_min_dependency_signal_total', 0) or 0)}｜"
-        f"portfolio={int(summary.get('local_min_dependency_portfolio_evaluated', 0) or 0)}/"
-        f"{int(summary.get('local_min_dependency_portfolio_total', 0) or 0)}｜"
-        f"reuse_candidate={int(summary.get('local_min_signal_reuse_candidate_evaluated', 0) or 0)}/"
-        f"{int(summary.get('local_min_signal_reuse_candidate_total', 0) or 0)}｜"
-        f"fields={str(summary.get('local_min_dependency_field_evaluated_counts', '') or '-')}"
-    )
-    print(
-        "📏 Prep 細分摘要｜"
-        f"calls={int(summary.get('prep_call_count', 0) or 0)}｜"
-        f"wall={float(summary.get('prep_wall_sum_sec', 0.0) or 0.0):.3f}s｜"
-        f"signals={float(summary.get('prep_generate_signals_sum_sec', 0.0) or 0.0):.3f}s｜"
-        f"backtest={float(summary.get('prep_run_backtest_sum_sec', 0.0) or 0.0):.3f}s｜"
-        f"pack={float(summary.get('prep_to_dict_sum_sec', 0.0) or 0.0):.3f}s｜"
-        f"collect={float(summary.get('prep_executor_collect_sum_sec', 0.0) or 0.0):.3f}s｜"
-        f"merge={float(summary.get('prep_merge_sum_sec', 0.0) or 0.0):.3f}s｜"
-        f"feature_hit={float(summary.get('prep_feature_bank_hit_rate', 0.0) or 0.0):.1%}"
-    )
 
 
 
@@ -2759,8 +2639,6 @@ def _rank_retention_finalist_items(finalists: list[dict]) -> list[dict]:
     )
 
 
-def _is_base_finalists_agree_policy(policy_name: str) -> bool:
-    return str(policy_name) == BASE_FINALISTS_AGREE_POLICY_NAME
 
 
 def _is_local_finalists_agree_policy(policy_name: str) -> bool:
@@ -2775,8 +2653,6 @@ def _is_finalists_agree_policy(policy_name: str) -> bool:
     return str(policy_name) in set(FINALISTS_AGREE_POLICY_NAMES)
 
 
-def _is_base_finalist_best_policy(policy_name: str) -> bool:
-    return str(policy_name) == BASE_FINALIST_BEST_POLICY_NAME
 
 
 def _is_local_finalist_best_policy(policy_name: str) -> bool:
@@ -2907,16 +2783,10 @@ def _finalists_agree_metadata(finalists: list[dict], *, policy_name: str) -> dic
     return metadata
 
 
-def _base_finalists_agree_metadata(finalists: list[dict]) -> dict:
-    return _finalists_agree_metadata(finalists, policy_name=BASE_FINALISTS_AGREE_POLICY_NAME)
 
 
-def _local_finalists_agree_metadata(finalists: list[dict]) -> dict:
-    return _finalists_agree_metadata(finalists, policy_name=LOCAL_FINALISTS_AGREE_POLICY_NAME)
 
 
-def _retention_finalists_agree_metadata(finalists: list[dict]) -> dict:
-    return _finalists_agree_metadata(finalists, policy_name=RETENTION_FINALISTS_AGREE_POLICY_NAME)
 
 
 def _build_finalists_agree_member_payloads(
@@ -2966,64 +2836,12 @@ def _build_finalists_agree_member_payloads(
     return renumber_seed_ensemble_members(members)
 
 
-def _build_base_finalists_agree_member_payloads(
-    finalists: list[dict],
-    *,
-    member_index: int = 1,
-    seed: int | None = None,
-    local_rank_map: dict[int, int] | None = None,
-    retention_rank_map: dict[int, int] | None = None,
-) -> list[dict]:
-    return _build_finalists_agree_member_payloads(
-        finalists,
-        policy_name=BASE_FINALISTS_AGREE_POLICY_NAME,
-        member_index=member_index,
-        seed=seed,
-        local_rank_map=local_rank_map,
-        retention_rank_map=retention_rank_map,
-    )
 
 
-def _build_local_finalists_agree_member_payloads(
-    finalists: list[dict],
-    *,
-    member_index: int = 1,
-    seed: int | None = None,
-    local_rank_map: dict[int, int] | None = None,
-    retention_rank_map: dict[int, int] | None = None,
-) -> list[dict]:
-    return _build_finalists_agree_member_payloads(
-        finalists,
-        policy_name=LOCAL_FINALISTS_AGREE_POLICY_NAME,
-        member_index=member_index,
-        seed=seed,
-        local_rank_map=local_rank_map,
-        retention_rank_map=retention_rank_map,
-    )
 
 
-def _build_retention_finalists_agree_member_payloads(
-    finalists: list[dict],
-    *,
-    member_index: int = 1,
-    seed: int | None = None,
-    local_rank_map: dict[int, int] | None = None,
-    retention_rank_map: dict[int, int] | None = None,
-) -> list[dict]:
-    return _build_finalists_agree_member_payloads(
-        finalists,
-        policy_name=RETENTION_FINALISTS_AGREE_POLICY_NAME,
-        member_index=member_index,
-        seed=seed,
-        local_rank_map=local_rank_map,
-        retention_rank_map=retention_rank_map,
-    )
 
 
-def _annotate_base_finalists_agree_selection(item: dict, finalists: list[dict]) -> dict:
-    selected = dict(item)
-    selected.update(_base_finalists_agree_metadata(finalists))
-    return selected
 
 
 def _safe_float_for_finalists_agree_sort(value, default: float = INVALID_TRIAL_VALUE) -> float:
@@ -3346,26 +3164,6 @@ def _finalists_agree_metadata_keys() -> tuple[str, ...]:
         "retention_agree_min_agree_requested",
     )
 
-def _policy_description(policy_name: str) -> str:
-    if _is_base_finalist_best_policy(policy_name):
-        return "Select the single finalist with the best base rank/score across available seeds."
-    if _is_local_finalist_best_policy(policy_name):
-        return "Select the single finalist with the best local_min_score across available seeds."
-    if _is_retention_finalist_best_policy(policy_name):
-        return "Select the single finalist with the best retention across available seeds."
-    if _is_base_finalists_agree_policy(policy_name):
-        return "Select the seed whose finalists have the highest summed base_score, then replay that seed's finalists as an agree ensemble."
-    if _is_local_finalists_agree_policy(policy_name):
-        return "Select the seed whose finalists have the highest summed local_min_score, then replay that seed's finalists as an agree ensemble."
-    if _is_retention_finalists_agree_policy(policy_name):
-        return "Select the seed whose finalists have the highest summed retention, then replay that seed's finalists as an agree ensemble."
-    if policy_name == "base":
-        return "Replay the seed ensemble built from each seed's base representative member."
-    if policy_name == "local":
-        return "Replay the seed ensemble built from each seed's local representative member."
-    if policy_name == "retention":
-        return "Replay the seed ensemble built from each seed's retention representative member."
-    return f"Use {policy_name} params for each OOS year."
 
 
 def _build_policy_schedule_entry(
@@ -3565,10 +3363,6 @@ def _extract_period_metrics(report: dict) -> dict:
     }
 
 
-def _format_oos_delta(reference_score, selected_score) -> str:
-    ref = _safe_float(reference_score, 0.0)
-    selected = _safe_float(selected_score, 0.0)
-    return f"{ref:.{OOS_SCORE_DECIMALS}f} ({selected - ref:+.{OOS_SCORE_DECIMALS}f})"
 
 
 def _evaluate_finalist_ensemble_oos_metrics(*, session, item: dict, policy_name: str, oos_year: int, oos_start_date: str | None = None, oos_end_date: str | None = None) -> dict:
@@ -3762,18 +3556,8 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
     }
 
 
-def _compound_return_pct(return_pcts: list[float]) -> float:
-    equity = 1.0
-    for value in list(return_pcts or []):
-        equity *= 1.0 + float(value) / 100.0
-    return (equity - 1.0) * 100.0
 
 
-def _average_float(values: list[float]) -> float:
-    nums = [float(value) for value in list(values or [])]
-    if not nums:
-        return 0.0
-    return sum(nums) / float(len(nums))
 
 
 def _normalize_equity_curve_rows(curve_rows: list[dict]) -> list[dict]:
@@ -5413,70 +5197,10 @@ def _print_completed_results(rows: list[dict]):
     print("\n" + _render_optimizer_results_tables(rows, color=True, include_chain=True))
 
 
-def _flatten_policy_for_csv(row: dict, policy_name: str) -> dict:
-    policy = dict(row.get(policy_name) or {})
-    best = float(row.get("best_finalist_oos_score", 0.0))
-    bench = float(row.get("benchmark_oos_score", 0.0))
-    if not _policy_is_available(policy):
-        return {
-            f"{policy_name}_available": False,
-            f"{policy_name}_rank_1_trial": policy.get("rank_1_trial"),
-            f"{policy_name}_rank_1_oos": "",
-            f"{policy_name}_rank_1_plain_romd": "",
-            f"{policy_name}_rank_1_return_pct": "",
-            f"{policy_name}_rank_1_mdd_pct": "",
-            f"{policy_name}_rank_1_trades": "",
-            f"{policy_name}_best_oos": best,
-            f"{policy_name}_best_gap": "",
-            f"{policy_name}_0050_oos": bench,
-            f"{policy_name}_0050_gap": "",
-            f"{policy_name}_0050_plain_romd_gap": "",
-        }
-    rank_1 = float(policy.get("rank_1_oos", 0.0))
-    rank_1_plain_romd = _policy_plain_romd_score(policy)
-    return {
-        f"{policy_name}_available": True,
-        f"{policy_name}_rank_1_trial": policy.get("rank_1_trial"),
-        f"{policy_name}_rank_1_oos": rank_1,
-        f"{policy_name}_rank_1_plain_romd": rank_1_plain_romd,
-        f"{policy_name}_rank_1_return_pct": float(policy.get("rank_1_return_pct", 0.0)),
-        f"{policy_name}_rank_1_mdd_pct": float(policy.get("rank_1_mdd_pct", 0.0)),
-        f"{policy_name}_rank_1_trades": int(policy.get("rank_1_trades", 0) or 0),
-        f"{policy_name}_best_oos": best,
-        f"{policy_name}_best_gap": rank_1 - best,
-        f"{policy_name}_0050_oos": bench,
-        f"{policy_name}_0050_gap": rank_1 - bench,
-        f"{policy_name}_0050_plain_romd_gap": rank_1_plain_romd - bench,
-    }
 
 
-def _flatten_row_for_csv(row: dict) -> dict:
-    flat = {
-        "fold": row.get("fold"),
-        "selection": row.get("selection_period"),
-        "oos_year": row.get("oos_year"),
-        "oos_period": row.get("oos_period"),
-        "selection_start_date": row.get("selection_start_date"),
-        "selection_end_date": row.get("selection_end_date"),
-        "oos_start_date": row.get("oos_start_date"),
-        "oos_end_date": row.get("oos_end_date"),
-        "best_finalist_return_pct": float(row.get("best_finalist_return_pct", 0.0)),
-        "benchmark_return_pct": float(row.get("benchmark_return_pct", 0.0)),
-    }
-    for policy_name in REPORT_POLICY_NAMES:
-        flat.update(_flatten_policy_for_csv(row, policy_name))
-    flat["elapsed"] = _fmt_duration(row.get("elapsed_sec", 0.0))
-    return flat
 
 
-def _build_policies_schedule(rows: list[dict]) -> dict:
-    policies: dict[str, dict] = {}
-    for policy_name in REPORT_POLICY_NAMES:
-        policies[policy_name] = {
-            "description": _policy_description(policy_name),
-            "schedule": [dict(row.get("policy_schedules", {}).get(policy_name) or {}) for row in rows if row.get("policy_schedules", {}).get(policy_name)],
-        }
-    return policies
 
 
 def _build_seed_ensemble_policy_payload() -> dict:
@@ -5490,9 +5214,6 @@ def _build_seed_ensemble_policy_payload() -> dict:
 _build_random_seed_ensemble_policy_payload = _build_seed_ensemble_policy_payload
 
 
-def _resolve_policy_min_agree_for_member_count(policy_name: str | None, member_count: int) -> int | str:
-    _ = (policy_name, member_count)
-    return "auto"
 
 
 def _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date: dict, *, policy_name: str | None = None) -> dict:
@@ -6441,14 +6162,6 @@ def read_optimizer_seed_progresses_from_log_paths(paths) -> dict[int, dict]:
     return latest
 
 
-def _parallel_progress_pct(done, total) -> float:
-    try:
-        total_float = float(total)
-        if total_float <= 0.0:
-            return 0.0
-        return 100.0 * float(done) / total_float
-    except (TypeError, ValueError, ZeroDivisionError):
-        return 0.0
 
 
 def _fmt_seconds_3(seconds) -> str:
@@ -7022,15 +6735,6 @@ def build_optimizer_seed_ensemble_live_lines(
     return lines
 
 
-def _seed_progress_key_from_event(event: dict) -> tuple[int, int] | None:
-    try:
-        fold_idx = int(event.get("fold_idx", 0) or 0)
-        seed_idx = int(event.get("seed_ensemble_member_index", 0) or 0)
-    except (TypeError, ValueError):
-        return None
-    if fold_idx <= 0 or seed_idx <= 0:
-        return None
-    return (fold_idx, seed_idx)
 
 
 def _read_latest_parallel_fold_seed_progresses(path: str) -> dict[int, dict]:
@@ -7388,83 +7092,8 @@ def render_optimizer_seed_progress_line(*, context: dict, progress: dict) -> str
     return _format_seed_ensemble_progress_line(dict(context or {}), dict(progress or {}))
 
 
-class _ParallelFoldProgressBoard:
-    def __init__(self, tasks: list[dict]):
-        self.tasks = sorted(list(tasks or []), key=lambda item: int(item.get("fold_idx", 0) or 0))
-        self.lines: dict[int, str] = {}
-        self.rendered_lines = 0
-        self.inline = stdout_supports_inline_progress()
-        self.started_at = time.perf_counter()
-
-    def update(self, *, pending: set, future_map: dict, completed_rows: list[dict], force: bool = False) -> None:
-        pending_tasks = {id(future_map[future]): future_map[future] for future in pending if future in future_map}
-        completed_oos = {int(normalize_optimizer_seed_ensemble_fold_row(row).get("oos_year", 0) or 0) for row in list(completed_rows or [])}
-        new_lines: dict[int, str] = {}
-        for task in self.tasks:
-            fold_idx = int(task.get("fold_idx", 0) or 0)
-            log_path = str(task.get("log_path") or "")
-            progress = _read_latest_parallel_fold_progress(log_path)
-            log_status = _latest_parallel_fold_log_status(log_path)
-            if int(task.get("oos_year", 0) or 0) in completed_oos and not progress:
-                progress = {"stage": "DONE", "status": "done"}
-            new_lines[fold_idx] = _format_parallel_fold_progress_line(task, progress, log_status=log_status)
-        if not force and new_lines == self.lines:
-            return
-        self.lines = new_lines
-        _ = pending
-        header = (
-            f"⏱️ Rolling fold parallel | completed={len(completed_rows)}/{len(self.tasks)} | "
-            f"total_time={_fmt_duration(time.perf_counter() - self.started_at)}"
-        )
-        output_lines = [f"{C_CYAN}{header}{C_RESET}"] + [f"{C_GRAY}  {line}{C_RESET}" for _, line in sorted(new_lines.items())]
-        if self.inline:
-            if self.rendered_lines > 0:
-                sys.stdout.write(f"\x1b[{self.rendered_lines}F")
-            for line in output_lines:
-                sys.stdout.write("\r" + line + "\x1b[K\n")
-            sys.stdout.flush()
-            self.rendered_lines = len(output_lines)
-        else:
-            print("\n".join(output_lines), flush=True)
-
-    def close(self) -> None:
-        if self.inline and self.rendered_lines > 0:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            self.rendered_lines = 0
 
 
-class _ParallelCompletedResultsBoard:
-    def __init__(self):
-        self.rendered_lines = 0
-        self.inline = stdout_supports_inline_progress()
-
-    def render(self, rows: list[dict]) -> None:
-        completed = sorted((normalize_optimizer_seed_ensemble_fold_row(item) for item in list(rows or [])), key=optimizer_seed_ensemble_row_sort_key)
-        if not completed:
-            return
-        table = _render_optimizer_results_tables(completed, color=True, include_chain=False, include_oos_avg=True)
-        if not table:
-            return
-        table_lines = table.splitlines()
-        if table_lines and table_lines[0].strip().upper() == "ROLLING MONTHLY OOS RESULTS":
-            table_lines = table_lines[1:]
-        lines = table_lines
-        if self.inline:
-            if self.rendered_lines > 0:
-                sys.stdout.write(f"\x1b[{self.rendered_lines}F")
-            for line in lines:
-                sys.stdout.write("\r" + line + "\x1b[K\n")
-            sys.stdout.flush()
-            self.rendered_lines = len(lines)
-        else:
-            print("\n".join(lines), flush=True)
-
-    def close(self) -> None:
-        if self.inline and self.rendered_lines > 0:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            self.rendered_lines = 0
 
 
 class _ParallelFoldLiveBoard:
@@ -7940,24 +7569,6 @@ def _build_members_from_seed_rows_for_policy(seed_rows: list[dict], policy_name:
     return normalized
 
 
-def _build_members_from_seed_rows_for_best(seed_rows: list[dict]) -> list[dict]:
-    members: list[dict] = []
-    for row in list(seed_rows or []):
-        params_payload = dict(row.get("best_finalist_params") or {})
-        if not params_payload:
-            continue
-        seed = _extract_seed_from_policy_schedules(row)
-        member = {
-            "member_index": int(len(members) + 1),
-            "seed": seed,
-            "selected_trial": row.get("best_finalist_trial"),
-            "params": params_payload,
-            "oos_score": row.get("best_finalist_oos_score"),
-            "return_pct": row.get("best_finalist_return_pct"),
-            "mdd_pct": row.get("best_finalist_mdd_pct"),
-        }
-        members.append(member)
-    return normalize_seed_ensemble_members(members)
 
 
 def _build_single_period_ensemble_payload(*, members: list[dict], effective_start: str, effective_end: str, oos_year: int, policy_name: str | None = None, raw_universe_required_min_rows=None) -> dict:
@@ -7988,41 +7599,6 @@ def _build_single_period_ensemble_payload(*, members: list[dict], effective_star
     }
 
 
-def _evaluate_period_ensemble_members(
-    *,
-    selected_data_dir: str,
-    members: list[dict],
-    oos_year: int,
-    oos_start_date: str,
-    oos_end_date: str,
-    max_positions: int,
-    enable_rotation: bool,
-    raw_universe_required_min_rows=None,
-) -> dict:
-    from services.portfolio_replay import run_portfolio_simulation_with_param_ensemble
-
-    payload = _build_single_period_ensemble_payload(
-        members=members,
-        effective_start=str(oos_start_date),
-        effective_end=str(oos_end_date),
-        oos_year=int(oos_year),
-        raw_universe_required_min_rows=raw_universe_required_min_rows,
-    )
-    result = run_portfolio_simulation_with_param_ensemble(
-        selected_data_dir,
-        payload,
-        max_positions=int(max_positions),
-        enable_rotation=bool(enable_rotation),
-        start_year=int(pd.Timestamp(oos_start_date).year),
-        end_year=int(pd.Timestamp(oos_end_date).year),
-        start_date=str(oos_start_date),
-        end_date=str(oos_end_date),
-        benchmark_ticker="0050",
-        verbose=False,
-        use_prepared_cache=False,
-        write_prepared_cache=False,
-    )
-    return _extract_active_replay_metrics(result)
 
 
 def _build_policy_replay_context(

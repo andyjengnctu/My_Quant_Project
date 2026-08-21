@@ -55,18 +55,6 @@ def _finish_static_replay_progress(progress_state: dict | None) -> None:
     progress_state["width"] = 0
 
 
-def _build_static_policy_oos_row_from_metrics(candidate_metrics: dict, benchmark_metrics: dict) -> dict:
-    candidate_score = _safe_float(candidate_metrics.get("pf_romd", 0.0))
-    benchmark_score = _safe_float(benchmark_metrics.get("pf_romd", 0.0))
-    return {
-        "available": True,
-        "rank_1_trial": None,
-        "rank_1_oos": float(candidate_score),
-        "rank_1_return_pct": _safe_float(candidate_metrics.get("pf_return", 0.0)),
-        "rank_1_mdd_pct": _safe_float(candidate_metrics.get("pf_mdd", 0.0)),
-        "rank_1_trades": _safe_int(candidate_metrics.get("pf_trades", 0)),
-        "benchmark_0050_gap": float(candidate_score) - float(benchmark_score),
-    }
 
 
 def _build_static_policy_oos_row_from_active_metrics(metrics: dict, *, benchmark_score: float) -> dict:

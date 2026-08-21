@@ -1102,13 +1102,6 @@ def _dataset_rebuild_reasons(
     return reasons
 
 
-def _dataset_matches_request(filter_id: str, dataset: str, *, max_tickers: int) -> bool:
-    mode, _reasons = _dataset_refresh_plan(
-        filter_id,
-        dataset,
-        max_tickers=max_tickers,
-    )
-    return mode == "none"
 
 
 def _parse_workflow_args(argv=None, *, program_name: str = "apps/research.py model") -> argparse.Namespace:
@@ -1863,21 +1856,6 @@ def _interactive_train(program_name: str) -> int:
     )
 
 
-def _interactive_export_research(program_name: str) -> int:
-    filter_id = _policy_filter_id()
-    _print_policy_defaults(filter_id)
-    return _run_command(
-        "export-scores",
-        [
-            "--filter-id",
-            filter_id,
-            "--experiment-profile",
-            BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-            "--scope",
-            "research",
-        ],
-        program_name=program_name,
-    )
 
 
 def _interactive_report(program_name: str) -> int:
@@ -1900,97 +1878,10 @@ def _interactive_report(program_name: str) -> int:
     )
 
 
-def _interactive_evaluate(program_name: str) -> int:
-    filter_id = _policy_filter_id()
-    _print_policy_defaults(filter_id)
-    split = _prompt_choice(
-        "Split：[T] Train [V] Validation [S] Selection [O] OOS [A] All",
-        "S",
-        {
-            "t": "train",
-            "train": "train",
-            "v": "validation",
-            "validation": "validation",
-            "s": "selection",
-            "selection": "selection",
-            "o": "oos",
-            "oos": "oos",
-            "a": "all",
-            "all": "all",
-        },
-    )
-    if split == "oos" and not _prompt_bool(
-        "確認執行最終 OOS；結果不得用於回頭調參",
-        False,
-    ):
-        print("已取消。")
-        return 0
-    return _run_command(
-        "evaluate",
-        [
-            "--filter-id",
-            filter_id,
-            "--experiment-profile",
-            BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-            "--split",
-            split,
-        ],
-        program_name=program_name,
-    )
 
 
-def _interactive_export_forward_oos(program_name: str) -> int:
-    filter_id = _policy_filter_id()
-    _print_policy_defaults(filter_id)
-    if not _prompt_bool("確認更新正式 canonical scores.csv", False):
-        print("已取消。")
-        return 0
-    return _run_command(
-        "export-scores",
-        [
-            "--filter-id",
-            filter_id,
-            "--experiment-profile",
-            BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-            "--scope",
-            "forward_oos",
-        ],
-        program_name=program_name,
-    )
 
 
-def _interactive_regime_audit(program_name: str) -> int:
-    from tools.audit.breakout_quality.regime import (
-        DEFAULT_FOCUS_YEAR,
-        DEFAULT_MIN_SELECTION_GROUPS,
-        DEFAULT_MIN_SUPPORT_SHARE_RATIO,
-    )
-
-    filter_id = _policy_filter_id()
-    _print_policy_defaults(filter_id)
-    focus_year = _prompt_int("歸因年度", DEFAULT_FOCUS_YEAR, minimum=1900)
-    print(
-        "使用診斷預設："
-        f"min_selection_groups={int(DEFAULT_MIN_SELECTION_GROUPS)}、"
-        f"min_support_share_ratio={float(DEFAULT_MIN_SUPPORT_SHARE_RATIO):g}；"
-        "只作研究歸因，不建立runtime regime gate。"
-    )
-    return _run_command(
-        "regime-audit",
-        [
-            "--filter-id",
-            filter_id,
-            "--experiment-profile",
-            BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-            "--focus-year",
-            str(int(focus_year)),
-            "--min-selection-groups",
-            str(int(DEFAULT_MIN_SELECTION_GROUPS)),
-            "--min-support-share-ratio",
-            str(float(DEFAULT_MIN_SUPPORT_SHARE_RATIO)),
-        ],
-        program_name=program_name,
-    )
 
 
 
@@ -2165,52 +2056,6 @@ def _print_workflow_status(settings=None) -> None:
     print(render_table(("狀態", "項目"), status_rows))
 
 
-def _interactive_existing_binary_validation(
-    program_name: str,
-    *,
-    workflow_settings,
-) -> int:
-    filter_id = normalize_filter_id(workflow_settings.filter_id)
-    request = _policy_train_settings(filter_id)
-    request.experiment_profile = str(workflow_settings.experiment_profile)
-    request.seed = int(workflow_settings.seed)
-    _print_policy_defaults(filter_id, request)
-    print(
-        "\n即將使用既有模型：更新 research scores → OOS 簡易模型報表 "
-        "→ export forward-OOS scores"
-    )
-    if not _prompt_bool("確認開始", True):
-        print("已取消。")
-        return 0
-    print("\n[1/3] 由既有模型更新 research scores")
-    rc = _run_command(
-        "export-scores",
-        _build_export_score_argv(request, scope="research"),
-        program_name=program_name,
-    )
-    if rc != 0:
-        return int(rc)
-    print("\n[2/3] 顯示 OOS 簡易模型報表")
-    rc = _run_command(
-        "report",
-        [
-            "--filter-id",
-            filter_id,
-            "--experiment-profile",
-            str(workflow_settings.experiment_profile),
-            "--include-oos",
-        ],
-        program_name=program_name,
-    )
-    if rc != 0:
-        return int(rc)
-    return _run_binary_post_train_validation(
-        request,
-        workflow_settings=workflow_settings,
-        program_name=program_name,
-        step_start=3,
-        total_steps=3,
-    )
 
 
 def _trade_path_train_request(workflow_settings) -> argparse.Namespace:
@@ -2759,10 +2604,6 @@ def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
     )
 
 
-def _continuous_pit_gate_batch_for_active(settings):
-    gate = get_breakout_quality_continuous_ranker_pit_gate_settings()
-    profiles = tuple(profile for _model_id, profile in gate.model_profiles)
-    return gate if settings.experiment_profile in profiles else None
 
 
 def _run_continuous_pit_profile(
@@ -2841,114 +2682,10 @@ def _interactive_continuous_stability_validation(program_name: str, settings) ->
     )
 
 
-def _fmt_pit_metric(value, *, percent: bool = False) -> str:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return "-"
-    if not math.isfinite(number):
-        return "-"
-    return f"{number * 100:.2f}%" if percent else f"{number:.4f}"
 
 
-def _render_continuous_pit_gate_comparison(model_profiles) -> None:
-    rows = []
-    for model_id, profile_name in model_profiles:
-        settings = get_breakout_quality_workflow_settings(
-            experiment_profile=profile_name
-        )
-        audit_path = resolve_selection_point_in_time_audit_json_path(
-            PROJECT_ROOT,
-            settings.filter_id,
-            settings.model_architecture,
-            settings.experiment_profile,
-        )
-        if not audit_path.is_file():
-            rows.append((model_id, "MISSING", "-", "-", "-", "-", "-", "-", "-"))
-            continue
-        payload = json.loads(audit_path.read_text(encoding="utf-8"))
-        gate = derive_point_in_time_model_validation_gate(payload)
-        metrics = dict(payload.get("metrics") or {})
-        primary_scope = str(gate.get("primary_metric_scope") or "all_valid_target")
-        primary = dict(metrics.get(primary_scope) or {})
-        breakout = dict(metrics.get("breakout_candidate_target") or {})
-        topk = dict(primary.get("top_k_quality") or {})
-        breakout_topk = dict(breakout.get("top_k_quality") or {})
-        rows.append(
-            (
-                model_id,
-                str(gate.get("status") or "-"),
-                _fmt_pit_metric(primary.get("mean_daily_spearman")),
-                _fmt_pit_metric(primary.get("global_spearman")),
-                _fmt_pit_metric(primary.get("pairwise_concordance"), percent=True),
-                _fmt_pit_metric(topk.get("top_k_raw_target_lift")),
-                _fmt_pit_metric(topk.get("boundary_raw_target_gap")),
-                _fmt_pit_metric(breakout.get("mean_daily_spearman")),
-                _fmt_pit_metric(breakout_topk.get("top_k_raw_target_lift")),
-            )
-        )
-    print("\n" + render_title("Selection PIT Model Gate Comparison"))
-    print(
-        render_table(
-            (
-                "Model",
-                "Gate",
-                "All Daily rho",
-                "All Global rho",
-                "All Pair",
-                "All Top-K Lift",
-                "All Boundary gap",
-                "Breakout Daily rho",
-                "Breakout Top-K Lift",
-            ),
-            rows,
-        )
-    )
-    print("比較表只並列canonical PIT audit原始指標；不建立加權總分、不挑seed。")
 
 
-def _interactive_continuous_pit_gate_batch(program_name: str, gate) -> int:
-    print("\n" + render_title("Selection PIT Model Gate Batch"))
-    reference = get_breakout_quality_workflow_settings(
-        experiment_profile=gate.model_profiles[0][1]
-    )
-    print(
-        render_key_values(
-            (
-                ("Models", ", ".join(model_id for model_id, _ in gate.model_profiles)),
-                ("Seed", gate.seed),
-                (
-                    "PIT period",
-                    f"{'auto（最早合法）' if str(gate.point_in_time_score_start_date).lower() == 'auto' else gate.point_in_time_score_start_date} ～ "
-                    f"{gate.point_in_time_score_end_date or 'Selection end'}",
-                ),
-                (
-                    "Fold／Validation",
-                    f"{gate.point_in_time_fold_months}／"
-                    f"{gate.point_in_time_inner_validation_months} months",
-                ),
-                ("Target", reference.continuous_target_id),
-                ("Sample scope", reference.training_sample_scope),
-                ("Architecture", reference.model_architecture),
-            )
-        )
-    )
-    print("三個profile各自獨立訓練／PIT工件；共用同一Dataset、Target、Seed、period與fold contract。")
-    if not _prompt_bool("確認依序執行全部PIT Model Gate", True):
-        return 0
-    total = len(gate.model_profiles)
-    for index, (model_id, profile_name) in enumerate(gate.model_profiles, start=1):
-        print(f"\n[{index}/{total}] {model_id}")
-        code = _run_continuous_pit_profile(
-            program_name,
-            model_id=model_id,
-            profile_name=profile_name,
-        )
-        if code != 0:
-            print(f"[FAILED] {model_id} PIT Model Gate停止；修正後可由同一入口resume。")
-            return int(code)
-    _render_continuous_pit_gate_comparison(gate.model_profiles)
-    return 0
 
 
 def _prepare_strategy_compare_model_upstream(

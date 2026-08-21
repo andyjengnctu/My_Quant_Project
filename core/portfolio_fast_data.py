@@ -308,12 +308,6 @@ def build_trade_stats_index(trade_logs):
     }
 
 
-def _cum_diff(values, start_idx, end_idx):
-    if values is None or len(values) == 0 or end_idx <= start_idx:
-        return 0.0
-    end_value = float(values[end_idx - 1])
-    start_value = float(values[start_idx - 1]) if start_idx > 0 else 0.0
-    return end_value - start_value
 
 
 def summarize_single_stock_r_values(r_values):

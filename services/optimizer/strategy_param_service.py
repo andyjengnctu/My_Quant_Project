@@ -115,78 +115,10 @@ def _legacy_candidates(root: Path, *, family: str, evaluation_mode: str, policy:
 
 
 
-def _normalize_legacy_period_date(value: Any, *, is_end: bool = False) -> str:
-    text = str(value or "").strip()
-    if not text or text.lower() in {"latest", "auto", "none", "null"}:
-        return ""
-    if len(text) == 4 and text.isdigit():
-        return f"{text}-12-31" if is_end else f"{text}-01-01"
-    return text[:10]
 
 
-def _legacy_static_oos_period(payload: dict[str, Any]) -> tuple[str, str]:
-    meta = dict(payload.get("meta") or {})
-    workflow = dict(meta.get("walk_forward_policy") or {})
-    summary = dict(payload.get("summary") or {})
-    period = str(summary.get("oos_period") or payload.get("oos_period") or "").strip()
-    period_start = period_end = ""
-    if "~" in period:
-        period_start, period_end = [part.strip() for part in period.split("~", 1)]
-    start_candidates = (
-        meta.get("oos_start_date"),
-        payload.get("oos_start_date"),
-        summary.get("oos_start_date"),
-        workflow.get("oos_start_date"),
-        period_start,
-        workflow.get("oos_start_year"),
-    )
-    end_candidates = (
-        meta.get("oos_end_date"),
-        meta.get("latest_data_date"),
-        payload.get("oos_end_date"),
-        summary.get("oos_end_date"),
-        workflow.get("oos_end_date"),
-        period_end,
-        workflow.get("oos_end_year"),
-    )
-    start = next(
-        (resolved for raw in start_candidates if (resolved := _normalize_legacy_period_date(raw))),
-        "2021-01-01",
-    )
-    end = next(
-        (resolved for raw in end_candidates if (resolved := _normalize_legacy_period_date(raw, is_end=True))),
-        "",
-    )
-    return start, end
 
 
-def _resolve_rolling_policy_end_date(root: Path, *, family: str, policy: str) -> str:
-    candidates = [
-        resolve_strategy_param_artifact_path(
-            root, family=family, evaluation_mode="rolling", policy=policy
-        )
-    ]
-    candidates.extend(
-        _legacy_candidates(root, family=family, evaluation_mode="rolling", policy=policy)
-    )
-    for source in candidates:
-        if not source.is_file():
-            continue
-        try:
-            payload = json.loads(source.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict) or not is_active_param_ensemble_payload(payload):
-            continue
-        if resolve_active_param_ensemble_mode(payload) != ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING:
-            continue
-        try:
-            _start, end = get_active_param_ensemble_date_range(payload)
-        except (TypeError, ValueError, KeyError):
-            continue
-        if end:
-            return str(end)
-    return ""
 
 
 def _materialize_legacy_candidate(

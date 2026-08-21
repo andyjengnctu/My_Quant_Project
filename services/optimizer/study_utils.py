@@ -337,12 +337,6 @@ def _trial_matches_objective_mode(trial, objective_mode: str) -> bool:
         return objective_modes_are_compatible(actual, expected)
     return expected == OBJECTIVE_MODE_LEGACY_BASE_SCORE
 
-def _wf_attr_float(trial, key: str, default: float = float("-inf")) -> float:
-    value = trial.user_attrs.get(key, default)
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return float(default)
 
 
 def _resolve_legacy_best_trial_or_none(study, *, objective_mode=OBJECTIVE_MODE_LEGACY_BASE_SCORE):

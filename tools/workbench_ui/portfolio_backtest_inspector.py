@@ -534,11 +534,6 @@ def _safe_fast_value(fast_data, field, *, pos):
         return np.nan
 
 
-def _safe_fast_close(fast_data, *, pos):
-    try:
-        return _coerce_float(get_fast_close(fast_data, pos=pos))
-    except (TypeError, ValueError, KeyError, IndexError):
-        return np.nan
 
 
 def _resolve_buy_limit_from_row(row, fast_data):

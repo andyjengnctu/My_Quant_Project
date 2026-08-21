@@ -398,13 +398,6 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
     return payload
 
 
-def _resolve_candidate_best_selection_rule():
-    parts = ["max_local_min_score" if is_optimizer_local_min_review_enabled() else "max_base_score_local_min_disabled"]
-    if bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED):
-        parts.append("inner_validate_score_gt_0_and_rank_top_half")
-    if bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED):
-        parts.append("intuitive_dominant_year_dependency_veto")
-    return "_with_".join(parts)
 
 
 def _summary_policy_signature(summary: dict | None):
@@ -420,18 +413,6 @@ def _summary_policy_signature(summary: dict | None):
     )
 
 
-def _format_summary_policy_signature(summary: dict | None) -> str:
-    signature = _summary_policy_signature(summary)
-    if signature is None:
-        return "N/A"
-    mode, objective_mode, train_start_date, search_train_end_date, train_window_months, oos_start_date = signature
-    return (
-        f"mode={mode or 'N/A'}"
-        f", objective={objective_mode or 'N/A'}"
-        f", train={train_start_date or 'N/A'}~{search_train_end_date or 'N/A'}"
-        f", window_m={train_window_months if train_window_months is not None else 'N/A'}"
-        f", oos_start={oos_start_date if oos_start_date is not None else 'N/A'}"
-    )
 
 
 def _summaries_have_compatible_policy(*, candidate_summary: dict, run_best_summary: dict | None) -> bool:
@@ -867,8 +848,6 @@ def _resolve_nonrolling_seed_ensemble_policy(*, seed_count: int | None = None):
     )
 
 
-def _is_base_finalists_agree_policy_name(policy_name: str | None) -> bool:
-    return str(policy_name or "").strip() == "base_finalists_agree"
 
 
 def _is_local_finalists_agree_policy_name(policy_name: str | None) -> bool:
@@ -932,13 +911,6 @@ def _resolve_nonrolling_policy_seed_ensemble_policy(*, policy_name: str, members
     return _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
 
 
-def _resolve_optimizer_session_ts(session, *, fallback_label: str = "") -> str:
-    raw_session_ts = str(getattr(session, "session_ts", "") or "").strip()
-    if raw_session_ts:
-        return raw_session_ts
-    suffix = str(fallback_label or "").strip()
-    generated = get_taipei_now().strftime("%Y%m%d_%H%M%S_%f")
-    return generated if not suffix else f"{generated}_{suffix}"
 
 
 def _build_seed_ensemble_member(*, member_index: int, seed: int, best_trial, finalist_entry: dict, params_payload: dict) -> dict:
@@ -961,15 +933,8 @@ def _build_seed_ensemble_member(*, member_index: int, seed: int, best_trial, fin
 
 
 
-def _format_nonrolling_result_number(value) -> str:
-    try:
-        return f"{float(value):.3f}"
-    except (TypeError, ValueError):
-        return "N/A"
 
 
-def _format_nonrolling_system_score(value) -> str:
-    return format_optimizer_score_for_display(value, decimals=3)
 
 
 def _build_nonrolling_single_fold_period_context(walk_forward_policy: dict) -> dict:
@@ -1529,60 +1494,6 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
         raise RuntimeError(f"nonrolling seed member failed: seed={int((task or {}).get('seed', 0) or 0)} error={type(exc).__name__}: {exc}") from exc
 
 
-def _print_static_seed_ensemble_result_table(*, members: list[dict], policy: dict, colors: dict) -> None:
-    gray = colors.get("gray", "")
-    green = colors.get("green", "")
-    red = colors.get("red", "")
-    yellow = colors.get("yellow", "")
-    reset = colors.get("reset", "")
-    member_count = len(members)
-    min_agree = int(policy.get("min_agree", member_count or 1))
-    title = "SEED ENSEMBLE RESULTS"
-    header = (
-        f"{'member':<8} | {'seed':>10} | {'trial':>8} | "
-        f"{'base':>12} | {'local_min':>12} | {'retention':>10} | {'gate':>8} | {'result':>10}"
-    )
-    separator_width = max(len(title), len(header))
-    print(f"{gray}{'-' * separator_width}{reset}")
-    print(title)
-    print(f"{gray}{'-' * separator_width}{reset}")
-    print(header)
-    print(f"{gray}{'-' * separator_width}{reset}")
-    pass_count = 0
-    for idx, item in enumerate(members, start=1):
-        gate_pass = bool(item.get("local_gate", False))
-        if gate_pass:
-            pass_count += 1
-        gate_text = "PASS" if gate_pass else "FAIL"
-        gate_color = green if gate_pass else red
-        result_text = "member"
-        result_color = green if gate_pass else red
-        print(
-            f"#{int(item.get('member_index', idx)):<7} | "
-            f"{int(item.get('seed', 0)):>10} | "
-            f"#{int(item.get('selected_trial', 0)):>7} | "
-            f"{_format_nonrolling_system_score(item.get('base_score')):>12} | "
-            f"{_format_nonrolling_system_score(item.get('local_min_score')):>12} | "
-            f"{_format_nonrolling_result_number(item.get('retention')):>10} | "
-            f"{gate_color}{gate_text:>8}{reset} | "
-            f"{result_color}{result_text:>10}{reset}"
-        )
-    base_scores = [float(item.get("base_score", 0.0)) for item in members]
-    local_scores = [float(item.get("local_min_score", 0.0)) for item in members]
-    retentions = [float(item.get("retention", 0.0)) for item in members]
-    ensemble_pass = bool(member_count > 0 and pass_count >= min_agree)
-    ensemble_color = green if ensemble_pass else red
-    ensemble_result = "PASS" if ensemble_pass else "FAIL"
-    print(f"{gray}{'=' * separator_width}{reset}")
-    print(
-        f"ENSEMBLE | N={member_count} | min_agree={min_agree} | "
-        f"gate_pass={pass_count}/{member_count} | "
-        f"base_min={_format_nonrolling_system_score(min(base_scores) if base_scores else None)} | "
-        f"local_min_min={_format_nonrolling_system_score(min(local_scores) if local_scores else None)} | "
-        f"retention_min={_format_nonrolling_result_number(min(retentions) if retentions else None)} | "
-        f"result={ensemble_color}{ensemble_result}{reset}"
-    )
-    print(f"{yellow}static ensemble 已完成；Trade mode 產生 candidate_best/run_best，OOS mode 只產生 validation policy outputs。{reset}")
 
 
 def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_name: str = "") -> dict:

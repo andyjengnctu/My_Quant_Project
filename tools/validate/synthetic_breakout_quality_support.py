@@ -63,9 +63,6 @@ def _source_has_render_menu_item_call(
     return False
 
 
-def _registered_breakout_quality_audit_module(command: str) -> str | None:
-    entry = get_domain_cli_commands("breakout_quality").get(str(command))
-    return None if entry is None else str(entry.module)
 
 
 from core.active_param_ensemble import build_static_active_param_ensemble_payload

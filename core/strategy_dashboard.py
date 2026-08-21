@@ -360,10 +360,6 @@ def _format_mdd_diff(candidate: float, baseline: float) -> str:
     return "(0.00%)"
 
 
-def _format_value_with_delta(value: str, delta: str) -> str:
-    if delta in ("", "-", None):
-        return str(value)
-    return f"{value} {delta}"
 
 
 def _normalize_comparison_period_text(value) -> str:

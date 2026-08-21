@@ -1299,10 +1299,6 @@ def _format_chart_entry_type(value):
     return str(value).strip() or "-"
 
 
-def _format_chart_trade_sequence(value):
-    if _is_missing_info_value(value):
-        return "-"
-    return f"第 {int(value)} 次"
 
 
 CHART_INFO_FIELD_SPECS = {
