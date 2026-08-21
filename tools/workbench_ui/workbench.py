@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import importlib
+import io
+import threading
 import tkinter as tk
 import warnings
+from tkinter import font as tkfont
 from tkinter import ttk
+
+import pandas as pd
+
+from tools.workbench_ui.param_sources import build_workbench_param_source_options
 
 
 WORKBENCH_TITLE = "股票工具工作台"
@@ -350,6 +357,275 @@ def set_workbench_capital_display_text(target, *, reserved_text, actual_text, di
     if display_mode in {WORKBENCH_CAPITAL_MODE_RESERVED, WORKBENCH_CAPITAL_MODE_ACTUAL}:
         target._selected_capital_display_mode = display_mode
     refresh_workbench_capital_display(target)
+
+
+class WorkbenchConsoleWriter(io.TextIOBase):
+    def __init__(self, panel):
+        super().__init__()
+        self._panel = panel
+
+    def write(self, text):
+        if not text:
+            return 0
+        self._panel._append_console_stream(str(text))
+        return len(text)
+
+    def flush(self):
+        return None
+
+
+class WorkbenchInspectorSharedMixin:
+    """Behavior shared by the single-stock and portfolio inspector panels."""
+
+    _console_colors = {}
+    _ansi_pattern = None
+    _workbench_project_root = ""
+    _param_source_include_rolling_oos = False
+    _param_source_include_active_param_ensemble = False
+    _combobox_width_rules = {}
+
+    def _get_workbench_combobox_font(self):
+        if hasattr(self, "_workbench_combobox_font"):
+            return self._workbench_combobox_font
+        font_spec = ttk.Style(self).lookup("Workbench.TCombobox", "font") or ("Microsoft JhengHei", 11)
+        try:
+            self._workbench_combobox_font = tkfont.Font(font=font_spec)
+        except tk.TclError as exc:
+            _warn_gui_fallback('tkfont.Font(font=Workbench.TCombobox)', exc)
+            self._workbench_combobox_font = tkfont.nametofont("TkDefaultFont")
+        return self._workbench_combobox_font
+
+    def _autosize_combobox(self, combo, *, values, current_text, rule_key):
+        rule = self._combobox_width_rules[rule_key]
+        font_obj = self._get_workbench_combobox_font()
+        text_candidates = [str(value or "") for value in list(values or [])] + [str(current_text or "")]
+        try:
+            live_text = combo.get()
+        except tk.TclError as exc:
+            _warn_gui_fallback('combobox.get() during autosize', exc)
+            live_text = ""
+        text_candidates.append(str(live_text or ""))
+        longest_text = max(text_candidates, key=lambda text: font_obj.measure(text), default="")
+        average_char_px = max(font_obj.measure("0"), 1)
+        text_px = font_obj.measure(longest_text) + int(rule.get("extra_px") or 0)
+        width_chars = max(int(rule.get("min_chars") or 0), (text_px + average_char_px - 1) // average_char_px)
+        combo.configure(width=min(width_chars, int(rule.get("max_chars") or width_chars)))
+
+    def _configure_console_tags(self):
+        self._console_text.tag_configure("default", foreground="#f7fbff")
+        for code, color in self._console_colors.items():
+            self._console_text.tag_configure(f"ansi_{code}", foreground=color)
+
+    def _append_console_text(self, text):
+        normalized_text = str(text or "")
+        if not normalized_text:
+            return
+        if threading.current_thread() is not self._ui_thread:
+            self.after(0, self._append_console_text, normalized_text)
+            return
+        self._flush_console_live_progress(force_newline=True)
+        self._insert_ansi_text(normalized_text)
+        self._console_text.see("end")
+
+    def _append_console_stream(self, text):
+        normalized_text = str(text or "").replace("\r\n", "\n")
+        if not normalized_text:
+            return
+        if threading.current_thread() is not self._ui_thread:
+            self.after(0, self._append_console_stream, normalized_text)
+            return
+        current = self._console_stream_buffer
+        mode = self._console_stream_mode
+        ended_with_carriage_return = False
+        for char in normalized_text:
+            if char == "\r":
+                self._set_console_live_progress(current)
+                current = ""
+                mode = "progress"
+                ended_with_carriage_return = True
+                continue
+            ended_with_carriage_return = False
+            if char == "\n":
+                if mode == "progress":
+                    self._set_console_live_progress(current)
+                    self._flush_console_live_progress(force_newline=True)
+                else:
+                    self._insert_ansi_text(current + "\n")
+                    self._console_text.see("end")
+                current = ""
+                mode = "line"
+                continue
+            current += char
+        self._console_stream_buffer = current
+        self._console_stream_mode = mode
+        if mode == "progress" and not ended_with_carriage_return:
+            self._set_console_live_progress(current)
+
+    def _insert_ansi_text(self, text):
+        current_tag = self._console_current_tag
+        pos = 0
+        for match in self._ansi_pattern.finditer(text):
+            if match.start() > pos:
+                self._console_text.insert("end", text[pos:match.start()], current_tag)
+            codes = match.group(0)[2:-1].split(";")
+            if not codes or codes == ["0"] or "0" in codes:
+                current_tag = "default"
+            else:
+                for code in codes:
+                    if code in self._console_colors:
+                        current_tag = f"ansi_{code}"
+            pos = match.end()
+        if pos < len(text):
+            self._console_text.insert("end", text[pos:], current_tag)
+        self._console_current_tag = current_tag
+
+    def _set_console_live_progress(self, text):
+        if self._console_live_progress_start is None:
+            self._console_live_progress_start = self._console_text.index("end-1c")
+            self._insert_ansi_text(str(text or ""))
+        else:
+            self._console_text.delete(self._console_live_progress_start, "end-1c")
+            self._insert_ansi_text(str(text or ""))
+        self._console_text.see("end")
+
+    def _flush_console_live_progress(self, *, force_newline):
+        if self._console_live_progress_start is None:
+            return
+        if force_newline:
+            line_tail = self._console_text.get(
+                f"{self._console_live_progress_start} lineend",
+                f"{self._console_live_progress_start} lineend +1c",
+            )
+            if line_tail != "\n":
+                self._console_text.insert("end", "\n", self._console_current_tag)
+        self._console_live_progress_start = None
+        self._console_text.see("end")
+
+    def _prepare_console_for_new_task(self):
+        self._flush_console_live_progress(force_newline=True)
+        self._console_stream_buffer = ""
+        self._console_stream_mode = "line"
+        self._console_live_progress_start = None
+        self._console_current_tag = "default"
+        if self._console_text.compare("end-1c", ">", "1.0"):
+            if self._console_text.get("end-2c", "end-1c") != "\n":
+                self._console_text.insert("end", "\n", self._console_current_tag)
+            self._console_text.insert("end", "\n" + ("=" * 80) + "\n", self._console_current_tag)
+        self._console_text.see("end")
+
+    def _clear_console(self):
+        self._console_stream_buffer = ""
+        self._console_stream_mode = "line"
+        self._console_live_progress_start = None
+        self._console_current_tag = "default"
+        self._console_text.delete("1.0", "end")
+
+    def _refresh_param_source_options(self):
+        current_label = self._param_source_display_var.get().strip()
+        labels, path_by_label, key_by_label, default_label = build_workbench_param_source_options(
+            self._workbench_project_root,
+            include_rolling_oos=self._param_source_include_rolling_oos,
+            include_active_param_ensemble=self._param_source_include_active_param_ensemble,
+        )
+        self._param_source_labels = labels
+        self._param_source_path_by_label = path_by_label
+        self._param_source_key_by_label = key_by_label
+        selected_label = current_label if current_label in path_by_label else default_label
+        if selected_label:
+            self._param_source_display_var.set(selected_label)
+        if hasattr(self, "_param_source_combo"):
+            self._param_source_combo.configure(values=self._param_source_labels)
+            self._autosize_combobox(
+                self._param_source_combo,
+                values=self._param_source_labels,
+                current_text=self._param_source_display_var.get(),
+                rule_key="param_source",
+            )
+
+    def _get_selected_param_source(self):
+        self._refresh_param_source_options()
+        selected_label = self._param_source_display_var.get().strip()
+        return self._param_source_key_by_label.get(selected_label, "run_best")
+
+    def _get_selected_params_path(self):
+        self._refresh_param_source_options()
+        selected_label = self._param_source_display_var.get().strip()
+        params_path = self._param_source_path_by_label.get(selected_label)
+        if params_path:
+            return params_path
+        _, path_by_label, _, default_label = build_workbench_param_source_options(
+            self._workbench_project_root,
+            include_rolling_oos=self._param_source_include_rolling_oos,
+            include_active_param_ensemble=self._param_source_include_active_param_ensemble,
+        )
+        return path_by_label[default_label]
+
+    def _on_fixed_risk_selected(self, _event=None):
+        if self._fixed_risk_display_var.get() == "自訂":
+            self._custom_fixed_risk_entry.state(["!disabled"])
+            self._custom_fixed_risk_entry.focus_set()
+        else:
+            self._custom_fixed_risk_entry.state(["disabled"])
+
+    @staticmethod
+    def _format_sidebar_line_value(label, value):
+        return f"{label}: -" if value is None or pd.isna(value) else f"{label}: {float(value):.2f}"
+
+    @staticmethod
+    def _format_sidebar_amount_value(label, value):
+        return f"{label}: -" if value is None or pd.isna(value) else f"{label}: {float(value):,.0f}"
+
+    @staticmethod
+    def _format_sidebar_ohlcv_value(label, value, *, volume=False):
+        if value is None or pd.isna(value):
+            return f"{label}: -"
+        return f"{label}: {float(value) / 1_000_000:.2f}M" if volume else f"{label}: {float(value):.2f}"
+
+    def _update_selected_value_sidebar(self, snapshot):
+        if not snapshot:
+            self._selected_date_var.set("選取日: -")
+            self._selected_open_var.set("開: -")
+            self._selected_high_var.set("高: -")
+            self._selected_low_var.set("低: -")
+            self._selected_close_var.set("收: -")
+            self._selected_volume_var.set("量: -")
+            grid_workbench_selected_ohlcv_labels(self._selected_ohlcv_labels, start_row=5)
+            self._selected_tp_var.set("停利: -")
+            self._selected_limit_var.set("限價: -")
+            self._selected_entry_var.set("成交: -")
+            self._selected_stop_var.set("停損: -")
+            set_workbench_capital_display_text(
+                self, reserved_text="預留: -", actual_text="實支: -", display_mode=WORKBENCH_CAPITAL_MODE_RESERVED
+            )
+            return
+        self._selected_date_var.set(f"選取日: {snapshot.get('date_label', '-')}")
+        self._selected_open_var.set(self._format_sidebar_ohlcv_value("開", snapshot.get("open")))
+        self._selected_high_var.set(self._format_sidebar_ohlcv_value("高", snapshot.get("high")))
+        self._selected_low_var.set(self._format_sidebar_ohlcv_value("低", snapshot.get("low")))
+        self._selected_close_var.set(self._format_sidebar_ohlcv_value("收", snapshot.get("close")))
+        self._selected_volume_var.set(self._format_sidebar_ohlcv_value("量", snapshot.get("volume"), volume=True))
+        grid_workbench_selected_ohlcv_labels(
+            self._selected_ohlcv_labels,
+            open_value=snapshot.get("open"),
+            close_value=snapshot.get("close"),
+            start_row=5,
+        )
+        line_sources = dict(snapshot.get("line_value_sources") or {})
+
+        def _line_label(base_label, key):
+            return f"Shadow{base_label}" if line_sources.get(key) == "shadow" else base_label
+
+        self._selected_tp_var.set(self._format_sidebar_line_value(_line_label("停利", "tp_price"), snapshot.get("tp_price")))
+        self._selected_limit_var.set(self._format_sidebar_line_value(_line_label("限價", "limit_price"), snapshot.get("limit_price")))
+        entry_label = _line_label("買進", "entry_price") if line_sources.get("entry_price") == "shadow" else "成交"
+        self._selected_entry_var.set(self._format_sidebar_line_value(entry_label, snapshot.get("entry_price")))
+        self._selected_stop_var.set(self._format_sidebar_line_value(_line_label("停損", "stop_price"), snapshot.get("stop_price")))
+        set_workbench_capital_display_text(
+            self,
+            reserved_text=self._format_sidebar_amount_value("預留", snapshot.get("reserved_capital")),
+            actual_text=self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")),
+            display_mode=resolve_workbench_capital_display_mode_for_snapshot(snapshot),
+        )
 
 
 class StockToolsWorkbench:
