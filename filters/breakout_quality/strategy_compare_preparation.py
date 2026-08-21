@@ -116,7 +116,7 @@ def _execute_preparation_action(
         prepare_oos_frozen_roos_params(
             project_root=root,
             param_policy=settings.param_policy,
-            source_params_path=project_relative_display_path(dependency_path, project_root=root),
+            source_params_path=dependency_path,
             output_relative_dir=str(options["output_relative_dir"]),
             freeze_effective_date=str(options.get("freeze_effective_date") or "2021-01-01"),
             freeze_cutoff_date=str(options.get("freeze_cutoff_date") or "2020-12-31"),

@@ -9795,3 +9795,10 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 防回歸：既有 `VALIDATE_CONSOLE_SUMMARY_REPORTING / T85 / B21` 增加 formal PASS `csv_path=None/xlsx_path=None` 案例；GPT 另以 isolated temp run 驗證 summary 先落盤且 renderer 可正常完成。沒有修改 consistency 計算、交易規則、Research orchestration、模型／策略 identity、seed、trial 或 benchmark science。
 - Decision：**FORMAL_SUMMARY_LIFECYCLE_FIXED / CONSISTENCY_COMPUTATION_UNCHANGED / FORMAL_RERUN_PENDING**。
 
+
+### 2026-08-21 — Strategy parameter producer path-boundary closure：Min recovery policy與output_root語意解耦
+- 使用者在Research自動補建`param:min_rolling`時遇到`Strategy Compare output_root必須是專案root相對路徑`。根因不是Rolling期間或Optimizer search，而是canonical Strategy Parameter service為了禁止historical P2從completed Strategy Compare recovery，將Optimizer-owned絕對`work_root/no_recovery*`當成假的`comparison_output_root`傳入P2 builder；filesystem path與Strategy Compare logical relative-root contract被混為同一語意。
+- 架構修正：`prepare_selection_historical_p2_params()`新增顯式`recover_completed_strategy_compare: bool` historical-compatibility policy。current canonical Min schedule以及Robustness benchmark Min初始／tail producer固定傳`False`，完全跳過Strategy Compare recovery；真正historical／Strategy Compare builder保留預設`True`並繼續只接受config-owned project-relative roots。移除current service所有`no_recovery*`假路徑。另把OOS freeze preparation由「先用`project_relative_display_path()`把canonical dependency Path轉成字串再傳builder」改為直接傳Path，明確隔離display-only helper與runtime path semantics。
+- 防回歸：Strategy Compare config-driven synthetic現在實際建立current canonical Min Rolling與benchmark Min OOS/Rolling fake Optimizer schedules，驗證四次Min producer委派全部明確關閉recovery、benchmark 2021 member SHA仍跨mode一致，且current service不再含`no_recovery` path convention。
+- 此修正不改strategy parameter search space、seed、trials/fold、effective-date schedule、OOS freeze、Rolling annual refit、benchmark identity或任何交易／模型科學語意。
+- Decision：**ENGINEERING_BOUNDARY_FIXED / OPTIMIZER_SOLE_PRODUCER_PRESERVED / FORMAL_RERUN_PENDING**。

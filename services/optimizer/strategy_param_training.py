@@ -1151,6 +1151,7 @@ def prepare_selection_historical_p2_params(
     quiet: bool = False,
     comparison_output_root: str = "outputs/strategy_compare",
     comparison_output_roots: tuple[str, ...] | None = None,
+    recover_completed_strategy_compare: bool = True,
     first_oos_date: str | None = TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
     last_oos_date: str | None = TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
     train_window_months: int = TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
@@ -1162,40 +1163,48 @@ def prepare_selection_historical_p2_params(
     No full-strategy historical baseline is trained first.  The rolling search
     directly optimizes ``high_len`` plus the four ATR fields while every other
     optimizer dimension is frozen from canonical config/schema defaults.
+
+    ``recover_completed_strategy_compare`` is a historical-compatibility policy,
+    not a path convention.  Current canonical/benchmark producers disable it
+    explicitly so Optimizer work directories are never smuggled through the
+    Strategy Compare relative ``output_root`` contract as fake recovery roots.
     """
 
     root = Path(project_root).resolve()
+    if not isinstance(recover_completed_strategy_compare, bool):
+        raise ValueError("recover_completed_strategy_compare必須是bool")
     resolved_first_oos_date, resolved_last_oos_date = _resolve_selection_historical_oos_period(
         first_oos_date, last_oos_date
     )
-    recovered = restore_selection_historical_p2_from_completed_strategy_compare(
-        project_root=root,
-        output_root=str(comparison_output_root),
-        output_roots=tuple(comparison_output_roots or (str(comparison_output_root),)),
-        dataset=str(dataset),
-        param_policy=str(param_policy),
-        start_date=resolved_first_oos_date,
-        end_date=resolved_last_oos_date,
-        max_positions=int(max_positions),
-        rotation=str(rotation),
-        quiet=bool(quiet),
-    )
-    if recovered is not None:
-        return {
-            "params_path": Path(recovered["params_path"]),
-            "summary": {
-                "parameter_set": "P2_HISTORY",
-                "status": "RECOVERED_FROM_COMPLETED_STRATEGY_PAIR",
-                "recovery_mode": recovered["recovery_mode"],
-                "params_sha256": recovered["params_sha256"],
-            },
-            "contract": {
-                "status": "RECOVERED_FROM_COMPLETED_STRATEGY_PAIR",
-                "source_run_dir": project_relative_display_path(
-                    Path(recovered["source_run_dir"]), project_root=root
-                ),
-            },
-        }
+    if bool(recover_completed_strategy_compare):
+        recovered = restore_selection_historical_p2_from_completed_strategy_compare(
+            project_root=root,
+            output_root=str(comparison_output_root),
+            output_roots=tuple(comparison_output_roots or (str(comparison_output_root),)),
+            dataset=str(dataset),
+            param_policy=str(param_policy),
+            start_date=resolved_first_oos_date,
+            end_date=resolved_last_oos_date,
+            max_positions=int(max_positions),
+            rotation=str(rotation),
+            quiet=bool(quiet),
+        )
+        if recovered is not None:
+            return {
+                "params_path": Path(recovered["params_path"]),
+                "summary": {
+                    "parameter_set": "P2_HISTORY",
+                    "status": "RECOVERED_FROM_COMPLETED_STRATEGY_PAIR",
+                    "recovery_mode": recovered["recovery_mode"],
+                    "params_sha256": recovered["params_sha256"],
+                },
+                "contract": {
+                    "status": "RECOVERED_FROM_COMPLETED_STRATEGY_PAIR",
+                    "source_run_dir": project_relative_display_path(
+                        Path(recovered["source_run_dir"]), project_root=root
+                    ),
+                },
+            }
 
     schedule_contract = _build_min_roos_schedule_contract(
         first_oos_date=resolved_first_oos_date,
@@ -1553,7 +1562,7 @@ def prepare_oos_frozen_roos_params(
     *,
     project_root=PROJECT_ROOT,
     param_policy: str,
-    source_params_path: str,
+    source_params_path: str | Path,
     output_relative_dir: str | Path,
     freeze_effective_date: str = "2021-01-01",
     freeze_cutoff_date: str = "2020-12-31",

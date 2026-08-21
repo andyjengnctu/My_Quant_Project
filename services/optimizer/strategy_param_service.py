@@ -972,8 +972,7 @@ def _build_canonical_schedule(
         else:
             result = prepare_selection_historical_p2_params(
                 **common,
-                comparison_output_root=str(work_root / f"no_recovery_{suffix}"),
-                comparison_output_roots=(str(work_root / f"no_recovery_{suffix}"),),
+                recover_completed_strategy_compare=False,
             )
         path = Path(result["params_path"]).resolve()
         if not path.is_file():
@@ -1480,8 +1479,7 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
         else:
             result = prepare_selection_historical_p2_params(
                 **common,
-                comparison_output_root=str(work_root / "no_recovery"),
-                comparison_output_roots=(str(work_root / "no_recovery"),),
+                recover_completed_strategy_compare=False,
             )
         _copy_json_payload(Path(result["params_path"]), initial_cache)
 
@@ -1521,8 +1519,7 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
             else:
                 tail_result = prepare_selection_historical_p2_params(
                     **common_tail,
-                    comparison_output_root=str(work_root / "no_recovery_tail"),
-                    comparison_output_roots=(str(work_root / "no_recovery_tail"),),
+                    recover_completed_strategy_compare=False,
                 )
             tail_path = Path(tail_result["params_path"])
         _stitch_benchmark_rolling_payload(

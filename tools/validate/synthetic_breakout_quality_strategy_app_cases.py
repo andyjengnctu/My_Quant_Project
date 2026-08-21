@@ -1444,6 +1444,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     from services.optimizer import strategy_param_service as strategy_param_service_module
 
+    min_recovery_flags = []
+
     def _fake_benchmark_optimizer(**kwargs):
         output_root = Path(kwargs["output_relative_dir"])
         output_root.mkdir(parents=True, exist_ok=True)
@@ -1481,6 +1483,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         path.write_text(json.dumps(payload), encoding="utf-8")
         return {"params_path": path}
 
+    def _fake_min_benchmark_optimizer(**kwargs):
+        min_recovery_flags.append(kwargs.get("recover_completed_strategy_compare"))
+        return _fake_benchmark_optimizer(**kwargs)
+
     with tempfile.TemporaryDirectory() as round2_tmp, patch.object(
         __import__("services.optimizer.strategy_param_training", fromlist=["prepare_selection_historical_full_roos_params"]),
         "prepare_selection_historical_full_roos_params",
@@ -1488,7 +1494,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     ), patch.object(
         __import__("services.optimizer.strategy_param_training", fromlist=["prepare_selection_historical_p2_params"]),
         "prepare_selection_historical_p2_params",
-        side_effect=_fake_benchmark_optimizer,
+        side_effect=_fake_min_benchmark_optimizer,
     ):
         round2_root = Path(round2_tmp)
         common_round2 = {
@@ -1524,6 +1530,27 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             evaluation_mode="oos", **extended_round2
         )
         oos_extended_payload = json.loads(Path(round2_oos_extended["path"]).read_text(encoding="utf-8"))
+
+        canonical_min_rolling = ensure_strategy_parameter_artifact(
+            round2_root,
+            family="min",
+            evaluation_mode="rolling",
+            policy="base_finalist_best",
+            comparison_end_date="2026-03-02",
+            dataset="full",
+            max_positions=10,
+            rotation="off",
+            fixed_risk=0.01,
+            max_position_cap_pct=0.30,
+        )
+        common_round2_min = dict(common_round2)
+        common_round2_min["family"] = "min"
+        round2_min_oos = strategy_param_service_module.ensure_robustness_benchmark_strategy_parameter_artifact(
+            evaluation_mode="oos", **common_round2_min
+        )
+        round2_min_rolling = strategy_param_service_module.ensure_robustness_benchmark_strategy_parameter_artifact(
+            evaluation_mode="rolling", **common_round2_min
+        )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "robustness_round2_optimizer_producer_reuses_same_2021_member_and_refreshes_latest_coverage",
@@ -1534,6 +1561,21 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and round2_oos_reuse["action"] == "REUSE"
         and round2_oos_extended["action"] == "BUILD"
         and str(dict(oos_extended_payload.get("meta") or {}).get("last_oos_date")) == "2026-04-30",
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "current_min_optimizer_producers_disable_strategy_compare_recovery_without_fake_output_roots",
+        True,
+        canonical_min_rolling["action"] == "BUILD"
+        and round2_min_oos["action"] == "BUILD"
+        and round2_min_rolling["action"] == "BUILD"
+        and round2_min_oos["initial_2021_member_sha256"]
+            == round2_min_rolling["initial_2021_member_sha256"]
+        and min_recovery_flags == [False, False, False, False]
+        and "no_recovery" not in param_repository_service_source
+        and param_repository_service_source.count("recover_completed_strategy_compare=False") == 3
+        and "source_params_path=dependency_path" in preparation_source
+        and "source_params_path=project_relative_display_path" not in preparation_source,
     )
 
     shared_source_arm = robustness_profile.arms["C59"]
