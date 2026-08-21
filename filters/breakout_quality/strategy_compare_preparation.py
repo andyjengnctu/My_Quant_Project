@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT
 from core.console_report import project_relative_display_path
@@ -21,6 +21,7 @@ from filters.breakout_quality.strategy_compare_preparation_status import (
     resolve_required_param_policies_for_source,
 )
 from services.optimizer.strategy_param_service import ensure_strategy_parameter_artifact
+from services.research.artifact_orchestrator import run_research_artifact_preparation
 from services.optimizer.strategy_param_training import (
     prepare_extending_full_roos_params,
     prepare_extending_min_roos_params,
@@ -274,107 +275,72 @@ def _run_preparation_plan(
     status_refresher: Callable[[], dict[str, Any]],
     required_artifact_keys: tuple[str, ...] | None,
     failure_prefix: str,
+    producer_handlers: Mapping[str, Callable[[StrategyPreparationAction], int | None]] | None = None,
 ) -> dict[str, Any]:
-    """Execute one canonical dependency-aware preparation loop.
+    """Execute the shared Research dependency loop for Strategy Compare.
 
-    ``required_artifact_keys`` limits execution to the requested artifacts plus their
-    declared dependency closure.  This is how Multiple-seed robustness reuses the same
-    planner while intentionally ignoring unrelated canonical DL-score blockers.
+    The supplied ``status`` is only a rendering snapshot.  Execution always starts from a
+    fresh status and re-plans after every producer, so a Dataset/Target rebuild can change
+    comparison coverage before Optimizer/model downstream work is dispatched.
     """
 
     root = Path(project_root).resolve()
-    current = status
-    requested_plan: StrategyPreparationPlan = status["preparation_plan"]
-    requested_keys = None if required_artifact_keys is None else tuple(required_artifact_keys)
-    selected_requested = (
-        requested_plan
-        if requested_keys is None
-        else requested_plan.select(requested_keys)
-    )
-    if selected_requested.blocked:
-        blocked = [
-            item.artifact_key
-            for item in selected_requested.actions
-            if item.action == "BLOCKED"
-        ]
-        raise RuntimeError(
-            f"{failure_prefix}包含BLOCKED工件: " + ", ".join(blocked)
-        )
-    if selected_requested.overall_status == "READY":
-        return current
-    if not settings.preparation.auto_prepare:
+    holder: dict[str, dict[str, Any]] = {}
+
+    def _refresh_plan() -> StrategyPreparationPlan:
+        refreshed = status_refresher()
+        holder["status"] = refreshed
+        plan = refreshed.get("preparation_plan")
+        if not isinstance(plan, StrategyPreparationPlan):
+            raise TypeError("Strategy Compare status缺少合法preparation_plan")
+        return plan
+
+    supplied_plan = status.get("preparation_plan") if isinstance(status, dict) else None
+    if (
+        isinstance(supplied_plan, StrategyPreparationPlan)
+        and supplied_plan.overall_status != "READY"
+        and not settings.preparation.auto_prepare
+    ):
         raise RuntimeError("目前config已關閉auto_prepare")
 
-    executed_signatures: set[tuple[str, str, str | None, str]] = set()
-    max_waves = max(2, len(selected_requested.actions) * 2 + 2)
-    for _wave in range(max_waves):
-        current_plan: StrategyPreparationPlan = current["preparation_plan"]
-        selected = (
-            current_plan
-            if requested_keys is None
-            else current_plan.select(requested_keys)
-        )
-        if selected.overall_status == "READY":
-            current["requested_preparation_plan"] = selected_requested
-            return current
-        if selected.blocked:
-            blocked = [
-                item.artifact_key for item in selected.actions if item.action == "BLOCKED"
-            ]
-            raise RuntimeError(
-                f"{failure_prefix}依賴於重新規劃後變成BLOCKED: "
-                + ", ".join(blocked)
-            )
+    handlers = dict(producer_handlers or {})
 
-        action = selected.next_runnable_action(
-            executed_signatures=executed_signatures
+    def _execute(action: StrategyPreparationAction) -> None:
+        external = handlers.get(str(action.producer_work_type or ""))
+        if external is not None:
+            code = int(external(action) or 0)
+            if code != 0:
+                raise RuntimeError(
+                    f"producer {action.producer_work_type}失敗: returncode={code}"
+                )
+            return
+        current = holder.get("status") or {}
+        comparison_period = dict(current.get("comparison_period") or {})
+        _execute_preparation_action(
+            root=root,
+            settings=settings,
+            action=action,
+            comparison_end_date=(
+                None
+                if comparison_period.get("end") in (None, "")
+                else str(comparison_period.get("end"))
+            ),
         )
-        if action is None:
-            remaining = [
-                f"{item.artifact_key}:{item.action}"
-                for item in selected.actions
-                if item.action != "REUSE"
-            ]
-            raise RuntimeError(
-                f"{failure_prefix}重新規劃後沒有可執行且依賴已就緒的動作: "
-                + ", ".join(remaining)
-            )
 
-        print(f"\n[前置] {action.description}")
-        try:
-            comparison_period = dict(current.get("comparison_period") or {})
-            _execute_preparation_action(
-                root=root,
-                settings=settings,
-                action=action,
-                comparison_end_date=(
-                    None if comparison_period.get("end") in (None, "")
-                    else str(comparison_period.get("end"))
-                ),
-            )
-        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
-            raise RuntimeError(
-                f"{failure_prefix}失敗: {action.artifact_key} | action={action.action} | "
-                f"path={action.path} | {type(exc).__name__}: {exc}"
-            ) from exc
-        executed_signatures.add(
-            (action.artifact_key, action.action, action.builder_type, action.path)
-        )
-        current = status_refresher()
-        current["requested_preparation_plan"] = selected_requested
-
-    current_plan = current["preparation_plan"]
-    selected = (
-        current_plan if requested_keys is None else current_plan.select(requested_keys)
+    outcome = run_research_artifact_preparation(
+        plan_refresher=_refresh_plan,
+        action_executor=_execute,
+        required_artifact_keys=required_artifact_keys,
+        failure_prefix=failure_prefix,
+        on_action=lambda action: print(f"\n[前置] {action.description}"),
     )
-    remaining = [
-        f"{item.artifact_key}:{item.action}"
-        for item in selected.actions
-        if item.action != "REUSE"
-    ]
-    raise RuntimeError(
-        f"{failure_prefix}超過最大依賴波次仍未READY: " + ", ".join(remaining)
+    final = holder.get("status") or status_refresher()
+    final["requested_preparation_plan"] = (
+        outcome.plan
+        if required_artifact_keys is None
+        else outcome.plan.select(required_artifact_keys)
     )
+    return final
 
 
 def prepare_strategy_parameter_artifacts(
@@ -384,6 +350,7 @@ def prepare_strategy_parameter_artifacts(
     status: dict[str, Any],
     required_source_ids: tuple[str, ...] | list[str] | set[str],
     status_refresher: Callable[[], dict[str, Any]] | None = None,
+    producer_handlers: Mapping[str, Callable[[StrategyPreparationAction], int | None]] | None = None,
 ) -> dict[str, Any]:
     """Prepare requested strategy parameters through the canonical dependency runner."""
 
@@ -406,6 +373,7 @@ def prepare_strategy_parameter_artifacts(
         status_refresher=refresh_status,
         required_artifact_keys=tuple(f"param:{source_id}" for source_id in requested),
         failure_prefix="策略參數前置",
+        producer_handlers=producer_handlers,
     )
 
 
@@ -415,6 +383,7 @@ def prepare_strategy_comparison_artifacts(
     settings: StrategyComparisonSettings,
     status: dict[str, Any],
     status_refresher: Callable[[], dict[str, Any]] | None = None,
+    producer_handlers: Mapping[str, Callable[[StrategyPreparationAction], int | None]] | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     refresh_status = (
@@ -429,6 +398,7 @@ def prepare_strategy_comparison_artifacts(
         status_refresher=refresh_status,
         required_artifact_keys=None,
         failure_prefix="策略比較前置",
+        producer_handlers=producer_handlers,
     )
 
 

@@ -108,6 +108,7 @@ project/
 ```
 
 - `tools/optimizer/`目前保留策略參數最佳化互動／orchestration與legacy import façade；由 `apps/research.py` 的「策略參數最佳化」工作類型進入。正式可共用primitive逐步移入`services/optimizer/`，不得再由`filters/`新增對`tools.optimizer`的反向依賴。
+- Research前置工件的狀態與依賴編排由`core/research_orchestration.py`與`services/research/artifact_orchestrator.py`共同持有SSOT：各domain readiness只能提供`ready / exists / resumable / canonical producer / dependencies`等事實，統一action policy映射為`REUSE / BUILD / REBUILD / RESUME / BLOCKED`；canonical Dataset／Target、模型／PIT score、Optimizer策略參數與可配置Audit source仍由各自domain service唯一產生，Research層只負責依dependency graph委派。Producer「存在」不得與其upstream「此刻READY」混為一談；每執行一個producer後必須重新讀取最新truth並re-plan，避免Dataset／Target重建前捕捉的舊period、fingerprint或coverage流入後續Optimizer／score工作。此契約同時適用完整缺件、部分缺件、stale／corrupt、config fingerprint變更、上游更新、partial seed／fold與合法cross-mode reuse；只有缺raw truth、無canonical producer、workflow未授權，或需要新Label／新model identity／target／architecture／loss／hyperparameter等研究選擇時才可`BLOCKED`。`status`／`report`類read-only入口不得因檢視而觸發長流程builder；執行入口須先顯示可稽核plan並只確認一次，再由共用orchestrator一路補建到READY或在第一個真正不可補的節點fail-fast。
 
 ### `tools/trade_analysis/`
 

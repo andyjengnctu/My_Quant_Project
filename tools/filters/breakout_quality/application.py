@@ -49,7 +49,7 @@ from core.runtime_utils import (
     run_cli_entrypoint,
 )
 from filters.breakout_quality.artifact_dependency_registry import (
-    collect_model_upstream_readiness,
+    collect_model_upstream_preparation_plan,
 )
 from filters.breakout_quality.dataset_readiness import collect_dataset_readiness
 from filters.breakout_quality.contract import CONTEXT_COLUMNS, DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
@@ -101,6 +101,7 @@ from filters.breakout_quality.ranking_score_store import (
     resolve_continuous_ranker_oos_score_path,
 )
 from tools.audit.catalog import get_domain_cli_commands
+from services.research.artifact_orchestrator import run_research_artifact_preparation
 
 from core.console_report import (
     COMPACT_CONSOLE_ENV,
@@ -2440,6 +2441,52 @@ def _interactive_binary_model_research(
         print("無效選項，請重新輸入。")
 
 
+def _collect_continuous_research_input_plan(
+    settings,
+    *,
+    dataset_profile: str | None = None,
+    max_tickers: int | None = None,
+):
+    resolved_dataset_profile = str(
+        INTERACTIVE_DATASET_PROFILE if dataset_profile is None else dataset_profile
+    )
+    resolved_max_tickers = int(
+        INTERACTIVE_MAX_TICKERS if max_tickers is None else max_tickers
+    )
+    return collect_model_upstream_preparation_plan(
+        PROJECT_ROOT,
+        filter_id=str(settings.filter_id),
+        model_architecture=str(settings.model_architecture),
+        experiment_profile=str(settings.experiment_profile),
+        dataset=resolved_dataset_profile,
+        max_tickers=resolved_max_tickers,
+    )
+
+
+def _render_continuous_research_input_plan(settings, plan) -> None:
+    print("\n" + render_section("Research 前置工件計畫"))
+    print(
+        render_key_values(
+            (
+                ("Profile", str(settings.experiment_profile)),
+                ("整體狀態", str(plan.overall_status)),
+            )
+        )
+    )
+    rows = []
+    for action in plan.actions:
+        rows.append(
+            (
+                str(action.action),
+                str(action.artifact_key),
+                project_relative_display_path(action.path, project_root=PROJECT_ROOT),
+                str(action.description),
+            )
+        )
+    if rows:
+        print(render_table(("動作", "工件", "路徑", "說明"), rows))
+
+
 def _prepare_continuous_research_inputs(
     program_name: str,
     settings,
@@ -2447,6 +2494,12 @@ def _prepare_continuous_research_inputs(
     dataset_profile: str | None = None,
     max_tickers: int | None = None,
 ) -> int:
+    """Prepare deterministic model inputs through the shared Research orchestrator.
+
+    This handles cold-start, partial deletion, corruption, stale source inventory, schema
+    changes and relabel-only refresh with one dependency/re-plan contract.
+    """
+
     color_enabled = console_color_enabled()
     resolved_dataset_profile = str(
         INTERACTIVE_DATASET_PROFILE if dataset_profile is None else dataset_profile
@@ -2454,28 +2507,85 @@ def _prepare_continuous_research_inputs(
     resolved_max_tickers = int(
         INTERACTIVE_MAX_TICKERS if max_tickers is None else max_tickers
     )
-    refresh_mode, refresh_reasons, dataset_step = _dataset_refresh_step(
-        settings.filter_id,
-        resolved_dataset_profile,
-        max_tickers=resolved_max_tickers,
-    )
-    if dataset_step is not None:
-        command, command_args, label = dataset_step
-        reason_summary = _compact_dataset_refresh_reason(refresh_reasons)
-        print(
-            paint("[Dataset]", "cyan", enabled=color_enabled, bold=True)
-            + f" {label}｜{reason_summary}"
+
+    def _refresh_plan():
+        return _collect_continuous_research_input_plan(
+            settings,
+            dataset_profile=resolved_dataset_profile,
+            max_tickers=resolved_max_tickers,
         )
-        with _compact_console_scope():
-            code = _run_command(command, command_args, program_name=program_name)
-        if code != 0:
-            return int(code)
+
+    def _execute(action) -> None:
+        if action.builder_type == "breakout_quality_dataset":
+            refresh_mode, refresh_reasons, dataset_step = _dataset_refresh_step(
+                str(settings.filter_id),
+                resolved_dataset_profile,
+                max_tickers=resolved_max_tickers,
+            )
+            if dataset_step is None:
+                return
+            command, command_args, label = dataset_step
+            reason_summary = _compact_dataset_refresh_reason(refresh_reasons)
+            print(
+                paint("[Dataset]", "cyan", enabled=color_enabled, bold=True)
+                + f" {label}｜{reason_summary}"
+            )
+            with _compact_console_scope():
+                code = _run_command(command, command_args, program_name=program_name)
+            if code != 0:
+                raise RuntimeError(f"Dataset canonical builder失敗: returncode={code}")
+            return
+        if action.builder_type == "breakout_quality_continuous_target":
+            profile = get_breakout_quality_experiment_profile(settings.experiment_profile)
+            with _compact_console_scope():
+                code = _run_command(
+                    "prepare-continuous-target",
+                    [
+                        "--filter-id", str(settings.filter_id),
+                        "--target-id", str(profile.continuous_target_id),
+                    ],
+                    program_name=program_name,
+                )
+            if code != 0:
+                raise RuntimeError(
+                    f"Continuous Target canonical builder失敗: returncode={code}"
+                )
+            return
+        raise RuntimeError(f"不支援的model upstream builder: {action.builder_type}")
+
+    try:
+        outcome = run_research_artifact_preparation(
+            plan_refresher=_refresh_plan,
+            action_executor=_execute,
+            failure_prefix="模型研究前置",
+            on_action=lambda action: print(
+                "  Upstream "
+                + paint(
+                    action.action,
+                    "green" if action.action == "REUSE" else "yellow",
+                    enabled=color_enabled,
+                    bold=True,
+                )
+                + f" | {action.artifact_key.split(':', 1)[-1]} | {action.path}"
+            ),
+        )
+    except RuntimeError as exc:
+        print(paint("[Upstream] FAIL", "red", enabled=color_enabled, bold=True) + f"｜{exc}")
+        return 2
+
+    if not outcome.executed:
+        for action in outcome.plan.actions:
+            print(
+                "  Upstream "
+                + paint("REUSE", "green", enabled=color_enabled, bold=True)
+                + f" | {action.artifact_key.split(':', 1)[-1]} | {action.path}"
+            )
+
     profile = get_breakout_quality_experiment_profile(settings.experiment_profile)
     if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
-        # Daily-universal targets are derived directly from canonical OHLCV and do not
-        # create an event-group Continuous Target artifact.  MR-13I/J additionally need
-        # historical-effective Min ROOS risk calibration; fail before GPU training when
-        # those read-only upstream parameter artifacts are unavailable.
+        # The historical MR-13I/J target has a cross-work-type strategy-risk dependency.
+        # It remains an explicit research dependency rather than being silently filled by
+        # the model trainer.  Current active Daily Universal targets do not use it.
         if str(profile.continuous_target_id or "") == DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID:
             try:
                 schedule = load_min_roos_risk_schedule(PROJECT_ROOT)
@@ -2484,25 +2594,17 @@ def _prepare_continuous_research_inputs(
                     paint("[Risk params] BLOCKED", "red", enabled=color_enabled, bold=True)
                     + f"｜{exc}"
                 )
-                print("請先由Strategy Compare參數工作流準備Selection/Forward Min ROOS正式risk-param工件；模型流程不得自行訓練或補值。")
+                print(
+                    "此target需要historical-effective Min ROOS風險參數，屬跨工作類型且目前"
+                    "不是current workflow；不得由模型trainer自行猜測或補值。"
+                )
                 return 2
             print(
                 paint("[Risk params] READY", "green", enabled=color_enabled, bold=True)
                 + "｜historical-effective Min ROOS atr_len / atr_times_init"
                 + f"｜periods={len(schedule)}"
             )
-        return 0
-    with _compact_console_scope():
-        return int(
-            _run_command(
-                "prepare-continuous-target",
-                [
-                    "--filter-id", settings.filter_id,
-                    "--target-id", str(settings.continuous_target_id),
-                ],
-                program_name=program_name,
-            )
-        )
+    return 0
 
 
 def _interactive_continuous_full_train(program_name: str, settings) -> int:
@@ -2525,7 +2627,12 @@ def _interactive_continuous_full_train(program_name: str, settings) -> int:
         f"Loss={profile.loss_name}｜Epoch metric={profile.epoch_selection_metric}"
     )
     print("此為Pre-Test研究Gate：不取代正式Rolling evidence；模型完成後可直接執行Pre-Test策略比較。")
-    if not _prompt_bool("確認開始", True):
+    upstream_plan = _collect_continuous_research_input_plan(settings)
+    _render_continuous_research_input_plan(settings, upstream_plan)
+    if upstream_plan.blocked:
+        print("目前存在不可由canonical producer確定性補建的前置工件；本次不執行。")
+        return 2
+    if not _prompt_bool("確認開始（含必要自動前置）", True):
         print("已取消。")
         return 0
     code = _prepare_continuous_research_inputs(program_name, settings)
@@ -2627,7 +2734,12 @@ def _interactive_continuous_rolling_test(
                     )
                 )
             )
-            if not _prompt_bool(f"確認執行{mode.label}", True):
+            upstream_plan = _collect_continuous_research_input_plan(settings)
+            _render_continuous_research_input_plan(settings, upstream_plan)
+            if upstream_plan.blocked:
+                print("目前存在不可由canonical producer確定性補建的前置工件；本次不執行。")
+                continue
+            if not _prompt_bool(f"確認執行{mode.label}（含必要自動前置）", True):
                 continue
             spec = get_continuous_ranker_research_spec(settings.experiment_profile)
             return _run_continuous_pit_profile(
@@ -2849,25 +2961,26 @@ def _prepare_strategy_compare_model_upstream(
 ) -> int:
     """Prepare canonical Dataset/Target only when the shared registry says they are stale."""
 
-    readiness = collect_model_upstream_readiness(
-        PROJECT_ROOT,
-        filter_id=str(workflow.filter_id),
-        model_architecture=str(workflow.model_architecture),
-        experiment_profile=str(workflow.experiment_profile),
-        dataset=str(dataset_profile),
-        max_tickers=0,
+    plan = _collect_continuous_research_input_plan(
+        workflow, dataset_profile=str(dataset_profile), max_tickers=0
     )
     color_enabled = console_color_enabled()
-    for item in readiness:
-        status_text = "REUSE" if item.ready else "BUILD/REBUILD"
+    for item in plan.actions:
         print(
             "  Upstream "
-            + paint(status_text, "green" if item.ready else "yellow", enabled=color_enabled, bold=True)
-            + f" | {item.artifact_type} | {item.status}"
+            + paint(
+                item.action,
+                "green" if item.action == "REUSE" else "yellow",
+                enabled=color_enabled,
+                bold=True,
+            )
+            + f" | {item.artifact_key.split(':', 1)[-1]} | {item.description}"
             + f" | {project_relative_display_path(item.path, project_root=PROJECT_ROOT)}"
         )
-    if all(item.ready for item in readiness):
+    if plan.overall_status == "READY":
         return 0
+    if plan.blocked:
+        raise RuntimeError("Strategy Compare model upstream包含不可自動補建的Research依賴")
     return int(
         _prepare_continuous_research_inputs(
             program_name,
@@ -3220,7 +3333,7 @@ def _prepare_strategy_compare_model_artifacts(
     return 0
 
 
-def _interactive_rolling_timing_mode(program_name: str) -> int:
+def _interactive_rolling_timing_mode(program_name: str, settings) -> int:
     while True:
         print("\n=== Timing Mode｜Rolling 訓練前後比較 ===")
         print(render_menu_item(1, "執行／更新 A/B 比較", default=True))
@@ -3237,6 +3350,16 @@ def _interactive_rolling_timing_mode(program_name: str) -> int:
             return 0
         try:
             if choice == "1":
+                upstream_plan = _collect_continuous_research_input_plan(settings)
+                _render_continuous_research_input_plan(settings, upstream_plan)
+                if upstream_plan.blocked:
+                    print("目前存在不可由canonical producer確定性補建的前置工件；本次不執行。")
+                    continue
+                if not _prompt_bool("確認執行Timing A/B（含必要自動前置）", True):
+                    continue
+                code = _prepare_continuous_research_inputs(program_name, settings)
+                if code != 0:
+                    return int(code)
                 return int(
                     _run_command(
                         "timing-rolling-training",
@@ -3321,6 +3444,25 @@ def _interactive_model_research(program_name: str) -> int:
             if not research_spec.reference_profile_name:
                 print("目前Active Profile未設定reference Target；此項不可執行。")
                 continue
+            reference_settings = get_breakout_quality_workflow_settings(
+                experiment_profile=str(research_spec.reference_profile_name)
+            )
+            target_compare_plans = []
+            for required_settings in (settings, reference_settings):
+                plan = _collect_continuous_research_input_plan(required_settings)
+                _render_continuous_research_input_plan(required_settings, plan)
+                target_compare_plans.append(plan)
+            if any(plan.blocked for plan in target_compare_plans):
+                print("Target比較存在不可由canonical producer確定性補建的前置工件；本次不執行。")
+                continue
+            if not _prompt_bool("確認執行Target比較（含必要自動前置）", True):
+                continue
+            for required_settings in (settings, reference_settings):
+                code = _prepare_continuous_research_inputs(
+                    program_name, required_settings
+                )
+                if code != 0:
+                    return int(code)
             return int(
                 _run_command(
                     "compare-daily-targets",
@@ -3334,7 +3476,11 @@ def _interactive_model_research(program_name: str) -> int:
                 )
             )
         if choice == "5":
-            return int(_interactive_rolling_timing_mode(program_name))
+            timing = get_breakout_quality_rolling_timing_settings()
+            timing_settings = get_breakout_quality_workflow_settings(
+                experiment_profile=str(timing.experiment_profile)
+            )
+            return int(_interactive_rolling_timing_mode(program_name, timing_settings))
         print("無效選項，請重新輸入。")
 
 def run_model_training_menu(program_name: str = "apps/research.py model") -> int:

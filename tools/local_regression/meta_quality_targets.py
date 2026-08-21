@@ -91,6 +91,8 @@ COVERAGE_TARGETS = list(dict.fromkeys([
     "tools/validate/synthetic_guardrail_cases.py",
     "tools/validate/synthetic_display_cases.py",
     "tools/validate/synthetic_reporting_cases.py",
+    "core/research_orchestration.py",
+    "services/research/artifact_orchestrator.py",
     "tools/validate/synthetic_error_cases.py",
     "tools/validate/synthetic_data_quality_cases.py",
     "tools/validate/synthetic_cli_cases.py",

@@ -23,6 +23,7 @@ class AuditCatalogEntry:
     status_function: str | None = None
     run_function: str | None = None
     cli_command: str | None = None
+    preparation_function: str | None = None
 
     @property
     def formal(self) -> bool:
@@ -42,6 +43,16 @@ class AuditCatalogEntry:
         handler = getattr(import_module(self.module), self.run_function)
         if not callable(handler):
             raise TypeError(f"Audit run handler不可呼叫: {self.module}.{self.run_function}")
+        return handler
+
+    def load_preparation_handler(self) -> RunHandler:
+        if not self.preparation_function:
+            raise ValueError(f"Audit沒有canonical source preparer: {self.audit_type}")
+        handler = getattr(import_module(self.module), self.preparation_function)
+        if not callable(handler):
+            raise TypeError(
+                f"Audit source preparer不可呼叫: {self.module}.{self.preparation_function}"
+            )
         return handler
 
 

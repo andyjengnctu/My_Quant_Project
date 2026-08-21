@@ -9754,3 +9754,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 防回歸：既有Strategy Compare synthetic加入「missing canonical upstream必須PREPARABLE且要求provider callback」案例；CLI synthetic確認formal robustness run一定注入upstream preparer。未新增MR/SR/Cxx identity，不改`end_to_end_v1`四seed、300 trials/fold、Round B shared initial checkpoint與Compare Suite。
 - 決策：**ENGINEERING_BUG_FIXED / COLD_START_AUTO_PREPARE_RESTORED / READY_FOR_OOS_BENCHMARK**。
 
+### 2026-08-21 — Research-wide Artifact Orchestration：全狀態自動偵測／補建與 producer 後 re-plan
+- 使用者要求由架構層處理，不再針對Robustness或cold start逐錯補丁；正式Research工作在全新、部分缺件、stale、corrupt、fingerprint/identity改變、partial seed/fold、上游更新造成下游過期等狀況，都必須用同一套dependency/action語意自行判斷。
+- 實機觸發證據：Robustness先成功自動重建canonical Dataset，下一步卻沿用Dataset重建前的舊planning snapshot，導致canonical Optimizer收到未知comparison end而報`MANIFEST_MISSING_OR_INVALID`／無法判定建立終點。這證明問題是跨producer orchestration/re-plan邊界，而非單一Dataset builder。
+- 架構修正：新增`core/research_orchestration.py`作Research-wide artifact graph/action SSOT，新增`services/research/artifact_orchestrator.py`作dependency-aware runner；每個producer執行前使用fresh plan，完成後強制重新讀最新canonical truth再決定下一個動作。統一語意為READY→REUSE、missing→BUILD、stale/corrupt→REBUILD、合法partial→RESUME、真正無producer／缺raw truth／需新Label、新model identity或研究決策→BLOCKED。
+- Producer邊界維持不變：共用orchestrator不複製Dataset/Target/model/Optimizer/Audit builder。模型Research、Strategy Compare／Robustness、Optimizer parameter service與Audit只宣告facts/dependencies，實際BUILD/REBUILD/RESUME仍委派各自canonical producer；Optimizer仍是current strategy parameter唯一producer。
+- Robustness特別修正：Dataset/Target補建後先重新解析2021→latest共同comparison period，再以fresh period委派canonical Optimizer建立production/benchmark strategy params，避免`comparison_end=None`穿越producer邊界。normal Strategy Compare同樣以dependency graph等待score/period truth後才啟動parameter producer。
+- UX契約：只有真正「執行」會自動補建；status／latest／查看設定保持read-only。執行前先顯示可稽核plan並只確認一次；任一producer失敗立即停止、保留可RESUME工件、不產生半套正式結果。
+- 驗證邊界：GPT端獨立targeted contracts覆蓋action matrix、dependency order、producer後re-plan、fresh comparison period、Strategy/PIT/Robustness/Model/Audit formal paths；未執行`apps/run_bundle.py`／`apps/test_suite.py`，正式本機double check與4-seed benchmark evidence仍待使用者執行。
+- Decision：**IMPLEMENTED / RESEARCH_WIDE_ORCHESTRATION_SSOT / FORMAL_RERUN_PENDING / BENCHMARK_EVIDENCE_PENDING**。未新增MR/SR/Cxx identity，production/runtime identity不變。

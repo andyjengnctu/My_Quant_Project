@@ -93,22 +93,6 @@ def _prepare_strategy_model_upstream_prerequisites(*, profile_id: str) -> int:
     )
 
 
-def _auto_preparable_model_blockers(resolved_plan) -> tuple[object, ...]:
-    return tuple(
-        action
-        for action in resolved_plan.preparation_plan.actions
-        if action.action == "BLOCKED" and action.producer_work_type == "model_training"
-    )
-
-
-def _non_model_blockers(resolved_plan) -> tuple[object, ...]:
-    return tuple(
-        action
-        for action in resolved_plan.preparation_plan.actions
-        if action.action == "BLOCKED" and action.producer_work_type != "model_training"
-    )
-
-
 def _run_strategy_param_migration() -> int:
     from services.optimizer.strategy_param_service import (
         finalize_legacy_strategy_parameter_migration,
@@ -168,22 +152,19 @@ def _run_current_comparison(*, profile_id: str, confirm: bool) -> dict:
     status = resolved_plan.status_dict()
     print("\n" + render_execution_plan(settings=settings, status=status))
 
-    auto_model_blockers = _auto_preparable_model_blockers(resolved_plan)
-    hard_blockers = _non_model_blockers(resolved_plan)
-    if hard_blockers:
-        reason = str(hard_blockers[0].description or "目前缺少不可自動產生的上游工件。")
-        raise RuntimeError(reason)
-
-    if auto_model_blockers:
-        unique_sources = sorted({str(item.artifact_key).split(":")[1] for item in auto_model_blockers if str(item.artifact_key).startswith("dl:")})
-        print(
-            "\n自動前置：將由canonical模型訓練服務補建／接續缺少的模型工件"
-            + (f" | sources={','.join(unique_sources)}" if unique_sources else "")
+    if resolved_plan.preparation_plan.blocked:
+        blocked = [
+            action for action in resolved_plan.preparation_plan.actions
+            if action.action == "BLOCKED"
+        ]
+        reason = str(
+            blocked[0].description if blocked else "目前存在不可自動補建的Research前置工件。"
         )
+        raise RuntimeError(reason)
 
     if confirm and settings.preparation.require_confirmation:
         try:
-            choice = input("👉 按 Enter 執行（含必要自動前置）；輸入 0 返回：").strip().lower()
+            choice = input("👉 按 Enter 執行（含所有必要自動前置）；輸入 0 返回：").strip().lower()
         except EOFError:
             print("\n輸入已結束，本次不執行。")
             return {}
@@ -194,22 +175,16 @@ def _run_current_comparison(*, profile_id: str, confirm: bool) -> dict:
             print("輸入無效，本次不執行。")
             return {}
 
-    if auto_model_blockers:
-        code = _prepare_strategy_model_prerequisites(profile_id=profile_id)
-        if code != 0:
-            raise RuntimeError(f"策略比較模型前置失敗: returncode={code}")
-        resolved_plan = resolve_comparison_plan(settings=settings)
-        remaining = tuple(
-            action for action in resolved_plan.preparation_plan.actions if action.action == "BLOCKED"
-        )
-        if remaining:
-            raise RuntimeError(str(remaining[0].description or "自動前置後仍有BLOCKED工件。"))
-
     return run_strategy_comparison(
         resolved_plan=resolved_plan,
         auto_prepare=True,
         settings=settings,
         quiet=True,
+        producer_handlers={
+            "model_training": lambda _action: _prepare_strategy_model_prerequisites(
+                profile_id=profile_id
+            )
+        },
     )
 
 

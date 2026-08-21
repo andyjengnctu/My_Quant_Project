@@ -1035,29 +1035,21 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
     import apps.research as research_app_module
 
-    auto_model_plan = StrategyPreparationPlan.from_actions((
-        StrategyPreparationAction(
-            action_id="dl:CONT13K_ROLL:manifest",
-            artifact_key="dl:CONT13K_ROLL:manifest",
-            action="BLOCKED",
-            builder_type=None,
-            description="synthetic missing model artifact",
-            path="models/synthetic/manifest.json",
-            producer_work_type="model_training",
-        ),
-    ))
-    ready_model_plan = StrategyPreparationPlan.from_actions(tuple())
-    blocked_resolved = SimpleNamespace(
+    auto_model_action = StrategyPreparationAction(
+        action_id="dl:CONT13K_ROLL:manifest",
+        artifact_key="dl:CONT13K_ROLL:manifest",
+        action="BUILD",
+        builder_type="canonical_model_artifacts",
+        description="synthetic missing model artifact",
+        path="models/synthetic/manifest.json",
+        producer_work_type="model_training",
+    )
+    auto_model_plan = StrategyPreparationPlan.from_actions((auto_model_action,))
+    preparable_resolved = SimpleNamespace(
         preparation_plan=auto_model_plan,
         status_dict=lambda: {
             "preparation_plan": auto_model_plan,
-            "config_fingerprint": "synthetic",
-        },
-    )
-    ready_resolved = SimpleNamespace(
-        preparation_plan=ready_model_plan,
-        status_dict=lambda: {
-            "preparation_plan": ready_model_plan,
+            "overall_status": "PREPARABLE",
             "config_fingerprint": "synthetic",
         },
     )
@@ -1072,7 +1064,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ),
         patch.object(
             research_app_module, "resolve_comparison_plan",
-            side_effect=[blocked_resolved, ready_resolved],
+            return_value=preparable_resolved,
         ) as resolve_plan_mock,
         patch.object(
             research_app_module, "render_execution_plan",
@@ -1084,7 +1076,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ) as auto_prepare_mock,
         patch.object(
             research_app_module, "run_strategy_comparison",
-            return_value={"status": "ok"},
+            side_effect=lambda **kwargs: (
+                kwargs["producer_handlers"]["model_training"](auto_model_action),
+                {"status": "ok"},
+            )[1],
         ) as replay_mock,
         patch("builtins.input", return_value="") as confirm_mock,
         redirect_stdout(auto_prepare_stdout),
@@ -1097,11 +1092,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "single_seed_strategy_compare_auto_prepares_model_prerequisites_then_replans_with_one_confirmation",
         True,
         auto_prepare_result == {"status": "ok"}
-        and resolve_plan_mock.call_count == 2
+        and resolve_plan_mock.call_count == 1
         and auto_prepare_mock.call_count == 1
         and replay_mock.call_count == 1
         and confirm_mock.call_count == 1
-        and "自動前置" in auto_prepare_stdout.getvalue(),
+        and "所有必要自動前置" in app_source,
     )
 
     selection_min_roos_source = settings.parameter_sources.get("selection_min_roos")
@@ -1293,15 +1288,19 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     }
 
     from filters.breakout_quality import strategy_multi_seed_robustness as robustness_module
-    from filters.breakout_quality.artifact_dependency_registry import PRODUCER_MODEL_TRAINING
+    from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
 
     with tempfile.TemporaryDirectory() as missing_robustness_upstream_temp:
-        pending_upstream = SimpleNamespace(
-            ready=False,
-            producer_work_type=PRODUCER_MODEL_TRAINING,
-            path=Path(missing_robustness_upstream_temp) / "dataset_summary.json",
+        pending_upstream = ResearchArtifactAction(
+            action_id="model-upstream:dataset_core",
+            artifact_key="model-upstream:dataset_core",
+            action="BUILD",
+            builder_type="breakout_quality_dataset",
             description="canonical Dataset需更新：synthetic missing",
+            path=str(Path(missing_robustness_upstream_temp) / "dataset_summary.json"),
+            producer_work_type="model_training",
         )
+        pending_upstream_plan = ResearchArtifactPlan.from_actions((pending_upstream,))
         model_sensitive_arms = robustness_module._model_seed_sensitive_arms(
             robustness_profile, robustness_settings, robustness_stochastic
         )
@@ -1310,8 +1309,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )
         with patch.object(
             robustness_module,
-            "collect_model_upstream_readiness",
-            return_value=(pending_upstream,),
+            "collect_model_upstream_preparation_plan",
+            return_value=pending_upstream_plan,
         ):
             upstream_rows, upstream_blockers = robustness_module._model_upstream_rows(
                 robustness_profile, model_sensitive_arms
@@ -1328,7 +1327,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "multi_seed_robustness_missing_canonical_upstream_is_auto_preparable_not_manual_blocker",
         True,
         bool(upstream_rows)
-        and all(row[0] in {"BUILD", "REBUILD"} for row in upstream_rows)
+        and all(row[0] in {"BUILD", "REBUILD", "RESUME"} for row in upstream_rows)
         and upstream_blockers == []
         and auto_upstream_plan["overall_status"] == "PREPARABLE"
         and bool(auto_upstream_plan["model_upstream_prepare_required"])
@@ -1338,6 +1337,19 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "strategy_upstream_handler" in research_provider_source
         and "prepare_strategy_compare_model_upstream_artifacts" in model_app_source
         and "_prepare_strategy_model_upstream_prerequisites" in app_source,
+    )
+
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_robustness_replans_fresh_period_before_optimizer_parameter_dispatch",
+        True,
+        (
+            "period_override = {\"start\": str(comparison_start), \"end\": str(comparison_end)}" in robustness_source
+            and "comparison_period_override=period_override" in robustness_source
+            and robustness_source.find("comparison_start, comparison_end = _comparison_period_from_upstream")
+            < robustness_source.find("status = prepare_strategy_parameter_artifacts(")
+            and "collect_model_upstream_preparation_plan" in robustness_source
+        ),
     )
 
     configured_seed_count = int(robustness_settings.seed_count)
@@ -2498,7 +2510,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 settings=fake_settings,
                 status={"preparation_plan": first_plan},
                 required_source_ids=tuple(configured_required_sources),
-                status_refresher=lambda: {"preparation_plan": second_plan},
+                status_refresher=iter((
+                    {"preparation_plan": first_plan},
+                    {"preparation_plan": second_plan},
+                )).__next__,
             )
         parameter_only_prepare_ok = (
             prep_calls == [f"param:{build_source}"]
@@ -2789,11 +2804,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "preparation_builds_parameter_identity_first_and_replans_before_historical_pit_rebuild",
         True,
-        all(token in preparation_source for token in (
+        all(token in (preparation_source + (project_root / "services" / "research" / "artifact_orchestrator.py").read_text(encoding="utf-8")) for token in (
             "status_refresher",
-            "execution_priority=10",
-            "selected.next_runnable_action",
-            "current = status_refresher()",
+            "execution_priority",
+            "next_runnable_action",
+            "current = plan_refresher()",
         )),
     )
 
@@ -2835,7 +2850,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "strategy_and_model_work_share_artifact_upstream_readiness_registry",
         True,
         "collect_model_upstream_readiness" in preparation_source
-        and "collect_model_upstream_readiness" in model_app_source
+        and "collect_model_upstream_preparation_plan" in model_app_source
+        and "run_research_artifact_preparation" in model_app_source
         and "model-upstream:" in preparation_source
         and "source_upstream_dependencies" in preparation_source,
     )
@@ -2870,7 +2886,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and len(daily_blockers) == 1
         and any("canonical Dataset" in item for item in daily_blockers)
         and not any("market-set" in item for item in daily_blockers)
-        and "canonical model-training service自動補建" in preparation_source,
+        and "Research dependency graph" in preparation_source,
     )
     contract_example = {
         "breakout_quality_param_adaptation": {
@@ -2911,12 +2927,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "preparation_plan_has_ready_preparable_blocked_and_single_confirmation_contract",
         True,
-        all(token in preparation_source for token in (
-            "StrategyPreparationPlan.from_actions(actions)",
-            'failure_prefix="策略比較前置"',
-            'f"{failure_prefix}失敗:',
-        ))
-        and "按 Enter 執行（含必要自動前置）；輸入 0 返回" in app_source
+        "StrategyPreparationPlan.from_actions(actions)" in preparation_source
+        and 'failure_prefix="策略比較前置"' in preparation_source
+        and 'f"{failure_prefix}失敗:' in (project_root / "services" / "research" / "artifact_orchestrator.py").read_text(encoding="utf-8")
+        and "按 Enter 執行（含所有必要自動前置）；輸入 0 返回" in app_source
         and "render_execution_plan" in app_source,
     )
 

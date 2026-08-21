@@ -25,6 +25,37 @@ MODEL_RESEARCH_PROVIDERS: dict[str, dict[str, str]] = {
 }
 
 
+# Research-wide deterministic artifact orchestration policy.  Domain configs may add
+# domain-specific reuse knobs, but missing/stale/corrupt/partial handling must not fork.
+RESEARCH_ARTIFACT_PREPARATION = {
+    "auto_prepare": True,
+    "reuse_ready_artifacts": True,
+    "rebuild_stale_artifacts": True,
+    "resume_partial_artifacts": True,
+    "require_single_confirmation": True,
+}
+
+
+@dataclass(frozen=True)
+class ResearchArtifactPreparationPolicy:
+    auto_prepare: bool
+    reuse_ready_artifacts: bool
+    rebuild_stale_artifacts: bool
+    resume_partial_artifacts: bool
+    require_single_confirmation: bool
+
+
+def get_research_artifact_preparation_policy() -> ResearchArtifactPreparationPolicy:
+    raw = dict(RESEARCH_ARTIFACT_PREPARATION)
+    return ResearchArtifactPreparationPolicy(
+        auto_prepare=bool(raw.get("auto_prepare", True)),
+        reuse_ready_artifacts=bool(raw.get("reuse_ready_artifacts", True)),
+        rebuild_stale_artifacts=bool(raw.get("rebuild_stale_artifacts", True)),
+        resume_partial_artifacts=bool(raw.get("resume_partial_artifacts", True)),
+        require_single_confirmation=bool(raw.get("require_single_confirmation", True)),
+    )
+
+
 @dataclass(frozen=True)
 class ModelResearchProvider:
     model_id: str
@@ -65,6 +96,9 @@ def get_active_model_research_provider() -> ModelResearchProvider:
 __all__ = [
     "ACTIVE_MODEL_ID",
     "MODEL_RESEARCH_PROVIDERS",
+    "RESEARCH_ARTIFACT_PREPARATION",
     "ModelResearchProvider",
+    "ResearchArtifactPreparationPolicy",
     "get_active_model_research_provider",
+    "get_research_artifact_preparation_policy",
 ]

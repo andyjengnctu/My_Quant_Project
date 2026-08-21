@@ -29,7 +29,85 @@ def append_strategy_compare_preparation_contract_checks(
     preparation_source: str,
     orchestration_source: str,
 ) -> None:
+    shared_orchestrator_source = (
+        project_root / "services" / "research" / "artifact_orchestrator.py"
+    ).read_text(encoding="utf-8")
+    research_contract_source = (
+        project_root / "core" / "research_orchestration.py"
+    ).read_text(encoding="utf-8")
     min_roos_source = settings.parameter_sources["min_roos"]
+
+    from core.research_orchestration import resolve_research_artifact_action
+    policy_cases = {
+        "REUSE": dict(ready=True, artifact_exists=True, has_builder=True, resumable=False),
+        "BUILD": dict(ready=False, artifact_exists=False, has_builder=True, resumable=False),
+        "REBUILD": dict(ready=False, artifact_exists=True, has_builder=True, resumable=False),
+        "RESUME": dict(ready=False, artifact_exists=True, has_builder=True, resumable=True),
+        "BLOCKED": dict(ready=False, artifact_exists=False, has_builder=False, resumable=False),
+    }
+    resolved_policy_cases = {
+        expected: resolve_research_artifact_action(
+            **facts,
+            auto_prepare=True,
+            reuse_ready_artifacts=True,
+            rebuild_stale_artifacts=True,
+            resume_partial_artifacts=True,
+        )
+        for expected, facts in policy_cases.items()
+    }
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "research_artifact_policy_unifies_reuse_build_rebuild_resume_blocked",
+        tuple(policy_cases),
+        tuple(
+            expected
+            for expected in policy_cases
+            if resolved_policy_cases[expected] == expected
+        ),
+    )
+
+    from services.research.artifact_orchestrator import run_research_artifact_preparation
+    dataset_build = StrategyPreparationAction(
+        action_id="model-upstream:dataset_core",
+        artifact_key="model-upstream:dataset_core",
+        action="BUILD",
+        builder_type="dataset",
+        description="dataset build",
+        path="outputs/dataset_summary.json",
+        execution_priority=10,
+    )
+    param_waiting = StrategyPreparationAction(
+        action_id="param:full_oos",
+        artifact_key="param:full_oos",
+        action="BUILD",
+        builder_type="optimizer",
+        description="param build",
+        path="models/strategy_params/canonical/full.json",
+        dependencies=("model-upstream:dataset_core",),
+        execution_priority=20,
+    )
+    dataset_reuse = replace(dataset_build, action="REUSE", builder_type=None)
+    param_reuse = replace(param_waiting, action="REUSE", builder_type=None)
+    dependency_plans = iter((
+        StrategyPreparationPlan.from_actions((dataset_build, param_waiting)),
+        StrategyPreparationPlan.from_actions((dataset_reuse, param_waiting)),
+        StrategyPreparationPlan.from_actions((dataset_reuse, param_reuse)),
+    ))
+    dependency_calls: list[str] = []
+    with redirect_stdout(io.StringIO()):
+        dependency_outcome = run_research_artifact_preparation(
+            plan_refresher=dependency_plans.__next__,
+            action_executor=lambda action: dependency_calls.append(action.artifact_key),
+            failure_prefix="synthetic research graph",
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "research_orchestrator_replans_after_each_producer_and_orders_dependencies",
+        True,
+        dependency_calls == ["model-upstream:dataset_core", "param:full_oos"]
+        and dependency_outcome.plan.overall_status == "READY"
+        and dependency_outcome.waves == 2,
+    )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "min_roos_uses_forward_p2_artifact_and_has_auto_builder",
@@ -54,8 +132,9 @@ def append_strategy_compare_preparation_contract_checks(
         results, "synthetic_breakout_quality", case_id,
         "preparation_supports_dependency_waves_after_score_period_becomes_known",
         True,
-        "max_waves" in preparation_source
-        and "重新規劃後沒有可執行且依賴已就緒的動作" in preparation_source,
+        "plan_refresher" in shared_orchestrator_source
+        and "Mandatory re-plan boundary after every producer invocation" in shared_orchestrator_source
+        and "resolve_research_artifact_action" in research_contract_source,
     )
 
     from filters.breakout_quality import strategy_compare_preparation as preparation_module
@@ -99,7 +178,7 @@ def append_strategy_compare_preparation_contract_checks(
     with patch.object(
         preparation_module,
         "collect_artifact_status",
-        side_effect=(second_wave_status, final_wave_status),
+        side_effect=(initial_wave_status, second_wave_status, final_wave_status),
     ), patch.object(
         preparation_module,
         "_execute_preparation_action",
@@ -119,6 +198,69 @@ def append_strategy_compare_preparation_contract_checks(
             call.kwargs["action"].artifact_key
             for call in mocked_prepare_action.call_args_list
         ] == ["dl:TP1:forward_scores", "param:min_roos"],
+    )
+
+    # Regression for the actual cross-producer failure: the rendering snapshot may have
+    # comparison_period=None before Dataset/Target preparation.  Parameter execution must
+    # consume the freshly re-planned period, never that stale snapshot.
+    from config.strategy_compare import get_strategy_comparison_settings as _get_compare_settings
+    fresh_period_settings = _get_compare_settings("extending_window_oos")
+    fresh_param_action = StrategyPreparationAction(
+        action_id="param:full_oos",
+        artifact_key="param:full_oos",
+        action="BUILD",
+        builder_type="canonical_optimizer_strategy_params",
+        description="synthetic canonical param build",
+        path="models/strategy_params/canonical/full_base_best.json",
+        producer_work_type="optimizer_strategy_parameter_service",
+    )
+    stale_param_status = {
+        "comparison_ready": False,
+        "overall_status": "PREPARABLE",
+        "comparison_period": None,
+        "preparation_plan": StrategyPreparationPlan.from_actions((fresh_param_action,)),
+    }
+    fresh_param_status = {
+        "comparison_ready": False,
+        "overall_status": "PREPARABLE",
+        "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
+        "preparation_plan": StrategyPreparationPlan.from_actions((fresh_param_action,)),
+    }
+    final_param_status = {
+        "comparison_ready": True,
+        "overall_status": "READY",
+        "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
+        "preparation_plan": StrategyPreparationPlan.from_actions((
+            StrategyPreparationAction(
+                action_id="param:full_oos",
+                artifact_key="param:full_oos",
+                action="REUSE",
+                builder_type=None,
+                description="synthetic canonical param reuse",
+                path="models/strategy_params/canonical/full_base_best.json",
+                producer_work_type="existing_artifact",
+            ),
+        )),
+    }
+    forwarded_ensure: dict[str, Any] = {}
+    with patch.object(
+        preparation_module,
+        "ensure_strategy_parameter_artifact",
+        side_effect=lambda *args, **kwargs: forwarded_ensure.update(kwargs) or {},
+    ), redirect_stdout(io.StringIO()):
+        refreshed_param_result = preparation_module.prepare_strategy_parameter_artifacts(
+            project_root=project_root,
+            settings=fresh_period_settings,
+            status=stale_param_status,
+            required_source_ids=("full_oos",),
+            status_refresher=iter((fresh_param_status, final_param_status)).__next__,
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "parameter_producer_consumes_fresh_post_upstream_comparison_period",
+        True,
+        refreshed_param_result["comparison_ready"]
+        and forwarded_ensure.get("comparison_end_date") == "2026-03-02",
     )
 
     from config.strategy_compare import get_strategy_comparison_settings
@@ -546,11 +688,11 @@ def append_strategy_compare_preparation_contract_checks(
         not missing_ready
         and str(missing_row.get("status") or "").startswith("SELECTION_PIT_INVALID")
         and len(missing_actions) == 3
-        and all(action.action == "BLOCKED" for action in missing_actions)
-        and all(action.builder_type is None for action in missing_actions)
+        and all(action.action == "BUILD" for action in missing_actions)
+        and all(action.builder_type == "canonical_model_artifacts" for action in missing_actions)
         and all(action.producer_work_type == "model_training" for action in missing_actions)
-        and all("canonical model-training service" in action.description for action in missing_actions)
-        and all("自動BUILD／RESUME" in action.description for action in missing_actions),
+        and all("canonical model-training producer" in action.description for action in missing_actions)
+        and all("BUILD／REBUILD／RESUME" in action.description for action in missing_actions),
     )
 
     failed_gate_contract = SimpleNamespace(

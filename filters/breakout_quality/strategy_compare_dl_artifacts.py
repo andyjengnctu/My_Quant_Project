@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from core.console_report import project_relative_display_path
+from core.research_orchestration import resolve_research_artifact_action
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
@@ -69,6 +70,26 @@ def model_upstream_prerequisite_blockers(
         experiment_profile=experiment_profile,
         dataset=dataset,
         max_tickers=max_tickers,
+    )
+
+
+def _resolve_action(
+    settings: StrategyComparisonSettings,
+    *,
+    ready: bool,
+    artifact_exists: bool,
+    has_builder: bool,
+    resumable: bool = False,
+) -> str:
+    return resolve_research_artifact_action(
+        ready=bool(ready),
+        artifact_exists=bool(artifact_exists),
+        has_builder=bool(has_builder),
+        auto_prepare=bool(settings.preparation.auto_prepare),
+        reuse_ready_artifacts=bool(settings.preparation.reuse_ready_artifacts),
+        rebuild_stale_artifacts=bool(settings.preparation.rebuild_stale_artifacts),
+        resume_partial_artifacts=bool(settings.preparation.resume_parameter_training),
+        resumable=bool(resumable),
     )
 
 
@@ -213,13 +234,24 @@ def _collect_model_upstream_dependencies(
             if dependency in upstream_key_by_type
         )
         display_path = project_relative_display_path(item.path, project_root=root)
-        action = "REUSE" if item.ready else "BLOCKED"
+        action = _resolve_action(
+            settings,
+            ready=bool(item.ready),
+            artifact_exists=item.path.exists(),
+            has_builder=True,
+            resumable=False,
+        )
+        builder_type = (
+            "canonical_model_upstream"
+            if action in {"BUILD", "REBUILD", "RESUME"}
+            else None
+        )
         description = (
             item.description
             if item.ready
             else (
                 item.description
-                + "；執行Strategy Compare時由canonical model-training service自動補建可確定的模型上游工件"
+                + "；由canonical model-training producer依Research dependency graph自動補建並re-plan"
             )
         )
         actions.append(
@@ -227,7 +259,7 @@ def _collect_model_upstream_dependencies(
                 action_id=artifact_key,
                 artifact_key=artifact_key,
                 action=action,
-                builder_type=None,
+                builder_type=builder_type,
                 description=description,
                 path=display_path,
                 dependencies=dependency_keys,
@@ -383,8 +415,15 @@ def _collect_selection_pit_source_status(
             "path": project_relative_display_path(path, project_root=root),
             "sha256": sha256,
         }
-        if pit_ready and settings.preparation.reuse_ready_artifacts:
-            action = "REUSE"
+        any_pit_artifact_exists = any(candidate.exists() for candidate in files.values())
+        action = _resolve_action(
+            settings,
+            ready=bool(pit_ready),
+            artifact_exists=any_pit_artifact_exists,
+            has_builder=True,
+            resumable=any_pit_artifact_exists and not pit_ready,
+        )
+        if action == "REUSE":
             description = "重用既有Selection PIT score／audit工件"
             if pit_gate_status not in (None, "", "PASS"):
                 description += (
@@ -392,10 +431,9 @@ def _collect_selection_pit_source_status(
                     "本次仍允許既定strategy-conversion replay；不代表runtime promotion資格"
                 )
         else:
-            action = "BLOCKED"
             description = (
-                "缺少或無效的Selection PIT模型工件；執行Strategy Compare時會由canonical "
-                "model-training service依目前OOS／Rolling mode自動BUILD／RESUME並完成PIT Model Gate。"
+                "缺少或無效的Selection PIT模型工件；由canonical model-training producer依目前"
+                "OOS／Rolling mode自動BUILD／REBUILD／RESUME並完成PIT Model Gate，再re-plan。"
             )
         file_rows[key] = {
             "ready": pit_ready,
@@ -409,7 +447,7 @@ def _collect_selection_pit_source_status(
                 action_id=f"dl:{dl_id}:{key}",
                 artifact_key=f"dl:{dl_id}:{key}",
                 action=action,
-                builder_type=None,
+                builder_type=(None if action == "REUSE" else "canonical_model_artifacts" if action != "BLOCKED" else None),
                 description=description,
                 path=file_rows[key]["path"],
                 dependencies=(
@@ -519,7 +557,13 @@ def _collect_continuous_ranker_source_status(
             if key in {"model", "manifest", "report"}
             else runtime_status
         )
-        action = "REUSE" if ready and settings.preparation.reuse_ready_artifacts else "BLOCKED"
+        action = _resolve_action(
+            settings,
+            ready=ready,
+            artifact_exists=path.exists(),
+            has_builder=True,
+            resumable=False,
+        )
         research_label = f"{dl_id}/{source.experiment_profile}"
         description = (
             f"重用既有{research_label} continuous research工件"
@@ -543,7 +587,7 @@ def _collect_continuous_ranker_source_status(
                 action_id=f"dl:{dl_id}:{key}",
                 artifact_key=f"dl:{dl_id}:{key}",
                 action=action,
-                builder_type=None,
+                builder_type=(None if action == "REUSE" else "canonical_model_artifacts" if action != "BLOCKED" else None),
                 description=description,
                 path=file_rows[key]["path"],
                 dependencies=(
@@ -636,49 +680,44 @@ def _collect_standard_model_source_status(
         if key in {"model", "manifest"}:
             ready = model_ready and path.is_file()
             status = "READY" if ready else model_status
-            action = "REUSE" if ready else "BLOCKED"
-            description = "重用既有模型工件" if ready else "需由模型正式入口建立或修復"
-            builder_type = None
+            action = _resolve_action(
+                settings,
+                ready=ready,
+                artifact_exists=path.exists(),
+                has_builder=True,
+                resumable=False,
+            )
+            builder_type = (
+                "canonical_model_artifacts"
+                if action in {"BUILD", "REBUILD", "RESUME"}
+                else None
+            )
+            description = (
+                "重用既有模型工件" if action == "REUSE"
+                else "由canonical model-training producer建立／修復模型工件後re-plan"
+            )
         else:
             ready = runtime_ready
             status = runtime_status
             builder = source.forward_scores_builder
-            if ready and settings.preparation.reuse_ready_artifacts:
-                action = "REUSE"
+            has_score_builder = bool(builder is not None and builder.enabled)
+            action = _resolve_action(
+                settings,
+                ready=ready,
+                artifact_exists=path.exists(),
+                has_builder=has_score_builder,
+                resumable=False,
+            )
+            if action == "REUSE":
                 description = "重用正式forward-OOS scores"
                 builder_type = None
-            elif ready:
-                if (
-                    settings.preparation.auto_prepare
-                    and settings.preparation.rebuild_stale_artifacts
-                    and builder is not None
-                    and builder.enabled
-                ):
-                    action = "REBUILD"
-                    description = "config禁止重用，重新匯出正式forward-OOS scores"
-                    builder_type = builder.builder_type
-                else:
-                    action = "BLOCKED"
-                    description = "config禁止重用且未允許重新建立scores"
-                    builder_type = None
-            elif (
-                model_ready
-                and settings.preparation.auto_prepare
-                and builder is not None
-                and builder.enabled
-            ):
-                action = "REBUILD" if path.exists() else "BUILD"
-                if action == "REBUILD" and not settings.preparation.rebuild_stale_artifacts:
-                    action = "BLOCKED"
+            elif action in {"BUILD", "REBUILD", "RESUME"}:
                 description = (
-                    "使用既有模型重新匯出正式forward-OOS scores"
-                    if action in {"BUILD", "REBUILD"}
-                    else "scores過期且config禁止自動重建"
+                    "由正式score builder在模型依賴就緒後建立／修復forward-OOS scores"
                 )
-                builder_type = builder.builder_type if action != "BLOCKED" else None
+                builder_type = None if builder is None else builder.builder_type
             else:
-                action = "BLOCKED"
-                description = "缺少正式scores且無可用自動builder或模型工件"
+                description = "缺少正式scores且無合法builder，或Research policy禁止自動補建"
                 builder_type = None
             status = "READY" if ready else action
         file_rows[key] = {
@@ -697,7 +736,7 @@ def _collect_standard_model_source_status(
         )
         producer_work_type = (
             "strategy_compare_deterministic_rebuild"
-            if key == "forward_scores" and action in {"BUILD", "REBUILD"}
+            if key == "forward_scores" and action in {"BUILD", "REBUILD", "RESUME"}
             else "existing_artifact"
             if action == "REUSE"
             else "model_training"

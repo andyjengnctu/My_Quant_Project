@@ -141,8 +141,10 @@ from filters.breakout_quality.strategy_comparison import (
 from filters.breakout_quality.strategy_compare_reporting import capacity_summary
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 from filters.breakout_quality.artifact_dependency_registry import (
-    PRODUCER_MODEL_TRAINING,
-    collect_model_upstream_readiness,
+    collect_model_upstream_preparation_plan,
+)
+from filters.breakout_quality.strategy_compare_preparation_status import (
+    collect_artifact_status as collect_strategy_preparation_status,
 )
 from filters.breakout_quality.strategy_compare_preparation import (
     prepare_strategy_parameter_artifacts,
@@ -842,12 +844,7 @@ def _contract_paired_contrasts(
 
 
 def _model_upstream_rows(settings, stochastic_arms) -> tuple[list[tuple[str, str, str]], list[str]]:
-    """Render canonical model-upstream truth as reusable or auto-preparable work.
-
-    Dataset/Target truth remains owned by the model-training provider.  Robustness only
-    plans the dependency here; the formal app injects the provider callback after the
-    user's single execution confirmation.
-    """
+    """Render model upstream work from the shared Research preparation contract."""
 
     rows: list[tuple[str, str, str]] = []
     blockers: list[str] = []
@@ -858,7 +855,7 @@ def _model_upstream_rows(settings, stochastic_arms) -> tuple[list[tuple[str, str
         if key in seen:
             continue
         seen.add(key)
-        readiness = collect_model_upstream_readiness(
+        plan = collect_model_upstream_preparation_plan(
             PROJECT_ROOT,
             filter_id=str(dl.filter_id),
             model_architecture=str(dl.model_architecture),
@@ -866,45 +863,35 @@ def _model_upstream_rows(settings, stochastic_arms) -> tuple[list[tuple[str, str
             dataset=str(settings.dataset),
             max_tickers=0,
         )
-        pending = [item for item in readiness if not item.ready]
-        if pending:
-            non_preparable = [
-                item for item in pending
-                if str(item.producer_work_type) != PRODUCER_MODEL_TRAINING
-            ]
-            if non_preparable:
-                reasons = [item.description for item in non_preparable]
-                blockers.extend(reasons)
-                rows.append((
-                    "BLOCKED",
-                    f"model-upstream:{dl.experiment_profile}",
-                    "；".join(reasons),
-                ))
-                continue
-            action = "BUILD" if all(not item.path.is_file() for item in pending) else "REBUILD"
-            rows.append((
-                action,
-                f"model-upstream:{dl.experiment_profile}",
-                "；".join(item.description for item in pending)
-                + "；確認後由canonical model-training provider自動補建，再自動re-plan",
-            ))
-            continue
-
-        profile = get_breakout_quality_experiment_profile(str(dl.experiment_profile))
-        if str(profile.training_sample_scope) == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        pending = [item for item in plan.actions if item.action != "REUSE"]
+        if not pending:
+            profile = get_breakout_quality_experiment_profile(str(dl.experiment_profile))
             description = (
                 "重用canonical Dataset／source OHLCV truth；daily windows與固定target由"
                 "canonical trainer即時計算，不需要legacy market-set工件"
+                if str(profile.training_sample_scope)
+                == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+                else "重用canonical Dataset／Continuous Target truth；isolated trainer不得建立新的Label／Target定義"
             )
-        else:
-            description = (
-                "重用canonical Dataset／Continuous Target truth；isolated trainer不得建立"
-                "新的Label／Target定義"
-            )
+            rows.append(("REUSE", f"model-upstream:{dl.experiment_profile}", description))
+            continue
+        if plan.blocked:
+            reasons = [item.description for item in pending if item.action == "BLOCKED"]
+            blockers.extend(reasons)
+            rows.append((
+                "BLOCKED",
+                f"model-upstream:{dl.experiment_profile}",
+                "；".join(reasons) or "Research dependency graph判定model upstream不可自動補建",
+            ))
+            continue
+        action = "REBUILD" if any(item.action == "REBUILD" for item in pending) else (
+            "RESUME" if any(item.action == "RESUME" for item in pending) else "BUILD"
+        )
         rows.append((
-            "REUSE",
+            action,
             f"model-upstream:{dl.experiment_profile}",
-            description,
+            "；".join(item.description for item in pending)
+            + "；確認後由canonical model-training producer依Research dependency graph補建並re-plan",
         ))
     return rows, blockers
 
@@ -1029,7 +1016,7 @@ def _render_robustness_execution_plan(
     )
     upstream_rows, upstream_blockers = _model_upstream_rows(settings, model_arms)
     blockers = [*param_blockers, *benchmark_blockers, *upstream_blockers]
-    upstream_pending = any(row[0] in {"BUILD", "REBUILD"} for row in upstream_rows)
+    upstream_pending = any(row[0] in {"BUILD", "REBUILD", "RESUME"} for row in upstream_rows)
     if upstream_pending and not upstream_blockers:
         start = end = None
         period_text = "待自動補建canonical Dataset／Target後解析"
@@ -1046,7 +1033,7 @@ def _render_robustness_execution_plan(
             blockers.append(str(exc))
 
     pending_work = any(
-        row[0] in {"BUILD", "REBUILD"}
+        row[0] in {"BUILD", "REBUILD", "RESUME"}
         for row in (*param_rows, *benchmark_rows, *upstream_rows)
     )
     overall = "BLOCKED" if blockers else "PREPARABLE" if pending_work else "READY"
@@ -3821,7 +3808,7 @@ def run_multi_seed_robustness(
         settings, model_arms
     )
     post_upstream_pending = [
-        row for row in post_upstream_rows if row[0] in {"BUILD", "REBUILD"}
+        row for row in post_upstream_rows if row[0] in {"BUILD", "REBUILD", "RESUME"}
     ]
     if post_upstream_blockers or post_upstream_pending:
         detail = [*post_upstream_blockers, *(row[2] for row in post_upstream_pending)]
@@ -3830,12 +3817,30 @@ def run_multi_seed_robustness(
             + "；".join(detail)
         )
 
+    # Dataset/Target preparation may change the valid OOS horizon.  Resolve the period
+    # from the freshly rebuilt canonical upstream truth *before* dispatching Optimizer
+    # parameter producers, then bind that period into the shared Strategy preparation
+    # graph.  This prevents stale comparison_end=None snapshots after partial/cold/stale
+    # rebuilds and applies equally when only part of outputs/models was removed.
+    comparison_start, comparison_end = _comparison_period_from_upstream(
+        settings, model_arms, status
+    )
+    period_override = {"start": str(comparison_start), "end": str(comparison_end)}
+    status = collect_strategy_preparation_status(
+        project_root=PROJECT_ROOT,
+        settings=settings,
+        comparison_period_override=period_override,
+    )
     status = prepare_strategy_parameter_artifacts(
         project_root=PROJECT_ROOT,
         settings=settings,
         status=status,
         required_source_ids=tuple(plan["required_param_sources"]),
-        status_refresher=lambda: collect_artifact_status(settings=settings),
+        status_refresher=lambda: collect_strategy_preparation_status(
+            project_root=PROJECT_ROOT,
+            settings=settings,
+            comparison_period_override=period_override,
+        ),
     )
     resolved_params = dict(status.get("resolved_arm_parameter_paths") or {})
     missing_params = sorted(
@@ -3847,9 +3852,6 @@ def run_multi_seed_robustness(
             "Multiple-seed robustness策略參數前置完成後仍缺arm binding: "
             + ", ".join(missing_params)
         )
-    comparison_start, comparison_end = _comparison_period_from_upstream(
-        settings, model_arms, status
-    )
     benchmark_bindings = _prepare_benchmark_strategy_parameter_artifacts(
         settings=settings, robustness=cfg, benchmark_arms=tuple(stochastic_arms),
         comparison_end=str(comparison_end),

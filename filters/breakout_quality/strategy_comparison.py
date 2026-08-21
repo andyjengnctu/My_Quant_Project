@@ -355,22 +355,7 @@ def render_status(
         for item in current.enabled_contrasts
     ]
     plan = current_status.get("preparation_plan")
-    hard_blocked = False
-    if isinstance(plan, StrategyPreparationPlan):
-        hard_blocked = any(
-            item.action == "BLOCKED" and item.producer_work_type != "model_training"
-            for item in plan.actions
-        )
-    display_overall_status = (
-        "PREPARABLE"
-        if isinstance(plan, StrategyPreparationPlan)
-        and not hard_blocked
-        and any(
-            item.action == "BLOCKED" and item.producer_work_type == "model_training"
-            for item in plan.actions
-        )
-        else current_status["overall_status"]
-    )
+    display_overall_status = current_status["overall_status"]
 
     artifact_rows = []
     for source_id, row in current_status["parameters"].items():
@@ -391,14 +376,9 @@ def render_status(
         for key, file_row in row["files"].items():
             artifact_key = f"dl:{dl_id}:{key}"
             plan_item = model_action_by_key.get(artifact_key)
-            display_action = file_row["action"]
-            if (
-                plan_item is not None
-                and plan_item.action == "BLOCKED"
-                and plan_item.producer_work_type == "model_training"
-                and not hard_blocked
-            ):
-                display_action = "AUTO_BUILD"
+            display_action = (
+                plan_item.action if plan_item is not None else file_row["action"]
+            )
             artifact_rows.append(
                 (artifact_key, file_row["status"], display_action, file_row["path"])
             )
@@ -463,27 +443,12 @@ def render_execution_plan(
             item.artifact_key,
         ),
     )
-    hard_blocked = any(
-        item.action == "BLOCKED" and item.producer_work_type != "model_training"
-        for item in plan.actions
-    )
-    auto_model_needed = any(
-        item.action == "BLOCKED" and item.producer_work_type == "model_training"
-        for item in plan.actions
-    )
-    blocked = hard_blocked
+    blocked = plan.blocked
     rows = []
     for item in ordered_actions:
         action = item.action
         description = item.description
-        if item.action == "BLOCKED" and item.producer_work_type == "model_training":
-            if hard_blocked:
-                action = "NOT_RUN"
-                description = f"{description}｜另有不可自動處理的上游BLOCKED，本次不執行"
-            else:
-                action = "AUTO_BUILD"
-                description = f"{description}｜確認後由canonical model-training service自動BUILD／RESUME"
-        elif blocked and action in {"BUILD", "REBUILD"}:
+        if blocked and action in {"BUILD", "REBUILD", "RESUME", "MIGRATE", "DERIVE"}:
             action = "NOT_RUN"
             description = f"{description}｜整體計畫已BLOCKED，本次不執行"
         rows.append((action, item.artifact_key, description))
@@ -528,7 +493,7 @@ def render_execution_plan(
             render_title("本次執行計畫"),
             render_key_values(
                 (
-                    ("整體狀態", "PREPARABLE" if auto_model_needed and not hard_blocked else plan.overall_status),
+                    ("整體狀態", plan.overall_status),
                     ("設定檔", "config/strategy_compare.py"),
                     ("比較階段", f"{settings.profile_label} ({settings.profile_id})"),
                     ("Config fingerprint", status["config_fingerprint"]),
@@ -1284,6 +1249,7 @@ def run_strategy_comparison(
     resolved_plan: ResolvedComparisonPlan | None = None,
     auto_prepare: bool = True,
     settings: StrategyComparisonSettings | None = None,
+    producer_handlers: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     settings = settings or get_strategy_comparison_settings()
@@ -1306,7 +1272,7 @@ def run_strategy_comparison(
     if status["overall_status"] == "BLOCKED":
         print("\n" + render_status(project_root=root, settings=settings, status=status))
         raise RuntimeError(
-            "目前啟用比較缺少不可自動產生的上游工件；請依狀態頁使用正式模型入口處理。"
+            "目前啟用比較存在Research dependency graph判定為不可自動補建的工件。"
         )
     if status["overall_status"] == "PREPARABLE":
         if not auto_prepare:
@@ -1318,6 +1284,7 @@ def run_strategy_comparison(
             status_refresher=lambda: collect_artifact_status(
                 project_root=root, settings=settings
             ),
+            producer_handlers=producer_handlers,
         )
         resolved_plan = resolve_comparison_plan(
             project_root=root,

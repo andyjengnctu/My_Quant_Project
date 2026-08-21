@@ -12,11 +12,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from config.research import get_research_artifact_preparation_policy
 from config.breakout_quality import (
     TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
     get_breakout_quality_experiment_profile,
 )
 from core.console_report import project_relative_display_path
+from core.research_orchestration import (
+    ResearchArtifactAction,
+    ResearchArtifactPlan,
+    resolve_research_artifact_action,
+)
 from filters.breakout_quality.continuous_target import (
     TARGET_MANIFEST_FILENAME,
     load_validated_continuous_target_manifest,
@@ -230,6 +236,74 @@ def collect_model_upstream_readiness(
     return tuple(rows)
 
 
+def collect_model_upstream_preparation_plan(
+    project_root: str | Path,
+    *,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    dataset: str,
+    max_tickers: int = 0,
+) -> ResearchArtifactPlan:
+    """Return the canonical deterministic Dataset/Target dependency plan.
+
+    Missing, stale, corrupt, schema-mismatched, relabel-required and partially existing
+    artifacts are all represented as BUILD/REBUILD work owned by model training.  A
+    downstream consumer never needs to special-case cold-start versus stale states.
+    """
+
+    root = Path(project_root).resolve()
+    readiness = collect_model_upstream_readiness(
+        root,
+        filter_id=str(filter_id),
+        model_architecture=str(model_architecture),
+        experiment_profile=str(experiment_profile),
+        dataset=str(dataset),
+        max_tickers=int(max_tickers),
+    )
+    actions: list[ResearchArtifactAction] = []
+    priority = {ARTIFACT_DATASET_CORE: 10, ARTIFACT_CONTINUOUS_TARGET: 20}
+    builder = {
+        ARTIFACT_DATASET_CORE: "breakout_quality_dataset",
+        ARTIFACT_CONTINUOUS_TARGET: "breakout_quality_continuous_target",
+    }
+    policy = get_research_artifact_preparation_policy()
+    for item in readiness:
+        configured_builder = builder.get(item.artifact_type)
+        action = resolve_research_artifact_action(
+            ready=bool(item.ready),
+            artifact_exists=item.path.exists(),
+            has_builder=configured_builder is not None,
+            auto_prepare=bool(policy.auto_prepare),
+            reuse_ready_artifacts=bool(policy.reuse_ready_artifacts),
+            rebuild_stale_artifacts=bool(policy.rebuild_stale_artifacts),
+            resume_partial_artifacts=bool(policy.resume_partial_artifacts),
+            resumable=False,
+        )
+        builder_type = None if action in {"REUSE", "BLOCKED"} else configured_builder
+        producer = (
+            PRODUCER_EXISTING_ARTIFACT
+            if action == "REUSE"
+            else item.producer_work_type
+        )
+        actions.append(
+            ResearchArtifactAction(
+                action_id=f"model-upstream:{item.artifact_type}",
+                artifact_key=f"model-upstream:{item.artifact_type}",
+                action=action,
+                builder_type=builder_type,
+                description=item.description,
+                path=project_relative_display_path(item.path, project_root=root),
+                dependencies=tuple(
+                    f"model-upstream:{dependency}" for dependency in item.dependencies
+                ),
+                producer_work_type=producer,
+                execution_priority=int(priority.get(item.artifact_type, 100)),
+            )
+        )
+    return ResearchArtifactPlan.from_actions(actions)
+
+
 def model_upstream_prerequisite_blockers(
     project_root: str | Path,
     *,
@@ -273,6 +347,7 @@ __all__ = [
     "PRODUCER_STRATEGY_COMPARE_CHECKPOINT",
     "PRODUCER_STRATEGY_COMPARE_DETERMINISTIC",
     "collect_model_upstream_readiness",
+    "collect_model_upstream_preparation_plan",
     "dependency_types_for",
     "model_upstream_prerequisite_blockers",
     "required_upstream_artifact_types",

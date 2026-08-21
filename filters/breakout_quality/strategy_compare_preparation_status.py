@@ -7,7 +7,7 @@ Builder execution stays in :mod:`strategy_compare_preparation`.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pandas as pd
 
@@ -36,6 +36,7 @@ from filters.breakout_quality.artifacts import (
     load_runtime_artifact_contract,
 )
 from core.console_report import project_relative_display_path
+from core.research_orchestration import resolve_research_artifact_action
 from core.strategy_param_artifacts import (
     resolve_strategy_param_artifact_path,
     resolve_strategy_param_manifest_path,
@@ -560,29 +561,28 @@ def _collect_expected_r_calibration_status(
             expected_selection_runtime_start_date=expected_selection_start,
             expected_forward_frozen_cutoff_exclusive=expected_forward_cutoff,
         )
-        upstream_ready = bool((dl_rows.get(arm.dl_id) or {}).get("ready")) and bool(
-            (dl_rows.get(fit_dl_id) or {}).get("ready")
+        action = resolve_research_artifact_action(
+            ready=bool(ready),
+            artifact_exists=bool(paths["manifest"].exists() or paths["lookup"].exists()),
+            has_builder=True,
+            auto_prepare=bool(settings.preparation.auto_prepare),
+            reuse_ready_artifacts=bool(settings.preparation.reuse_ready_artifacts),
+            rebuild_stale_artifacts=bool(settings.preparation.rebuild_stale_artifacts),
+            resume_partial_artifacts=bool(settings.preparation.resume_parameter_training),
+            resumable=False,
         )
-        if ready and settings.preparation.reuse_ready_artifacts:
-            action = "REUSE"
+        if action == "REUSE":
             description = "重用frozen MR-13E PIT Expected-R calibration工件"
             builder_type = None
-        elif upstream_ready and settings.preparation.auto_prepare:
-            action = "REBUILD" if paths["manifest"].exists() or paths["lookup"].exists() else "BUILD"
-            if action == "REBUILD" and not settings.preparation.rebuild_stale_artifacts:
-                action = "BLOCKED"
-                builder_type = None
-                description = "Expected-R calibration過期且config禁止自動重建"
-            else:
-                builder_type = "expected_r_calibration"
-                description = (
-                    "只用Selection PIT成熟target建立daily percentile→Expected R；"
-                    "Forward以frozen OOS execution start為cutoff，不讀Forward target"
-                )
+        elif action in {"BUILD", "REBUILD", "RESUME"}:
+            builder_type = "expected_r_calibration"
+            description = (
+                "待score依賴就緒後，只用Selection PIT成熟target建立daily percentile→Expected R；"
+                "Forward以frozen OOS execution start為cutoff，不讀Forward target"
+            )
         else:
-            action = "BLOCKED"
             builder_type = None
-            description = "Expected-R calibration上游score未就緒"
+            description = "Research artifact policy禁止自動建立／重建Expected-R calibration"
         artifact_key = f"runtime:{arm.arm_id}:expected_r_calibration"
         display_path = project_relative_display_path(paths["manifest"], project_root=root)
         actions.append(_preparation_action(
@@ -595,7 +595,7 @@ def _collect_expected_r_calibration_status(
             dependencies=(runtime_score_key, fit_score_key) if runtime_score_key != fit_score_key else (runtime_score_key,),
             producer_work_type=(
                 "existing_artifact" if action == "REUSE"
-                else "strategy_compare_deterministic_rebuild" if action in {"BUILD", "REBUILD"}
+                else "strategy_compare_deterministic_rebuild" if action in {"BUILD", "REBUILD", "RESUME"}
                 else None
             ),
             execution_priority=30,
@@ -710,29 +710,28 @@ def _collect_expected_excess_r_calibration_status(
             expected_fit_score_sha256=(fit_sha or None),
             expected_selection_runtime_start_date=settings.start_date,
         )
-        upstream_ready = bool((dl_rows.get(arm.dl_id) or {}).get("ready")) and bool(
-            (dl_rows.get(fit_dl_id) or {}).get("ready")
+        action = resolve_research_artifact_action(
+            ready=bool(ready),
+            artifact_exists=bool(paths["manifest"].exists() or paths["lookup"].exists()),
+            has_builder=True,
+            auto_prepare=bool(settings.preparation.auto_prepare),
+            reuse_ready_artifacts=bool(settings.preparation.reuse_ready_artifacts),
+            rebuild_stale_artifacts=bool(settings.preparation.rebuild_stale_artifacts),
+            resume_partial_artifacts=bool(settings.preparation.resume_parameter_training),
+            resumable=False,
         )
-        if ready and settings.preparation.reuse_ready_artifacts:
-            action = "REUSE"
+        if action == "REUSE":
             description = "重用frozen MR-13E PIT Expected Excess-R calibration工件"
             builder_type = None
-        elif upstream_ready and settings.preparation.auto_prepare:
-            action = "REBUILD" if paths["manifest"].exists() or paths["lookup"].exists() else "BUILD"
-            if action == "REBUILD" and not settings.preparation.rebuild_stale_artifacts:
-                action = "BLOCKED"
-                builder_type = None
-                description = "Expected Excess-R calibration過期且config禁止自動重建"
-            else:
-                builder_type = "expected_excess_r_calibration"
-                description = (
-                    "只用Selection PIT成熟target建立daily percentile→Expected Excess-R單調isotonic mapping；"
-                    "target先扣同日daily-eligible成熟樣本平均R，不建立absolute Expected-R"
-                )
+        elif action in {"BUILD", "REBUILD", "RESUME"}:
+            builder_type = "expected_excess_r_calibration"
+            description = (
+                "待score依賴就緒後，只用Selection PIT成熟target建立daily percentile→Expected Excess-R單調isotonic mapping；"
+                "target先扣同日daily-eligible成熟樣本平均R，不建立absolute Expected-R"
+            )
         else:
-            action = "BLOCKED"
             builder_type = None
-            description = "Expected Excess-R calibration上游score未就緒"
+            description = "Research artifact policy禁止自動建立／重建Expected Excess-R calibration"
         artifact_key = f"runtime:{arm.arm_id}:expected_excess_r_calibration"
         display_path = project_relative_display_path(paths["manifest"], project_root=root)
         actions.append(_preparation_action(
@@ -745,7 +744,7 @@ def _collect_expected_excess_r_calibration_status(
             dependencies=(runtime_score_key, fit_score_key) if runtime_score_key != fit_score_key else (runtime_score_key,),
             producer_work_type=(
                 "existing_artifact" if action == "REUSE"
-                else "strategy_compare_deterministic_rebuild" if action in {"BUILD", "REBUILD"}
+                else "strategy_compare_deterministic_rebuild" if action in {"BUILD", "REBUILD", "RESUME"}
                 else None
             ),
             execution_priority=30,
@@ -775,6 +774,7 @@ def _collect_parameter_artifact_status(
     comparison_start: str | None,
     comparison_end: str | None,
     dl_model_ready: dict[str, bool],
+    comparison_period_dependencies: tuple[str, ...],
     artifact_identities: dict[str, Any],
     actions: list[StrategyPreparationAction],
 ):
@@ -869,48 +869,48 @@ def _collect_parameter_artifact_status(
             upstream_ready = bool(
                 upstream_ready
                 and dependency_row is not None
-                and dependency_action in {"REUSE", "BUILD", "REBUILD"}
+                and dependency_action in {"REUSE", "BUILD", "REBUILD", "RESUME"}
             )
 
-        if all_artifacts_ready and settings.preparation.reuse_ready_artifacts:
-            action = "REUSE"
+        # Builder availability is a producer fact, not a snapshot of upstream readiness.
+        # Dependencies order the producer after model/period/parameter prerequisites; marking
+        # the downstream node BLOCKED merely because an upstream node is currently BUILD would
+        # make partial/cold/stale states diverge across Research entrypoints.
+        has_builder = bool(builder is not None and builder.enabled)
+        artifact_exists = bool(
+            any_target_exists or (identity_path is not None and identity_path.exists())
+        )
+        action = resolve_research_artifact_action(
+            ready=bool(all_artifacts_ready),
+            artifact_exists=artifact_exists,
+            has_builder=has_builder,
+            auto_prepare=bool(settings.preparation.auto_prepare),
+            reuse_ready_artifacts=bool(settings.preparation.reuse_ready_artifacts),
+            rebuild_stale_artifacts=bool(settings.preparation.rebuild_stale_artifacts),
+            resume_partial_artifacts=bool(settings.preparation.resume_parameter_training),
+            resumable=False,
+        )
+        if action == "REUSE":
             description = "重用既有策略參數工件"
             builder_type = None
-        elif all_artifacts_ready:
-            if (
-                settings.preparation.auto_prepare
-                and settings.preparation.rebuild_stale_artifacts
-                and builder is not None
-                and builder.enabled
-            ):
-                action = "REBUILD"
-                description = "config禁止重用，重新建立策略參數工件"
-                builder_type = builder.builder_type
-            else:
-                action = "BLOCKED"
-                description = "config禁止重用且未允許重新建立策略參數"
-                builder_type = None
-        elif (
-            upstream_ready
-            and settings.preparation.auto_prepare
-            and builder is not None
-            and builder.enabled
-        ):
-            action = "REBUILD" if (any_target_exists or (identity_path is not None and identity_path.exists())) else "BUILD"
-            if action == "REBUILD" and not settings.preparation.rebuild_stale_artifacts:
-                action = "BLOCKED"
+        elif action in {"BUILD", "REBUILD", "RESUME"}:
+            if builder is None:
+                raise RuntimeError(f"策略參數action={action}卻缺少builder: {source_id}")
             if builder.builder_type == "canonical_optimizer_strategy_params":
                 description = (
-                    "由canonical Optimizer parameter service解析／建立策略參數工件"
+                    "由canonical Optimizer parameter service解析／建立／接續策略參數工件"
                     f"｜policies={','.join(policies)}"
                 )
             else:
                 description = "執行或接續config指定的策略參數訓練"
-            builder_type = builder.builder_type if action != "BLOCKED" else None
+            builder_type = builder.builder_type
         else:
-            action = "BLOCKED"
-            description = "缺少參數工件且無可用builder或上游模型工件"
             builder_type = None
+            description = (
+                "缺少參數工件且無可用builder或上游模型工件"
+                if not has_builder and not all_artifacts_ready
+                else "目前Research artifact policy不允許自動重用／建立／重建此策略參數"
+            )
 
         source_paths = [row["path"] for row in policy_rows.values()]
         parameter_rows[source_id] = {
@@ -934,9 +934,10 @@ def _collect_parameter_artifact_status(
             },
             "identity_status": identity_status,
         }
-        upstream_dependencies: tuple[str, ...] = (
-            (f"param:{param_dependency_id}",) if param_dependency_id else ()
-        )
+        upstream_dependencies: tuple[str, ...] = tuple(dict.fromkeys((
+            *((f"param:{param_dependency_id}",) if param_dependency_id else ()),
+            *comparison_period_dependencies,
+        )))
         if source.trained_with_dl_id:
             upstream_candidates = (
                 f"dl:{source.trained_with_dl_id}:model",
@@ -965,9 +966,7 @@ def _collect_parameter_artifact_status(
                         if builder is not None and builder.builder_type == "canonical_optimizer_strategy_params"
                         else "strategy_parameter_optimization"
                     )
-                    if action in {"BUILD", "REBUILD"}
-                    else "model_training"
-                    if source.trained_with_dl_id and not upstream_ready
+                    if action in {"BUILD", "REBUILD", "RESUME"}
                     else None
                 ),
                 execution_priority=10,
@@ -987,6 +986,7 @@ def collect_artifact_status(
     *,
     project_root: Path = PROJECT_ROOT,
     settings: StrategyComparisonSettings,
+    comparison_period_override: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Resolve the complete deterministic preparation status for one comparison profile."""
 
@@ -1024,9 +1024,31 @@ def collect_artifact_status(
         actions=actions,
     )
 
-    comparison_start, comparison_end, comparison_period_source = resolve_comparison_period(
-        settings=settings,
-        runtime_periods=runtime_periods,
+    if comparison_period_override is not None:
+        override = dict(comparison_period_override)
+        comparison_start = str(override.get("start") or "").strip() or None
+        comparison_end = str(override.get("end") or "").strip() or None
+        if comparison_start is None or comparison_end is None:
+            raise ValueError("comparison_period_override必須同時提供start/end")
+        if pd.Timestamp(comparison_end) < pd.Timestamp(comparison_start):
+            raise ValueError("comparison_period_override期間不合法")
+        comparison_period_source = "research_orchestrator_override"
+    else:
+        comparison_start, comparison_end, comparison_period_source = resolve_comparison_period(
+            settings=settings,
+            runtime_periods=runtime_periods,
+        )
+    # When the evaluation horizon is runtime-derived, strategy parameters depend on the
+    # score artifacts that define that horizon.  This keeps the graph PREPARABLE while
+    # those scores are BUILD/REBUILD/RESUME, and prevents Optimizer from receiving a stale
+    # comparison_end=None snapshot.
+    comparison_period_dependencies = (
+        tuple(
+            f"dl:{dl_id}:forward_scores"
+            for dl_id in sorted(runtime_required_dl_sources)
+        )
+        if comparison_start is None or comparison_end is None
+        else tuple()
     )
     parameter_rows, resolved_parameter_paths, resolved_arm_parameter_paths = _collect_parameter_artifact_status(
         root=root,
@@ -1035,6 +1057,7 @@ def collect_artifact_status(
         comparison_start=comparison_start,
         comparison_end=comparison_end,
         dl_model_ready=dl_model_ready,
+        comparison_period_dependencies=comparison_period_dependencies,
         artifact_identities=artifact_identities,
         actions=actions,
     )

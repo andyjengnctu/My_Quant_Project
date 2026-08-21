@@ -14,6 +14,7 @@ from config.breakout_quality import (
     get_breakout_quality_rolling_test_mode,
     get_breakout_quality_workflow_settings,
 )
+from config.research import get_research_artifact_preparation_policy
 from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT
 from config.compatibility.strategy_compare_history import (
     HISTORICAL_STRATEGY_COMPARE_ARMS,
@@ -394,12 +395,13 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
 # 2. 前置工件政策
 # =============================================================================
 
+_RESEARCH_PREPARATION = get_research_artifact_preparation_policy()
 STRATEGY_COMPARE_PREPARATION = {
-    "auto_prepare": True,
-    "reuse_ready_artifacts": True,
-    "rebuild_stale_artifacts": True,
-    "resume_parameter_training": True,
-    "require_confirmation": True,
+    "auto_prepare": bool(_RESEARCH_PREPARATION.auto_prepare),
+    "reuse_ready_artifacts": bool(_RESEARCH_PREPARATION.reuse_ready_artifacts),
+    "rebuild_stale_artifacts": bool(_RESEARCH_PREPARATION.rebuild_stale_artifacts),
+    "resume_parameter_training": bool(_RESEARCH_PREPARATION.resume_partial_artifacts),
+    "require_confirmation": bool(_RESEARCH_PREPARATION.require_single_confirmation),
     # 已完成且replay identity完全相同的pair直接重用歷史正式結果。
     "reuse_completed_results": True,
     # 同一param_source/rule_policy的新pair只執行一次DL-off baseline。
