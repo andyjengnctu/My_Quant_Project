@@ -2,8 +2,8 @@
 
 Trainer artifact producers and runtime artifact validators must resolve the same
 profile-driven semantics from this module.  In particular, pairwise weighting is
-owned by ``ContinuousRankerResearchSpec.pairwise_reduction`` rather than by a
-consumer-specific hard-coded default.
+owned by the experiment-agnostic execution recipe rather than by research
+identity or a consumer-specific hard-coded default.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
-    get_continuous_ranker_research_spec,
+    get_continuous_ranker_execution_recipe,
 )
 
 
@@ -71,9 +71,9 @@ def training_semantics(profile) -> dict[str, Any]:
         TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     }:
-        spec = get_continuous_ranker_research_spec(profile.name)
+        recipe = get_continuous_ranker_execution_recipe(profile.name)
         pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
-        pairwise_contract["pair_weighting"] = str(spec.pairwise_reduction)
+        pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
             pairwise_contract.update({
                 "pair_scope": "same_date_strict_pareto_dominance_pairs",

@@ -302,6 +302,16 @@ P3不得使用final 9A score回灌歷史optimizer。`tools/filters/breakout_qual
 
 最終報表只保留八操作點矩陣、各參數下DL增量、參數適應比較與風險參數差異。正式採用主比較為`B3−A2`；interaction=`(B3−A3)−(B2−A2)`只能判斷DL-aware參數是否改善DL增量，不可取代絕對績效。
 
+### Breakout Quality research / execution lifecycle boundary
+
+Breakout Quality 的研究身份與可執行語意必須分層，避免每個新 MR 把 experiment identity 永久寫進 trainer／runtime。
+
+- **Current execution**：`config/breakout_quality.py` 的 `ContinuousRankerExecutionRecipe`只由既有`BreakoutQualityExperimentProfile`與`ContinuousRankerResearchSpec`衍生 trainer／target／loss／architecture／pairwise／score semantic；service 的dispatch與learning semantics只讀recipe，不以MR ID判斷行為。`current_time_validation_authorized`預設fail-closed，且只授權目前Strategy Compare OOS／Rolling真正需要的continuous model dependencies。
+- **Reusable components**：target transform、pairwise reduction、risk context、attention／encoder block等可重組數學留在其canonical domain implementation；REJECT的是特定experiment recipe，不代表component本身被刪除或永久禁用。Reusable component不另建第二份MR registry。
+- **Legacy compatibility**：`filters/breakout_quality/models/legacy_compatibility.py`只負責舊checkpoint／manifest reconstruction；新訓練只可走`filters/breakout_quality/models/active.py`。`ACTIVE_MODEL_ARCHITECTURES`與`LEGACY_MODEL_ARCHITECTURES`必須互斥且完整覆蓋supported architecture。
+- **History**：MR/SR identity、phase、比較reference、已執行證據與GO/REJECT理由只由`doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`／`doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`保存；不得要求production service依歷史文件或舊approval report才能執行。
+- `selection_pit_authorized`只表示該歷史research recipe是否曾被授權建立PIT evidence／供重現；**不等於current OOS/Rolling授權**。Current time validation只看`current_time_validation_authorized`，避免過去曾做過PIT的profile重新滲入current workflow。
+
 ### Daily Universal Risk-normalized Ranker（MR-13I / MR-13J）
 
 - Production runtime anchor仍固定C42/C44的MR-13E exact K/R0 constrained contract；MR-13K Pure-MFE與MR-13M low-adverse保留為current研究source。Current evaluation framework不再以Selection/Frozen C56/C57 full-flow作Gate，而以同一`extending_current` Compare Suite的C61/C62/C58/C63/C59/C60跑OOS／Rolling：OOS固定2020 information cutoff並先作最小必要證據，Rolling 12M annual refit才是完整evidence/promotion basis；Multi-seed同樣維持六-arm matrix，但以固定benchmark題庫作end-to-end pairing：C62/C63 fixed production consensus context；C61/C58/C59/C60逐seed使用same-seed strategy params，C59/C60再同seed訓模型，C60每題K/M同seed同namespace。Plan C-M與Plan A依Research Queue排在current framework最小驗證之後。

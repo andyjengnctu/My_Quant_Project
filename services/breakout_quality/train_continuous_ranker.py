@@ -37,6 +37,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
+    get_continuous_ranker_execution_recipe,
     get_continuous_ranker_research_spec,
     resolve_breakout_quality_random_seed,
 )
@@ -282,12 +283,12 @@ def validate_args(args) -> None:
     model_spec = get_model_spec(str(args.model_architecture))
     if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
         raise ValueError("continuous ranker命令只接受continuous ranking profile")
-    spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
+    execution_recipe = get_continuous_ranker_execution_recipe(str(args.experiment_profile))
     if bool(model_spec.requires_market_set) or bool(model_spec.derived_context_features):
         raise ValueError("continuous ranker不支援market-set／derived-context architecture")
     if (
         bool(model_spec.use_dataset_context)
-        and spec.trainer_family != CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL
+        and execution_recipe.trainer_family != CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL
     ):
         raise ValueError("event continuous ranker只允許sequence-only architecture")
     expected_family = (
@@ -295,11 +296,11 @@ def validate_args(args) -> None:
         if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
         else CONTINUOUS_RANKER_TRAINER_EVENT
     )
-    if spec.trainer_family != expected_family:
+    if execution_recipe.trainer_family != expected_family:
         raise ValueError(
             "continuous ranker research spec與profile sample scope不一致: "
             f"profile={args.experiment_profile}, expected={expected_family}, "
-            f"actual={spec.trainer_family}"
+            f"actual={execution_recipe.trainer_family}"
         )
     if not bool(args.use_inner_validation):
         raise ValueError("continuous ranker必須使用inner validation選epoch")
@@ -341,15 +342,16 @@ def _group_table(events: pd.DataFrame, event_group_index: np.ndarray, labels: np
 
 
 def _profile_contract(profile) -> dict[str, str]:
-    spec = get_continuous_ranker_research_spec(profile.name)
+    research_spec = get_continuous_ranker_research_spec(profile.name)
+    execution_recipe = get_continuous_ranker_execution_recipe(profile.name)
     return {
-        "experiment": spec.experiment_name,
-        "phase": spec.phase,
-        "model_research_id": spec.model_research_id,
-        "target_description": spec.target_description,
-        "objective_description": spec.objective_description,
-        "metric_scope": spec.metric_scope,
-        "score_semantic_id": spec.score_semantic_id,
+        "experiment": research_spec.experiment_name,
+        "phase": research_spec.phase,
+        "model_research_id": research_spec.model_research_id,
+        "target_description": research_spec.target_description,
+        "objective_description": research_spec.objective_description,
+        "metric_scope": research_spec.metric_scope,
+        "score_semantic_id": execution_recipe.score_semantic_id,
     }
 
 
@@ -1427,6 +1429,7 @@ def select_epoch(
 ) -> dict[str, Any]:
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
+    execution_recipe = get_continuous_ranker_execution_recipe(str(args.experiment_profile))
     training_target = _training_target_for_profile(profile, raw_target, percentile_target, group_table)
     raw_r_loss_name = (
         str(profile.loss_name)
@@ -1489,7 +1492,7 @@ def select_epoch(
             prefetch_batches=int(args.train_prefetch_batches),
             prefetch_workers=int(getattr(args, "train_prefetch_workers", BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS)),
             pairwise_reduction=(
-                research_spec.pairwise_reduction
+                execution_recipe.pairwise_reduction
                 or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
             ),
             raw_r_loss_name=raw_r_loss_name,
@@ -1721,6 +1724,7 @@ def fit_final(
 ):
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
+    execution_recipe = get_continuous_ranker_execution_recipe(str(args.experiment_profile))
     training_target = _training_target_for_profile(profile, raw_target, percentile_target, group_table)
     raw_r_loss_name = (
         str(profile.loss_name)
@@ -1765,7 +1769,7 @@ def fit_final(
             prefetch_batches=int(args.train_prefetch_batches),
             prefetch_workers=int(getattr(args, "train_prefetch_workers", BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS)),
             pairwise_reduction=(
-                research_spec.pairwise_reduction
+                execution_recipe.pairwise_reduction
                 or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
             ),
             raw_r_loss_name=raw_r_loss_name,
@@ -2004,7 +2008,7 @@ def run(args) -> int:
     validate_args(args)
     started = time.perf_counter()
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
-    if get_continuous_ranker_research_spec(profile.name).trainer_family == CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL:
+    if get_continuous_ranker_execution_recipe(profile.name).trainer_family == CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL:
         raise ValueError(
             "daily-universal ranker必須由services.breakout_quality.ranker_cli dispatch，"
             "event trainer不得直接承載daily orchestration"

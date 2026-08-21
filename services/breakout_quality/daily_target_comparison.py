@@ -15,6 +15,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_TARGET_COMPARISON_BARRIER_BAND_RETURN,
     get_breakout_quality_experiment_profile,
     get_breakout_quality_model_research_settings,
+    get_continuous_ranker_execution_recipe,
     get_continuous_ranker_research_spec,
 )
 from filters.breakout_quality.daily_ranker_data import load_daily_universal_ranker_data
@@ -74,11 +75,11 @@ def _validate_controlled_pair(candidate_profile: str, reference_profile: str) ->
         raise ValueError(
             "daily target comparison要求candidate/reference除continuous target外的training profile完全相同"
         )
-    candidate_spec = get_continuous_ranker_research_spec(candidate_profile)
-    reference_spec = get_continuous_ranker_research_spec(reference_profile)
-    if candidate_spec.trainer_family != reference_spec.trainer_family:
+    candidate_recipe = get_continuous_ranker_execution_recipe(candidate_profile)
+    reference_recipe = get_continuous_ranker_execution_recipe(reference_profile)
+    if candidate_recipe.trainer_family != reference_recipe.trainer_family:
         raise ValueError("daily target comparison trainer family不一致")
-    if candidate_spec.pairwise_reduction != reference_spec.pairwise_reduction:
+    if candidate_recipe.pairwise_reduction != reference_recipe.pairwise_reduction:
         raise ValueError("daily target comparison pairwise reduction不一致")
 
 

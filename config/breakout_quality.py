@@ -1129,7 +1129,11 @@ class ContinuousRankerResearchSpec:
     pairwise_reduction: str | None = None
     reference_profile_name: str | None = None
     evaluation_reference_profile_name: str | None = None
+    # Historical/research PIT authorization.  This may remain true for archived
+    # evidence that must still be readable/reconstructable.  Current OOS/Rolling
+    # execution is governed separately by current_time_validation_authorized.
     selection_pit_authorized: bool = True
+    current_time_validation_authorized: bool = False
 
     def __post_init__(self) -> None:
         if self.profile_name not in _EXPERIMENT_PROFILES:
@@ -1185,6 +1189,11 @@ class ContinuousRankerResearchSpec:
                 )
             if reference == self.profile_name:
                 raise ValueError(f"continuous ranker {reference_field}不得等於自身")
+        if self.current_time_validation_authorized and not self.selection_pit_authorized:
+            raise ValueError(
+                "current time validation authorization必須建立在PIT research authorization上: "
+                f"{self.profile_name}"
+            )
         for field_name in (
             "model_research_id",
             "experiment_name",
@@ -1214,6 +1223,50 @@ class ContinuousRankerResearchSpec:
             "reference_profile_name": self.reference_profile_name,
             "evaluation_reference_profile_name": self.evaluation_reference_profile_name,
             "selection_pit_authorized": bool(self.selection_pit_authorized),
+            "current_time_validation_authorized": bool(
+                self.current_time_validation_authorized
+            ),
+        }
+
+
+@dataclass(frozen=True)
+class ContinuousRankerExecutionRecipe:
+    """Experiment-agnostic execution contract derived from the canonical profile/spec.
+
+    Services should consume this recipe for trainer/target/loss/architecture semantics.
+    Research identity (MR id, phase, experiment wording) remains in
+    ContinuousRankerResearchSpec for reports/history only.
+    """
+
+    profile_name: str
+    trainer_family: str
+    training_objective: str
+    continuous_target_id: str
+    loss_name: str
+    model_architecture: str | None
+    training_label_scope: str
+    training_sample_scope: str
+    score_semantic_id: str
+    pairwise_reduction: str | None
+    historical_pit_authorized: bool
+    current_time_validation_authorized: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "profile_name": self.profile_name,
+            "trainer_family": self.trainer_family,
+            "training_objective": self.training_objective,
+            "continuous_target_id": self.continuous_target_id,
+            "loss_name": self.loss_name,
+            "model_architecture": self.model_architecture,
+            "training_label_scope": self.training_label_scope,
+            "training_sample_scope": self.training_sample_scope,
+            "score_semantic_id": self.score_semantic_id,
+            "pairwise_reduction": self.pairwise_reduction,
+            "historical_pit_authorized": bool(self.historical_pit_authorized),
+            "current_time_validation_authorized": bool(
+                self.current_time_validation_authorized
+            ),
         }
 
 
@@ -1300,6 +1353,7 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days",
         score_semantic_id="daily_opportunity_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+        selection_pit_authorized=False,
     ),
     DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_NO_TIME_PERCENTILE_MSE_PROFILE,
@@ -1341,6 +1395,7 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days",
         score_semantic_id="daily_opportunity_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        current_time_validation_authorized=True,
     ),
     DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -1375,6 +1430,7 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         reference_profile_name=DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         selection_pit_authorized=True,
+        current_time_validation_authorized=True,
     ),
     DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
@@ -1409,6 +1465,7 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         score_semantic_id="daily_full_horizon_low_adverse_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         selection_pit_authorized=True,
+        current_time_validation_authorized=True,
     ),
     DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -1461,6 +1518,7 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         metric_scope="all_stock_days",
         score_semantic_id="daily_predicted_r",
+        selection_pit_authorized=False,
     ),
     DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_NO_TIME_R_MSE_PROFILE,
@@ -1475,6 +1533,7 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         metric_scope="all_stock_days",
         score_semantic_id="daily_predicted_r",
+        selection_pit_authorized=False,
     ),
     DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -1491,6 +1550,7 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days",
         score_semantic_id="daily_risk_normalized_opportunity_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=False,
     ),
     DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -1524,6 +1584,34 @@ def get_continuous_ranker_research_spec(
             f"continuous ranker profile缺少research spec登記: {profile_name}"
         )
     return spec
+
+
+def get_continuous_ranker_execution_recipe(
+    experiment_profile: str,
+) -> ContinuousRankerExecutionRecipe:
+    """Resolve executable semantics without leaking research identity into services."""
+
+    profile_name = normalize_breakout_quality_experiment_profile(experiment_profile)
+    profile = get_breakout_quality_experiment_profile(profile_name)
+    spec = get_continuous_ranker_research_spec(profile_name)
+    if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
+        raise ValueError(f"continuous ranker recipe只接受continuous profile: {profile_name}")
+    return ContinuousRankerExecutionRecipe(
+        profile_name=profile_name,
+        trainer_family=spec.trainer_family,
+        training_objective=profile.training_objective,
+        continuous_target_id=str(profile.continuous_target_id),
+        loss_name=profile.loss_name,
+        model_architecture=profile.model_architecture,
+        training_label_scope=profile.training_label_scope,
+        training_sample_scope=profile.training_sample_scope,
+        score_semantic_id=spec.score_semantic_id,
+        pairwise_reduction=spec.pairwise_reduction,
+        historical_pit_authorized=bool(spec.selection_pit_authorized),
+        current_time_validation_authorized=bool(
+            spec.current_time_validation_authorized
+        ),
+    )
 
 
 def resolve_breakout_quality_random_seed() -> int:
@@ -1815,8 +1903,8 @@ def get_breakout_quality_rolling_timing_settings() -> BreakoutQualityRollingTimi
     if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
         raise ValueError("Rolling Timing只支援continuous ranker profile")
 
-    research_spec = get_continuous_ranker_research_spec(profile_name)
-    if not bool(research_spec.selection_pit_authorized):
+    execution_recipe = get_continuous_ranker_execution_recipe(profile_name)
+    if not bool(execution_recipe.current_time_validation_authorized):
         raise ValueError(
             f"Rolling Timing profile尚未授權current Rolling: {profile_name}"
         )
@@ -1957,8 +2045,8 @@ class BreakoutQualityWorkflowSettings:
 
         if not self.supports_point_in_time_scores:
             return False
-        spec = get_continuous_ranker_research_spec(self.experiment_profile)
-        return bool(spec.selection_pit_authorized)
+        recipe = get_continuous_ranker_execution_recipe(self.experiment_profile)
+        return bool(recipe.current_time_validation_authorized)
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload = {
@@ -2476,6 +2564,7 @@ __all__ = [
     'DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'ContinuousRankerResearchSpec',
+    'ContinuousRankerExecutionRecipe',
     'CONTINUOUS_RANKER_TRAINER_EVENT',
     'CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL',
     'CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR',
@@ -2485,6 +2574,7 @@ __all__ = [
     'CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE',
     'SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS',
     'get_continuous_ranker_research_spec',
+    'get_continuous_ranker_execution_recipe',
     'SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES',
     'TIME_WEIGHT_MODE_DATE_BALANCED',
     'TIME_WEIGHT_MODE_NONE',

@@ -2105,9 +2105,16 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
 
     from config.breakout_quality import (
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+        SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
         TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_execution_recipe,
+        get_continuous_ranker_research_spec,
     )
-    from config.strategy_compare import get_strategy_comparison_settings
+    from config.strategy_compare import (
+        get_strategy_comparison_settings,
+        get_strategy_rolling_test_modes,
+    )
     from core.params_io import params_to_json_dict
     from core.strategy_params import V16StrategyParams
     from filters.breakout_quality.continuous_target import (
@@ -2117,7 +2124,13 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     from filters.breakout_quality.daily_ranker_data import build_equal_rank_mfe_low_adverse_target
     from filters.breakout_quality.models.active import build_active_model
     from filters.breakout_quality.models.runtime import require_torch
-    from filters.breakout_quality.models.spec import INCEPTION_TIME_RISK_CONTEXT_V1, INCEPTION_TIME_V1
+    from filters.breakout_quality.models.spec import (
+        ACTIVE_MODEL_ARCHITECTURES,
+        LEGACY_MODEL_ARCHITECTURES,
+        SUPPORTED_MODEL_ARCHITECTURES,
+        INCEPTION_TIME_RISK_CONTEXT_V1,
+        INCEPTION_TIME_V1,
+    )
     from filters.breakout_quality.ranker_training_contract import training_semantics
     from filters.breakout_quality.risk_normalized_target import (
         RISK_GEOMETRY_CONTEXT_FEATURES,
@@ -2424,6 +2437,110 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         (int(pair_count), bool(pareto_loss is not None and torch.isfinite(pareto_loss).item())),
     )
 
+
+    # Execution recipe is derived from canonical profile/spec but intentionally omits
+    # MR identity.  Current OOS/Rolling authorization is fail-closed and must match
+    # the model dependencies of the config-driven current Strategy Compare modes.
+    current_required_profiles = set()
+    for mode in get_strategy_rolling_test_modes():
+        mode_settings = get_strategy_comparison_settings(str(mode["profile_id"]))
+        for arm in mode_settings.enabled_arms:
+            if not bool(arm.dl_enabled) or not arm.dl_id:
+                continue
+            required_dl_ids = [str(arm.dl_id)]
+            runtime_options = dict(arm.dl_runtime_options or {})
+            safety_dl_id = str(runtime_options.get("safety_dl_id") or "").strip()
+            if safety_dl_id:
+                required_dl_ids.append(safety_dl_id)
+            for dl_id in required_dl_ids:
+                source = mode_settings.dl_sources[dl_id]
+                profile_name = str(source.experiment_profile)
+                if profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+                    current_required_profiles.add(profile_name)
+
+    current_authorized_profiles = {
+        profile_name
+        for profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+        if get_continuous_ranker_execution_recipe(
+            profile_name
+        ).current_time_validation_authorized
+    }
+    check(
+        "current_time_validation_authorization_matches_current_compare_dependencies",
+        tuple(sorted(current_required_profiles)),
+        tuple(sorted(current_authorized_profiles)),
+    )
+
+    recipe_keys = set(
+        get_continuous_ranker_execution_recipe(
+            next(iter(sorted(current_authorized_profiles)))
+        ).as_dict()
+    )
+    check(
+        "execution_recipe_excludes_research_identity_fields",
+        set(),
+        recipe_keys.intersection({"model_research_id", "experiment_name", "phase"}),
+    )
+
+    recipe_mismatches = []
+    for profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+        profile = get_breakout_quality_experiment_profile(profile_name)
+        research_spec = get_continuous_ranker_research_spec(profile_name)
+        recipe = get_continuous_ranker_execution_recipe(profile_name)
+        observed = (
+            recipe.trainer_family,
+            recipe.training_objective,
+            recipe.continuous_target_id,
+            recipe.loss_name,
+            recipe.model_architecture,
+            recipe.training_label_scope,
+            recipe.training_sample_scope,
+            recipe.score_semantic_id,
+            recipe.pairwise_reduction,
+            recipe.historical_pit_authorized,
+        )
+        expected = (
+            research_spec.trainer_family,
+            profile.training_objective,
+            str(profile.continuous_target_id),
+            profile.loss_name,
+            profile.model_architecture,
+            profile.training_label_scope,
+            profile.training_sample_scope,
+            research_spec.score_semantic_id,
+            research_spec.pairwise_reduction,
+            bool(research_spec.selection_pit_authorized),
+        )
+        if observed != expected:
+            recipe_mismatches.append(profile_name)
+    check(
+        "execution_recipe_is_pure_derivation_without_second_semantics_table",
+        [],
+        recipe_mismatches,
+    )
+
+    historical_only_authorization_examples = [
+        profile_name
+        for profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+        if get_continuous_ranker_execution_recipe(profile_name).historical_pit_authorized
+        and not get_continuous_ranker_execution_recipe(
+            profile_name
+        ).current_time_validation_authorized
+    ]
+    check_true(
+        "historical_pit_compatibility_is_separate_from_current_time_validation",
+        bool(historical_only_authorization_examples),
+    )
+
+    check(
+        "active_and_legacy_model_architecture_sets_are_disjoint_and_exhaustive",
+        (set(), set(SUPPORTED_MODEL_ARCHITECTURES)),
+        (
+            set(ACTIVE_MODEL_ARCHITECTURES).intersection(LEGACY_MODEL_ARCHITECTURES),
+            set(ACTIVE_MODEL_ARCHITECTURES).union(LEGACY_MODEL_ARCHITECTURES),
+        ),
+    )
+
     summary["components"] = (
         "dual_component_regression",
         "equal_rank_target",
@@ -2604,6 +2721,7 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
         SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
         SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
         get_breakout_quality_experiment_profile,
+        get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
     )
 
@@ -2641,19 +2759,21 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
                 ),
     )
 
-    project_root = Path(__file__).resolve().parents[2]
-    daily_source = (project_root / "services" / "breakout_quality" / "train_daily_ranker.py").read_text(encoding="utf-8")
-    cli_source = (project_root / "services" / "breakout_quality" / "ranker_cli.py").read_text(encoding="utf-8")
-    continuous_source = (project_root / "services" / "breakout_quality" / "train_continuous_ranker.py").read_text(encoding="utf-8")
+    event_recipe = get_continuous_ranker_execution_recipe(
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
+    )
+    daily_recipe = get_continuous_ranker_execution_recipe(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+    )
     check(
-        "daily_trainer_and_dispatch_are_profile_driven",
-        (False, False, True, True),
+        "daily_trainer_and_dispatch_are_execution_recipe_driven",
+        ("event", CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL, False, False),
         (
-                    "MR-13A" in daily_source,
-                    "daily_universal_no_time_pairwise" in daily_source,
-                    "get_continuous_ranker_research_spec" in cli_source,
-                    "SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES" in continuous_source,
-                ),
+            event_recipe.trainer_family,
+            daily_recipe.trainer_family,
+            hasattr(event_recipe, "model_research_id"),
+            hasattr(daily_recipe, "phase"),
+        ),
     )
     from config.breakout_quality import TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING
 

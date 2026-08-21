@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from config.breakout_quality import (
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
-    get_continuous_ranker_research_spec,
+    get_continuous_ranker_execution_recipe,
 )
 from services.breakout_quality import train_continuous_ranker as event_ranker
 
@@ -17,8 +17,8 @@ from services.breakout_quality import train_continuous_ranker as event_ranker
 def main(argv=None) -> int:
     args = event_ranker.parse_args(argv)
     event_ranker.validate_args(args)
-    research_spec = get_continuous_ranker_research_spec(args.experiment_profile)
-    if research_spec.trainer_family == CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL:
+    execution_recipe = get_continuous_ranker_execution_recipe(args.experiment_profile)
+    if execution_recipe.trainer_family == CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL:
         from services.breakout_quality.train_daily_ranker import run as run_daily_ranker
 
         return int(run_daily_ranker(args))

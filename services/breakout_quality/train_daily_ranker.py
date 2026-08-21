@@ -18,6 +18,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
+    get_continuous_ranker_execution_recipe,
     get_continuous_ranker_research_spec,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
@@ -309,10 +310,11 @@ def _render_markdown(payload: dict) -> str:
 def run(args) -> int:
     started = time.perf_counter()
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
-    if research_spec.trainer_family != CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL:
+    execution_recipe = get_continuous_ranker_execution_recipe(str(args.experiment_profile))
+    if execution_recipe.trainer_family != CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL:
         raise ValueError(
             "daily ranker orchestrator只接受daily_universal research spec: "
-            f"profile={args.experiment_profile}, family={research_spec.trainer_family}"
+            f"profile={args.experiment_profile}, family={execution_recipe.trainer_family}"
         )
     build_started = time.perf_counter()
     progress_state = {"last_bucket": -1}
@@ -673,7 +675,7 @@ def run(args) -> int:
         "experiment": research_spec.experiment_name,
         "phase": research_spec.phase,
         "model_research_id": research_spec.model_research_id,
-        "score_semantic_id": research_spec.score_semantic_id,
+        "score_semantic_id": execution_recipe.score_semantic_id,
         "status": "RESULT_AVAILABLE_PENDING_REVIEW",
         "filter_id": str(args.filter_id),
         "model_architecture": str(args.model_architecture),
@@ -696,7 +698,7 @@ def run(args) -> int:
             "pairwise_contract": ranker_api.training_semantics(bundle.profile)["pairwise_contract"],
             "raw_r_regression_contract": ranker_api.training_semantics(bundle.profile).get("raw_r_regression_contract"),
             "dual_component_r_regression_contract": ranker_api.training_semantics(bundle.profile).get("dual_component_r_regression_contract"),
-            "pairwise_reduction": research_spec.pairwise_reduction,
+            "pairwise_reduction": execution_recipe.pairwise_reduction,
             "selected_epoch": selected_epoch,
             "epoch_selection_metric": bundle.profile.epoch_selection_metric,
             "epoch_selection": epoch_selection,
