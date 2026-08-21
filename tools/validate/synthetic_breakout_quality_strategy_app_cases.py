@@ -654,7 +654,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )
         shared_work_root = (
             shared_policy_root / "outputs" / "optimizer" / "strategy_param_schedule"
-            / "full" / "shared_policy_search"
+            / "canonical" / "full"
         )
         shared_markers = sorted(
             path.parent.relative_to(shared_policy_root).as_posix()
@@ -663,10 +663,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     check_true(
         "canonical_strategy_param_policies_share_one_optimizer_search_per_schedule_segment",
         shared_best["action"] == "BUILD"
-                and shared_agree["action"] == "BUILD"
+                and shared_agree["action"] == "REUSE"
                 and len(shared_search_events) == 1
                 and shared_markers == [
-                    "outputs/optimizer/strategy_param_schedule/full/shared_policy_search/schedule_2021_forward",
+                    "outputs/optimizer/strategy_param_schedule/canonical/full/schedule_2021_forward",
                 ]
                 and str(shared_best_payload.get("selector")) == "base_finalist_best"
                 and str(shared_agree_payload.get("selector")) == "base_finalists_agree"
@@ -1270,7 +1270,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                     "completed_strategy_pair_exact_sha",
                     "_build_min_roos_schedule_contract",
                     "MIN_ROOS_SEARCH_FIELDS",
-                    "Selection Min ROOS缺少；自動建立／接續單階段rolling params",
+                    "Min策略參數缺少／過期；自動建立／接續rolling schedule",
                 )),
     )
     selection_full_roos_source = settings.parameter_sources.get("selection_full_roos")
@@ -1686,6 +1686,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         round2_min_rolling = strategy_param_service_module.ensure_robustness_benchmark_strategy_parameter_artifact(
             evaluation_mode="rolling", **common_round2_min
         )
+        round2_benchmark_work = (
+            round2_root / "outputs" / "optimizer" / "strategy_param_schedule"
+            / "benchmark" / str(robustness_settings.benchmark_id)
+            / f"seed_{benchmark_seed}" / "full" / "schedule_2021_forward"
+        )
+        round2_models_work = (
+            round2_root / "models" / "strategy_params" / "benchmark"
+            / str(robustness_settings.benchmark_id) / "_optimizer_work"
+        )
     check_true(
         "robustness_optimizer_producer_uses_one_full_schedule_and_refreshes_latest_coverage",
         round2_oos["action"] == "BUILD"
@@ -1693,6 +1702,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 and round2_oos["initial_2021_member_sha256"] == round2_rolling["initial_2021_member_sha256"]
                 and round2_oos_reuse["action"] == "REUSE"
                 and round2_oos_extended["action"] == "BUILD"
+                and round2_benchmark_work.is_dir()
+                and not round2_models_work.exists()
                 and str(dict(oos_extended_payload.get("meta") or {}).get("last_oos_date")) == "2026-04-30",
     )
     check_true(

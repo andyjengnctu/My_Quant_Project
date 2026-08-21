@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +16,7 @@ from config.training_policy import (
     get_robustness_benchmark_policy_snapshot,
     get_strategy_parameter_training_policy_snapshot,
 )
+from core.file_integrity import atomic_write_json
 from core.strategy_param_artifacts import (
     POLICY_FILENAME_BY_NAME,
     STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION,
@@ -42,11 +42,7 @@ def _project_relative(root: Path, path: Path) -> str:
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False, default=str) + "\n",
-        encoding="utf-8",
-    )
+    atomic_write_json(path, payload)
 
 
 def _canonical_json_sha256(payload: Any) -> str:
@@ -66,6 +62,27 @@ def _existing_source_records(
 ) -> dict[str, dict[str, Any]]:
     manifest_path = resolve_strategy_param_manifest_path(
         root, family=family, evaluation_mode=evaluation_mode
+    )
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for policy, record in dict(payload.get("artifacts") or {}).items():
+        source = dict(dict(record or {}).get("source") or {})
+        if source:
+            out[str(policy)] = source
+    return out
+
+
+def _existing_benchmark_source_records(
+    root: Path, *, benchmark_id: str, seed: int, family: str, evaluation_mode: str
+) -> dict[str, dict[str, Any]]:
+    manifest_path = resolve_strategy_param_benchmark_manifest_path(
+        root, benchmark_id=benchmark_id, seed=seed, family=family,
+        evaluation_mode=evaluation_mode,
     )
     try:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -165,6 +182,11 @@ def build_strategy_parameter_benchmark_manifest_payload(
     mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
     if mode not in {"oos", "rolling"}:
         raise ValueError("robustness benchmark strategy params只支援oos/rolling")
+    preserved_sources = _existing_benchmark_source_records(
+        root, benchmark_id=benchmark_id, seed=int(seed), family=family,
+        evaluation_mode=mode,
+    )
+    preserved_sources.update(dict(source_records or {}))
     artifacts: dict[str, Any] = {}
     for policy in POLICY_FILENAME_BY_NAME:
         path = resolve_strategy_param_benchmark_artifact_path(
@@ -177,7 +199,7 @@ def build_strategy_parameter_benchmark_manifest_payload(
             "path": _project_relative(root, path),
             "sha256": compute_strategy_param_file_sha256(path),
         }
-        source = dict(dict(source_records or {}).get(policy) or {})
+        source = dict(preserved_sources.get(policy) or {})
         if source:
             artifacts[policy]["source"] = source
     benchmark_policy = get_robustness_benchmark_policy_snapshot()
@@ -264,13 +286,7 @@ def write_strategy_parameter_state_artifact(
         suffix = str(backup_label or "previous").strip() or "previous"
         backup_path = backups / f"{target.stem}_{suffix}.json"
         shutil.copy2(target, backup_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temp = target.with_name(target.name + ".tmp")
-    temp.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False, default=str) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temp, target)
+    _write_json(target, payload)
     manifest = refresh_strategy_parameter_manifest(
         root, family=family, evaluation_mode=mode
     )

@@ -25,14 +25,17 @@ STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION = 3
 STRATEGY_PARAM_ROOT_RELATIVE = Path("models") / "strategy_params"
 STRATEGY_PARAM_CANONICAL_DIRNAME = "canonical"
 STRATEGY_PARAM_BENCHMARK_DIRNAME = "benchmark"
+STRATEGY_PARAM_WORK_ROOT_RELATIVE = Path("outputs") / "optimizer" / "strategy_param_schedule"
+STRATEGY_PARAM_WORK_SCOPE_CANONICAL = "canonical"
+STRATEGY_PARAM_WORK_SCOPE_BENCHMARK = "benchmark"
 
 STRATEGY_PARAM_FAMILIES = ("full", "min")
 STRATEGY_PARAM_EVALUATION_MODES = ("study", "full", "oos", "rolling", "trade")
 STRATEGY_PARAM_SCHEDULE_MODES = ("oos", "rolling")
 
-# Optimizer working/current named artifacts live beside canonical strategy files.
-# ``active`` is kept only as a compatibility API key; its physical filename is the
-# explicit run_best artifact, not a second anonymous active-param truth.
+# Named current runtime state lives beside canonical strategy files; Optimizer
+# resume/intermediate workspace never does. ``active`` is kept only as a compatibility
+# API key; its physical filename is the explicit run_best artifact, not a second truth.
 STRATEGY_PARAM_STATE_FILENAME_BY_NAME = {
     "active": "run_best_params.json",
     "active_summary": "run_best_summary.json",
@@ -173,6 +176,40 @@ def normalize_strategy_param_benchmark_seed(value: int) -> int:
     if seed <= 0:
         raise ValueError("策略參數benchmark seed必須>0")
     return seed
+
+
+def resolve_strategy_param_optimizer_work_dir(
+    project_root: str | Path,
+    *,
+    scope: str,
+    family: str,
+    benchmark_id: str | None = None,
+    seed: int | None = None,
+) -> Path:
+    """Resolve the only current Optimizer workspace namespace for strategy schedules.
+
+    Persistent strategy truth always lives under ``models/strategy_params``. Optimizer
+    resume/intermediate state always lives under ``outputs/optimizer`` so workspace
+    trees can never be mistaken for canonical or benchmark truth.
+    """
+    family = normalize_strategy_param_family(family)
+    normalized_scope = str(scope or "").strip().lower()
+    root = Path(project_root).resolve() / STRATEGY_PARAM_WORK_ROOT_RELATIVE
+    if normalized_scope == STRATEGY_PARAM_WORK_SCOPE_CANONICAL:
+        if benchmark_id not in (None, "") or seed is not None:
+            raise ValueError("canonical strategy-param workspace不可帶benchmark identity")
+        return root / STRATEGY_PARAM_WORK_SCOPE_CANONICAL / family
+    if normalized_scope == STRATEGY_PARAM_WORK_SCOPE_BENCHMARK:
+        if benchmark_id in (None, "") or seed is None:
+            raise ValueError("benchmark strategy-param workspace需要benchmark_id與seed")
+        return (
+            root
+            / STRATEGY_PARAM_WORK_SCOPE_BENCHMARK
+            / normalize_strategy_param_benchmark_id(str(benchmark_id))
+            / f"seed_{normalize_strategy_param_benchmark_seed(int(seed))}"
+            / family
+        )
+    raise ValueError(f"不支援的strategy-param workspace scope: {scope!r}")
 
 
 def resolve_strategy_param_benchmark_dir(
@@ -343,12 +380,16 @@ __all__ = [
     "normalize_strategy_param_evaluation_mode",
     "normalize_strategy_param_policy",
     "normalize_strategy_param_benchmark_id",
+    "STRATEGY_PARAM_WORK_ROOT_RELATIVE",
+    "STRATEGY_PARAM_WORK_SCOPE_CANONICAL",
+    "STRATEGY_PARAM_WORK_SCOPE_BENCHMARK",
     "normalize_strategy_param_benchmark_seed",
     "resolve_strategy_param_dir",
     "resolve_strategy_param_artifact_path",
     "resolve_strategy_param_state_dir",
     "resolve_strategy_param_state_path",
     "resolve_strategy_param_manifest_path",
+    "resolve_strategy_param_optimizer_work_dir",
     "resolve_strategy_param_benchmark_dir",
     "resolve_strategy_param_benchmark_artifact_path",
     "resolve_strategy_param_benchmark_manifest_path",

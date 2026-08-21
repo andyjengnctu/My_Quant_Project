@@ -26,9 +26,10 @@ from core.active_param_ensemble import (
     resolve_active_param_ensemble_mode,
 )
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
-from core.file_integrity import canonical_json_sha256
+from core.file_integrity import atomic_write_json, canonical_json_sha256
 from core.strategy_param_artifacts import (
     POLICY_FILENAME_BY_NAME,
+    COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY,
     compute_strategy_param_file_sha256,
     normalize_strategy_param_evaluation_mode,
     normalize_strategy_param_family,
@@ -38,6 +39,10 @@ from core.strategy_param_artifacts import (
     resolve_strategy_param_benchmark_dir,
     resolve_strategy_param_benchmark_manifest_path,
     resolve_strategy_param_dir,
+    resolve_strategy_param_optimizer_work_dir,
+    STRATEGY_PARAM_WORK_ROOT_RELATIVE,
+    STRATEGY_PARAM_WORK_SCOPE_CANONICAL,
+    STRATEGY_PARAM_WORK_SCOPE_BENCHMARK,
     resolve_strategy_param_manifest_path,
     resolve_strategy_param_state_path,
     STRATEGY_PARAM_STATE_FILENAME_BY_NAME,
@@ -56,8 +61,98 @@ def _project_relative(root: Path, path: Path) -> str:
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False, default=str) + "\n", encoding="utf-8")
+    atomic_write_json(path, payload)
+
+
+def _prune_empty_parents(start: Path, *, stop: Path) -> None:
+    current = Path(start)
+    stop = Path(stop).resolve()
+    while True:
+        try:
+            resolved = current.resolve()
+        except OSError:
+            return
+        if resolved == stop or stop not in resolved.parents:
+            return
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
+
+
+def _adopt_legacy_optimizer_work_root(
+    *, current_root: Path, legacy_root: Path, prune_stop: Path | None = None
+) -> Path:
+    """Move a legacy optimizer workspace into the current outputs-only namespace once.
+
+    Truth resolvers never read the legacy workspace.  This migration only preserves
+    resumable producer state when the new workspace has not been created yet.
+    """
+    current_root = Path(current_root).resolve()
+    legacy_root = Path(legacy_root).resolve()
+    if not legacy_root.is_dir():
+        return current_root
+    current_root.parent.mkdir(parents=True, exist_ok=True)
+    if not current_root.exists():
+        shutil.move(str(legacy_root), str(current_root))
+    else:
+        archive_dir = current_root.parent / "_legacy_workspace_archive"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archive_target = archive_dir / current_root.name
+        suffix = 1
+        while archive_target.exists():
+            archive_target = archive_dir / f"{current_root.name}_{suffix}"
+            suffix += 1
+        shutil.move(str(legacy_root), str(archive_target))
+    if prune_stop is not None:
+        _prune_empty_parents(legacy_root.parent, stop=Path(prune_stop))
+    return current_root
+
+
+def _assert_optimizer_work_source(*, source_path: Path, work_root: Path) -> None:
+    source = Path(source_path).resolve()
+    work = Path(work_root).resolve()
+    if work != source and work not in source.parents:
+        raise RuntimeError(
+            "Optimizer current producer回傳的params_path不在正式workspace內: "
+            f"source={source.as_posix()}, workspace={work.as_posix()}"
+        )
+
+
+def _optimizer_compare_policy_outputs(source_path: Path) -> dict[str, Path]:
+    """Return all first-class compare-policy files emitted by one rolling search."""
+    source_dir = Path(source_path).resolve().parent
+    outputs: dict[str, Path] = {}
+    for policy in COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY.values():
+        normalized = normalize_strategy_param_policy(policy)
+        candidate = source_dir / f"roos_{POLICY_FILENAME_BY_NAME[normalized]}"
+        if not candidate.is_file():
+            continue
+        payload = _load_json_object(candidate)
+        if payload is None:
+            raise ValueError(
+                "Optimizer策略參數工作工件不是合法JSON: "
+                + candidate.as_posix()
+            )
+        if str(payload.get("selector") or "") != normalized:
+            raise ValueError(
+                "Optimizer策略參數policy selector不一致: "
+                f"policy={normalized}, selector={payload.get('selector')}, path={candidate.as_posix()}"
+            )
+        outputs[normalized] = candidate
+    return outputs
+
+
+def _print_published_strategy_param_paths(
+    root: Path, *, title: str, paths: dict[str, Path], manifest_path: Path
+) -> None:
+    print(str(title))
+    for policy in COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY.values():
+        path = paths.get(policy)
+        if path is not None:
+            print(f"  {policy}: {_project_relative(root, path)}")
+    print(f"  manifest: {_project_relative(root, manifest_path)}")
 
 
 def _legacy_policy_filename(policy: str, *, evaluation_mode: str) -> str:
@@ -753,10 +848,10 @@ def _canonical_schedule_coverage_end(path: Path) -> str | None:
 
 def _compare_policy_name(policy: str) -> str:
     normalized = normalize_strategy_param_policy(policy)
-    reverse = {value: key for key, value in {
-        "base-finalist-best": "base_finalist_best",
-        "base-finalists-agree": "base_finalists_agree",
-    }.items()}
+    reverse = {
+        optimizer_policy: compare_policy
+        for compare_policy, optimizer_policy in COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY.items()
+    }
     if normalized not in reverse:
         raise ValueError(
             "current canonical auto-build只支援Strategy Compare正式policy: "
@@ -791,15 +886,22 @@ def _build_canonical_schedule(
     # One optimizer-owned 2021->latest rolling schedule is the only physical truth.
     # OOS is an in-memory consumption view applied by Strategy Compare, never a
     # second 2021-only training job or frozen parameter JSON.
-    work_root = (
-        root / "outputs" / "optimizer" / "strategy_param_schedule"
-        / str(family) / "shared_policy_search"
+    work_root = resolve_strategy_param_optimizer_work_dir(
+        root, scope=STRATEGY_PARAM_WORK_SCOPE_CANONICAL, family=family
+    )
+    legacy_work_root = (
+        root / STRATEGY_PARAM_WORK_ROOT_RELATIVE / str(family) / "shared_policy_search"
+    )
+    work_root = _adopt_legacy_optimizer_work_root(
+        current_root=work_root,
+        legacy_root=legacy_work_root,
+        prune_stop=root / STRATEGY_PARAM_WORK_ROOT_RELATIVE,
     )
     work_identity = {
-        "schema": "canonical_strategy_schedule_work_v3",
+        "schema": "canonical_strategy_schedule_work_v4",
         "family": family,
         "build_contract": contract,
-        "policy_outputs": ["base_finalist_best", "base_finalists_agree"],
+        "policy_outputs": list(COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY.values()),
     }
     work_contract_path = work_root / "work_contract.json"
     work_root.mkdir(parents=True, exist_ok=True)
@@ -827,6 +929,8 @@ def _build_canonical_schedule(
         train_window_months=int(contract["train_window_months"]),
         oos_months=int(contract["oos_horizon_months"]),
         output_relative_dir=schedule_work,
+        build_context_label="Canonical",
+        optimizer_output_title="Optimizer 工作工件（非正式策略參數）",
     )
     if family == "full":
         result = prepare_selection_historical_full_roos_params(**common)
@@ -835,34 +939,50 @@ def _build_canonical_schedule(
             **common, recover_completed_strategy_compare=False
         )
     source_path = Path(result["params_path"]).resolve()
+    _assert_optimizer_work_source(source_path=source_path, work_root=work_root)
     if not source_path.is_file():
         raise FileNotFoundError(
             "Optimizer完成但找不到策略參數輸出: " + _project_relative(root, source_path)
         )
 
-    target = resolve_strategy_param_artifact_path(
-        root, family=family, evaluation_mode="rolling", policy=policy
-    )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    _copy_json_payload(source_path, target)
-    source_record = {
-        "optimizer_build": True,
-        "path": _project_relative(root, source_path),
-        "build_contract": contract,
-        "schedule_kind": "annual_refit",
-        "same_json_oos_rolling": True,
-    }
+    emitted = _optimizer_compare_policy_outputs(source_path)
+    if policy not in emitted:
+        raise FileNotFoundError(
+            "Optimizer完成但requested policy工作工件缺少: "
+            f"policy={policy}, source_dir={_project_relative(root, source_path.parent)}"
+        )
+    published: dict[str, Path] = {}
+    source_records: dict[str, dict[str, Any]] = {}
+    for emitted_policy, emitted_path in emitted.items():
+        target_path = resolve_strategy_param_artifact_path(
+            root, family=family, evaluation_mode="rolling", policy=emitted_policy
+        )
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        _copy_json_payload(emitted_path, target_path)
+        published[emitted_policy] = target_path
+        source_records[emitted_policy] = {
+            "optimizer_build": True,
+            "path": _project_relative(root, emitted_path),
+            "build_contract": contract,
+            "schedule_kind": "annual_refit",
+            "same_json_oos_rolling": True,
+        }
     manifest = refresh_strategy_parameter_manifest(
         root,
         family=family,
         evaluation_mode="rolling",
-        source_records={policy: source_record},
+        source_records=source_records,
+    )
+    target = published[policy]
+    _print_published_strategy_param_paths(
+        root, title="Canonical 正式策略參數", paths=published, manifest_path=manifest
     )
     return {
         "path": target,
         "manifest_path": manifest,
         "sha256": compute_strategy_param_file_sha256(target),
         "schedule_kind": "annual_refit",
+        "published_paths": published,
     }
 
 def ensure_strategy_parameter_artifact(
@@ -975,6 +1095,13 @@ def ensure_strategy_parameter_artifact(
 def _benchmark_optimizer_work_root(
     root: Path, *, benchmark_id: str, seed: int, family: str
 ) -> Path:
+    current_root = resolve_strategy_param_optimizer_work_dir(
+        root,
+        scope=STRATEGY_PARAM_WORK_SCOPE_BENCHMARK,
+        benchmark_id=str(benchmark_id),
+        seed=int(seed),
+        family=family,
+    )
     benchmark_dir = resolve_strategy_param_benchmark_dir(
         root,
         benchmark_id=benchmark_id,
@@ -982,7 +1109,10 @@ def _benchmark_optimizer_work_root(
         family=family,
         evaluation_mode="rolling",
     )
-    return benchmark_dir / "_optimizer_work" / f"seed_{int(seed)}" / str(family)
+    legacy_root = benchmark_dir / "_optimizer_work" / f"seed_{int(seed)}" / str(family)
+    return _adopt_legacy_optimizer_work_root(
+        current_root=current_root, legacy_root=legacy_root, prune_stop=benchmark_dir
+    )
 
 
 def _copy_json_payload(source: Path, target: Path) -> dict[str, Any]:
@@ -1027,7 +1157,7 @@ def _benchmark_schedule_build_contract(
 
     optimizer_policy = get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling")
     return {
-        "schema": "robustness_strategy_schedule_work_v2",
+        "schema": "robustness_strategy_schedule_work_v3",
         "benchmark_id": str(benchmark_id),
         "seed": int(seed),
         "family": normalize_strategy_param_family(family),
@@ -1208,6 +1338,8 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
         train_window_months=train_window_months,
         oos_months=oos_months,
         output_relative_dir=schedule_work,
+        build_context_label=f"Benchmark {benchmark_id} seed={int(seed)}",
+        optimizer_output_title="Optimizer 工作工件（非正式策略參數）",
     )
     if family == "full":
         result = prepare_selection_historical_full_roos_params(**common)
@@ -1216,6 +1348,7 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
             **common, recover_completed_strategy_compare=False
         )
     source_path = Path(result["params_path"]).resolve()
+    _assert_optimizer_work_source(source_path=source_path, work_root=work_root)
     if not source_path.is_file():
         raise FileNotFoundError(
             "Benchmark Optimizer完成但找不到策略參數輸出: "
@@ -1235,9 +1368,17 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
                 "schedule_kind": "annual_refit",
                 "same_json_oos_rolling": True,
                 "build_contract": build_contract,
+                "path": _project_relative(root, source_path),
             }
         },
     )
+    if not bool(quiet):
+        _print_published_strategy_param_paths(
+            root,
+            title=f"Benchmark 正式策略參數 | {benchmark_id} | seed={int(seed)}",
+            paths={policy: target},
+            manifest_path=manifest,
+        )
     return {
         "action": "BUILD", "path": target, "manifest_path": manifest,
         "sha256": compute_strategy_param_file_sha256(target),

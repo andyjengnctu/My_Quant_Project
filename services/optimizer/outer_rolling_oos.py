@@ -8690,6 +8690,7 @@ def run_outer_rolling_oos(
     timing_mode: bool = False,
     paramset_models_dir: str | None = None,
     canonical_strategy_param_family: str | None = None,
+    output_files_title: str = "💾 輸出檔案",
 ) -> int:
     from services.optimizer.session import close_study_storage
     from services.optimizer.session_factory import build_optimizer_session_from_spec
@@ -9316,5 +9317,7 @@ def run_outer_rolling_oos(
             (get_optimizer_policy_output_label(str(policy_name)), str(paramset_path))
             for policy_name, paramset_path in dict(paths.get("paramsets") or {}).items()
         ]
-        print_optimizer_output_files(visible_paramsets, title="💾 輸出檔案", project_root=project_root)
+        print_optimizer_output_files(
+            visible_paramsets, title=str(output_files_title or "💾 輸出檔案"), project_root=project_root
+        )
     return 0

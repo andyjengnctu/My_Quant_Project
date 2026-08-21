@@ -917,6 +917,10 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
                 timing_mode=False,
                 paramset_models_dir=str(active_param_dir.resolve()),
                 canonical_strategy_param_family=(canonical_family if canonical_current else None),
+                output_files_title=str(
+                    getattr(args, "optimizer_output_title", "💾 輸出檔案")
+                    or "💾 輸出檔案"
+                ),
             )
         if int(exit_code) != 0:
             raise RuntimeError(f"{arm_id} Min ROOS rolling optimizer失敗: {exit_code}")
@@ -1174,6 +1178,8 @@ def prepare_selection_historical_p2_params(
     train_window_months: int = TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
     oos_months: int = TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
     output_relative_dir: str | Path | None = None,
+    build_context_label: str = "Selection",
+    optimizer_output_title: str = "💾 輸出檔案",
 ):
     """Build/reuse Selection Min ROOS with one canonical rolling optimization.
 
@@ -1243,11 +1249,12 @@ def prepare_selection_historical_p2_params(
         p3_variant=None,
         resume_parameter_training=bool(resume_parameter_training),
         quiet=bool(quiet),
+        optimizer_output_title=str(optimizer_output_title),
     )
     settings = SimpleNamespace(seed=int(optimizer_seed))
     if not quiet:
         print(
-            "Selection Min ROOS缺少；自動建立／接續單階段rolling params "
+            f"{str(build_context_label)} Min策略參數缺少／過期；自動建立／接續rolling schedule "
             f"| period={schedule_contract['meta']['first_oos_date']}~"
             f"{schedule_contract['meta']['last_oos_date']} "
             f"| train={int(train_window_months)}m "
@@ -1925,6 +1932,8 @@ def prepare_selection_historical_full_roos_params(
     train_window_months: int = TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
     oos_months: int = TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
     output_relative_dir: str | Path | None = None,
+    build_context_label: str = "Selection",
+    optimizer_output_title: str = "💾 輸出檔案",
 ):
     """Build/reuse Full rolling params using the canonical full search space.
 
@@ -1999,7 +2008,7 @@ def prepare_selection_historical_full_roos_params(
     if not reusable:
         if not quiet:
             print(
-                "Selection Full ROOS缺少；自動建立／接續canonical Full rolling params "
+                f"{str(build_context_label)} Full策略參數缺少／過期；自動建立／接續rolling schedule "
                 f"| period={schedule_contract['meta']['first_oos_date']}~{schedule_contract['meta']['last_oos_date']} "
                 f"| train={int(train_window_months)}m | oos={int(oos_months)}m "
                 f"| trials={int(trials_per_fold)}/fold"
@@ -2043,6 +2052,7 @@ def prepare_selection_historical_full_roos_params(
             default_trials=int(trials_per_fold),
             timing_mode=False,
             paramset_models_dir=str(active_param_dir.resolve()),
+            output_files_title=str(optimizer_output_title or "💾 輸出檔案"),
         )
         if int(exit_code) != 0:
             raise RuntimeError(f"Selection Full ROOS rolling optimizer失敗: {exit_code}")

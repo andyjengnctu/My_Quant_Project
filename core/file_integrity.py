@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
+from typing import Any
 
 
 def compute_file_sha256(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
@@ -14,6 +17,32 @@ def compute_file_sha256(path: str | Path, *, chunk_size: int = 1024 * 1024) -> s
                 break
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def atomic_write_json(path: str | Path, payload: Any) -> Path:
+    """Atomically replace one JSON file with a uniquely staged sibling temp file."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
+    )
+    os.close(fd)
+    temp = Path(temp_name)
+    try:
+        temp.write_text(
+            json.dumps(
+                payload, ensure_ascii=False, indent=2, allow_nan=False, default=str
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temp, target)
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+    return target
 
 
 def canonical_json_sha256(payload: object, *, length: int | None = None) -> str:
@@ -32,4 +61,4 @@ def canonical_json_sha256(payload: object, *, length: int | None = None) -> str:
     return digest[: int(length)]
 
 
-__all__ = ["canonical_json_sha256", "compute_file_sha256"]
+__all__ = ["atomic_write_json", "canonical_json_sha256", "compute_file_sha256"]
