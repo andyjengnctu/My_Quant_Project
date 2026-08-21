@@ -72,8 +72,10 @@ def _assert_finite_strategy_runtime_params(value: Any, *, path: str) -> None:
     if hasattr(value, "item") and not isinstance(value, (str, bytes, bytearray)):
         try:
             value = value.item()
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"strategy runtime params無法轉換scalar: path={path}, type={type(value).__name__}"
+            ) from exc
     if isinstance(value, float):
         if not math.isfinite(value):
             raise ValueError(f"strategy runtime params含non-finite數值: path={path}, value={value}")
