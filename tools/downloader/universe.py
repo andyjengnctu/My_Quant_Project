@@ -3,6 +3,7 @@ import requests
 from datetime import timedelta
 from io import StringIO
 
+from core.console_report import project_relative_display_path
 from tools.downloader import runtime as rt
 
 
@@ -19,7 +20,7 @@ def get_market_last_date():
             return actual_date
     except rt.EXPECTED_MARKET_DATE_EXCEPTIONS as e:
         rt.append_downloader_issues("最新交易日(FinMind)失敗", [f"{type(e).__name__}: {e}"])
-        print(f"⚠️ FinMind 日期獲取異常: {type(e).__name__}: {e}")
+        print(f"注意：FinMind 日期獲取異常: {type(e).__name__}: {e}")
 
     print("🔄 啟動備援方案 (YFinance) 獲取交易日...")
     try:
@@ -32,7 +33,7 @@ def get_market_last_date():
             return actual_date
     except rt.EXPECTED_MARKET_DATE_EXCEPTIONS as e:
         rt.append_downloader_issues("最新交易日(YF備援)失敗", [f"{type(e).__name__}: {e}"])
-        print(f"⚠️ YFinance 備援失敗: {type(e).__name__}: {e}")
+        print(f"注意：YFinance 備援失敗: {type(e).__name__}: {e}")
 
     fallback_date = rt.get_taipei_now()
     if fallback_date.hour < 14:
@@ -42,7 +43,7 @@ def get_market_last_date():
         fallback_date -= timedelta(days=1)
 
     fallback_str = fallback_date.strftime("%Y-%m-%d")
-    print(f"⚠️ 無法取得精準日期，使用智能推算平日備用日期: {fallback_str}")
+    print(f"注意：無法取得精準日期，使用智能推算平日備用日期: {fallback_str}")
     return fallback_str
 
 
@@ -59,7 +60,7 @@ def get_or_update_universe():
             if cached_tickers:
                 print(f"✅ 名單有效 (更新於: {file_mod_time.strftime('%Y-%m-%d')})，直接讀取。")
                 return cached_tickers
-            print("⚠️ universe 快取為空，重新海選。")
+            print("注意：universe 快取為空，重新海選。")
 
     print(f"🕵️‍♂️ 啟動全市場海選 (市值 > {rt.MIN_MARKET_CAP/1e8:.0f}億 且 成交量 > {rt.MIN_VOLUME/10000:.0f}萬)...")
 
@@ -94,7 +95,7 @@ def get_or_update_universe():
         except rt.EXPECTED_UNIVERSE_FETCH_EXCEPTIONS as e:
             universe_fetch_errors.append(f"{url} -> {type(e).__name__}: {e}")
             if rt.VERBOSE_UNIVERSE_FETCH_ERRORS:
-                print(f"\n⚠️ 名單來源抓取失敗: {url} | {type(e).__name__}: {e}")
+                print(f"\n注意：名單來源抓取失敗: {url} | {type(e).__name__}: {e}")
 
     if not tickers_info:
         if universe_fetch_errors:
@@ -144,11 +145,11 @@ def get_or_update_universe():
 
     if universe_fetch_errors:
         rt.append_downloader_issues("名單來源失敗", universe_fetch_errors)
-        print(f"⚠️ 名單來源失敗 {len(universe_fetch_errors)} 筆，詳細已寫入: {rt.get_downloader_issue_log_path()}")
+        print(f"注意：名單來源失敗 {len(universe_fetch_errors)} 筆，詳細已寫入: {project_relative_display_path(rt.get_downloader_issue_log_path(), project_root=rt.PROJECT_ROOT)}")
 
     if screening_errors:
         screening_log_lines = [f"{sid} ({yf_t}) -> {err}" for sid, yf_t, err in screening_errors]
         rt.append_downloader_issues("快篩失敗", screening_log_lines)
-        print(f"⚠️ 快篩失敗 {len(screening_errors)} 檔，詳細已寫入: {rt.get_downloader_issue_log_path()}")
+        print(f"注意：快篩失敗 {len(screening_errors)} 檔，詳細已寫入: {project_relative_display_path(rt.get_downloader_issue_log_path(), project_root=rt.PROJECT_ROOT)}")
 
     return qualified_tickers

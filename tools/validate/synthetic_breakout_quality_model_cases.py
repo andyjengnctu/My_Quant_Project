@@ -2284,6 +2284,7 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
     )
 
     from filters.breakout_quality.daily_ranker_data import (
+        build_daily_ranker_split,
         resolve_daily_training_universe_start,
     )
     benchmark_dates = pd.date_range("2004-01-01", periods=305, freq="D")
@@ -2297,6 +2298,57 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
         "daily_universal_training_start_is_data_driven_by_complete_benchmark_feature_window",
         pd.Timestamp(benchmark_dates[299]).normalize(),
         resolved_training_start,
+    )
+
+    split_dates = pd.date_range("2004-09-08", "2021-03-31", freq="D")
+    split_group_table = pd.DataFrame(
+        {"date": split_dates, "label_eval_end_date": split_dates}
+    )
+    split_policy = {
+        "selection_start_date": "2011-01-01",
+        "selection_end_date": "2020-12-31",
+        "oos_start_date": "2021-01-01",
+        "effective_oos_end_date": "2021-03-31",
+    }
+    missing_training_start_rejected = False
+    try:
+        build_daily_ranker_split(
+            SimpleNamespace(
+                group_table=split_group_table,
+                outer_policy=split_policy,
+                summary={},
+            ),
+            inner_validation_months=24,
+        )
+    except ValueError as exc:
+        missing_training_start_rejected = (
+            "training_universe_start_date" in str(exc)
+            and "selection_start_date" in str(exc)
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "daily_ranker_split_rejects_missing_training_universe_start_instead_of_optimizer_fallback",
+        True,
+        missing_training_start_rejected,
+    )
+
+    valid_split = build_daily_ranker_split(
+        SimpleNamespace(
+            group_table=split_group_table,
+            outer_policy=split_policy,
+            summary={"training_universe_start_date": "2004-09-08"},
+        ),
+        inner_validation_months=24,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "daily_ranker_split_uses_data_driven_training_universe_start_not_optimizer_selection_start",
+        "2004-09-08",
+        valid_split.report["selection_start_date"],
     )
 
     summary["model_research_id"] = "MR-13H/MR-13K"

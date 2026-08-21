@@ -291,6 +291,47 @@ def validate_dataset_cli_contract_case(_base_params):
 
     interactive_commands = []
 
+    # Model Research now uses the Research-wide dependency/re-plan orchestrator.
+    # CLI wiring tests must therefore model artifact truth transitions explicitly:
+    # mocking a canonical builder returncode=0 without changing readiness would
+    # correctly be treated by the orchestrator as a producer that did not make
+    # progress.  Planner semantics themselves are covered by the dedicated
+    # Research orchestration synthetic contracts.
+    from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
+
+    def _model_upstream_plan(*, dataset_action: str, target_action: str):
+        dataset_action = str(dataset_action).upper()
+        target_action = str(target_action).upper()
+        return ResearchArtifactPlan.from_actions(
+            (
+                ResearchArtifactAction(
+                    action_id="model-upstream:dataset_core",
+                    artifact_key="model-upstream:dataset_core",
+                    action=dataset_action,
+                    builder_type=(
+                        None if dataset_action == "REUSE" else "breakout_quality_dataset"
+                    ),
+                    description="synthetic canonical Dataset",
+                    path="outputs/filters/breakout_quality/breakout_quality_v1/dataset_summary.json",
+                    execution_priority=10,
+                ),
+                ResearchArtifactAction(
+                    action_id="model-upstream:continuous_target",
+                    artifact_key="model-upstream:continuous_target",
+                    action=target_action,
+                    builder_type=(
+                        None
+                        if target_action == "REUSE"
+                        else "breakout_quality_continuous_target"
+                    ),
+                    description="synthetic canonical Continuous Target",
+                    path="outputs/filters/breakout_quality/breakout_quality_v1/continuous_targets/target_manifest.json",
+                    dependencies=("model-upstream:dataset_core",),
+                    execution_priority=20,
+                ),
+            )
+        )
+
     def _record_interactive_command(command, args, *, program_name):
         interactive_commands.append(
             {
@@ -349,6 +390,12 @@ def validate_dataset_cli_contract_case(_base_params):
             patch(
                 "tools.filters.breakout_quality.application._dataset_refresh_step",
                 return_value=("none", [], None),
+            ),
+            patch(
+                "tools.filters.breakout_quality.application._collect_continuous_research_input_plan",
+                return_value=_model_upstream_plan(
+                    dataset_action="REUSE", target_action="REUSE"
+                ),
             ),
         ):
             rc, interactive_text = _capture_stdout(
@@ -721,6 +768,23 @@ def validate_dataset_cli_contract_case(_base_params):
         for index, mode in enumerate(rolling_modes, start=1)
         if mode.mode_id == "oos"
     )
+    dataset_missing_plan = _model_upstream_plan(
+        dataset_action="BUILD", target_action="BUILD"
+    )
+    target_missing_plan = _model_upstream_plan(
+        dataset_action="REUSE", target_action="BUILD"
+    )
+    upstream_ready_plan = _model_upstream_plan(
+        dataset_action="REUSE", target_action="REUSE"
+    )
+    upstream_plan_sequence = iter(
+        (
+            dataset_missing_plan,  # menu audit plan
+            dataset_missing_plan,  # preparation runner initial truth
+            target_missing_plan,   # re-plan after Dataset producer
+            upstream_ready_plan,   # re-plan after Target producer
+        )
+    )
     with (
         patch.object(
             breakout_quality_config,
@@ -752,6 +816,10 @@ def validate_dataset_cli_contract_case(_base_params):
         patch(
             "tools.filters.breakout_quality.application._dataset_refresh_step",
             return_value=("rebuild", ["dataset_summary.json 缺少"], dataset_step),
+        ),
+        patch(
+            "tools.filters.breakout_quality.application._collect_continuous_research_input_plan",
+            side_effect=lambda *_args, **_kwargs: next(upstream_plan_sequence),
         ),
         patch(
             "tools.filters.breakout_quality.application._run_command",
@@ -2556,7 +2624,23 @@ def validate_package_zip_commit_test_suite_orchestration_case(_base_params):
         add_check(results, "cli_contract", case_id, "package_zip_orchestration_commit_precedes_zip_snapshot", True, commit_idx < ls_files_idx)
         add_check(results, "cli_contract", case_id, "package_zip_orchestration_output_uses_post_commit_sha", True, new_zip_path.exists())
         add_check(results, "cli_contract", case_id, "package_zip_orchestration_test_suite_called", [[sys.executable, "apps/test_suite.py"]], python_commands)
-        add_check(results, "cli_contract", case_id, "package_zip_orchestration_test_suite_after_zip", True, stdout_text.index(f"[package_zip] output={new_zip_path}") < stdout_text.index("[package_zip] test_suite=pass"))
+        relative_zip_output = f"[package_zip] output={new_zip_path.name}"
+        add_check(
+            results,
+            "cli_contract",
+            case_id,
+            "package_zip_orchestration_output_is_project_relative",
+            True,
+            relative_zip_output in stdout_text and str(project_root).replace("\\", "/") not in stdout_text,
+        )
+        add_check(
+            results,
+            "cli_contract",
+            case_id,
+            "package_zip_orchestration_test_suite_after_zip",
+            True,
+            stdout_text.index(relative_zip_output) < stdout_text.index("[package_zip] test_suite=pass"),
+        )
         add_check(results, "cli_contract", case_id, "package_zip_orchestration_commit_headline_reported", True, "[package_zip] commit=[feature/workflow fedcba9] feat: package workflow" in stdout_text)
         add_check(results, "cli_contract", case_id, "package_zip_orchestration_bundle_preserved", True, (project_root / "to_chatgpt_bundle_20250103_deadbeef.zip").exists())
 

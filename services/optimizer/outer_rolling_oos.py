@@ -445,9 +445,9 @@ def format_optimizer_output_file_lines(
         if not label_text or not path_text:
             continue
         try:
-            display_path = os.path.relpath(path_text, root)
+            display_path = os.path.relpath(path_text, root).replace(os.sep, "/")
         except ValueError:
-            display_path = os.path.basename(path_text)
+            display_path = os.path.basename(path_text).replace(os.sep, "/")
         visible_entries.append((label_text, display_path))
     if not visible_entries:
         return []
@@ -5748,10 +5748,10 @@ def _remove_stale_policy_paramset_files(models_dir: str) -> None:
                 os.remove(path)
         except OSError as exc:
             try:
-                display_path = os.path.relpath(path, os.path.dirname(models_dir))
+                display_path = os.path.relpath(path, os.path.dirname(models_dir)).replace(os.sep, "/")
             except ValueError:
-                display_path = os.path.basename(path)
-            print(f"{C_YELLOW}⚠️ 無法移除舊 policy 檔：{display_path}｜{type(exc).__name__}: {exc}{C_RESET}")
+                display_path = os.path.basename(path).replace(os.sep, "/")
+            print(f"{C_YELLOW}注意：無法移除舊 policy 檔：{display_path}｜{type(exc).__name__}: {exc}{C_RESET}")
 
 
 def _write_policy_paramset_files(

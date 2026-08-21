@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 
 DATASET_PROFILE_REDUCED = "reduced"
@@ -143,15 +144,24 @@ def build_validate_dataset_prompt(default=DEFAULT_VALIDATE_DATASET_PROFILE):
 
 
 
+def _display_dataset_path(data_dir):
+    from core.console_report import project_relative_display_path
+
+    project_root = Path(__file__).resolve().parents[1]
+    return project_relative_display_path(data_dir, project_root=project_root)
+
+
 def build_missing_dataset_dir_message(profile_key, data_dir):
     normalized_key = normalize_dataset_profile_key(profile_key)
+    display_path = _display_dataset_path(data_dir)
     if normalized_key == DATASET_PROFILE_REDUCED:
-        return f"找不到資料夾 {data_dir}，請先將 tw_stock_data_vip_reduced 放到 <repo>/data/。"
-    return f"找不到資料夾 {data_dir}，請先執行 apps/smart_downloader.py！"
+        return f"找不到資料夾 {display_path}，請先將 tw_stock_data_vip_reduced 放到 <repo>/data/。"
+    return f"找不到資料夾 {display_path}，請先執行 apps/smart_downloader.py！"
 
 
 def build_empty_dataset_dir_message(profile_key, data_dir):
     normalized_key = normalize_dataset_profile_key(profile_key)
+    display_path = _display_dataset_path(data_dir)
     if normalized_key == DATASET_PROFILE_REDUCED:
-        return f"資料夾 {data_dir} 內沒有任何 CSV 檔案；請先將 tw_stock_data_vip_reduced 放到 <repo>/data/。"
-    return f"資料夾 {data_dir} 內沒有任何 CSV 檔案。"
+        return f"資料夾 {display_path} 內沒有任何 CSV 檔案；請先將 tw_stock_data_vip_reduced 放到 <repo>/data/。"
+    return f"資料夾 {display_path} 內沒有任何 CSV 檔案。"

@@ -258,8 +258,6 @@ BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS = 24
 BREAKOUT_QUALITY_POINT_IN_TIME_TRAIN_WINDOW_MONTHS: int | None = None
 # Fixed-Window Rolling使用10年固定history；此值是config而非validator magic constant。
 BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS = 120
-BREAKOUT_QUALITY_STABILITY_SCORE_START_DATE = "2016-01-01"
-BREAKOUT_QUALITY_STABILITY_SCORE_END_DATE = "2025-12-31"
 
 # Rolling Timing Mode：只做 execution benchmark，不改正式 PIT 工件或模型科學契約。
 # 第一次執行會建立改善前 baseline；之後同設定重跑時以目前程式作 candidate，

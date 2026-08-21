@@ -20,6 +20,7 @@ import pandas as pd
 from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_PORTFOLIO_MAX_POSITIONS
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
+from core.console_report import project_relative_display_path
 from tools.workbench_ui.param_sources import DEFAULT_PARAM_SOURCE_LABEL, build_workbench_param_source_options
 from core.entry_plans import build_position_from_entry_fill
 from core.portfolio_fast_data import get_fast_close, get_fast_dates, get_fast_pos, get_fast_value
@@ -2021,7 +2022,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         print(f"{C_CYAN}================================================================================{C_RESET}")
         print(f"⚙️ {C_YELLOW}Rolling OOS 驗證參數組檢視{C_RESET}")
         print(f"{C_CYAN}================================================================================{C_RESET}")
-        print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
+        print(f"{C_GRAY}📦 參數檔: {project_relative_display_path(options['params_path'], project_root=WORKBENCH_PROJECT_ROOT)}{C_RESET}")
         for line in format_rolling_oos_summary_lines(payload):
             print(f"{C_GRAY}{line}{C_RESET}")
         print(f"{C_YELLOW}此檔案用途為 validation only；Workbench 目前顯示 rolling 訓練輸出的串連摘要，不重跑實盤單一參數模擬。{C_RESET}")
@@ -2050,7 +2051,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         print(f"{C_CYAN}================================================================================{C_RESET}")
         print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (active-param replay 對齊版){C_RESET}")
         print(f"{C_CYAN}================================================================================{C_RESET}")
-        print(f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)} | 來源: workbench | 路徑: {data_dir}{C_RESET}")
+        print(f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)} | 來源: workbench | 路徑: {project_relative_display_path(data_dir, project_root=WORKBENCH_PROJECT_ROOT)}{C_RESET}")
         print(f"{C_GRAY}ℹ️ 參數來源: {options['param_source']}{C_RESET}")
         print(f"{C_GRAY}ℹ️ source_mode={options.get('param_source_mode', 'custom')} | selector={options.get('selector') or '-'} | replay_range={options.get('replay_range_label')}{C_RESET}")
         print(f"{C_GRAY}ℹ️ fixed_risk_source={options.get('fixed_risk_source')} | optimizer_aligned_replay={bool(options.get('optimizer_aligned_replay'))}{C_RESET}")
@@ -2076,7 +2077,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             params_section_title = "Active-param ensemble 訓練參數"
             rolling_params_schedule_rows = _build_params_schedule_rows(ensemble_payload, fixed_risk=options.get("fixed_risk"))
             print(f"\n{C_GREEN}✅ 成功載入 active-param ensemble 參數組！{C_RESET}")
-            print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
+            print(f"{C_GRAY}📦 參數檔: {project_relative_display_path(options['params_path'], project_root=WORKBENCH_PROJECT_ROOT)}{C_RESET}")
             for line in format_active_param_ensemble_summary_lines(ensemble_payload):
                 print(f"{C_GRAY}{line}{C_RESET}")
             result = run_portfolio_simulation_with_param_ensemble(
@@ -2103,7 +2104,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             params_section_title = "Rolling OOS 訓練參數"
             rolling_params_schedule_rows = _build_params_schedule_rows(rolling_payload, fixed_risk=options.get("fixed_risk"))
             print(f"\n{C_GREEN}✅ 成功載入 Rolling OOS active-param replay 參數組！{C_RESET}")
-            print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
+            print(f"{C_GRAY}📦 參數檔: {project_relative_display_path(options['params_path'], project_root=WORKBENCH_PROJECT_ROOT)}{C_RESET}")
             for line in format_rolling_oos_summary_lines(rolling_payload):
                 print(f"{C_GRAY}{line}{C_RESET}")
             result = run_portfolio_simulation_with_param_schedule(
@@ -2125,7 +2126,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             if options.get("fixed_risk") is not None:
                 params.fixed_risk = float(options["fixed_risk"])
             print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
-            print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
+            print(f"{C_GRAY}📦 參數檔: {project_relative_display_path(options['params_path'], project_root=WORKBENCH_PROJECT_ROOT)}{C_RESET}")
             print(f"{C_GRAY}ℹ️ 單筆固定風險: {params.fixed_risk:.4f} ({options.get('fixed_risk_source')}){C_RESET}")
             context = load_portfolio_market_context(data_dir, params, verbose=True)
             result = run_portfolio_simulation_prepared(

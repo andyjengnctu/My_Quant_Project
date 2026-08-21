@@ -785,7 +785,7 @@ def _render_compact_strategy_console_report(
 
     lines.append(render_section("判讀限制", number=next_number))
     if not metadata.get("lookahead_safe_active_param_schedule"):
-        lines.append("⚠️ 本次使用單一／static參數，只能視為敏感度診斷。")
+        lines.append("注意：本次使用單一／static參數，只能視為敏感度診斷。")
     if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING:
         lines.append(
             "本結果是Selection內的PIT比較；模型排序、投組績效與資金配置必須分層判讀，"
@@ -953,7 +953,7 @@ def _render_strategy_console_report(
 
     lines.append(render_section("判讀限制", number=4 if strategy_diagnostics else 3))
     if not metadata.get("lookahead_safe_active_param_schedule"):
-        lines.append("⚠️ 本次使用單一／static 參數，只能視為敏感度診斷，不是無前視部署證據。")
+        lines.append("注意：本次使用單一／static 參數，只能視為敏感度診斷，不是無前視部署證據。")
     if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING:
         lines.append(
             "本報表使用 Selection point-in-time Scores 與當期歷史 active params；"

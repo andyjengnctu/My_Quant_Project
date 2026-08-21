@@ -9763,3 +9763,18 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - UX契約：只有真正「執行」會自動補建；status／latest／查看設定保持read-only。執行前先顯示可稽核plan並只確認一次；任一producer失敗立即停止、保留可RESUME工件、不產生半套正式結果。
 - 驗證邊界：GPT端獨立targeted contracts覆蓋action matrix、dependency order、producer後re-plan、fresh comparison period、Strategy/PIT/Robustness/Model/Audit formal paths；未執行`apps/run_bundle.py`／`apps/test_suite.py`，正式本機double check與4-seed benchmark evidence仍待使用者執行。
 - Decision：**IMPLEMENTED / RESEARCH_WIDE_ORCHESTRATION_SSOT / FORMAL_RERUN_PENDING / BENCHMARK_EVIDENCE_PENDING**。未新增MR/SR/Cxx identity，production/runtime identity不變。
+
+### 2026-08-21 — Research-wide orchestration formal rerun：CLI synthetic re-plan harness對齊
+- 本機`apps/run_bundle.py`正式double check在Research-wide orchestration版出現3個consistency FAIL，全部集中於`CLI_DATASET_WRAPPER_CONTRACT`：model research menu rc、isolated profile route、missing Dataset first。`meta quality`唯一FAIL `coverage_synthetic_suite_runs_successfully`來自同一coverage synthetic run的`synthetic_fail_count=3`，不是第二個runtime問題。
+- 根因：production Research orchestrator自此版起要求canonical producer完成後重新讀artifact truth；舊CLI synthetic只mock `_run_command(...)=0`，卻沒有同步模擬Dataset／Target readiness由`BUILD→REUSE`，因此synthetic本身在第一次producer後被正確的no-progress guard停止。這與實際builder成功後會寫入canonical artifact的runtime語意不同。
+- 修正：只更新`tools/validate/synthetic_cli_cases.py`的test seam，讓CLI wiring案例顯式模擬`Dataset BUILD → re-plan Dataset REUSE/Target BUILD → Target REUSE → PIT build/audit`；READY isolated-profile案例則直接注入READY upstream plan。正式expectation、validator判定、Research action policy、builder與production runtime均未放寬或修改。
+- GPT獨立回歸：`CLI_DATASET_WRAPPER_CONTRACT=170/170 PASS`；Strategy Compare config-driven contract=`157/157 PASS`、PIT=`36/36 PASS`、Audit framework=`3/3 PASS`、Optimizer walk-forward policy=`48/48 PASS`；meta/checklist/registry/coverage-target targeted contracts=`1468/1468 PASS`。正式本機double check仍待重跑。
+- Decision：**SYNTHETIC_HARNESS_ALIGNED / PRODUCTION_ORCHESTRATION_UNCHANGED / FORMAL_RERUN_PENDING / BENCHMARK_EVIDENCE_PENDING**。未新增或變更任何MR/SR/Cxx/ARCH/PARAM/AUD identity，Research Queue優先順序不變。
+
+### 2026-08-21 — Full-project independent audit hardening：Daily Universal history identity + user-visible path contract
+- 本輪屬工程／治理完整檢查，不新增MR/SR/Cxx/ARCH/PARAM/AUD identity，也不改Research Queue研究優先序；基準為Research-wide artifact orchestration版加formal synthetic harness修正。
+- E12修正：`filters/breakout_quality/daily_ranker_data.py`的current split不再於`training_universe_start_date`缺失時fallback到Optimizer `selection_start_date`；缺欄位即fail-fast。另移除current config中已退役、未被current builder使用的Fixed-Window `2016-01-01～2025-12-31` score-date constants，避免舊Fast/Selection期間重新進入current時間驗證語意。
+- B12/B19修正：project-local console／report／package輸出統一使用repo-relative `/` path；Strategy Compare與相關人讀warning改成文字`注意`，不再以警示emoji作判讀marker。Canonical manifest/runtime path identity與外部明確路徑未改。
+- 防回歸：既有MR-13H/K model contract加入`Daily Universal missing training_universe_start_date must reject`與`data-driven start wins over optimizer cutoff`兩項synthetic；`package_zip` orchestration synthetic同步驗證使用者可見ZIP路徑只能是repo-relative `/` path。其餘修改只復用`core.console_report.project_relative_display_path`，未建立第二套路徑轉換規則。
+- GPT端獨立完整矩陣驗證未執行`apps/run_bundle.py`／`apps/test_suite.py`；正式本機double check仍由使用者以`apps/run_bundle.py`執行。
+- Decision：**ENGINEERING_HARDENING_COMPLETE / CURRENT_IDENTITY_UNCHANGED / FORMAL_RERUN_PENDING**。

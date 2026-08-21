@@ -1,6 +1,11 @@
+from pathlib import Path
+
 from core.buy_sort import get_buy_sort_title, sort_candidate_rows
 from core.config import get_buy_sort_method
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
+from core.console_report import project_relative_display_path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def print_scanner_start_banner(now_label):
@@ -16,7 +21,7 @@ def _sort_rows(rows):
 def _print_issue_log_notice(scanner_issue_log_path, count_sanitized_candidates):
     if scanner_issue_log_path:
         print(
-            f"\n{C_YELLOW}⚠️ 清洗摘要已寫入: {scanner_issue_log_path} "
+            f"\n{C_YELLOW}注意：清洗摘要已寫入: {project_relative_display_path(scanner_issue_log_path, project_root=PROJECT_ROOT)} "
             f"(候選清洗 {count_sanitized_candidates} 檔){C_RESET}"
         )
 

@@ -12,6 +12,7 @@ from core.dataset_profiles import (
     resolve_dataset_profile_from_cli_env,
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_scanner_header
+from core.console_report import project_relative_display_path
 from core.log_utils import write_issue_log
 from core.runtime_utils import enable_line_buffered_stdout, get_process_pool_executor_kwargs, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
 from .reporting import print_history_qualified_summary, print_scanner_start_banner, print_scanner_summary
@@ -246,7 +247,7 @@ def main(argv=None, env=None):
         params = load_strict_params(ACTIVE_PARAMS_PATH)
         print(
             f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
-            f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
+            f"來源: {dataset_source} | 路徑: {project_relative_display_path(selected_data_dir, project_root=PROJECT_ROOT)}{C_RESET}"
         )
     except (ValueError, FileNotFoundError, RuntimeError) as e:
         import sys

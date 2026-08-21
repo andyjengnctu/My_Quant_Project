@@ -19,6 +19,7 @@ from core.dataset_profiles import (
     build_missing_dataset_dir_message,
     build_empty_dataset_dir_message,
 )
+from core.console_report import project_relative_display_path
 from core.log_utils import format_exception_summary
 from core.model_paths import resolve_default_primary_param_source_path
 from core.portfolio_param_runtime import load_portfolio_primary_params_from_json
@@ -269,7 +270,7 @@ def main(argv=None, environ=None):
 
         print(
             f"驗證資料集: {dataset_label} | "
-            f"來源: {dataset_source} | 路徑: {DATA_DIR}"
+            f"來源: {dataset_source} | 路徑: {project_relative_display_path(DATA_DIR, project_root=PROJECT_ROOT)}"
         )
         all_results = []
         summaries = []

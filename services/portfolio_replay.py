@@ -15,6 +15,7 @@ from core.dataset_profiles import (
     infer_dataset_profile_key_from_data_dir,
 )
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_YELLOW, C_RESET
+from core.console_report import project_relative_display_path
 from core.log_utils import format_exception_summary, write_issue_log
 from core.params_io import build_params_from_mapping
 from core.portfolio_param_runtime import (
@@ -595,7 +596,7 @@ def _load_portfolio_market_context_sequential(data_dir, params, *, verbose=True,
 
     vprint(" " * 160, end="\r")
     if load_log_path:
-        vprint(f"{C_YELLOW}⚠️ 預載入摘要已寫入: {load_log_path}{C_RESET}")
+        vprint(f"{C_YELLOW}注意：預載入摘要已寫入: {project_relative_display_path(load_log_path, project_root=PROJECT_ROOT)}{C_RESET}")
     if not all_dfs_fast:
         raise RuntimeError("未能成功載入任何股票資料！")
 
@@ -659,7 +660,7 @@ def _prepare_portfolio_context_from_raw_sequential(raw_data_cache, params, *, ve
     prep_log_path = write_issue_log("portfolio_sim_prep_issues", prep_issue_lines, log_dir=OUTPUT_DIR) if prep_issue_lines else None
     vprint(" " * 160, end="\r")
     if prep_log_path:
-        vprint(f"{C_YELLOW}⚠️ 投組預處理摘要已寫入: {prep_log_path}{C_RESET}")
+        vprint(f"{C_YELLOW}注意：投組預處理摘要已寫入: {project_relative_display_path(prep_log_path, project_root=PROJECT_ROOT)}{C_RESET}")
     if not all_dfs_fast:
         raise RuntimeError("未能成功建立任何 portfolio sim 快取標的！")
     vprint(f"\n{C_GREEN}✅ 預處理完成！共載入 {len(all_dfs_fast)} 檔標的。{C_RESET}\n")
@@ -823,7 +824,7 @@ def load_portfolio_market_context(
     sorted_dates = sorted(prep_result.get("master_dates") or [])
     if verbose:
         if load_log_path:
-            print(f"{C_YELLOW}⚠️ 投組預處理摘要已寫入: {load_log_path}{C_RESET}")
+            print(f"{C_YELLOW}注意：投組預處理摘要已寫入: {project_relative_display_path(load_log_path, project_root=PROJECT_ROOT)}{C_RESET}")
         prep_profile = prep_result.get("prep_profile") or {}
         print(
             f"{C_GREEN}✅ 預處理完成！共載入 {len(all_dfs_fast)} 檔標的，"

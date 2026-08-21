@@ -1,8 +1,12 @@
 import os
+from pathlib import Path
 
 import pandas as pd
 
+from core.console_report import project_relative_display_path
 from tools.trade_analysis.charting import build_debug_chart_payload, create_debug_chart_context, export_debug_chart_html
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _build_placeholder_price_df(chart_context=None):
@@ -68,7 +72,7 @@ def finalize_debug_analysis(
     else:
         df_logs = None
         if verbose:
-            print(f"{colors['yellow']}⚠️ 這檔股票沒有任何交易紀錄。{colors['reset']}")
+            print(f"{colors['yellow']}注意：這檔股票沒有任何交易紀錄。{colors['reset']}")
 
     excel_path = None
     chart_path = None
@@ -80,7 +84,7 @@ def finalize_debug_analysis(
         excel_path = os.path.join(output_dir, f"Debug_TradeLog_{ticker}.xlsx")
         df_logs.to_excel(excel_path, index=False)
         if verbose:
-            print(f"{colors['green']}📁 交易明細已成功匯出至：{excel_path}{colors['reset']}")
+            print(f"{colors['green']}交易明細已成功匯出至：{project_relative_display_path(excel_path, project_root=PROJECT_ROOT)}{colors['reset']}")
 
     if export_chart or return_chart_payload:
         if price_df is None:
@@ -104,7 +108,7 @@ def finalize_debug_analysis(
             chart_payload=chart_payload,
         )
         if verbose:
-            print(f"{colors['green']}📈 K 線交易檢視已成功匯出至：{chart_path}{colors['reset']}")
+            print(f"{colors['green']}K 線交易檢視已成功匯出至：{project_relative_display_path(chart_path, project_root=PROJECT_ROOT)}{colors['reset']}")
 
     if verbose and df_logs is not None and not df_logs.empty:
         _emit_loss_summary(df_logs, colors)

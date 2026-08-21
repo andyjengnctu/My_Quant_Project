@@ -21,6 +21,7 @@ from core.params_io import load_params_from_json
 from core.strategy_params import V16StrategyParams, strategy_params_to_dict
 from core.output_paths import build_output_dir
 from core.model_paths import resolve_run_best_params_path
+from core.console_report import project_relative_display_path
 from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, validate_cli_args
 
 warnings.simplefilter("default")
@@ -48,7 +49,7 @@ def load_params(json_file=None, *, verbose=True):
     resolved_json_file = resolve_run_best_params_path(BASE_DIR) if json_file is None else os.path.abspath(str(json_file))
     params = load_params_from_json(resolved_json_file)
     if verbose:
-        print(f"{C_GREEN}✅ 成功載入參數大腦: {resolved_json_file}{C_RESET}")
+        print(f"{C_GREEN}成功載入參數大腦: {project_relative_display_path(resolved_json_file, project_root=BASE_DIR)}{C_RESET}")
     return params
 
 
@@ -311,7 +312,7 @@ def main(argv=None, environ=None):
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(
         f"📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
-        f"來源: {dataset_source} | 路徑: {DATA_DIR}"
+        f"來源: {dataset_source} | 路徑: {project_relative_display_path(DATA_DIR, project_root=BASE_DIR)}"
     )
 
     analysis_result = run_ticker_analysis(
@@ -323,8 +324,8 @@ def main(argv=None, environ=None):
     )
     sanitize_stats = analysis_result["sanitize_stats"]
 
-    print(f"📥 讀取 {analysis_result['file_path']}...")
-    print(f"{C_GREEN}✅ 成功載入參數大腦: {resolve_run_best_params_path(BASE_DIR)}{C_RESET}")
+    print(f"讀取 {project_relative_display_path(analysis_result['file_path'], project_root=BASE_DIR)}...")
+    print(f"{C_GREEN}成功載入參數大腦: {project_relative_display_path(resolve_run_best_params_path(BASE_DIR), project_root=BASE_DIR)}{C_RESET}")
 
     dropped_row_count = sanitize_stats['dropped_row_count']
     invalid_row_count = sanitize_stats['invalid_row_count']
@@ -332,18 +333,18 @@ def main(argv=None, environ=None):
 
     if dropped_row_count > 0:
         print(
-            f"{C_YELLOW}⚠️ {ticker} 清洗移除 {dropped_row_count} 列 "
+            f"{C_YELLOW}注意：{ticker} 清洗移除 {dropped_row_count} 列 "
             f"(異常OHLCV={invalid_row_count}, 重複日期={duplicate_date_count}){C_RESET}"
         )
 
     if analysis_result["trade_logs_df"] is None:
-        print(f"{C_YELLOW}⚠️ 這檔股票沒有任何交易紀錄。{C_RESET}")
+        print(f"{C_YELLOW}注意：這檔股票沒有任何交易紀錄。{C_RESET}")
         return 0
 
     if analysis_result["excel_path"]:
-        print(f"{C_GREEN}📁 交易明細已成功匯出至：{analysis_result['excel_path']}{C_RESET}")
+        print(f"{C_GREEN}交易明細已成功匯出至：{project_relative_display_path(analysis_result['excel_path'], project_root=BASE_DIR)}{C_RESET}")
     if analysis_result["chart_path"]:
-        print(f"{C_GREEN}📈 K 線交易檢視已成功匯出至：{analysis_result['chart_path']}{C_RESET}")
+        print(f"{C_GREEN}K 線交易檢視已成功匯出至：{project_relative_display_path(analysis_result['chart_path'], project_root=BASE_DIR)}{C_RESET}")
 
     return 0
 

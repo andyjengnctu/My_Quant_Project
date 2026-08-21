@@ -1,5 +1,6 @@
 import pandas as pd
 
+from core.console_report import project_relative_display_path
 from tools.downloader import runtime as rt
 
 
@@ -38,7 +39,7 @@ def smart_download_vip_data(tickers, market_last_date, verbose=True):
             except rt.EXPECTED_LAST_DATE_CHECK_EXCEPTIONS as e:
                 last_date_check_errors.append(f"{sid}: {type(e).__name__}: {e}")
                 if rt.VERBOSE_LAST_DATE_CHECK_ERRORS:
-                    vprint(f"\n⚠️ {sid} 檢查最後日期發生錯誤，將強制重抓: {type(e).__name__}: {e}")
+                    vprint(f"\n注意：{sid} 檢查最後日期發生錯誤，將強制重抓: {type(e).__name__}: {e}")
 
         vprint(
             f"\r⚡ [{i:03d}/{total:03d}] 成功:{count_success:>4} | 跳過:{count_skipped_latest:>4} | "
@@ -94,7 +95,7 @@ def smart_download_vip_data(tickers, market_last_date, verbose=True):
     issue_log_path = None
     if last_date_check_errors or download_errors:
         issue_log_path = rt.get_downloader_issue_log_path()
-        vprint(f"⚠️ 非致命問題詳細已寫入: {issue_log_path}")
+        vprint(f"注意：非致命問題詳細已寫入: {project_relative_display_path(issue_log_path, project_root=rt.PROJECT_ROOT)}")
 
     return {
         "total": total,

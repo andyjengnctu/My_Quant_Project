@@ -170,9 +170,9 @@ def _project_relative_path(path: str) -> str:
     if not raw:
         return ""
     try:
-        return os.path.relpath(raw, PROJECT_ROOT)
+        return os.path.relpath(raw, PROJECT_ROOT).replace(os.sep, "/")
     except ValueError:
-        return os.path.basename(raw)
+        return os.path.basename(raw).replace(os.sep, "/")
 
 
 def _is_finite_number(value) -> bool:
@@ -3025,7 +3025,7 @@ def main(argv=None, environ=None):
                 print(f"{C_RED}❌ Study Mode 輸出 base.json 需要既有 study 記憶庫；目前未設定 db_file。{C_RESET}", file=sys.stderr)
                 return 1
             if not os.path.exists(db_file):
-                print(f"{C_RED}❌ 記憶庫不存在，無法輸出 base.json: {db_file}；請先用 Study Mode 訓練產生 study 記憶庫。{C_RESET}", file=sys.stderr)
+                print(f"{C_RED}❌ 記憶庫不存在，無法輸出 base.json: {_project_relative_path(db_file)}；請先用 Study Mode 訓練產生 study 記憶庫。{C_RESET}", file=sys.stderr)
                 return 1
             study = None
             try:
@@ -3080,7 +3080,7 @@ def main(argv=None, environ=None):
             print(f"{C_RED}❌ 目前預設使用 memory study，不保留長期 DB；export_candidate 不支援從硬碟接續匯出。請用 Trade mode --trials N 重新訓練產生 candidate_best。{C_RESET}", file=sys.stderr)
             return 1
         if not os.path.exists(db_file):
-            print(f"{C_RED}❌ 記憶庫不存在，無法匯出: {db_file}；請用 Trade mode --trials N 重新訓練產生 candidate_best。{C_RESET}", file=sys.stderr)
+            print(f"{C_RED}❌ 記憶庫不存在，無法匯出: {_project_relative_path(db_file)}；請用 Trade mode --trials N 重新訓練產生 candidate_best。{C_RESET}", file=sys.stderr)
             return 1
         try:
             ensure_optimizer_db_usable(db_file)

@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from core.display import C_CYAN, C_GREEN, C_RESET, C_YELLOW
+from core.console_report import project_relative_display_path
 from core.log_utils import format_exception_summary
 from core.output_paths import build_output_dir
 
@@ -34,12 +35,12 @@ def print_yearly_return_report(yearly_return_rows, benchmark_yearly_return_rows=
 
     base_columns = ["year", "year_return_pct", "is_full_year", "start_date", "end_date"]
     if not yearly_return_rows:
-        print(f"{C_YELLOW}⚠️ 無年度報酬率資料。{C_RESET}")
+        print(f"{C_YELLOW}注意：無年度報酬率資料。{C_RESET}")
         return pd.DataFrame(columns=base_columns)
 
     df_yearly = pd.DataFrame(yearly_return_rows).copy()
     if df_yearly.empty:
-        print(f"{C_YELLOW}⚠️ 無年度報酬率資料。{C_RESET}")
+        print(f"{C_YELLOW}注意：無年度報酬率資料。{C_RESET}")
         return pd.DataFrame(columns=base_columns)
 
     df_yearly["year_label"] = df_yearly["year"].astype(str)
@@ -84,7 +85,7 @@ def export_portfolio_reports(df_eq, df_tr, df_yearly, benchmark_ticker, start_ye
         df_eq.to_excel(writer, sheet_name="Equity Curve", index=False)
         df_tr.to_excel(writer, sheet_name="Trade History", index=False)
         df_yearly.to_excel(writer, sheet_name="Yearly Returns", index=False)
-    print(f"{C_GREEN}📁 完整資產曲線、交易明細與各年度報酬率已匯出至: {REPORT_XLSX_PATH}{C_RESET}")
+    print(f"{C_GREEN}完整資產曲線、交易明細與各年度報酬率已匯出至: {project_relative_display_path(REPORT_XLSX_PATH, project_root=PROJECT_ROOT)}{C_RESET}")
 
     try:
         import plotly.graph_objects as go
@@ -97,6 +98,6 @@ def export_portfolio_reports(df_eq, df_tr, df_yearly, benchmark_ticker, start_ye
         end_label = "至今" if end_year is None else f"至 {int(end_year)}"
         fig.update_layout(title=f'<b>V16 投資組合實戰淨值 vs {benchmark_ticker} 大盤</b> ({start_year} {end_label})', xaxis_title='日期', yaxis_title='累積報酬率 (%)', template='plotly_dark', hovermode='x unified', legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(0,0,0,0.5)"), margin=dict(l=40, r=40, t=60, b=40))
         fig.write_html(DASHBOARD_HTML_PATH)
-        print(f"{C_GREEN}📊 互動式網頁已生成: {DASHBOARD_HTML_PATH}{C_RESET}")
+        print(f"{C_GREEN}互動式網頁已生成: {project_relative_display_path(DASHBOARD_HTML_PATH, project_root=PROJECT_ROOT)}{C_RESET}")
     except (ImportError, OSError, ValueError, RuntimeError, webbrowser.Error) as e:
-        print(f"{C_YELLOW}⚠️ Plotly 圖表輸出或開啟失敗: {format_exception_summary(e)}{C_RESET}")
+        print(f"{C_YELLOW}注意：Plotly 圖表輸出或開啟失敗: {format_exception_summary(e)}{C_RESET}")

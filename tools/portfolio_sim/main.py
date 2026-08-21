@@ -12,6 +12,7 @@ from core.model_paths import discover_model_param_sources, resolve_candidate_bes
 from core.rolling_oos_params import format_rolling_oos_summary_lines, get_active_param_date_range, get_active_param_year_range, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
 from core.portfolio_param_runtime import build_params_schedule_rows_from_payload
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
+from core.console_report import project_relative_display_path
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, parse_int_strict, parse_float_strict, validate_cli_args
 from config.execution_policy import DEFAULT_FIXED_RISK
 
@@ -82,7 +83,7 @@ def main(argv=None, env=None):
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(
         f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
-        f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
+        f"來源: {dataset_source} | 路徑: {project_relative_display_path(selected_data_dir, project_root=PROJECT_ROOT)}{C_RESET}"
     )
 
     try:
@@ -129,7 +130,7 @@ def main(argv=None, env=None):
             rolling_first_date, rolling_last_date = get_active_param_date_range(rolling_payload)
             default_start_year_hint = int(rolling_first_year)
             print(f"\n{C_GREEN}✅ 成功載入 Rolling OOS active-param replay 參數組！{C_RESET}")
-            print(f"{C_GRAY}📦 參數檔: {params_path}{C_RESET}")
+            print(f"{C_GRAY}📦 參數檔: {project_relative_display_path(params_path, project_root=PROJECT_ROOT)}{C_RESET}")
             for line in format_rolling_oos_summary_lines(rolling_payload):
                 print(f"{C_GRAY}{line}{C_RESET}")
             print(f"{C_YELLOW}此檔案只用於驗證 rolling 結果；實際交易請使用最新單一 param.json。{C_RESET}")
@@ -188,7 +189,7 @@ def main(argv=None, env=None):
             return 1
 
         print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
-        print(f"{C_GRAY}📦 參數檔: {params_path}{C_RESET}")
+        print(f"{C_GRAY}📦 參數檔: {project_relative_display_path(params_path, project_root=PROJECT_ROOT)}{C_RESET}")
         print(f"{C_GRAY}ℹ️ 單筆固定風險: {params.fixed_risk:.4f}{C_RESET}")
 
     ensure_runtime_dirs()

@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from core.console_report import project_relative_display_path
 from core.runtime_utils import has_help_flag, get_taipei_now, resolve_cli_program_name, run_cli_entrypoint, validate_cli_args
 
 HELP_DESCRIPTION = "清除 Python 快取、封存舊 package ZIP，並把目前 working tree 的 tracked / untracked 非忽略檔打成乾淨 ZIP。新 package 會包含 reduced dataset；舊 package 移入 arch/ 時會自動移除 reduced dataset 以節省空間。可選擇先 commit，再於打包後執行 test suite。"
@@ -272,7 +273,7 @@ def main(argv=None) -> int:
     print(f"[package_zip] removed __pycache__={removed_cache_dirs} *.pyc={removed_pyc_files}")
     print(f"[package_zip] archived old root zips={moved_count} stripped_reduced_members={stripped_member_count}")
     print(f"[package_zip] packaged files={len(package_paths)}")
-    print(f"[package_zip] output={zip_path}")
+    print(f"[package_zip] output={project_relative_display_path(zip_path, project_root=PROJECT_ROOT)}")
 
     test_suite_summary = "not_run"
     if parsed.get("run_test_suite"):
