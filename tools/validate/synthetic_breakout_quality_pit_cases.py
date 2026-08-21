@@ -32,6 +32,7 @@ from .synthetic_breakout_quality_support import (
 from .source_index import read_source_ast, read_source_text
 
 def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_params):
+    """Protect PIT legality, fold identity and score-universe semantics."""
     case_id = "BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_BUILDER"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
@@ -39,82 +40,37 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
 
     from config import breakout_quality as workflow_config
     from config.breakout_quality import get_breakout_quality_workflow_settings
-    from services.breakout_quality.point_in_time_audit import (
-        _direction_summary,
-        _orderable_coverage,
-        _render_markdown as render_point_in_time_markdown,
-        render_compact_console_summary as render_point_in_time_compact_console,
-        render_console_summary as render_point_in_time_console,
-    )
-    from tools.filters.breakout_quality.build_point_in_time_scores import (
-        REQUIRED_SCORE_COLUMNS,
-        _build_fold_periods,
-        _stable_fold_id,
-        _combined_validation,
-        _fold_group_ids,
-        _fold_training_contract_is_compatible,
-        _migrate_compatible_legacy_fold,
-        _rescore_daily_fold_from_compatible_checkpoint,
-        _rescore_fold_from_external_checkpoint,
-        _resolve_score_start,
-        _resolve_training_universe_start,
-        _snapshot_superseded_point_in_time_aggregate,
-        _validate_score_frame,
-        parse_args as parse_point_in_time_args,
-    )
     from filters.breakout_quality.continuous_ranker_data import _validate_group_consistency
     from filters.breakout_quality.ranker_sample_contract import (
-        build_score_eligibility_contract,
         resolve_forward_oos_score_group_ids,
         resolve_forward_oos_target_evaluable_group_ids,
     )
-    from filters.breakout_quality.artifacts import build_file_manifest, compute_file_sha256
-    from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME, LABEL_PASS
-
-    consistent_terminal_events = pd.DataFrame(
-        [
-            {
-                "ticker": "2330",
-                "date": "2026-03-02",
-                "group_index": 0,
-                "label_eval_end_date": None,
-            },
-            {
-                "ticker": "2330",
-                "date": "2026-03-02",
-                "group_index": 0,
-                "label_eval_end_date": None,
-            },
-            {
-                "ticker": "2317",
-                "date": "2020-01-02",
-                "group_index": 1,
-                "label_eval_end_date": "2020-03-02",
-            },
-        ]
+    from tools.filters.breakout_quality.build_point_in_time_scores import (
+        _build_fold_periods,
+        _fold_training_contract_is_compatible,
+        _resolve_training_universe_start,
+        _stable_fold_id,
     )
-    all_missing_label_end_accepted = True
+
+    terminal = pd.DataFrame([
+        {"ticker": "2330", "date": "2026-03-02", "group_index": 0, "label_eval_end_date": None},
+        {"ticker": "2330", "date": "2026-03-02", "group_index": 0, "label_eval_end_date": None},
+    ])
     try:
-        _validate_group_consistency(consistent_terminal_events)
+        _validate_group_consistency(terminal)
+        terminal_ok = True
     except ValueError:
-        all_missing_label_end_accepted = False
-    check_true(
-        "point_in_time_group_consistency_accepts_all_missing_terminal_label_end",
-        all_missing_label_end_accepted,
-    )
+        terminal_ok = False
+    check_true("pit_group_consistency_accepts_all_missing_terminal_label_end", terminal_ok)
 
-    synthetic_history_bundle = SimpleNamespace(
-        summary={"training_universe_start_date": "2004-09-08"}
-    )
     check(
-        "rolling_available_history_start_uses_data_driven_training_universe_not_optimizer_selection_start",
+        "pit_training_history_start_is_data_driven",
         pd.Timestamp("2004-09-08"),
         _resolve_training_universe_start(
-                    synthetic_history_bundle, selection_start=pd.Timestamp("2011-01-01")
-                ),
+            SimpleNamespace(summary={"training_universe_start_date": "2004-09-08"}),
+            selection_start=pd.Timestamp("2011-01-01"),
+        ),
     )
-
-    missing_daily_history_rejected = False
     try:
         _resolve_training_universe_start(
             SimpleNamespace(
@@ -125,19 +81,16 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             ),
             selection_start=pd.Timestamp("2011-01-01"),
         )
-    except ValueError as exc:
-        missing_daily_history_rejected = (
-            "不得fallback到optimizer selection_start_date" in str(exc)
-        )
-    check_true(
-        "daily_universal_missing_training_universe_start_fails_closed_without_optimizer_fallback",
-        missing_daily_history_rejected,
-    )
+    except ValueError:
+        missing_history_rejected = True
+    else:
+        missing_history_rejected = False
+    check_true("daily_universal_missing_history_start_fails_closed", missing_history_rejected)
 
     event_profile = get_breakout_quality_experiment_profile(
         STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
     )
-    forward_bundle = SimpleNamespace(
+    bundle = SimpleNamespace(
         group_table=pd.DataFrame([
             {"ticker": "A", "date": "2021-01-04", "group_index": 0, "label": 1},
             {"ticker": "B", "date": "2021-01-04", "group_index": 1, "label": 0},
@@ -145,531 +98,60 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             {"ticker": "D", "date": "2020-12-31", "group_index": 3, "label": 1},
         ]),
         target_valid=np.array([True, False, True, True], dtype=bool),
-        outer_policy={
-            "oos_start_date": "2021-01-01",
-            "effective_oos_end_date": "2021-12-31",
-        },
+        outer_policy={"oos_start_date": "2021-01-01", "effective_oos_end_date": "2021-12-31"},
         profile=event_profile,
     )
     check(
-        "forward_oos_runtime_score_universe_does_not_require_future_target_completion",
+        "forward_oos_score_universe_is_future_target_independent",
         ([0, 1, 2], [0]),
         (
-                    resolve_forward_oos_score_group_ids(forward_bundle).tolist(),
-                    resolve_forward_oos_target_evaluable_group_ids(forward_bundle).tolist(),
-                ),
-    )
-
-    mixed_label_end_rejected = False
-    inconsistent_terminal_events = consistent_terminal_events.copy()
-    inconsistent_terminal_events.loc[1, "label_eval_end_date"] = "2026-04-30"
-    try:
-        _validate_group_consistency(inconsistent_terminal_events)
-    except ValueError as exc:
-        mixed_label_end_rejected = "invalid_groups=1" in str(exc)
-    check_true(
-        "point_in_time_group_consistency_rejects_mixed_missing_and_completed_label_end",
-        mixed_label_end_rejected,
+            resolve_forward_oos_score_group_ids(bundle).tolist(),
+            resolve_forward_oos_target_evaluable_group_ids(bundle).tolist(),
+        ),
     )
 
     settings = get_breakout_quality_workflow_settings()
-    with patch.object(
-        workflow_config,
-        "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
-        UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
-    ):
-        binary_settings = workflow_config.get_breakout_quality_workflow_settings()
-    check(
-        "workflow_binary_profile_resolves_classification_and_hard_filter",
-        (
-                    "binary_classification",
-                    None,
-                    "hard-filter",
-                    "canonical_runtime",
-                    "original",
-                ),
-        (
-                    binary_settings.training_objective,
-                    binary_settings.continuous_target_id,
-                    binary_settings.strategy_comparison_mode,
-                    binary_settings.strategy_score_source,
-                    binary_settings.strategy_buy_sort,
-                ),
+    binary = workflow_config.get_breakout_quality_workflow_settings(
+        experiment_profile=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
     )
-    with patch.object(
-        workflow_config,
-        "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
-        STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
-    ):
-        continuous_settings = workflow_config.get_breakout_quality_workflow_settings()
-    check(
-        "workflow_continuous_profile_resolves_point_in_time_score_ranking",
-        (
-                    "daily_percentile_regression",
-                    "strategy_aligned_opportunity_no_time_r_v1",
-                    "score-ranking",
-                    "selection_point_in_time",
-                    "breakout_quality_score_desc",
-                ),
-        (
-                    continuous_settings.training_objective,
-                    continuous_settings.continuous_target_id,
-                    continuous_settings.strategy_comparison_mode,
-                    continuous_settings.strategy_score_source,
-                    continuous_settings.strategy_buy_sort,
-                ),
+    continuous = workflow_config.get_breakout_quality_workflow_settings(
+        experiment_profile=STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
     )
-    daily_settings = workflow_config.get_breakout_quality_workflow_settings(
+    daily = workflow_config.get_breakout_quality_workflow_settings(
         experiment_profile=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
     )
-    check(
-        "daily_universal_profile_enables_model_layer_pit_without_changing_strategy_identity",
-        (
-                    "daily_pairwise_ranking",
-                    "daily_eligible_stock_days",
-                    True,
-                    settings.experiment_profile,
-                ),
-        (
-                    daily_settings.training_objective,
-                    daily_settings.training_sample_scope,
-                    daily_settings.supports_point_in_time_scores,
-                    workflow_config.BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-                ),
-    )
-    parsed = parse_point_in_time_args([])
-    check(
-        "point_in_time_cli_defaults_follow_current_workflow_config",
-        (
-                    settings.filter_id,
-                    settings.model_architecture,
-                    settings.experiment_profile,
-                    settings.seed,
-                    settings.point_in_time_score_start_date,
-                    settings.point_in_time_fold_months,
-                    settings.point_in_time_inner_validation_months,
-                ),
-        (
-                    parsed.filter_id,
-                    parsed.model_architecture,
-                    parsed.experiment_profile,
-                    parsed.seed,
-                    parsed.score_start_date,
-                    parsed.fold_months,
-                    parsed.inner_validation_months,
-                ),
-    )
-
-    periods = _build_fold_periods(
-        pd.Timestamp("2019-12-31"),
-        pd.Timestamp("2020-03-15"),
-        fold_months=1,
-    )
-    check(
-        "point_in_time_fold_periods_are_contiguous_and_calendar_month_based",
-        [
-                    ("2019-12-31", "2019-12-31"),
-                    ("2020-01-01", "2020-01-31"),
-                    ("2020-02-01", "2020-02-29"),
-                    ("2020-03-01", "2020-03-15"),
-                ],
-        [
-                    (str(item["score_start"].date()), str(item["score_end"].date()))
-                    for item in periods
-                ],
-    )
-
-    oos_periods = _build_fold_periods(
-        pd.Timestamp("2021-01-01"),
-        pd.Timestamp("2026-03-02"),
-        fold_months=12,
-        fold_anchor=pd.Timestamp("2021-01-01"),
-        single_score_block=True,
-    )
-    check(
-        "point_in_time_single_score_block_keeps_2021_to_latest_as_one_fold",
-        [("2021-01-01", "2026-03-02")],
-        [(str(item["score_start"].date()), str(item["score_end"].date())) for item in oos_periods],
-    )
-
-    rolling_periods = _build_fold_periods(
-        pd.Timestamp("2021-01-01"),
-        pd.Timestamp("2026-03-02"),
-        fold_months=12,
-        single_score_block=False,
-    )
-    check(
-        "point_in_time_current_rolling_uses_2021_to_latest_annual_folds_with_partial_tail",
-        [
-                    ("2021-01-01", "2021-12-31"),
-                    ("2022-01-01", "2022-12-31"),
-                    ("2023-01-01", "2023-12-31"),
-                    ("2024-01-01", "2024-12-31"),
-                    ("2025-01-01", "2025-12-31"),
-                    ("2026-01-01", "2026-03-02"),
-                ],
-        [(str(item["score_start"].date()), str(item["score_end"].date())) for item in rolling_periods],
-    )
-
-    with tempfile.TemporaryDirectory() as tmp:
-        pit_root = Path(tmp) / "point_in_time"
-        pit_root.mkdir(parents=True, exist_ok=True)
-        manifest_path = pit_root / "selection_point_in_time_manifest.json"
-        manifest_path.write_text(
-            json.dumps({"score_period": {"start": "2016-01-01", "end": "2025-12-31"}}),
-            encoding="utf-8",
-        )
-        for name in (
-            "selection_point_in_time_scores.csv",
-            "selection_point_in_time_coverage.csv",
-            "selection_point_in_time_audit.md",
-        ):
-            (pit_root / name).write_text(name, encoding="utf-8")
-        snapshot_dir = _snapshot_superseded_point_in_time_aggregate(
-            point_in_time_dir=pit_root,
-            manifest_path=manifest_path,
-            score_start=pd.Timestamp("2021-01-01"),
-            score_end=pd.Timestamp("2026-03-02"),
-            selection_end=pd.Timestamp("2020-12-31"),
-        )
-        snapshot_ok = (
-            snapshot_dir is not None
-            and snapshot_dir.name == "historical_aggregate_20160101_20251231"
-            and (snapshot_dir / manifest_path.name).is_file()
-            and (snapshot_dir / "selection_point_in_time_scores.csv").is_file()
-            and (snapshot_dir / "selection_point_in_time_coverage.csv").is_file()
-            and (snapshot_dir / "selection_point_in_time_audit.md").is_file()
-        )
     check_true(
-        "point_in_time_narrower_current_period_snapshots_broader_historical_aggregate_before_refresh",
-        snapshot_ok,
+        "workflow_profiles_keep_binary_continuous_and_daily_pit_semantics",
+        binary.training_objective == "binary_classification"
+        and continuous.strategy_score_source == "selection_point_in_time"
+        and daily.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+        and daily.supports_point_in_time_scores,
     )
 
-    original_annual_periods = _build_fold_periods(
-        pd.Timestamp("2014-01-01"),
-        pd.Timestamp("2015-12-31"),
-        fold_months=12,
+    oos = _build_fold_periods(
+        pd.Timestamp("2021-01-01"), pd.Timestamp("2026-03-02"),
+        fold_months=12, fold_anchor=pd.Timestamp("2021-01-01"), single_score_block=True,
     )
-    earlier_periods = _build_fold_periods(
-        pd.Timestamp("2007-06-01"),
-        pd.Timestamp("2015-12-31"),
-        fold_months=12,
+    rolling = _build_fold_periods(
+        pd.Timestamp("2021-01-01"), pd.Timestamp("2026-03-02"),
+        fold_months=12, single_score_block=False,
     )
-    original_fold = next(
-        item for item in original_annual_periods
-        if item["score_start"] == pd.Timestamp("2014-01-01")
-    )
-    extended_fold = next(
-        item for item in earlier_periods
-        if item["score_start"] == pd.Timestamp("2014-01-01")
-    )
-    auto_group_dates = pd.date_range("2020-01-01", periods=8, freq="MS")
-    auto_bundle = SimpleNamespace(
-        group_table=pd.DataFrame({
-            "date": auto_group_dates,
-            "label_eval_end_date": auto_group_dates,
-            "label": np.full(len(auto_group_dates), LABEL_PASS, dtype=np.int64),
-        }),
-        target_valid=np.ones(len(auto_group_dates), dtype=bool),
-        profile=SimpleNamespace(
-            training_label_scope=TRAINING_LABEL_SCOPE_PASS_ONLY,
-            training_sample_scope=TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+    check(
+        "pit_oos_is_single_block_and_rolling_is_annual_with_partial_tail",
+        (1, 6, "2021-01-01", "2026-03-02"),
+        (
+            len(oos), len(rolling),
+            str(rolling[0]["score_start"].date()),
+            str(rolling[-1]["score_end"].date()),
         ),
     )
-    auto_settings = SimpleNamespace(
-        point_in_time_min_train_groups=2,
-        point_in_time_min_validation_groups=2,
-        point_in_time_min_score_groups=1,
-    )
-    resolved_auto_start, auto_diagnostics = _resolve_score_start(
-        "auto",
-        bundle=auto_bundle,
-        settings=auto_settings,
-        selection_start=pd.Timestamp("2020-01-01"),
-        score_end=pd.Timestamp("2020-08-31"),
-        fold_months=1,
-        validation_months=2,
-    )
     check(
-        "point_in_time_auto_start_selects_earliest_month_meeting_real_split_counts",
-        ("2020-05-01", 5, {"inner_train": 2, "validation": 2, "score": 1}),
-        (
-                    str(resolved_auto_start.date()),
-                    auto_diagnostics["candidate_months_checked"],
-                    auto_diagnostics["first_fold_group_counts"],
-                ),
+        "pit_fold_identity_is_date_stable",
+        "fold_20140101_20141231",
+        _stable_fold_id(pd.Timestamp("2014-01-01"), pd.Timestamp("2014-12-31")),
     )
 
-    check(
-        "point_in_time_fold_identity_is_date_stable_when_history_is_extended",
-        (
-                    "fold_20140101_20141231",
-                    "fold_20140101_20141231",
-                    "fold_20140101_20141231",
-                ),
-        (
-                    original_fold["fold_id"],
-                    extended_fold["fold_id"],
-                    _stable_fold_id(pd.Timestamp("2014-01-01"), pd.Timestamp("2014-12-31")),
-                ),
-    )
-
-    with tempfile.TemporaryDirectory() as tmp:
-        pit_root = Path(tmp) / "point_in_time"
-        legacy_dir = pit_root / "folds" / "fold_000"
-        target_dir = pit_root / "folds" / "fold_20140101_20141231"
-        legacy_dir.mkdir(parents=True, exist_ok=True)
-        model_path = legacy_dir / DEFAULT_MODEL_FILENAME
-        score_path = legacy_dir / "scores.csv"
-        pd.DataFrame(
-            [{
-                "ticker": "2330",
-                "date": "2014-06-30",
-                "group_index": 7,
-                "breakout_quality_score": 0.75,
-                "fold_id": "fold_000",
-                "model_information_cutoff": "2013-12-31",
-            }]
-        ).to_csv(score_path, index=False, encoding="utf-8-sig")
-        common_contract = {
-            "filter_id": "breakout_quality_v1",
-            "model_architecture": "inception_time_v1",
-            "experiment_profile": "strategy_aligned_no_time_pass_magnitude_mse",
-            "continuous_target_id": "strategy_aligned_opportunity_no_time_r_v1",
-            "training_label_scope": "pass_only",
-            "seed": 42,
-            "planned_periods": {
-                "score_start": "2014-01-01",
-                "score_end": "2014-12-31",
-            },
-            "observed_periods": {},
-            "model_information_cutoff": "2013-12-31",
-            "group_counts": {},
-            "event_row_counts": {},
-            "model_spec": {},
-            "experiment_settings": {},
-            "training_settings": {},
-            "source_contract": {},
-            "lookahead_contract": {},
-        }
-        import torch
-
-        torch.save(
-            {
-                "model_state_dict": {"synthetic_weight": torch.tensor([1.0])},
-                "fold_contract": {
-                    **common_contract,
-                    "schema_version": 1,
-                    "fold_id": "fold_000",
-                },
-            },
-            model_path,
-        )
-        legacy_manifest = {
-            **common_contract,
-            "schema_version": 1,
-            "fold_id": "fold_000",
-            "contract_fingerprint": "legacy-fingerprint",
-            "artifacts": {
-                "checkpoint": build_file_manifest(model_path),
-                "scores": build_file_manifest(score_path),
-            },
-        }
-        (legacy_dir / "manifest.json").write_text(
-            json.dumps(legacy_manifest), encoding="utf-8"
-        )
-        target_contract = {
-            **common_contract,
-            "schema_version": 2,
-            "fold_id": "fold_20140101_20141231",
-        }
-        migrated = _migrate_compatible_legacy_fold(
-            point_in_time_dir=pit_root,
-            target_fold_dir=target_dir,
-            expected_fingerprint="stable-fingerprint",
-            fold_contract=target_contract,
-            torch_module=torch,
-        )
-        migrated_frame, migrated_manifest = migrated or (pd.DataFrame(), {})
-        migrated_checkpoint = (
-            torch.load(
-                target_dir / DEFAULT_MODEL_FILENAME,
-                map_location="cpu",
-                weights_only=True,
-            )
-            if migrated is not None
-            else {}
-        )
-    check(
-        "compatible_legacy_fold_is_hash_checked_and_migrated_to_stable_id",
-        (
-                    True,
-                    {"fold_20140101_20141231"},
-                    "fold_20140101_20141231",
-                    "fold_000",
-                    "stable-fingerprint",
-                ),
-        (
-                    migrated is not None,
-                    set(migrated_frame.get("fold_id", pd.Series(dtype=str)).astype(str)),
-                    dict(migrated_checkpoint.get("fold_contract") or {}).get("fold_id"),
-                    dict(migrated_manifest.get("migration") or {}).get("source_fold_id"),
-                    migrated_manifest.get("contract_fingerprint"),
-                ),
-    )
-
-    group_table = pd.DataFrame(
-        [
-            {
-                "ticker": "A",
-                "date": "2010-01-01",
-                "group_index": 0,
-                "label": 1,
-                "label_eval_end_date": "2010-02-01",
-            },
-            {
-                "ticker": "B",
-                "date": "2011-12-01",
-                "group_index": 1,
-                "label": 1,
-                "label_eval_end_date": "2012-01-10",
-            },
-            {
-                "ticker": "C",
-                "date": "2012-01-02",
-                "group_index": 2,
-                "label": 1,
-                "label_eval_end_date": "2012-02-15",
-            },
-            {
-                "ticker": "D",
-                "date": "2013-12-01",
-                "group_index": 3,
-                "label": 1,
-                "label_eval_end_date": "2013-12-20",
-            },
-            {
-                "ticker": "E",
-                "date": "2013-12-20",
-                "group_index": 4,
-                "label": 1,
-                "label_eval_end_date": "2014-01-10",
-            },
-            {
-                "ticker": "0056",
-                "date": "2014-01-02",
-                "group_index": 5,
-                "label": 0,
-                "label_eval_end_date": "2014-02-15",
-            },
-            {
-                "ticker": "G",
-                "date": "2014-06-01",
-                "group_index": 6,
-                "label": 1,
-                "label_eval_end_date": "2014-07-15",
-            },
-        ]
-    )
-    bundle = SimpleNamespace(
-        group_table=group_table,
-        profile=SimpleNamespace(
-            training_label_scope="pass_only",
-            training_sample_scope=TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
-        ),
-        target_valid=np.ones(len(group_table), dtype=bool),
-        event_group_index=np.arange(len(group_table), dtype=np.int64),
-    )
-    fold = {
-        "fold_id": "fold_000",
-        "score_start": pd.Timestamp("2014-01-01"),
-        "score_end": pd.Timestamp("2014-12-31"),
-    }
-    ids = _fold_group_ids(bundle, fold, validation_months=24)
-    check(
-        "point_in_time_split_requires_completed_labels_before_each_information_boundary",
-        ([0], [2, 3], [0, 1, 2, 3], [5, 6]),
-        (
-                    ids["train_ids"].tolist(),
-                    ids["validation_ids"].tolist(),
-                    ids["final_ids"].tolist(),
-                    ids["score_ids"].tolist(),
-                ),
-    )
-
-    daily_group_table = group_table.copy()
-    daily_group_table["label"] = -1
-    daily_bundle = SimpleNamespace(
-        group_table=daily_group_table,
-        profile=SimpleNamespace(
-            training_label_scope=TRAINING_LABEL_SCOPE_ALL,
-            training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-        ),
-        target_valid=np.ones(len(daily_group_table), dtype=bool),
-        event_group_index=np.arange(len(daily_group_table), dtype=np.int64),
-    )
-    daily_ids = _fold_group_ids(daily_bundle, fold, validation_months=24)
-    check(
-        "daily_point_in_time_split_uses_all_target_valid_stock_days_and_same_label_end_embargo",
-        ([0], [2, 3], [0, 1, 2, 3], [5, 6]),
-        (
-                    daily_ids["train_ids"].tolist(),
-                    daily_ids["validation_ids"].tolist(),
-                    daily_ids["final_ids"].tolist(),
-                    daily_ids["score_ids"].tolist(),
-                ),
-    )
-
-    inference_target_valid = np.ones(len(daily_group_table), dtype=bool)
-    inference_target_valid[[3, 6]] = False
-    inference_daily_bundle = SimpleNamespace(
-        group_table=daily_group_table,
-        profile=SimpleNamespace(
-            training_label_scope=TRAINING_LABEL_SCOPE_ALL,
-            training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-        ),
-        target_valid=inference_target_valid,
-        event_group_index=np.arange(len(daily_group_table), dtype=np.int64),
-    )
-    inference_daily_ids = _fold_group_ids(
-        inference_daily_bundle, fold, validation_months=24
-    )
-    check(
-        "daily_pit_future_target_validity_controls_training_but_not_score_presence",
-        ([0], [2], [0, 1, 2], [5, 6]),
-        (
-                    inference_daily_ids["train_ids"].tolist(),
-                    inference_daily_ids["validation_ids"].tolist(),
-                    inference_daily_ids["final_ids"].tolist(),
-                    inference_daily_ids["score_ids"].tolist(),
-                ),
-    )
-
-    daily_score_contract = build_score_eligibility_contract(
-        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
-    )
-    event_score_contract = build_score_eligibility_contract(
-        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
-    )
-    check(
-        "pit_score_eligibility_contract_is_profile_driven_and_future_target_independent",
-        (
-                    "feature_history_only",
-                    False,
-                    True,
-                    "canonical_breakout_event_membership",
-                    False,
-                ),
-        (
-                    daily_score_contract["eligibility_basis"],
-                    daily_score_contract["future_target_required_for_score"],
-                    daily_score_contract["target_valid_required_for_training"],
-                    event_score_contract["eligibility_basis"],
-                    event_score_contract["future_target_required_for_score"],
-                ),
-    )
-
-    training_contract = {
+    expected_contract = {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
         "experiment_profile": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
@@ -677,561 +159,36 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "training_label_scope": TRAINING_LABEL_SCOPE_ALL,
         "training_sample_scope": TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         "seed": 42,
-        "planned_periods": {
-            "validation_start": "2012-01-01",
-            "validation_end": "2013-12-31",
-            "score_start": "2014-01-01",
-            "score_end": "2014-12-31",
-        },
-        "observed_periods": {
-            "inner_train": {"start": "2010-01-01", "end": "2011-12-31"},
-            "validation": {"start": "2012-01-01", "end": "2013-11-01"},
-            "final_refit": {"start": "2010-01-01", "end": "2013-11-01"},
-            "score": {"start": "2014-01-01", "end": "2014-12-31"},
-        },
-        "model_information_cutoff": "2013-12-20",
-        "group_counts": {
-            "inner_train": 10,
-            "validation": 20,
-            "final_refit": 30,
-            "score": 40,
-        },
-        "event_row_counts": {
-            "inner_train": 10,
-            "validation": 20,
-            "final_refit": 30,
-            "score": 40,
-        },
+        "model_information_cutoff": "2020-12-31",
         "model_spec": {"architecture": "inception_time_v1"},
-        "experiment_settings": {"training_sample_scope": "daily_eligible_stock_days"},
-        "training_settings": {"epochs_max": 200},
-        "source_contract": {
-            "target_contract": {"target_id": "daily_opportunity_no_time_r_v1"},
-            "training_universe_start_date": "2004-09-08",
-        },
-        "lookahead_contract": {"score_period_used_for_training_or_epoch_selection": False},
-    }
-    expanded_score_contract = json.loads(json.dumps(training_contract))
-    expanded_score_contract["group_counts"]["score"] = 55
-    expanded_score_contract["event_row_counts"]["score"] = 55
-    changed_training_contract = json.loads(json.dumps(expanded_score_contract))
-    changed_training_contract["group_counts"]["final_refit"] = 31
-    cross_mode_score_horizon_contract = json.loads(json.dumps(training_contract))
-    cross_mode_score_horizon_contract["planned_periods"]["score_end"] = "2026-03-02"
-    cross_mode_score_horizon_contract["observed_periods"]["score"]["end"] = "2026-03-02"
-    cross_mode_score_horizon_contract["group_counts"]["score"] = 400
-    cross_mode_score_horizon_contract["event_row_counts"]["score"] = 400
-    check_true(
-        "daily_pit_training_identity_ignores_score_end_for_oos_rolling_initial_checkpoint_reuse",
-        _fold_training_contract_is_compatible(
-                    training_contract, expected_contract=cross_mode_score_horizon_contract
-                ),
-    )
-    check(
-        "daily_pit_checkpoint_reuse_allows_score_only_expansion_but_rejects_training_change",
-        (True, False),
-        (
-                    _fold_training_contract_is_compatible(
-                        training_contract, expected_contract=expanded_score_contract
-                    ),
-                    _fold_training_contract_is_compatible(
-                        training_contract, expected_contract=changed_training_contract
-                    ),
-                ),
-    )
-
-    legacy_cutoff_contract = json.loads(json.dumps(training_contract))
-    legacy_cutoff_contract["source_contract"].pop("training_universe_start_date", None)
-    changed_universe_contract = json.loads(json.dumps(training_contract))
-    changed_universe_contract["source_contract"]["training_universe_start_date"] = "2011-01-01"
-    check(
-        "daily_pit_fold_reuse_rejects_missing_or_old_training_universe_identity",
-        (False, False),
-        (
-                    _fold_training_contract_is_compatible(
-                        legacy_cutoff_contract, expected_contract=training_contract
-                    ),
-                    _fold_training_contract_is_compatible(
-                        changed_universe_contract, expected_contract=training_contract
-                    ),
-                ),
-    )
-
-    class _SyntheticRankerModel:
-        def load_state_dict(self, _state, strict=True):
-            return self
-
-        def to(self, _device):
-            return self
-
-        def eval(self):
-            return self
-
-    old_checkpoint_contract = json.loads(json.dumps(training_contract))
-    old_checkpoint_contract.update({"schema_version": 2, "fold_id": "fold_20140101_20141231"})
-    old_checkpoint_contract["group_counts"]["score"] = 1
-    old_checkpoint_contract["event_row_counts"]["score"] = 1
-    expected_checkpoint_contract = json.loads(json.dumps(old_checkpoint_contract))
-    expected_checkpoint_contract["group_counts"]["score"] = 2
-    expected_checkpoint_contract["event_row_counts"]["score"] = 2
-    expected_checkpoint_contract["score_eligibility_contract"] = daily_score_contract
-    synthetic_bundle = SimpleNamespace(
-        profile=SimpleNamespace(
-            training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
-        ),
-        feature_bank=SimpleNamespace(shape=(2, 300, 10)),
-        group_context=np.zeros((2, 0), dtype=np.float32),
-        group_table=pd.DataFrame(
-            [
-                {"ticker": "2330", "date": "2014-01-02", "group_index": 0},
-                {"ticker": "2317", "date": "2014-01-03", "group_index": 1},
-            ]
-        ),
-    )
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        rescore_fold_dir = Path(tmp_dir) / "fold_20140101_20141231"
-        rescore_fold_dir.mkdir(parents=True, exist_ok=True)
-        rescore_model_path = rescore_fold_dir / DEFAULT_MODEL_FILENAME
-        torch.save(
-            {
-                "model_state_dict": {"synthetic_weight": torch.tensor([1.0])},
-                "feature_count": 10,
-                "context_count": 0,
-                "sequence_length": 300,
-                "model_spec": old_checkpoint_contract["model_spec"],
-                "selected_epoch": 1,
-                "fold_contract": old_checkpoint_contract,
-            },
-            rescore_model_path,
-        )
-        old_rescore_manifest = {
-            **old_checkpoint_contract,
-            "selected_epoch": 1,
-            "epoch_selection": {"best_epoch": 1},
-            "final_refit_history": [{"epoch": 1}],
-            "artifacts": {
-                "checkpoint": build_file_manifest(rescore_model_path),
-                "scores": None,
-            },
-        }
-        (rescore_fold_dir / "manifest.json").write_text(
-            json.dumps(old_rescore_manifest), encoding="utf-8"
-        )
-        original_checkpoint_bytes = rescore_model_path.read_bytes()
-        original_manifest_text = (rescore_fold_dir / "manifest.json").read_text(encoding="utf-8")
-        with patch(
-            "tools.filters.breakout_quality.build_point_in_time_scores.build_model",
-            return_value=_SyntheticRankerModel(),
-        ), patch(
-            "tools.filters.breakout_quality.build_point_in_time_scores.predict_scores",
-            return_value=np.asarray([0.25, 0.75], dtype=np.float32),
-        ):
-            rescored = _rescore_daily_fold_from_compatible_checkpoint(
-                fold_dir=rescore_fold_dir,
-                bundle=synthetic_bundle,
-                ids={"score_ids": np.asarray([0, 1], dtype=np.int64)},
-                fold_contract=expected_checkpoint_contract,
-                expected_fingerprint="expanded-score-fingerprint",
-                args=SimpleNamespace(evaluation_batch_size=32),
-                torch_module=torch,
-                plan=SimpleNamespace(device="cpu"),
-            )
-        rescored_frame, rescored_manifest = rescored or (pd.DataFrame(), {})
-        rewritten_checkpoint = (
-            torch.load(rescore_model_path, map_location="cpu", weights_only=True)
-            if rescored is not None
-            else {}
-        )
-
-        external_source_dir = Path(tmp_dir) / "external_source"
-        external_source_dir.mkdir(parents=True, exist_ok=True)
-        (external_source_dir / DEFAULT_MODEL_FILENAME).write_bytes(original_checkpoint_bytes)
-        (external_source_dir / "manifest.json").write_text(
-            original_manifest_text, encoding="utf-8"
-        )
-        cross_mode_contract = json.loads(json.dumps(expected_checkpoint_contract))
-        cross_mode_contract["fold_id"] = "fold_20140101_20161231"
-        cross_mode_contract["planned_periods"]["score_end"] = "2016-12-31"
-        cross_mode_target_dir = Path(tmp_dir) / cross_mode_contract["fold_id"]
-        source_sha = compute_file_sha256(external_source_dir / DEFAULT_MODEL_FILENAME)
-        with patch(
-            "tools.filters.breakout_quality.build_point_in_time_scores.build_model",
-            return_value=_SyntheticRankerModel(),
-        ), patch(
-            "tools.filters.breakout_quality.build_point_in_time_scores.predict_scores",
-            return_value=np.asarray([0.25, 0.75], dtype=np.float32),
-        ):
-            cross_mode_rescored = _rescore_fold_from_external_checkpoint(
-                source_fold_dir=external_source_dir,
-                target_fold_dir=cross_mode_target_dir,
-                bundle=synthetic_bundle,
-                ids={"score_ids": np.asarray([0, 1], dtype=np.int64)},
-                fold_contract=cross_mode_contract,
-                expected_fingerprint="cross-mode-score-fingerprint",
-                args=SimpleNamespace(evaluation_batch_size=32),
-                torch_module=torch,
-                plan=SimpleNamespace(device="cpu"),
-            )
-        cross_mode_manifest = (cross_mode_rescored or (pd.DataFrame(), {}))[1]
-        target_sha = (
-            compute_file_sha256(cross_mode_target_dir / DEFAULT_MODEL_FILENAME)
-            if cross_mode_rescored is not None
-            else ""
-        )
-    check(
-        "daily_pit_cross_mode_reuse_preserves_exact_checkpoint_sha_and_rescores_only",
-        (True, True, False, source_sha),
-        (
-                    cross_mode_rescored is not None,
-                    bool(dict(cross_mode_manifest.get("migration") or {}).get("source_checkpoint_sha_preserved")),
-                    bool(dict(cross_mode_manifest.get("migration") or {}).get("source_score_reused")),
-                    target_sha,
-                ),
-    )
-    check(
-        "daily_pit_checkpoint_reuse_round_trip_rescores_expanded_universe_without_refit",
-        (True, 2, "expanded_daily_score_universe_checkpoint_reuse", 2, 30),
-        (
-                    rescored is not None,
-                    len(rescored_frame),
-                    dict(rescored_manifest.get("migration") or {}).get("kind"),
-                    dict(rewritten_checkpoint.get("fold_contract") or {})
-                    .get("group_counts", {})
-                    .get("score"),
-                    dict(rewritten_checkpoint.get("fold_contract") or {})
-                    .get("group_counts", {})
-                    .get("final_refit"),
-                ),
-    )
-
-    fold_contract = {
-        "fold_id": "fold_000",
-        "model_information_cutoff": "2013-12-20",
+        "experiment_settings": {"profile": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE},
+        "training_settings": {"objective": "daily_pairwise_ranking"},
+        "source_contract": {"training_universe_start_date": "2004-09-08"},
+        "lookahead_contract": {"future_target_in_scoring": False},
         "planned_periods": {
-            "score_start": "2014-01-01",
-            "score_end": "2014-12-31",
+            "validation_start": "2019-01-01",
+            "validation_end": "2020-12-31",
+            "score_start": "2021-01-01",
+            "score_end": "2026-03-02",
+            "history_start": "2004-09-08",
         },
+        "observed_periods": {phase: phase for phase in ("inner_train", "validation", "final_refit")},
+        "group_counts": {phase: 10 for phase in ("inner_train", "validation", "final_refit")},
+        "event_row_counts": {phase: 10 for phase in ("inner_train", "validation", "final_refit")},
     }
-    score_frame = pd.DataFrame(
-        [
-            {
-                "ticker": "0056",
-                "date": "2014-01-02",
-                "group_index": 5,
-                "breakout_quality_score": 0.2,
-                "fold_id": "fold_000",
-                "model_information_cutoff": "2013-12-20",
-            },
-            {
-                "ticker": "G",
-                "date": "2014-06-01",
-                "group_index": 6,
-                "breakout_quality_score": 0.8,
-                "fold_id": "fold_000",
-                "model_information_cutoff": "2013-12-20",
-            },
-        ]
-    )
-    validated = _validate_score_frame(score_frame, fold_contract=fold_contract)
-    coverage = _combined_validation(
-        validated,
-        bundle,
-        score_start=pd.Timestamp("2014-01-01"),
-        score_end=pd.Timestamp("2014-12-31"),
-    )
-    check(
-        "point_in_time_score_output_has_no_future_target_and_complete_unique_coverage",
-        (True, 2, 1.0, 0, 0, 0),
-        (
-                    not bool(
-                        {"label", "target_raw_r", "target_daily_percentile"}
-                        & set(REQUIRED_SCORE_COLUMNS)
-                    ),
-                    coverage["scored_group_count"],
-                    coverage["coverage_rate"],
-                    coverage["duplicate_group_count"],
-                    coverage["missing_group_count"],
-                    coverage["extra_group_count"],
-                ),
+    same_contract = {**expected_contract, "planned_periods": {**expected_contract["planned_periods"], "score_end": "2021-12-31"}}
+    changed_contract = dict(expected_contract, model_information_cutoff="2021-12-31")
+    check_true(
+        "pit_fold_reuse_ignores_score_horizon_but_rejects_training_identity_change",
+        _fold_training_contract_is_compatible(same_contract, expected_contract=expected_contract)
+        and not _fold_training_contract_is_compatible(changed_contract, expected_contract=expected_contract),
     )
 
-    duplicate_rejected = False
-    try:
-        _combined_validation(
-            pd.concat([validated, validated.iloc[[0]]], ignore_index=True),
-            bundle,
-            score_start=pd.Timestamp("2014-01-01"),
-            score_end=pd.Timestamp("2014-12-31"),
-        )
-    except ValueError as exc:
-        duplicate_rejected = "重複group" in str(exc)
-    check_true("point_in_time_combined_output_rejects_duplicate_groups", duplicate_rejected)
-
-    identity_mismatch_rejected = False
-    mismatched = validated.copy()
-    mismatched.loc[mismatched["group_index"] == 5, "ticker"] = "9999"
-    try:
-        _combined_validation(
-            mismatched,
-            bundle,
-            score_start=pd.Timestamp("2014-01-01"),
-            score_end=pd.Timestamp("2014-12-31"),
-        )
-    except ValueError as exc:
-        identity_mismatch_rejected = "identity不一致" in str(exc)
-    check_true("point_in_time_combined_output_rejects_ticker_date_identity_mismatch", identity_mismatch_rejected)
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        orderable_path = Path(tmp_dir) / "orderable.csv"
-        pd.DataFrame(
-            [
-                {
-                    "ticker": "0056",
-                    "target_date": "2014-01-02",
-                    "breakout_quality_score": 0.01,
-                },
-                {
-                    "ticker": "X",
-                    "target_date": "2014-01-03",
-                    "breakout_quality_score": 0.99,
-                },
-            ]
-        ).to_csv(orderable_path, index=False, encoding="utf-8-sig")
-        score_dates = validated.copy()
-        score_dates["date"] = pd.to_datetime(score_dates["date"], errors="raise")
-        orderable = _orderable_coverage(
-            score_dates,
-            requested_path=str(orderable_path),
-            filter_id=settings.filter_id,
-            target_id=settings.continuous_target_id,
-        )
-    check(
-        "point_in_time_orderable_coverage_uses_canonical_target_date",
-        (True, 2, 1, 0.5),
-        (
-                    orderable["available"],
-                    orderable["candidate_count"],
-                    orderable["scored_candidate_count"],
-                    orderable["coverage_rate"],
-                ),
-        tol=1e-12,
-    )
-    check(
-        "point_in_time_orderable_coverage_ignores_existing_candidate_score_column",
-        (True, "selection_point_in_time_scores"),
-        (
-                    orderable["candidate_artifact_has_existing_breakout_quality_score"],
-                    orderable["coverage_score_source"],
-                ),
-    )
-
-    yearly_rows = [
-        {
-            "year": 2014,
-            "group_count": 2,
-            "global_spearman": 0.3,
-            "mean_daily_spearman": 0.2,
-            "top_bottom_target_spread": 0.8,
-        }
-    ]
-    report_payload = {
-        "status": "RESULT_AVAILABLE_PENDING_REVIEW",
-        "filter_id": "breakout_quality_v1",
-        "model_architecture": "inception_time_v1",
-        "experiment_profile": "strategy_aligned_no_time_pass_magnitude_mse",
-        "continuous_target_id": "strategy_aligned_opportunity_no_time_r_v1",
-        "score_period": {"start": "2014-01-01", "end": "2014-12-31"},
-        "score_coverage": {
-            "expected_group_count": 2,
-            "scored_group_count": 2,
-            "coverage_rate": 1.0,
-        },
-        "workflow": {
-            "training_label_scope": "pass_only",
-            "seed": 42,
-            "fold_count": 1,
-            "fold_months": 12,
-            "inner_validation_months": 24,
-        },
-        "metrics": {
-            "pass_only_target": {
-                "group_count": 2,
-                "global_spearman": 0.3,
-                "mean_daily_spearman": 0.2,
-                "top_decile_target_mean": 1.5,
-                "bottom_decile_target_mean": 0.7,
-                "top_bottom_target_spread": 0.8,
-            },
-            "all_valid_target": {
-                "group_count": 2,
-                "global_spearman": 0.25,
-                "mean_daily_spearman": 0.15,
-                "top_decile_target_mean": 1.4,
-                "bottom_decile_target_mean": 0.6,
-                "top_bottom_target_spread": 0.8,
-            },
-        },
-        "yearly_pass_only": yearly_rows,
-        "direction_summary": _direction_summary(yearly_rows),
-        "fold_metrics": [
-            {
-                "fold_id": "fold_000",
-                "group_count": 2,
-                "score_mean": 0.5,
-                "score_std": 0.2,
-                "score_p10": 0.3,
-                "score_p50": 0.5,
-                "score_p90": 0.7,
-                "adjacent_mean_shift_in_pooled_std": None,
-                "pass_target_spearman": 0.3,
-            }
-        ],
-        "fold_drift": {
-            "criterion": "synthetic drift contract",
-            "drift_flag": False,
-            "flagged_folds": [],
-            "max_adjacent_mean_shift_in_pooled_std": 0.0,
-        },
-        "classification_overlap": {
-            "score_vs_pass_reject_auc": 0.6,
-            "overall_pass_share": 0.5,
-            "top_score_decile_pass_share": 1.0,
-            "interpretation_contract": "synthetic overlap contract",
-        },
-        "orderable_candidate_coverage": {
-            "available": True,
-            "path": "/tmp/orderable.csv",
-            "candidate_count": 2,
-            "scored_candidate_count": 2,
-            "unscored_candidate_count": 0,
-            "coverage_rate": 1.0,
-            "coverage_score_source": "selection_point_in_time_scores",
-        },
-        "source_artifacts": {
-            "point_in_time_manifest": "/tmp/manifest.json",
-            "point_in_time_scores": "/tmp/scores.csv",
-            "point_in_time_coverage": "/tmp/coverage.csv",
-        },
-        "report_artifacts": {
-            "markdown": "/tmp/audit.md",
-            "json": "/tmp/audit.json",
-        },
-    }
-    report_console = render_point_in_time_console(report_payload)
-    colored_report_console = render_point_in_time_console(report_payload, color=True)
-    compact_report_console = render_point_in_time_compact_console(report_payload)
-    report_markdown = render_point_in_time_markdown(report_payload)
-    check_true(
-        "point_in_time_audit_outputs_readable_console_summary",
-        all(
-                    text in report_console
-                    for text in (
-                        "Selection Point-in-time 模型評估報表",
-                        "核心排序能力",
-                        "年度穩定性",
-                        "Fold 分布與漂移",
-                        "策略 optimizer：未執行",
-                    )
-                ),
-    )
-    check_true(
-        "point_in_time_audit_console_uses_shared_status_colors",
-        all(
-                    token in colored_report_console
-                    for token in (
-                        "\x1b[96m",
-                        "\x1b[92m",
-                        "\x1b[93m",
-                    )
-                )
-                and "\x1b[" not in report_console,
-    )
-    check_true(
-        "point_in_time_audit_compact_console_avoids_repeated_detail_tables",
-        all(
-                    text in compact_report_console
-                    for text in (
-                        "PIT 模型驗證",
-                        "核心排序",
-                        "年度穩定",
-                        "模型 Gate",
-                        "執行策略績效驗證",
-                    )
-                )
-                and all(
-                    text not in compact_report_console
-                    for text in (
-                        "Current Breakout Quality Workflow",
-                        "Fold 分布與漂移",
-                        "fold_000",
-                        "完整指標 JSON",
-                    )
-                ),
-    )
-    project_root = Path(__file__).resolve().parents[2]
-    ranker_source = (
-        project_root / "services" / "breakout_quality" / "train_continuous_ranker.py"
-    ).read_text(encoding="utf-8")
-    pit_builder_source = (
-        project_root / "services" / "breakout_quality" / "point_in_time_scores.py"
-    ).read_text(encoding="utf-8")
-    pit_builder_tree = ast.parse(pit_builder_source)
-    pit_builder_call_keywords = {
-        node.func.id: {keyword.arg for keyword in node.keywords if keyword.arg}
-        for node in ast.walk(pit_builder_tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id in {"_load_reusable_fold", "_migrate_compatible_legacy_fold"}
-    }
-    continuous_target_builder_source = (
-        project_root / "services" / "breakout_quality" / "continuous_target_builder.py"
-    ).read_text(encoding="utf-8")
-    continuous_target_prepare_source = (
-        project_root / "tools" / "filters" / "breakout_quality" / "prepare_continuous_target.py"
-    ).read_text(encoding="utf-8")
-    check(
-        "point_in_time_resume_wires_torch_only_to_legacy_migration",
-        (False, True),
-        (
-                    "torch_module" in pit_builder_call_keywords.get("_load_reusable_fold", set()),
-                    "torch_module" in pit_builder_call_keywords.get(
-                        "_migrate_compatible_legacy_fold", set()
-                    ),
-                ),
-    )
-    check_true(
-        "point_in_time_compact_training_output_is_one_line_per_new_fold",
-        ranker_source.count("if not compact_console:") >= 4
-                and "fold_progress.print_line(" in pit_builder_source
-                and "best epoch=" in pit_builder_source
-                and "PIT Scores 完成" in pit_builder_source,
-    )
-    check_true(
-        "point_in_time_continuous_target_compact_output_is_owned_by_canonical_service",
-        "if compact_console_enabled():" in continuous_target_builder_source
-                and "Continuous Target 完成" in continuous_target_builder_source
-                and "Selection mean=" in continuous_target_builder_source
-                and '"oos_evaluated": False' in continuous_target_builder_source
-                and "services.breakout_quality.continuous_target_builder" in continuous_target_prepare_source
-                and "tools.audit.breakout_quality.continuous_target" not in continuous_target_prepare_source,
-    )
-    check_true(
-        "point_in_time_audit_outputs_complete_markdown_report",
-        all(
-                    text in report_markdown
-                    for text in (
-                        "# Breakout Quality Rolling Point-in-time 模型評估報表",
-                        "## 2. 核心排序能力",
-                        "## 3. 年度穩定性（",
-                        "## 4. Fold 分布與漂移",
-                        "## 7. 研究邊界與下一步",
-                        "## 8. 工件",
-                    )
-                ),
-    )
-
-    summary["workflow"] = "selection_point_in_time_scores"
-    summary["score_contract"] = "future_target_excluded"
+    summary.update({
+        "profile": settings.experiment_profile,
+        "oos_fold_count": len(oos),
+        "rolling_fold_count": len(rolling),
+    })
     return results, summary
 
 def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_base_params):

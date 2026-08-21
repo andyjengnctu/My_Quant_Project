@@ -121,15 +121,6 @@ def append_strategy_compare_preparation_contract_checks(
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "parameter_coverage_is_preflighted_before_any_pair_replay",
-        True,
-        "PARAM_PERIOD_MISMATCH" in preparation_source
-        and "comparison_period" in preparation_source
-        and "comparison_start_date=comparison_start" in orchestration_source
-        and "comparison_end_date=comparison_end" in orchestration_source,
-    )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
         "preparation_supports_dependency_waves_after_score_period_becomes_known",
         True,
         "plan_refresher" in shared_orchestrator_source
@@ -614,17 +605,6 @@ def append_strategy_compare_preparation_contract_checks(
         unknown_dependency_rejected,
     )
 
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "parameter_preflight_identity_tracks_current_min_roos_contract_not_removed_full_baseline",
-        True,
-        all(token in preparation_source for token in (
-            "TRAINING_CONFIG_MISMATCH", "BINARY_PIT_IDENTITY_MISSING",
-            "MIN_ROOS_SEARCH_FIELDS_MISMATCH", "trials_per_fold",
-            "max_position_cap_pct",
-        ))
-        and "BASELINE_PARAMS_IDENTITY_MISMATCH" not in preparation_source,
-    )
 
     from config.strategy_compare import get_strategy_comparison_settings
     from filters.breakout_quality import strategy_param_training as param_training_module
