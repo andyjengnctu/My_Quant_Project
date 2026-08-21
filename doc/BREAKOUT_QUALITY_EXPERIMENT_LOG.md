@@ -9778,3 +9778,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 防回歸：既有MR-13H/K model contract加入`Daily Universal missing training_universe_start_date must reject`與`data-driven start wins over optimizer cutoff`兩項synthetic；`package_zip` orchestration synthetic同步驗證使用者可見ZIP路徑只能是repo-relative `/` path。其餘修改只復用`core.console_report.project_relative_display_path`，未建立第二套路徑轉換規則。
 - GPT端獨立完整矩陣驗證未執行`apps/run_bundle.py`／`apps/test_suite.py`；正式本機double check仍由使用者以`apps/run_bundle.py`執行。
 - Decision：**ENGINEERING_HARDENING_COMPLETE / CURRENT_IDENTITY_UNCHANGED / FORMAL_RERUN_PENDING**。
+
+
+### 2026-08-21 — Full-project audit formal closure：path SSOT leaf extraction + Windows display synthetic alignment
+- 使用者以`apps/run_bundle.py`正式double check前一版full-project hardening，consistency共2個FAIL；meta quality唯一FAIL `coverage_synthetic_suite_runs_successfully`完全由同一synthetic run的2個FAIL連帶造成，沒有第三個獨立問題。
+- `META_NO_TOP_LEVEL_IMPORT_CYCLES`證實既有`core.signal_utils → filters.breakout_quality.runtime → ... → source_inventory → core.dataset_profiles → core.console_report → core.display → ... → core.signal_utils`形成實際import SCC。根因是`core.dataset_profiles`為了單一顯示path helper而反向牽入整套console/dashboard/portfolio graph。
+- 架構修正：`project_relative_display_path()`下沉至leaf utility `core/path_utils.py`作canonical owner；`core/console_report.py`只re-export，`core/dataset_profiles.py`直接依賴leaf helper。沒有lazy-import規避guard、沒有關閉cycle validator、沒有複製第二套路徑轉換規則。
+- `PORTFOLIO_EXPORT_REPORT_ARTIFACTS`則是上一輪B12將使用者可見path統一為`/`後，synthetic仍以Windows `Path.__str__()`的`\`比對；改成直接使用production同一canonical display helper產生expected path，不改production輸出。
+- GPT獨立回歸：import-cycle contract與portfolio export artifact contract皆0 FAIL；全專案AST與bare-except、critical-helper single-source、reporting contracts及Research/Strategy/PIT/Optimizer/Audit targeted contracts重新驗證。正式本機double check仍由使用者以`apps/run_bundle.py`執行。
+- Decision：**FORMAL_FAILURES_CLOSED / PATH_DISPLAY_SSOT_MOVED_TO_LEAF_CORE / PRODUCTION_RESEARCH_IDENTITY_UNCHANGED / FORMAL_RERUN_PENDING**。

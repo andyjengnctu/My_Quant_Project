@@ -145,7 +145,7 @@ def build_validate_dataset_prompt(default=DEFAULT_VALIDATE_DATASET_PROFILE):
 
 
 def _display_dataset_path(data_dir):
-    from core.console_report import project_relative_display_path
+    from core.path_utils import project_relative_display_path
 
     project_root = Path(__file__).resolve().parents[1]
     return project_relative_display_path(data_dir, project_root=project_root)

@@ -305,7 +305,20 @@ def validate_portfolio_export_report_artifacts_case(_base_params):
         add_check(results, "reporting_schema", case_id, "portfolio_export_trade_header", ["ticker", "entry_date", "exit_date", "net_pnl"], [cell.value for cell in tr_ws[1]])
         add_check(results, "reporting_schema", case_id, "portfolio_export_yearly_header", ["year", "year_return_pct", "is_full_year", "start_date", "end_date", "year_label", "year_type"], [cell.value for cell in yr_ws[1]])
         add_check(results, "reporting_schema", case_id, "portfolio_export_html_trace_count", True, "trace_count=2" in html_text)
-        add_check(results, "reporting_schema", case_id, "portfolio_export_console_paths", True, str(xlsx_path) in export_text and str(html_path) in export_text)
+        expected_xlsx_display = portfolio_reporting.project_relative_display_path(
+            xlsx_path, project_root=portfolio_reporting.PROJECT_ROOT
+        )
+        expected_html_display = portfolio_reporting.project_relative_display_path(
+            html_path, project_root=portfolio_reporting.PROJECT_ROOT
+        )
+        add_check(
+            results,
+            "reporting_schema",
+            case_id,
+            "portfolio_export_console_paths",
+            True,
+            expected_xlsx_display in export_text and expected_html_display in export_text,
+        )
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         xlsx_path = Path(tmp_dir) / "portfolio_report_fallback.xlsx"

@@ -39,7 +39,8 @@ project/
 │  ├─ portfolio_entry_selection_common.py # Binary／Continuous共用resource-aware search
 │  ├─ portfolio_entry_selection_max_dl.py # Max-DL／feasible-ascent search
 │  ├─ portfolio_entries.py            # reserved order fill／missed-buy／extended-signal cleanup state transition
-│  ├─ console_report.py               # 全專案簡易console／相對工件路徑格式SSOT
+│  ├─ console_report.py               # 全專案簡易console格式SSOT
+│  ├─ path_utils.py                   # 跨平台path判定／project-relative顯示path SSOT
 │  ├─ file_integrity.py               # file／canonical-JSON hash SSOT
 │  ├─ path_utils.py                   # 跨平台path判定／split SSOT
 │  ├─ serialization_utils.py          # 共用output text／JSON-native serialization SSOT
@@ -224,7 +225,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 
 ## 正式單一真理來源 / 開發輔助
 
-- `core/file_integrity.py`／`core/path_utils.py`／`core/serialization_utils.py`／`core/runtime_utils.py`：跨workflow共用的hash、cross-platform path判定、output serialization與environment flag解析SSOT；consumer只import/re-export，不得複製同一實作。
+- `core/file_integrity.py`／`core/path_utils.py`／`core/serialization_utils.py`／`core/runtime_utils.py`：跨workflow共用的hash、cross-platform path判定與project-relative顯示path、output serialization與environment flag解析SSOT；consumer只import/re-export，不得複製同一實作。
 - `services/optimizer/dependency_stats.py`：optimizer local-min dependency統計初始payload SSOT；seed-ensemble policy snapshot仍由`core/seed_ensemble_policy.py`建立，outer rolling只保留單一wrapper owner。
 - `tools/local_regression/formal_pipeline.py`：formal 步驟單一真理來源，供正式入口與 local regression 內部編排使用；不是使用者正式入口。
 - `tools/trade_analysis/trade_log.py`：單股 trade-analysis 共用 backend / 開發輔助 CLI；不是正式使用者入口。

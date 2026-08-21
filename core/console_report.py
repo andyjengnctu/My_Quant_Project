@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Iterable, Sequence
 
 from core.display_common import console_color_enabled
+from core.path_utils import project_relative_display_path
 
 from core.display import (
     C_CYAN,
@@ -44,26 +44,6 @@ def paint(text: object, tone: str, *, enabled: bool, bold: bool = False) -> str:
     color = colors.get(str(tone), "")
     bold_code = "\033[1m" if bold else ""
     return f"{bold_code}{color}{raw}{C_RESET}"
-
-
-def project_relative_display_path(
-    path: str | os.PathLike[str],
-    *,
-    project_root: str | os.PathLike[str],
-) -> str:
-    """Render project-scoped paths from repository root using forward slashes."""
-
-    raw = os.fspath(path)
-    candidate = Path(raw)
-    root = Path(project_root)
-    try:
-        relative = candidate.resolve(strict=False).relative_to(root.resolve(strict=False))
-    except (OSError, ValueError):
-        if candidate.is_absolute():
-            return raw.replace("\\", "/")
-        relative = candidate
-    text = relative.as_posix()
-    return text if text not in {"", "."} else "."
 
 
 def _pad(text: object, width: int, *, align: str) -> str:
