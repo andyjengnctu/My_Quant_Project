@@ -1390,6 +1390,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     from config.strategy_compare import get_strategy_multi_seed_robustness_settings
     from filters.breakout_quality.strategy_multi_seed_robustness import (
         _model_artifact_identity_payload,
+        _seed_expansion_compatibility_payload,
         _strategy_only_baseline_action,
     )
 
@@ -1457,6 +1458,76 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         model_identity_before == model_identity_after
         and 'contract.get("model_artifact_fingerprint") or contract["fingerprint"]' in multi_seed_source
         and "reusable_artifact_roots_exist = model_dir.is_dir()" in multi_seed_source,
+    )
+    seed_expansion_before = dict(model_identity_scientific)
+    seed_expansion_before["resolved_seeds"] = [11, 22]
+    seed_expansion_after = dict(seed_expansion_before)
+    seed_expansion_after["resolved_seeds"] = [11, 22, 33, 44]
+    check_true(
+        "robustness_model_artifact_identity_is_independent_of_seed_count_expansion",
+        _model_artifact_identity_payload(seed_expansion_before)
+        == _model_artifact_identity_payload(seed_expansion_after)
+        and '"resolved_seeds": list(scientific.get("resolved_seeds") or ())' not in multi_seed_source,
+    )
+
+    prefix_contract = {
+        **seed_expansion_before,
+        "scientific_contract_version": 5,
+        "suite_id": "extending_current",
+        "param_policy": "per-arm",
+        "arm_param_policies": {},
+        "max_positions": 10,
+        "rotation": "off",
+        "parameter_artifact_identities": {"full|best": {"sha256": "production"}},
+        "seed_count": 2,
+        "seed_generator_seed": 20260810,
+        "strategy_trials_per_fold": 20,
+        "seed_pairing": "same_seed_strategy_optimizer_and_all_dl_sources",
+        "benchmark_strategy_arm_ids": ["C61", "C58", "C59", "C60"],
+        "model_seed_sensitive_arm_ids": ["C59", "C60"],
+        "consensus_reference_arm_ids": ["C62", "C63"],
+        "romd_reference_baselines": {},
+        "fixed_arms": [],
+        "benchmark_parameter_artifact_identities": {
+            "C61:seed=11": {"sha256": "full-11"},
+            "C58:seed=11": {"sha256": "min-11"},
+            "C61:seed=22": {"sha256": "full-22"},
+            "C58:seed=22": {"sha256": "min-22"},
+        },
+    }
+    expanded_contract = {
+        **prefix_contract,
+        "seed_count": 4,
+        "resolved_seeds": [11, 22, 33, 44],
+        "benchmark_parameter_artifact_identities": {
+            **prefix_contract["benchmark_parameter_artifact_identities"],
+            "C61:seed=33": {"sha256": "full-33"},
+            "C58:seed=33": {"sha256": "min-33"},
+            "C61:seed=44": {"sha256": "full-44"},
+            "C58:seed=44": {"sha256": "min-44"},
+        },
+    }
+    changed_trials_contract = dict(expanded_contract)
+    changed_trials_contract["strategy_trials_per_fold"] = 15
+    changed_prefix_param_contract = dict(expanded_contract)
+    changed_prefix_param_contract["benchmark_parameter_artifact_identities"] = dict(
+        expanded_contract["benchmark_parameter_artifact_identities"]
+    )
+    changed_prefix_param_contract["benchmark_parameter_artifact_identities"][
+        "C61:seed=11"
+    ] = {"sha256": "full-11-changed"}
+    prefix_identity = _seed_expansion_compatibility_payload(
+        prefix_contract, seeds=(11, 22)
+    )
+    check_true(
+        "robustness_seed_count_expansion_reuses_only_strict_scientific_seed_prefix",
+        prefix_identity
+        == _seed_expansion_compatibility_payload(expanded_contract, seeds=(11, 22))
+        and prefix_identity
+        != _seed_expansion_compatibility_payload(changed_trials_contract, seeds=(11, 22))
+        and prefix_identity
+        != _seed_expansion_compatibility_payload(changed_prefix_param_contract, seeds=(11, 22))
+        and "[SEED EXPANSION REUSE]" in multi_seed_source,
     )
 
     check_true(

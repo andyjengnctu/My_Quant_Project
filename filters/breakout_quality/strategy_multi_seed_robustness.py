@@ -161,7 +161,7 @@ ATTRIBUTION_SOURCE_DIRNAME = "attribution_source"
 ATTRIBUTION_SOURCE_SCHEMA_VERSION = 2
 ROBUSTNESS_SCHEMA_VERSION = 11
 ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 5
-ROBUSTNESS_MODEL_ARTIFACT_CONTRACT_VERSION = 1
+ROBUSTNESS_MODEL_ARTIFACT_CONTRACT_VERSION = 2
 TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
 MEAN_METRICS: tuple[tuple[str, str, str], ...] = (
@@ -1450,9 +1450,223 @@ def _model_artifact_identity_payload(scientific: dict[str, Any]) -> dict[str, An
         "dataset_identity": scientific.get("dataset_identity"),
         "comparison_period": scientific.get("comparison_period"),
         "benchmark_id": scientific.get("benchmark_id"),
-        "resolved_seeds": list(scientific.get("resolved_seeds") or ()),
+        # Seed membership belongs to the robustness result contract, not to the
+        # model-artifact namespace. Each model child directory is already keyed
+        # by the concrete seed, so expanding N=2 -> N=4 must not invalidate the
+        # already fitted artifacts for seeds 1-2.
         "training_defaults": scientific.get("training_defaults"),
         "model_sources": [model_sources[key] for key in sorted(model_sources)],
+    }
+
+
+_SEED_EXPANSION_NON_SCIENTIFIC_KEYS = frozenset({
+    "model_artifact_fingerprint",
+    "paired_contrasts",
+    "report_schema_version",
+    "label",
+    "execution_options",
+    "retention",
+    "fingerprint",
+})
+
+
+def _benchmark_parameter_identities_for_seeds(
+    identities: dict[str, Any], seeds: tuple[int, ...],
+) -> dict[str, Any]:
+    suffixes = tuple(f":seed={int(seed)}" for seed in seeds)
+    return {
+        str(key): value
+        for key, value in dict(identities or {}).items()
+        if str(key).endswith(suffixes)
+    }
+
+
+def _seed_expansion_compatibility_payload(
+    contract: dict[str, Any], *, seeds: tuple[int, ...],
+) -> dict[str, Any]:
+    """Normalize a robustness contract for strict prefix-seed reuse.
+
+    Only seed membership may expand. All scientific conditions for the reused
+    prefix -- including each prefix seed's strategy-parameter artifact identity
+    -- must remain byte-identical at the contract level. OOS and Rolling remain
+    isolated because robustness/profile/source contracts stay in this payload.
+    """
+
+    normalized = {
+        str(key): value
+        for key, value in dict(contract or {}).items()
+        if str(key) not in _SEED_EXPANSION_NON_SCIENTIFIC_KEYS
+        and str(key) not in {
+            "seed_count",
+            "resolved_seeds",
+            "benchmark_parameter_artifact_identities",
+        }
+    }
+    normalized["seed_count"] = len(seeds)
+    normalized["resolved_seeds"] = [int(seed) for seed in seeds]
+    normalized["benchmark_parameter_artifact_identities"] = (
+        _benchmark_parameter_identities_for_seeds(
+            dict(contract.get("benchmark_parameter_artifact_identities") or {}),
+            seeds,
+        )
+    )
+    return normalized
+
+
+def _seed_expansion_source_run(
+    *, contract: dict[str, Any], current_run_root: Path,
+) -> tuple[Path, dict[str, Any], tuple[int, ...]] | None:
+    """Find the largest completed strict-prefix run reusable by this run."""
+
+    current_seeds = tuple(int(value) for value in contract.get("resolved_seeds") or ())
+    if len(current_seeds) <= 1:
+        return None
+    cfg = get_strategy_multi_seed_robustness_settings(str(contract["robustness_id"]))
+    output_root = (PROJECT_ROOT / cfg.output_root).resolve()
+    if not output_root.is_dir():
+        return None
+    best: tuple[Path, dict[str, Any], tuple[int, ...]] | None = None
+    for candidate_root in sorted(path for path in output_root.iterdir() if path.is_dir()):
+        if candidate_root.resolve() == Path(current_run_root).resolve():
+            continue
+        manifest_path = candidate_root / MANIFEST_FILENAME
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = _read_json(manifest_path)
+            if str(manifest.get("status") or "") != "COMPLETED":
+                continue
+            candidate_contract = dict(manifest.get("contract") or {})
+            candidate_seeds = tuple(
+                int(value) for value in candidate_contract.get("resolved_seeds") or ()
+            )
+        except (OSError, ValueError, json.JSONDecodeError, TypeError):
+            continue
+        if not candidate_seeds or len(candidate_seeds) >= len(current_seeds):
+            continue
+        if current_seeds[: len(candidate_seeds)] != candidate_seeds:
+            continue
+        if _seed_expansion_compatibility_payload(
+            candidate_contract, seeds=candidate_seeds
+        ) != _seed_expansion_compatibility_payload(
+            contract, seeds=candidate_seeds
+        ):
+            continue
+        if best is None or len(candidate_seeds) > len(best[2]):
+            best = (candidate_root.resolve(), candidate_contract, candidate_seeds)
+    return best
+
+
+def _rebind_attribution_unit_for_seed_expansion(
+    *, source_run_root: Path, destination_run_root: Path, arm_id: str, seed: int,
+    source_fingerprint: str, destination_fingerprint: str, seed_order: int,
+) -> None:
+    source_payload = _read_attribution_unit_manifest(
+        source_run_root,
+        arm_id=arm_id,
+        seed=seed,
+        expected_fingerprint=source_fingerprint,
+    )
+    if source_payload is None:
+        raise RuntimeError(
+            f"seed expansion缺少已驗證compact attribution source: {arm_id}/seed={seed}"
+        )
+    source_dir = _attribution_unit_dir(source_run_root, arm_id, seed)
+    destination_dir = _attribution_unit_dir(destination_run_root, arm_id, seed)
+    shutil.rmtree(destination_dir, ignore_errors=True)
+    shutil.copytree(source_dir, destination_dir)
+    payload = _read_json(destination_dir / MANIFEST_FILENAME)
+    payload["scientific_fingerprint"] = str(destination_fingerprint)
+    payload["seed_order"] = int(seed_order)
+    payload["scientific_observation_validation"] = {
+        "status": "VERIFIED",
+        "verified_at_utc": datetime.now(timezone.utc).isoformat(),
+        "source": f"seed_expansion_reuse:{source_fingerprint}",
+    }
+    for role, raw_item in dict(payload.get("files") or {}).items():
+        item = dict(raw_item or {})
+        filename = Path(str(item.get("path") or f"{role}.csv.gz")).name
+        destination = destination_dir / filename
+        if not destination.is_file():
+            raise RuntimeError(
+                f"seed expansion attribution copy缺少檔案: {arm_id}/seed={seed}/{filename}"
+            )
+        item["path"] = project_relative_display_path(
+            destination, project_root=PROJECT_ROOT
+        )
+        item["sha256"] = compute_file_sha256(destination)
+        payload["files"][role] = item
+    _write_json(destination_dir / MANIFEST_FILENAME, payload)
+
+
+def _import_seed_expansion_results(
+    *, contract: dict[str, Any], run_root: Path,
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    model_arms: tuple[StrategyComparisonArm, ...],
+    keep_attribution_source: bool,
+) -> dict[str, Any] | None:
+    """Import a completed strict seed-prefix without replaying old seeds."""
+
+    source = _seed_expansion_source_run(contract=contract, current_run_root=run_root)
+    if source is None:
+        return None
+    source_root, source_contract, source_seeds = source
+    source_results = _load_seed_results(source_root / SEED_RESULTS_FILENAME)
+    source_yearly = _load_seed_yearly_results(source_root / SEED_YEARLY_RESULTS_FILENAME)
+    _validate_seed_results_frame(
+        source_results, stochastic_arms=stochastic_arms, seeds=source_seeds
+    )
+    expected_units = {
+        (arm.arm_id, int(seed)) for arm in stochastic_arms for seed in source_seeds
+    }
+    actual_result_units = set() if source_results.empty else {
+        (str(row.arm_id), int(row.seed)) for row in source_results.itertuples(index=False)
+    }
+    if actual_result_units != expected_units:
+        raise RuntimeError("seed expansion來源缺少完整seed策略結果")
+    actual_yearly_units = set() if source_yearly.empty else {
+        (str(row.arm_id), int(row.seed)) for row in source_yearly.itertuples(index=False)
+    }
+    if expected_units - actual_yearly_units:
+        raise RuntimeError("seed expansion來源缺少完整年度結果")
+
+    source_fingerprint = str(source_contract.get("fingerprint") or "")
+    destination_fingerprint = str(contract["fingerprint"])
+    if keep_attribution_source:
+        model_ids = {arm.arm_id for arm in model_arms}
+        for arm_id, seed in sorted(expected_units):
+            if arm_id not in model_ids:
+                continue
+            _rebind_attribution_unit_for_seed_expansion(
+                source_run_root=source_root,
+                destination_run_root=run_root,
+                arm_id=arm_id,
+                seed=int(seed),
+                source_fingerprint=source_fingerprint,
+                destination_fingerprint=destination_fingerprint,
+                seed_order=list(contract["resolved_seeds"]).index(int(seed)) + 1,
+            )
+
+    current_results_path = run_root / SEED_RESULTS_FILENAME
+    current_yearly_path = run_root / SEED_YEARLY_RESULTS_FILENAME
+    current_results = _load_seed_results(current_results_path)
+    current_yearly = _load_seed_yearly_results(current_yearly_path)
+    merged_results = pd.concat([source_results, current_results], ignore_index=True)
+    if not merged_results.empty:
+        merged_results = merged_results.drop_duplicates(
+            subset=["arm_id", "seed"], keep="last"
+        )
+    merged_yearly = pd.concat([source_yearly, current_yearly], ignore_index=True)
+    if not merged_yearly.empty:
+        merged_yearly = merged_yearly.drop_duplicates(
+            subset=["arm_id", "seed", "year"], keep="last"
+        )
+    _write_seed_results(current_results_path, merged_results)
+    _write_seed_yearly_results(current_yearly_path, merged_yearly)
+    return {
+        "source_fingerprint": source_fingerprint,
+        "reused_seeds": [int(seed) for seed in source_seeds],
+        "reused_observations": len(expected_units),
     }
 
 
@@ -3976,6 +4190,25 @@ def run_multi_seed_robustness(
 
     started_total = time.perf_counter()
     seeds = tuple(int(value) for value in contract["resolved_seeds"])
+    seed_expansion_reuse = None
+    if cfg.reuse_completed:
+        seed_expansion_reuse = _import_seed_expansion_results(
+            contract=contract,
+            run_root=run_root,
+            stochastic_arms=tuple(stochastic_arms),
+            model_arms=tuple(model_arms),
+            keep_attribution_source=bool(cfg.keep_attribution_source),
+        )
+        if seed_expansion_reuse is not None:
+            manifest["seed_expansion_reuse"] = dict(seed_expansion_reuse)
+            _write_json(manifest_path, manifest)
+            reused_seeds_text = ",".join(
+                str(value) for value in seed_expansion_reuse["reused_seeds"]
+            )
+            print(
+                paint("[SEED EXPANSION REUSE]", "green", enabled=console_color_enabled(), bold=True)
+                + f" seeds={reused_seeds_text} | observations={seed_expansion_reuse['reused_observations']}"
+            )
     try:
         existing = _load_seed_results(seed_results_path)
         _validate_seed_results_frame(existing, stochastic_arms=stochastic_arms, seeds=seeds)

@@ -259,6 +259,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 - `outputs/debug_trade_log/`（trade_analysis legacy output dir）屬既有工具鏈相容邊界，不代表子系統角色仍是 debug-only。
 - `outputs/workbench_ui/` 為 GUI runtime 快取分類；目前承接常用股票中文名稱快取。
 - `outputs/strategy_compare/robustness/<fingerprint>/`只永久保存multi-seed aggregate manifest／seed metrics／summary／Markdown；每seed model、full scores與replay detail預設只在`models/research/breakout_quality/strategy_compare/multi_seed_robustness/`及run `work/`暫存，完成seed observation後依config retention policy清除。
+- Current end-to-end robustness的整體scientific fingerprint必須包含完整seed membership，因此`N=2`與`N=4`是不同正式run；但seed擴張採strict-prefix incremental reuse。若新resolved seeds以前一個completed run的resolved seeds為完整前綴，且除seed membership外所有scientific contract（包含trials/fold、Dataset、evaluation mode、training/source/lookahead contract，以及既有prefix每個benchmark strategy-param JSON／manifest identity）完全一致，新run必須直接承接舊prefix的`seed_results`、年度結果與已驗證compact attribution，不得重跑既有seeds，只新增後續seeds。只要prefix strategy-param identity、trial budget或其他scientific condition任一改變即禁止承接。DL model-work fingerprint不得包含整個resolved-seed集合；每個model child本身以具體seed區隔，因此單純`N=2→N=4`不得讓seeds 1–2的model artifact identity失效。OOS與Rolling仍是不同evaluation-mode result namespace：兩者只共用同seed 2021 initial fitting checkpoint及同一strategy-param truth，score與strategy replay不得跨mode直接重用。
 
 ## 維護原則
 
