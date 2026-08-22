@@ -1396,12 +1396,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     from config.strategy_compare import get_strategy_multi_seed_robustness_settings
     from filters.breakout_quality.strategy_multi_seed_robustness import (
         _benchmark_identity_payload,
-        _benchmark_parameter_identities_compatible,
         _scientific_benchmark_parameter_identities,
-        _rebind_legacy_strategy_param_identity_rows,
         _build_durable_result_artifacts,
         _model_artifact_identity_payload,
-        _seed_expansion_compatibility_payload,
         _validate_scientific_observation_manifest,
         _strategy_only_baseline_action,
         SCIENTIFIC_DURABLE_RESULT_KEYS,
@@ -1533,60 +1530,6 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and '"resolved_seeds": list(scientific.get("resolved_seeds") or ())' not in multi_seed_source,
     )
 
-    prefix_contract = {
-        **seed_expansion_before,
-        "scientific_contract_version": 5,
-        "suite_id": "extending_current",
-        "param_policy": "per-arm",
-        "arm_param_policies": {},
-        "max_positions": 10,
-        "rotation": "off",
-        "parameter_artifact_identities": {"full|best": {"sha256": "production"}},
-        "seed_count": 2,
-        "seed_generator_seed": 20260810,
-        "strategy_trials_per_fold": 20,
-        "seed_pairing": "same_seed_strategy_optimizer_and_all_dl_sources",
-        "benchmark_strategy_arm_ids": ["C61", "C58", "C59", "C60"],
-        "model_seed_sensitive_arm_ids": ["C59", "C60"],
-        "consensus_reference_arm_ids": ["C62", "C63"],
-        "romd_reference_baselines": {},
-        "fixed_arms": [],
-        "benchmark_parameter_artifact_identities": {
-            "C61:seed=11": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "full-11"},
-            "C58:seed=11": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "min-11"},
-            "C61:seed=22": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "full-22"},
-            "C58:seed=22": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "min-22"},
-        },
-    }
-    expanded_contract = {
-        **prefix_contract,
-        "seed_count": 4,
-        "resolved_seeds": [11, 22, 33, 44],
-        "benchmark_parameter_artifact_identities": {
-            **prefix_contract["benchmark_parameter_artifact_identities"],
-            "C61:seed=33": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "full-33"},
-            "C58:seed=33": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "min-33"},
-            "C61:seed=44": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "full-44"},
-            "C58:seed=44": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "min-44"},
-        },
-    }
-    changed_trials_contract = dict(expanded_contract)
-    changed_trials_contract["strategy_trials_per_fold"] = 15
-    changed_prefix_param_contract = dict(expanded_contract)
-    changed_prefix_param_contract["benchmark_parameter_artifact_identities"] = dict(
-        expanded_contract["benchmark_parameter_artifact_identities"]
-    )
-    changed_prefix_param_contract["benchmark_parameter_artifact_identities"][
-        "C61:seed=11"
-    ] = {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "full-11-changed"}
-    manifest_refresh_contract = dict(prefix_contract)
-    manifest_refresh_contract["benchmark_parameter_artifact_identities"] = {
-        key: {**dict(value), "manifest_sha256": f"manifest-{key}"}
-        for key, value in prefix_contract["benchmark_parameter_artifact_identities"].items()
-    }
-    prefix_identity = _seed_expansion_compatibility_payload(
-        prefix_contract, seeds=(11, 22)
-    )
     benchmark_binding_a = {
         ("C61", 11): {
             "family": "full", "evaluation_mode": "rolling",
@@ -1605,24 +1548,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         _scientific_benchmark_parameter_identities(_benchmark_identity_payload(benchmark_binding_a))
         == _scientific_benchmark_parameter_identities(_benchmark_identity_payload(benchmark_binding_b)),
     )
-
     check_true(
-        "robustness_seed_count_expansion_reuses_only_strict_scientific_seed_prefix",
-        prefix_identity
-        == _seed_expansion_compatibility_payload(expanded_contract, seeds=(11, 22))
-        and prefix_identity
-        == _seed_expansion_compatibility_payload(manifest_refresh_contract, seeds=(11, 22))
-        and prefix_identity
-        != _seed_expansion_compatibility_payload(changed_trials_contract, seeds=(11, 22))
-        and _benchmark_parameter_identities_compatible(
-            prefix_contract, expanded_contract, seeds=(11, 22)
-        )
-        and not _benchmark_parameter_identities_compatible(
-            prefix_contract, changed_prefix_param_contract, seeds=(11, 22)
-        )
-        and "[SEED EXPANSION REUSE]" in multi_seed_source
-        and "[COMPATIBLE RESULT REUSE]" in multi_seed_source
-        and "len(candidate_seeds) > len(current_seeds)" in multi_seed_source,
+        "robustness_cross_fingerprint_completed_result_migration_is_intentionally_unsupported",
+        "_import_seed_expansion_results(" not in multi_seed_source
+        and "_seed_expansion_source_run(" not in multi_seed_source
+        and "[COMPATIBLE RESULT REUSE]" not in multi_seed_source
+        and "[SEED EXPANSION REUSE]" not in multi_seed_source,
     )
 
     benchmark = get_robustness_benchmark_policy_snapshot()
@@ -1890,41 +1821,6 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         stable_ensemble_identity and runtime_ensemble_change_detected,
     )
 
-    legacy_prefix_contract = {
-        **prefix_contract,
-        "benchmark_parameter_artifact_identities": {
-            "C61:seed=11": {"sha256": "raw-full-11"},
-            "C58:seed=11": {"sha256": "raw-min-11"},
-            "C61:seed=22": {"sha256": "raw-full-22"},
-            "C58:seed=22": {"sha256": "raw-min-22"},
-        },
-    }
-    legacy_current_contract = {
-        **prefix_contract,
-        "benchmark_parameter_publication_identities": {
-            "C61:seed=11": {"file_sha256": "raw-full-11"},
-            "C58:seed=11": {"file_sha256": "raw-min-11"},
-            "C61:seed=22": {"file_sha256": "raw-full-22"},
-            "C58:seed=22": {"file_sha256": "raw-min-22"},
-        },
-    }
-    legacy_rows = pd.DataFrame([
-        {"arm_id": "C61", "seed": 11, "strategy_param_sha256": "raw-full-11"},
-        {"arm_id": "C58", "seed": 11, "strategy_param_sha256": "raw-min-11"},
-    ])
-    rebound_legacy_rows = _rebind_legacy_strategy_param_identity_rows(
-        legacy_rows, source_contract=legacy_prefix_contract, current_contract=legacy_current_contract
-    )
-    check_true(
-        "robustness_legacy_raw_param_identity_migrates_only_with_exact_current_file_sha",
-        _benchmark_parameter_identities_compatible(
-            legacy_prefix_contract, legacy_current_contract, seeds=(11, 22)
-        )
-        and str(rebound_legacy_rows.iloc[0]["strategy_param_sha256"]) == "full-11"
-        and str(rebound_legacy_rows.iloc[1]["strategy_param_sha256"]) == "min-11",
-    )
-
-
     identity_frame = pd.DataFrame([{
         "arm_id": "C59",
         "seed": 11,
@@ -2075,11 +1971,10 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         durable_before and not durable_after,
     )
     check_true(
-        "robustness_compatible_observation_reuse_ignores_derived_report_refresh",
+        "robustness_scientific_observation_integrity_is_independent_of_derived_report_refresh",
         scientific_after_report_refresh
         and "SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME" in multi_seed_source
-        and "_validate_scientific_observation_manifest(" in multi_seed_source
-        and "else SCIENTIFIC_DURABLE_RESULT_KEYS" in multi_seed_source,
+        and "_validate_scientific_observation_manifest(" in multi_seed_source,
     )
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -2130,23 +2025,18 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             encoding="utf-8",
         )
         lifecycle_independent_evidence = _validate_scientific_observation_manifest(
-            evidence_root,
-            backfill_legacy_completed=False,
+            evidence_root
         )
-        # Simulate a pre-READY-marker long run whose later resume rewrote the
-        # lifecycle manifest to FAILED.  Complete observations must still be
-        # discovered from their own rows/yearly evidence and upgraded once.
+        # Without the exact-fingerprint READY marker, no legacy/cross-fingerprint
+        # inference is attempted; the current scientific identity must rebuild.
         (evidence_root / SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME).unlink()
-        legacy_failed_recovered = _validate_scientific_observation_manifest(
-            evidence_root,
-            backfill_legacy_completed=True,
-        )
+        missing_ready_marker = _validate_scientific_observation_manifest(evidence_root)
     check_true(
-        "robustness_scientific_observation_commit_survives_lifecycle_manifest_failure",
+        "robustness_scientific_observation_commit_is_exact_fingerprint_only",
         lifecycle_independent_evidence is not None
-        and legacy_failed_recovered is not None
+        and missing_ready_marker is None
         and SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME in multi_seed_source
-        and "_load_legacy_scientific_observations_for_backfill(" in multi_seed_source
+        and "_load_legacy_scientific_observations_for_backfill(" not in multi_seed_source
         and "_write_scientific_observation_manifest(" in multi_seed_source
         and "_validate_scientific_observation_manifest(" in multi_seed_source,
     )

@@ -1651,307 +1651,6 @@ def _model_artifact_identity_payload(scientific: dict[str, Any]) -> dict[str, An
     }
 
 
-_SEED_EXPANSION_NON_SCIENTIFIC_KEYS = frozenset({
-    "benchmark_parameter_publication_identities",
-    "model_artifact_fingerprint",
-    "paired_contrasts",
-    "report_schema_version",
-    "label",
-    "execution_options",
-    "retention",
-    "fingerprint",
-})
-
-
-def _benchmark_parameter_identities_for_seeds(
-    identities: dict[str, Any], seeds: tuple[int, ...],
-) -> dict[str, Any]:
-    """Return replay-scientific per-seed parameter identities only."""
-
-    suffixes = tuple(f":seed={int(seed)}" for seed in seeds)
-    result: dict[str, Any] = {}
-    for key, raw in dict(identities or {}).items():
-        if not str(key).endswith(suffixes):
-            continue
-        item = dict(raw or {})
-        item.pop("manifest_sha256", None)
-        item.pop("file_sha256", None)
-        result[str(key)] = item
-    return result
-
-
-def _benchmark_parameter_identities_compatible(
-    candidate_contract: dict[str, Any],
-    current_contract: dict[str, Any],
-    *,
-    seeds: tuple[int, ...],
-) -> bool:
-    """Compare per-seed strategy-param identity with one safe legacy migration.
-
-    New contracts store the runtime-scientific SHA.  Legacy contracts stored raw
-    JSON byte SHA under the same field.  A legacy row can be upgraded only when its
-    old SHA exactly equals the *current* parameter file SHA; exact bytes prove that
-    the old observation used the same payload.  If a publication refresh already
-    replaced those bytes, we deliberately refuse to guess.
-    """
-
-    candidate = _benchmark_parameter_identities_for_seeds(
-        dict(candidate_contract.get("benchmark_parameter_artifact_identities") or {}), seeds
-    )
-    current = _benchmark_parameter_identities_for_seeds(
-        dict(current_contract.get("benchmark_parameter_artifact_identities") or {}), seeds
-    )
-    current_publication = dict(
-        current_contract.get("benchmark_parameter_publication_identities") or {}
-    )
-    if set(candidate) != set(current):
-        return False
-    for key in sorted(current):
-        old = dict(candidate[key] or {})
-        new = dict(current[key] or {})
-        for field in ("family", "evaluation_mode", "param_policy"):
-            if str(old.get(field) or "") != str(new.get(field) or ""):
-                return False
-        old_schema = str(old.get("identity_schema") or "").strip()
-        new_schema = str(new.get("identity_schema") or "").strip()
-        old_sha = _normalized_hash_value(old.get("sha256"))
-        new_sha = _normalized_hash_value(new.get("sha256"))
-        if old_schema:
-            if old_schema != new_schema or old_sha != new_sha:
-                return False
-            continue
-        # Pre-runtime-identity contract: sha256 was the raw JSON file SHA.
-        current_file_sha = _normalized_hash_value(
-            dict(current_publication.get(key) or {}).get("file_sha256")
-        )
-        if not current_file_sha or old_sha != current_file_sha:
-            return False
-    return True
-
-
-def _rebind_legacy_strategy_param_identity_rows(
-    frame: pd.DataFrame,
-    *,
-    source_contract: dict[str, Any],
-    current_contract: dict[str, Any],
-) -> pd.DataFrame:
-    """Upgrade safely proven legacy raw-SHA rows to runtime-scientific SHA."""
-
-    if frame.empty:
-        return frame
-    output = frame.copy()
-    source_identities = dict(source_contract.get("benchmark_parameter_artifact_identities") or {})
-    current_identities = dict(current_contract.get("benchmark_parameter_artifact_identities") or {})
-    current_publication = dict(current_contract.get("benchmark_parameter_publication_identities") or {})
-    for idx, row in output.iterrows():
-        key = f"{str(row.get('arm_id') or '')}:seed={int(row.get('seed'))}"
-        old = dict(source_identities.get(key) or {})
-        new = dict(current_identities.get(key) or {})
-        if not old or not new:
-            continue
-        if str(old.get("identity_schema") or "").strip():
-            continue
-        old_sha = _normalized_hash_value(row.get("strategy_param_sha256"))
-        current_file_sha = _normalized_hash_value(
-            dict(current_publication.get(key) or {}).get("file_sha256")
-        )
-        if old_sha and current_file_sha and old_sha == current_file_sha:
-            output.at[idx, "strategy_param_sha256"] = str(new.get("sha256") or "")
-    return output
-
-
-def _seed_expansion_compatibility_payload(
-    contract: dict[str, Any], *, seeds: tuple[int, ...],
-) -> dict[str, Any]:
-    """Normalize a robustness contract for compatible observation reuse.
-
-    Seed membership may stay the same (engineering-only fingerprint migration) or
-    expand by strict prefix.  Replay-relevant parameter payload identity and every
-    other scientific condition must remain identical; volatile benchmark-manifest
-    publication metadata is intentionally excluded. OOS and Rolling remain isolated
-    because robustness/profile/source contracts stay in this payload.
-    """
-
-    normalized = {
-        str(key): value
-        for key, value in dict(contract or {}).items()
-        if str(key) not in _SEED_EXPANSION_NON_SCIENTIFIC_KEYS
-        and str(key) not in {
-            "seed_count",
-            "resolved_seeds",
-            "benchmark_parameter_artifact_identities",
-        }
-    }
-    normalized["seed_count"] = len(seeds)
-    normalized["resolved_seeds"] = [int(seed) for seed in seeds]
-    return normalized
-
-
-def _seed_expansion_source_run(
-    *, contract: dict[str, Any], current_run_root: Path,
-) -> tuple[Path, dict[str, Any], tuple[int, ...]] | None:
-    """Find the largest completed compatible run reusable by this run.
-
-    A source may have the same seed set (engineering-only fingerprint migration)
-    or a strict seed prefix (N expansion).
-    """
-
-    current_seeds = tuple(int(value) for value in contract.get("resolved_seeds") or ())
-    if not current_seeds:
-        return None
-    cfg = get_strategy_multi_seed_robustness_settings(str(contract["robustness_id"]))
-    output_root = (PROJECT_ROOT / cfg.output_root).resolve()
-    if not output_root.is_dir():
-        return None
-    best: tuple[Path, dict[str, Any], tuple[int, ...]] | None = None
-    for candidate_root in sorted(path for path in output_root.iterdir() if path.is_dir()):
-        if candidate_root.resolve() == Path(current_run_root).resolve():
-            continue
-        validated = _validate_scientific_observation_manifest(
-            candidate_root,
-            backfill_legacy_completed=True,
-        )
-        if validated is None:
-            continue
-        candidate_contract = dict(validated["contract"])
-        candidate_seeds = tuple(
-            int(value) for value in candidate_contract.get("resolved_seeds") or ()
-        )
-        if not candidate_seeds or len(candidate_seeds) > len(current_seeds):
-            continue
-        if current_seeds[: len(candidate_seeds)] != candidate_seeds:
-            continue
-        if _seed_expansion_compatibility_payload(
-            candidate_contract, seeds=candidate_seeds
-        ) != _seed_expansion_compatibility_payload(
-            contract, seeds=candidate_seeds
-        ):
-            continue
-        if not _benchmark_parameter_identities_compatible(
-            candidate_contract, contract, seeds=candidate_seeds
-        ):
-            continue
-        if best is None or len(candidate_seeds) > len(best[2]):
-            best = (candidate_root.resolve(), candidate_contract, candidate_seeds)
-    return best
-
-
-def _rebind_attribution_unit_for_seed_expansion(
-    *, source_run_root: Path, destination_run_root: Path, arm_id: str, seed: int,
-    source_fingerprint: str, destination_fingerprint: str, seed_order: int,
-) -> None:
-    source_payload = _read_attribution_unit_manifest(
-        source_run_root,
-        arm_id=arm_id,
-        seed=seed,
-        expected_fingerprint=source_fingerprint,
-    )
-    if source_payload is None:
-        raise RuntimeError(
-            f"seed expansion缺少已驗證compact attribution source: {arm_id}/seed={seed}"
-        )
-    source_dir = _attribution_unit_dir(source_run_root, arm_id, seed)
-    destination_dir = _attribution_unit_dir(destination_run_root, arm_id, seed)
-    shutil.rmtree(destination_dir, ignore_errors=True)
-    shutil.copytree(source_dir, destination_dir)
-    payload = _read_json(destination_dir / MANIFEST_FILENAME)
-    payload["scientific_fingerprint"] = str(destination_fingerprint)
-    payload["seed_order"] = int(seed_order)
-    payload["scientific_observation_validation"] = {
-        "status": "VERIFIED",
-        "verified_at_utc": datetime.now(timezone.utc).isoformat(),
-        "source": f"seed_expansion_reuse:{source_fingerprint}",
-    }
-    for role, raw_item in dict(payload.get("files") or {}).items():
-        item = dict(raw_item or {})
-        filename = Path(str(item.get("path") or f"{role}.csv.gz")).name
-        destination = destination_dir / filename
-        if not destination.is_file():
-            raise RuntimeError(
-                f"seed expansion attribution copy缺少檔案: {arm_id}/seed={seed}/{filename}"
-            )
-        item["path"] = project_relative_display_path(
-            destination, project_root=PROJECT_ROOT
-        )
-        item["sha256"] = compute_file_sha256(destination)
-        payload["files"][role] = item
-    _write_json(destination_dir / MANIFEST_FILENAME, payload)
-
-
-def _import_seed_expansion_results(
-    *, contract: dict[str, Any], run_root: Path,
-    stochastic_arms: tuple[StrategyComparisonArm, ...],
-    model_arms: tuple[StrategyComparisonArm, ...],
-    keep_attribution_source: bool,
-) -> dict[str, Any] | None:
-    """Import compatible completed observations without replaying old seeds."""
-
-    source = _seed_expansion_source_run(contract=contract, current_run_root=run_root)
-    if source is None:
-        return None
-    source_root, source_contract, source_seeds = source
-    source_results = _load_seed_results(source_root / SEED_RESULTS_FILENAME)
-    source_yearly = _load_seed_yearly_results(source_root / SEED_YEARLY_RESULTS_FILENAME)
-    source_results = _rebind_legacy_strategy_param_identity_rows(
-        source_results, source_contract=source_contract, current_contract=contract
-    )
-    _validate_seed_results_frame(
-        source_results, stochastic_arms=stochastic_arms, seeds=source_seeds
-    )
-    expected_units = {
-        (arm.arm_id, int(seed)) for arm in stochastic_arms for seed in source_seeds
-    }
-    actual_result_units = set() if source_results.empty else {
-        (str(row.arm_id), int(row.seed)) for row in source_results.itertuples(index=False)
-    }
-    if actual_result_units != expected_units:
-        raise RuntimeError("seed expansion來源缺少完整seed策略結果")
-    actual_yearly_units = set() if source_yearly.empty else {
-        (str(row.arm_id), int(row.seed)) for row in source_yearly.itertuples(index=False)
-    }
-    if expected_units - actual_yearly_units:
-        raise RuntimeError("seed expansion來源缺少完整年度結果")
-
-    source_fingerprint = str(source_contract.get("fingerprint") or "")
-    destination_fingerprint = str(contract["fingerprint"])
-    if keep_attribution_source:
-        model_ids = {arm.arm_id for arm in model_arms}
-        for arm_id, seed in sorted(expected_units):
-            if arm_id not in model_ids:
-                continue
-            _rebind_attribution_unit_for_seed_expansion(
-                source_run_root=source_root,
-                destination_run_root=run_root,
-                arm_id=arm_id,
-                seed=int(seed),
-                source_fingerprint=source_fingerprint,
-                destination_fingerprint=destination_fingerprint,
-                seed_order=list(contract["resolved_seeds"]).index(int(seed)) + 1,
-            )
-
-    current_results_path = run_root / SEED_RESULTS_FILENAME
-    current_yearly_path = run_root / SEED_YEARLY_RESULTS_FILENAME
-    current_results = _load_seed_results(current_results_path)
-    current_yearly = _load_seed_yearly_results(current_yearly_path)
-    merged_results = pd.concat([source_results, current_results], ignore_index=True)
-    if not merged_results.empty:
-        merged_results = merged_results.drop_duplicates(
-            subset=["arm_id", "seed"], keep="last"
-        )
-    merged_yearly = pd.concat([source_yearly, current_yearly], ignore_index=True)
-    if not merged_yearly.empty:
-        merged_yearly = merged_yearly.drop_duplicates(
-            subset=["arm_id", "seed", "year"], keep="last"
-        )
-    _write_seed_results(current_results_path, merged_results)
-    _write_seed_yearly_results(current_yearly_path, merged_yearly)
-    return {
-        "source_fingerprint": source_fingerprint,
-        "reused_seeds": [int(seed) for seed in source_seeds],
-        "reused_observations": len(expected_units),
-    }
-
-
 def _run_root(contract: dict[str, Any]) -> Path:
     cfg = get_strategy_multi_seed_robustness_settings(str(contract["robustness_id"]))
     return (PROJECT_ROOT / cfg.output_root / str(contract["fingerprint"])).resolve()
@@ -2579,10 +2278,10 @@ def _write_scientific_observation_manifest(
 ) -> dict[str, Any]:
     """Commit expensive robustness observations independently from run/report status.
 
-    This READY manifest is the commit marker for reusable stochastic evidence.  It
-    intentionally excludes summary/report presentation so later renderer refreshes,
-    lifecycle retries, or a failed report finalization cannot make completed model
-    observations disappear from cross-fingerprint reuse discovery.
+    This READY manifest is the commit marker for stochastic evidence within the
+    exact scientific fingerprint. It intentionally excludes summary/report
+    presentation so renderer refreshes or lifecycle retries do not alter evidence
+    integrity. Cross-fingerprint result migration is deliberately unsupported.
     """
 
     payload = {
@@ -2680,83 +2379,19 @@ def _load_validated_scientific_observations(
     }
 
 
-def _load_legacy_scientific_observations_for_backfill(
-    run_root: Path,
-) -> dict[str, Any] | None:
-    """Recover complete legacy observations independently of lifecycle status.
-
-    Older runs used ``manifest.json`` both as RUNNING/FAILED lifecycle state and as
-    the only discovery anchor for completed observations.  A later failed resume can
-    therefore overwrite ``COMPLETED`` even though the expensive seed/yearly/compact
-    attribution evidence is still complete.  Validate the evidence itself and use
-    lifecycle metadata only to recover the original scientific contract.
-    """
-
-    lifecycle_path = Path(run_root) / MANIFEST_FILENAME
-    if not lifecycle_path.is_file():
-        return None
-    try:
-        lifecycle = _read_json(lifecycle_path)
-        contract = dict(lifecycle.get("contract") or {})
-        fingerprint = str(contract.get("fingerprint") or "")
-        if not fingerprint or fingerprint != Path(run_root).name:
-            return None
-        durable = dict(lifecycle.get("durable_artifacts") or {})
-        if durable and not _validate_durable_result_artifacts(
-            run_root, durable, keys=SCIENTIFIC_DURABLE_RESULT_KEYS
-        ):
-            return None
-        validated = _load_validated_scientific_observations(
-            run_root, contract=contract, scientific_artifacts=None
-        )
-        return {"contract": contract, **validated}
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return None
-
-
 def _validate_scientific_observation_manifest(
     run_root: Path,
-    *,
-    backfill_legacy_completed: bool,
 ) -> dict[str, Any] | None:
-    """Validate reusable scientific evidence without consulting run lifecycle status.
+    """Validate exact-fingerprint scientific evidence.
 
-    New runs publish ``scientific_observations_manifest.json`` before derived report
-    generation.  Legacy completed runs can be validated once through the previous
-    durable-result contract and upgraded in place.  After the READY marker exists,
-    later RUNNING/FAILED presentation attempts cannot invalidate these observations.
+    No legacy backfill or cross-fingerprint migration is attempted. If the READY
+    marker is absent or incompatible, the caller must rebuild under the current
+    scientific identity.
     """
 
     evidence_path = _scientific_observation_manifest_path(run_root)
     if not evidence_path.is_file():
-        if not backfill_legacy_completed:
-            return None
-        legacy = _load_legacy_scientific_observations_for_backfill(run_root)
-        if legacy is None:
-            return None
-        contract = dict(legacy["contract"])
-        stochastic = tuple(legacy["stochastic_arms"])
-        seeds = tuple(int(value) for value in legacy["seeds"])
-        model_ids = {
-            str(value) for value in tuple(contract.get("model_seed_sensitive_arm_ids") or ())
-        }
-        attribution_index_path = None
-        if bool(dict(contract.get("retention") or {}).get("keep_attribution_source")):
-            model_arms = tuple(arm for arm in stochastic if arm.arm_id in model_ids)
-            attribution_index_path = _write_attribution_index_manifest(
-                run_root,
-                contract=contract,
-                stochastic_arms=model_arms,
-                seeds=seeds,
-            )
-        _write_scientific_observation_manifest(
-            run_root,
-            contract=contract,
-            seed_frame=legacy["seed_frame"],
-            seed_yearly_frame=legacy["seed_yearly_frame"],
-            attribution_index_path=attribution_index_path,
-        )
-
+        return None
     try:
         evidence = _read_json(evidence_path)
         if int(evidence.get("schema_version") or 0) != SCIENTIFIC_OBSERVATIONS_SCHEMA_VERSION:
@@ -2787,15 +2422,8 @@ def _validate_completed_run(
     *,
     expected_contract: dict[str, Any] | None = None,
     backfill_integrity: bool,
-    require_derived_artifacts: bool = True,
 ) -> dict[str, Any] | None:
-    """Validate one completed robustness result at the requested evidence layer.
-
-    Exact-run presentation REUSE requires the derived summary/report. Compatible
-    cross-fingerprint observation reuse only requires validated scientific seed
-    observations plus compact attribution; stale/missing derived presentation must
-    not trigger multi-hour model retraining.
-    """
+    """Validate one completed result for exact-fingerprint no-op REUSE."""
 
     manifest_path = run_root / MANIFEST_FILENAME
     if not manifest_path.is_file():
@@ -2819,27 +2447,20 @@ def _validate_completed_run(
         seeds = tuple(int(value) for value in validated["seeds"])
         seed_frame = validated["seed_frame"]
         yearly_frame = validated["seed_yearly_frame"]
-        summary: dict[str, Any] = {}
-        if require_derived_artifacts:
-            summary = _read_json(run_root / SUMMARY_FILENAME)
-            summary_contract = dict(summary.get("contract") or {})
-            if str(summary_contract.get("fingerprint") or "") != fingerprint:
-                return None
-            _validate_summary_seed_aggregates(summary, seed_frame=seed_frame, contract=contract)
-            if not (run_root / REPORT_FILENAME).is_file():
-                return None
+        summary = _read_json(run_root / SUMMARY_FILENAME)
+        summary_contract = dict(summary.get("contract") or {})
+        if str(summary_contract.get("fingerprint") or "") != fingerprint:
+            return None
+        _validate_summary_seed_aggregates(summary, seed_frame=seed_frame, contract=contract)
+        if not (run_root / REPORT_FILENAME).is_file():
+            return None
         durable = dict(manifest.get("durable_artifacts") or {})
         if durable:
-            integrity_keys = (
-                tuple(DURABLE_RESULT_FILENAMES.keys())
-                if require_derived_artifacts
-                else SCIENTIFIC_DURABLE_RESULT_KEYS
-            )
             if not _validate_durable_result_artifacts(
-                run_root, durable, keys=integrity_keys
+                run_root, durable, keys=tuple(DURABLE_RESULT_FILENAMES.keys())
             ):
                 return None
-        elif backfill_integrity and require_derived_artifacts:
+        elif backfill_integrity:
             manifest["durable_artifacts"] = _build_durable_result_artifacts(run_root)
             manifest["integrity_backfilled_at_utc"] = datetime.now(timezone.utc).isoformat()
             _write_json(manifest_path, manifest)
@@ -5131,30 +4752,6 @@ def run_multi_seed_robustness(
 
     started_total = time.perf_counter()
     seeds = tuple(int(value) for value in contract["resolved_seeds"])
-    seed_expansion_reuse = None
-    if cfg.reuse_completed:
-        seed_expansion_reuse = _import_seed_expansion_results(
-            contract=contract,
-            run_root=run_root,
-            stochastic_arms=tuple(stochastic_arms),
-            model_arms=tuple(model_arms),
-            keep_attribution_source=bool(cfg.keep_attribution_source),
-        )
-        if seed_expansion_reuse is not None:
-            manifest["seed_expansion_reuse"] = dict(seed_expansion_reuse)
-            _write_json(manifest_path, manifest)
-            reused_seeds_text = ",".join(
-                str(value) for value in seed_expansion_reuse["reused_seeds"]
-            )
-            reuse_label = (
-                "[COMPATIBLE RESULT REUSE]"
-                if len(seed_expansion_reuse["reused_seeds"]) == len(seeds)
-                else "[SEED EXPANSION REUSE]"
-            )
-            print(
-                paint(reuse_label, "green", enabled=console_color_enabled(), bold=True)
-                + f" seeds={reused_seeds_text} | observations={seed_expansion_reuse['reused_observations']}"
-            )
     try:
         existing = _load_seed_results(seed_results_path)
         _validate_seed_results_frame(existing, stochastic_arms=stochastic_arms, seeds=seeds)
