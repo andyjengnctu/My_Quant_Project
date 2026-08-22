@@ -1300,7 +1300,7 @@ def _render_robustness_execution_plan(
             fold_text = str(unique_fold_counts[0]) if len(unique_fold_counts) == 1 else "/".join(map(str, unique_fold_counts))
             pit_workload_lines += [
                 f"PIT folds          ：{fold_text} folds / DL source / seed",
-                f"預計fold trainings ：{cfg.seed_count * sum(fold_counts)}",
+                f"PIT fold工作量     ：{cfg.seed_count * sum(fold_counts)} slots（實際新訓練會扣除REUSE／rescore／跨mode checkpoint重用）",
             ]
     color_enabled = console_color_enabled()
     action_colors = {
@@ -2912,6 +2912,10 @@ def _validate_training_artifacts(
             "score_available_from": str(table.attrs.get("available_from") or actual_start),
             "score_available_through": str(table.attrs.get("available_through") or actual_end),
             "fold_count": int(manifest.get("fold_count", len(folds)) or len(folds)),
+            "fold_reuse_summary": {
+                str(key): int(value or 0)
+                for key, value in dict(manifest.get("fold_reuse_summary") or {}).items()
+            },
         }
 
     profile = get_breakout_quality_experiment_profile(dl.experiment_profile)
@@ -3453,7 +3457,9 @@ def _pit_saved_fold_progress(meta: dict[str, Any]) -> tuple[int, int] | None:
     saved = sum(
         1
         for path in folds_root.iterdir()
-        if path.is_dir() and (path / MANIFEST_FILENAME).is_file()
+        if path.is_dir()
+        and (path / PIT_FOLD_MANIFEST_FILENAME).is_file()
+        and (path / PIT_FOLD_MODEL_FILENAME).is_file()
     )
     return min(saved, expected), expected
 
@@ -5352,13 +5358,16 @@ def run_multi_seed_robustness(
     trained_artifacts: dict[tuple[str, int], dict[str, Any]] = {}
     queued_replay_units: set[tuple[str, int]] = set()
 
+    displayed_done_units = 0
     for seed_order, seed in enumerate(seeds, start=1):
         for arm_order, arm in enumerate(stochastic_arms, start=1):
             unit_key = (arm.arm_id, int(seed))
             strategy_action = strategy_only_actions.get(unit_key)
+            if unit_key in completed:
+                displayed_done_units += 1
             if strategy_action == "RUN_SCIENTIFIC":
                 progress.print_line(
-                    paint(f"[DONE {done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
+                    paint(f"[DONE {displayed_done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
                     + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name}"
                 )
             elif strategy_action == "REBUILD_CONTEXT":
@@ -5368,7 +5377,7 @@ def run_multi_seed_robustness(
                 )
             elif unit_key in completed:
                 progress.print_line(
-                    paint(f"[REUSE {done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
+                    paint(f"[REUSE {displayed_done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
                     + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name}"
                 )
             elif unit_key in scientific_completed:
@@ -5615,13 +5624,30 @@ def run_multi_seed_robustness(
             trained = future.result()
             artifacts = dict(trained["artifacts"])
             trained_artifacts[(str(meta["dl_id"]), int(meta["seed"]))] = artifacts
-            tag = "[TRAIN REUSE]" if trained["reused"] else "[TRAIN DONE]"
+            fold_reuse = dict(artifacts.get("fold_reuse_summary") or {})
+            built_folds = int(fold_reuse.get("built", 0) or 0)
+            if trained["reused"]:
+                tag = "[TRAIN ARTIFACT REUSE]"
+            elif fold_reuse and built_folds == 0:
+                tag = "[PIT RECOVER]"
+            else:
+                tag = "[TRAIN DONE]"
             cache_meta = dict(trained.get("initial_checkpoint_cache") or {})
             cache_note = (
                 " | 2021 checkpoint cache="
                 + ("reuse" if bool(cache_meta.get("reused_existing_cache")) else "publish")
                 if cache_meta else ""
             )
+            fold_note = ""
+            if fold_reuse:
+                fold_note = (
+                    " | folds="
+                    f"reuse:{int(fold_reuse.get('exact_reuse', 0) or 0)}"
+                    f"/rescore:{int(fold_reuse.get('local_checkpoint_rescore', 0) or 0)}"
+                    f"/cross-mode:{int(fold_reuse.get('cross_mode_initial_checkpoint_reuse', 0) or 0)}"
+                    f"/migrate:{int(fold_reuse.get('legacy_migration', 0) or 0)}"
+                    f"/built:{built_folds}"
+                )
             progress.print_line(
                 paint(tag, "green", enabled=color_enabled, bold=True)
                 + f" seed {meta['seed_order']}/{len(seeds)} | "
@@ -5629,6 +5655,7 @@ def run_multi_seed_robustness(
                 + f"| replay targets={len(meta['replay_arms'])} "
                 + f"| epoch={artifacts['selected_epoch']} "
                 + f"| elapsed={_format_elapsed(artifacts.get('training_elapsed_sec', trained['wall_elapsed_sec']))}"
+                + fold_note
                 + cache_note
             )
             for arm_order, arm in meta["replay_arms"]:
@@ -5647,12 +5674,26 @@ def run_multi_seed_robustness(
             meta["submitted_at"] = time.perf_counter()
             future = training_executor.submit(_train_one_unit, meta)
             training_futures[future] = meta
+            pit_progress = _pit_saved_fold_progress(meta)
+            if pit_progress is None:
+                action_tag = "[TRAIN]"
+                resume_note = ""
+            else:
+                saved_folds, expected_folds = pit_progress
+                if saved_folds >= expected_folds:
+                    action_tag = "[PIT VERIFY/RECOVER]"
+                elif saved_folds > 0:
+                    action_tag = "[TRAIN RESUME]"
+                else:
+                    action_tag = "[TRAIN]"
+                resume_note = f" | saved checkpoints={saved_folds}/{expected_folds}"
             progress_update(
-                paint("[TRAIN]", "cyan", enabled=color_enabled, bold=True)
+                paint(action_tag, "cyan", enabled=color_enabled, bold=True)
                 + f" seed {meta['seed_order']}/{len(seeds)} | "
                 f"模型來源 {meta['source_order']}/{meta['source_count']} {meta['dl_id']} "
                 + f"| replay targets={len(meta['replay_arms'])} "
-                + f"| GPU running={len(training_futures)}/{cfg.gpu_train_workers} "
+                + resume_note
+                + f" | GPU processes={len(training_futures)}/{cfg.gpu_train_workers} "
                 + f"| completed={done_units}/{total_units}"
             )
         if training_futures:
