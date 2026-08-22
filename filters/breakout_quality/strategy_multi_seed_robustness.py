@@ -171,6 +171,8 @@ DURABLE_RESULT_FILENAMES = {
     "summary": SUMMARY_FILENAME,
     "report": REPORT_FILENAME,
 }
+SCIENTIFIC_DURABLE_RESULT_KEYS = ("seed_results", "seed_yearly_results")
+DERIVED_DURABLE_RESULT_KEYS = ("summary", "report")
 ROBUSTNESS_SCHEMA_VERSION = 11
 ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 5
 ROBUSTNESS_MODEL_ARTIFACT_CONTRACT_VERSION = 2
@@ -1681,7 +1683,10 @@ def _seed_expansion_source_run(
         if candidate_root.resolve() == Path(current_run_root).resolve():
             continue
         validated = _validate_completed_run(
-            candidate_root, expected_contract=None, backfill_integrity=True
+            candidate_root,
+            expected_contract=None,
+            backfill_integrity=False,
+            require_derived_artifacts=False,
         )
         if validated is None:
             continue
@@ -2351,11 +2356,23 @@ def _build_durable_result_artifacts(run_root: Path) -> dict[str, dict[str, Any]]
 
 
 def _validate_durable_result_artifacts(
-    run_root: Path, artifacts: dict[str, Any]
+    run_root: Path, artifacts: dict[str, Any], *, keys: tuple[str, ...] | None = None
 ) -> bool:
+    """Validate durable artifacts at the requested evidence layer.
+
+    ``seed_results`` and ``seed_yearly_results`` are scientific observations.
+    ``summary`` and ``report`` are derived presentation artifacts that may be
+    regenerated after renderer/schema maintenance without invalidating the
+    expensive stochastic observations behind them.
+    """
+
     if not artifacts:
         return False
-    for key, filename in DURABLE_RESULT_FILENAMES.items():
+    selected_keys = tuple(keys or DURABLE_RESULT_FILENAMES.keys())
+    for key in selected_keys:
+        filename = DURABLE_RESULT_FILENAMES.get(str(key))
+        if filename is None:
+            raise KeyError(f"未知robustness durable artifact key: {key}")
         item = dict(artifacts.get(key) or {})
         path = run_root / filename
         if not path.is_file() or Path(str(item.get("filename") or "")).name != filename:
@@ -2373,8 +2390,15 @@ def _validate_completed_run(
     *,
     expected_contract: dict[str, Any] | None = None,
     backfill_integrity: bool,
+    require_derived_artifacts: bool = True,
 ) -> dict[str, Any] | None:
-    """Validate one completed robustness result before REUSE/seed expansion."""
+    """Validate one completed robustness result at the requested evidence layer.
+
+    Exact-run presentation REUSE requires the derived summary/report. Compatible
+    cross-fingerprint observation reuse only requires validated scientific seed
+    observations plus compact attribution; stale/missing derived presentation must
+    not trigger multi-hour model retraining.
+    """
 
     manifest_path = run_root / MANIFEST_FILENAME
     if not manifest_path.is_file():
@@ -2413,13 +2437,15 @@ def _validate_completed_run(
             yearly_frame, stochastic_arms=stochastic, seeds=seeds,
             expected_years=expected_years, require_complete_units=True,
         )
-        summary = _read_json(run_root / SUMMARY_FILENAME)
-        summary_contract = dict(summary.get("contract") or {})
-        if str(summary_contract.get("fingerprint") or "") != fingerprint:
-            return None
-        _validate_summary_seed_aggregates(summary, seed_frame=seed_frame, contract=contract)
-        if not (run_root / REPORT_FILENAME).is_file():
-            return None
+        summary: dict[str, Any] = {}
+        if require_derived_artifacts:
+            summary = _read_json(run_root / SUMMARY_FILENAME)
+            summary_contract = dict(summary.get("contract") or {})
+            if str(summary_contract.get("fingerprint") or "") != fingerprint:
+                return None
+            _validate_summary_seed_aggregates(summary, seed_frame=seed_frame, contract=contract)
+            if not (run_root / REPORT_FILENAME).is_file():
+                return None
         validation_contract = expected_contract if expected_contract is not None else contract
         model_ids = {
             str(value) for value in tuple(validation_contract.get("model_seed_sensitive_arm_ids") or ())
@@ -2433,9 +2459,16 @@ def _validate_completed_run(
                 return None
         durable = dict(manifest.get("durable_artifacts") or {})
         if durable:
-            if not _validate_durable_result_artifacts(run_root, durable):
+            integrity_keys = (
+                tuple(DURABLE_RESULT_FILENAMES.keys())
+                if require_derived_artifacts
+                else SCIENTIFIC_DURABLE_RESULT_KEYS
+            )
+            if not _validate_durable_result_artifacts(
+                run_root, durable, keys=integrity_keys
+            ):
                 return None
-        elif backfill_integrity:
+        elif backfill_integrity and require_derived_artifacts:
             manifest["durable_artifacts"] = _build_durable_result_artifacts(run_root)
             manifest["integrity_backfilled_at_utc"] = datetime.now(timezone.utc).isoformat()
             _write_json(manifest_path, manifest)

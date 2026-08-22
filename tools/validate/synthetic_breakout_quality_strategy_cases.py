@@ -1400,6 +1400,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         _model_artifact_identity_payload,
         _seed_expansion_compatibility_payload,
         _strategy_only_baseline_action,
+        SCIENTIFIC_DURABLE_RESULT_KEYS,
         _strategy_only_baseline_context_available,
         _validate_durable_result_artifacts,
         _validate_seed_result_scientific_identities,
@@ -1808,9 +1809,20 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         durable_before = _validate_durable_result_artifacts(durable_root, durable_manifest)
         (durable_root / "robustness_report.md").write_text("tampered\n", encoding="utf-8")
         durable_after = _validate_durable_result_artifacts(durable_root, durable_manifest)
+        scientific_after_report_refresh = _validate_durable_result_artifacts(
+            durable_root,
+            durable_manifest,
+            keys=SCIENTIFIC_DURABLE_RESULT_KEYS,
+        )
     check_true(
         "robustness_completed_run_reuse_requires_durable_result_sha_integrity",
         durable_before and not durable_after,
+    )
+    check_true(
+        "robustness_compatible_observation_reuse_ignores_derived_report_refresh",
+        scientific_after_report_refresh
+        and "require_derived_artifacts=False" in multi_seed_source
+        and "else SCIENTIFIC_DURABLE_RESULT_KEYS" in multi_seed_source,
     )
 
     check_true(
