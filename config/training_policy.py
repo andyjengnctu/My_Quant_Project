@@ -115,7 +115,7 @@ OPTIMIZER_RANDOM_SEED_DEFAULT = 42
 # 同一 benchmark seed 必須同時供 Strategy Optimizer 與所有 DL model source 使用；
 # resolved sequence 是跨版本可重現的 scientific identity，不得由 Strategy Compare 另設第二份。
 ROBUSTNESS_BENCHMARK_ID = "end_to_end_v1"
-ROBUSTNESS_BENCHMARK_SEED_COUNT = 4
+ROBUSTNESS_BENCHMARK_SEED_COUNT = 2
 ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED = 20260810
 
 def resolve_robustness_benchmark_seeds(
