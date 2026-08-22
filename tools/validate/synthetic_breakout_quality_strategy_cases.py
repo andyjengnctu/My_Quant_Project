@@ -1389,6 +1389,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     ).read_text(encoding="utf-8")
     from config.strategy_compare import get_strategy_multi_seed_robustness_settings
     from filters.breakout_quality.strategy_multi_seed_robustness import (
+        _model_artifact_identity_payload,
         _strategy_only_baseline_action,
     )
 
@@ -1419,6 +1420,45 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             baseline_context_available=False,
         ),
     )
+    model_identity_scientific = {
+        "robustness_id": "extending_window_rolling",
+        "profile_id": "strategy_compare",
+        "dataset": "full",
+        "dataset_identity": {"sha256": "dataset-a"},
+        "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
+        "benchmark_id": "end_to_end_v1",
+        "resolved_seeds": [11, 22],
+        "training_defaults": {"epochs": 200},
+        "benchmark_parameter_artifact_identities": {
+            "C59:seed=11": {"sha256": "param-old"}
+        },
+        "stochastic_arms": [
+            {
+                "arm_id": "C59",
+                "model_seed_sensitive": True,
+                "runtime_dl_sources": [
+                    {
+                        "dl_id": "CONT13E_ROLL",
+                        "filter_id": "breakout_quality_v1",
+                        "model_architecture": "inception_time_v1",
+                        "experiment_profile": "profile_e",
+                    }
+                ],
+            }
+        ],
+    }
+    model_identity_before = _model_artifact_identity_payload(model_identity_scientific)
+    model_identity_scientific["benchmark_parameter_artifact_identities"] = {
+        "C59:seed=11": {"sha256": "param-new"}
+    }
+    model_identity_after = _model_artifact_identity_payload(model_identity_scientific)
+    check_true(
+        "robustness_model_artifact_identity_is_independent_of_strategy_param_retraining",
+        model_identity_before == model_identity_after
+        and 'contract.get("model_artifact_fingerprint") or contract["fingerprint"]' in multi_seed_source
+        and "reusable_artifact_roots_exist = model_dir.is_dir()" in multi_seed_source,
+    )
+
     check_true(
         "robustness_report_surfaces_run_pinned_seed_and_optimizer_budget_identity",
         '("Benchmark ID", str(contract.get("benchmark_id") or "-"))' in multi_seed_source

@@ -161,6 +161,7 @@ ATTRIBUTION_SOURCE_DIRNAME = "attribution_source"
 ATTRIBUTION_SOURCE_SCHEMA_VERSION = 2
 ROBUSTNESS_SCHEMA_VERSION = 11
 ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 5
+ROBUSTNESS_MODEL_ARTIFACT_CONTRACT_VERSION = 1
 TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
 MEAN_METRICS: tuple[tuple[str, str, str], ...] = (
@@ -1393,8 +1394,12 @@ def build_multi_seed_robustness_contract(
             benchmark_arm_contract(arm) for arm in stochastic
         ],
     }
+    model_artifact_identity = _model_artifact_identity_payload(scientific)
     contract = {
         **scientific,
+        "model_artifact_fingerprint": canonical_json_sha256(
+            model_artifact_identity, length=16
+        ),
         "romd_reference_baselines": reference_baselines,
         "paired_contrasts": [dict(item) for item in robustness.paired_contrasts],
         "report_schema_version": ROBUSTNESS_SCHEMA_VERSION,
@@ -1419,6 +1424,38 @@ def build_multi_seed_robustness_contract(
     return contract
 
 
+def _model_artifact_identity_payload(scientific: dict[str, Any]) -> dict[str, Any]:
+    """Return the DL fitting/score identity without strategy-parameter bindings.
+
+    Strategy params affect C59/C60 replay results, not E/K/M model fitting.  Keep
+    model work reusable across parameter-only robustness fingerprints whenever
+    retention has preserved the required model/score artifacts.
+    """
+
+    model_sources: dict[str, dict[str, Any]] = {}
+    for raw_arm in tuple(scientific.get("stochastic_arms") or ()):
+        arm = dict(raw_arm or {})
+        if not bool(arm.get("model_seed_sensitive")):
+            continue
+        for raw_source in tuple(arm.get("runtime_dl_sources") or ()):
+            source = dict(raw_source or {})
+            dl_id = str(source.get("dl_id") or "").strip()
+            if dl_id:
+                model_sources[dl_id] = source
+    return {
+        "model_artifact_contract_version": ROBUSTNESS_MODEL_ARTIFACT_CONTRACT_VERSION,
+        "robustness_id": scientific.get("robustness_id"),
+        "profile_id": scientific.get("profile_id"),
+        "dataset": scientific.get("dataset"),
+        "dataset_identity": scientific.get("dataset_identity"),
+        "comparison_period": scientific.get("comparison_period"),
+        "benchmark_id": scientific.get("benchmark_id"),
+        "resolved_seeds": list(scientific.get("resolved_seeds") or ()),
+        "training_defaults": scientific.get("training_defaults"),
+        "model_sources": [model_sources[key] for key in sorted(model_sources)],
+    }
+
+
 def _run_root(contract: dict[str, Any]) -> Path:
     cfg = get_strategy_multi_seed_robustness_settings(str(contract["robustness_id"]))
     return (PROJECT_ROOT / cfg.output_root / str(contract["fingerprint"])).resolve()
@@ -1426,7 +1463,10 @@ def _run_root(contract: dict[str, Any]) -> Path:
 
 def _model_work_root(contract: dict[str, Any]) -> Path:
     cfg = get_strategy_multi_seed_robustness_settings(str(contract["robustness_id"]))
-    return (PROJECT_ROOT / cfg.model_work_root / str(contract["fingerprint"])).resolve()
+    model_fingerprint = str(
+        contract.get("model_artifact_fingerprint") or contract["fingerprint"]
+    )
+    return (PROJECT_ROOT / cfg.model_work_root / model_fingerprint).resolve()
 
 
 def _unit_key(arm_id: str, seed: int) -> str:
@@ -2189,7 +2229,10 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     )
     started = time.perf_counter()
     artifacts = None
-    if bool(job.get("reuse_completed")) and model_dir.is_dir() and research_dir.is_dir():
+    reusable_artifact_roots_exist = model_dir.is_dir() and (
+        is_selection_pit or research_dir.is_dir()
+    )
+    if bool(job.get("reuse_completed")) and reusable_artifact_roots_exist:
         try:
             artifacts = _validate_training_artifacts(
                 arm=arm,
