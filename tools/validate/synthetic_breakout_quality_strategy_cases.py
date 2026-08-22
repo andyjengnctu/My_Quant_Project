@@ -2194,17 +2194,21 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     )
 
     check_true(
-        "strategy_compare_training_progress_uses_shared_multiline_board_and_live_epoch_ssot",
+        "strategy_compare_training_progress_uses_shared_multiline_board_and_live_fold_epoch_ssot",
         "FixedProgressBlock" in multi_seed_source
         and "render_training_unit_progress" in multi_seed_source
-        and "def _trainer_epoch_progress(" in multi_seed_source
         and "read_trainer_epoch_progress" in multi_seed_source
+        and "read_trainer_pit_progress" in multi_seed_source
+        and "_pit_saved_fold_progress" not in multi_seed_source
+        and "read_trainer_pit_progress" in strategy_app_service_source
         and 'COMPACT_CONSOLE_ENV: "0"' in strategy_training_source
         and '"PYTHONUNBUFFERED": "1"' in strategy_training_source
         and '"BREAKOUT_QUALITY_EPOCH_PROGRESS_MARKERS": "1"' in strategy_training_source
         and "def read_trainer_epoch_progress(" in training_progress_source
+        and "def read_trainer_pit_progress(" in training_progress_source
         and "_EPOCH_PROGRESS_MARKER_RE" in training_progress_source
-        and "_PIT_TRAINING_FOLD_RE" in training_progress_source
+        and "_PIT_ACTIVE_FOLD_RE" in training_progress_source
+        and "_PIT_COMPLETE_RE" in training_progress_source
         and "__BQ_EPOCH_PROGRESS__" in continuous_ranker_source
         and "_emit_epoch_progress_marker(\"select\"" in continuous_ranker_source
         and "_emit_epoch_progress_marker(\"refit\"" in continuous_ranker_source

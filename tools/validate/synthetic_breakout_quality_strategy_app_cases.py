@@ -35,7 +35,7 @@ from .synthetic_breakout_quality_support import (
 
 from .source_index import read_source_ast, read_source_text
 from core.display_common import FixedProgressBlock
-from core.training_progress import render_training_unit_progress
+from core.training_progress import read_trainer_pit_progress, render_training_unit_progress
 
 def validate_breakout_quality_single_seed_single_entry_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_SINGLE_SEED_SINGLE_ENTRY"
@@ -654,7 +654,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     second_render = "".join(tty_buffer.parts[first_render_len:])
     fixed_progress.clear()
     check_true(
-        "robustness_training_progress_redraws_fixed_seed_lines_in_place",
+        "strategy_compare_training_progress_redraws_fixed_worker_lines_in_place",
         "\x1b[1A" in second_render
         and "seed-1 next" in second_render
         and "seed-2 next" in second_render,
@@ -677,6 +677,37 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "active fold 3/6" in shared_unit_progress
         and "epoch select 1/200" in shared_unit_progress,
     )
+
+    with tempfile.TemporaryDirectory(prefix="strategy_progress_log_") as temp_dir:
+        progress_log = Path(temp_dir) / "train.log"
+        progress_log.write_text(
+            "[PIT plan] 建立 6 個fold的合法 train/validation/score partitions...\n"
+            "Selection point-in-time fold plan\n"
+            "fold_20210101_20211231  2021-01-01 ～ 2021-12-31\n"
+            "fold_20220101_20221231  2022-01-01 ～ 2022-12-31\n"
+            "fold_20230101_20231231  2023-01-01 ～ 2023-12-31\n"
+            "fold_20240101_20241231  2024-01-01 ～ 2024-12-31\n"
+            "fold_20250101_20251231  2025-01-01 ～ 2025-12-31\n"
+            "fold_20260101_20260302  2026-01-01 ～ 2026-03-02\n"
+            "執行環境\n"
+            "fold_20230101_20231231：訓練並評分 2023-01-01 ～ 2023-12-31\n",
+            encoding="utf-8",
+        )
+        check(
+            "strategy_compare_single_and_multi_seed_share_pit_fold_progress_parser",
+            (2, 6),
+            read_trainer_pit_progress(progress_log),
+        )
+        progress_log.write_text(
+            progress_log.read_text(encoding="utf-8")
+            + "PIT Scores 完成 | folds=6 | 重用=2 | 新建=4\n",
+            encoding="utf-8",
+        )
+        check(
+            "strategy_compare_pit_fold_progress_parser_marks_completed_plan",
+            (6, 6),
+            read_trainer_pit_progress(progress_log),
+        )
 
     with tempfile.TemporaryDirectory(prefix="robustness_atomic_retry_") as temp_dir:
         target = Path(temp_dir) / "manifest.json"

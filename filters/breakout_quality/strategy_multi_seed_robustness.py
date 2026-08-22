@@ -68,7 +68,11 @@ from core.file_integrity import (
     canonical_json_sha256,
     load_json_object_or_none,
 )
-from core.training_progress import read_trainer_epoch_progress, render_training_unit_progress
+from core.training_progress import (
+    read_trainer_epoch_progress,
+    read_trainer_pit_progress,
+    render_training_unit_progress,
+)
 from core.training_scheduler import pop_next_seed_diverse_unit
 from core.console_report import (
     console_color_enabled,
@@ -2568,37 +2572,6 @@ def _format_elapsed(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{sec:02d}"
 
 
-def _trainer_epoch_progress(meta: dict[str, Any]) -> tuple[str, int, int] | None:
-    """Read active epoch phase from the canonical trainer log."""
-
-    log_path = Path(str(meta["research_dir"])).resolve() / "train.log"
-    return read_trainer_epoch_progress(log_path)
-
-
-def _pit_saved_fold_progress(meta: dict[str, Any]) -> tuple[int, int] | None:
-    settings = meta["settings"]
-    dl = settings.dl_sources[str(meta["dl_id"])]
-    if str(dl.score_source) != "selection_point_in_time":
-        return None
-    expected = _pit_fold_count_for_period(
-        str(meta["comparison_start"]),
-        str(meta["comparison_end"]),
-        _source_point_in_time_fold_months(settings=settings, dl_id=str(meta["dl_id"])),
-    )
-    folds_root = Path(str(meta["model_dir"])).resolve() / "folds"
-    if not folds_root.is_dir():
-        return 0, expected
-    saved = sum(
-        1
-        for path in folds_root.iterdir()
-        if path.is_dir()
-        and (path / PIT_FOLD_MANIFEST_FILENAME).is_file()
-        and (path / PIT_FOLD_MODEL_FILENAME).is_file()
-    )
-    return min(saved, expected), expected
-
-
-
 def _pop_next_training_unit(
     pending_trainings: deque[dict[str, Any]],
     training_futures: dict[Future, dict[str, Any]],
@@ -4027,7 +4000,9 @@ def _manifest_progress_payload(
             "source_count": int(meta["source_count"]),
             "replay_arm_ids": [arm.arm_id for _arm_order, arm in meta["replay_arms"]],
         }
-        pit_progress = _pit_saved_fold_progress(meta)
+        pit_progress = read_trainer_pit_progress(
+            Path(str(meta["research_dir"])).resolve() / "train.log"
+        )
         if pit_progress is not None:
             item["pit_saved_folds"] = int(pit_progress[0])
             item["pit_expected_folds"] = int(pit_progress[1])
@@ -4742,41 +4717,34 @@ def run_multi_seed_robustness(
         if finished:
             write_progress_manifest()
 
-    def render_seed_training_progress(now: float) -> None:
+    def render_training_progress(now: float) -> None:
         if not training_futures:
             training_progress.clear()
             return
-        active_by_seed: dict[int, list[dict[str, Any]]] = {}
-        for meta in training_futures.values():
-            active_by_seed.setdefault(int(meta["seed"]), []).append(meta)
+        active_metas = sorted(
+            training_futures.values(),
+            key=lambda item: (int(item["seed_order"]), int(item["source_order"])),
+        )
         lines: list[str] = []
-        for seed_order, seed in enumerate(seeds, start=1):
-            metas = active_by_seed.get(int(seed), [])
-            if not metas:
-                continue
-            metas.sort(key=lambda item: int(item["source_order"]))
-            parts: list[str] = []
-            for meta in metas:
-                pit_progress = _pit_saved_fold_progress(meta)
-                epoch_progress = _trainer_epoch_progress(meta)
-                parts.append(
-                    render_training_unit_progress(
-                        unit_id=str(meta["dl_id"]),
-                        source_index=int(meta["source_order"]),
-                        source_count=int(meta["source_count"]),
-                        elapsed_seconds=now - float(meta["submitted_at"]),
-                        pit_progress=pit_progress,
-                        epoch_progress=epoch_progress,
-                    )
-                )
-            action = str(metas[0].get("display_action_tag") or "[TRAIN]")
+        for worker_index, meta in enumerate(active_metas, start=1):
+            log_path = Path(str(meta["research_dir"])).resolve() / "train.log"
+            unit_text = render_training_unit_progress(
+                unit_id=str(meta["dl_id"]),
+                source_index=int(meta["source_order"]),
+                source_count=int(meta["source_count"]),
+                elapsed_seconds=now - float(meta["submitted_at"]),
+                pit_progress=read_trainer_pit_progress(log_path),
+                epoch_progress=read_trainer_epoch_progress(log_path),
+            )
+            action = str(meta.get("display_action_tag") or "[TRAIN]")
             lines.append(
                 paint(action, "cyan", enabled=color_enabled, bold=True)
-                + f" seed {seed_order}/{len(seeds)} ({int(seed)}) | "
-                + " ; ".join(parts)
+                + f" worker {worker_index}/{cfg.gpu_train_workers}"
+                + f" | seed {int(meta['seed_order'])}/{len(seeds)} ({int(meta['seed'])})"
+                + " | "
+                + unit_text
             )
         training_progress.update(lines)
-
 
     def submit_trainings() -> None:
         while pending_trainings and len(training_futures) < int(cfg.gpu_train_workers):
@@ -4784,21 +4752,12 @@ def run_multi_seed_robustness(
             meta["submitted_at"] = time.perf_counter()
             future = training_executor.submit(_train_one_unit, meta)
             training_futures[future] = meta
-            pit_progress = _pit_saved_fold_progress(meta)
-            if pit_progress is None:
-                action_tag = "[TRAIN]"
-            else:
-                saved_folds, expected_folds = pit_progress
-                if saved_folds >= expected_folds:
-                    action_tag = "[PIT VERIFY/RECOVER]"
-                elif saved_folds > 0:
-                    action_tag = "[TRAIN RESUME]"
-                else:
-                    action_tag = "[TRAIN]"
-            meta["display_action_tag"] = action_tag
+            # Fold state is owned by the canonical trainer log and parsed by
+            # core.training_progress for both single- and multi-seed callers.
+            meta["display_action_tag"] = "[TRAIN]"
         if training_futures:
             write_progress_manifest()
-            render_seed_training_progress(time.perf_counter())
+            render_training_progress(time.perf_counter())
 
     next_print = time.perf_counter() + float(cfg.progress_interval_seconds)
     try:
@@ -4811,7 +4770,7 @@ def run_multi_seed_robustness(
             now = time.perf_counter()
             if now >= next_print and (training_futures or replay_futures or ready_replays):
                 if training_futures:
-                    render_seed_training_progress(now)
+                    render_training_progress(now)
                 else:
                     progress_update(
                         paint("[REPLAY PROGRESS]", "cyan", enabled=color_enabled, bold=True)

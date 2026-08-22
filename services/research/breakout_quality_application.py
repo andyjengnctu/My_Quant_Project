@@ -47,7 +47,11 @@ from config.breakout_quality import (
 )
 from core.display_common import FixedProgressBlock, render_elapsed
 from core.file_integrity import load_json_object_or_none
-from core.training_progress import read_trainer_epoch_progress, render_training_unit_progress
+from core.training_progress import (
+    read_trainer_epoch_progress,
+    read_trainer_pit_progress,
+    render_training_unit_progress,
+)
 from core.strategy_comparison import validate_strategy_compare_gpu_train_workers
 from core.training_scheduler import pop_next_seed_diverse_unit
 from core.report_style import (
@@ -2820,6 +2824,7 @@ def _prepare_strategy_compare_model_artifacts(
                     source_index=int(job["source_index"]),
                     source_count=int(job["source_count"]),
                     elapsed_seconds=now - float(job["submitted_at"]),
+                    pit_progress=read_trainer_pit_progress(Path(str(job["log_path"]))),
                     epoch_progress=read_trainer_epoch_progress(Path(str(job["log_path"]))),
                 )
                 lines.append(
