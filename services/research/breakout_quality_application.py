@@ -45,9 +45,9 @@ from config.breakout_quality import (
     get_breakout_quality_rolling_timing_settings,
     get_breakout_quality_workflow_settings,
 )
-from core.display_common import InlineProgress, render_elapsed
+from core.display_common import FixedProgressBlock, render_elapsed
 from core.file_integrity import load_json_object_or_none
-from core.training_progress import read_trainer_epoch_progress
+from core.training_progress import read_trainer_epoch_progress, render_training_unit_progress
 from core.strategy_comparison import validate_strategy_compare_gpu_train_workers
 from core.training_scheduler import pop_next_seed_diverse_unit
 from core.report_style import (
@@ -2747,7 +2747,7 @@ def _prepare_strategy_compare_model_artifacts(
         active_processes_lock = Lock()
         executor = ThreadPoolExecutor(max_workers=worker_count)
         futures: dict[Future, dict[str, object]] = {}
-        progress = InlineProgress()
+        progress = FixedProgressBlock()
         started_total = time.perf_counter()
         progress_interval = max(1.0, float(STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS))
         next_progress = started_total + progress_interval
@@ -2763,14 +2763,30 @@ def _prepare_strategy_compare_model_artifacts(
                     active_processes_lock=active_processes_lock,
                 )
                 futures[future] = job
-                progress.print_line(
-                    paint("[TRAIN]", "cyan", enabled=color_enabled, bold=True)
-                    + f" seed={job['seed']} | {job['dl_id']}"
-                    + f" | GPU running={len(futures)}/{worker_count}"
+
+        def render_training_progress(now: float) -> None:
+            active_jobs = sorted(
+                futures.values(), key=lambda item: int(item["source_index"])
+            )
+            lines = []
+            for worker_index, job in enumerate(active_jobs, start=1):
+                unit_text = render_training_unit_progress(
+                    unit_id=str(job["dl_id"]),
+                    source_index=int(job["source_index"]),
+                    source_count=int(job["source_count"]),
+                    elapsed_seconds=now - float(job["submitted_at"]),
+                    epoch_progress=read_trainer_epoch_progress(Path(str(job["log_path"]))),
                 )
+                lines.append(
+                    paint("[TRAIN]", "cyan", enabled=color_enabled, bold=True)
+                    + f" worker {worker_index}/{worker_count} | seed {int(job['seed'])} | "
+                    + unit_text
+                )
+            progress.update(lines)
 
         try:
             submit_jobs()
+            render_training_progress(time.perf_counter())
             while jobs or futures:
                 finished = [future for future in futures if future.done()]
                 for future in finished:
@@ -2794,28 +2810,8 @@ def _prepare_strategy_compare_model_artifacts(
                     )
                 submit_jobs()
                 now = time.perf_counter()
-                if futures and now >= next_progress:
-                    parts = []
-                    for job in sorted(
-                        futures.values(), key=lambda item: int(item["source_index"])
-                    ):
-                        epoch = read_trainer_epoch_progress(Path(str(job["log_path"])))
-                        epoch_text = "epoch pending"
-                        if epoch is not None:
-                            phase, current_epoch, total_epochs = epoch
-                            epoch_text = (
-                                f"epoch {phase} {current_epoch}/{total_epochs}"
-                                if total_epochs > 0
-                                else f"epoch {phase} -"
-                            )
-                        parts.append(
-                            f"{job['dl_id']} {render_elapsed(now-float(job['submitted_at']))} {epoch_text}"
-                        )
-                    progress.update(
-                        paint("[TRAIN PROGRESS]", "cyan", enabled=color_enabled, bold=True)
-                        + f" GPU={len(futures)}/{worker_count} | "
-                        + " ; ".join(parts)
-                    )
+                if futures and (finished or now >= next_progress):
+                    render_training_progress(now)
                     next_progress = now + progress_interval
                 if jobs or futures:
                     time.sleep(0.25)

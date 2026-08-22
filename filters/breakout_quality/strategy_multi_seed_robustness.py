@@ -23,7 +23,6 @@ import random
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 from threading import Lock
 import time
@@ -69,7 +68,7 @@ from core.file_integrity import (
     canonical_json_sha256,
     load_json_object_or_none,
 )
-from core.training_progress import read_trainer_epoch_progress
+from core.training_progress import read_trainer_epoch_progress, render_training_unit_progress
 from core.training_scheduler import pop_next_seed_diverse_unit
 from core.console_report import (
     console_color_enabled,
@@ -79,7 +78,7 @@ from core.console_report import (
     render_table,
     render_title,
 )
-from core.display_common import InlineProgress
+from core.display_common import FixedProgressBlock, InlineProgress
 from core.report_metrics import (
     CORE_STRATEGY_RESULT_METRICS,
     EXECUTION_STRATEGY_RESULT_METRICS,
@@ -2787,53 +2786,6 @@ def _pit_saved_fold_progress(meta: dict[str, Any]) -> tuple[int, int] | None:
     return min(saved, expected), expected
 
 
-class _FixedProgressBlock:
-    """Redraw a bounded set of TTY lines in place; redirected output stays quiet."""
-
-    def __init__(self, stream=None):
-        self.stream = stream if stream is not None else sys.stdout
-        self.inline = bool(getattr(self.stream, "isatty", lambda: False)())
-        self._line_count = 0
-        self._active = False
-
-    def _rewind_to_first_line(self) -> None:
-        if self._active and self._line_count > 1:
-            self.stream.write(f"\r\x1b[{self._line_count - 1}A")
-        elif self._active:
-            self.stream.write("\r")
-
-    def update(self, lines: list[str]) -> None:
-        values = [str(line).replace("\r", " ").replace("\n", " ") for line in lines]
-        if not values or not self.inline:
-            return
-        if self._active and len(values) != self._line_count:
-            self.clear()
-        if self._active:
-            self._rewind_to_first_line()
-        for index, value in enumerate(values):
-            self.stream.write("\r\x1b[2K" + value)
-            if index < len(values) - 1:
-                self.stream.write("\n")
-        self.stream.flush()
-        self._line_count = len(values)
-        self._active = True
-
-    def clear(self) -> None:
-        if not self.inline or not self._active:
-            return
-        self._rewind_to_first_line()
-        for index in range(self._line_count):
-            self.stream.write("\r\x1b[2K")
-            if index < self._line_count - 1:
-                self.stream.write("\n")
-        if self._line_count > 1:
-            self.stream.write(f"\r\x1b[{self._line_count - 1}A")
-        else:
-            self.stream.write("\r")
-        self.stream.flush()
-        self._line_count = 0
-        self._active = False
-
 
 def _pop_next_training_unit(
     pending_trainings: deque[dict[str, Any]],
@@ -4647,7 +4599,7 @@ def run_multi_seed_robustness(
         )
     color_enabled = console_color_enabled()
     progress = InlineProgress()
-    training_progress = _FixedProgressBlock()
+    training_progress = FixedProgressBlock()
     min_ref_arm = str(dict(dict(contract.get("romd_reference_baselines") or {}).get("min") or {}).get("arm_id") or "")
 
     def print_event(text: str) -> None:
@@ -5021,30 +4973,16 @@ def run_multi_seed_robustness(
             parts: list[str] = []
             for meta in metas:
                 pit_progress = _pit_saved_fold_progress(meta)
-                if pit_progress is None:
-                    fold_text = ""
-                else:
-                    saved, expected = pit_progress
-                    fold_text = f" | PIT {saved}/{expected} | remain {max(0, expected - saved)}"
                 epoch_progress = _trainer_epoch_progress(meta)
-                if pit_progress is None:
-                    active_fold_text = ""
-                else:
-                    saved, expected = pit_progress
-                    active_fold_text = (
-                        "" if saved >= expected else f" | active fold {saved + 1}/{expected}"
-                    )
-                if epoch_progress is None:
-                    epoch_text = active_fold_text + (" | epoch pending" if active_fold_text else "")
-                else:
-                    phase, epoch, epoch_count = epoch_progress
-                    epoch_label = f"epoch {phase} {epoch}/{epoch_count}" if epoch_count > 0 else f"epoch {phase} -"
-                    epoch_text = active_fold_text + f" | {epoch_label}"
                 parts.append(
-                    f"{meta['dl_id']} {meta['source_order']}/{meta['source_count']}"
-                    f" | {_format_elapsed(now - float(meta['submitted_at']))}"
-                    + fold_text
-                    + epoch_text
+                    render_training_unit_progress(
+                        unit_id=str(meta["dl_id"]),
+                        source_index=int(meta["source_order"]),
+                        source_count=int(meta["source_count"]),
+                        elapsed_seconds=now - float(meta["submitted_at"]),
+                        pit_progress=pit_progress,
+                        epoch_progress=epoch_progress,
+                    )
                 )
             action = str(metas[0].get("display_action_tag") or "[TRAIN]")
             lines.append(

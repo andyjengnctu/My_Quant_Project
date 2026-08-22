@@ -1331,6 +1331,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     strategy_training_source = (
         project_root / "services/research/strategy_compare_training.py"
     ).read_text(encoding="utf-8")
+    strategy_app_service_source = (
+        project_root / "services/research/breakout_quality_application.py"
+    ).read_text(encoding="utf-8")
     strategy_reuse_source = (
         project_root / "filters/breakout_quality/strategy_compare_reuse.py"
     ).read_text(encoding="utf-8")
@@ -2191,8 +2194,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     )
 
     check_true(
-        "multi_seed_long_training_progress_is_seed_fixed_and_surfaces_live_epoch",
-        "class _FixedProgressBlock" in multi_seed_source
+        "strategy_compare_training_progress_uses_shared_multiline_board_and_live_epoch_ssot",
+        "FixedProgressBlock" in multi_seed_source
+        and "render_training_unit_progress" in multi_seed_source
         and "def _trainer_epoch_progress(" in multi_seed_source
         and "read_trainer_epoch_progress" in multi_seed_source
         and 'COMPACT_CONSOLE_ENV: "0"' in strategy_training_source
@@ -2204,9 +2208,11 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "__BQ_EPOCH_PROGRESS__" in continuous_ranker_source
         and "_emit_epoch_progress_marker(\"select\"" in continuous_ranker_source
         and "_emit_epoch_progress_marker(\"refit\"" in continuous_ranker_source
-        and "active fold" in multi_seed_source
-        and "epoch pending" in multi_seed_source
-        and "epoch {phase}" in multi_seed_source,
+        and "active fold" in training_progress_source
+        and "epoch pending" in training_progress_source
+        and "epoch {phase}" in training_progress_source
+        and "FixedProgressBlock" in strategy_app_service_source
+        and "render_training_unit_progress(" in strategy_app_service_source,
     )
 
     check_true(

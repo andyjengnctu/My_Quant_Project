@@ -113,6 +113,64 @@ class InlineProgress:
         self._active = False
 
 
+class FixedProgressBlock:
+    """Redraw a bounded set of TTY lines in place; redirected output stays quiet."""
+
+    def __init__(self, stream=None):
+        self.stream = stream if stream is not None else sys.stdout
+        self.inline = bool(getattr(self.stream, "isatty", lambda: False)())
+        self._line_count = 0
+        self._active = False
+
+    def _rewind_to_first_line(self):
+        if self._active and self._line_count > 1:
+            self.stream.write(f"\r\x1b[{self._line_count - 1}A")
+        elif self._active:
+            self.stream.write("\r")
+
+    def update(self, lines):
+        values = [str(line).replace("\r", " ").replace("\n", " ") for line in lines]
+        if not values or not self.inline:
+            return
+        if self._active and len(values) != self._line_count:
+            self.clear()
+        if self._active:
+            self._rewind_to_first_line()
+        for index, value in enumerate(values):
+            self.stream.write("\r\x1b[2K" + value)
+            if index < len(values) - 1:
+                self.stream.write("\n")
+        self.stream.flush()
+        self._line_count = len(values)
+        self._active = True
+
+    def clear(self):
+        if not self.inline or not self._active:
+            return
+        self._rewind_to_first_line()
+        for index in range(self._line_count):
+            self.stream.write("\r\x1b[2K")
+            if index < self._line_count - 1:
+                self.stream.write("\n")
+        if self._line_count > 1:
+            self.stream.write(f"\r\x1b[{self._line_count - 1}A")
+        else:
+            self.stream.write("\r")
+        self.stream.flush()
+        self._line_count = 0
+        self._active = False
+
+    def print_line(self, text):
+        self.clear()
+        print(str(text), file=self.stream, flush=True)
+
+    def finish(self):
+        if self.inline and self._active:
+            self.stream.write("\n")
+            self.stream.flush()
+        self._line_count = 0
+        self._active = False
+
 def _terminal_content_width():
     return max(1, int(shutil.get_terminal_size(fallback=(100, 24)).columns) - 1)
 

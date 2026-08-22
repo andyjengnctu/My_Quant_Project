@@ -34,6 +34,8 @@ from .synthetic_breakout_quality_support import (
 )
 
 from .source_index import read_source_ast, read_source_text
+from core.display_common import FixedProgressBlock
+from core.training_progress import render_training_unit_progress
 
 def validate_breakout_quality_single_seed_single_entry_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_SINGLE_SEED_SINGLE_ENTRY"
@@ -533,7 +535,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             return None
 
     tty_buffer = _TtyBuffer()
-    fixed_progress = robustness_runtime._FixedProgressBlock(stream=tty_buffer)
+    fixed_progress = FixedProgressBlock(stream=tty_buffer)
     fixed_progress.update(["seed-1 first", "seed-2 first"])
     first_render_len = len(tty_buffer.parts)
     fixed_progress.update(["seed-1 next", "seed-2 next"])
@@ -544,6 +546,24 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "\x1b[1A" in second_render
         and "seed-1 next" in second_render
         and "seed-2 next" in second_render,
+    )
+
+    shared_unit_progress = render_training_unit_progress(
+        unit_id="SOURCE_A",
+        source_index=1,
+        source_count=3,
+        elapsed_seconds=60.1,
+        pit_progress=(2, 6),
+        epoch_progress=("select", 1, 200),
+    )
+    check_true(
+        "strategy_compare_training_unit_progress_has_one_shared_canonical_format",
+        "SOURCE_A 1/3" in shared_unit_progress
+        and "01:00.1" in shared_unit_progress
+        and "PIT 2/6" in shared_unit_progress
+        and "remain 4" in shared_unit_progress
+        and "active fold 3/6" in shared_unit_progress
+        and "epoch select 1/200" in shared_unit_progress,
     )
 
     with tempfile.TemporaryDirectory(prefix="robustness_atomic_retry_") as temp_dir:
