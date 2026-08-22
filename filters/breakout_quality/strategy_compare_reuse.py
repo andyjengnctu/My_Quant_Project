@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.file_integrity import load_json_object_or_none as _read_json
+
 import hashlib
 import json
 from pathlib import Path
@@ -43,7 +45,6 @@ from filters.breakout_quality.strategy_compare_runtime import (
 from filters.breakout_quality.strategy_compare_sources import (
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
-    read_json_object_or_none as _read_json,
     resolve_project_relative_path as _resolve_relative_path,
 )
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES

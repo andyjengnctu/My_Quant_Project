@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.file_integrity import load_json_object_or_none as _read_json
+
 import json
 import math
 from pathlib import Path
@@ -66,7 +68,6 @@ from filters.breakout_quality.strategy_compare_contracts import (
     STRATEGY_COMPARE_SCHEMA_VERSION as STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
 )
 from filters.breakout_quality.strategy_compare_sources import (
-    read_json_object_or_none as _read_json,
     resolve_project_relative_path as _resolve_relative_path,
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,

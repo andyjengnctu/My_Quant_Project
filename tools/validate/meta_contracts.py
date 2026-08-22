@@ -55,12 +55,12 @@ CRITICAL_HELPER_SINGLE_SOURCE_SPECS: Dict[str, Tuple[str, ...]] = {
     "core/file_integrity.py": (
         "canonical_json_sha256",
         "compute_file_sha256",
+        "load_json_object_or_none",
     ),
     "filters/breakout_quality/continuous_ranker_data.py": (
         "source_data_end",
     ),
     "filters/breakout_quality/strategy_compare_sources.py": (
-        "read_json_object_or_none",
         "resolve_project_relative_path",
     ),
     "services/breakout_quality/continuous_ranker_pipeline.py": (

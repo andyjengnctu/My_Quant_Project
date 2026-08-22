@@ -9,6 +9,8 @@ parameter set is replayed once with the binary filter off (A) and once on (B).
 
 from __future__ import annotations
 
+from core.file_integrity import load_json_object_or_none as _load_json
+
 import argparse
 import copy
 import hashlib
@@ -90,7 +92,6 @@ from filters.breakout_quality.strategy_optimizer_policy import (
 )
 from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_HARD_FILTER
 from filters.breakout_quality.strategy_compare_sources import (
-    read_json_object_or_none as _load_json,
     OPTIONAL_ENTRY_FILTER_FIELDS,
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
