@@ -2151,8 +2151,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "[ROBUSTNESS REUSE]" in multi_seed_source
         and "_load_local_fixed_baseline_if_compatible(" in multi_seed_source
         and "inspect_robustness_benchmark_strategy_parameter_artifact(" in multi_seed_source
-        and "multi-seed score起始覆蓋不足" in multi_seed_source
-        and "multi-seed score結束覆蓋不足" in multi_seed_source
+        and "Strategy Compare continuous score起始覆蓋不足" in strategy_training_source
+        and "Strategy Compare continuous score結束覆蓋不足" in strategy_training_source
         and "param_evaluation_mode=param_evaluation_mode" in multi_seed_source
         and "_strategy_only_baseline_context_available(" in multi_seed_source
         and '"param_evaluation_mode": str(' in strategy_reuse_source

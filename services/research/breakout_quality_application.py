@@ -63,12 +63,9 @@ from core.runtime_utils import (
     run_cli_entrypoint,
 )
 from services.research.strategy_compare_training import (
-    STRATEGY_COMPARE_TRAINER_ENV,
-    STRATEGY_COMPARE_TRAINER_LOG_TAIL_CHARS,
-    build_strategy_compare_trainer_command,
+    run_strategy_compare_training_unit,
 )
 from services.research.training_process import (
-    run_logged_training_process,
     terminate_registered_training_processes,
 )
 from filters.breakout_quality.artifact_dependency_registry import (
@@ -2564,46 +2561,48 @@ def prepare_strategy_compare_artifacts(
     raise ValueError(f"不支援的Strategy Compare artifact scope: {scope!r}")
 
 
-def _strategy_compare_model_build_command(
-    *,
-    source,
-    workflow,
-    pit_dir_override: Path | None,
-) -> tuple[list[str], list[str], dict[str, object]]:
-    """Delegate canonical Strategy Compare trainer CLI construction to the shared SSOT."""
-
-    from config.strategy_compare import STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT
-
-    return build_strategy_compare_trainer_command(
-        source=source,
-        workflow=workflow,
-        seed=int(workflow.seed),
-        point_in_time_dir_override=pit_dir_override,
-        checkpoint_cache_root=(
-            PROJECT_ROOT / STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT
-        ),
-        resume=True,
-    )
-
-
 def _run_strategy_compare_model_build_subprocess(
     job: dict[str, object],
     *,
     active_processes: dict[str, subprocess.Popen],
     active_processes_lock: Lock,
 ) -> dict[str, object]:
-    result = run_logged_training_process(
-        command=list(job["command"]),
+    """Run one single-seed unit through the shared Strategy Compare lifecycle."""
+
+    return run_strategy_compare_training_unit(
+        project_root=PROJECT_ROOT,
+        source=job["source"],
+        workflow=job["workflow"],
+        seed=int(job["seed"]),
+        model_dir=Path(str(job["model_dir"])),
+        research_dir=Path(str(job["research_dir"])),
         log_path=Path(str(job["log_path"])),
-        cwd=PROJECT_ROOT,
+        comparison_start=(
+            None if job.get("comparison_start") in (None, "")
+            else str(job["comparison_start"])
+        ),
+        comparison_end=(
+            None if job.get("comparison_end") in (None, "")
+            else str(job["comparison_end"])
+        ),
+        point_in_time_dir_override=job.get("pit_dir_override"),
+        checkpoint_cache_root=job.get("checkpoint_cache_root"),
+        model_output_dir=(
+            job.get("model_dir")
+            if str(job["source"].score_source) == SCORE_SOURCE_CONTINUOUS_RANKER_OOS
+            else None
+        ),
+        research_output_dir=(
+            job.get("research_dir")
+            if str(job["source"].score_source) == SCORE_SOURCE_CONTINUOUS_RANKER_OOS
+            else None
+        ),
         registry=active_processes,
         registry_lock=active_processes_lock,
         registry_key=str(job["dl_id"]),
-        env_overrides=STRATEGY_COMPARE_TRAINER_ENV,
         failure_prefix=f"Strategy Compare canonical模型訓練失敗: dl_id={job['dl_id']}",
-        log_tail_chars=STRATEGY_COMPARE_TRAINER_LOG_TAIL_CHARS,
+        resume=True,
     )
-    return result
 
 
 def _prepare_strategy_compare_model_artifacts(
@@ -2673,7 +2672,6 @@ def _prepare_strategy_compare_model_artifacts(
         )
 
     jobs: deque[dict[str, object]] = deque()
-    audit_jobs: list[dict[str, object]] = []
     legacy_reuse: list[str] = []
     with tempfile.TemporaryDirectory(prefix="strategy_compare_model_training_") as temp_dir:
         log_root = Path(temp_dir)
@@ -2715,11 +2713,32 @@ def _prepare_strategy_compare_model_artifacts(
                     )
                     / str(source.point_in_time_dirname)
                 )
-            command, report_args, metadata = _strategy_compare_model_build_command(
-                source=source,
-                workflow=workflow,
-                pit_dir_override=pit_dir_override,
-            )
+            if str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+                model_dir = (
+                    pit_dir_override
+                    if pit_dir_override is not None
+                    else resolve_selection_point_in_time_score_path(
+                        PROJECT_ROOT,
+                        str(source.filter_id),
+                        str(source.model_architecture),
+                        str(source.experiment_profile),
+                    ).parent
+                )
+                research_dir = model_dir
+            else:
+                model_paths = resolve_filter_artifact_paths(
+                    PROJECT_ROOT,
+                    str(source.filter_id),
+                    str(source.model_architecture),
+                    str(source.experiment_profile),
+                )
+                model_dir = model_paths.model_dir
+                research_dir = resolve_filter_model_output_dir(
+                    PROJECT_ROOT,
+                    str(source.filter_id),
+                    str(source.model_architecture),
+                    str(source.experiment_profile),
+                )
             job = {
                 "seed": int(workflow.seed),
                 "source_index": int(source_index),
@@ -2728,14 +2747,18 @@ def _prepare_strategy_compare_model_artifacts(
                 "source": source,
                 "workflow": workflow,
                 "pit_dir_override": pit_dir_override,
-                "command": command,
-                "report_args": report_args,
-                "metadata": metadata,
+                "model_dir": model_dir,
+                "research_dir": research_dir,
+                "checkpoint_cache_root": (
+                    PROJECT_ROOT / STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT
+                ),
+                # Canonical single-seed source owns its PIT score period; robustness
+                # supplies explicit seed-scoped periods in its isolated namespace.
+                "comparison_start": None,
+                "comparison_end": None,
                 "log_path": log_root / f"{source_index:02d}_{dl_id}.log",
             }
             jobs.append(job)
-            if str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-                audit_jobs.append(job)
 
         for dl_id in legacy_reuse:
             print(
@@ -2794,15 +2817,33 @@ def _prepare_strategy_compare_model_artifacts(
                     result = future.result()
                     # Refill the freed GPU slot before rendering the completed unit report.
                     submit_jobs()
-                    _emit_breakout_quality_simple_report(
-                        "build-point-in-time-scores"
-                        if str(job["metadata"].get("score_source"))
+                    is_pit = (
+                        str(job["source"].score_source)
                         == SCORE_SOURCE_SELECTION_POINT_IN_TIME
-                        else "train-continuous-ranker",
-                        list(job["report_args"]),
+                    )
+                    _emit_breakout_quality_simple_report(
+                        "build-point-in-time-scores" if is_pit else "train-continuous-ranker",
+                        list(result["report_args"]),
                         returncode=0,
                         elapsed_sec=float(result["elapsed_sec"]),
                     )
+                    if is_pit:
+                        audit_args = [
+                            "--filter-id", str(job["source"].filter_id),
+                            "--model-architecture", str(job["source"].model_architecture),
+                            "--experiment-profile", str(job["source"].experiment_profile),
+                        ]
+                        if job.get("pit_dir_override") is not None:
+                            audit_args.extend([
+                                "--point-in-time-dir-override",
+                                str(job["pit_dir_override"]),
+                            ])
+                        _emit_breakout_quality_simple_report(
+                            "audit-point-in-time-scores",
+                            audit_args,
+                            returncode=0,
+                            elapsed_sec=float(result.get("audit_elapsed_sec", 0.0) or 0.0),
+                        )
                     progress.print_line(
                         styled_workflow_status("[TRAIN DONE]")
                         + f" seed={job['seed']} | {job['dl_id']}"
@@ -2825,37 +2866,6 @@ def _prepare_strategy_compare_model_artifacts(
         finally:
             executor.shutdown(wait=True, cancel_futures=True)
 
-        from services.breakout_quality.point_in_time_audit import (
-            audit_selection_point_in_time_scores,
-        )
-
-        for job in audit_jobs:
-            source = job["source"]
-            pit_dir_override = job["pit_dir_override"]
-            audit_args = [
-                "--filter-id", str(source.filter_id),
-                "--model-architecture", str(source.model_architecture),
-                "--experiment-profile", str(source.experiment_profile),
-            ]
-            if pit_dir_override is not None:
-                audit_args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
-            stage_started = time.perf_counter()
-            code = audit_selection_point_in_time_scores(
-                filter_id=str(source.filter_id),
-                model_architecture=str(source.model_architecture),
-                experiment_profile=str(source.experiment_profile),
-                point_in_time_dir_override=(
-                    None if pit_dir_override is None else str(pit_dir_override)
-                ),
-            )
-            if code != 0:
-                return int(code)
-            _emit_breakout_quality_simple_report(
-                "audit-point-in-time-scores",
-                audit_args,
-                returncode=0,
-                elapsed_sec=time.perf_counter() - stage_started,
-            )
 
     print(styled_workflow_status("[READY]") + " 策略比較所需模型工件已就緒")
     return 0

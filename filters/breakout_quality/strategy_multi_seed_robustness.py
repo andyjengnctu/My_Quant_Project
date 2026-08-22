@@ -111,31 +111,26 @@ from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_SCORE_FILENAME,
 )
 from filters.breakout_quality.ranking_score_store import (
-    CONTINUOUS_RANKER_REPORT_FILENAME,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
-    DAILY_RANKER_OOS_SCORE_FILENAME,
-    CONTINUOUS_RANKER_SCORE_FILENAME,
-    load_continuous_ranker_oos_score_table_from_path,
-    load_selection_point_in_time_score_table_from_path,
 )
 from filters.breakout_quality.strategy_compare_sources import (
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
 )
-from filters.breakout_quality.strategy_compare_engine import run_comparison
 from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_SCORE_RANKING
 from filters.breakout_quality.strategy_compare_replay import (
     _load_reusable_no_filter_baseline,
-    run_standalone_baseline,
+)
+from filters.breakout_quality.strategy_compare_execution import (
+    run_strategy_compare_active_arm,
+    run_strategy_compare_baseline_arm,
 )
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
 from services.research.strategy_compare_training import (
-    STRATEGY_COMPARE_TRAINER_ENV,
-    STRATEGY_COMPARE_TRAINER_LOG_TAIL_CHARS,
-    build_strategy_compare_trainer_command,
+    run_strategy_compare_training_unit,
+    validate_strategy_compare_training_artifacts,
 )
 from services.research.training_process import (
-    run_logged_training_process,
     terminate_registered_training_processes,
 )
 from services.optimizer.strategy_param_service import (
@@ -155,14 +150,13 @@ from core.report_style import (
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from filters.breakout_quality.strategy_comparison import (
-    _arm_runtime_spec,
-    _resolved_ranking_options,
     _find_reusable_baseline_source,
     _load_direct_selection_r,
     collect_artifact_status,
     render_strategy_aggregate_report,
     render_strategy_execution_plan_surface,
 )
+from filters.breakout_quality.strategy_compare_runtime import _arm_runtime_spec
 from filters.breakout_quality.strategy_compare_reporting import capacity_summary
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 from filters.breakout_quality.strategy_compare_preparation_status import (
@@ -910,23 +904,16 @@ def _run_strategy_only_benchmark_unit(
 ) -> dict[str, Any]:
     if output_dir.exists():
         shutil.rmtree(output_dir)
-    all_off = arm.rule_policy == "all_off"
     started = time.perf_counter()
-    payload = run_standalone_baseline(
+    payload = run_strategy_compare_baseline_arm(
+        settings=settings,
+        arm=arm,
         project_root=PROJECT_ROOT,
-        dataset=settings.dataset,
         params_path=str(params_path),
-        param_policy=resolve_strategy_comparison_arm_param_policy(settings, arm),
-        max_positions=settings.max_positions,
-        enable_rotation=settings.rotation == "on",
-        optional_entry_filter_policy=(
-            OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF if all_off else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
-        ),
-        output_dir_override=output_dir,
-        comparison_start_date=str(comparison_start),
-        comparison_end_date=str(comparison_end),
+        output_dir=output_dir,
+        comparison_start=str(comparison_start),
+        comparison_end=str(comparison_end),
         quiet=True,
-        shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None),
         param_evaluation_mode=str(param_evaluation_mode),
     )
     metrics = dict(payload.get("no_filter") or {})
@@ -2412,181 +2399,10 @@ def _resolved_period(settings, status: dict[str, Any]) -> tuple[str, str]:
     return start, end
 
 
-def _validate_training_artifacts(
-    *, arm: StrategyComparisonArm, dl_id: str, seed: int, model_dir: Path, research_dir: Path, settings,
-    comparison_start: str, comparison_end: str,
-) -> dict[str, Any]:
-    dl = settings.dl_sources[str(dl_id)]
-    if str(dl.score_source) == "selection_point_in_time":
-        score = model_dir / SELECTION_POINT_IN_TIME_SCORE_FILENAME
-        manifest_path = model_dir / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
-        for label, path in (("PIT score", score), ("PIT manifest", manifest_path)):
-            if not path.is_file():
-                raise FileNotFoundError(f"multi-seed {label}工件不存在: {path}")
-        manifest = _read_json(manifest_path)
-        for field, expected in (
-            ("filter_id", dl.filter_id),
-            ("experiment_profile", dl.experiment_profile),
-            ("model_architecture", dl.model_architecture),
-        ):
-            if str(manifest.get(field) or "") != str(expected):
-                raise ValueError(f"multi-seed PIT manifest {field}不一致")
-        if int(manifest.get("seed", -1)) != int(seed):
-            raise ValueError("multi-seed PIT manifest seed不一致")
-        expected_fold_months = _source_point_in_time_fold_months(
-            settings=settings, dl_id=str(dl_id)
-        )
-        if int(manifest.get("fold_months", -1) or -1) != int(expected_fold_months):
-            raise ValueError(
-                "multi-seed PIT manifest fold_months不一致: "
-                f"expected={expected_fold_months}, actual={manifest.get('fold_months')}"
-            )
-        expected_single_block = _source_point_in_time_single_score_block(
-            settings=settings, dl_id=str(dl_id)
-        )
-        if bool(manifest.get("single_score_block", False)) != bool(expected_single_block):
-            raise ValueError(
-                "multi-seed PIT manifest single_score_block不一致: "
-                f"expected={expected_single_block}, actual={manifest.get('single_score_block')}"
-            )
-        expected_anchor = _source_point_in_time_fold_anchor_date(
-            settings=settings, dl_id=str(dl_id)
-        )
-        actual_anchor = str(manifest.get("fold_anchor_date") or "").strip() or None
-        if expected_anchor is not None and actual_anchor != expected_anchor:
-            raise ValueError(
-                "multi-seed PIT manifest fold_anchor_date不一致: "
-                f"expected={expected_anchor}, actual={actual_anchor}"
-            )
-        period = dict(manifest.get("score_period") or {})
-        actual_start = pd.Timestamp(period.get("start")).strftime("%Y-%m-%d")
-        actual_end = pd.Timestamp(period.get("end")).strftime("%Y-%m-%d")
-        if actual_start != pd.Timestamp(comparison_start).strftime("%Y-%m-%d") or actual_end != pd.Timestamp(comparison_end).strftime("%Y-%m-%d"):
-            raise ValueError(
-                "multi-seed PIT只允許策略比較期間所需fold: "
-                f"expected={comparison_start}~{comparison_end}, actual={actual_start}~{actual_end}"
-            )
-        table = load_selection_point_in_time_score_table_from_path(
-            str(score), manifest_path=str(manifest_path)
-        )
-        folds = list(manifest.get("folds") or [])
-        if not folds:
-            raise ValueError("multi-seed PIT manifest沒有folds")
-        epochs = [int(dict(item).get("selected_epoch", 0) or 0) for item in folds]
-        if any(epoch < 1 for epoch in epochs):
-            raise ValueError("multi-seed PIT fold selected_epoch不合法")
-        return {
-            "score": str(score.resolve()),
-            "manifest": str(manifest_path.resolve()),
-            "score_sha256": compute_file_sha256(score),
-            "selected_epoch": int(round(float(np.median(epochs)))),
-            "training_elapsed_sec": float(manifest.get("elapsed_sec", 0.0) or 0.0),
-            "score_execution_start": str(table.attrs.get("available_from") or actual_start),
-            "score_available_from": str(table.attrs.get("available_from") or actual_start),
-            "score_available_through": str(table.attrs.get("available_through") or actual_end),
-            "fold_count": int(manifest.get("fold_count", len(folds)) or len(folds)),
-            "fold_reuse_summary": {
-                str(key): int(value or 0)
-                for key, value in dict(manifest.get("fold_reuse_summary") or {}).items()
-            },
-        }
-
-    profile = get_breakout_quality_experiment_profile(dl.experiment_profile)
-    score_name = (
-        DAILY_RANKER_OOS_SCORE_FILENAME
-        if str(profile.training_sample_scope) == "daily_eligible_stock_days"
-        else CONTINUOUS_RANKER_SCORE_FILENAME
-    )
-    paths = {
-        "model": model_dir / "model.pt", "manifest": model_dir / "manifest.json",
-        "report": research_dir / CONTINUOUS_RANKER_REPORT_FILENAME, "score": research_dir / score_name,
-    }
-    for label, path in paths.items():
-        if not path.is_file():
-            raise FileNotFoundError(f"multi-seed {label}工件不存在: {path}")
-    manifest = _read_json(paths["manifest"]); report = _read_json(paths["report"])
-    for payload, label in ((manifest, "manifest"), (report, "report")):
-        if str(payload.get("filter_id") or "") != dl.filter_id:
-            raise ValueError(f"multi-seed {label} filter_id不一致")
-        if str(payload.get("experiment_profile") or "") != dl.experiment_profile:
-            raise ValueError(f"multi-seed {label} experiment profile不一致")
-        if str(payload.get("model_architecture") or "") != dl.model_architecture:
-            raise ValueError(f"multi-seed {label} architecture不一致")
-    training = dict(report.get("training") or {})
-    if int(training.get("seed", -1)) != int(seed):
-        raise ValueError("multi-seed report seed不一致")
-    outer_policy = dict(manifest.get("outer_oos_policy") or {})
-    execution_start_raw = str(outer_policy.get("oos_start_date") or "").strip()
-    if not execution_start_raw:
-        raise ValueError("multi-seed manifest缺少outer_oos_policy.oos_start_date")
-    execution_start = pd.Timestamp(execution_start_raw).strftime("%Y-%m-%d")
-    score_table = load_continuous_ranker_oos_score_table_from_path(str(paths["score"]), dl.experiment_profile)
-    score_available_from = str(score_table.attrs.get("available_from") or "")
-    score_available_through = str(score_table.attrs.get("available_through") or "")
-    if not score_available_from or not score_available_through:
-        raise ValueError("multi-seed score table缺少日期範圍metadata")
-    required_start = pd.Timestamp(comparison_start).strftime("%Y-%m-%d")
-    required_end = pd.Timestamp(comparison_end).strftime("%Y-%m-%d")
-    if execution_start > score_available_from:
-        raise ValueError("multi-seed isolated score時間契約不一致")
-    if pd.Timestamp(score_available_from) > pd.Timestamp(required_start):
-        raise ValueError(
-            "multi-seed score起始覆蓋不足: "
-            f"required<={required_start}, actual={score_available_from}"
-        )
-    if pd.Timestamp(score_available_through) < pd.Timestamp(required_end):
-        raise ValueError(
-            "multi-seed score結束覆蓋不足: "
-            f"required>={required_end}, actual={score_available_through}"
-        )
-    artifact_payload = {
-        **{key: str(path.resolve()) for key, path in paths.items()},
-        "model_sha256": compute_file_sha256(paths["model"]),
-        "score_sha256": compute_file_sha256(paths["score"]),
-        "selected_epoch": int(training.get("selected_epoch", 0) or 0),
-        "training_elapsed_sec": float(report.get("elapsed_sec", 0.0) or 0.0),
-        "score_execution_start": execution_start,
-        "score_available_from": score_available_from,
-        "score_available_through": score_available_through,
-        "fold_count": None,
-    }
-    artifact_payload["model_prediction_metrics"] = _model_prediction_metrics_from_training_artifacts(artifact_payload)
-    return artifact_payload
-
-
-
-PIT_FOLD_MANIFEST_FILENAME = "manifest.json"
-PIT_FOLD_MODEL_FILENAME = "model.pt"
-
-
-def _training_command(
-    *, arm: StrategyComparisonArm, dl_id: str, seed: int, model_dir: Path, research_dir: Path, settings,
-    comparison_start: str, comparison_end: str, checkpoint_cache_root: Path | None = None,
-) -> list[str]:
-    """Build the per-seed command through the shared Strategy Compare trainer SSOT."""
-
-    del arm  # Arm semantics affect replay; trainer identity is owned by the DL source + seed.
-    dl = settings.dl_sources[str(dl_id)]
-    workflow = get_breakout_quality_workflow_settings(
-        experiment_profile=str(dl.experiment_profile)
-    )
-    command, _args, _metadata = build_strategy_compare_trainer_command(
-        source=dl,
-        workflow=workflow,
-        seed=int(seed),
-        score_start_date=str(comparison_start),
-        score_end_date=str(comparison_end),
-        point_in_time_dir_override=model_dir,
-        checkpoint_cache_root=checkpoint_cache_root,
-        model_output_dir=model_dir,
-        research_output_dir=research_dir,
-        resume=True,
-    )
-    return command
-
 
 def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
-    arm: StrategyComparisonArm = job["arm"]
+    """Run one robustness seed through the shared single/multi training lifecycle."""
+
     settings = job["settings"]
     seed = int(job["seed"])
     model_dir = Path(job["model_dir"]).resolve()
@@ -2594,7 +2410,10 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     train_log_path = research_dir / "train.log"
     dl_id = str(job["dl_id"])
     dl = settings.dl_sources[dl_id]
-    is_selection_pit = str(dl.score_source) == "selection_point_in_time"
+    workflow = get_breakout_quality_workflow_settings(
+        experiment_profile=str(dl.experiment_profile)
+    )
+    is_selection_pit = str(dl.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME
     checkpoint_cache_root = (
         None
         if job.get("checkpoint_cache_root") in (None, "")
@@ -2607,19 +2426,22 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     )
     if bool(job.get("reuse_completed")) and reusable_artifact_roots_exist:
         try:
-            artifacts = _validate_training_artifacts(
-                arm=arm,
-                dl_id=dl_id,
+            artifacts = validate_strategy_compare_training_artifacts(
+                project_root=PROJECT_ROOT,
+                source=dl,
+                workflow=workflow,
                 seed=seed,
                 model_dir=model_dir,
                 research_dir=research_dir,
-                settings=settings,
                 comparison_start=str(job["comparison_start"]),
                 comparison_end=str(job["comparison_end"]),
             )
         except (FileNotFoundError, ValueError):
             artifacts = None
     if artifacts is not None:
+        artifacts["model_prediction_metrics"] = (
+            _model_prediction_metrics_from_training_artifacts(artifacts)
+        )
         return {
             "artifacts": artifacts,
             "reused": True,
@@ -2627,9 +2449,8 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         }
 
     if is_selection_pit:
-        # PIT builder本身具備fold-level resume；完整seed尚未完成時只清除top-level
-        # aggregate工件，保留已完成fold checkpoint/score，避免中斷後把合法partial
-        # folds全部刪掉而從fold 1重訓。
+        # Isolated benchmark namespace may resume completed PIT folds.  Remove only
+        # top-level aggregate artifacts so the canonical builder can reconstruct them.
         model_dir.mkdir(parents=True, exist_ok=True)
         for filename in (
             SELECTION_POINT_IN_TIME_SCORE_FILENAME,
@@ -2645,41 +2466,32 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         model_dir.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(research_dir, ignore_errors=True)
     research_dir.mkdir(parents=True, exist_ok=True)
-    trainer_registry = job["trainer_registry"]
-    trainer_registry_lock = job["trainer_registry_lock"]
-    trainer_key = str(job["trainer_key"])
-    run_logged_training_process(
-        command=_training_command(
-            arm=arm,
-            dl_id=dl_id,
-            seed=seed,
-            model_dir=model_dir,
-            research_dir=research_dir,
-            settings=settings,
-            comparison_start=str(job["comparison_start"]),
-            comparison_end=str(job["comparison_end"]),
-            checkpoint_cache_root=checkpoint_cache_root,
-        ),
-        log_path=train_log_path,
-        cwd=PROJECT_ROOT,
-        registry=trainer_registry,
-        registry_lock=trainer_registry_lock,
-        registry_key=trainer_key,
-        env_overrides=STRATEGY_COMPARE_TRAINER_ENV,
-        failure_prefix=(
-            f"multi-seed模型訓練失敗: arm={arm.name}, seed_index={job['seed_order']}"
-        ),
-        log_tail_chars=STRATEGY_COMPARE_TRAINER_LOG_TAIL_CHARS,
-    )
-    artifacts = _validate_training_artifacts(
-        arm=arm,
-        dl_id=dl_id,
+
+    trained = run_strategy_compare_training_unit(
+        project_root=PROJECT_ROOT,
+        source=dl,
+        workflow=workflow,
         seed=seed,
         model_dir=model_dir,
         research_dir=research_dir,
-        settings=settings,
+        log_path=train_log_path,
         comparison_start=str(job["comparison_start"]),
         comparison_end=str(job["comparison_end"]),
+        point_in_time_dir_override=(model_dir if is_selection_pit else None),
+        checkpoint_cache_root=checkpoint_cache_root,
+        model_output_dir=(model_dir if not is_selection_pit else None),
+        research_output_dir=(research_dir if not is_selection_pit else None),
+        registry=job["trainer_registry"],
+        registry_lock=job["trainer_registry_lock"],
+        registry_key=str(job["trainer_key"]),
+        failure_prefix=(
+            f"multi-seed模型訓練失敗: dl_id={dl_id}, seed_index={job['seed_order']}"
+        ),
+        resume=True,
+    )
+    artifacts = dict(trained["artifacts"])
+    artifacts["model_prediction_metrics"] = (
+        _model_prediction_metrics_from_training_artifacts(artifacts)
     )
     return {
         "artifacts": artifacts,
@@ -2968,27 +2780,18 @@ def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dic
             continue
         if output_dir.exists():
             shutil.rmtree(output_dir)
-        all_off = arm.rule_policy == "all_off"
         param_evaluation_mode = str(
             settings.parameter_sources[arm.param_source].canonical_evaluation_mode or "rolling"
         )
-        payload = run_standalone_baseline(
+        payload = run_strategy_compare_baseline_arm(
+            settings=settings,
+            arm=arm,
             project_root=PROJECT_ROOT,
-            dataset=settings.dataset,
             params_path=path_text,
-            param_policy=arm_param_policy,
-            max_positions=settings.max_positions,
-            enable_rotation=settings.rotation == "on",
-            optional_entry_filter_policy=(
-                OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
-                if all_off
-                else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
-            ),
-            output_dir_override=output_dir,
-            comparison_start_date=start,
-            comparison_end_date=end,
+            output_dir=output_dir,
+            comparison_start=start,
+            comparison_end=end,
             quiet=True,
-            shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None),
             param_evaluation_mode=param_evaluation_mode,
         )
         results[arm.arm_id] = {
@@ -3014,43 +2817,25 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     pair_dir = Path(str(job["pair_dir"])).resolve()
     baseline_dir = Path(str(job["baseline_dir"])).resolve()
     if pair_dir.exists(): shutil.rmtree(pair_dir)
-    all_off = arm.rule_policy == "all_off"
-    started = time.perf_counter(); runtime_spec = _arm_runtime_spec(arm)
-    is_selection = str(dl.score_source) == "selection_point_in_time"
+    started = time.perf_counter()
+    runtime_spec = _arm_runtime_spec(arm)
     score_overrides = {
         str(key): dict(value or {})
         for key, value in dict(job.get("score_overrides") or {}).items()
     }
-    primary_override = dict(score_overrides.get(str(arm.dl_id)) or {})
-    payload = run_comparison(
-        project_root=PROJECT_ROOT, dataset=settings.dataset, params_path=str(job["params_path"]),
-        param_policy=resolve_strategy_comparison_arm_param_policy(settings, arm), max_positions=settings.max_positions,
-        enable_rotation=settings.rotation == "on", comparison_mode=runtime_spec["comparison_mode"],
-        ranking_policy=runtime_spec["ranking_policy"], ranking_options=_resolved_ranking_options(
-            settings,
-            arm,
-            continuous_score_overrides=score_overrides,
-        ),
-        optional_entry_filter_policy=(OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF if all_off else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT),
-        filter_id=dl.filter_id, score_source=dl.score_source, model_architecture=dl.model_architecture,
-        experiment_profile=dl.experiment_profile, threshold=dl.threshold, output_dir_override=pair_dir,
-        comparison_start_date=start, comparison_end_date=end, quiet=True,
-        shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None),
-        baseline_reuse_dir=baseline_dir,
+    payload = run_strategy_compare_active_arm(
+        settings=settings,
+        arm=arm,
+        project_root=PROJECT_ROOT,
+        params_path=str(job["params_path"]),
+        output_dir=pair_dir,
+        comparison_start=start,
+        comparison_end=end,
         param_evaluation_mode=str(job.get("param_evaluation_mode") or "rolling"),
-        continuous_score_path_override=(
-            None if is_selection else str(primary_override.get("score_path") or job["score_path"])
-        ),
-        continuous_score_execution_start_override=(
-            None if is_selection else str(primary_override.get("execution_start") or job["score_execution_start"])
-        ),
-        selection_pit_score_path_override=(
-            str(primary_override.get("score_path") or job["score_path"]) if is_selection else None
-        ),
-        selection_pit_manifest_path_override=(
-            str(primary_override.get("manifest_path") or job["score_manifest_path"]) if is_selection else None
-        ),
-        selection_pit_expected_seed_override=(int(job["seed"]) if is_selection else None),
+        score_overrides=score_overrides,
+        expected_seed_override=int(job["seed"]),
+        baseline_reuse_dir=baseline_dir,
+        quiet=True,
         capture_execution_diagnostics=bool(job.get("keep_attribution_source")),
         # Multi-seed robustness只需要策略績效、trade-set與compact attribution。
         # Selection future-target join是post-replay離線診斷；daily-universal profile

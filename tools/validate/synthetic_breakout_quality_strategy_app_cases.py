@@ -384,6 +384,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     from core.training_scheduler import pop_next_seed_diverse_unit
     from services.research import breakout_quality_application as model_application
+    from services.research import strategy_compare_training as training_runtime
     from filters.breakout_quality import strategy_multi_seed_robustness as robustness_runtime
     from config.research import get_active_model_research_provider
 
@@ -400,6 +401,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     training_process_source = read_source_text(
         project_root / "services" / "research" / "training_process.py"
     )
+    execution_contract_source = read_source_text(
+        project_root / "filters" / "breakout_quality" / "strategy_compare_execution.py"
+    )
+    orchestration_source = read_source_text(
+        project_root / "filters" / "breakout_quality" / "strategy_comparison.py"
+    )
     provider = get_active_model_research_provider()
     check_true(
         "strategy_compare_model_provider_uses_one_scoped_artifact_handler",
@@ -410,7 +417,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "_strategy_model_artifact_scope" in research_entry_source,
     )
     check_true(
-        "normal_and_robustness_share_gpu_training_worker_scheduler_and_process_ssot",
+        "normal_and_robustness_share_gpu_training_scheduler_and_one_training_lifecycle_owner",
         int(strategy_config.STRATEGY_COMPARE_GPU_TRAIN_WORKERS) >= 1
         and float(strategy_config.STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS) > 0.0
         and all(
@@ -421,15 +428,76 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "ThreadPoolExecutor(max_workers=worker_count)" in application_source
         and "pop_next_seed_diverse_unit(jobs, futures.values())" in application_source
         and "pop_next_seed_diverse_unit(" in robustness_source
-        and "build_strategy_compare_trainer_command(" in application_source
-        and "build_strategy_compare_trainer_command(" in robustness_source
-        and "run_logged_training_process(" in application_source
-        and "run_logged_training_process(" in robustness_source
+        and "run_strategy_compare_training_unit(" in application_source
+        and "run_strategy_compare_training_unit(" in robustness_source
+        and "build_strategy_compare_trainer_command(" not in application_source
+        and "build_strategy_compare_trainer_command(" not in robustness_source
+        and "run_logged_training_process(" not in application_source
+        and "run_logged_training_process(" not in robustness_source
+        and "audit_selection_point_in_time_scores(" not in application_source
+        and "audit_selection_point_in_time_scores(" not in robustness_source
+        and "def _validate_training_artifacts(" not in robustness_source
+        and "def _training_command(" not in robustness_source
+        and "build_strategy_compare_trainer_command(" in training_contract_source
+        and "run_logged_training_process(" in training_contract_source
+        and "audit_selection_point_in_time_scores(" in training_contract_source
+        and "validate_strategy_compare_training_artifacts(" in training_contract_source
         and "subprocess.Popen(" not in application_source
         and "subprocess.Popen(" not in robustness_source
         and "subprocess.Popen(" in training_process_source
         and "--inner-validation-months" in training_contract_source
         and "--checkpoint-cache-root" in training_contract_source,
+    )
+    check_true(
+        "normal_and_robustness_share_one_per_arm_replay_argument_owner",
+        "run_strategy_compare_active_arm(" in orchestration_source
+        and "run_strategy_compare_active_arm(" in robustness_source
+        and "run_strategy_compare_baseline_arm(" in orchestration_source
+        and "run_strategy_compare_baseline_arm(" in robustness_source
+        and "run_comparison(" not in orchestration_source
+        and "run_comparison(" not in robustness_source
+        and "run_standalone_baseline(" not in orchestration_source
+        and "run_standalone_baseline(" not in robustness_source
+        and "run_comparison(" in execution_contract_source
+        and "run_standalone_baseline(" in execution_contract_source,
+    )
+
+    from filters.breakout_quality.strategy_compare_execution import (
+        resolve_strategy_compare_ranking_options,
+    )
+
+    isolated_safety_override_checks = []
+    for current_settings in settings_by_mode.values():
+        for current_arm in current_settings.enabled_arms:
+            options = dict(current_arm.dl_runtime_options or {})
+            safety_dl_id = str(options.get("safety_dl_id") or "").strip()
+            if not safety_dl_id or not current_arm.dl_id:
+                continue
+            primary_dl_id = str(current_arm.dl_id)
+            overrides = {
+                primary_dl_id: {
+                    "score_path": f"isolated/{primary_dl_id}/score.csv",
+                    "manifest_path": f"isolated/{primary_dl_id}/manifest.json",
+                },
+                safety_dl_id: {
+                    "score_path": f"isolated/{safety_dl_id}/score.csv",
+                    "manifest_path": f"isolated/{safety_dl_id}/manifest.json",
+                },
+            }
+            resolved = resolve_strategy_compare_ranking_options(
+                current_settings, current_arm, score_overrides=overrides
+            )
+            isolated_safety_override_checks.append(
+                resolved.get("safety_score_path_override")
+                == overrides[safety_dl_id]["score_path"]
+                and resolved.get("safety_score_manifest_path_override")
+                == overrides[safety_dl_id]["manifest_path"]
+            )
+    check_true(
+        "dual_model_robustness_keeps_explicit_same_seed_safety_override_over_production_fallback",
+        bool(isolated_safety_override_checks)
+        and all(isolated_safety_override_checks)
+        and "if not safety_override" in execution_contract_source,
     )
     check_true(
         "single_and_multi_seed_share_fitting_checkpoint_cache_root",
@@ -468,17 +536,22 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     normal_workflow = get_breakout_quality_workflow_settings(
         experiment_profile=str(normal_dl.experiment_profile)
     )
-    normal_command, normal_args, _ = model_application._strategy_compare_model_build_command(
+    normal_command, normal_args, _ = training_runtime.build_strategy_compare_trainer_command(
         source=normal_dl,
         workflow=normal_workflow,
-        pit_dir_override=None,
+        seed=int(normal_workflow.seed),
+        point_in_time_dir_override=None,
+        checkpoint_cache_root=(
+            project_root / strategy_config.STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT
+        ),
+        resume=True,
     )
     seed_arg_index = normal_args.index("--seed") + 1
     check_true(
         "normal_parallel_training_keeps_canonical_workflow_seed_and_isolated_subprocess",
         int(normal_args[seed_arg_index]) == int(normal_workflow.seed)
         and normal_command[:3]
-        == [model_application.sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores"]
+        == [training_runtime.sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores"]
         and "--resume" in normal_args
         and "--inner-validation-months" in normal_args
         and "--checkpoint-cache-root" in normal_args

@@ -83,8 +83,10 @@ from filters.breakout_quality.strategy_compare_reporting import (
     materialize_strategy_pair_readable_report,
     render_strategy_pair_simple_report,
 )
-from filters.breakout_quality.strategy_compare_engine import run_comparison
-from filters.breakout_quality.strategy_compare_replay import run_standalone_baseline
+from filters.breakout_quality.strategy_compare_execution import (
+    run_strategy_compare_active_arm,
+    run_strategy_compare_baseline_arm,
+)
 from filters.breakout_quality.strategy_compare_plan import ResolvedComparisonPlan
 from filters.breakout_quality.strategy_compare_runtime import (
     _arm_runtime_spec,
@@ -132,26 +134,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RESULT_SCHEMA_VERSION = 8
 
 
-def _selection_pit_mode_paths(
-    dl: StrategyDLSource,
-    *,
-    project_root: Path = PROJECT_ROOT,
-) -> dict[str, Path] | None:
-    dirname = None if dl.point_in_time_dirname in (None, "") else str(dl.point_in_time_dirname).strip()
-    if dirname is None:
-        return None
-    base = (
-        resolve_filter_model_output_dir(
-            Path(project_root).resolve(), dl.filter_id, dl.model_architecture, dl.experiment_profile
-        )
-        / dirname
-    ).resolve()
-    return {
-        "score": base / SELECTION_POINT_IN_TIME_SCORE_FILENAME,
-        "manifest": base / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
-    }
-
-
 def _json_native(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _json_native(item) for key, item in value.items()}
@@ -166,91 +148,6 @@ def _json_native(value: Any) -> Any:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     atomic_write_json(path, _json_native(payload))
-
-
-
-
-
-
-def _resolved_ranking_options(
-    settings: StrategyComparisonSettings,
-    arm: StrategyComparisonArm,
-    *,
-    continuous_score_overrides: dict[str, dict[str, Any]] | None = None,
-    project_root: Path = PROJECT_ROOT,
-) -> dict[str, Any]:
-    options = dict(arm.dl_runtime_options or {})
-    if arm.dl_runtime_mode not in {
-        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
-        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
-    }:
-        return options
-    safety_dl_id = str(options.get("safety_dl_id") or "").strip()
-    if not safety_dl_id or safety_dl_id not in settings.dl_sources:
-        raise ValueError(f"dual-model safety arm缺少合法safety_dl_id: {arm.arm_id}")
-    source = settings.dl_sources[safety_dl_id]
-    safety_override = dict((continuous_score_overrides or {}).get(safety_dl_id) or {})
-    if source.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-        mode_paths = _selection_pit_mode_paths(source, project_root=project_root)
-        if mode_paths is not None:
-            safety_override = {
-                "score_path": mode_paths["score"],
-                "manifest_path": mode_paths["manifest"],
-            }
-    options.update({
-        "safety_filter_id": str(source.filter_id),
-        "safety_score_source": str(source.score_source),
-        "safety_model_architecture": str(source.model_architecture),
-        "safety_experiment_profile": str(source.experiment_profile),
-        "safety_score_path_override": (
-            None
-            if not safety_override.get("score_path")
-            else str(safety_override["score_path"])
-        ),
-        "safety_score_manifest_path_override": (
-            None
-            if not safety_override.get("manifest_path")
-            else str(safety_override["manifest_path"])
-        ),
-    })
-    return options
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1221,7 +1118,6 @@ def run_strategy_comparison(
             if settings.preparation.reuse_shared_baseline
             else None
         )
-        all_off = off_arm.rule_policy == "all_off"
         arm_started = time.perf_counter()
         baseline_action = "REUSE" if baseline_reuse_source is not None else "RUN"
         if quiet and baseline_action == "RUN":
@@ -1229,25 +1125,15 @@ def run_strategy_comparison(
                 f"[RUN] {off_arm.arm_id} {off_arm.name} "
                 f"| total={format_elapsed(arm_started - replay_started)}"
             )
-        baseline_payload = run_standalone_baseline(
+        baseline_payload = run_strategy_compare_baseline_arm(
+            settings=settings,
+            arm=off_arm,
             project_root=root,
-            dataset=settings.dataset,
             params_path=str(status["resolved_arm_parameter_paths"][off_arm.arm_id]),
-            param_policy=off_param_policy,
-            max_positions=settings.max_positions,
-            enable_rotation=settings.rotation == "on",
-            optional_entry_filter_policy=(
-                OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
-                if all_off
-                else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
-            ),
-            output_dir_override=pair_dir,
-            comparison_start_date=comparison_start,
-            comparison_end_date=comparison_end,
+            output_dir=pair_dir,
+            comparison_start=comparison_start,
+            comparison_end=comparison_end,
             quiet=quiet,
-            shared_param_overrides=(
-                ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None
-            ),
             baseline_reuse_dir=baseline_reuse_source,
             param_evaluation_mode=(
                 settings.parameter_sources[off_arm.param_source].canonical_evaluation_mode or "rolling"
@@ -1459,115 +1345,38 @@ def run_strategy_comparison(
                         f"| total={format_elapsed(now - replay_started)}"
                     )
 
-        selection_pit_mode_paths = (
-            _selection_pit_mode_paths(dl, project_root=root)
-            if dl.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME
-            else None
-        )
-        selection_pit_expected_seed = (
-            get_breakout_quality_workflow_settings(
-                experiment_profile=dl.experiment_profile
-            ).seed
-            if selection_pit_mode_paths is not None
-            else None
-        )
-        pair_payload = run_comparison(
+        ranking_options_extra: dict[str, Any] = {}
+        if (
+            on_arm.dl_runtime_mode
+            == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT
+        ):
+            ranking_options_extra["expected_r_calibration_path"] = str(
+                (status.get("expected_r_calibrations") or {})[on_arm.arm_id]["lookup_path"]
+            )
+        elif on_arm.dl_runtime_mode in {
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
+        }:
+            ranking_options_extra["expected_excess_r_calibration_path"] = str(
+                (status.get("expected_excess_r_calibrations") or {})[on_arm.arm_id]["lookup_path"]
+            )
+        pair_payload = run_strategy_compare_active_arm(
+            settings=settings,
+            arm=on_arm,
             project_root=root,
-            dataset=settings.dataset,
             params_path=str(status["resolved_arm_parameter_paths"][on_arm.arm_id]),
-            param_policy=on_param_policy,
-            max_positions=settings.max_positions,
-            enable_rotation=settings.rotation == "on",
-            fixed_risk=None,
-            max_position_cap_pct=None,
-            comparison_mode=runtime_spec["comparison_mode"],
-            ranking_policy=runtime_spec["ranking_policy"],
-            ranking_options=(
-                {
-                    **_resolved_ranking_options(
-                        settings,
-                        on_arm,
-                        continuous_score_overrides=(status.get("continuous_score_overrides") or {}),
-                        project_root=root,
-                    ),
-                    **(
-                        {
-                            "expected_r_calibration_path": str(
-                                (status.get("expected_r_calibrations") or {})[on_arm.arm_id]["lookup_path"]
-                            )
-                        }
-                        if on_arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT
-                        else {
-                            "expected_excess_r_calibration_path": str(
-                                (status.get("expected_excess_r_calibrations") or {})[on_arm.arm_id]["lookup_path"]
-                            )
-                        }
-                        if on_arm.dl_runtime_mode in {
-                            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
-                            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
-                            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
-                        }
-                        else {}
-                    ),
-                }
-            ),
-            optional_entry_filter_policy=(
-                OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
-                if all_off
-                else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
-            ),
-            filter_id=dl.filter_id,
-            score_source=dl.score_source,
-            model_architecture=dl.model_architecture,
-            experiment_profile=dl.experiment_profile,
-            threshold=dl.threshold,
-            output_dir_override=pair_dir,
-            comparison_start_date=comparison_start,
-            comparison_end_date=comparison_end,
-            quiet=quiet,
-            progress_callback=_pair_progress,
-            shared_param_overrides=(
-                ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None
-            ),
-            baseline_reuse_dir=baseline_reuse_source,
+            output_dir=pair_dir,
+            comparison_start=comparison_start,
+            comparison_end=comparison_end,
             param_evaluation_mode=(
                 settings.parameter_sources[on_arm.param_source].canonical_evaluation_mode or "rolling"
             ),
-            continuous_score_path_override=(
-                str(
-                    (status.get("continuous_score_overrides") or {})[on_arm.dl_id][
-                        "score_path"
-                    ]
-                )
-                if (
-                    dl.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS
-                    and on_arm.dl_id in (status.get("continuous_score_overrides") or {})
-                )
-                else None
-            ),
-            continuous_score_execution_start_override=(
-                str(
-                    (status.get("continuous_score_overrides") or {})[on_arm.dl_id][
-                        "execution_start"
-                    ]
-                )
-                if (
-                    dl.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS
-                    and on_arm.dl_id in (status.get("continuous_score_overrides") or {})
-                )
-                else None
-            ),
-            selection_pit_score_path_override=(
-                None
-                if selection_pit_mode_paths is None
-                else str(selection_pit_mode_paths["score"])
-            ),
-            selection_pit_manifest_path_override=(
-                None
-                if selection_pit_mode_paths is None
-                else str(selection_pit_mode_paths["manifest"])
-            ),
-            selection_pit_expected_seed_override=selection_pit_expected_seed,
+            score_overrides=(status.get("continuous_score_overrides") or {}),
+            ranking_options_extra=ranking_options_extra,
+            baseline_reuse_dir=baseline_reuse_source,
+            quiet=quiet,
+            progress_callback=_pair_progress,
             capture_execution_diagnostics=(
                 runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
             ),
