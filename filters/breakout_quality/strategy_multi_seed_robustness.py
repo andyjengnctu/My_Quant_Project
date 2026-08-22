@@ -3151,15 +3151,33 @@ def _pit_saved_fold_progress(meta: dict[str, Any]) -> tuple[int, int] | None:
 
 def _training_progress_label(meta: dict[str, Any], *, now: float, seed_count: int) -> str:
     label = (
-        f"seed {meta['seed_order']}/{seed_count} {meta['dl_id']} "
-        f"targets={len(meta['replay_arms'])} "
-        f"{_format_elapsed(now-float(meta['submitted_at']))}"
+        f"seed {meta['seed_order']}/{seed_count} ({int(meta['seed'])}) | "
+        f"模型來源 {meta['source_order']}/{meta['source_count']} {meta['dl_id']} | "
+        f"replay targets={len(meta['replay_arms'])} | "
+        f"elapsed={_format_elapsed(now-float(meta['submitted_at']))}"
     )
     pit_progress = _pit_saved_fold_progress(meta)
     if pit_progress is not None:
         saved, expected = pit_progress
-        label += f" [PIT saved folds={saved}/{expected}]"
+        label += f" | PIT folds saved={saved}/{expected} | remaining={max(0, expected-saved)}"
     return label
+
+
+def _pop_next_training_unit(
+    pending_trainings: deque[dict[str, Any]],
+    training_futures: dict[Future, dict[str, Any]],
+) -> dict[str, Any]:
+    if not pending_trainings:
+        raise IndexError("沒有待排程的training unit")
+    active_seeds = {int(meta["seed"]) for meta in training_futures.values()}
+    if active_seeds:
+        for index, meta in enumerate(pending_trainings):
+            if int(meta["seed"]) not in active_seeds:
+                pending_trainings.rotate(-index)
+                selected = pending_trainings.popleft()
+                pending_trainings.rotate(index)
+                return selected
+    return pending_trainings.popleft()
 
 
 def _normalize_yearly_rows(
@@ -5331,7 +5349,7 @@ def run_multi_seed_robustness(
 
     def submit_trainings() -> None:
         while pending_trainings and len(training_futures) < int(cfg.gpu_train_workers):
-            meta = pending_trainings.popleft()
+            meta = _pop_next_training_unit(pending_trainings, training_futures)
             meta["submitted_at"] = time.perf_counter()
             future = training_executor.submit(_train_one_unit, meta)
             training_futures[future] = meta
@@ -5348,9 +5366,9 @@ def run_multi_seed_robustness(
                 else:
                     action_tag = "[TRAIN]"
                 resume_note = f" | saved checkpoints={saved_folds}/{expected_folds}"
-            progress_update(
+            progress.print_line(
                 paint(action_tag, "cyan", enabled=color_enabled, bold=True)
-                + f" seed {meta['seed_order']}/{len(seeds)} | "
+                + f" seed {meta['seed_order']}/{len(seeds)} ({int(meta['seed'])}) | "
                 f"模型來源 {meta['source_order']}/{meta['source_count']} {meta['dl_id']} "
                 + f"| replay targets={len(meta['replay_arms'])} "
                 + resume_note
@@ -5370,30 +5388,27 @@ def run_multi_seed_robustness(
             submit_trainings()
             now = time.perf_counter()
             if now >= next_print and (training_futures or replay_futures or ready_replays):
-                training_labels = ", ".join(
-                    _training_progress_label(meta, now=now, seed_count=len(seeds))
-                    for meta in training_futures.values()
-                )
-                replay_labels = ", ".join(
-                    f"seed {meta['seed_order']}/{len(seeds)} {meta['name']} "
-                    f"{_format_elapsed(now-float(meta.get('submitted_at', now)))}"
-                    for meta in replay_futures.values()
-                )
-                tag = "[TRAIN]" if training_futures else "[REPLAY]"
-                details = []
-                if training_labels:
-                    details.append(training_labels)
-                if replay_labels:
-                    details.append("replay: " + replay_labels)
-                if ready_replays:
-                    details.append(f"replay queued={len(ready_replays)}")
-                progress_update(
+                tag = "[TRAIN PROGRESS]" if training_futures else "[REPLAY PROGRESS]"
+                progress.print_line(
                     paint(tag, "cyan", enabled=color_enabled, bold=True)
                     + f" GPU running={len(training_futures)}/{cfg.gpu_train_workers}"
-                    + (f" | {' | '.join(details)}" if details else "")
                     + f" | CPU replay={len(replay_futures)}/{cfg.cpu_replay_workers}"
+                    + f" | replay queued={len(ready_replays)}"
+                    + f" | completed={done_units}/{total_units}"
                     + f" | total={_format_elapsed(now-started_total)}"
                 )
+                for worker_index, meta in enumerate(training_futures.values(), start=1):
+                    progress.print_line(
+                        f"  [GPU {worker_index}/{cfg.gpu_train_workers}] "
+                        + _training_progress_label(meta, now=now, seed_count=len(seeds))
+                    )
+                for replay_index, meta in enumerate(replay_futures.values(), start=1):
+                    progress.print_line(
+                        f"  [CPU REPLAY {replay_index}/{cfg.cpu_replay_workers}] "
+                        + f"seed {meta['seed_order']}/{len(seeds)} ({int(meta['seed'])}) | "
+                        + f"{meta['name']} | "
+                        + f"elapsed={_format_elapsed(now-float(meta.get('submitted_at', now)))}"
+                    )
                 next_print = now + float(cfg.progress_interval_seconds)
             if pending_trainings or training_futures or ready_replays or replay_futures:
                 time.sleep(0.25)

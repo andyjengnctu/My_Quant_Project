@@ -338,6 +338,21 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     from filters.breakout_quality import strategy_multi_seed_robustness as robustness_runtime
 
+    pending_trainings = robustness_runtime.deque([
+        {"seed": 101, "dl_id": "SOURCE_A"},
+        {"seed": 101, "dl_id": "SOURCE_B"},
+        {"seed": 202, "dl_id": "SOURCE_A"},
+    ])
+    active_training = {object(): {"seed": 101, "dl_id": "SOURCE_A"}}
+    selected_training = robustness_runtime._pop_next_training_unit(
+        pending_trainings, active_training
+    )
+    check(
+        "robustness_gpu_scheduler_prioritizes_a_different_seed_when_available",
+        (202, "SOURCE_A"),
+        (int(selected_training["seed"]), str(selected_training["dl_id"])),
+    )
+
     with tempfile.TemporaryDirectory(prefix="robustness_atomic_retry_") as temp_dir:
         target = Path(temp_dir) / "manifest.json"
         target.write_text("old\n", encoding="utf-8")
