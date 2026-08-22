@@ -1325,6 +1325,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     continuous_ranker_source = (
         project_root / "services/breakout_quality/train_continuous_ranker.py"
     ).read_text(encoding="utf-8")
+    training_progress_source = (project_root / "core/training_progress.py").read_text(
+        encoding="utf-8"
+    )
     strategy_reuse_source = (
         project_root / "filters/breakout_quality/strategy_compare_reuse.py"
     ).read_text(encoding="utf-8")
@@ -2098,10 +2101,13 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "multi_seed_long_training_progress_is_seed_fixed_and_surfaces_live_epoch",
         "class _FixedProgressBlock" in multi_seed_source
         and "def _trainer_epoch_progress(" in multi_seed_source
+        and "read_trainer_epoch_progress" in multi_seed_source
         and 'env["BREAKOUT_QUALITY_COMPACT_CONSOLE"] = "0"' in multi_seed_source
         and 'env["PYTHONUNBUFFERED"] = "1"' in multi_seed_source
         and 'env["BREAKOUT_QUALITY_EPOCH_PROGRESS_MARKERS"] = "1"' in multi_seed_source
-        and "_EPOCH_PROGRESS_MARKER_RE" in multi_seed_source
+        and "def read_trainer_epoch_progress(" in training_progress_source
+        and "_EPOCH_PROGRESS_MARKER_RE" in training_progress_source
+        and "_PIT_TRAINING_FOLD_RE" in training_progress_source
         and "__BQ_EPOCH_PROGRESS__" in continuous_ranker_source
         and "_emit_epoch_progress_marker(\"select\"" in continuous_ranker_source
         and "_emit_epoch_progress_marker(\"refit\"" in continuous_ranker_source

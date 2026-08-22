@@ -2760,16 +2760,17 @@ def _prepare_strategy_compare_model_artifacts(
                 )
 
             if source.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+                legacy_contract = None
                 try:
-                    load_continuous_ranker_oos_contract(
+                    legacy_contract = load_continuous_ranker_oos_contract(
                         PROJECT_ROOT,
                         str(source.filter_id),
                         str(source.model_architecture),
                         str(source.experiment_profile),
                     )
                 except (OSError, ValueError, KeyError, TypeError):
-                    pass
-                else:
+                    legacy_contract = None
+                if legacy_contract is not None:
                     legacy_reuse.append(str(dl_id))
                     continue
 
