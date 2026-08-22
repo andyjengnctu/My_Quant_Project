@@ -1399,19 +1399,30 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         _build_durable_result_artifacts,
         _model_artifact_identity_payload,
         _seed_expansion_compatibility_payload,
+        _validate_scientific_observation_manifest,
         _strategy_only_baseline_action,
         SCIENTIFIC_DURABLE_RESULT_KEYS,
+        SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME,
+        MEAN_METRICS,
         _strategy_only_baseline_context_available,
         _validate_durable_result_artifacts,
         _validate_seed_result_scientific_identities,
         _validate_seed_yearly_results_frame,
+        _write_scientific_observation_manifest,
+        _write_seed_results,
+        _write_seed_yearly_results,
     )
     from config.training_policy import (
         get_robustness_benchmark_policy_snapshot,
         get_strategy_parameter_training_policy_snapshot,
     )
-    from core.strategy_param_artifacts import compute_strategy_param_file_sha256
+    from core.strategy_param_artifacts import (
+        STRATEGY_PARAM_WORK_SCOPE_BENCHMARK,
+        compute_strategy_param_file_sha256,
+        resolve_strategy_param_optimizer_work_dir,
+    )
     from services.optimizer.strategy_param_service import (
+        _benchmark_fast_republish_source,
         _benchmark_manifest_matches_current_policy,
         _benchmark_schedule_build_contract,
     )
@@ -1712,6 +1723,64 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         membership_only_reuse and stale_contract_rejected and stale_sha_rejected,
     )
 
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        fast_target = temp_root / "models" / "strategy_params" / "benchmark" / "x" / "min_base_best_seed.json"
+        fast_target.parent.mkdir(parents=True, exist_ok=True)
+        fast_payload = {
+            "selector": benchmark_policy,
+            "meta": {"last_oos_date": "2026-03-02"},
+        }
+        fast_target.write_text(json.dumps(fast_payload), encoding="utf-8")
+        fast_work_root = resolve_strategy_param_optimizer_work_dir(
+            temp_root,
+            scope=STRATEGY_PARAM_WORK_SCOPE_BENCHMARK,
+            benchmark_id=str(benchmark["benchmark_id"]),
+            seed=benchmark_seed,
+            family=benchmark_family,
+        )
+        fast_source = (
+            fast_work_root
+            / "schedule_2021_forward"
+            / "p2_dl_off_trained"
+            / "active_params"
+            / "roos_base_best.json"
+        )
+        fast_source.parent.mkdir(parents=True, exist_ok=True)
+        fast_source.write_text(json.dumps(fast_payload), encoding="utf-8")
+        retained_contract = dict(benchmark_build_contract)
+        retained_contract["schema"] = "robustness_strategy_schedule_work_v2"
+        (fast_work_root / "work_contract.json").write_text(
+            json.dumps(retained_contract), encoding="utf-8"
+        )
+        publication_only_repair = _benchmark_fast_republish_source(
+            root=temp_root,
+            benchmark_id=str(benchmark["benchmark_id"]),
+            seed=benchmark_seed,
+            family=benchmark_family,
+            policy=benchmark_policy,
+            target_path=fast_target,
+            build_contract=benchmark_build_contract,
+            comparison_end_date="2026-03-02",
+        )
+        changed_fit_contract = dict(benchmark_build_contract)
+        changed_fit_contract["trials_per_fold"] = int(changed_fit_contract["trials_per_fold"]) + 1
+        scientific_change_not_repairable = _benchmark_fast_republish_source(
+            root=temp_root,
+            benchmark_id=str(benchmark["benchmark_id"]),
+            seed=benchmark_seed,
+            family=benchmark_family,
+            policy=benchmark_policy,
+            target_path=fast_target,
+            build_contract=changed_fit_contract,
+            comparison_end_date="2026-03-02",
+        )
+    check_true(
+        "robustness_benchmark_publication_only_stale_uses_fast_repair_not_optimizer_resume",
+        publication_only_repair == fast_source.resolve()
+        and scientific_change_not_repairable is None,
+    )
+
     identity_frame = pd.DataFrame([{
         "arm_id": "C59",
         "seed": 11,
@@ -1821,8 +1890,78 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     check_true(
         "robustness_compatible_observation_reuse_ignores_derived_report_refresh",
         scientific_after_report_refresh
-        and "require_derived_artifacts=False" in multi_seed_source
+        and "SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME" in multi_seed_source
+        and "_validate_scientific_observation_manifest(" in multi_seed_source
         and "else SCIENTIFIC_DURABLE_RESULT_KEYS" in multi_seed_source,
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        evidence_root = Path(temp_dir) / "scientific-evidence-test"
+        evidence_root.mkdir(parents=True, exist_ok=True)
+        evidence_contract = {
+            "fingerprint": evidence_root.name,
+            "profile_id": "extending_window_rolling",
+            "benchmark_id": "end_to_end_v1",
+            "comparison_period": {"start": "2021-01-01", "end": "2021-12-31"},
+            "resolved_seeds": [11],
+            "stochastic_arms": [{"arm_id": "C59"}],
+            "model_seed_sensitive_arm_ids": [],
+            "benchmark_parameter_artifact_identities": {
+                "C59:seed=11": {"sha256": "param-sha"},
+            },
+            "retention": {"keep_attribution_source": False},
+        }
+        seed_row = {
+            "arm_id": "C59",
+            "seed": 11,
+            "arm_order": 1,
+            "seed_order": 1,
+            "strategy_param_sha256": "param-sha",
+            "strategy_param_manifest_sha256": "manifest-provenance",
+        }
+        seed_row.update({key: 1.0 for _label, key, _unit in MEAN_METRICS})
+        evidence_seed_frame = pd.DataFrame([seed_row])
+        evidence_yearly_frame = pd.DataFrame([{
+            "arm_id": "C59", "seed": 11, "arm_order": 1, "seed_order": 1,
+            "year": 2021, "return_pct": 1.0, "is_complete_year": True,
+        }])
+        _write_seed_results(evidence_root / "seed_results.csv", evidence_seed_frame)
+        _write_seed_yearly_results(
+            evidence_root / "seed_yearly_returns.csv", evidence_yearly_frame
+        )
+        _write_scientific_observation_manifest(
+            evidence_root,
+            contract=evidence_contract,
+            seed_frame=evidence_seed_frame,
+            seed_yearly_frame=evidence_yearly_frame,
+            attribution_index_path=None,
+        )
+        # A later failed presentation/resume attempt may rewrite lifecycle
+        # manifest.json, but must not revoke already committed observations.
+        (evidence_root / "manifest.json").write_text(
+            json.dumps({"status": "FAILED", "contract": evidence_contract}),
+            encoding="utf-8",
+        )
+        lifecycle_independent_evidence = _validate_scientific_observation_manifest(
+            evidence_root,
+            backfill_legacy_completed=False,
+        )
+        # Simulate a pre-READY-marker long run whose later resume rewrote the
+        # lifecycle manifest to FAILED.  Complete observations must still be
+        # discovered from their own rows/yearly evidence and upgraded once.
+        (evidence_root / SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME).unlink()
+        legacy_failed_recovered = _validate_scientific_observation_manifest(
+            evidence_root,
+            backfill_legacy_completed=True,
+        )
+    check_true(
+        "robustness_scientific_observation_commit_survives_lifecycle_manifest_failure",
+        lifecycle_independent_evidence is not None
+        and legacy_failed_recovered is not None
+        and SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME in multi_seed_source
+        and "_load_legacy_scientific_observations_for_backfill(" in multi_seed_source
+        and "_write_scientific_observation_manifest(" in multi_seed_source
+        and "_validate_scientific_observation_manifest(" in multi_seed_source,
     )
 
     check_true(
@@ -1837,6 +1976,14 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "_strategy_only_baseline_context_available(" in multi_seed_source
         and '"param_evaluation_mode": str(' in strategy_reuse_source
         and "expected_param_evaluation_mode" in strategy_replay_source,
+    )
+
+    check_true(
+        "robustness_attribution_progress_separates_missing_observation_from_attribution_rebuild",
+        "expected_model_units =" in multi_seed_source
+        and "scientific observation pending=" in multi_seed_source
+        and "attribution rebuild=" in multi_seed_source
+        and "scientific_completed - attribution_ready" not in multi_seed_source,
     )
 
     check_true(

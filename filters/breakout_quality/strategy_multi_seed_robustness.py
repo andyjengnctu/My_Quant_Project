@@ -162,9 +162,11 @@ SUMMARY_FILENAME = "robustness_summary.json"
 SEED_RESULTS_FILENAME = "seed_results.csv"
 SEED_YEARLY_RESULTS_FILENAME = "seed_yearly_returns.csv"
 MANIFEST_FILENAME = "manifest.json"
+SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME = "scientific_observations_manifest.json"
 LATEST_FILENAME = "latest.json"
 ATTRIBUTION_SOURCE_DIRNAME = "attribution_source"
 ATTRIBUTION_SOURCE_SCHEMA_VERSION = 2
+SCIENTIFIC_OBSERVATIONS_SCHEMA_VERSION = 1
 DURABLE_RESULT_FILENAMES = {
     "seed_results": SEED_RESULTS_FILENAME,
     "seed_yearly_results": SEED_YEARLY_RESULTS_FILENAME,
@@ -172,7 +174,6 @@ DURABLE_RESULT_FILENAMES = {
     "report": REPORT_FILENAME,
 }
 SCIENTIFIC_DURABLE_RESULT_KEYS = ("seed_results", "seed_yearly_results")
-DERIVED_DURABLE_RESULT_KEYS = ("summary", "report")
 ROBUSTNESS_SCHEMA_VERSION = 11
 ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 5
 ROBUSTNESS_MODEL_ARTIFACT_CONTRACT_VERSION = 2
@@ -675,9 +676,14 @@ def _benchmark_parameter_plan_rows(
             action = str(state["action"])
             if action == "REUSE":
                 detail = project_relative_display_path(path, project_root=PROJECT_ROOT)
+            elif action == "REPAIR":
+                detail = (
+                    "策略參數payload與Optimizer fitting contract相同；只快速修復benchmark publication manifest，"
+                    "不重新執行fold optimizer"
+                )
             elif action == "REBUILD":
                 detail = (
-                    "既有benchmark策略參數缺少／過期／identity不符；由canonical Optimizer service自動REBUILD／RESUME"
+                    "既有benchmark策略參數缺少／過期／scientific identity不符；由canonical Optimizer service自動REBUILD／RESUME"
                 )
             else:
                 detail = (
@@ -1682,11 +1688,9 @@ def _seed_expansion_source_run(
     for candidate_root in sorted(path for path in output_root.iterdir() if path.is_dir()):
         if candidate_root.resolve() == Path(current_run_root).resolve():
             continue
-        validated = _validate_completed_run(
+        validated = _validate_scientific_observation_manifest(
             candidate_root,
-            expected_contract=None,
-            backfill_integrity=False,
-            require_derived_artifacts=False,
+            backfill_legacy_completed=True,
         )
         if validated is None:
             continue
@@ -2385,6 +2389,247 @@ def _validate_durable_result_artifacts(
     return True
 
 
+def _scientific_observation_manifest_path(run_root: Path) -> Path:
+    return Path(run_root) / SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME
+
+
+def _build_scientific_observation_artifacts(
+    run_root: Path, *, attribution_index_path: Path | None
+) -> dict[str, dict[str, Any]]:
+    artifacts: dict[str, dict[str, Any]] = {}
+    for key in SCIENTIFIC_DURABLE_RESULT_KEYS:
+        filename = DURABLE_RESULT_FILENAMES[key]
+        path = Path(run_root) / filename
+        if not path.is_file():
+            raise FileNotFoundError(f"robustness scientific observation缺少: {path}")
+        artifacts[key] = {
+            "path": project_relative_display_path(path, project_root=PROJECT_ROOT),
+            **build_file_manifest(path),
+        }
+    if attribution_index_path is not None:
+        index_path = Path(attribution_index_path)
+        if not index_path.is_file():
+            raise FileNotFoundError(f"robustness attribution index缺少: {index_path}")
+        artifacts["attribution_index"] = {
+            "path": project_relative_display_path(index_path, project_root=PROJECT_ROOT),
+            **build_file_manifest(index_path),
+        }
+    return artifacts
+
+
+def _write_scientific_observation_manifest(
+    run_root: Path,
+    *,
+    contract: dict[str, Any],
+    seed_frame: pd.DataFrame,
+    seed_yearly_frame: pd.DataFrame,
+    attribution_index_path: Path | None,
+) -> dict[str, Any]:
+    """Commit expensive robustness observations independently from run/report status.
+
+    This READY manifest is the commit marker for reusable stochastic evidence.  It
+    intentionally excludes summary/report presentation so later renderer refreshes,
+    lifecycle retries, or a failed report finalization cannot make completed model
+    observations disappear from cross-fingerprint reuse discovery.
+    """
+
+    payload = {
+        "schema_version": SCIENTIFIC_OBSERVATIONS_SCHEMA_VERSION,
+        "status": "READY",
+        "committed_at_utc": datetime.now(timezone.utc).isoformat(),
+        "scientific_fingerprint": str(contract["fingerprint"]),
+        "contract": contract,
+        "seed_strategy_observations": int(len(seed_frame)),
+        "seed_yearly_observations": int(len(seed_yearly_frame)),
+        "artifacts": _build_scientific_observation_artifacts(
+            run_root, attribution_index_path=attribution_index_path
+        ),
+    }
+    _write_json(_scientific_observation_manifest_path(run_root), payload)
+    return payload
+
+
+def _load_validated_scientific_observations(
+    run_root: Path,
+    *,
+    contract: dict[str, Any],
+    scientific_artifacts: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Load and validate the one canonical stochastic-observation evidence set."""
+
+    fingerprint = str(contract.get("fingerprint") or "")
+    settings = get_strategy_comparison_settings(str(contract["profile_id"]))
+    stochastic = _contract_stochastic_arms(contract, settings)
+    seeds = tuple(int(value) for value in tuple(contract.get("resolved_seeds") or ()))
+    if not seeds:
+        raise ValueError("robustness scientific observation缺少resolved seeds")
+
+    seed_frame = _load_seed_results(Path(run_root) / SEED_RESULTS_FILENAME)
+    _validate_seed_results_frame(seed_frame, stochastic_arms=stochastic, seeds=seeds)
+    _validate_seed_result_scientific_identities(seed_frame, contract=contract)
+    expected_units = {(arm.arm_id, int(seed)) for arm in stochastic for seed in seeds}
+    actual_units = {
+        (str(row.arm_id), int(row.seed)) for row in seed_frame.itertuples(index=False)
+    }
+    if actual_units != expected_units:
+        raise ValueError("robustness scientific seed observation單元不完整")
+
+    yearly_frame = _load_seed_yearly_results(Path(run_root) / SEED_YEARLY_RESULTS_FILENAME)
+    comparison_period = dict(contract.get("comparison_period") or {})
+    _validate_seed_yearly_results_frame(
+        yearly_frame,
+        stochastic_arms=stochastic,
+        seeds=seeds,
+        expected_years=_comparison_years(
+            str(comparison_period.get("start") or ""),
+            str(comparison_period.get("end") or ""),
+        ),
+        require_complete_units=True,
+    )
+
+    if scientific_artifacts is not None and not _validate_durable_result_artifacts(
+        run_root,
+        scientific_artifacts,
+        keys=SCIENTIFIC_DURABLE_RESULT_KEYS,
+    ):
+        raise ValueError("robustness scientific seed artifact SHA/size不一致")
+
+    model_ids = {
+        str(value) for value in tuple(contract.get("model_seed_sensitive_arm_ids") or ())
+    }
+    if bool(dict(contract.get("retention") or {}).get("keep_attribution_source")):
+        if scientific_artifacts is not None:
+            attribution_item = dict(scientific_artifacts.get("attribution_index") or {})
+            attribution_path = _attribution_source_root(run_root) / MANIFEST_FILENAME
+            expected_sha = _normalized_hash_value(attribution_item.get("sha256"))
+            if (
+                not attribution_path.is_file()
+                or Path(str(attribution_item.get("filename") or "")).name != MANIFEST_FILENAME
+                or int(attribution_item.get("size_bytes") or -1) != int(attribution_path.stat().st_size)
+                or not expected_sha
+                or compute_file_sha256(attribution_path).lower() != expected_sha
+            ):
+                raise ValueError("robustness attribution index SHA/size不一致")
+        model_arms = tuple(arm for arm in stochastic if arm.arm_id in model_ids)
+        ready = _attribution_ready_units(
+            run_root,
+            stochastic_arms=model_arms,
+            seeds=seeds,
+            fingerprint=fingerprint,
+        )
+        if len(ready) != len(model_arms) * len(seeds):
+            raise ValueError("robustness compact attribution source不完整")
+
+    return {
+        "stochastic_arms": stochastic,
+        "seeds": seeds,
+        "seed_frame": seed_frame,
+        "seed_yearly_frame": yearly_frame,
+    }
+
+
+def _load_legacy_scientific_observations_for_backfill(
+    run_root: Path,
+) -> dict[str, Any] | None:
+    """Recover complete legacy observations independently of lifecycle status.
+
+    Older runs used ``manifest.json`` both as RUNNING/FAILED lifecycle state and as
+    the only discovery anchor for completed observations.  A later failed resume can
+    therefore overwrite ``COMPLETED`` even though the expensive seed/yearly/compact
+    attribution evidence is still complete.  Validate the evidence itself and use
+    lifecycle metadata only to recover the original scientific contract.
+    """
+
+    lifecycle_path = Path(run_root) / MANIFEST_FILENAME
+    if not lifecycle_path.is_file():
+        return None
+    try:
+        lifecycle = _read_json(lifecycle_path)
+        contract = dict(lifecycle.get("contract") or {})
+        fingerprint = str(contract.get("fingerprint") or "")
+        if not fingerprint or fingerprint != Path(run_root).name:
+            return None
+        durable = dict(lifecycle.get("durable_artifacts") or {})
+        if durable and not _validate_durable_result_artifacts(
+            run_root, durable, keys=SCIENTIFIC_DURABLE_RESULT_KEYS
+        ):
+            return None
+        validated = _load_validated_scientific_observations(
+            run_root, contract=contract, scientific_artifacts=None
+        )
+        return {"contract": contract, **validated}
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _validate_scientific_observation_manifest(
+    run_root: Path,
+    *,
+    backfill_legacy_completed: bool,
+) -> dict[str, Any] | None:
+    """Validate reusable scientific evidence without consulting run lifecycle status.
+
+    New runs publish ``scientific_observations_manifest.json`` before derived report
+    generation.  Legacy completed runs can be validated once through the previous
+    durable-result contract and upgraded in place.  After the READY marker exists,
+    later RUNNING/FAILED presentation attempts cannot invalidate these observations.
+    """
+
+    evidence_path = _scientific_observation_manifest_path(run_root)
+    if not evidence_path.is_file():
+        if not backfill_legacy_completed:
+            return None
+        legacy = _load_legacy_scientific_observations_for_backfill(run_root)
+        if legacy is None:
+            return None
+        contract = dict(legacy["contract"])
+        stochastic = tuple(legacy["stochastic_arms"])
+        seeds = tuple(int(value) for value in legacy["seeds"])
+        model_ids = {
+            str(value) for value in tuple(contract.get("model_seed_sensitive_arm_ids") or ())
+        }
+        attribution_index_path = None
+        if bool(dict(contract.get("retention") or {}).get("keep_attribution_source")):
+            model_arms = tuple(arm for arm in stochastic if arm.arm_id in model_ids)
+            attribution_index_path = _write_attribution_index_manifest(
+                run_root,
+                contract=contract,
+                stochastic_arms=model_arms,
+                seeds=seeds,
+            )
+        _write_scientific_observation_manifest(
+            run_root,
+            contract=contract,
+            seed_frame=legacy["seed_frame"],
+            seed_yearly_frame=legacy["seed_yearly_frame"],
+            attribution_index_path=attribution_index_path,
+        )
+
+    try:
+        evidence = _read_json(evidence_path)
+        if int(evidence.get("schema_version") or 0) != SCIENTIFIC_OBSERVATIONS_SCHEMA_VERSION:
+            return None
+        if str(evidence.get("status") or "") != "READY":
+            return None
+        contract = dict(evidence.get("contract") or {})
+        fingerprint = str(contract.get("fingerprint") or "")
+        if not fingerprint or fingerprint != str(evidence.get("scientific_fingerprint") or ""):
+            return None
+        if fingerprint != Path(run_root).name:
+            return None
+        validated = _load_validated_scientific_observations(
+            run_root,
+            contract=contract,
+            scientific_artifacts=dict(evidence.get("artifacts") or {}),
+        )
+        return {
+            "evidence": evidence,
+            "contract": contract,
+            **validated,
+        }
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+
 def _validate_completed_run(
     run_root: Path,
     *,
@@ -2413,30 +2658,15 @@ def _validate_completed_run(
             return None
         if expected_contract is not None and fingerprint != str(expected_contract.get("fingerprint") or ""):
             return None
-        settings = get_strategy_comparison_settings(str(contract["profile_id"]))
-        stochastic = _contract_stochastic_arms(contract, settings)
-        seeds = tuple(int(value) for value in tuple(contract.get("resolved_seeds") or ()))
-        if not seeds:
-            return None
-        seed_frame = _load_seed_results(run_root / SEED_RESULTS_FILENAME)
-        _validate_seed_results_frame(seed_frame, stochastic_arms=stochastic, seeds=seeds)
-        _validate_seed_result_scientific_identities(seed_frame, contract=contract)
-        expected_units = {(arm.arm_id, int(seed)) for arm in stochastic for seed in seeds}
-        actual_units = {
-            (str(row.arm_id), int(row.seed)) for row in seed_frame.itertuples(index=False)
-        }
-        if actual_units != expected_units:
-            return None
-        yearly_frame = _load_seed_yearly_results(run_root / SEED_YEARLY_RESULTS_FILENAME)
-        comparison_period = dict(contract.get("comparison_period") or {})
-        expected_years = _comparison_years(
-            str(comparison_period.get("start") or ""),
-            str(comparison_period.get("end") or ""),
+        validated = _load_validated_scientific_observations(
+            run_root,
+            contract=contract,
+            scientific_artifacts=None,
         )
-        _validate_seed_yearly_results_frame(
-            yearly_frame, stochastic_arms=stochastic, seeds=seeds,
-            expected_years=expected_years, require_complete_units=True,
-        )
+        stochastic = tuple(validated["stochastic_arms"])
+        seeds = tuple(int(value) for value in validated["seeds"])
+        seed_frame = validated["seed_frame"]
+        yearly_frame = validated["seed_yearly_frame"]
         summary: dict[str, Any] = {}
         if require_derived_artifacts:
             summary = _read_json(run_root / SUMMARY_FILENAME)
@@ -2445,17 +2675,6 @@ def _validate_completed_run(
                 return None
             _validate_summary_seed_aggregates(summary, seed_frame=seed_frame, contract=contract)
             if not (run_root / REPORT_FILENAME).is_file():
-                return None
-        validation_contract = expected_contract if expected_contract is not None else contract
-        model_ids = {
-            str(value) for value in tuple(validation_contract.get("model_seed_sensitive_arm_ids") or ())
-        }
-        if bool(dict(validation_contract.get("retention") or {}).get("keep_attribution_source")):
-            model_arms = tuple(arm for arm in stochastic if arm.arm_id in model_ids)
-            ready = _attribution_ready_units(
-                run_root, stochastic_arms=model_arms, seeds=seeds, fingerprint=fingerprint
-            )
-            if len(ready) != len(model_arms) * len(seeds):
                 return None
         durable = dict(manifest.get("durable_artifacts") or {})
         if durable:
@@ -2475,6 +2694,8 @@ def _validate_completed_run(
         return {
             "manifest": manifest,
             "contract": contract,
+            "stochastic_arms": stochastic,
+            "seeds": seeds,
             "seed_frame": seed_frame,
             "seed_yearly_frame": yearly_frame,
             "summary": summary,
@@ -4943,10 +5164,16 @@ def run_multi_seed_robustness(
     )
     print(f"GPU train workers={cfg.gpu_train_workers} | CPU replay workers={cfg.cpu_replay_workers}")
     if cfg.keep_attribution_source:
-        missing_attr = scientific_completed - attribution_ready
+        expected_model_units = {
+            (arm.arm_id, int(seed)) for arm in model_arms for seed in seeds
+        }
+        completed_model_units = scientific_completed & expected_model_units
+        pending_observations = expected_model_units - scientific_completed
+        missing_attr = completed_model_units - attribution_ready
         print(
-            f"Compact attribution source={len(attribution_ready)}/{len(model_arms) * len(seeds)} ready"
-            + (f" | rebuild={len(missing_attr)}" if missing_attr else "")
+            f"Compact attribution source={len(attribution_ready)}/{len(expected_model_units)} ready"
+            + (f" | scientific observation pending={len(pending_observations)}" if pending_observations else "")
+            + (f" | attribution rebuild={len(missing_attr)}" if missing_attr else "")
         )
     color_enabled = console_color_enabled()
     progress = InlineProgress()
@@ -5411,6 +5638,13 @@ def run_multi_seed_robustness(
                 stochastic_arms=tuple(model_arms),
                 seeds=seeds,
             )
+        _write_scientific_observation_manifest(
+            run_root,
+            contract=contract,
+            seed_frame=seed_frame,
+            seed_yearly_frame=seed_yearly_frame,
+            attribution_index_path=attribution_index_path,
+        )
         summary = _robustness_summary(
             contract=contract, fixed_results=fixed_results, seed_frame=seed_frame,
             seed_yearly_frame=seed_yearly_frame, run_root=run_root,
@@ -5484,7 +5718,12 @@ def run_multi_seed_robustness(
         + ("｜2021 shared checkpoint cache=保留" if cfg.initial_checkpoint_cache_root else "")
     )
     print("永久工件：")
-    permanent_paths = [manifest_path, seed_results_path, seed_yearly_results_path]
+    permanent_paths = [
+        manifest_path,
+        _scientific_observation_manifest_path(run_root),
+        seed_results_path,
+        seed_yearly_results_path,
+    ]
     if cfg.keep_attribution_source:
         permanent_paths.append(_attribution_source_root(run_root) / MANIFEST_FILENAME)
     permanent_paths.extend([run_root / SUMMARY_FILENAME, run_root / REPORT_FILENAME])

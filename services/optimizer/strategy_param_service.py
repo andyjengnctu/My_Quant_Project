@@ -1186,6 +1186,86 @@ def _benchmark_schedule_build_contract(
     }
 
 
+def _benchmark_build_contract_scientific_payload(contract: dict[str, Any]) -> dict[str, Any]:
+    """Return the fitted-parameter inputs, excluding workspace schema metadata.
+
+    Workspace/manifest schema revisions are publication engineering, not a reason to
+    rerun an already-completed optimizer when the fitted payload and every optimizer
+    input are unchanged.
+    """
+
+    return {
+        str(key): value
+        for key, value in dict(contract or {}).items()
+        if str(key) != "schema"
+    }
+
+
+def _benchmark_workspace_source_path(
+    work_root: Path, *, family: str, policy: str
+) -> Path:
+    schedule_root = Path(work_root) / "schedule_2021_forward"
+    if normalize_strategy_param_family(family) == "min":
+        schedule_root = schedule_root / "p2_dl_off_trained"
+    filename = f"roos_{POLICY_FILENAME_BY_NAME[normalize_strategy_param_policy(policy)]}"
+    return schedule_root / "active_params" / filename
+
+
+def _benchmark_fast_republish_source(
+    *, root: Path, benchmark_id: str, seed: int, family: str, policy: str,
+    target_path: Path, build_contract: dict[str, Any], comparison_end_date: str,
+) -> Path | None:
+    """Return an existing workspace payload that can repair publication metadata only.
+
+    This is intentionally stricter than simply trusting the target JSON: the current
+    target and the retained optimizer workspace output must normalize to the same
+    payload, the workspace fitting contract must match all scientific inputs, and
+    coverage/selector must still satisfy the requested schedule.
+    """
+
+    if not target_path.is_file():
+        return None
+    target_payload = _load_json_object(target_path)
+    if target_payload is None:
+        return None
+    if str(target_payload.get("selector") or "") != normalize_strategy_param_policy(policy):
+        return None
+    coverage_end = _benchmark_parameter_coverage_end(target_path)
+    if coverage_end is None or str(coverage_end) < str(comparison_end_date):
+        return None
+    work_root = resolve_strategy_param_optimizer_work_dir(
+        root,
+        scope=STRATEGY_PARAM_WORK_SCOPE_BENCHMARK,
+        benchmark_id=str(benchmark_id),
+        seed=int(seed),
+        family=normalize_strategy_param_family(family),
+    )
+    work_contract_path = Path(work_root) / "work_contract.json"
+    source_path = _benchmark_workspace_source_path(
+        Path(work_root), family=family, policy=policy
+    )
+    if not work_contract_path.is_file() or not source_path.is_file():
+        return None
+    try:
+        retained_contract = load_json_strict(work_contract_path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(retained_contract, dict):
+        return None
+    if _benchmark_build_contract_scientific_payload(retained_contract) != (
+        _benchmark_build_contract_scientific_payload(build_contract)
+    ):
+        return None
+    source_payload = _load_json_object_permissive(source_path)
+    if source_payload is None:
+        return None
+    normalized_source = normalize_strategy_param_payload_for_persistence(source_payload)
+    normalized_target = normalize_strategy_param_payload_for_persistence(target_payload)
+    if normalized_source != normalized_target:
+        return None
+    return source_path.resolve()
+
+
 def _benchmark_manifest_matches_current_policy(
     manifest_path: Path, *, benchmark: dict[str, Any], benchmark_id: str, seed: int,
     family: str, evaluation_mode: str, policy: str, target_path: Path,
@@ -1299,6 +1379,19 @@ def _resolve_robustness_benchmark_strategy_parameter_state(
             comparison_end_date=str(comparison_end_date), build_contract=build_contract,
         )
     )
+    repair_source = None
+    if not reusable:
+        repair_source = _benchmark_fast_republish_source(
+            root=root, benchmark_id=str(benchmark_id), seed=int(seed),
+            family=normalized_family, policy=normalized_policy, target_path=target,
+            build_contract=build_contract, comparison_end_date=str(comparison_end_date),
+        )
+    action = (
+        "REUSE" if reusable else
+        "REPAIR" if repair_source is not None else
+        "REBUILD" if target.exists() or manifest_path.exists() else
+        "BUILD"
+    )
     return {
         "root": root,
         "family": normalized_family,
@@ -1309,7 +1402,8 @@ def _resolve_robustness_benchmark_strategy_parameter_state(
         "build_contract": build_contract,
         "target": target,
         "manifest_path": manifest_path,
-        "action": "REUSE" if reusable else ("REBUILD" if target.exists() or manifest_path.exists() else "BUILD"),
+        "repair_source_path": repair_source,
+        "action": action,
     }
 
 
@@ -1412,6 +1506,42 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
             "initial_2021_member_sha256": str(initial_sha),
         }
 
+    if str(state["action"]) == "REPAIR":
+        source_path = Path(state["repair_source_path"]).resolve()
+        work_root = resolve_strategy_param_optimizer_work_dir(
+            root, scope=STRATEGY_PARAM_WORK_SCOPE_BENCHMARK,
+            benchmark_id=str(benchmark_id), seed=int(seed), family=family,
+        )
+        _assert_optimizer_work_source(source_path=source_path, work_root=Path(work_root))
+        _write_json(Path(work_root) / "work_contract.json", dict(build_contract))
+        initial_member_sha = _benchmark_effective_member_sha256(target)
+        manifest = refresh_strategy_parameter_benchmark_manifest(
+            root, benchmark_id=str(benchmark_id), seed=int(seed), family=family,
+            evaluation_mode="rolling",
+            source_records={
+                policy: {
+                    "benchmark_initial_2021_member_sha256": str(initial_member_sha),
+                    "same_seed_oos_rolling_initial_required": True,
+                    "schedule_kind": "annual_refit",
+                    "same_json_oos_rolling": True,
+                    "build_contract": build_contract,
+                    "path": _project_relative(root, source_path),
+                }
+            },
+        )
+        if not bool(quiet):
+            _print_published_strategy_param_paths(
+                root,
+                title=f"Benchmark 正式策略參數 | {benchmark_id} | seed={int(seed)} | publication repair",
+                paths={policy: target},
+                manifest_path=manifest,
+            )
+        return {
+            "action": "REPAIR", "path": target, "manifest_path": manifest,
+            "sha256": compute_strategy_param_file_sha256(target),
+            "initial_2021_member_sha256": str(initial_member_sha),
+        }
+
     work_root = _benchmark_optimizer_work_root(
         root, benchmark_id=str(benchmark_id), seed=int(seed), family=family
     )
@@ -1486,7 +1616,8 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
             manifest_path=manifest,
         )
     return {
-        "action": "BUILD", "path": target, "manifest_path": manifest,
+        "action": "REBUILD" if str(state["action"]) == "REBUILD" else "BUILD",
+        "path": target, "manifest_path": manifest,
         "sha256": compute_strategy_param_file_sha256(target),
         "initial_2021_member_sha256": str(initial_member_sha),
     }
