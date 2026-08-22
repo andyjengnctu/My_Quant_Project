@@ -155,7 +155,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config import strategy_compare as strategy_config
-    from config.breakout_quality import get_continuous_ranker_execution_recipe
+    from config.breakout_quality import (
+        get_breakout_quality_workflow_settings,
+        get_continuous_ranker_execution_recipe,
+    )
     from config.training_policy import (
         OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
         ROBUSTNESS_BENCHMARK_RESOLVED_SEEDS,
@@ -336,7 +339,70 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         project_root=project_root,
     )
 
+    from core.training_scheduler import pop_next_seed_diverse_unit
+    from services.research import breakout_quality_application as model_application
     from filters.breakout_quality import strategy_multi_seed_robustness as robustness_runtime
+
+    application_source = read_source_text(
+        project_root / "services" / "research" / "breakout_quality_application.py"
+    )
+    robustness_source = read_source_text(
+        project_root / "filters" / "breakout_quality" / "strategy_multi_seed_robustness.py"
+    )
+    check_true(
+        "normal_and_robustness_share_gpu_training_worker_ssot_and_seed_diverse_scheduler",
+        int(strategy_config.STRATEGY_COMPARE_GPU_TRAIN_WORKERS) >= 1
+        and float(strategy_config.STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS) > 0.0
+        and all(
+            int(strategy_config.get_strategy_multi_seed_robustness_settings(str(mode["robustness_id"])).gpu_train_workers)
+            == int(strategy_config.STRATEGY_COMPARE_GPU_TRAIN_WORKERS)
+            for mode in modes
+        )
+        and "ThreadPoolExecutor(max_workers=worker_count)" in application_source
+        and "subprocess.Popen(" in application_source
+        and "pop_next_seed_diverse_unit(jobs, futures.values())" in application_source
+        and "pop_next_seed_diverse_unit(" in robustness_source,
+    )
+
+    single_seed_pending = robustness_runtime.deque([
+        {"seed": 42, "dl_id": "SOURCE_B"},
+        {"seed": 42, "dl_id": "SOURCE_C"},
+    ])
+    single_seed_selected = pop_next_seed_diverse_unit(
+        single_seed_pending,
+        ({"seed": 42, "dl_id": "SOURCE_A"},),
+    )
+    check(
+        "single_seed_scheduler_uses_next_dl_source_when_second_gpu_worker_is_free",
+        (42, "SOURCE_B"),
+        (int(single_seed_selected["seed"]), str(single_seed_selected["dl_id"])),
+    )
+
+    rolling_settings = settings_by_mode[
+        next(profile_id for profile_id in settings_by_mode if profile_id.endswith("_rolling"))
+    ]
+    normal_dl = next(
+        rolling_settings.dl_sources[arm.dl_id]
+        for arm in rolling_settings.enabled_arms
+        if arm.dl_enabled and arm.dl_id in rolling_settings.dl_sources
+    )
+    normal_workflow = get_breakout_quality_workflow_settings(
+        experiment_profile=str(normal_dl.experiment_profile)
+    )
+    normal_command, normal_args, _ = model_application._strategy_compare_model_build_command(
+        source=normal_dl,
+        workflow=normal_workflow,
+        pit_dir_override=None,
+    )
+    seed_arg_index = normal_args.index("--seed") + 1
+    check_true(
+        "normal_parallel_training_keeps_canonical_workflow_seed_and_isolated_subprocess",
+        int(normal_args[seed_arg_index]) == int(normal_workflow.seed)
+        and normal_command[:3]
+        == [model_application.sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores"]
+        and "--resume" in normal_args
+        and "--single-score-block" not in normal_args,
+    )
 
     pending_trainings = robustness_runtime.deque([
         {"seed": 101, "dl_id": "SOURCE_A"},

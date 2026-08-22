@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 import importlib
 import json
 import math
 import os
+import subprocess
 import sys
+import tempfile
+from threading import Lock
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,7 +45,9 @@ from config.breakout_quality import (
     get_breakout_quality_rolling_timing_settings,
     get_breakout_quality_workflow_settings,
 )
-from core.display_common import render_elapsed
+from core.display_common import InlineProgress, render_elapsed
+from core.training_progress import read_trainer_epoch_progress
+from core.training_scheduler import pop_next_seed_diverse_unit
 from core.runtime_utils import (
     is_interactive_console,
     resolve_cli_program_name,
@@ -113,6 +120,9 @@ from core.console_report import (
     render_table,
     render_title,
 )
+
+
+STRATEGY_COMPARE_TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
 
 COMMAND_MODULES = {
@@ -2546,14 +2556,156 @@ def prepare_strategy_compare_model_artifacts(
     )
 
 
+def _strategy_compare_model_build_command(
+    *,
+    source,
+    workflow,
+    pit_dir_override: Path | None,
+) -> tuple[list[str], list[str], dict[str, object]]:
+    """Build one canonical trainer subprocess command without changing identity."""
+
+    if source.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+        args = [
+            "--filter-id", str(source.filter_id),
+            "--model-architecture", str(source.model_architecture),
+            "--experiment-profile", str(source.experiment_profile),
+            "--seed", str(workflow.seed),
+        ]
+        return (
+            [
+                sys.executable,
+                "-m",
+                "tools.filters.breakout_quality.train_continuous_ranker",
+                *args,
+            ],
+            args,
+            {"score_source": str(source.score_source)},
+        )
+
+    if source.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+        raise ValueError(
+            f"不支援的Strategy Compare model score source: {source.score_source!r}"
+        )
+    if not workflow.rolling_authorized:
+        raise ValueError(
+            "設定的Rolling PIT source未授權current Rolling workflow: "
+            f"{source.dl_id}"
+        )
+
+    fold_months = int(
+        source.point_in_time_fold_months
+        if source.point_in_time_fold_months is not None
+        else workflow.point_in_time_fold_months
+    )
+    score_start_date = (
+        str(source.point_in_time_score_start_date)
+        if source.point_in_time_score_start_date not in (None, "")
+        else str(workflow.point_in_time_score_start_date)
+    )
+    score_end_date = (
+        source.point_in_time_score_end_date
+        if source.point_in_time_score_end_date not in (None, "")
+        else workflow.point_in_time_score_end_date
+    )
+    args = [
+        "--filter-id", str(source.filter_id),
+        "--model-architecture", str(source.model_architecture),
+        "--experiment-profile", str(source.experiment_profile),
+        "--score-start-date", score_start_date,
+        "--fold-months", str(fold_months),
+        "--inner-validation-months", str(workflow.point_in_time_inner_validation_months),
+        "--seed", str(workflow.seed),
+        "--resume",
+    ]
+    if source.point_in_time_fold_anchor_date not in (None, ""):
+        args.extend(["--fold-anchor-date", str(source.point_in_time_fold_anchor_date)])
+    if source.point_in_time_single_score_block:
+        args.append("--single-score-block")
+    if score_end_date:
+        args.extend(["--score-end-date", str(score_end_date)])
+    if pit_dir_override is not None:
+        args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
+    return (
+        [
+            sys.executable,
+            "-m",
+            "tools.filters.breakout_quality.build_point_in_time_scores",
+            *args,
+        ],
+        args,
+        {
+            "score_source": str(source.score_source),
+            "score_start_date": score_start_date,
+            "score_end_date": score_end_date,
+            "fold_months": fold_months,
+        },
+    )
+
+
+def _terminate_strategy_compare_model_process(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=STRATEGY_COMPARE_TRAINER_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+def _run_strategy_compare_model_build_subprocess(
+    job: dict[str, object],
+    *,
+    active_processes: dict[str, subprocess.Popen],
+    active_processes_lock: Lock,
+) -> dict[str, object]:
+    log_path = Path(str(job["log_path"]))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env[COMPACT_CONSOLE_ENV] = "0"
+    env["PYTHONUNBUFFERED"] = "1"
+    env["BREAKOUT_QUALITY_EPOCH_PROGRESS_MARKERS"] = "1"
+    started = time.perf_counter()
+    with log_path.open("w", encoding="utf-8") as handle:
+        proc = subprocess.Popen(
+            list(job["command"]),
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        key = str(job["dl_id"])
+        with active_processes_lock:
+            active_processes[key] = proc
+        try:
+            returncode = proc.wait()
+        except BaseException:
+            _terminate_strategy_compare_model_process(proc)
+            raise
+        finally:
+            with active_processes_lock:
+                active_processes.pop(key, None)
+    elapsed = time.perf_counter() - started
+    if int(returncode or 0) != 0:
+        tail = log_path.read_text(encoding="utf-8", errors="replace")[-5000:]
+        raise RuntimeError(
+            "Strategy Compare canonical模型訓練失敗: "
+            f"dl_id={job['dl_id']}, returncode={returncode}; log_tail={tail}"
+        )
+    return {"elapsed_sec": elapsed, "returncode": int(returncode or 0)}
+
+
 def _prepare_strategy_compare_model_artifacts(
     program_name: str, *, profile_ids: tuple[str, ...] | None = None
 ) -> int:
-    """Prepare model artifacts for the selected current Rolling Test mode(s).
+    """Prepare current Strategy Compare model artifacts with shared GPU-unit scheduling.
 
-    OOS/Rolling share the canonical trainer and model identities but use different
-    score-block semantics and aggregate paths. Strategy Compare may invoke this canonical
-    model-work handler as an orchestrator, but it does not own or duplicate training logic.
+    Normal Strategy Compare keeps its canonical workflow seed (currently one seed) but
+    uses the same top-level execution policy as robustness: isolated trainer subprocesses,
+    up to the configured GPU worker count, with each PIT training unit retaining serial
+    fold execution.  Only throughput changes; model identity, seed, target and fitting
+    contracts are untouched.
     """
 
     comparisons, sources = _strategy_compare_required_model_sources(profile_ids)
@@ -2565,179 +2717,195 @@ def _prepare_strategy_compare_model_artifacts(
         raise ValueError(f"Strategy Compare profiles dataset不一致: {sorted(datasets)}")
     comparison = comparisons[0]
 
+    from config.strategy_compare import (
+        STRATEGY_COMPARE_GPU_TRAIN_WORKERS,
+        STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
+    )
+
+    worker_count = max(1, int(STRATEGY_COMPARE_GPU_TRAIN_WORKERS))
     color_enabled = console_color_enabled()
     print(
         paint("策略比較模型工件準備", "cyan", enabled=color_enabled, bold=True)
-        + f" | profiles={len(comparisons)} | sources={len(sources)} | dataset={comparison.dataset}"
+        + f" | profiles={len(comparisons)} | sources={len(sources)}"
+        + f" | dataset={comparison.dataset} | GPU workers={worker_count}"
     )
-    for source_index, (dl_id, source) in enumerate(sources, start=1):
-        workflow = get_breakout_quality_workflow_settings(
-            experiment_profile=str(source.experiment_profile)
-        )
-        if (
-            str(workflow.filter_id) != str(source.filter_id)
-            or str(workflow.model_architecture) != str(source.model_architecture)
-        ):
-            raise ValueError(
-                f"Strategy Compare model source與workflow identity不一致: {dl_id}"
-            )
-        print(
-            paint(
-                f"[{source_index}/{len(sources)}]",
-                "cyan",
-                enabled=color_enabled,
-                bold=True,
-            )
-            + f" {dl_id} | profile={source.experiment_profile}"
-        )
 
-        if source.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
-            # Legacy-only compatibility path; current Fast/Overnight profiles use PIT.
-            try:
-                load_continuous_ranker_oos_contract(
-                    PROJECT_ROOT,
-                    str(source.filter_id),
-                    str(source.model_architecture),
-                    str(source.experiment_profile),
-                )
-            except (OSError, ValueError, KeyError, TypeError):
-                code = _prepare_strategy_compare_model_upstream(
-                    program_name,
-                    workflow=workflow,
-                    dataset_profile=str(comparison.dataset),
-                )
-                if code != 0:
-                    return int(code)
-                code = _run_command(
-                    "train-continuous-ranker",
-                    [
-                        "--filter-id", str(source.filter_id),
-                        "--model-architecture", str(source.model_architecture),
-                        "--experiment-profile", str(source.experiment_profile),
-                        "--seed", str(workflow.seed),
-                    ],
-                    program_name=program_name,
-                )
-                if code != 0:
-                    return int(code)
-            else:
-                print("  Frozen compatibility policy：REUSE 已完成且identity一致的模型／report／scores")
-            continue
+    selected_profile_ids = (
+        tuple(str(value) for value in profile_ids)
+        if profile_ids is not None
+        else tuple(str(item.profile_id) for item in comparisons)
+    )
+    code = prepare_strategy_compare_model_upstream_artifacts(
+        program_name=program_name,
+        profile_ids=selected_profile_ids,
+    )
+    if code != 0:
+        return int(code)
 
-        if source.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-            raise ValueError(
-                f"不支援的Strategy Compare model score source: {source.score_source!r}"
+    jobs: deque[dict[str, object]] = deque()
+    audit_jobs: list[dict[str, object]] = []
+    legacy_reuse: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="strategy_compare_model_training_") as temp_dir:
+        log_root = Path(temp_dir)
+        for source_index, (dl_id, source) in enumerate(sources, start=1):
+            workflow = get_breakout_quality_workflow_settings(
+                experiment_profile=str(source.experiment_profile)
             )
-        if not workflow.rolling_authorized:
-            raise ValueError(
-                f"設定的Rolling PIT source未授權current Rolling workflow: {dl_id}"
-            )
-
-        code = _prepare_strategy_compare_model_upstream(
-            program_name,
-            workflow=workflow,
-            dataset_profile=str(comparison.dataset),
-        )
-        if code != 0:
-            return int(code)
-
-        fold_months = int(
-            source.point_in_time_fold_months
-            if source.point_in_time_fold_months is not None
-            else workflow.point_in_time_fold_months
-        )
-        pit_dir_override = None
-        if source.point_in_time_dirname not in (None, ""):
-            pit_dir_override = (
-                resolve_filter_model_output_dir(
-                    PROJECT_ROOT,
-                    str(source.filter_id),
-                    str(source.model_architecture),
-                    str(source.experiment_profile),
+            if (
+                str(workflow.filter_id) != str(source.filter_id)
+                or str(workflow.model_architecture) != str(source.model_architecture)
+            ):
+                raise ValueError(
+                    f"Strategy Compare model source與workflow identity不一致: {dl_id}"
                 )
-                / str(source.point_in_time_dirname)
+
+            if source.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+                try:
+                    load_continuous_ranker_oos_contract(
+                        PROJECT_ROOT,
+                        str(source.filter_id),
+                        str(source.model_architecture),
+                        str(source.experiment_profile),
+                    )
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
+                else:
+                    legacy_reuse.append(str(dl_id))
+                    continue
+
+            pit_dir_override = None
+            if source.point_in_time_dirname not in (None, ""):
+                pit_dir_override = (
+                    resolve_filter_model_output_dir(
+                        PROJECT_ROOT,
+                        str(source.filter_id),
+                        str(source.model_architecture),
+                        str(source.experiment_profile),
+                    )
+                    / str(source.point_in_time_dirname)
+                )
+            command, report_args, metadata = _strategy_compare_model_build_command(
+                source=source,
+                workflow=workflow,
+                pit_dir_override=pit_dir_override,
             )
-        score_start_date = (
-            str(source.point_in_time_score_start_date)
-            if source.point_in_time_score_start_date not in (None, "")
-            else str(workflow.point_in_time_score_start_date)
-        )
-        score_end_date = (
-            source.point_in_time_score_end_date
-            if source.point_in_time_score_end_date not in (None, "")
-            else workflow.point_in_time_score_end_date
-        )
-        build_args = [
-            "--filter-id", str(source.filter_id),
-            "--model-architecture", str(source.model_architecture),
-            "--experiment-profile", str(source.experiment_profile),
-            "--score-start-date", score_start_date,
-            "--fold-months", str(fold_months),
-            "--inner-validation-months", str(workflow.point_in_time_inner_validation_months),
-            "--seed", str(workflow.seed),
-            "--resume",
-        ]
-        if source.point_in_time_fold_anchor_date not in (None, ""):
-            build_args.extend(
-                ["--fold-anchor-date", str(source.point_in_time_fold_anchor_date)]
+            job = {
+                "seed": int(workflow.seed),
+                "source_index": int(source_index),
+                "source_count": int(len(sources)),
+                "dl_id": str(dl_id),
+                "source": source,
+                "workflow": workflow,
+                "pit_dir_override": pit_dir_override,
+                "command": command,
+                "report_args": report_args,
+                "metadata": metadata,
+                "log_path": log_root / f"{source_index:02d}_{dl_id}.log",
+            }
+            jobs.append(job)
+            if str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+                audit_jobs.append(job)
+
+        for dl_id in legacy_reuse:
+            print(
+                paint("[REUSE]", "green", enabled=color_enabled, bold=True)
+                + f" {dl_id} | Frozen compatibility model/report/scores"
             )
-        if source.point_in_time_single_score_block:
-            build_args.append("--single-score-block")
-        if score_end_date:
-            build_args.extend(["--score-end-date", str(score_end_date)])
-        if pit_dir_override is not None:
-            build_args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
-        print(
-            "  PIT policy："
-            + (
-                f"single OOS block；score={score_start_date}→{('最新' if str(score_end_date).lower() == 'auto' else score_end_date)}"
-                if source.point_in_time_single_score_block
-                else f"{fold_months}M cadence"
-            )
-            + (
-                ""
-                if source.point_in_time_fold_anchor_date in (None, "")
-                else f"；anchor={source.point_in_time_fold_anchor_date}"
-            )
-            + "；resume existing folds；缺少／不相容fold才補訓"
-        )
-        from services.breakout_quality.point_in_time_scores import (
-            build_selection_point_in_time_scores,
-        )
+
+        active_processes: dict[str, subprocess.Popen] = {}
+        active_processes_lock = Lock()
+        executor = ThreadPoolExecutor(max_workers=worker_count)
+        futures: dict[Future, dict[str, object]] = {}
+        progress = InlineProgress()
+        started_total = time.perf_counter()
+        progress_interval = max(1.0, float(STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS))
+        next_progress = started_total + progress_interval
+
+        def submit_jobs() -> None:
+            while jobs and len(futures) < worker_count:
+                job = pop_next_seed_diverse_unit(jobs, futures.values())
+                job["submitted_at"] = time.perf_counter()
+                future = executor.submit(
+                    _run_strategy_compare_model_build_subprocess,
+                    job,
+                    active_processes=active_processes,
+                    active_processes_lock=active_processes_lock,
+                )
+                futures[future] = job
+                progress.print_line(
+                    paint("[TRAIN]", "cyan", enabled=color_enabled, bold=True)
+                    + f" seed={job['seed']} | {job['dl_id']}"
+                    + f" | GPU running={len(futures)}/{worker_count}"
+                )
+
+        try:
+            submit_jobs()
+            while jobs or futures:
+                finished = [future for future in futures if future.done()]
+                for future in finished:
+                    job = futures.pop(future)
+                    result = future.result()
+                    # Refill the freed GPU slot before rendering the completed unit report.
+                    submit_jobs()
+                    _emit_breakout_quality_simple_report(
+                        "build-point-in-time-scores"
+                        if str(job["metadata"].get("score_source"))
+                        == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+                        else "train-continuous-ranker",
+                        list(job["report_args"]),
+                        returncode=0,
+                        elapsed_sec=float(result["elapsed_sec"]),
+                    )
+                    progress.print_line(
+                        paint("[TRAIN DONE]", "green", enabled=color_enabled, bold=True)
+                        + f" seed={job['seed']} | {job['dl_id']}"
+                        + f" | elapsed={render_elapsed(float(result['elapsed_sec']))}"
+                    )
+                submit_jobs()
+                now = time.perf_counter()
+                if futures and now >= next_progress:
+                    parts = []
+                    for job in sorted(
+                        futures.values(), key=lambda item: int(item["source_index"])
+                    ):
+                        epoch = read_trainer_epoch_progress(Path(str(job["log_path"])))
+                        epoch_text = "epoch pending"
+                        if epoch is not None:
+                            phase, current_epoch, total_epochs = epoch
+                            epoch_text = (
+                                f"epoch {phase} {current_epoch}/{total_epochs}"
+                                if total_epochs > 0
+                                else f"epoch {phase} -"
+                            )
+                        parts.append(
+                            f"{job['dl_id']} {render_elapsed(now-float(job['submitted_at']))} {epoch_text}"
+                        )
+                    progress.update(
+                        paint("[TRAIN PROGRESS]", "cyan", enabled=color_enabled, bold=True)
+                        + f" GPU={len(futures)}/{worker_count} | "
+                        + " ; ".join(parts)
+                    )
+                    next_progress = now + progress_interval
+                if jobs or futures:
+                    time.sleep(0.25)
+            progress.finish()
+        except BaseException:
+            with active_processes_lock:
+                processes = list(active_processes.values())
+            for proc in processes:
+                _terminate_strategy_compare_model_process(proc)
+            progress.finish()
+            raise
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
+
         from services.breakout_quality.point_in_time_audit import (
             audit_selection_point_in_time_scores,
         )
 
-        with _compact_console_scope():
-            stage_started = time.perf_counter()
-            code = build_selection_point_in_time_scores(
-                filter_id=str(source.filter_id),
-                model_architecture=str(source.model_architecture),
-                experiment_profile=str(source.experiment_profile),
-                score_start_date=score_start_date,
-                score_end_date=(None if score_end_date in (None, "") else str(score_end_date)),
-                fold_months=fold_months,
-                fold_anchor_date=(
-                    None
-                    if source.point_in_time_fold_anchor_date in (None, "")
-                    else str(source.point_in_time_fold_anchor_date)
-                ),
-                inner_validation_months=int(workflow.point_in_time_inner_validation_months),
-                seed=int(workflow.seed),
-                resume=True,
-                point_in_time_dir_override=(
-                    None if pit_dir_override is None else str(pit_dir_override)
-                ),
-                single_score_block=bool(source.point_in_time_single_score_block),
-            )
-            if code != 0:
-                return int(code)
-            _emit_breakout_quality_simple_report(
-                "build-point-in-time-scores",
-                build_args,
-                returncode=0,
-                elapsed_sec=time.perf_counter() - stage_started,
-            )
+        for job in audit_jobs:
+            source = job["source"]
+            pit_dir_override = job["pit_dir_override"]
             audit_args = [
                 "--filter-id", str(source.filter_id),
                 "--model-architecture", str(source.model_architecture),
@@ -2762,6 +2930,7 @@ def _prepare_strategy_compare_model_artifacts(
                 returncode=0,
                 elapsed_sec=time.perf_counter() - stage_started,
             )
+
     print(
         paint("策略比較所需模型工件已就緒", "green", enabled=color_enabled, bold=True)
     )

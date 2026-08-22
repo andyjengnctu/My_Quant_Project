@@ -65,6 +65,8 @@ from config.execution_policy import (
     DEFAULT_MAX_POSITION_CAP_PCT,
 )
 from core.file_integrity import canonical_json_sha256
+from core.training_progress import read_trainer_epoch_progress
+from core.training_scheduler import pop_next_seed_diverse_unit
 from core.console_report import (
     console_color_enabled,
     paint,
@@ -2928,54 +2930,11 @@ def _format_elapsed(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{sec:02d}"
 
 
-_EPOCH_PROGRESS_MARKER_RE = re.compile(
-    r"__BQ_EPOCH_PROGRESS__\s+phase=(select|refit)\s+epoch=(\d+)\s*/\s*(\d+)",
-    re.IGNORECASE,
-)
-_EPOCH_LOG_RE = re.compile(r"Epoch\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
-_EPOCH_PHASE_RE = re.compile(r"(Epoch\s*選擇|Fold歷史資料重訓|完整 Selection(?: 重訓| 訓練)?)")
-_PIT_TRAINING_FOLD_RE = re.compile(r"fold_\d{8}_\d{8}.*訓練並評分")
-
-
 def _trainer_epoch_progress(meta: dict[str, Any]) -> tuple[str, int, int] | None:
-    """Read the active epoch phase from the redirected canonical trainer log tail."""
+    """Read active epoch phase from the canonical trainer log."""
 
     log_path = Path(str(meta["research_dir"])).resolve() / "train.log"
-    if not log_path.is_file():
-        return None
-    try:
-        with log_path.open("rb") as handle:
-            handle.seek(0, os.SEEK_END)
-            size = handle.tell()
-            handle.seek(max(0, size - 131072), os.SEEK_SET)
-            text = handle.read().decode("utf-8", errors="replace")
-    except OSError:
-        return None
-    # Restrict epoch parsing to the latest actively-trained PIT fold.  Without this boundary,
-    # the just-completed fold's final refit epoch can briefly appear beside the next fold while
-    # the next fold is still preparing data.
-    fold_matches = list(_PIT_TRAINING_FOLD_RE.finditer(text))
-    if fold_matches:
-        text = text[fold_matches[-1].start():]
-    marker_matches = list(_EPOCH_PROGRESS_MARKER_RE.finditer(text))
-    if marker_matches:
-        marker = marker_matches[-1]
-        return (
-            str(marker.group(1)).lower(),
-            int(marker.group(2)),
-            int(marker.group(3)),
-        )
-    phase_matches = list(_EPOCH_PHASE_RE.finditer(text))
-    if not phase_matches:
-        return None
-    phase_match = phase_matches[-1]
-    epoch_matches = list(_EPOCH_LOG_RE.finditer(text, phase_match.end()))
-    phase_raw = str(phase_match.group(1))
-    phase = "select" if phase_raw.startswith("Epoch") else "refit"
-    if not epoch_matches:
-        return (phase, 0, 0)
-    epoch_match = epoch_matches[-1]
-    return (phase, int(epoch_match.group(1)), int(epoch_match.group(2)))
+    return read_trainer_epoch_progress(log_path)
 
 
 def _pit_saved_fold_progress(meta: dict[str, Any]) -> tuple[int, int] | None:
@@ -3053,17 +3012,10 @@ def _pop_next_training_unit(
     pending_trainings: deque[dict[str, Any]],
     training_futures: dict[Future, dict[str, Any]],
 ) -> dict[str, Any]:
-    if not pending_trainings:
-        raise IndexError("沒有待排程的training unit")
-    active_seeds = {int(meta["seed"]) for meta in training_futures.values()}
-    if active_seeds:
-        for index, meta in enumerate(pending_trainings):
-            if int(meta["seed"]) not in active_seeds:
-                pending_trainings.rotate(-index)
-                selected = pending_trainings.popleft()
-                pending_trainings.rotate(index)
-                return selected
-    return pending_trainings.popleft()
+    return pop_next_seed_diverse_unit(
+        pending_trainings,
+        training_futures.values(),
+    )
 
 
 def _normalize_yearly_rows(

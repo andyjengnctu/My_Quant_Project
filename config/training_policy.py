@@ -106,7 +106,7 @@ OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 6  # local_min_score finalist rev
 OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT = 1000
 
 # Rolling OOS 與 Selection rolling adaptation 每個 fold 的預設 trial 數。
-OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 20
+OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 10
 
 # Canonical optimizer stochastic seed for ordinary production/single-seed training.
 OPTIMIZER_RANDOM_SEED_DEFAULT = 42
