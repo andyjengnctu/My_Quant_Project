@@ -1331,6 +1331,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     strategy_replay_source = (
         project_root / "filters/breakout_quality/strategy_compare_replay.py"
     ).read_text(encoding="utf-8")
+    strategy_engine_source = (
+        project_root / "filters/breakout_quality/strategy_compare_engine.py"
+    ).read_text(encoding="utf-8")
     model_report_source = (
         project_root / "services/breakout_quality/report.py"
     ).read_text(encoding="utf-8")
@@ -2055,7 +2058,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "param_evaluation_mode=param_evaluation_mode" in multi_seed_source
         and "_strategy_only_baseline_context_available(" in multi_seed_source
         and '"param_evaluation_mode": str(' in strategy_reuse_source
-        and "expected_param_evaluation_mode" in strategy_replay_source,
+        and "expected_param_evaluation_mode=str(param_evaluation_mode)" in strategy_replay_source
+        and "expected_param_evaluation_mode=str(param_evaluation_mode)" in strategy_engine_source,
     )
 
     check_true(

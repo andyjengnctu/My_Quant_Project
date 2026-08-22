@@ -832,6 +832,7 @@ def run_comparison(
                 expected_dataset=dataset,
                 expected_params_sha256=param_identity_sha256,
                 expected_param_policy=param_policy,
+                expected_param_evaluation_mode=str(param_evaluation_mode),
                 expected_optional_entry_filter_policy=optional_entry_filter_policy,
                 expected_shared_param_overrides=dict(shared_param_overrides or {}),
                 expected_max_positions=max_positions,
