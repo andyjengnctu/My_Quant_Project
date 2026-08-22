@@ -336,6 +336,35 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         project_root=project_root,
     )
 
+    from filters.breakout_quality import strategy_multi_seed_robustness as robustness_runtime
+
+    with tempfile.TemporaryDirectory(prefix="robustness_atomic_retry_") as temp_dir:
+        target = Path(temp_dir) / "manifest.json"
+        target.write_text("old\n", encoding="utf-8")
+        original_replace = robustness_runtime.os.replace
+        replace_attempts = {"count": 0}
+
+        def transient_replace(src, dst):
+            replace_attempts["count"] += 1
+            if replace_attempts["count"] <= 2:
+                raise PermissionError("simulated transient manifest lock")
+            return original_replace(src, dst)
+
+        with patch.object(robustness_runtime.os, "replace", side_effect=transient_replace), patch.object(
+            robustness_runtime.time, "sleep", return_value=None
+        ):
+            robustness_runtime._atomic_write_text(target, "new\n")
+
+        check(
+            "robustness_progress_manifest_retries_transient_permission_error",
+            (3, "new", 0),
+            (
+                replace_attempts["count"],
+                target.read_text(encoding="utf-8").strip(),
+                len(list(Path(temp_dir).glob(".manifest.json.*.tmp"))),
+            ),
+        )
+
     summary.update(
         {
             "suite_id": suite_id,

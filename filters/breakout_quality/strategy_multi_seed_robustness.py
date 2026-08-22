@@ -231,6 +231,23 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
+_ATOMIC_REPLACE_MAX_ATTEMPTS = 20
+_ATOMIC_REPLACE_RETRY_DELAY_SECONDS = 0.10
+
+
+def _atomic_replace_with_retry(temp: Path, path: Path) -> None:
+    """Publish one staged file, retrying only transient Windows-style lock failures."""
+
+    for attempt in range(1, _ATOMIC_REPLACE_MAX_ATTEMPTS + 1):
+        try:
+            os.replace(temp, path)
+            return
+        except PermissionError:
+            if attempt >= _ATOMIC_REPLACE_MAX_ATTEMPTS:
+                raise
+            time.sleep(_ATOMIC_REPLACE_RETRY_DELAY_SECONDS)
+
+
 def _atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
@@ -239,11 +256,23 @@ def _atomic_write_text(path: Path, text: str) -> None:
     os.close(fd)
     temp = Path(temp_name)
     try:
-        temp.write_text(text, encoding="utf-8")
-        os.replace(temp, path)
-    finally:
+        with temp.open("w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _atomic_replace_with_retry(temp, path)
+    except BaseException as exc:
         if temp.exists():
-            temp.unlink()
+            try:
+                temp.unlink()
+            except OSError as cleanup_exc:
+                add_note = getattr(exc, "add_note", None)
+                if callable(add_note):
+                    add_note(
+                        "atomic temp cleanup failed: "
+                        f"{type(cleanup_exc).__name__}: {cleanup_exc}"
+                    )
+        raise
 
 
 def _atomic_write_csv(
@@ -260,10 +289,19 @@ def _atomic_write_csv(
     temp = Path(temp_name)
     try:
         ordered.to_csv(temp, index=False, encoding="utf-8-sig")
-        os.replace(temp, path)
-    finally:
+        _atomic_replace_with_retry(temp, path)
+    except BaseException as exc:
         if temp.exists():
-            temp.unlink()
+            try:
+                temp.unlink()
+            except OSError as cleanup_exc:
+                add_note = getattr(exc, "add_note", None)
+                if callable(add_note):
+                    add_note(
+                        "atomic temp cleanup failed: "
+                        f"{type(cleanup_exc).__name__}: {cleanup_exc}"
+                    )
+        raise
 
 
 def _finite_or_none(value: Any) -> float | None:
