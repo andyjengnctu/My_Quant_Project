@@ -46,6 +46,7 @@ from config.breakout_quality import (
     get_breakout_quality_workflow_settings,
 )
 from core.display_common import InlineProgress, render_elapsed
+from core.file_integrity import load_json_object_or_none
 from core.training_progress import read_trainer_epoch_progress
 from core.strategy_comparison import validate_strategy_compare_gpu_train_workers
 from core.training_scheduler import pop_next_seed_diverse_unit
@@ -236,16 +237,6 @@ def _cli_option_value(args: list[str], flag: str, default=None):
     return args[index + 1]
 
 
-def _safe_json_object(path: Path) -> dict:
-    if not path.is_file():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
 def _simple_report_context(command: str, args: list[str]) -> tuple[str, str, str]:
     if command == "timing-rolling-training":
         timing = get_breakout_quality_rolling_timing_settings()
@@ -292,7 +283,7 @@ def _continuous_ranker_simple_report_payload(
     output_dir = resolve_filter_model_output_dir(
         PROJECT_ROOT, filter_id, architecture, profile
     )
-    return _safe_json_object(output_dir / CONTINUOUS_RANKER_REPORT_FILENAME)
+    return load_json_object_or_none(output_dir / CONTINUOUS_RANKER_REPORT_FILENAME) or {}
 
 
 def _render_continuous_ranker_simple_console(payload: dict) -> str:
@@ -486,7 +477,7 @@ def _simple_report_details(
                 / f"{candidate.continuous_target_id}__vs__{reference.continuous_target_id}"
             )
             report_json = detail_dir / "daily_target_comparison.json"
-            payload = _safe_json_object(report_json)
+            payload = load_json_object_or_none(report_json) or {}
             metrics = dict(payload.get("metrics") or {})
             rows.extend(
                 [
@@ -613,7 +604,7 @@ def _simple_report_details(
             resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
             / "continuous_ranker_comparison"
         )
-        payload = _safe_json_object(output_dir / "continuous_ranker_comparison.json")
+        payload = load_json_object_or_none(output_dir / "continuous_ranker_comparison.json") or {}
         configured = dict(payload.get("comparison_settings") or {})
         model_ids = tuple(str(value) for value in configured.get("model_ids") or ())
         summary_pair = tuple(str(value) for value in configured.get("summary_pair") or ())
@@ -750,7 +741,7 @@ def _simple_report_details(
                 PROJECT_ROOT, filter_id, architecture, profile
             )
         )
-        payload = _safe_json_object(audit_json)
+        payload = load_json_object_or_none(audit_json) or {}
         coverage = dict(payload.get("score_coverage") or {})
         if command == "build-point-in-time-scores" and not coverage:
             pit_manifest = (
@@ -760,7 +751,7 @@ def _simple_report_details(
                     PROJECT_ROOT, filter_id, architecture, profile
                 )
             )
-            manifest_payload = _safe_json_object(pit_manifest)
+            manifest_payload = load_json_object_or_none(pit_manifest) or {}
             coverage = dict(manifest_payload.get("coverage") or {})
         decision = dict(payload.get("decision_contract") or {})
         primary_scope = str(decision.get("primary_metric_scope") or "pass_only_target")
@@ -790,7 +781,7 @@ def _simple_report_details(
         report_json = resolve_filter_report_json_path(
             PROJECT_ROOT, filter_id, architecture, profile
         )
-        payload = _safe_json_object(report_json)
+        payload = load_json_object_or_none(report_json) or {}
         oos = dict((payload.get("split_summaries") or {}).get("oos") or {})
         conclusion = dict(payload.get("conclusion") or {})
         rows.extend(
@@ -823,8 +814,8 @@ def _simple_report_details(
             )
 
             timing_paths = resolve_rolling_timing_artifact_paths()
-            baseline = _safe_json_object(timing_paths["baseline"])
-            candidate_payload = _safe_json_object(timing_paths["candidate"])
+            baseline = load_json_object_or_none(timing_paths["baseline"]) or {}
+            candidate_payload = load_json_object_or_none(timing_paths["candidate"]) or {}
             comparison = dict(candidate_payload.get("comparison_to_baseline") or {})
             if baseline:
                 rows.append(
@@ -866,7 +857,7 @@ def _simple_report_details(
             target_dir = resolve_continuous_target_dir(
                 PROJECT_ROOT, filter_id, target_id=target_id
             )
-            manifest = _safe_json_object(target_dir / TARGET_MANIFEST_FILENAME)
+            manifest = load_json_object_or_none(target_dir / TARGET_MANIFEST_FILENAME) or {}
             coverage = dict(manifest.get("coverage") or {})
             rows.extend(
                 [
@@ -896,9 +887,9 @@ def _emit_breakout_quality_simple_report(
             resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
             / "continuous_ranker_comparison"
         )
-        comparison_payload = _safe_json_object(
+        comparison_payload = load_json_object_or_none(
             output_dir / "continuous_ranker_comparison.json"
-        )
+        ) or {}
         configured = dict(comparison_payload.get("comparison_settings") or {})
         model_ids = tuple(str(value) for value in configured.get("model_ids") or ())
         if not model_ids:

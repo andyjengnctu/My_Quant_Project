@@ -43,7 +43,11 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
 
     project_root = Path(__file__).resolve().parents[2]
     canonical_config_path = project_root / "config" / "breakout_quality.py"
+    research_config_path = project_root / "config" / "research.py"
+    training_policy_path = project_root / "config" / "training_policy.py"
     canonical_source = canonical_config_path.read_text(encoding="utf-8")
+    research_source = research_config_path.read_text(encoding="utf-8")
+    training_policy_source = training_policy_path.read_text(encoding="utf-8")
     canonical_app_path = project_root / "services" / "research" / "breakout_quality_application.py"
     compatibility_app_path = project_root / "tools" / "filters" / "breakout_quality" / "application.py"
     canonical_app_source = canonical_app_path.read_text(encoding="utf-8")
@@ -51,21 +55,29 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
     strategy_app_path = project_root / "apps" / "research.py"
     strategy_config_path = project_root / "config" / "strategy_compare.py"
 
-    check(
-        "single_seed_contract_has_one_editable_setting_and_no_workflow_seed",
-        (1, False),
-        (
-                    canonical_source.count("BREAKOUT_QUALITY_RANDOM_SEED ="),
-                    "BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED" in canonical_source,
-                ),
+    check_true(
+        "single_seed_contract_has_one_neutral_research_seed_ssot",
+        research_source.count("RESEARCH_SINGLE_SEED =") == 1
+        and "BREAKOUT_QUALITY_RANDOM_SEED = RESEARCH_SINGLE_SEED" in canonical_source
+        and "OPTIMIZER_RANDOM_SEED_DEFAULT = RESEARCH_SINGLE_SEED" in training_policy_source
+        and "BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED" not in canonical_source,
     )
 
     from config import breakout_quality as breakout_quality_config
+    from config import research as research_config
+    from config import training_policy as training_policy_config
 
     configured_seed = breakout_quality_config.resolve_breakout_quality_random_seed()
     check_true(
         "single_seed_contract_resolves_nonnegative_integer",
         isinstance(configured_seed, int) and configured_seed >= 0,
+    )
+
+    check_true(
+        "single_seed_contract_model_and_optimizer_defaults_share_research_seed",
+        int(breakout_quality_config.BREAKOUT_QUALITY_RANDOM_SEED)
+        == int(training_policy_config.OPTIMIZER_RANDOM_SEED_DEFAULT)
+        == int(research_config.RESEARCH_SINGLE_SEED),
     )
 
     with patch.object(breakout_quality_config, "BREAKOUT_QUALITY_RANDOM_SEED", 7):
@@ -138,7 +150,7 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
                 ),
     )
 
-    summary["seed_source"] = "config.breakout_quality.BREAKOUT_QUALITY_RANDOM_SEED"
+    summary["seed_source"] = "config.research.RESEARCH_SINGLE_SEED"
     summary["strategy_compare_entry"] = "apps/research.py compare"
     return results, summary
 
@@ -153,6 +165,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    project_root = Path(__file__).resolve().parents[2]
 
     from config import strategy_compare as strategy_config
     from config.breakout_quality import (
@@ -214,6 +228,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         .issubset(set(strategy_history.HISTORICAL_STRATEGY_DL_SOURCES))
         and {"C1", "C3", "C23", "C32", "C42", "C44", "C56", "C57"}
         .issubset(set(strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS)),
+    )
+
+    research_shell_source = (project_root / "apps" / "research.py").read_text(encoding="utf-8")
+    check_true(
+        "current_compare_cli_only_accepts_current_menu_profiles",
+        'profile_ids = {item["profile_id"] for item in get_strategy_comparison_menu_profiles()}'
+        in research_shell_source
+        and 'profile_ids = {item["profile_id"] for item in get_strategy_comparison_profiles()}'
+        not in research_shell_source,
     )
 
     current_param_sources = {
@@ -329,7 +352,6 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     settings = next(iter(settings_by_mode.values()))
-    project_root = Path(__file__).resolve().parents[2]
     from .synthetic_breakout_quality_strategy_preparation_cases import (
         append_strategy_compare_preparation_contract_checks,
     )
@@ -471,7 +493,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and 'scope="upstream"' in research_entry_source
         and "scope=_strategy_model_artifact_scope(action)" in research_entry_source
         and "model phase開始前canonical upstream尚未READY" in application_source
-        and "resolve_planned_comparison_period_from_upstream(" in robustness_source
+        and "def _comparison_period_from_status(" in robustness_source
+        and "status = collect_preparation_status(" in robustness_source
+        and "resolve_planned_comparison_period_from_upstream(" not in robustness_source
         and "rows = [*upstream_rows, *param_rows, *benchmark_rows]" in robustness_source
         and "int(item.execution_priority)" in comparison_source,
     )
@@ -522,7 +546,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     with tempfile.TemporaryDirectory(prefix="robustness_atomic_retry_") as temp_dir:
         target = Path(temp_dir) / "manifest.json"
         target.write_text("old\n", encoding="utf-8")
-        original_replace = robustness_runtime.os.replace
+        import core.file_integrity as file_integrity
+
+        original_replace = file_integrity.os.replace
         replace_attempts = {"count": 0}
 
         def transient_replace(src, dst):
@@ -531,10 +557,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 raise PermissionError("simulated transient manifest lock")
             return original_replace(src, dst)
 
-        with patch.object(robustness_runtime.os, "replace", side_effect=transient_replace), patch.object(
-            robustness_runtime.time, "sleep", return_value=None
+        with patch.object(file_integrity.os, "replace", side_effect=transient_replace), patch.object(
+            file_integrity.time, "sleep", return_value=None
         ):
-            robustness_runtime._atomic_write_text(target, "new\n")
+            file_integrity.atomic_write_text(target, "new\n")
 
         check(
             "robustness_progress_manifest_retries_transient_permission_error",

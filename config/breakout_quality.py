@@ -14,6 +14,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from config.research import RESEARCH_SINGLE_SEED
 from config.breakout_policy import (
     BREAKOUT_DEFAULT_HIGH_LEN,
     build_breakout_optimizer_high_len_values,
@@ -63,7 +64,7 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
-BREAKOUT_QUALITY_RANDOM_SEED = 42
+BREAKOUT_QUALITY_RANDOM_SEED = RESEARCH_SINGLE_SEED
 
 # Daily-universal batch PIT Gate：只放「可共用同一Target/period/fold contract」的profile。
 # 單一profile是否已被Forward證據授權PIT，改由ContinuousRankerResearchSpec.selection_pit_authorized控制；

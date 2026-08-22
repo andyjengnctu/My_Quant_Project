@@ -58,15 +58,15 @@ from filters.breakout_quality.strategy_compare_reporting import (
     _delta,
     _format_metric,
     _load_existing_comparison_payload,
-    _markdown_report,
     _normalize_yearly_completeness,
     _refresh_yearly_summary,
     _remove_legacy_html_outputs,
-    _render_strategy_console_report,
     _scenario_summary,
-    _strategy_pair_report_components,
     _to_json_native,
     _yearly_frame,
+    materialize_strategy_pair_readable_report,
+    render_strategy_pair_markdown,
+    render_strategy_pair_simple_report,
 )
 from filters.breakout_quality.strategy_compare_replay import (
     _load_reusable_no_filter_baseline,
@@ -291,52 +291,23 @@ def _parse_args(argv=None):
 
 
 
-def render_strategy_pair_simple_report(
-    payload: dict[str, Any],
-    *,
-    color: bool | None = None,
-) -> str:
-    """Compatibility façade over the canonical reporting module."""
-
-    metadata, baseline, quality, delta, yearly, diagnostics = (
-        _strategy_pair_report_components(payload)
-    )
-    return _render_strategy_console_report(
-        metadata, baseline, quality, delta, yearly, diagnostics, color=color
-    )
-
-
-def render_strategy_pair_markdown(payload: dict[str, Any]) -> str:
-    """Compatibility façade over the canonical reporting module."""
-
-    metadata, baseline, quality, delta, yearly, diagnostics = (
-        _strategy_pair_report_components(payload)
-    )
-    return _markdown_report(metadata, baseline, quality, delta, yearly, diagnostics)
-
-
-def materialize_strategy_pair_readable_report(
-    payload: dict[str, Any],
-    *,
-    output_dir: str | Path,
-) -> Path:
-    """Persist the canonical pair report while preserving the historical engine API."""
-
-    target_dir = Path(output_dir).resolve()
-    target_dir.mkdir(parents=True, exist_ok=True)
-    report_path = target_dir / "strategy_comparison.md"
-    report_path.write_text(render_strategy_pair_markdown(payload), encoding="utf-8")
-    return report_path
-
-
-
-
-
-
-
-
-
-
+def _resolve_continuous_score_override_period(
+    table: pd.DataFrame, *, execution_start_override=None
+) -> tuple[str, str, str]:
+    available_from = str(table.attrs.get("available_from") or "")
+    available_through = str(table.attrs.get("available_through") or "")
+    if not available_from or not available_through:
+        raise ValueError("Continuous ranker isolated score table缺少日期範圍metadata")
+    if execution_start_override in (None, ""):
+        execution_start = available_from
+    else:
+        execution_start = pd.Timestamp(str(execution_start_override)).strftime("%Y-%m-%d")
+        if execution_start > available_from:
+            raise ValueError(
+                "Continuous ranker isolated execution_start不可晚於第一個Score日："
+                f"execution_start={execution_start}, available_from={available_from}"
+            )
+    return execution_start, available_from, available_through
 
 
 def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
@@ -425,23 +396,6 @@ def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
 
 
 
-def _resolve_continuous_score_override_period(
-    table: pd.DataFrame, *, execution_start_override=None
-) -> tuple[str, str, str]:
-    available_from = str(table.attrs.get("available_from") or "")
-    available_through = str(table.attrs.get("available_through") or "")
-    if not available_from or not available_through:
-        raise ValueError("Continuous ranker isolated score table缺少日期範圍metadata")
-    if execution_start_override in (None, ""):
-        execution_start = available_from
-    else:
-        execution_start = pd.Timestamp(str(execution_start_override)).strftime("%Y-%m-%d")
-        if execution_start > available_from:
-            raise ValueError(
-                "Continuous ranker isolated execution_start不可晚於第一個Score日："
-                f"execution_start={execution_start}, available_from={available_from}"
-            )
-    return execution_start, available_from, available_through
 
 
 def run_comparison(

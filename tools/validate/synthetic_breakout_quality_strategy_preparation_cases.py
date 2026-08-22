@@ -168,7 +168,7 @@ def append_strategy_compare_preparation_contract_checks(
     }
     with patch.object(
         preparation_module,
-        "collect_artifact_status",
+        "collect_preparation_status",
         side_effect=(initial_wave_status, second_wave_status, final_wave_status),
     ), patch.object(
         preparation_module,

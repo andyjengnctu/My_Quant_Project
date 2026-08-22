@@ -1082,7 +1082,7 @@ def _collect_parameter_artifact_status(
 
     return parameter_rows, resolved_parameter_paths, resolved_arm_parameter_paths
 
-def collect_artifact_status(
+def collect_preparation_status(
     *,
     project_root: Path = PROJECT_ROOT,
     settings: StrategyComparisonSettings,
@@ -1195,7 +1195,7 @@ def collect_artifact_status(
 
 
 __all__ = [
-    "collect_artifact_status",
+    "collect_preparation_status",
     "model_upstream_prerequisite_blockers",
     "resolve_comparison_period",
     "resolve_planned_comparison_period_from_upstream",

@@ -1,6 +1,7 @@
 import math
 import random
 
+from config.research import RESEARCH_SINGLE_SEED
 from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
 
 # 期望值 (EV) 算法切換
@@ -109,7 +110,7 @@ OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT = 1000
 OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 10
 
 # Canonical optimizer stochastic seed for ordinary production/single-seed training.
-OPTIMIZER_RANDOM_SEED_DEFAULT = 42
+OPTIMIZER_RANDOM_SEED_DEFAULT = RESEARCH_SINGLE_SEED
 
 # End-to-end robustness benchmark 題庫。
 # 同一 benchmark seed 必須同時供 Strategy Optimizer 與所有 DL model source 使用；

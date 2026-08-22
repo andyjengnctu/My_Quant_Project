@@ -63,7 +63,12 @@ from config.execution_policy import (
     DEFAULT_FIXED_RISK,
     DEFAULT_MAX_POSITION_CAP_PCT,
 )
-from core.file_integrity import canonical_json_sha256
+from core.file_integrity import (
+    atomic_replace_with_retry,
+    atomic_write_text,
+    canonical_json_sha256,
+    load_json_object_or_none,
+)
 from core.training_progress import read_trainer_epoch_progress
 from core.training_scheduler import pop_next_seed_diverse_unit
 from core.console_report import (
@@ -146,11 +151,9 @@ from core.report_style import (
     styled_signal,
     styled_workflow_status,
     terminal_signal,
+    finite_number as _finite_or_none,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
-from filters.breakout_quality.strategy_compare_preparation_status import (
-    resolve_planned_comparison_period_from_upstream,
-)
 from filters.breakout_quality.strategy_comparison import (
     _arm_runtime_spec,
     _resolved_ranking_options,
@@ -163,7 +166,7 @@ from filters.breakout_quality.strategy_comparison import (
 from filters.breakout_quality.strategy_compare_reporting import capacity_summary
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 from filters.breakout_quality.strategy_compare_preparation_status import (
-    collect_artifact_status as collect_strategy_preparation_status,
+    collect_preparation_status,
 )
 from filters.breakout_quality.strategy_compare_preparation import (
     prepare_strategy_parameter_artifacts,
@@ -228,60 +231,15 @@ ROBUSTNESS_OPTIONAL_SEED_METRIC_KEYS = tuple(dict.fromkeys((
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8-sig"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"JSON根節點必須是object: {path}")
+    payload = load_json_object_or_none(path, encoding="utf-8-sig")
+    if payload is None:
+        raise ValueError(f"JSON根節點必須是object或檔案無法讀取: {path}")
     return payload
 
-
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    _atomic_write_text(
+    atomic_write_text(
         path, json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
     )
-
-
-_ATOMIC_REPLACE_MAX_ATTEMPTS = 20
-_ATOMIC_REPLACE_RETRY_DELAY_SECONDS = 0.10
-
-
-def _atomic_replace_with_retry(temp: Path, path: Path) -> None:
-    """Publish one staged file, retrying only transient Windows-style lock failures."""
-
-    for attempt in range(1, _ATOMIC_REPLACE_MAX_ATTEMPTS + 1):
-        try:
-            os.replace(temp, path)
-            return
-        except PermissionError:
-            if attempt >= _ATOMIC_REPLACE_MAX_ATTEMPTS:
-                raise
-            time.sleep(_ATOMIC_REPLACE_RETRY_DELAY_SECONDS)
-
-
-def _atomic_write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
-    )
-    os.close(fd)
-    temp = Path(temp_name)
-    try:
-        with temp.open("w", encoding="utf-8") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        _atomic_replace_with_retry(temp, path)
-    except BaseException as exc:
-        if temp.exists():
-            try:
-                temp.unlink()
-            except OSError as cleanup_exc:
-                add_note = getattr(exc, "add_note", None)
-                if callable(add_note):
-                    add_note(
-                        "atomic temp cleanup failed: "
-                        f"{type(cleanup_exc).__name__}: {cleanup_exc}"
-                    )
-        raise
 
 
 def _atomic_write_csv(
@@ -298,7 +256,7 @@ def _atomic_write_csv(
     temp = Path(temp_name)
     try:
         ordered.to_csv(temp, index=False, encoding="utf-8-sig")
-        _atomic_replace_with_retry(temp, path)
+        atomic_replace_with_retry(temp, path)
     except BaseException as exc:
         if temp.exists():
             try:
@@ -311,14 +269,6 @@ def _atomic_write_csv(
                         f"{type(cleanup_exc).__name__}: {cleanup_exc}"
                     )
         raise
-
-
-def _finite_or_none(value: Any) -> float | None:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    return numeric if math.isfinite(numeric) else None
 
 
 def _mean_metric(frame: pd.DataFrame, key: str) -> float | None:
@@ -1127,24 +1077,17 @@ def _model_upstream_rows(status: dict[str, Any]) -> tuple[list[tuple[str, str, s
     return rows, blockers
 
 
-def _comparison_period_from_upstream(settings, stochastic_arms, status: dict[str, Any]) -> tuple[str, str]:
-    del status  # Period planning is owned by the shared Strategy preparation resolver.
-    required_dl_ids = {
-        str(dl_id)
-        for dl_id, _arm_entries in _training_source_groups(
-            tuple(stochastic_arms), settings=settings
-        )
-    }
-    start, end, _source = resolve_planned_comparison_period_from_upstream(
-        project_root=PROJECT_ROOT,
-        settings=settings,
-        required_dl_sources=required_dl_ids,
-    )
-    if start is None or end is None:
+def _comparison_period_from_status(status: dict[str, Any]) -> tuple[str, str]:
+    """Read the period resolved by the shared Strategy preparation owner."""
+
+    period = dict(status.get("comparison_period") or {})
+    start = str(period.get("start") or "").strip()
+    end = str(period.get("end") or "").strip()
+    if not start or not end:
         raise RuntimeError(
-            "Multiple-seed robustness尚無法由canonical upstream truth解析共同策略期間"
+            "Multiple-seed robustness尚無法由共用Strategy preparation解析共同策略期間"
         )
-    return str(start), str(end)
+    return start, end
 
 def _parameter_plan_rows(
     *, settings, status: dict[str, Any], required_sources: tuple[str, ...]
@@ -1202,7 +1145,7 @@ def _render_robustness_execution_plan(
         period_error = None
     else:
         try:
-            start, end = _comparison_period_from_upstream(settings, model_arms, status)
+            start, end = _comparison_period_from_status(status)
             period_text = f"{start} ～ {end}"
             period_error = None
         except (FileNotFoundError, RuntimeError, ValueError, KeyError, TypeError) as exc:
@@ -4275,13 +4218,13 @@ def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None
                 run_root=summary_path.parent,
             )
             _write_json(summary_path, upgraded)
-            _atomic_write_text(
+            atomic_write_text(
                 report, render_multi_seed_robustness_report(upgraded, target="markdown")
             )
     if not summary_path.is_file():
         raise FileNotFoundError(f"最新robustness摘要不存在: {summary_path}")
     summary = _read_json(summary_path)
-    _atomic_write_text(
+    atomic_write_text(
         report, render_multi_seed_robustness_report(summary, target="markdown")
     )
     _print_report_tables(summary)
@@ -4427,29 +4370,22 @@ def run_multi_seed_robustness(
             + "；".join(detail)
         )
 
-    # Dataset/Target preparation may change the valid OOS horizon.  Resolve the period
-    # from the freshly rebuilt canonical upstream truth *before* dispatching Optimizer
-    # parameter producers, then bind that period into the shared Strategy preparation
-    # graph.  This prevents stale comparison_end=None snapshots after partial/cold/stale
-    # rebuilds and applies equally when only part of outputs/models was removed.
-    comparison_start, comparison_end = _comparison_period_from_upstream(
-        settings, model_arms, status
-    )
-    period_override = {"start": str(comparison_start), "end": str(comparison_end)}
-    status = collect_strategy_preparation_status(
+    # Re-read the same shared Strategy preparation owner after upstream production.
+    # It alone resolves the current/planned comparison period for both single- and
+    # multi-seed flows; robustness must not maintain a second period resolver.
+    status = collect_preparation_status(
         project_root=PROJECT_ROOT,
         settings=settings,
-        comparison_period_override=period_override,
     )
+    comparison_start, comparison_end = _comparison_period_from_status(status)
     status = prepare_strategy_parameter_artifacts(
         project_root=PROJECT_ROOT,
         settings=settings,
         status=status,
         required_source_ids=tuple(plan["required_param_sources"]),
-        status_refresher=lambda: collect_strategy_preparation_status(
+        status_refresher=lambda: collect_preparation_status(
             project_root=PROJECT_ROOT,
             settings=settings,
-            comparison_period_override=period_override,
         ),
     )
     resolved_params = dict(status.get("resolved_arm_parameter_paths") or {})
@@ -4496,7 +4432,7 @@ def run_multi_seed_robustness(
                     seed_yearly_frame=seed_yearly_frame, run_root=run_root,
                 )
                 _write_json(run_root / SUMMARY_FILENAME, summary)
-                _atomic_write_text(
+                atomic_write_text(
                     run_root / REPORT_FILENAME,
                     render_multi_seed_robustness_report(summary, target="markdown"),
                 )
@@ -5248,7 +5184,7 @@ def run_multi_seed_robustness(
         summary["elapsed_sec"] = round(time.perf_counter() - started_total, 3)
         _write_json(run_root / SUMMARY_FILENAME, summary)
         report_text = render_multi_seed_robustness_report(summary, target="markdown")
-        _atomic_write_text(run_root / REPORT_FILENAME, report_text)
+        atomic_write_text(run_root / REPORT_FILENAME, report_text)
         manifest.update({
             "status": "COMPLETED",
             "completed_at_utc": datetime.now(timezone.utc).isoformat(),

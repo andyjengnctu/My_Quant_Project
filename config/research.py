@@ -11,6 +11,9 @@ from typing import Mapping
 
 ACTIVE_MODEL_ID = "breakout_quality"
 
+# Canonical single-seed identity for ordinary Research workflows.
+RESEARCH_SINGLE_SEED = 42
+
 # Model-specific application providers.  Add future models here without adding a
 # new executable under apps/.
 MODEL_RESEARCH_PROVIDERS: dict[str, dict[str, str]] = {
@@ -92,6 +95,7 @@ def get_active_model_research_provider() -> ModelResearchProvider:
 
 __all__ = [
     "ACTIVE_MODEL_ID",
+    "RESEARCH_SINGLE_SEED",
     "MODEL_RESEARCH_PROVIDERS",
     "RESEARCH_ARTIFACT_PREPARATION",
     "ModelResearchProvider",

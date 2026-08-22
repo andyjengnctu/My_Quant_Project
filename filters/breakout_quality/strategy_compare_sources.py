@@ -8,6 +8,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from core.file_integrity import load_json_object_or_none as read_json_object_or_none
+
 from core.active_param_ensemble import (
     ACTIVE_PARAM_ENSEMBLE_MODE_STATIC,
     get_active_param_ensemble_date_range,
@@ -37,16 +39,6 @@ from filters.breakout_quality.strategy_compare_contracts import (
     comparison_labels as _comparison_labels,
     comparison_switch_spec as _comparison_switch_spec,
 )
-
-def read_json_object_or_none(path: Path) -> dict[str, Any] | None:
-    if not path.is_file():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
-
 
 def resolve_project_relative_path(root: Path, value: str) -> Path:
     path = Path(str(value))

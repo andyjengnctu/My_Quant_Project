@@ -14,7 +14,7 @@ from core.strategy_comparison import (
 )
 from filters.breakout_quality.export_scores import export_forward_oos_scores
 from filters.breakout_quality.strategy_compare_preparation_status import (
-    collect_artifact_status,
+    collect_preparation_status,
     model_upstream_prerequisite_blockers,
     resolve_comparison_period,
     resolve_param_source_path,
@@ -364,7 +364,7 @@ def prepare_strategy_parameter_artifacts(
     refresh_status = (
         status_refresher
         if status_refresher is not None
-        else lambda: collect_artifact_status(project_root=root, settings=settings)
+        else lambda: collect_preparation_status(project_root=root, settings=settings)
     )
     return _run_preparation_plan(
         project_root=root,
@@ -389,7 +389,7 @@ def prepare_strategy_comparison_artifacts(
     refresh_status = (
         status_refresher
         if status_refresher is not None
-        else lambda: collect_artifact_status(project_root=root, settings=settings)
+        else lambda: collect_preparation_status(project_root=root, settings=settings)
     )
     return _run_preparation_plan(
         project_root=root,
@@ -403,7 +403,7 @@ def prepare_strategy_comparison_artifacts(
 
 
 __all__ = [
-    "collect_artifact_status",
+    "collect_preparation_status",
     "model_upstream_prerequisite_blockers",
     "prepare_strategy_comparison_artifacts",
     "prepare_strategy_parameter_artifacts",

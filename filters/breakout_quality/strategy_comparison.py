@@ -17,6 +17,7 @@ from config.strategy_compare import (
     get_strategy_runtime_integration_settings,
 )
 from core.runtime_utils import get_taipei_now
+from core.file_integrity import atomic_write_json
 from core.display_common import format_elapsed
 from core.display import _display_width
 from core.strategy_comparison import (
@@ -122,7 +123,7 @@ from filters.breakout_quality.strategy_rule_policies import (
     ALL_RULE_FILTERS_OFF_OVERRIDES,
 )
 from filters.breakout_quality.strategy_compare_preparation import (
-    collect_artifact_status as collect_preparation_status,
+    collect_preparation_status,
     prepare_strategy_comparison_artifacts,
 )
 
@@ -163,17 +164,7 @@ def _json_native(value: Any) -> Any:
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            _json_native(payload),
-            ensure_ascii=False,
-            indent=2,
-            allow_nan=False,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    atomic_write_json(path, _json_native(payload))
 
 
 

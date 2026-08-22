@@ -21,7 +21,6 @@ from config.strategy_compare import (
     STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL,
     STRATEGY_COMPARE_ROLLING_TEST_MENU_LABEL,
     get_strategy_comparison_menu_profiles,
-    get_strategy_comparison_profiles,
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_profiles,
     get_strategy_multi_seed_robustness_settings,
@@ -626,7 +625,7 @@ def main(argv=None) -> int:
                 return 0
             raise ValueError(f"compare robustness不支援的命令: {action}")
 
-        profile_ids = {item["profile_id"] for item in get_strategy_comparison_profiles()}
+        profile_ids = {item["profile_id"] for item in get_strategy_comparison_menu_profiles()}
         if first in profile_ids:
             profile_id = first
             action = str(rest[1]).strip().lower() if len(rest) >= 2 else "status"
