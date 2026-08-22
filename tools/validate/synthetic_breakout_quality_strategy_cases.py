@@ -1388,6 +1388,44 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         project_root / "services/breakout_quality/point_in_time_scores.py"
     ).read_text(encoding="utf-8")
     from config.strategy_compare import get_strategy_multi_seed_robustness_settings
+    from filters.breakout_quality.strategy_multi_seed_robustness import (
+        _strategy_only_baseline_action,
+    )
+
+    check(
+        "robustness_strategy_only_completed_result_without_pending_model_context_is_true_reuse",
+        "REUSE",
+        _strategy_only_baseline_action(
+            scientific_result_exists=True,
+            baseline_context_required=False,
+            baseline_context_available=False,
+        ),
+    )
+    check(
+        "robustness_strategy_only_missing_transient_baseline_context_rebuilds_context_only",
+        "REBUILD_CONTEXT",
+        _strategy_only_baseline_action(
+            scientific_result_exists=True,
+            baseline_context_required=True,
+            baseline_context_available=False,
+        ),
+    )
+    check(
+        "robustness_strategy_only_missing_scientific_result_runs_scientific_replay",
+        "RUN_SCIENTIFIC",
+        _strategy_only_baseline_action(
+            scientific_result_exists=False,
+            baseline_context_required=True,
+            baseline_context_available=False,
+        ),
+    )
+    check_true(
+        "robustness_report_surfaces_run_pinned_seed_and_optimizer_budget_identity",
+        '("Benchmark ID", str(contract.get("benchmark_id") or "-"))' in multi_seed_source
+        and '("Strategy trials/fold", str(contract.get("strategy_trials_per_fold") or "-"))' in multi_seed_source
+        and '("Seed generator", str(contract.get("seed_generator_seed") or "-"))' in multi_seed_source
+        and "非same-seed配對勝率" in multi_seed_source,
+    )
 
     oos_robustness = get_strategy_multi_seed_robustness_settings("extending_window_oos")
     rolling_robustness = get_strategy_multi_seed_robustness_settings("extending_window_rolling")

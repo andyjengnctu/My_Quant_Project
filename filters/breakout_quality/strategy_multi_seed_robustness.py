@@ -685,6 +685,41 @@ def _strategy_only_benchmark_arms(
     return tuple(arm for arm in benchmark_arms if arm.arm_id not in model_ids)
 
 
+def _resolve_same_seed_baseline_arm(
+    *, settings, strategy_only_arms: tuple[StrategyComparisonArm, ...], model_arm: StrategyComparisonArm
+) -> StrategyComparisonArm:
+    model_policy = resolve_strategy_comparison_arm_param_policy(settings, model_arm)
+    matches = [
+        candidate for candidate in strategy_only_arms
+        if candidate.param_source == model_arm.param_source
+        and resolve_strategy_comparison_arm_param_policy(settings, candidate) == model_policy
+        and candidate.rule_policy == model_arm.rule_policy
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            "model benchmark arm無法唯一解析same-seed DL-off baseline: "
+            f"arm={model_arm.arm_id}, matches={[item.arm_id for item in matches]}"
+        )
+    return matches[0]
+
+
+def _strategy_only_baseline_action(
+    *, scientific_result_exists: bool, baseline_context_required: bool, baseline_context_available: bool
+) -> str:
+    """Choose whether a strategy-only benchmark unit needs replay work.
+
+    Scientific seed results are durable.  The baseline replay directory is only a
+    transient dependency for a model-arm replay, so a completed unit must not be
+    rerun merely because normal retention cleanup removed that directory.
+    """
+
+    if not scientific_result_exists:
+        return "RUN_SCIENTIFIC"
+    if baseline_context_required and not baseline_context_available:
+        return "REBUILD_CONTEXT"
+    return "REUSE"
+
+
 def _run_strategy_only_benchmark_unit(
     *, settings, arm: StrategyComparisonArm, seed: int, seed_order: int, arm_order: int,
     params_path: Path, comparison_start: str, comparison_end: str, output_dir: Path,
@@ -2691,6 +2726,8 @@ def _pairwise_distribution_comparison(
         "pairwise_left_gt_right_probability": float(
             np.mean(left_values[:, None] > right_values[None, :])
         ),
+        "left_n": int(len(left_values)),
+        "right_n": int(len(right_values)),
         "pair_count": int(len(left_values) * len(right_values)),
     }
 
@@ -3173,6 +3210,9 @@ def render_multi_seed_robustness_report(
         fingerprint_label="Scientific fingerprint",
         extra_metadata=(
             ("比較階段", str(contract.get("label") or "Multiple-seed robustness")),
+            ("Benchmark ID", str(contract.get("benchmark_id") or "-")),
+            ("Strategy trials/fold", str(contract.get("strategy_trials_per_fold") or "-")),
+            ("Seed generator", str(contract.get("seed_generator_seed") or "-")),
             (
                 "Seeds",
                 f"{int(contract['seed_count'])}（deterministic generated；不作best-seed選擇）",
@@ -3436,10 +3476,17 @@ def render_multi_seed_robustness_report(
                     signal_for_delta(probability - 0.5, preference="higher"),
                     target=target,
                 )
+                left_n = int(compare.get("left_n") or 0)
+                right_n = int(compare.get("right_n") or 0)
+                pair_shape = (
+                    f"{left_n}×{right_n}={int(compare['pair_count'])} all-pairs"
+                    if left_n > 0 and right_n > 0
+                    else f"{int(compare['pair_count'])} all-pairs"
+                )
                 block.append(
-                    f"Cross-seed P({compare['left']} > {compare['right']})="
+                    f"跨seed分布 P({compare['left']} > {compare['right']})="
                     f"{probability_text}"
-                    f"（{compare['pair_count']} pairs）。"
+                    f"（{pair_shape}；非same-seed配對勝率）。"
                 )
 
             annual_pair = list(item.get("yearly_same_seed") or [])
@@ -3944,16 +3991,45 @@ def run_multi_seed_robustness(
         for row in rows
     }
 
-    # Round 2: C61/C58 are no longer fixed production baselines. They are replayed
-    # once per benchmark seed with that seed's Optimizer-owned strategy params.
-    # Their work directories are then the same-seed C58 baseline reused by C59/C60.
+    # C61/C58 are per-seed scientific baselines.  Their durable seed results are
+    # reusable; the replay directory itself is transient and is rebuilt only when
+    # an unfinished model arm actually needs baseline_reuse_dir.
     benchmark_baseline_dirs: dict[tuple[str, int], str] = {}
     stochastic_order = {arm.arm_id: index for index, arm in enumerate(stochastic_arms, start=1)}
+    model_replay_pending = {
+        (arm.arm_id, int(seed))
+        for seed in seeds
+        for arm in model_arms
+        if (arm.arm_id, int(seed)) not in completed
+    }
+    required_baseline_units: set[tuple[str, int]] = set()
+    for model_arm in model_arms:
+        baseline_arm = _resolve_same_seed_baseline_arm(
+            settings=settings, strategy_only_arms=tuple(strategy_only_arms), model_arm=model_arm
+        )
+        for seed in seeds:
+            if (model_arm.arm_id, int(seed)) in model_replay_pending:
+                required_baseline_units.add((baseline_arm.arm_id, int(seed)))
+
+    strategy_only_actions: dict[tuple[str, int], str] = {}
+    strategy_results_changed = False
     for seed_order, seed in enumerate(seeds, start=1):
         for arm in strategy_only_arms:
             unit_identity = (arm.arm_id, int(seed))
             binding = benchmark_bindings[unit_identity]
             output_dir = run_root / "work" / "benchmark_baselines" / _unit_key(arm.arm_id, int(seed))
+            baseline_context_available = (output_dir / "strategy_comparison.json").is_file()
+            action = _strategy_only_baseline_action(
+                scientific_result_exists=unit_identity in scientific_completed,
+                baseline_context_required=unit_identity in required_baseline_units,
+                baseline_context_available=baseline_context_available,
+            )
+            strategy_only_actions[unit_identity] = action
+            if action == "REUSE":
+                if baseline_context_available and unit_identity in required_baseline_units:
+                    benchmark_baseline_dirs[unit_identity] = str(output_dir.resolve())
+                continue
+
             result = _run_strategy_only_benchmark_unit(
                 settings=settings,
                 arm=arm,
@@ -3969,6 +4045,9 @@ def run_multi_seed_robustness(
                 param_evaluation_mode=str(binding["evaluation_mode"]),
             )
             benchmark_baseline_dirs[unit_identity] = str(output_dir.resolve())
+            if action == "REBUILD_CONTEXT":
+                continue
+
             rows = [
                 row for row in rows
                 if (str(row.get("arm_id")), int(row.get("seed"))) != unit_identity
@@ -3981,7 +4060,8 @@ def run_multi_seed_robustness(
             yearly_rows.extend(result["yearly"])
             scientific_completed.add(unit_identity)
             completed.add(unit_identity)
-    if strategy_only_arms:
+            strategy_results_changed = True
+    if strategy_results_changed:
         seed_frame_checkpoint = pd.DataFrame(rows)
         yearly_frame_checkpoint = pd.DataFrame(yearly_rows)
         if not seed_frame_checkpoint.empty:
@@ -4058,7 +4138,18 @@ def run_multi_seed_robustness(
     for seed_order, seed in enumerate(seeds, start=1):
         for arm_order, arm in enumerate(stochastic_arms, start=1):
             unit_key = (arm.arm_id, int(seed))
-            if unit_key in completed:
+            strategy_action = strategy_only_actions.get(unit_key)
+            if strategy_action == "RUN_SCIENTIFIC":
+                progress.print_line(
+                    paint(f"[DONE {done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
+                    + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name}"
+                )
+            elif strategy_action == "REBUILD_CONTEXT":
+                progress.print_line(
+                    paint("[BASELINE CONTEXT REBUILD]", "yellow", enabled=color_enabled, bold=True)
+                    + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} | scientific result reuse"
+                )
+            elif unit_key in completed:
                 progress.print_line(
                     paint(f"[REUSE {done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
                     + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name}"
@@ -4215,19 +4306,9 @@ def run_multi_seed_robustness(
         source_keys = tuple((dl_id, int(seed)) for dl_id in required_dl_ids)
         if any(key not in trained_artifacts for key in source_keys):
             return
-        arm_param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
-        baseline_matches = [
-            candidate for candidate in strategy_only_arms
-            if candidate.param_source == arm.param_source
-            and resolve_strategy_comparison_arm_param_policy(settings, candidate) == arm_param_policy
-            and candidate.rule_policy == arm.rule_policy
-        ]
-        if len(baseline_matches) != 1:
-            raise RuntimeError(
-                "model benchmark arm無法唯一解析same-seed DL-off baseline: "
-                f"arm={arm.arm_id}, matches={[item.arm_id for item in baseline_matches]}"
-            )
-        baseline_arm = baseline_matches[0]
+        baseline_arm = _resolve_same_seed_baseline_arm(
+            settings=settings, strategy_only_arms=tuple(strategy_only_arms), model_arm=arm
+        )
         baseline_dir = benchmark_baseline_dirs.get((baseline_arm.arm_id, int(seed)))
         if not baseline_dir:
             raise RuntimeError(
