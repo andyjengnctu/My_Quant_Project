@@ -1,15 +1,20 @@
 """Strategy Compare 歷史唯讀相容定義。
 
 本模組保存退役 research arms、contrasts、DL sources 與 parameter sources，
-只供舊工件解讀／重現。目前正式 Selection／Forward 設定位於
-``config/strategy_compare.py``；歷史定義不得直接加入 current profile，除非先
-明確重新納入 active config。
+只供舊工件解讀／重現。Current Extending matrix只存在
+``config/strategy_compare.py``；歷史 Selection／Forward／Pre-Test 的 source、arm 與 contrast
+全部留在本 compatibility catalog，只有歷史 profile 解析時可讀，除非先明確重新納入 active config。
 """
 
 from __future__ import annotations
 
 from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT
-from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
+from config.training_policy import (
+    OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+    OPTIMIZER_RANDOM_SEED_DEFAULT,
+    OUTER_ROLLING_OOS_HORIZON_MONTHS,
+    OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
+)
 
 # 只供 SR-C26 歷史相容的固定語意。
 STRATEGY_COMPARE_STALE_SCORE_MEMBERSHIP_GUARD_MAX_AGE_DAYS = 22
@@ -226,6 +231,121 @@ HISTORICAL_STRATEGY_PARAM_SOURCES = {
             },
         },
     },
+
+    # Historical-only definitions migrated out of current Strategy Compare catalog.
+    "full_roos": {
+        "path_template": None,
+        "description": "正式Full ROOS；依param_policy解析canonical rolling工件",
+        "identity_manifest_path": None,
+        "trained_with_dl_id": None,
+        "builder": None,
+    },
+    "min_roos": {
+        "path_template": (
+            "models/research/breakout_quality/binary_dl_filter_param_adaptation/"
+            "risk_only_rolling/p2_dl_off_trained/active_params/{param_filename}"
+        ),
+        "description": "forward rolling期間、rule-based filters全關、DL-off訓練的Min ROOS",
+        "identity_manifest_path": (
+            "models/research/breakout_quality/binary_dl_filter_param_adaptation/"
+            "risk_only_rolling/p2_dl_off_trained/rolling_preflight.json"
+        ),
+        "trained_with_dl_id": None,
+        "builder": {
+            "enabled": True,
+            "builder_type": "binary_dl_min_roos_rolling",
+            "options": {
+                "parameter_set": "p2",
+                "model_source_id": "TP1",
+                "trials_per_fold": OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+                "resume": True,
+                "fixed_risk": DEFAULT_FIXED_RISK,
+                "max_position_cap_pct": DEFAULT_MAX_POSITION_CAP_PCT,
+                "build_binary_pit": False,
+                "binary_pit_resume": True,
+                "quiet": False,
+            },
+        },
+    },
+    "selection_min_roos": {
+        "path_template": (
+            "models/research/breakout_quality/trade_path_label/a2_teacher_params/"
+            "p2_dl_off_trained/active_params/{param_filename}"
+        ),
+        "description": (
+            "Selection 2014～2020 historical Min ROOS；rules全關、DL-off，"
+            "單階段rolling直接搜尋high_len＋4個ATR欄位"
+        ),
+        "identity_manifest_path": None,
+        "trained_with_dl_id": None,
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "mode": "min_roos_training",
+                "parameter_set": "P2_HISTORY",
+                "search_fields": [
+                    "high_len",
+                    "atr_len",
+                    "atr_buy_tol",
+                    "atr_times_init",
+                    "atr_times_trail",
+                ],
+                "fixed_rule_contract": "all_rule_filters_off",
+                "training_dl_enabled": False,
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "selection_historical_p2",
+            "options": {
+                "parameter_set": "p2_history",
+                "trials_per_fold": OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+                "train_window_months": OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
+                "oos_months": OUTER_ROLLING_OOS_HORIZON_MONTHS,
+                "resume": True,
+                "fixed_risk": DEFAULT_FIXED_RISK,
+                "max_position_cap_pct": DEFAULT_MAX_POSITION_CAP_PCT,
+                "optimizer_seed": OPTIMIZER_RANDOM_SEED_DEFAULT,
+                "quiet": False,
+            },
+        },
+    },
+    "selection_full_roos": {
+        "path_template": (
+            "models/research/breakout_quality/strategy_compare/selection_full_roos/"
+            "active_params/{param_filename}"
+        ),
+        "description": (
+            "Selection 2014～2020 historical Full ROOS；使用canonical Full optimizer search space，"
+            "DL filter/ranking與TP維持optimizer正式固定契約"
+        ),
+        "identity_manifest_path": (
+            "models/research/breakout_quality/strategy_compare/selection_full_roos/"
+            "rolling_preflight.json"
+        ),
+        "trained_with_dl_id": None,
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "mode": "selection_full_roos_training",
+                "parameter_set": "P4_HISTORY",
+                "training_dl_enabled": False,
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "selection_historical_full_roos",
+            "options": {
+                "parameter_set": "p4_history",
+                "trials_per_fold": OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+                "train_window_months": OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
+                "oos_months": OUTER_ROLLING_OOS_HORIZON_MONTHS,
+                "resume": True,
+                "fixed_risk": DEFAULT_FIXED_RISK,
+                "max_position_cap_pct": DEFAULT_MAX_POSITION_CAP_PCT,
+                "optimizer_seed": OPTIMIZER_RANDOM_SEED_DEFAULT,
+                "quiet": False,
+            },
+        },
+    },
 }
 
 HISTORICAL_STRATEGY_DL_SOURCES = {
@@ -301,6 +421,101 @@ HISTORICAL_STRATEGY_DL_SOURCES = {
         "score_source": "continuous_ranker_oos",
         "description": "MR-12C all-event no-time ListNet top-one listwise ranker frozen OOS score；只允許受控strategy research replay",
         "forward_scores_builder": None,
+    },
+
+    # Historical-only definitions migrated out of current Strategy Compare catalog.
+    "CONT13E": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_no_time_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "continuous_ranker_oos",
+        "description": (
+            "MR-13E Daily Universal full-list Delta-NDCG frozen Forward-OOS score；"
+            "盤前使用最新已完成交易日資訊，供current MR-13E exact strategy research"
+        ),
+        "forward_scores_builder": None,
+    },
+    "CONT13E_PIT": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_no_time_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": (
+            "MR-13E Daily Universal full-list Delta-NDCG Selection PIT score；"
+            "盤前只使用最新已完成交易日資訊，供2014～2020 current MR-13E exact strategy research"
+        ),
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {
+                "resume": True,
+                "allow_stale_source": False,
+            },
+        },
+    },
+    "CONT13K": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "continuous_ranker_oos",
+        "description": (
+            "MR-13K Daily Universal full-horizon pure-MFE frozen Forward-OOS score；"
+            "盤前使用最新已完成交易日資訊，供C54與C44作同K/R0/exact source-only策略比較"
+        ),
+        "forward_scores_builder": None,
+    },
+    "CONT13M": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "continuous_ranker_oos",
+        "description": (
+            "MR-13M Daily Universal full-horizon low-adverse frozen Forward-OOS score；"
+            "只作C55/C56 secondary path-safety source；C55使用raw safety floor，C56使用同日rank-space residual safety floor；皆不與MR-13K score加權、不單獨作portfolio objective"
+        ),
+        "forward_scores_builder": None,
+    },
+    "CONT13M_PIT": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": (
+            "MR-13M Daily Universal full-horizon low-adverse Selection PIT score；"
+            "只供C57作C56 B2的Selection secondary residual-safety source，不單獨作portfolio objective"
+        ),
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {
+                "resume": True,
+                "allow_stale_source": False,
+            },
+        },
+    },
+    "CONT13K_PIT": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": (
+            "MR-13K Daily Universal full-horizon pure-MFE Selection PIT score；"
+            "盤前只使用最新已完成交易日資訊，供C53與C42作同K/R0/exact source-only策略比較"
+        ),
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {
+                "resume": True,
+                "allow_stale_source": False,
+            },
+        },
     },
 }
 
@@ -700,6 +915,137 @@ HISTORICAL_STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+
+    # Historical-only definitions migrated out of current Strategy Compare catalog.
+    "C1": {
+        "name": 'Full ROOS',
+        "description": "Full optimizer rolling active params；DL-off baseline",
+        "param_source": "full_roos",
+        "rule_policy": "formal",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "fixed_baseline",
+    },
+    "C3": {
+        "name": 'Min ROOS',
+        "description": "只搜尋high_len＋4個ATR；rules全關；DL-off baseline",
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "fixed_baseline",
+    },
+    "C23": {
+        "name": 'Min ROOS',
+        "description": (
+            "2014～2020 historical P2 Min ROOS active params；rules全關；DL關閉；"
+            "作Selection PIT策略經濟驗證共同baseline"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "fixed_baseline",
+    },
+    "C42": {
+        "name": 'Min MR-13E Constrained',
+        "description": (
+            "Selection PIT current research arm：historical Min params/all-off + frozen MR-13E PIT score；"
+            "固定K/R0、canonical sizing/cash/orderability/execution，以deterministic exact branch-and-bound"
+            "在完整候選universe求K/R0/canonical-cash feasible MR-13E score-sum global optimum"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C44": {
+        "name": 'Min MR-13E Constrained',
+        "description": (
+            "Forward-OOS current research arm：current Min params/all-off + frozen MR-13E Forward score；"
+            "固定K/R0、canonical sizing/cash/orderability/execution，以與C42同源deterministic exact "
+            "branch-and-bound在完整候選universe求K/R0/canonical-cash feasible MR-13E score-sum global optimum"
+        ),
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": False,
+        },
+        "robustness_role": "off",
+    },
+    "C56": {
+        "name": 'Min MR-13K + MR-13M Residual Safety',
+        "description": (
+            "Forward-only Plan B2 controlled arm：完全沿用C54的Min params/all-off、K/R0、canonical "
+            "sizing/cash/orderability/execution與MR-13K primary score objective；每天在當日orderable候選中，"
+            "先把MR-13K/MR-13M frozen scores各自轉average-rank percentile，再以含intercept OLS估計"
+            "expected safety rank given upside rank，Residual Safety=actual safety percentile−expected safety percentile。"
+            "選中basket的Residual Safety coverage與score-sum不得低於同日DL-off Min ROOS baseline；13M residual"
+            "只作hard floor，不與13K objective加權、不使用未來Target、不新增numeric threshold。"
+        ),
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13K",
+        "dl_runtime_mode": "resource-aware-continuous-score-residual-safety-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": False,
+            "safety_dl_id": "CONT13M",
+            "safety_constraint": "baseline_residual_coverage_and_score_sum_floor_v1",
+            "safety_residualization": "same_day_rank_ols_v1",
+        },
+        "robustness_role": "off",
+    },
+    "C57": {
+        "name": 'Min MR-13K + MR-13M Residual Safety',
+        "description": (
+            "Selection PIT C56 full-flow counterpart：historical Min params/all-off、K/R0、canonical "
+            "sizing/cash/orderability/execution與exact solver固定；primary改用CONT13K_PIT，secondary改用"
+            "CONT13M_PIT。每天只在當日orderable候選把兩個PIT-safe score轉rank percentile並做同日OLS residual；"
+            "Residual Safety只作baseline-relative hard floor，primary objective仍只最大化MR-13K score-sum。"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13K_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-score-residual-safety-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+            "safety_dl_id": "CONT13M_PIT",
+            "safety_constraint": "baseline_residual_coverage_and_score_sum_floor_v1",
+            "safety_residualization": "same_day_rank_ols_v1",
+        },
+        "robustness_role": "off",
+    },
+    "C32": {
+        "name": 'Full ROOS',
+        "description": "2014～2020 historical Full ROOS active params；formal rules；DL-off共同baseline",
+        "param_source": "selection_full_roos",
+        "rule_policy": "formal",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "fixed_baseline",
+    },
 }
 
 HISTORICAL_STRATEGY_COMPARE_CONTRASTS = {
@@ -766,6 +1112,20 @@ HISTORICAL_STRATEGY_COMPARE_CONTRASTS = {
     "C48-C42": {"left": "C48", "right": "C42", "description": "SR-C48 historical basket-level Pareto Exact No-R0相對C42 R0-constrained control"},
     "C45-C32": {"left": "C45", "right": "C32", "description": "SR-C45 historical Full ROOS/formal MR-13E exact constrained相對C32 Full ROOS DL-off baseline"},
     "C45-C42": {"left": "C45", "right": "C42", "description": "SR-C45 historical同MR-13E PIT score/exact solver下Full/formal相對Min/all-off整體策略體系差異"},
+
+    # Historical-only definitions migrated out of current Strategy Compare catalog.
+    "C42-C23": {"left": "C42", "right": "C23", "description": "Selection PIT frozen MR-13E score exact constrained optimum相對DL-off Min ROOS的策略經濟效果"},
+    "C42-C32": {"left": "C42", "right": "C32", "description": "Selection PIT active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
+    "C57-C42": {"left": "C57", "right": "C42", "description": "C56 full-flow Selection primary contrast：同historical Min/K/R0/exact/cash/execution下，以MR-13K PIT primary + MR-13M PIT residual safety對production MR-13E exact reference"},
+    "C57-C23": {"left": "C57", "right": "C23", "description": "C56 full-flow Selection相對DL-off Min ROOS的策略經濟效果"},
+    "C57-C32": {"left": "C57", "right": "C32", "description": "C56 full-flow Selection相對Full ROOS的整體策略結果；不是單一參數效果"},
+    "C56-C44": {"left": "C56", "right": "C44", "description": "Plan B2 Forward相對production MR-13E exact constrained reference的整體策略結果"},
+    "C56-C3": {"left": "C56", "right": "C3", "description": "Plan B2 Forward相對DL-off Min ROOS的策略經濟效果"},
+    "C56-C1": {"left": "C56", "right": "C1", "description": "Plan B2 Forward相對Full ROOS的整體策略結果；不是單一參數效果"},
+    "C44-C3": {"left": "C44", "right": "C3", "description": "current Min ROOS下MR-13E exact constrained score selector相對DL-off baseline的Forward-OOS策略效果"},
+    "C44-C1": {"left": "C44", "right": "C1", "description": "Forward-OOS active research最終候選：Min MR-13E exact constrained相對Full ROOS的整體策略結果；不是單一參數或單一DL效果"},
+    "C1-C3": {"left": "C1", "right": "C3", "description": "Full ROOS相對current Min ROOS的完整策略體系差異；不是單一參數效果"},
+    "C32-C23": {"left": "C32", "right": "C23", "description": "Selection Full ROOS相對Selection Min ROOS的完整策略體系差異；不是單一參數效果"},
 }
 
 

@@ -15,7 +15,7 @@ ACTIVE_MODEL_ID = "breakout_quality"
 # new executable under apps/.
 MODEL_RESEARCH_PROVIDERS: dict[str, dict[str, str]] = {
     "breakout_quality": {
-        "module": "tools.filters.breakout_quality.application",
+        "module": "services.research.breakout_quality_application",
         "menu_handler": "run_model_training_menu",
         "status_handler": "show_model_status",
         "cli_handler": "main",

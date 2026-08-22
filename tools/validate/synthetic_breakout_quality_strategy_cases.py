@@ -1043,9 +1043,9 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
 
 
     project_root = Path(__file__).resolve().parents[2]
-    app_source = (project_root / "tools" / "filters" / "breakout_quality" / "application.py").read_text(encoding="utf-8")
+    app_source = (project_root / "services" / "research" / "breakout_quality_application.py").read_text(encoding="utf-8")
     builder_source = (
-        project_root / "tools" / "filters" / "breakout_quality" / "build_trade_path_labels.py"
+        project_root / "services" / "breakout_quality" / "trade_path_label_builder.py"
     ).read_text(encoding="utf-8")
     binary_pit_source = (
         project_root / "services" / "breakout_quality" / "binary_point_in_time_scores.py"
@@ -1138,9 +1138,9 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
     current_paths = (
         "filters/breakout_quality/strategy_comparison.py",
         "filters/breakout_quality/strategy_param_training.py",
-        "tools/filters/breakout_quality/build_trade_path_labels.py",
+        "services/breakout_quality/trade_path_label_builder.py",
         "services/breakout_quality/train.py",
-        "tools/audit/catalog.py",
+        "services/audit/catalog.py",
         "tools/validate/transient_code_maintenance.py",
     )
     check(
@@ -1164,7 +1164,7 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
     )
 
     application_source = (
-        project_root / "tools/filters/breakout_quality/application.py"
+        project_root / "services/research/breakout_quality_application.py"
     ).read_text(encoding="utf-8")
     current_docs = "\n".join(
         (project_root / relative_path).read_text(encoding="utf-8")
@@ -1329,7 +1329,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         project_root / "filters/breakout_quality/strategy_compare_replay.py"
     ).read_text(encoding="utf-8")
     model_report_source = (
-        project_root / "tools/filters/breakout_quality/report.py"
+        project_root / "services/breakout_quality/report.py"
     ).read_text(encoding="utf-8")
     strategy_dashboard_source = (project_root / "core/strategy_dashboard.py").read_text(encoding="utf-8")
     optimizer_callbacks_source = (project_root / "services/optimizer/callbacks.py").read_text(encoding="utf-8")

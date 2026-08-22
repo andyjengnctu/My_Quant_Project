@@ -44,8 +44,10 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
     project_root = Path(__file__).resolve().parents[2]
     canonical_config_path = project_root / "config" / "breakout_quality.py"
     canonical_source = canonical_config_path.read_text(encoding="utf-8")
-    canonical_app_path = project_root / "tools" / "filters" / "breakout_quality" / "application.py"
+    canonical_app_path = project_root / "services" / "research" / "breakout_quality_application.py"
+    compatibility_app_path = project_root / "tools" / "filters" / "breakout_quality" / "application.py"
     canonical_app_source = canonical_app_path.read_text(encoding="utf-8")
+    compatibility_app_source = compatibility_app_path.read_text(encoding="utf-8")
     strategy_app_path = project_root / "apps" / "research.py"
     strategy_config_path = project_root / "config" / "strategy_compare.py"
 
@@ -98,10 +100,12 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
     check_true(
         "model_and_strategy_apps_are_separate_entries",
         canonical_app_path.is_file()
+                and compatibility_app_path.is_file()
                 and strategy_app_path.is_file()
                 and strategy_config_path.is_file()
                 and '"strategy-compare"' not in canonical_app_source
-                and "apps/research.py compare" in canonical_app_source,
+                and "apps/research.py compare" in canonical_app_source
+                and "services.research.breakout_quality_application" in compatibility_app_source,
     )
 
     strategy_compare_source = (
@@ -110,6 +114,19 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
         / "breakout_quality"
         / "strategy_compare_engine.py"
     ).read_text(encoding="utf-8")
+    from config.research import get_active_model_research_provider
+
+    provider = get_active_model_research_provider()
+    research_shell_source = strategy_app_path.read_text(encoding="utf-8")
+    check_true(
+        "research_formal_applications_are_service_owned_and_tools_are_compatibility_only",
+        provider.module == "services.research.breakout_quality_application"
+        and "from services.optimizer.application import main" in research_shell_source
+        and "from services.audit.runner import" in research_shell_source
+        and "from tools.optimizer" not in research_shell_source
+        and "from tools.audit" not in research_shell_source,
+    )
+
     check_true(
         "single_seed_contract_strategy_gate_rejects_seed_mismatch",
         all(
@@ -176,6 +193,24 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and tuple(contrast.contrast_id for contrast in settings.enabled_contrasts) == expected_contrast_ids
             for settings in settings_by_mode.values()
         ),
+    )
+
+    from config.compatibility import strategy_compare_history as strategy_history
+
+    check_true(
+        "current_strategy_compare_catalog_is_physically_minimal_and_history_is_compatibility_only",
+        set(strategy_config.STRATEGY_PARAM_SOURCES)
+        == {"full_oos", "min_oos", "full_rolling", "min_rolling"}
+        and set(strategy_config.STRATEGY_DL_SOURCES)
+        == {"CONT13E_ROLL", "CONT13K_ROLL", "CONT13M_ROLL"}
+        and set(strategy_config.STRATEGY_COMPARE_ARMS) == set(expected_arm_ids)
+        and set(strategy_config.STRATEGY_COMPARE_CONTRASTS) == set(expected_contrast_ids)
+        and {"full_roos", "min_roos", "selection_min_roos", "selection_full_roos"}
+        .issubset(set(strategy_history.HISTORICAL_STRATEGY_PARAM_SOURCES))
+        and {"CONT13E", "CONT13E_PIT", "CONT13K", "CONT13M", "CONT13M_PIT", "CONT13K_PIT"}
+        .issubset(set(strategy_history.HISTORICAL_STRATEGY_DL_SOURCES))
+        and {"C1", "C3", "C23", "C32", "C42", "C44", "C56", "C57"}
+        .issubset(set(strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS)),
     )
 
     current_param_sources = {

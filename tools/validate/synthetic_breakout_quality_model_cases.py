@@ -244,9 +244,9 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
         project_root / "services" / "breakout_quality" / "continuous_target_builder.py"
     )
     prepare_source = read_source_text(
-        project_root / "tools" / "filters" / "breakout_quality" / "prepare_continuous_target.py"
+        project_root / "services" / "breakout_quality" / "continuous_target_preparation.py"
     )
-    catalog_source = read_source_text(project_root / "tools" / "audit" / "catalog.py")
+    catalog_source = read_source_text(project_root / "services" / "audit" / "catalog.py")
     retired_paths = [
         project_root / "tools" / "audit" / "breakout_quality" / name
         for name in (
@@ -493,7 +493,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             tamper_rejected = "size" in str(exc) or "SHA256" in str(exc)
         check_true("continuous_ranker_rejects_tampered_target_artifact", tamper_rejected)
 
-    app_path = Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py"
+    app_path = Path(__file__).resolve().parents[2] / "services" / "research" / "breakout_quality_application.py"
     tree = read_source_ast(app_path)
     command_modules = {}
     for node in tree.body:

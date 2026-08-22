@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.audit import get_active_audit_module_id
+from config.audit import get_active_audit_module_id, get_enabled_audit_definitions
 from config.research import get_active_model_research_provider
 from config.strategy_compare import (
     STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL,
@@ -36,7 +36,7 @@ from filters.breakout_quality.strategy_comparison import (
     run_strategy_comparison,
     show_strategy_comparison_status,
 )
-from tools.audit.runner import (
+from services.audit.runner import (
     render_audit_status,
     render_latest_audit_summary,
     run_enabled_audits,
@@ -140,7 +140,7 @@ def _run_optimizer(args: list[str] | None = None) -> int:
             raise ValueError(f"strategy-param migration不支援額外參數: {' '.join(routed[1:])}")
         return _run_strategy_param_migration()
 
-    from tools.optimizer import main as optimizer_main
+    from services.optimizer.application import main as optimizer_main
 
     routed_args = ["apps/research.py optimizer", *routed]
     return int(optimizer_main(argv=routed_args) or 0)
@@ -405,11 +405,17 @@ def _strategy_compare_menu() -> int:
 def _audit_menu() -> int:
     module_id = get_active_audit_module_id()
     while True:
+        enabled_audits = get_enabled_audit_definitions(module_id)
         print("\n=== Audit／診斷 ===")
         print(f"Active module：{module_id}")
-        print(render_menu_item(1, "執行目前 Audit 設定", default=True))
-        print(render_menu_item(2, "查看 Audit 設定、工件與預計動作"))
-        print(render_menu_item(3, "查看最近 Audit 結果"))
+        if enabled_audits:
+            print(render_menu_item(1, "執行目前 Audit 設定", default=True))
+            print(render_menu_item(2, "查看 Audit 設定、工件與預計動作"))
+            print(render_menu_item(3, "查看最近 Audit 結果"))
+        else:
+            print("目前沒有啟用的正式 Audit；只提供設定／歷史結果檢視。")
+            print(render_menu_item(1, "查看 Audit 設定、工件與預計動作", default=True))
+            print(render_menu_item(2, "查看最近 Audit 結果"))
         print(render_menu_item(0, "返回"))
         try:
             raw = input("👉 請選擇：").strip().lower()
@@ -418,6 +424,14 @@ def _audit_menu() -> int:
         choice = "1" if raw == "" else raw
         if choice in {"0", "q", "quit", "exit"}:
             return 0
+        if not enabled_audits:
+            if choice == "1":
+                print("\n" + render_audit_status(module_id, project_root=PROJECT_ROOT))
+            elif choice == "2":
+                print("\n" + render_latest_audit_summary(module_id, project_root=PROJECT_ROOT))
+            else:
+                print("無效選項，請按 Enter 或輸入 0～2。")
+            continue
         if choice == "1":
             print("\n" + render_audit_status(module_id, project_root=PROJECT_ROOT))
             try:

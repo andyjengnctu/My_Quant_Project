@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import io
+from contextlib import redirect_stdout
+from unittest.mock import patch
+
 from .checks import bind_checks
 
 from .synthetic_breakout_quality_support import add_check
@@ -13,11 +17,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         get_enabled_audit_definitions,
         validate_audit_config,
     )
-    from tools.audit.catalog import (
+    from services.audit.catalog import (
         get_domain_cli_commands,
         validate_audit_catalog,
     )
-    from tools.audit.runner import collect_audit_status
+    from services.audit.runner import collect_audit_status
 
     case_id = "AUDIT_FRAMEWORK"
     results = []
@@ -60,6 +64,21 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "research_audit_utilities_remain_catalogued_alongside_formal_gate",
         bool("regime-audit" in commands and "audit-point-in-time-scores" in commands),
+    )
+
+    import apps.research as research_app
+
+    audit_menu_console = io.StringIO()
+    with patch.object(research_app, "get_enabled_audit_definitions", return_value=()), patch(
+        "builtins.input", return_value="0"
+    ), redirect_stdout(audit_menu_console):
+        audit_menu_rc = research_app._audit_menu()
+    audit_menu_text = audit_menu_console.getvalue()
+    check_true(
+        "research_audit_menu_hides_non_executable_run_action_when_no_formal_audit_is_enabled",
+        audit_menu_rc == 0
+        and "目前沒有啟用的正式 Audit" in audit_menu_text
+        and "執行目前 Audit 設定" not in audit_menu_text,
     )
 
     summary["workflow"] = "config_driven_formal_audit_topology"
