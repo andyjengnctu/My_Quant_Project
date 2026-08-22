@@ -1322,6 +1322,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     multi_seed_source = (
         project_root / "filters/breakout_quality/strategy_multi_seed_robustness.py"
     ).read_text(encoding="utf-8")
+    strategy_reuse_source = (
+        project_root / "filters/breakout_quality/strategy_compare_reuse.py"
+    ).read_text(encoding="utf-8")
+    strategy_replay_source = (
+        project_root / "filters/breakout_quality/strategy_compare_replay.py"
+    ).read_text(encoding="utf-8")
     model_report_source = (
         project_root / "tools/filters/breakout_quality/report.py"
     ).read_text(encoding="utf-8")
@@ -1389,9 +1395,22 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     ).read_text(encoding="utf-8")
     from config.strategy_compare import get_strategy_multi_seed_robustness_settings
     from filters.breakout_quality.strategy_multi_seed_robustness import (
+        _build_durable_result_artifacts,
         _model_artifact_identity_payload,
         _seed_expansion_compatibility_payload,
         _strategy_only_baseline_action,
+        _validate_durable_result_artifacts,
+        _validate_seed_result_scientific_identities,
+        _validate_seed_yearly_results_frame,
+    )
+    from config.training_policy import (
+        get_robustness_benchmark_policy_snapshot,
+        get_strategy_parameter_training_policy_snapshot,
+    )
+    from core.strategy_param_artifacts import compute_strategy_param_file_sha256
+    from services.optimizer.strategy_param_service import (
+        _benchmark_manifest_matches_current_policy,
+        _benchmark_schedule_build_contract,
     )
 
     check(
@@ -1528,6 +1547,211 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and prefix_identity
         != _seed_expansion_compatibility_payload(changed_prefix_param_contract, seeds=(11, 22))
         and "[SEED EXPANSION REUSE]" in multi_seed_source,
+    )
+
+    benchmark = get_robustness_benchmark_policy_snapshot()
+    benchmark_seed = int(benchmark["resolved_seeds"][0])
+    benchmark_family = "min"
+    benchmark_policy = "base_finalist_best"
+    benchmark_training = get_strategy_parameter_training_policy_snapshot(
+        evaluation_mode="rolling"
+    )
+    benchmark_build_contract = _benchmark_schedule_build_contract(
+        benchmark_id=str(benchmark["benchmark_id"]),
+        seed=benchmark_seed,
+        family=benchmark_family,
+        policy=benchmark_policy,
+        dataset="full",
+        max_positions=10,
+        rotation="off",
+        fixed_risk=0.01,
+        max_position_cap_pct=20.0,
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        target = temp_root / "min_base_best.json"
+        target.write_text(
+            json.dumps({
+                "selector": benchmark_policy,
+                "meta": {"last_oos_date": "2026-03-02"},
+            }),
+            encoding="utf-8",
+        )
+        target_sha = compute_strategy_param_file_sha256(target)
+        manifest_path = temp_root / "min_manifest.json"
+        manifest = {
+            "benchmark_id": str(benchmark["benchmark_id"]),
+            "benchmark_seed": benchmark_seed,
+            "family": benchmark_family,
+            "evaluation_mode": "schedule",
+            # Deliberately pin an old N=1 membership snapshot. Membership expansion
+            # must not invalidate this concrete seed when fitting inputs are unchanged.
+            "benchmark": {
+                "benchmark_id": str(benchmark["benchmark_id"]),
+                "seed_count": 1,
+                "resolved_seeds": [benchmark_seed],
+            },
+            "training_policy": {
+                "optimizer_seed": benchmark_seed,
+                "trials_per_fold": int(benchmark_training["trials_per_fold"]),
+                "benchmark_seed_override": True,
+                "evaluation_mode": "schedule",
+            },
+            "artifacts": {
+                benchmark_policy: {
+                    "sha256": target_sha,
+                    "source": {
+                        "build_contract": benchmark_build_contract,
+                        "schedule_kind": "annual_refit",
+                    },
+                }
+            },
+        }
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        membership_only_reuse = _benchmark_manifest_matches_current_policy(
+            manifest_path,
+            benchmark=benchmark,
+            benchmark_id=str(benchmark["benchmark_id"]),
+            seed=benchmark_seed,
+            family=benchmark_family,
+            evaluation_mode="rolling",
+            policy=benchmark_policy,
+            target_path=target,
+            comparison_end_date="2026-03-02",
+            build_contract=benchmark_build_contract,
+        )
+        stale_contract = dict(benchmark_build_contract)
+        stale_contract["trials_per_fold"] = int(stale_contract["trials_per_fold"]) + 1
+        stale_contract_rejected = not _benchmark_manifest_matches_current_policy(
+            manifest_path,
+            benchmark=benchmark,
+            benchmark_id=str(benchmark["benchmark_id"]),
+            seed=benchmark_seed,
+            family=benchmark_family,
+            evaluation_mode="rolling",
+            policy=benchmark_policy,
+            target_path=target,
+            comparison_end_date="2026-03-02",
+            build_contract=stale_contract,
+        )
+        target.write_text(
+            json.dumps({
+                "selector": benchmark_policy,
+                "meta": {"last_oos_date": "2026-03-02"},
+                "tampered": True,
+            }),
+            encoding="utf-8",
+        )
+        stale_sha_rejected = not _benchmark_manifest_matches_current_policy(
+            manifest_path,
+            benchmark=benchmark,
+            benchmark_id=str(benchmark["benchmark_id"]),
+            seed=benchmark_seed,
+            family=benchmark_family,
+            evaluation_mode="rolling",
+            policy=benchmark_policy,
+            target_path=target,
+            comparison_end_date="2026-03-02",
+            build_contract=benchmark_build_contract,
+        )
+    check_true(
+        "robustness_per_seed_param_reuse_ignores_membership_but_rejects_stale_contract_or_sha",
+        membership_only_reuse and stale_contract_rejected and stale_sha_rejected,
+    )
+
+    identity_frame = pd.DataFrame([{
+        "arm_id": "C59",
+        "seed": 11,
+        "strategy_param_sha256": "param-sha",
+        "strategy_param_manifest_sha256": "manifest-sha",
+        "model_sha256": "model-sha",
+        "score_sha256": "score-sha",
+        "runtime_source_identity_sha256": "runtime-sha",
+    }])
+    identity_contract = {
+        "benchmark_id": "end_to_end_v1",
+        "benchmark_parameter_artifact_identities": {
+            "C59:seed=11": {
+                "sha256": "param-sha",
+                "manifest_sha256": "manifest-sha",
+            }
+        },
+        "model_seed_sensitive_arm_ids": ["C59"],
+    }
+    _validate_seed_result_scientific_identities(identity_frame, contract=identity_contract)
+    stale_identity_rejected = False
+    try:
+        stale_frame = identity_frame.copy()
+        stale_frame.loc[0, "strategy_param_sha256"] = "different"
+        _validate_seed_result_scientific_identities(stale_frame, contract=identity_contract)
+    except ValueError:
+        stale_identity_rejected = True
+    check_true(
+        "robustness_completed_observation_reuse_rejects_stale_strategy_param_identity",
+        stale_identity_rejected,
+    )
+
+    yearly_arm = SimpleNamespace(arm_id="C59")
+    partial_yearly = pd.DataFrame([{
+        "arm_id": "C59", "seed": 11, "arm_order": 1, "seed_order": 1,
+        "year": 2021, "return_pct": 1.0, "is_complete_year": True,
+    }])
+    partial_yearly_rejected = False
+    try:
+        _validate_seed_yearly_results_frame(
+            partial_yearly, stochastic_arms=(yearly_arm,), seeds=(11,),
+            expected_years=(2021, 2022), require_complete_units=True,
+        )
+    except ValueError:
+        partial_yearly_rejected = True
+    complete_yearly = pd.concat([
+        partial_yearly,
+        pd.DataFrame([{
+            "arm_id": "C59", "seed": 11, "arm_order": 1, "seed_order": 1,
+            "year": 2022, "return_pct": 2.0, "is_complete_year": True,
+        }]),
+    ], ignore_index=True)
+    complete_yearly_accepted = True
+    try:
+        _validate_seed_yearly_results_frame(
+            complete_yearly, stochastic_arms=(yearly_arm,), seeds=(11,),
+            expected_years=(2021, 2022), require_complete_units=True,
+        )
+    except ValueError:
+        complete_yearly_accepted = False
+    check_true(
+        "robustness_resume_requires_complete_year_set_before_unit_reuse",
+        partial_yearly_rejected and complete_yearly_accepted,
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        durable_root = Path(temp_dir)
+        for filename in (
+            "seed_results.csv", "seed_yearly_returns.csv",
+            "robustness_summary.json", "robustness_report.md",
+        ):
+            (durable_root / filename).write_text(f"stable:{filename}\n", encoding="utf-8")
+        durable_manifest = _build_durable_result_artifacts(durable_root)
+        durable_before = _validate_durable_result_artifacts(durable_root, durable_manifest)
+        (durable_root / "robustness_report.md").write_text("tampered\n", encoding="utf-8")
+        durable_after = _validate_durable_result_artifacts(durable_root, durable_manifest)
+    check_true(
+        "robustness_completed_run_reuse_requires_durable_result_sha_integrity",
+        durable_before and not durable_after,
+    )
+
+    check_true(
+        "robustness_completed_rerun_is_true_noop_and_interrupted_fixed_baseline_can_resume",
+        "completed_run = _validate_completed_run(" in multi_seed_source
+        and "[ROBUSTNESS REUSE]" in multi_seed_source
+        and "_load_local_fixed_baseline_if_compatible(" in multi_seed_source
+        and "inspect_robustness_benchmark_strategy_parameter_artifact(" in multi_seed_source
+        and "multi-seed score起始覆蓋不足" in multi_seed_source
+        and "multi-seed score結束覆蓋不足" in multi_seed_source
+        and "param_evaluation_mode=param_evaluation_mode" in multi_seed_source
+        and "_strategy_only_baseline_context_available(" in multi_seed_source
+        and '"param_evaluation_mode": str(' in strategy_reuse_source
+        and "expected_param_evaluation_mode" in strategy_replay_source,
     )
 
     check_true(

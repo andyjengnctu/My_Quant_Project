@@ -1310,6 +1310,9 @@ def _find_reusable_baseline_source(
         "dataset": settings.dataset,
         "params_file_sha256": expected_param_sha,
         "requested_param_policy": resolve_strategy_comparison_arm_param_policy(settings, off_arm),
+        "param_evaluation_mode": str(
+            settings.parameter_sources[off_arm.param_source].canonical_evaluation_mode or "rolling"
+        ),
         "optional_entry_filter_policy": (
             OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
             if all_off
@@ -1358,6 +1361,7 @@ def _find_reusable_baseline_source(
                 "dataset": str(metadata.get("dataset") or ""),
                 "params_file_sha256": str(metadata.get("params_file_sha256") or ""),
                 "requested_param_policy": str(metadata.get("requested_param_policy") or ""),
+                "param_evaluation_mode": str(metadata.get("param_evaluation_mode") or ""),
                 "optional_entry_filter_policy": str(
                     metadata.get("optional_entry_filter_policy") or ""
                 ),

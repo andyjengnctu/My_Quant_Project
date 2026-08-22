@@ -1205,11 +1205,12 @@ def _benchmark_manifest_matches_current_policy(
     ):
         return False
     pinned = dict(payload.get("benchmark") or {})
-    if (
-        str(pinned.get("benchmark_id") or "") != str(benchmark.get("benchmark_id") or "")
-        or tuple(int(v) for v in tuple(pinned.get("resolved_seeds") or ()))
-            != tuple(int(v) for v in tuple(benchmark.get("resolved_seeds") or ()))
-    ):
+    # A per-seed Optimizer artifact is identified by its concrete seed plus the
+    # Optimizer build/training contract below.  ``seed_count`` / ``resolved_seeds``
+    # describe the current benchmark *membership*, not the scientific identity of
+    # an already-fitted seed.  Expanding N=2 -> N=4 must therefore leave the first
+    # two per-seed artifacts reusable when every fitting input is unchanged.
+    if str(pinned.get("benchmark_id") or "") != str(benchmark.get("benchmark_id") or ""):
         return False
     training = dict(payload.get("training_policy") or {})
     if (
@@ -1241,6 +1242,115 @@ def _benchmark_manifest_matches_current_policy(
     return schedule_kind == "annual_refit"
 
 
+def _resolve_robustness_benchmark_strategy_parameter_state(
+    project_root: str | Path,
+    *,
+    benchmark_id: str,
+    seed: int,
+    family: str,
+    evaluation_mode: str,
+    policy: str,
+    comparison_end_date: str,
+    dataset: str,
+    max_positions: int,
+    rotation: str,
+    fixed_risk: float,
+    max_position_cap_pct: float,
+) -> dict[str, Any]:
+    """Resolve one per-seed benchmark artifact without performing build work."""
+
+    root = Path(project_root).resolve()
+    normalized_family = normalize_strategy_param_family(family)
+    mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
+    normalized_policy = normalize_strategy_param_policy(policy)
+    if mode not in {"oos", "rolling"}:
+        raise ValueError("robustness benchmark策略參數只支援oos/rolling")
+    if normalized_policy != "base_finalist_best":
+        raise ValueError("robustness benchmark per-seed策略參數固定使用base-finalist-best")
+    benchmark = get_robustness_benchmark_policy_snapshot()
+    if str(benchmark_id) != str(benchmark["benchmark_id"]):
+        raise ValueError(f"benchmark_id與current SSOT不一致: {benchmark_id}")
+    if int(seed) not in {int(value) for value in benchmark["resolved_seeds"]}:
+        raise ValueError(f"seed不屬於current robustness benchmark題庫: {seed}")
+
+    optimizer_policy = get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling")
+    build_contract = _benchmark_schedule_build_contract(
+        benchmark_id=str(benchmark_id), seed=int(seed), family=normalized_family,
+        policy=normalized_policy, dataset=str(dataset), max_positions=int(max_positions),
+        rotation=str(rotation), fixed_risk=float(fixed_risk),
+        max_position_cap_pct=float(max_position_cap_pct),
+    )
+    target = resolve_strategy_param_benchmark_artifact_path(
+        root, benchmark_id=str(benchmark_id), seed=int(seed), family=normalized_family,
+        evaluation_mode="rolling", policy=normalized_policy,
+    )
+    manifest_path = resolve_strategy_param_benchmark_manifest_path(
+        root, benchmark_id=str(benchmark_id), seed=int(seed), family=normalized_family,
+        evaluation_mode="rolling",
+    )
+    reusable = (
+        target.is_file()
+        and manifest_path.is_file()
+        and (_benchmark_parameter_coverage_end(target) or "") >= str(comparison_end_date)
+        and _benchmark_manifest_matches_current_policy(
+            manifest_path, benchmark=benchmark, benchmark_id=str(benchmark_id),
+            seed=int(seed), family=normalized_family, evaluation_mode=mode,
+            policy=normalized_policy, target_path=target,
+            comparison_end_date=str(comparison_end_date), build_contract=build_contract,
+        )
+    )
+    return {
+        "root": root,
+        "family": normalized_family,
+        "evaluation_mode": mode,
+        "policy": normalized_policy,
+        "benchmark": benchmark,
+        "optimizer_policy": optimizer_policy,
+        "build_contract": build_contract,
+        "target": target,
+        "manifest_path": manifest_path,
+        "action": "REUSE" if reusable else ("REBUILD" if target.exists() or manifest_path.exists() else "BUILD"),
+    }
+
+
+def inspect_robustness_benchmark_strategy_parameter_artifact(
+    project_root: str | Path,
+    *,
+    benchmark_id: str,
+    seed: int,
+    family: str,
+    evaluation_mode: str,
+    policy: str,
+    comparison_end_date: str,
+    dataset: str,
+    max_positions: int,
+    rotation: str,
+    fixed_risk: float,
+    max_position_cap_pct: float,
+) -> dict[str, Any]:
+    """Read-only BUILD/REBUILD/REUSE decision for the robustness planner."""
+
+    state = _resolve_robustness_benchmark_strategy_parameter_state(
+        project_root,
+        benchmark_id=benchmark_id,
+        seed=seed,
+        family=family,
+        evaluation_mode=evaluation_mode,
+        policy=policy,
+        comparison_end_date=comparison_end_date,
+        dataset=dataset,
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
+    )
+    return {
+        "action": str(state["action"]),
+        "path": Path(state["target"]),
+        "manifest_path": Path(state["manifest_path"]),
+    }
+
+
 def ensure_robustness_benchmark_strategy_parameter_artifact(
     project_root: str | Path,
     *,
@@ -1267,49 +1377,33 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
     execution stay owned by the canonical Optimizer. OOS and Rolling resolve to the
     same physical 2021->latest JSON; OOS freeze is applied only in memory by replay.
     """
-    root = Path(project_root).resolve()
-    family = normalize_strategy_param_family(family)
-    mode = normalize_strategy_param_evaluation_mode(evaluation_mode)
-    policy = normalize_strategy_param_policy(policy)
-    if mode not in {"oos", "rolling"}:
-        raise ValueError("robustness benchmark策略參數只支援oos/rolling")
-    if policy != "base_finalist_best":
-        raise ValueError("robustness benchmark per-seed策略參數固定使用base-finalist-best")
-    benchmark = get_robustness_benchmark_policy_snapshot()
-    if str(benchmark_id) != str(benchmark["benchmark_id"]):
-        raise ValueError(f"benchmark_id與current SSOT不一致: {benchmark_id}")
-    if int(seed) not in {int(value) for value in benchmark["resolved_seeds"]}:
-        raise ValueError(f"seed不屬於current robustness benchmark題庫: {seed}")
-
-    optimizer_policy = get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling")
+    state = _resolve_robustness_benchmark_strategy_parameter_state(
+        project_root,
+        benchmark_id=benchmark_id,
+        seed=seed,
+        family=family,
+        evaluation_mode=evaluation_mode,
+        policy=policy,
+        comparison_end_date=comparison_end_date,
+        dataset=dataset,
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
+    )
+    root = Path(state["root"])
+    family = str(state["family"])
+    mode = str(state["evaluation_mode"])
+    policy = str(state["policy"])
+    benchmark = dict(state["benchmark"])
+    optimizer_policy = dict(state["optimizer_policy"])
     trials = int(optimizer_policy["trials_per_fold"])
     train_window_months = int(optimizer_policy["train_window_months"])
     oos_months = int(optimizer_policy["oos_horizon_months"])
-    build_contract = _benchmark_schedule_build_contract(
-        benchmark_id=str(benchmark_id), seed=int(seed), family=family, policy=policy,
-        dataset=str(dataset), max_positions=int(max_positions),
-        rotation=str(rotation), fixed_risk=float(fixed_risk),
-        max_position_cap_pct=float(max_position_cap_pct),
-    )
-    target = resolve_strategy_param_benchmark_artifact_path(
-        root, benchmark_id=str(benchmark_id), seed=int(seed), family=family,
-        evaluation_mode="rolling", policy=policy,
-    )
-    manifest_path = resolve_strategy_param_benchmark_manifest_path(
-        root, benchmark_id=str(benchmark_id), seed=int(seed), family=family,
-        evaluation_mode="rolling",
-    )
-    reusable = (
-        target.is_file()
-        and manifest_path.is_file()
-        and (_benchmark_parameter_coverage_end(target) or "") >= str(comparison_end_date)
-        and _benchmark_manifest_matches_current_policy(
-            manifest_path, benchmark=benchmark, benchmark_id=str(benchmark_id),
-            seed=int(seed), family=family, evaluation_mode=mode, policy=policy,
-            target_path=target, comparison_end_date=str(comparison_end_date),
-            build_contract=build_contract,
-        )
-    )
+    build_contract = dict(state["build_contract"])
+    target = Path(state["target"])
+    manifest_path = Path(state["manifest_path"])
+    reusable = str(state["action"]) == "REUSE"
     if reusable:
         initial_sha = _benchmark_effective_member_sha256(target)
         return {
@@ -1400,6 +1494,7 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
 
 __all__ = [
     "ensure_robustness_benchmark_strategy_parameter_artifact",
+    "inspect_robustness_benchmark_strategy_parameter_artifact",
     "ensure_strategy_parameter_artifact",
     "validate_strategy_parameter_artifact_identity",
     "migrate_legacy_strategy_parameter_artifacts",

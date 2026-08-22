@@ -177,6 +177,7 @@ def _load_reusable_no_filter_baseline(
     expected_dataset: str,
     expected_params_sha256: str,
     expected_param_policy: str,
+    expected_param_evaluation_mode: str,
     expected_optional_entry_filter_policy: str,
     expected_shared_param_overrides: dict[str, Any],
     expected_max_positions: int,
@@ -204,6 +205,7 @@ def _load_reusable_no_filter_baseline(
         "dataset": str(expected_dataset),
         "params_file_sha256": str(expected_params_sha256),
         "requested_param_policy": str(expected_param_policy),
+        "param_evaluation_mode": str(expected_param_evaluation_mode),
         "optional_entry_filter_policy": str(expected_optional_entry_filter_policy),
         "shared_param_overrides": dict(expected_shared_param_overrides or {}),
         "max_positions": int(expected_max_positions),
@@ -217,6 +219,7 @@ def _load_reusable_no_filter_baseline(
         "dataset": str(metadata.get("dataset") or ""),
         "params_file_sha256": str(metadata.get("params_file_sha256") or ""),
         "requested_param_policy": str(metadata.get("requested_param_policy") or ""),
+        "param_evaluation_mode": str(metadata.get("param_evaluation_mode") or ""),
         "optional_entry_filter_policy": str(
             metadata.get("optional_entry_filter_policy") or ""
         ),
@@ -453,6 +456,7 @@ def run_standalone_baseline(
                 expected_dataset=dataset,
                 expected_params_sha256=param_identity_sha256,
                 expected_param_policy=param_policy,
+                expected_param_evaluation_mode=str(param_evaluation_mode),
                 expected_optional_entry_filter_policy=optional_entry_filter_policy,
                 expected_shared_param_overrides=dict(shared_param_overrides or {}),
                 expected_max_positions=max_positions,

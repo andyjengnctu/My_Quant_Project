@@ -23,6 +23,7 @@ import random
 import shutil
 import subprocess
 import sys
+import tempfile
 from threading import Lock
 import time
 from typing import Any, Callable
@@ -115,10 +116,15 @@ from filters.breakout_quality.strategy_compare_sources import (
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
 )
 from filters.breakout_quality.strategy_compare_engine import run_comparison
-from filters.breakout_quality.strategy_compare_replay import run_standalone_baseline
+from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_SCORE_RANKING
+from filters.breakout_quality.strategy_compare_replay import (
+    _load_reusable_no_filter_baseline,
+    run_standalone_baseline,
+)
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
 from services.optimizer.strategy_param_service import (
     ensure_robustness_benchmark_strategy_parameter_artifact,
+    inspect_robustness_benchmark_strategy_parameter_artifact,
 )
 from core.report_style import (
     SIGNAL_NEGATIVE,
@@ -159,6 +165,12 @@ MANIFEST_FILENAME = "manifest.json"
 LATEST_FILENAME = "latest.json"
 ATTRIBUTION_SOURCE_DIRNAME = "attribution_source"
 ATTRIBUTION_SOURCE_SCHEMA_VERSION = 2
+DURABLE_RESULT_FILENAMES = {
+    "seed_results": SEED_RESULTS_FILENAME,
+    "seed_yearly_results": SEED_YEARLY_RESULTS_FILENAME,
+    "summary": SUMMARY_FILENAME,
+    "report": REPORT_FILENAME,
+}
 ROBUSTNESS_SCHEMA_VERSION = 11
 ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 5
 ROBUSTNESS_MODEL_ARTIFACT_CONTRACT_VERSION = 2
@@ -208,13 +220,44 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-        encoding="utf-8",
+    _atomic_write_text(
+        path, json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
     )
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    os.close(fd)
+    temp = Path(temp_name)
+    try:
+        temp.write_text(text, encoding="utf-8")
+        os.replace(temp, path)
+    finally:
+        if temp.exists():
+            temp.unlink()
+
+
+def _atomic_write_csv(
+    path: Path, frame: pd.DataFrame, *, sort_columns: tuple[str, ...]
+) -> None:
+    """Atomically publish one resumable CSV checkpoint."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ordered = frame.sort_values(list(sort_columns), kind="mergesort")
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    os.close(fd)
+    temp = Path(temp_name)
+    try:
+        ordered.to_csv(temp, index=False, encoding="utf-8-sig")
+        os.replace(temp, path)
+    finally:
+        if temp.exists():
+            temp.unlink()
 
 
 def _finite_or_none(value: Any) -> float | None:
@@ -569,7 +612,8 @@ def _benchmark_param_binding(
 
 
 def _benchmark_parameter_plan_rows(
-    *, settings, robustness, benchmark_arms: tuple[StrategyComparisonArm, ...]
+    *, settings, robustness, benchmark_arms: tuple[StrategyComparisonArm, ...],
+    comparison_end: str | None,
 ) -> tuple[list[tuple[str, str, str]], list[str], dict[tuple[str, int], dict[str, Any]]]:
     if robustness.benchmark_id is None:
         return [], [], {}
@@ -598,14 +642,47 @@ def _benchmark_parameter_plan_rows(
                 f"param-benchmark:{robustness.benchmark_id}:seed={seed}:"
                 f"{binding['family']}:{binding['evaluation_mode']}:{binding['param_policy']}"
             )
-            if path.is_file() and manifest_path.is_file():
-                rows.append(("REUSE", label, project_relative_display_path(path, project_root=PROJECT_ROOT)))
+            if comparison_end in (None, ""):
+                if path.is_file() or manifest_path.is_file():
+                    rows.append((
+                        "CHECK", label,
+                        "共同策略期間解析後由canonical Optimizer service驗證manifest／coverage／build contract；"
+                        "不得因檔案存在直接視為REUSE",
+                    ))
+                else:
+                    rows.append((
+                        "BUILD", label,
+                        "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立；"
+                        "不得fallback到production Seed42策略參數",
+                    ))
+                continue
+            state = inspect_robustness_benchmark_strategy_parameter_artifact(
+                PROJECT_ROOT,
+                benchmark_id=str(robustness.benchmark_id),
+                seed=int(seed),
+                family=str(binding["family"]),
+                evaluation_mode=str(binding["evaluation_mode"]),
+                policy=str(binding["param_policy"]),
+                comparison_end_date=str(comparison_end),
+                dataset=str(settings.dataset),
+                max_positions=int(settings.max_positions),
+                rotation=str(settings.rotation),
+                fixed_risk=float(DEFAULT_FIXED_RISK),
+                max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+            )
+            action = str(state["action"])
+            if action == "REUSE":
+                detail = project_relative_display_path(path, project_root=PROJECT_ROOT)
+            elif action == "REBUILD":
+                detail = (
+                    "既有benchmark策略參數缺少／過期／identity不符；由canonical Optimizer service自動REBUILD／RESUME"
+                )
             else:
-                reason = (
+                detail = (
                     "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立；"
                     "不得fallback到production Seed42策略參數"
                 )
-                rows.append(("BUILD", label, reason))
+            rows.append((action, label, detail))
     return rows, blockers, bindings
 
 
@@ -702,6 +779,41 @@ def _resolve_same_seed_baseline_arm(
             f"arm={model_arm.arm_id}, matches={[item.arm_id for item in matches]}"
         )
     return matches[0]
+
+
+def _strategy_only_baseline_context_available(
+    *, output_dir: Path, settings, arm: StrategyComparisonArm, binding: dict[str, Any],
+    comparison_start: str, comparison_end: str,
+) -> bool:
+    """Validate transient DL-off replay context before spending GPU time."""
+
+    all_off = arm.rule_policy == "all_off"
+    try:
+        _load_reusable_no_filter_baseline(
+            output_dir,
+            comparison_mode=COMPARISON_MODE_SCORE_RANKING,
+            expected_dataset=str(settings.dataset),
+            expected_params_sha256=str(binding["sha256"]),
+            expected_param_policy=resolve_strategy_comparison_arm_param_policy(settings, arm),
+            expected_param_evaluation_mode=str(binding["evaluation_mode"]),
+            expected_optional_entry_filter_policy=(
+                OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
+                if all_off else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
+            ),
+            expected_shared_param_overrides=(
+                dict(ALL_RULE_FILTERS_OFF_OVERRIDES) if all_off else {}
+            ),
+            expected_max_positions=int(settings.max_positions),
+            expected_enable_rotation=settings.rotation == "on",
+            expected_start_date=str(comparison_start),
+            expected_end_date=str(comparison_end),
+        )
+        return True
+    except (
+        OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError,
+        TypeError, ValueError, pd.errors.ParserError,
+    ):
+        return False
 
 
 def _strategy_only_baseline_action(
@@ -1047,11 +1159,8 @@ def _render_robustness_execution_plan(
     param_rows, param_blockers = _parameter_plan_rows(
         settings=settings, status=status, required_sources=required_sources
     )
-    benchmark_rows, benchmark_blockers, benchmark_bindings = _benchmark_parameter_plan_rows(
-        settings=settings, robustness=cfg, benchmark_arms=tuple(stochastic_arms)
-    )
     upstream_rows, upstream_blockers = _model_upstream_rows(settings, model_arms)
-    blockers = [*param_blockers, *benchmark_blockers, *upstream_blockers]
+    blockers = [*param_blockers, *upstream_blockers]
     upstream_pending = any(row[0] in {"BUILD", "REBUILD", "RESUME"} for row in upstream_rows)
     if upstream_pending and not upstream_blockers:
         start = end = None
@@ -1068,8 +1177,13 @@ def _render_robustness_execution_plan(
             period_error = str(exc)
             blockers.append(str(exc))
 
+    benchmark_rows, benchmark_blockers, benchmark_bindings = _benchmark_parameter_plan_rows(
+        settings=settings, robustness=cfg, benchmark_arms=tuple(stochastic_arms),
+        comparison_end=end,
+    )
+    blockers.extend(benchmark_blockers)
     pending_work = any(
-        row[0] in {"BUILD", "REBUILD", "RESUME"}
+        row[0] in {"BUILD", "REBUILD", "RESUME", "CHECK"}
         for row in (*param_rows, *benchmark_rows, *upstream_rows)
     )
     overall = "BLOCKED" if blockers else "PREPARABLE" if pending_work else "READY"
@@ -1121,7 +1235,7 @@ def _render_robustness_execution_plan(
     color_enabled = console_color_enabled()
     action_colors = {
         "READY": "green", "REUSE": "green", "BUILD": "yellow", "REBUILD": "yellow",
-        "PREPARABLE": "yellow", "BLOCKED": "red", "RUN/REUSE": "cyan",
+        "CHECK": "yellow", "PREPARABLE": "yellow", "BLOCKED": "red", "RUN/REUSE": "cyan",
         "TRAIN+REPLAY": "cyan", "PARAM+REPLAY": "cyan",
     }
     colored_rows = [
@@ -1529,19 +1643,15 @@ def _seed_expansion_source_run(
     for candidate_root in sorted(path for path in output_root.iterdir() if path.is_dir()):
         if candidate_root.resolve() == Path(current_run_root).resolve():
             continue
-        manifest_path = candidate_root / MANIFEST_FILENAME
-        if not manifest_path.is_file():
+        validated = _validate_completed_run(
+            candidate_root, expected_contract=None, backfill_integrity=True
+        )
+        if validated is None:
             continue
-        try:
-            manifest = _read_json(manifest_path)
-            if str(manifest.get("status") or "") != "COMPLETED":
-                continue
-            candidate_contract = dict(manifest.get("contract") or {})
-            candidate_seeds = tuple(
-                int(value) for value in candidate_contract.get("resolved_seeds") or ()
-            )
-        except (OSError, ValueError, json.JSONDecodeError, TypeError):
-            continue
+        candidate_contract = dict(validated["contract"])
+        candidate_seeds = tuple(
+            int(value) for value in candidate_contract.get("resolved_seeds") or ()
+        )
         if not candidate_seeds or len(candidate_seeds) >= len(current_seeds):
             continue
         if current_seeds[: len(candidate_seeds)] != candidate_seeds:
@@ -2034,10 +2144,273 @@ def _validate_seed_results_frame(
 
 
 def _write_seed_results(path: Path, frame: pd.DataFrame) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    frame.sort_values(["arm_order", "seed_order"], kind="mergesort").to_csv(
-        path, index=False, encoding="utf-8-sig"
-    )
+    _atomic_write_csv(path, frame, sort_columns=("arm_order", "seed_order"))
+
+
+def _normalized_hash_value(value: Any) -> str:
+    if value is None or value is pd.NA:
+        return ""
+    if isinstance(value, (float, np.floating)) and math.isnan(float(value)):
+        return ""
+    return str(value).strip().lower()
+
+
+def _validate_seed_result_scientific_identities(
+    frame: pd.DataFrame, *, contract: dict[str, Any]
+) -> None:
+    """Reject stale/cross-run rows even when their arm/seed keys look valid."""
+
+    if frame.empty or contract.get("benchmark_id") in (None, ""):
+        return
+    required = {"strategy_param_sha256", "strategy_param_manifest_sha256"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(
+            "multi-seed seed_results缺少strategy parameter identity欄位: "
+            + ", ".join(missing)
+        )
+    identities = dict(contract.get("benchmark_parameter_artifact_identities") or {})
+    model_ids = {str(value) for value in tuple(contract.get("model_seed_sensitive_arm_ids") or ())}
+    for row in frame.to_dict("records"):
+        arm_id = str(row.get("arm_id") or "")
+        seed = int(row.get("seed"))
+        expected = dict(identities.get(f"{arm_id}:seed={seed}") or {})
+        if not expected:
+            raise ValueError(
+                f"multi-seed seed_results缺少contract parameter identity: {arm_id}/seed={seed}"
+            )
+        actual_param = _normalized_hash_value(row.get("strategy_param_sha256"))
+        actual_manifest = _normalized_hash_value(row.get("strategy_param_manifest_sha256"))
+        if actual_param != _normalized_hash_value(expected.get("sha256")):
+            raise ValueError(
+                f"multi-seed seed_results strategy param SHA stale: {arm_id}/seed={seed}"
+            )
+        if actual_manifest != _normalized_hash_value(expected.get("manifest_sha256")):
+            raise ValueError(
+                f"multi-seed seed_results strategy param manifest SHA stale: {arm_id}/seed={seed}"
+            )
+        if arm_id in model_ids:
+            for key in ("model_sha256", "score_sha256", "runtime_source_identity_sha256"):
+                if not _normalized_hash_value(row.get(key)):
+                    raise ValueError(
+                        f"multi-seed model observation缺少{key}: {arm_id}/seed={seed}"
+                    )
+
+
+def _comparison_years(comparison_start: str, comparison_end: str) -> tuple[int, ...]:
+    start_year = int(pd.Timestamp(comparison_start).year)
+    end_year = int(pd.Timestamp(comparison_end).year)
+    if end_year < start_year:
+        raise ValueError(
+            f"multi-seed comparison period年份顛倒: {comparison_start}~{comparison_end}"
+        )
+    return tuple(range(start_year, end_year + 1))
+
+
+def _validate_seed_yearly_results_frame(
+    frame: pd.DataFrame,
+    *,
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    seeds: tuple[int, ...],
+    expected_years: tuple[int, ...],
+    require_complete_units: bool,
+) -> None:
+    if frame.empty:
+        if require_complete_units:
+            raise ValueError("multi-seed seed_yearly_results為空")
+        return
+    required = {
+        "arm_id", "seed", "arm_order", "seed_order", "year",
+        "return_pct", "is_complete_year",
+    }
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(
+            "multi-seed seed_yearly_results缺少欄位: " + ", ".join(missing)
+        )
+    keys = [
+        (str(row.arm_id), int(row.seed), int(row.year))
+        for row in frame.itertuples(index=False)
+    ]
+    if len(keys) != len(set(keys)):
+        raise ValueError("multi-seed seed_yearly_results存在重複arm/seed/year observation")
+    expected_units = {
+        (arm.arm_id, int(seed)) for arm in stochastic_arms for seed in seeds
+    }
+    expected_year_set = {int(year) for year in expected_years}
+    expected_keys = {
+        (arm_id, seed, year)
+        for arm_id, seed in expected_units
+        for year in expected_year_set
+    }
+    actual_units = {(arm_id, seed) for arm_id, seed, _year in keys}
+    unexpected_units = sorted(actual_units - expected_units)
+    if unexpected_units:
+        raise ValueError(
+            "multi-seed seed_yearly_results含非本contract observation: "
+            + ", ".join(_unit_key(arm_id, seed) for arm_id, seed in unexpected_units[:4])
+        )
+    unexpected_years = sorted({year for _arm_id, _seed, year in keys} - expected_year_set)
+    if unexpected_years:
+        raise ValueError(
+            "multi-seed seed_yearly_results含comparison period外年度: "
+            + ", ".join(str(year) for year in unexpected_years[:6])
+        )
+    if require_complete_units and set(keys) != expected_keys:
+        missing_count = len(expected_keys - set(keys))
+        raise ValueError(
+            "multi-seed seed_yearly_results年度單元不完整: "
+            f"expected={len(expected_keys)}, actual={len(keys)}, missing={missing_count}"
+        )
+    arm_order = {arm.arm_id: index for index, arm in enumerate(stochastic_arms, start=1)}
+    seed_order = {int(seed): index for index, seed in enumerate(seeds, start=1)}
+    for row in frame.itertuples(index=False):
+        if int(row.arm_order) != arm_order[str(row.arm_id)]:
+            raise ValueError(f"multi-seed seed_yearly_results arm_order不一致: {row.arm_id}")
+        if int(row.seed_order) != seed_order[int(row.seed)]:
+            raise ValueError(f"multi-seed seed_yearly_results seed_order不一致: {row.seed}")
+
+
+def _validate_summary_seed_aggregates(
+    summary: dict[str, Any], *, seed_frame: pd.DataFrame, contract: dict[str, Any]
+) -> None:
+    rows = {
+        str(row.get("arm_id") or ""): dict(row)
+        for row in tuple(summary.get("mean_strategy_metrics") or ())
+        if str(row.get("type") or "") == "Multi-seed"
+    }
+    settings = get_strategy_comparison_settings(str(contract["profile_id"]))
+    stochastic = _contract_stochastic_arms(contract, settings)
+    for arm in stochastic:
+        group = seed_frame[seed_frame["arm_id"].astype(str) == arm.arm_id]
+        rendered = rows.get(arm.arm_id)
+        if rendered is None or int(rendered.get("n") or -1) != len(group):
+            raise ValueError(f"robustness summary seed aggregate缺少／N不一致: {arm.arm_id}")
+        for _label, key, _unit in MEAN_METRICS:
+            expected = _mean_or_none(group[key]) if key in group.columns else None
+            actual_raw = rendered.get(key)
+            actual = _finite_or_none(actual_raw)
+            if expected is None and actual is None:
+                continue
+            if expected is None or actual is None or not math.isclose(
+                float(expected), float(actual), rel_tol=0.0, abs_tol=1e-9
+            ):
+                raise ValueError(
+                    f"robustness summary與seed_results不一致: arm={arm.arm_id}, metric={key}"
+                )
+
+
+def _build_durable_result_artifacts(run_root: Path) -> dict[str, dict[str, Any]]:
+    artifacts: dict[str, dict[str, Any]] = {}
+    for key, filename in DURABLE_RESULT_FILENAMES.items():
+        path = run_root / filename
+        if not path.is_file():
+            raise FileNotFoundError(f"robustness durable result缺少: {path}")
+        artifacts[key] = {
+            "path": project_relative_display_path(path, project_root=PROJECT_ROOT),
+            **build_file_manifest(path),
+        }
+    return artifacts
+
+
+def _validate_durable_result_artifacts(
+    run_root: Path, artifacts: dict[str, Any]
+) -> bool:
+    if not artifacts:
+        return False
+    for key, filename in DURABLE_RESULT_FILENAMES.items():
+        item = dict(artifacts.get(key) or {})
+        path = run_root / filename
+        if not path.is_file() or Path(str(item.get("filename") or "")).name != filename:
+            return False
+        if int(item.get("size_bytes") or -1) != int(path.stat().st_size):
+            return False
+        expected_sha = _normalized_hash_value(item.get("sha256"))
+        if not expected_sha or compute_file_sha256(path).lower() != expected_sha:
+            return False
+    return True
+
+
+def _validate_completed_run(
+    run_root: Path,
+    *,
+    expected_contract: dict[str, Any] | None = None,
+    backfill_integrity: bool,
+) -> dict[str, Any] | None:
+    """Validate one completed robustness result before REUSE/seed expansion."""
+
+    manifest_path = run_root / MANIFEST_FILENAME
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = _read_json(manifest_path)
+        if str(manifest.get("status") or "") != "COMPLETED":
+            return None
+        contract = dict(manifest.get("contract") or {})
+        fingerprint = str(contract.get("fingerprint") or "")
+        if not fingerprint or fingerprint != run_root.name:
+            return None
+        if expected_contract is not None and fingerprint != str(expected_contract.get("fingerprint") or ""):
+            return None
+        settings = get_strategy_comparison_settings(str(contract["profile_id"]))
+        stochastic = _contract_stochastic_arms(contract, settings)
+        seeds = tuple(int(value) for value in tuple(contract.get("resolved_seeds") or ()))
+        if not seeds:
+            return None
+        seed_frame = _load_seed_results(run_root / SEED_RESULTS_FILENAME)
+        _validate_seed_results_frame(seed_frame, stochastic_arms=stochastic, seeds=seeds)
+        _validate_seed_result_scientific_identities(seed_frame, contract=contract)
+        expected_units = {(arm.arm_id, int(seed)) for arm in stochastic for seed in seeds}
+        actual_units = {
+            (str(row.arm_id), int(row.seed)) for row in seed_frame.itertuples(index=False)
+        }
+        if actual_units != expected_units:
+            return None
+        yearly_frame = _load_seed_yearly_results(run_root / SEED_YEARLY_RESULTS_FILENAME)
+        comparison_period = dict(contract.get("comparison_period") or {})
+        expected_years = _comparison_years(
+            str(comparison_period.get("start") or ""),
+            str(comparison_period.get("end") or ""),
+        )
+        _validate_seed_yearly_results_frame(
+            yearly_frame, stochastic_arms=stochastic, seeds=seeds,
+            expected_years=expected_years, require_complete_units=True,
+        )
+        summary = _read_json(run_root / SUMMARY_FILENAME)
+        summary_contract = dict(summary.get("contract") or {})
+        if str(summary_contract.get("fingerprint") or "") != fingerprint:
+            return None
+        _validate_summary_seed_aggregates(summary, seed_frame=seed_frame, contract=contract)
+        if not (run_root / REPORT_FILENAME).is_file():
+            return None
+        validation_contract = expected_contract if expected_contract is not None else contract
+        model_ids = {
+            str(value) for value in tuple(validation_contract.get("model_seed_sensitive_arm_ids") or ())
+        }
+        if bool(dict(validation_contract.get("retention") or {}).get("keep_attribution_source")):
+            model_arms = tuple(arm for arm in stochastic if arm.arm_id in model_ids)
+            ready = _attribution_ready_units(
+                run_root, stochastic_arms=model_arms, seeds=seeds, fingerprint=fingerprint
+            )
+            if len(ready) != len(model_arms) * len(seeds):
+                return None
+        durable = dict(manifest.get("durable_artifacts") or {})
+        if durable:
+            if not _validate_durable_result_artifacts(run_root, durable):
+                return None
+        elif backfill_integrity:
+            manifest["durable_artifacts"] = _build_durable_result_artifacts(run_root)
+            manifest["integrity_backfilled_at_utc"] = datetime.now(timezone.utc).isoformat()
+            _write_json(manifest_path, manifest)
+        return {
+            "manifest": manifest,
+            "contract": contract,
+            "seed_frame": seed_frame,
+            "seed_yearly_frame": yearly_frame,
+            "summary": summary,
+        }
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
 
 
 def _resolved_period(settings, status: dict[str, Any]) -> tuple[str, str]:
@@ -2158,8 +2531,20 @@ def _validate_training_artifacts(
     score_available_through = str(score_table.attrs.get("available_through") or "")
     if not score_available_from or not score_available_through:
         raise ValueError("multi-seed score table缺少日期範圍metadata")
+    required_start = pd.Timestamp(comparison_start).strftime("%Y-%m-%d")
+    required_end = pd.Timestamp(comparison_end).strftime("%Y-%m-%d")
     if execution_start > score_available_from:
         raise ValueError("multi-seed isolated score時間契約不一致")
+    if pd.Timestamp(score_available_from) > pd.Timestamp(required_start):
+        raise ValueError(
+            "multi-seed score起始覆蓋不足: "
+            f"required<={required_start}, actual={score_available_from}"
+        )
+    if pd.Timestamp(score_available_through) < pd.Timestamp(required_end):
+        raise ValueError(
+            "multi-seed score結束覆蓋不足: "
+            f"required>={required_end}, actual={score_available_through}"
+        )
     artifact_payload = {
         **{key: str(path.resolve()) for key, path in paths.items()},
         "model_sha256": compute_file_sha256(paths["model"]),
@@ -2725,14 +3110,80 @@ def _load_seed_yearly_results(path: Path) -> pd.DataFrame:
 
 
 def _write_seed_yearly_results(path: Path, frame: pd.DataFrame) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    frame.sort_values(["arm_order", "seed_order", "year"], kind="mergesort").to_csv(
-        path, index=False, encoding="utf-8-sig"
+    _atomic_write_csv(
+        path, frame, sort_columns=("arm_order", "seed_order", "year")
     )
 
 
 def _baseline_work_dir(run_root: Path, arm: StrategyComparisonArm) -> Path:
     return run_root / "work" / "baselines" / arm.arm_id
+
+
+def _load_local_fixed_baseline_if_compatible(
+    *, candidate: Path, settings, status: dict[str, Any], arm: StrategyComparisonArm,
+    comparison_start: str, comparison_end: str,
+) -> dict[str, Any] | None:
+    """Reuse a fixed baseline left by an interrupted robustness run."""
+
+    payload_path = candidate / "strategy_comparison.json"
+    required_names = (
+        "strategy_comparison.json", "yearly_returns_comparison.csv",
+        "no_filter_equity.csv", "no_filter_trades.csv",
+        "no_filter_daily_capacity.csv", "no_filter_orderable_candidates.csv",
+    )
+    if not all((candidate / name).is_file() for name in required_names):
+        return None
+    try:
+        payload = _read_json(payload_path)
+        metadata = dict(payload.get("metadata") or {})
+        identity = dict(
+            (status.get("artifact_identities") or {}).get(
+                strategy_comparison_param_artifact_key(
+                    arm.param_source,
+                    resolve_strategy_comparison_arm_param_policy(settings, arm),
+                )
+            )
+            or {}
+        )
+        expected_param_sha = str(identity.get("sha256") or "").strip().lower()
+        if not expected_param_sha:
+            return None
+        all_off = arm.rule_policy == "all_off"
+        param_evaluation_mode = str(
+            settings.parameter_sources[arm.param_source].canonical_evaluation_mode or "rolling"
+        )
+        expected = {
+            "dataset": str(settings.dataset),
+            "params_file_sha256": expected_param_sha,
+            "requested_param_policy": resolve_strategy_comparison_arm_param_policy(settings, arm),
+            "param_evaluation_mode": param_evaluation_mode,
+            "optional_entry_filter_policy": (
+                OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
+                if all_off else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
+            ),
+            "shared_param_overrides": dict(ALL_RULE_FILTERS_OFF_OVERRIDES) if all_off else {},
+            "max_positions": int(settings.max_positions),
+            "enable_rotation": settings.rotation == "on",
+            "comparison_period": {
+                "start": str(comparison_start), "end": str(comparison_end),
+            },
+        }
+        actual = {
+            "dataset": str(metadata.get("dataset") or ""),
+            "params_file_sha256": str(metadata.get("params_file_sha256") or "").strip().lower(),
+            "requested_param_policy": str(metadata.get("requested_param_policy") or ""),
+            "param_evaluation_mode": str(metadata.get("param_evaluation_mode") or ""),
+            "optional_entry_filter_policy": str(metadata.get("optional_entry_filter_policy") or ""),
+            "shared_param_overrides": dict(metadata.get("shared_param_overrides") or {}),
+            "max_positions": int(metadata.get("max_positions") or 0),
+            "enable_rotation": bool(metadata.get("enable_rotation")),
+            "comparison_period": dict(metadata.get("comparison_period") or {}),
+        }
+        if actual != expected or not dict(payload.get("no_filter") or {}):
+            return None
+        return payload
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
 
 
 def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dict[str, dict[str, Any]]:
@@ -2743,11 +3194,17 @@ def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dic
         if not path_text:
             raise RuntimeError(f"robustness baseline缺少arm param binding: {arm.arm_id}")
         arm_param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
-        reusable_dir = _find_reusable_baseline_source(
+        output_dir = _baseline_work_dir(run_root, arm)
+        payload = _load_local_fixed_baseline_if_compatible(
+            candidate=output_dir, settings=settings, status=status, arm=arm,
+            comparison_start=start, comparison_end=end,
+        )
+        reusable_dir = output_dir if payload is not None else _find_reusable_baseline_source(
             root=PROJECT_ROOT, settings=settings, status=status, off_arm=arm
         )
         if reusable_dir is not None:
-            payload = _read_json(reusable_dir / "strategy_comparison.json")
+            if payload is None:
+                payload = _read_json(reusable_dir / "strategy_comparison.json")
             results[arm.arm_id] = {
                 "arm_id": arm.arm_id,
                 "name": arm.name,
@@ -2766,10 +3223,12 @@ def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dic
                 + f" {arm.name} | {project_relative_display_path(reusable_dir, project_root=PROJECT_ROOT)}"
             )
             continue
-        output_dir = _baseline_work_dir(run_root, arm)
         if output_dir.exists():
             shutil.rmtree(output_dir)
         all_off = arm.rule_policy == "all_off"
+        param_evaluation_mode = str(
+            settings.parameter_sources[arm.param_source].canonical_evaluation_mode or "rolling"
+        )
         payload = run_standalone_baseline(
             project_root=PROJECT_ROOT,
             dataset=settings.dataset,
@@ -2787,6 +3246,7 @@ def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dic
             comparison_end_date=end,
             quiet=True,
             shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None),
+            param_evaluation_mode=param_evaluation_mode,
         )
         results[arm.arm_id] = {
             "arm_id": arm.arm_id,
@@ -3966,16 +4426,14 @@ def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None
                 run_root=summary_path.parent,
             )
             _write_json(summary_path, upgraded)
-            report.write_text(
-                render_multi_seed_robustness_report(upgraded, target="markdown"),
-                encoding="utf-8",
+            _atomic_write_text(
+                report, render_multi_seed_robustness_report(upgraded, target="markdown")
             )
     if not summary_path.is_file():
         raise FileNotFoundError(f"最新robustness摘要不存在: {summary_path}")
     summary = _read_json(summary_path)
-    report.write_text(
-        render_multi_seed_robustness_report(summary, target="markdown"),
-        encoding="utf-8",
+    _atomic_write_text(
+        report, render_multi_seed_robustness_report(summary, target="markdown")
     )
     _print_report_tables(summary)
 
@@ -4171,6 +4629,39 @@ def run_multi_seed_robustness(
     run_root = _run_root(contract)
     model_root = _model_work_root(contract)
     run_root.mkdir(parents=True, exist_ok=True)
+    if cfg.reuse_completed:
+        completed_run = _validate_completed_run(
+            run_root, expected_contract=contract, backfill_integrity=True
+        )
+        if completed_run is not None:
+            summary = dict(completed_run["summary"])
+            seed_frame = completed_run["seed_frame"]
+            seed_yearly_frame = completed_run["seed_yearly_frame"]
+            needs_upgrade = (
+                int(summary.get("schema_version") or 0) < ROBUSTNESS_SCHEMA_VERSION
+                or "paired_comparisons" not in summary
+                or "common_strategy_report" not in summary
+            )
+            if needs_upgrade:
+                summary = _upgrade_derived_report_summary(
+                    summary, seed_frame=seed_frame,
+                    seed_yearly_frame=seed_yearly_frame, run_root=run_root,
+                )
+                _write_json(run_root / SUMMARY_FILENAME, summary)
+                _atomic_write_text(
+                    run_root / REPORT_FILENAME,
+                    render_multi_seed_robustness_report(summary, target="markdown"),
+                )
+                manifest_payload = dict(completed_run["manifest"])
+                manifest_payload["durable_artifacts"] = _build_durable_result_artifacts(run_root)
+                manifest_payload["report_refreshed_at_utc"] = datetime.now(timezone.utc).isoformat()
+                _write_json(run_root / MANIFEST_FILENAME, manifest_payload)
+            print(
+                paint("[ROBUSTNESS REUSE]", "green", enabled=console_color_enabled(), bold=True)
+                + f" fingerprint={contract['fingerprint']} | completed scientific result"
+            )
+            _print_report_tables(summary)
+            return summary
     model_root.mkdir(parents=True, exist_ok=True)
     manifest_path = run_root / MANIFEST_FILENAME
     seed_results_path = run_root / SEED_RESULTS_FILENAME
@@ -4212,7 +4703,13 @@ def run_multi_seed_robustness(
     try:
         existing = _load_seed_results(seed_results_path)
         _validate_seed_results_frame(existing, stochastic_arms=stochastic_arms, seeds=seeds)
+        _validate_seed_result_scientific_identities(existing, contract=contract)
         existing_yearly = _load_seed_yearly_results(seed_yearly_results_path)
+        expected_years = _comparison_years(comparison_start, comparison_end)
+        _validate_seed_yearly_results_frame(
+            existing_yearly, stochastic_arms=stochastic_arms, seeds=seeds,
+            expected_years=expected_years, require_complete_units=False,
+        )
         fixed_results = _run_fixed_baselines(
             settings=settings, status=status, run_root=run_root, fixed_arms=fixed_arms
         )
@@ -4237,10 +4734,17 @@ def run_multi_seed_robustness(
         for row in existing.itertuples(index=False)
     } if not existing.empty and cfg.reuse_completed else set()
     if scientific_completed:
-        yearly_units = set() if existing_yearly.empty else {
-            (str(row.arm_id), int(row.seed)) for row in existing_yearly.itertuples(index=False)
+        expected_year_set = set(_comparison_years(comparison_start, comparison_end))
+        yearly_by_unit: dict[tuple[str, int], set[int]] = {}
+        if not existing_yearly.empty:
+            for row in existing_yearly.itertuples(index=False):
+                unit = (str(row.arm_id), int(row.seed))
+                yearly_by_unit.setdefault(unit, set()).add(int(row.year))
+        complete_yearly_units = {
+            unit for unit, years in yearly_by_unit.items()
+            if years == expected_year_set
         }
-        scientific_completed &= yearly_units
+        scientific_completed &= complete_yearly_units
     model_arm_ids = {arm.arm_id for arm in model_arms}
     strategy_only_completed = {unit for unit in scientific_completed if unit[0] not in model_arm_ids}
     attribution_ready = (
@@ -4294,7 +4798,10 @@ def run_multi_seed_robustness(
             unit_identity = (arm.arm_id, int(seed))
             binding = benchmark_bindings[unit_identity]
             output_dir = run_root / "work" / "benchmark_baselines" / _unit_key(arm.arm_id, int(seed))
-            baseline_context_available = (output_dir / "strategy_comparison.json").is_file()
+            baseline_context_available = _strategy_only_baseline_context_available(
+                output_dir=output_dir, settings=settings, arm=arm, binding=binding,
+                comparison_start=comparison_start, comparison_end=comparison_end,
+            )
             action = _strategy_only_baseline_action(
                 scientific_result_exists=unit_identity in scientific_completed,
                 baseline_context_required=unit_identity in required_baseline_units,
@@ -4793,19 +5300,18 @@ def run_multi_seed_robustness(
         _validate_seed_results_frame(
             seed_frame, stochastic_arms=stochastic_arms, seeds=seeds
         )
+        _validate_seed_result_scientific_identities(seed_frame, contract=contract)
         expected = len(stochastic_arms) * len(seeds)
         if len(seed_frame) != expected:
             raise RuntimeError(
                 f"multi-seed robustness結果不完整: expected={expected}, actual={len(seed_frame)}"
             )
         seed_yearly_frame = _load_seed_yearly_results(seed_yearly_results_path)
-        expected_yearly_units = {(arm.arm_id, int(seed)) for arm in stochastic_arms for seed in seeds}
-        actual_yearly_units = set() if seed_yearly_frame.empty else {
-            (str(row.arm_id), int(row.seed)) for row in seed_yearly_frame.itertuples(index=False)
-        }
-        missing_yearly = expected_yearly_units - actual_yearly_units
-        if missing_yearly:
-            raise RuntimeError(f"multi-seed年度結果不完整: missing_observations={len(missing_yearly)}")
+        _validate_seed_yearly_results_frame(
+            seed_yearly_frame, stochastic_arms=stochastic_arms, seeds=seeds,
+            expected_years=_comparison_years(comparison_start, comparison_end),
+            require_complete_units=True,
+        )
         attribution_index_path = None
         if cfg.keep_attribution_source:
             expected_attribution = len(model_arms) * len(seeds)
@@ -4832,11 +5338,12 @@ def run_multi_seed_robustness(
         summary["elapsed_sec"] = round(time.perf_counter() - started_total, 3)
         _write_json(run_root / SUMMARY_FILENAME, summary)
         report_text = render_multi_seed_robustness_report(summary, target="markdown")
-        (run_root / REPORT_FILENAME).write_text(report_text, encoding="utf-8")
+        _atomic_write_text(run_root / REPORT_FILENAME, report_text)
         manifest.update({
             "status": "COMPLETED",
             "completed_at_utc": datetime.now(timezone.utc).isoformat(),
             "elapsed_sec": summary["elapsed_sec"],
+            "durable_artifacts": _build_durable_result_artifacts(run_root),
             "completed_seed_strategy_observations": int(len(seed_frame)),
             "attribution_source_units": (len(model_arms) * len(seeds) if cfg.keep_attribution_source else 0),
             "attribution_source_manifest_path": (
