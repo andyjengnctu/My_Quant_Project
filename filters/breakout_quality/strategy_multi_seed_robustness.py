@@ -147,6 +147,7 @@ from filters.breakout_quality.strategy_comparison import (
     _load_direct_selection_r,
     collect_artifact_status,
     render_strategy_aggregate_report,
+    render_strategy_execution_plan_surface,
 )
 from filters.breakout_quality.strategy_compare_reporting import capacity_summary
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
@@ -1317,13 +1318,7 @@ def _render_robustness_execution_plan(
             action = "PARAM+REPLAY"
         rows.append((action, arm.name, description))
     training_sources = _training_source_groups(tuple(model_arms), settings=settings)
-    pit_workload_lines: list[str] = [
-        f"Benchmark ID       ：{cfg.benchmark_id or '-'}",
-        f"Benchmark seeds    ：{','.join(str(v) for v in cfg.resolved_seeds)}",
-        f"Strategy trials/fold：{cfg.strategy_trials_per_fold if cfg.strategy_trials_per_fold is not None else '-'}",
-        f"策略Benchmark單元  ：{cfg.seed_count * len(stochastic_arms)}（{len(stochastic_arms)} per-seed strategy arms × {cfg.seed_count} seeds）",
-        f"模型訓練單元       ：{cfg.seed_count * len(training_sources)}（{len(training_sources)} unique DL sources × {cfg.seed_count} seeds）",
-    ]
+    pit_workload_rows: list[tuple[str, str]] = []
     if settings.profile_id in {"selection_pit", "extending_window_oos", "extending_window_rolling"} and start is not None and end is not None:
         fold_counts = []
         for dl_id, _arm_entries in training_sources:
@@ -1337,34 +1332,47 @@ def _render_robustness_execution_plan(
         if fold_counts:
             unique_fold_counts = sorted(set(fold_counts))
             fold_text = str(unique_fold_counts[0]) if len(unique_fold_counts) == 1 else "/".join(map(str, unique_fold_counts))
-            pit_workload_lines += [
-                f"PIT folds          ：{fold_text} folds / DL source / seed",
-                f"PIT fold工作量     ：{cfg.seed_count * sum(fold_counts)} slots（實際新訓練會扣除REUSE／rescore／跨mode checkpoint重用）",
+            pit_workload_rows += [
+                ("PIT folds", f"{fold_text} folds / DL source / seed"),
+                (
+                    "PIT fold工作量",
+                    f"{cfg.seed_count * sum(fold_counts)} slots（實際新訓練會扣除REUSE／rescore／跨mode checkpoint重用）",
+                ),
             ]
-    color_enabled = console_color_enabled()
-    action_colors = {
-        "READY": "green", "REUSE": "green", "BUILD": "yellow", "REBUILD": "yellow",
-        "CHECK": "yellow", "PREPARABLE": "yellow", "BLOCKED": "red", "RUN/REUSE": "cyan",
-        "TRAIN+REPLAY": "cyan", "PARAM+REPLAY": "cyan",
-    }
-    colored_rows = [
-        (paint(action, action_colors.get(str(action), "gray"), enabled=color_enabled, bold=True), item, description)
-        for action, item, description in rows
-    ]
-    overall_color = {"READY": "green", "PREPARABLE": "yellow", "BLOCKED": "red"}.get(overall, "gray")
-    lines = [
-        render_title(f"{cfg.label} 本次執行計畫"),
-        f"整體狀態          ：{paint(overall, overall_color, enabled=color_enabled, bold=True)}",
-        f"比較階段          ：{settings.profile_label} ({settings.profile_id})",
-        f"共同策略期間      ：{period_text}",
-        f"Seed數量          ：{cfg.seed_count}",
-        f"Seed generator    ：deterministic benchmark / generator_seed={cfg.seed_generator_seed}",
-        f"GPU training      ：workers={cfg.gpu_train_workers}",
-        f"CPU strategy replay：workers={cfg.cpu_replay_workers}",
-        *pit_workload_lines,
-        render_table(("動作", "項目", "說明"), colored_rows),
-    ]
-    return "\n".join(lines), {
+    metadata_rows = (
+        ("整體狀態", overall),
+        ("設定檔", "config/strategy_compare.py"),
+        ("比較階段", f"{settings.profile_label} ({settings.profile_id})"),
+        ("共同策略期間", period_text),
+        ("Seed數量", cfg.seed_count),
+        (
+            "Seed generator",
+            f"deterministic benchmark / generator_seed={cfg.seed_generator_seed}",
+        ),
+        ("GPU training", f"workers={cfg.gpu_train_workers}"),
+        ("CPU strategy replay", f"workers={cfg.cpu_replay_workers}"),
+        ("Benchmark ID", cfg.benchmark_id or "-"),
+        ("Benchmark seeds", ",".join(str(v) for v in cfg.resolved_seeds)),
+        (
+            "Strategy trials/fold",
+            cfg.strategy_trials_per_fold if cfg.strategy_trials_per_fold is not None else "-",
+        ),
+        (
+            "策略Benchmark單元",
+            f"{cfg.seed_count * len(stochastic_arms)}（{len(stochastic_arms)} per-seed strategy arms × {cfg.seed_count} seeds）",
+        ),
+        (
+            "模型訓練單元",
+            f"{cfg.seed_count * len(training_sources)}（{len(training_sources)} unique DL sources × {cfg.seed_count} seeds）",
+        ),
+        *tuple(pit_workload_rows),
+    )
+    rendered_plan = render_strategy_execution_plan_surface(
+        title=f"{cfg.label} 本次執行計畫",
+        metadata_rows=metadata_rows,
+        action_rows=rows,
+    )
+    return rendered_plan, {
         "overall_status": overall,
         "blockers": blockers,
         "required_param_sources": required_sources,

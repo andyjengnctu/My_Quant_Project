@@ -2122,6 +2122,17 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     )
 
     check_true(
+        "strategy_compare_and_robustness_share_execution_plan_renderer_and_status_color_ssot",
+        "def render_strategy_execution_plan_surface(" in comparison_source
+                and "return render_strategy_execution_plan_surface(" in comparison_source
+                and "render_strategy_execution_plan_surface(" in multi_seed_source
+                and "action_colors =" not in multi_seed_source
+                and "def signal_for_workflow_status(" in report_style_source
+                and "signal_for_workflow_status" in comparison_source,
+    )
+
+
+    check_true(
         "strategy_reports_share_metric_registry_and_project_wide_color_semantics",
         "PORTFOLIO_RESULT_METRICS" in report_metrics_source
                 and "CORE_STRATEGY_RESULT_METRICS" in report_metrics_source

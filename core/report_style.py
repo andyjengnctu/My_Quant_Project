@@ -65,6 +65,27 @@ def finite_number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+
+def signal_for_workflow_status(value: Any) -> str:
+    """Classify shared workflow/action status text for human-readable reports.
+
+    This is the SSOT for execution-plan status colors.  Only statuses with a
+    clear readiness/failure meaning receive positive/warning/negative signals;
+    execution actions without an inherent good/bad meaning remain neutral.
+    """
+
+    status = str(value or "").strip().upper()
+    if status in {"READY", "REUSE", "DONE", "PASS"}:
+        return SIGNAL_POSITIVE
+    if status in {
+        "PREPARABLE", "BUILD", "REBUILD", "RESUME", "MIGRATE", "DERIVE",
+        "CHECK", "WARN", "WARNING", "PARTIAL",
+    }:
+        return SIGNAL_WARNING
+    if status in {"BLOCKED", "NOT_RUN", "FAIL", "FAILED", "ERROR"}:
+        return SIGNAL_NEGATIVE
+    return SIGNAL_NEUTRAL
+
 def signal_for_delta(
     value: Any,
     *,
@@ -248,6 +269,7 @@ __all__ = [
     "SIGNAL_WARNING",
     "SIGNAL_NEUTRAL",
     "finite_number",
+    "signal_for_workflow_status",
     "signal_for_delta",
     "signal_for_signed_value",
     "signal_for_coverage",

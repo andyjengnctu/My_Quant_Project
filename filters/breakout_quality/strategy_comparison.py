@@ -50,7 +50,7 @@ from core.report_metrics import (
     PORTFOLIO_RESULT_METRICS,
     TRADE_RESULT_METRICS,
 )
-from core.report_style import best_worst_signals, styled_signal
+from core.report_style import best_worst_signals, signal_for_workflow_status, styled_signal
 from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
@@ -430,6 +430,51 @@ def render_status(
     )
 
 
+
+def render_strategy_execution_plan_surface(
+    *,
+    title: str,
+    metadata_rows: tuple[tuple[object, object], ...],
+    action_rows: list[tuple[object, object, object]],
+) -> str:
+    """Render the shared Strategy Compare execution-plan surface.
+
+    Single-seed and multi-seed robustness plans provide their own plan data,
+    but layout and semantic status coloring must remain identical.
+    """
+
+    styled_metadata = []
+    for label, value in metadata_rows:
+        rendered = value
+        if str(label) == "整體狀態":
+            rendered = styled_signal(
+                value,
+                signal_for_workflow_status(value),
+                target="console",
+                bold=True,
+            )
+        styled_metadata.append((label, rendered))
+    styled_actions = [
+        (
+            styled_signal(
+                action,
+                signal_for_workflow_status(action),
+                target="console",
+                bold=True,
+            ),
+            item,
+            description,
+        )
+        for action, item, description in action_rows
+    ]
+    return "\n\n".join(
+        (
+            render_title(title),
+            render_key_values(tuple(styled_metadata)),
+            render_table(("動作", "項目", "說明"), styled_actions),
+        )
+    )
+
 def render_execution_plan(
     *,
     settings: StrategyComparisonSettings,
@@ -488,19 +533,15 @@ def render_execution_plan(
         )
         for item in settings.enabled_contrasts
     )
-    return "\n\n".join(
-        (
-            render_title("本次執行計畫"),
-            render_key_values(
-                (
-                    ("整體狀態", plan.overall_status),
-                    ("設定檔", "config/strategy_compare.py"),
-                    ("比較階段", f"{settings.profile_label} ({settings.profile_id})"),
-                    ("Config fingerprint", status["config_fingerprint"]),
-                )
-            ),
-            render_table(("動作", "項目", "說明"), rows),
-        )
+    return render_strategy_execution_plan_surface(
+        title="本次執行計畫",
+        metadata_rows=(
+            ("整體狀態", plan.overall_status),
+            ("設定檔", "config/strategy_compare.py"),
+            ("比較階段", f"{settings.profile_label} ({settings.profile_id})"),
+            ("Config fingerprint", status["config_fingerprint"]),
+        ),
+        action_rows=rows,
     )
 
 
@@ -1679,6 +1720,7 @@ __all__ = [
     "resolve_comparison_plan",
     "collect_artifact_status",
     "render_execution_plan",
+    "render_strategy_execution_plan_surface",
     "render_status",
     "render_strategy_aggregate_report",
     "render_strategy_run_execution_table",
