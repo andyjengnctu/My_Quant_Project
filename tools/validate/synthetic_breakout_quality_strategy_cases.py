@@ -2093,7 +2093,13 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "def _trainer_epoch_progress(" in multi_seed_source
         and 'env["BREAKOUT_QUALITY_COMPACT_CONSOLE"] = "0"' in multi_seed_source
         and 'env["PYTHONUNBUFFERED"] = "1"' in multi_seed_source
+        and 'env["BREAKOUT_QUALITY_EPOCH_PROGRESS_MARKERS"] = "1"' in multi_seed_source
+        and "_EPOCH_PROGRESS_MARKER_RE" in multi_seed_source
+        and "__BQ_EPOCH_PROGRESS__" in continuous_ranker_source
+        and "_emit_epoch_progress_marker(\"select\"" in continuous_ranker_source
+        and "_emit_epoch_progress_marker(\"refit\"" in continuous_ranker_source
         and "active fold" in multi_seed_source
+        and "epoch pending" in multi_seed_source
         and "epoch {phase}" in multi_seed_source,
     )
 

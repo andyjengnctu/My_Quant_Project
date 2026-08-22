@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import time
 from types import SimpleNamespace
 from collections import deque
@@ -141,6 +142,17 @@ RANKER_SCORE_FILENAME = "continuous_ranker_scores.csv"
 RANKER_REPORT_JSON_FILENAME = "continuous_ranker_report.json"
 RANKER_REPORT_MARKDOWN_FILENAME = "continuous_ranker_report.md"
 RANKER_TARGET_FILENAME = "group_target_daily_percentile.npy"
+EPOCH_PROGRESS_MARKER_ENV = "BREAKOUT_QUALITY_EPOCH_PROGRESS_MARKERS"
+
+
+def _emit_epoch_progress_marker(phase: str, epoch: int, total_epochs: int) -> None:
+    value = os.environ.get(EPOCH_PROGRESS_MARKER_ENV, "").strip().lower()
+    if value not in {"1", "true", "yes", "on"}:
+        return
+    print(
+        f"__BQ_EPOCH_PROGRESS__ phase={str(phase)} epoch={int(epoch)}/{int(total_epochs)}",
+        flush=True,
+    )
 
 
 def parse_args(argv=None):
@@ -1473,6 +1485,7 @@ def select_epoch(
         )
         print(f"\nEpoch選擇（依{label}）")
     for epoch in range(1, int(args.epochs) + 1):
+        _emit_epoch_progress_marker("select", epoch, int(args.epochs))
         started = time.perf_counter()
         batch_loss = _train_epoch(
             torch,
@@ -1750,6 +1763,7 @@ def fit_final(
     if not compact_console:
         print(f"\n{str(phase_label)}（{int(epochs)} Epoch）")
     for epoch in range(1, int(epochs) + 1):
+        _emit_epoch_progress_marker("refit", epoch, int(epochs))
         started = time.perf_counter()
         loss = _train_epoch(
             torch,

@@ -2794,6 +2794,7 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     env = dict(os.environ)
     env["BREAKOUT_QUALITY_COMPACT_CONSOLE"] = "0"
     env["PYTHONUNBUFFERED"] = "1"
+    env["BREAKOUT_QUALITY_EPOCH_PROGRESS_MARKERS"] = "1"
     trainer_registry = job["trainer_registry"]
     trainer_registry_lock = job["trainer_registry_lock"]
     trainer_key = str(job["trainer_key"])
@@ -2919,6 +2920,10 @@ def _format_elapsed(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{sec:02d}"
 
 
+_EPOCH_PROGRESS_MARKER_RE = re.compile(
+    r"__BQ_EPOCH_PROGRESS__\s+phase=(select|refit)\s+epoch=(\d+)\s*/\s*(\d+)",
+    re.IGNORECASE,
+)
 _EPOCH_LOG_RE = re.compile(r"Epoch\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
 _EPOCH_PHASE_RE = re.compile(r"(Epoch\s*選擇|Fold歷史資料重訓|完整 Selection(?: 重訓| 訓練)?)")
 _PIT_TRAINING_FOLD_RE = re.compile(r"fold_\d{8}_\d{8}.*訓練並評分")
@@ -2944,6 +2949,14 @@ def _trainer_epoch_progress(meta: dict[str, Any]) -> tuple[str, int, int] | None
     fold_matches = list(_PIT_TRAINING_FOLD_RE.finditer(text))
     if fold_matches:
         text = text[fold_matches[-1].start():]
+    marker_matches = list(_EPOCH_PROGRESS_MARKER_RE.finditer(text))
+    if marker_matches:
+        marker = marker_matches[-1]
+        return (
+            str(marker.group(1)).lower(),
+            int(marker.group(2)),
+            int(marker.group(3)),
+        )
     phase_matches = list(_EPOCH_PHASE_RE.finditer(text))
     if not phase_matches:
         return None
@@ -5244,7 +5257,7 @@ def run_multi_seed_robustness(
                         "" if saved >= expected else f" | active fold {saved + 1}/{expected}"
                     )
                 if epoch_progress is None:
-                    epoch_text = active_fold_text
+                    epoch_text = active_fold_text + (" | epoch pending" if active_fold_text else "")
                 else:
                     phase, epoch, epoch_count = epoch_progress
                     epoch_label = f"epoch {phase} {epoch}/{epoch_count}" if epoch_count > 0 else f"epoch {phase} -"
