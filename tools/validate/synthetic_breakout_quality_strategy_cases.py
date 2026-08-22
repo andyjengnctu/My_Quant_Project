@@ -1944,6 +1944,49 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "model_seed_sensitive_arm_ids": ["C59"],
     }
     _validate_seed_result_scientific_identities(identity_frame, contract=identity_contract)
+
+    pit_identity_frame = identity_frame.copy()
+    pit_identity_frame.loc[0, "model_sha256"] = ""
+    pit_identity_frame.loc[0, "fold_count"] = 6
+    pit_identity_contract = {
+        **identity_contract,
+        "stochastic_arms": [{
+            "arm_id": "C59",
+            "runtime_dl_sources": [{"score_source": "selection_point_in_time"}],
+        }],
+    }
+    pit_retained_observation_accepted = True
+    try:
+        _validate_seed_result_scientific_identities(
+            pit_identity_frame, contract=pit_identity_contract
+        )
+    except ValueError:
+        pit_retained_observation_accepted = False
+    pit_missing_score_rejected = False
+    try:
+        invalid_pit_frame = pit_identity_frame.copy()
+        invalid_pit_frame.loc[0, "score_sha256"] = ""
+        _validate_seed_result_scientific_identities(
+            invalid_pit_frame, contract=pit_identity_contract
+        )
+    except ValueError:
+        pit_missing_score_rejected = True
+    pit_missing_fold_count_rejected = False
+    try:
+        invalid_pit_frame = pit_identity_frame.copy()
+        invalid_pit_frame.loc[0, "fold_count"] = None
+        _validate_seed_result_scientific_identities(
+            invalid_pit_frame, contract=pit_identity_contract
+        )
+    except ValueError:
+        pit_missing_fold_count_rejected = True
+    check_true(
+        "robustness_pit_completed_observation_survives_checkpoint_retention_cleanup",
+        pit_retained_observation_accepted
+        and pit_missing_score_rejected
+        and pit_missing_fold_count_rejected,
+    )
+
     stale_identity_rejected = False
     try:
         stale_frame = identity_frame.copy()

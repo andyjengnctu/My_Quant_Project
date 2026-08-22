@@ -2362,7 +2362,33 @@ def _validate_seed_result_scientific_identities(
                 f"multi-seed seed_results缺少strategy param manifest provenance: {arm_id}/seed={seed}"
             )
         if arm_id in model_ids:
-            for key in ("model_sha256", "score_sha256", "runtime_source_identity_sha256"):
+            arm_contract = next(
+                (
+                    dict(item or {})
+                    for item in tuple(contract.get("stochastic_arms") or ())
+                    if str(dict(item or {}).get("arm_id") or "") == arm_id
+                ),
+                {},
+            )
+            runtime_sources = tuple(arm_contract.get("runtime_dl_sources") or ())
+            score_sources = {
+                str(dict(item or {}).get("score_source") or "").strip()
+                for item in runtime_sources
+                if str(dict(item or {}).get("score_source") or "").strip()
+            }
+            required_model_keys = ["score_sha256", "runtime_source_identity_sha256"]
+            if score_sources != {"selection_point_in_time"}:
+                required_model_keys.insert(0, "model_sha256")
+            else:
+                fold_count = pd.to_numeric(
+                    pd.Series([row.get("fold_count")]), errors="coerce"
+                ).iloc[0]
+                if pd.isna(fold_count) or int(fold_count) < 1:
+                    raise ValueError(
+                        "multi-seed PIT model observation缺少合法fold_count: "
+                        f"{arm_id}/seed={seed}"
+                    )
+            for key in required_model_keys:
                 if not _normalized_hash_value(row.get(key)):
                     raise ValueError(
                         f"multi-seed model observation缺少{key}: {arm_id}/seed={seed}"
