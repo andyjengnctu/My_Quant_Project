@@ -1395,10 +1395,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     ).read_text(encoding="utf-8")
     from config.strategy_compare import get_strategy_multi_seed_robustness_settings
     from filters.breakout_quality.strategy_multi_seed_robustness import (
+        _benchmark_identity_payload,
         _build_durable_result_artifacts,
         _model_artifact_identity_payload,
         _seed_expansion_compatibility_payload,
         _strategy_only_baseline_action,
+        _strategy_only_baseline_context_available,
         _validate_durable_result_artifacts,
         _validate_seed_result_scientific_identities,
         _validate_seed_yearly_results_frame,
@@ -1439,6 +1441,28 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             baseline_context_required=True,
             baseline_context_available=False,
         ),
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        missing_context_available = _strategy_only_baseline_context_available(
+            output_dir=Path(temp_dir) / "missing_baseline",
+            settings=SimpleNamespace(
+                dataset="full", param_policy="base-finalist-best",
+                max_positions=10, rotation="off",
+            ),
+            arm=SimpleNamespace(
+                arm_id="C61", param_source="full_rolling",
+                param_policy="base-finalist-best", rule_policy="all_off",
+            ),
+            binding={
+                "sha256": "0" * 64,
+                "evaluation_mode": "rolling",
+            },
+            comparison_start="2021-01-01",
+            comparison_end="2026-03-02",
+        )
+    check_true(
+        "robustness_missing_transient_baseline_json_is_cache_miss_not_runtime_failure",
+        missing_context_available is False,
     )
     model_identity_scientific = {
         "robustness_id": "extending_window_rolling",
@@ -1535,18 +1559,46 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     changed_prefix_param_contract["benchmark_parameter_artifact_identities"][
         "C61:seed=11"
     ] = {"sha256": "full-11-changed"}
+    manifest_refresh_contract = dict(prefix_contract)
+    manifest_refresh_contract["benchmark_parameter_artifact_identities"] = {
+        key: {**dict(value), "manifest_sha256": f"manifest-{key}"}
+        for key, value in prefix_contract["benchmark_parameter_artifact_identities"].items()
+    }
     prefix_identity = _seed_expansion_compatibility_payload(
         prefix_contract, seeds=(11, 22)
     )
+    benchmark_binding_a = {
+        ("C61", 11): {
+            "family": "full", "evaluation_mode": "rolling",
+            "param_policy": "base-finalist-best", "sha256": "same-param",
+            "manifest_sha256": "manifest-a",
+        }
+    }
+    benchmark_binding_b = {
+        ("C61", 11): {
+            **benchmark_binding_a[("C61", 11)],
+            "manifest_sha256": "manifest-b",
+        }
+    }
+    check_true(
+        "robustness_benchmark_manifest_publication_sha_does_not_change_scientific_param_identity",
+        _benchmark_identity_payload(benchmark_binding_a)
+        == _benchmark_identity_payload(benchmark_binding_b),
+    )
+
     check_true(
         "robustness_seed_count_expansion_reuses_only_strict_scientific_seed_prefix",
         prefix_identity
         == _seed_expansion_compatibility_payload(expanded_contract, seeds=(11, 22))
         and prefix_identity
+        == _seed_expansion_compatibility_payload(manifest_refresh_contract, seeds=(11, 22))
+        and prefix_identity
         != _seed_expansion_compatibility_payload(changed_trials_contract, seeds=(11, 22))
         and prefix_identity
         != _seed_expansion_compatibility_payload(changed_prefix_param_contract, seeds=(11, 22))
-        and "[SEED EXPANSION REUSE]" in multi_seed_source,
+        and "[SEED EXPANSION REUSE]" in multi_seed_source
+        and "[COMPATIBLE RESULT REUSE]" in multi_seed_source
+        and "len(candidate_seeds) > len(current_seeds)" in multi_seed_source,
     )
 
     benchmark = get_robustness_benchmark_policy_snapshot()
@@ -1673,7 +1725,6 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "benchmark_parameter_artifact_identities": {
             "C59:seed=11": {
                 "sha256": "param-sha",
-                "manifest_sha256": "manifest-sha",
             }
         },
         "model_seed_sensitive_arm_ids": ["C59"],
@@ -1689,6 +1740,28 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     check_true(
         "robustness_completed_observation_reuse_rejects_stale_strategy_param_identity",
         stale_identity_rejected,
+    )
+    refreshed_manifest_frame = identity_frame.copy()
+    refreshed_manifest_frame.loc[0, "strategy_param_manifest_sha256"] = "new-publication-manifest-sha"
+    manifest_refresh_accepted = True
+    try:
+        _validate_seed_result_scientific_identities(
+            refreshed_manifest_frame, contract=identity_contract
+        )
+    except ValueError:
+        manifest_refresh_accepted = False
+    missing_manifest_rejected = False
+    try:
+        missing_manifest_frame = identity_frame.copy()
+        missing_manifest_frame.loc[0, "strategy_param_manifest_sha256"] = ""
+        _validate_seed_result_scientific_identities(
+            missing_manifest_frame, contract=identity_contract
+        )
+    except ValueError:
+        missing_manifest_rejected = True
+    check_true(
+        "robustness_manifest_sha_is_provenance_not_replay_scientific_identity",
+        manifest_refresh_accepted and missing_manifest_rejected,
     )
 
     yearly_arm = SimpleNamespace(arm_id="C59")

@@ -744,13 +744,22 @@ def _prepare_benchmark_strategy_parameter_artifacts(
 def _benchmark_identity_payload(
     bindings: dict[tuple[str, int], dict[str, Any]]
 ) -> dict[str, Any]:
+    """Return replay-scientific parameter identity for each arm/seed.
+
+    The raw benchmark-manifest file SHA is deliberately not scientific identity:
+    manifests contain publication metadata (for example ``updated_at`` and current
+    seed membership) that can change without changing the fitted parameter payload
+    consumed by replay.  The manifest SHA remains stored on each observation as
+    provenance, while stale/replay identity is pinned by the parameter JSON SHA and
+    the surrounding trials/dataset/period/arm contract.
+    """
+
     return {
         f"{arm_id}:seed={seed}": {
             "family": item["family"],
             "evaluation_mode": item["evaluation_mode"],
             "param_policy": item["param_policy"],
             "sha256": item["sha256"],
-            "manifest_sha256": item["manifest_sha256"],
         }
         for (arm_id, seed), item in sorted(bindings.items())
     }
@@ -785,7 +794,13 @@ def _strategy_only_baseline_context_available(
     *, output_dir: Path, settings, arm: StrategyComparisonArm, binding: dict[str, Any],
     comparison_start: str, comparison_end: str,
 ) -> bool:
-    """Validate transient DL-off replay context before spending GPU time."""
+    """Validate transient DL-off replay context before spending GPU time.
+
+    Missing/corrupt retained context is a normal cache-miss signal.  The shared
+    comparison loader wraps JSON/file read failures in ``RuntimeError`` for
+    user-facing diagnostics, so unwrap only those known I/O/schema causes here;
+    unexpected RuntimeError still propagates instead of being silently hidden.
+    """
 
     all_off = arm.rule_policy == "all_off"
     try:
@@ -814,6 +829,10 @@ def _strategy_only_baseline_context_available(
         TypeError, ValueError, pd.errors.ParserError,
     ):
         return False
+    except RuntimeError as exc:
+        if isinstance(exc.__cause__, (OSError, UnicodeDecodeError, json.JSONDecodeError)):
+            return False
+        raise
 
 
 def _strategy_only_baseline_action(
@@ -1587,23 +1606,37 @@ _SEED_EXPANSION_NON_SCIENTIFIC_KEYS = frozenset({
 def _benchmark_parameter_identities_for_seeds(
     identities: dict[str, Any], seeds: tuple[int, ...],
 ) -> dict[str, Any]:
+    """Return replay-relevant per-seed parameter identities.
+
+    ``manifest_sha256`` is intentionally excluded from cross-run compatibility:
+    benchmark manifests contain publication metadata (for example ``updated_at``
+    and current benchmark membership) that can change while the fitted parameter
+    payload and replay semantics remain byte-identical.  Parameter payload SHA,
+    family/evaluation mode/policy and the surrounding robustness scientific
+    contract still have to match.
+    """
+
     suffixes = tuple(f":seed={int(seed)}" for seed in seeds)
-    return {
-        str(key): value
-        for key, value in dict(identities or {}).items()
-        if str(key).endswith(suffixes)
-    }
+    result: dict[str, Any] = {}
+    for key, raw in dict(identities or {}).items():
+        if not str(key).endswith(suffixes):
+            continue
+        item = dict(raw or {})
+        item.pop("manifest_sha256", None)
+        result[str(key)] = item
+    return result
 
 
 def _seed_expansion_compatibility_payload(
     contract: dict[str, Any], *, seeds: tuple[int, ...],
 ) -> dict[str, Any]:
-    """Normalize a robustness contract for strict prefix-seed reuse.
+    """Normalize a robustness contract for compatible observation reuse.
 
-    Only seed membership may expand. All scientific conditions for the reused
-    prefix -- including each prefix seed's strategy-parameter artifact identity
-    -- must remain byte-identical at the contract level. OOS and Rolling remain
-    isolated because robustness/profile/source contracts stay in this payload.
+    Seed membership may stay the same (engineering-only fingerprint migration) or
+    expand by strict prefix.  Replay-relevant parameter payload identity and every
+    other scientific condition must remain identical; volatile benchmark-manifest
+    publication metadata is intentionally excluded. OOS and Rolling remain isolated
+    because robustness/profile/source contracts stay in this payload.
     """
 
     normalized = {
@@ -1630,10 +1663,14 @@ def _seed_expansion_compatibility_payload(
 def _seed_expansion_source_run(
     *, contract: dict[str, Any], current_run_root: Path,
 ) -> tuple[Path, dict[str, Any], tuple[int, ...]] | None:
-    """Find the largest completed strict-prefix run reusable by this run."""
+    """Find the largest completed compatible run reusable by this run.
+
+    A source may have the same seed set (engineering-only fingerprint migration)
+    or a strict seed prefix (N expansion).
+    """
 
     current_seeds = tuple(int(value) for value in contract.get("resolved_seeds") or ())
-    if len(current_seeds) <= 1:
+    if not current_seeds:
         return None
     cfg = get_strategy_multi_seed_robustness_settings(str(contract["robustness_id"]))
     output_root = (PROJECT_ROOT / cfg.output_root).resolve()
@@ -1652,7 +1689,7 @@ def _seed_expansion_source_run(
         candidate_seeds = tuple(
             int(value) for value in candidate_contract.get("resolved_seeds") or ()
         )
-        if not candidate_seeds or len(candidate_seeds) >= len(current_seeds):
+        if not candidate_seeds or len(candidate_seeds) > len(current_seeds):
             continue
         if current_seeds[: len(candidate_seeds)] != candidate_seeds:
             continue
@@ -1715,7 +1752,7 @@ def _import_seed_expansion_results(
     model_arms: tuple[StrategyComparisonArm, ...],
     keep_attribution_source: bool,
 ) -> dict[str, Any] | None:
-    """Import a completed strict seed-prefix without replaying old seeds."""
+    """Import compatible completed observations without replaying old seeds."""
 
     source = _seed_expansion_source_run(contract=contract, current_run_root=run_root)
     if source is None:
@@ -2185,9 +2222,9 @@ def _validate_seed_result_scientific_identities(
             raise ValueError(
                 f"multi-seed seed_results strategy param SHA stale: {arm_id}/seed={seed}"
             )
-        if actual_manifest != _normalized_hash_value(expected.get("manifest_sha256")):
+        if not actual_manifest:
             raise ValueError(
-                f"multi-seed seed_results strategy param manifest SHA stale: {arm_id}/seed={seed}"
+                f"multi-seed seed_results缺少strategy param manifest provenance: {arm_id}/seed={seed}"
             )
         if arm_id in model_ids:
             for key in ("model_sha256", "score_sha256", "runtime_source_identity_sha256"):
@@ -4696,8 +4733,13 @@ def run_multi_seed_robustness(
             reused_seeds_text = ",".join(
                 str(value) for value in seed_expansion_reuse["reused_seeds"]
             )
+            reuse_label = (
+                "[COMPATIBLE RESULT REUSE]"
+                if len(seed_expansion_reuse["reused_seeds"]) == len(seeds)
+                else "[SEED EXPANSION REUSE]"
+            )
             print(
-                paint("[SEED EXPANSION REUSE]", "green", enabled=console_color_enabled(), bold=True)
+                paint(reuse_label, "green", enabled=console_color_enabled(), bold=True)
                 + f" seeds={reused_seeds_text} | observations={seed_expansion_reuse['reused_observations']}"
             )
     try:
@@ -4798,13 +4840,18 @@ def run_multi_seed_robustness(
             unit_identity = (arm.arm_id, int(seed))
             binding = benchmark_bindings[unit_identity]
             output_dir = run_root / "work" / "benchmark_baselines" / _unit_key(arm.arm_id, int(seed))
-            baseline_context_available = _strategy_only_baseline_context_available(
-                output_dir=output_dir, settings=settings, arm=arm, binding=binding,
-                comparison_start=comparison_start, comparison_end=comparison_end,
+            baseline_context_required = unit_identity in required_baseline_units
+            baseline_context_available = (
+                _strategy_only_baseline_context_available(
+                    output_dir=output_dir, settings=settings, arm=arm, binding=binding,
+                    comparison_start=comparison_start, comparison_end=comparison_end,
+                )
+                if baseline_context_required
+                else False
             )
             action = _strategy_only_baseline_action(
                 scientific_result_exists=unit_identity in scientific_completed,
-                baseline_context_required=unit_identity in required_baseline_units,
+                baseline_context_required=baseline_context_required,
                 baseline_context_available=baseline_context_available,
             )
             strategy_only_actions[unit_identity] = action
