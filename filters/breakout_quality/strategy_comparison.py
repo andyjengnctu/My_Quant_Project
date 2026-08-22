@@ -18,6 +18,7 @@ from config.strategy_compare import (
 )
 from core.runtime_utils import get_taipei_now
 from core.display_common import format_elapsed
+from core.display import _display_width
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
@@ -431,16 +432,116 @@ def render_status(
 
 
 
+_EXECUTION_PLAN_ITEM_WIDTH = 36
+_EXECUTION_PLAN_DESCRIPTION_WIDTH = 44
+
+
+def _compact_execution_plan_text(value: object, *, max_width: int) -> str:
+    """Normalize one execution-plan cell and cap its visible width."""
+
+    text = " ".join(str(value).split())
+    if not text:
+        return "-"
+    width = 0
+    out: list[str] = []
+    ellipsis = "…"
+    ellipsis_width = 1
+    if _display_width(text) <= int(max_width):
+        return text
+    limit = max(1, int(max_width) - ellipsis_width)
+    for char in text:
+        char_width = _display_width(char)
+        if width + char_width > limit:
+            break
+        out.append(char)
+        width += char_width
+    return "".join(out).rstrip() + ellipsis
+
+
+def _compact_execution_plan_item(value: object) -> str:
+    """Convert verbose artifact identities to stable human-readable labels."""
+
+    text = " ".join(str(value).split())
+    if text.startswith("param-benchmark:"):
+        parts = text.split(":")
+        seed = next((part.split("=", 1)[1] for part in parts if part.startswith("seed=")), "?")
+        family = next((part for part in parts if part in {"full", "min"}), "params")
+        text = f"Benchmark {family.title()} | seed {seed}"
+    elif text.startswith("param:"):
+        source = text.split(":", 1)[1]
+        source = source.replace("_oos", "").replace("_rolling", "")
+        source = source.replace("_", " ")
+        text = f"Params | {source.title()}"
+    elif text.startswith("model-upstream:"):
+        parts = text.split(":")
+        profile = next((part for part in parts if "daily_universal" in part), parts[-1])
+        profile = profile.replace("daily_universal_", "")
+        profile = profile.replace("full_list_ndcg_pairwise", "")
+        profile = profile.replace("full_horizon_", "")
+        profile = profile.strip("_") or "canonical"
+        text = f"Dataset | {profile.replace('_', '-')}"
+    elif text.startswith("dl:"):
+        parts = text.split(":")
+        if len(parts) >= 3:
+            text = f"{parts[1]} | {parts[-1]}"
+    elif text.endswith(" Rolling"):
+        text = text[:-8]
+    elif text.endswith(" OOS"):
+        text = text[:-4]
+    return _compact_execution_plan_text(text, max_width=_EXECUTION_PLAN_ITEM_WIDTH)
+
+
+def _compact_execution_plan_description(value: object) -> str:
+    """Keep decision-relevant plan detail while removing repetitive producer prose."""
+
+    text = " ".join(str(value).split())
+    if "由canonical Optimizer parameter service解析／建立／接續策略參數工件" in text:
+        policies = text.split("policies=", 1)[1] if "policies=" in text else ""
+        policy_count = len([item for item in policies.split(",") if item.strip()])
+        text = "canonical params" + (f" | {policy_count} policies" if policy_count else "")
+    elif "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立" in text:
+        text = "same-seed params | no prod fallback"
+    elif text.startswith("canonical Dataset需更新："):
+        missing_count = None
+        marker = "dataset 工件缺少:"
+        if marker in text:
+            missing = text.split(marker, 1)[1].split("；", 1)[0]
+            missing_count = len([item for item in missing.split(",") if item.strip()])
+        summary_bad = "dataset_summary.json 缺少、損壞或不是 JSON object" in text
+        parts = [f"Dataset缺件{missing_count}項" if missing_count is not None else "Dataset需更新"]
+        if summary_bad:
+            parts.append("summary無效")
+        if "補建" in text:
+            parts.append("自動補建")
+        text = " | ".join(parts)
+    elif text.startswith("重用canonical Dataset／source OHLCV truth"):
+        text = "REUSE canonical Dataset/OHLCV"
+    elif "Production finalists-agree consensus reference" in text:
+        text = "Production consensus reference"
+    elif "同seed strategy optimizer params + DL-off replay" in text:
+        seed_prefix = text.split("個固定benchmark seeds", 1)[0]
+        text = f"{seed_prefix} seeds | same-seed params | DL off"
+    elif "同seed strategy params + canonical DL trainer + replay" in text:
+        seed_prefix = text.split("個固定benchmark seeds", 1)[0]
+        text = f"{seed_prefix} seeds | same-seed params + DL + replay"
+    elif "重用已完成且identity一致的正式pair結果" in text:
+        text = "REUSE completed pair"
+    elif "重用既有正式shared baseline" in text:
+        text = "REUSE shared baseline"
+    return _compact_execution_plan_text(text, max_width=_EXECUTION_PLAN_DESCRIPTION_WIDTH)
+
+
 def render_strategy_execution_plan_surface(
     *,
     title: str,
     metadata_rows: tuple[tuple[object, object], ...],
     action_rows: list[tuple[object, object, object]],
 ) -> str:
-    """Render the shared Strategy Compare execution-plan surface.
+    """Render the shared compact Strategy Compare execution-plan surface.
 
-    Single-seed and multi-seed robustness plans provide their own plan data,
-    but layout and semantic status coloring must remain identical.
+    Full preparation reasons remain in the canonical plan/status payload.  The
+    interactive surface intentionally keeps only decision-relevant text so a
+    normal 100-column terminal does not wrap every action row.
     """
 
     styled_metadata = []
@@ -462,8 +563,8 @@ def render_strategy_execution_plan_surface(
                 target="console",
                 bold=True,
             ),
-            item,
-            description,
+            _compact_execution_plan_item(item),
+            _compact_execution_plan_description(description),
         )
         for action, item, description in action_rows
     ]

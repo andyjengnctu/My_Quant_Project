@@ -2126,6 +2126,10 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "def render_strategy_execution_plan_surface(" in comparison_source
                 and "return render_strategy_execution_plan_surface(" in comparison_source
                 and "render_strategy_execution_plan_surface(" in multi_seed_source
+                and "def _compact_execution_plan_item(" in comparison_source
+                and "def _compact_execution_plan_description(" in comparison_source
+                and "_EXECUTION_PLAN_ITEM_WIDTH = 36" in comparison_source
+                and "_EXECUTION_PLAN_DESCRIPTION_WIDTH = 44" in comparison_source
                 and "action_colors =" not in multi_seed_source
                 and "def signal_for_workflow_status(" in report_style_source
                 and "signal_for_workflow_status" in comparison_source,
