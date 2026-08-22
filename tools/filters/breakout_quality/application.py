@@ -1032,12 +1032,6 @@ def _read_dataset_summary(filter_id: str) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _dataset_profile(filter_id: str) -> str | None:
-    summary = _read_dataset_summary(filter_id)
-    if summary is None:
-        return None
-    profile = str(summary.get("dataset") or "").strip().lower()
-    return profile if profile in {"reduced", "full"} else None
 
 
 def _dataset_refresh_plan(
@@ -1088,18 +1082,6 @@ def _dataset_refresh_step(
     return refresh_mode, refresh_reasons, ("build-dataset", build_args, label)
 
 
-def _dataset_rebuild_reasons(
-    filter_id: str,
-    dataset: str,
-    *,
-    max_tickers: int,
-) -> list[str]:
-    _mode, reasons = _dataset_refresh_plan(
-        filter_id,
-        dataset,
-        max_tickers=max_tickers,
-    )
-    return reasons
 
 
 
@@ -1492,14 +1474,6 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     return 0
 
 
-def _prompt_choice(label: str, default: str, choices: dict[str, str]) -> str:
-    normalized_choices = {str(key).strip().lower(): value for key, value in choices.items()}
-    while True:
-        raw = input(f"{label} [{default}]：").strip().lower()
-        candidate = str(default).strip().lower() if raw == "" else raw
-        if candidate in normalized_choices:
-            return normalized_choices[candidate]
-        print(f"輸入無效，可用值：{', '.join(choices)}")
 
 
 def _prompt_bool(label: str, default: bool) -> bool:
@@ -1529,8 +1503,6 @@ def _prompt_int(label: str, default: int, *, minimum: int | None = None) -> int:
         return value
 
 
-def _policy_filter_id() -> str:
-    return normalize_filter_id(BREAKOUT_QUALITY_DEFAULT_FILTER_ID)
 
 
 def _policy_train_settings(filter_id: str) -> argparse.Namespace:
@@ -1570,96 +1542,6 @@ def _policy_train_settings(filter_id: str) -> argparse.Namespace:
     )
 
 
-def _print_policy_defaults(
-    filter_id: str,
-    train_settings: argparse.Namespace | None = None,
-) -> None:
-    print("\n" + render_title("Breakout Quality Policy"))
-    print(render_key_values((("Filter ID", normalize_filter_id(filter_id)),)))
-    print(render_section("Label 設定", number=1))
-    print(render_key_values((
-        ("Feature Window", f"{int(DEFAULT_LABEL_POLICY.feature_window_bars)} bars"),
-        ("Label Horizon", f"{int(DEFAULT_LABEL_POLICY.label_horizon_bars)} bars"),
-        ("最低 MFE", f">{float(DEFAULT_LABEL_POLICY.min_mfe_return) * 100:g}%"),
-        ("最低 MFE／MAE", f">{float(DEFAULT_LABEL_POLICY.min_reward_risk_ratio):g}"),
-        ("最大不利跌幅", f"{float(DEFAULT_LABEL_POLICY.max_adverse_return) * 100:g}%（觸及即 REJECT）"),
-    )))
-    if train_settings is None:
-        return
-    print(render_section("模型與訓練設定", number=2))
-    model_spec = get_active_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
-    experiment = get_breakout_quality_experiment_profile(
-        train_settings.experiment_profile
-    )
-    schedule_parameters = experiment.lr_schedule_parameters()
-    augmentation_parameters = experiment.augmentation_parameters()
-    if str(model_spec.family) == "inception_time":
-        target_line = (
-            f"- Configured Receptive Field Target：{int(BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS)} bars\n"
-            if str(model_spec.architecture) == "inception_time_v1"
-            else ""
-        )
-        architecture_details = (
-            f"- Model Family：InceptionTime\n"
-            f"- Depth：{model_spec.inception_depth}\n"
-            f"- Filters：{model_spec.inception_filters}\n"
-            f"- Bottleneck Channels：{model_spec.inception_bottleneck_channels}\n"
-            f"- Kernel Sizes：{'/'.join(str(value) for value in model_spec.inception_kernel_sizes)}\n"
-            f"{target_line}"
-            f"- Residual Every：{model_spec.inception_residual_every} modules"
-        )
-    else:
-        branch_inputs = "+".join(model_spec.branch_input_representations) or "level"
-        branch_channels = model_spec.branch_channels or (model_spec.channels,) * 3
-        branch_dropouts = model_spec.branch_dropouts or (model_spec.dropout,) * 3
-        architecture_details = (
-            f"- Branch Inputs：{branch_inputs}\n"
-            f"- Branch Channels：{'/'.join(str(value) for value in branch_channels)}\n"
-            f"- Branch Dropouts：{'/'.join(f'{value:g}' for value in branch_dropouts)}"
-        )
-    print(
-        f"- Model Architecture：{model_spec.architecture}\n"
-        f"- Experiment Profile：{experiment.name}\n"
-        f"{architecture_details}\n"
-        f"- Dataset Event Context：{'使用' if model_spec.use_dataset_context else '不使用'}\n"
-        f"- Derived Regime Context：{', '.join(model_spec.derived_context_features) or '-'}\n"
-        f"- Receptive Field：約 {model_spec.receptive_field_bars} bars\n"
-        f"- Pooling：{'+'.join(model_spec.pooling)}\n"
-        f"- Epoch 上限：{int(train_settings.epochs)}\n"
-        f"- Batch Size：{int(train_settings.batch_size)}\n"
-        f"- Evaluation Batch Size：{int(train_settings.evaluation_batch_size)}\n"
-        f"- Evaluation Workers：{int(train_settings.evaluation_workers)}\n"
-        f"- Parallel Split Evaluation：{'開啟' if bool(train_settings.parallel_split_evaluation) else '關閉'}\n"
-        f"- Train Prefetch Batches：{int(train_settings.train_prefetch_batches)}\n"
-        f"- Preload Feature Bank：{'開啟' if bool(train_settings.preload_feature_bank) else '關閉'}\n"
-        f"- Optimizer：{experiment.optimizer_name}\n"
-        f"- LR Schedule：{experiment.lr_schedule_name}\n"
-        f"- LR Schedule Parameters：{schedule_parameters or '-'}\n"
-        f"- Augmentation：{experiment.augmentation_name}\n"
-        f"- Augmentation Parameters：{augmentation_parameters or '-'}\n"
-        f"- Training Sampling：{experiment.training_sampling_mode}\n"
-        f"- Training Weight Reduction：{experiment.training_weight_reduction}\n"
-        f"- Learning Rate：{float(train_settings.lr):g}\n"
-        f"- Weight Decay：{float(train_settings.weight_decay):g}\n"
-        f"- Gradient Clip Norm：{float(train_settings.gradient_clip_norm):g}\n"
-        f"- Final Refit Mode：{train_settings.final_refit_mode}\n"
-        f"- Class Weight Mode：{train_settings.class_weight_mode}\n"
-        f"- Time Weight Mode：{train_settings.time_weight_mode}\n"
-        f"- Random Seed：{int(train_settings.seed)}\n"
-        f"- Threshold：{float(train_settings.fixed_threshold):g}\n"
-        f"- Torch Device：{train_settings.device}\n"
-        f"- Mixed Precision：{'開啟' if bool(train_settings.mixed_precision) else '關閉'}\n"
-        f"- Mixed Precision Dtype：{train_settings.mixed_precision_dtype}\n"
-        f"- Deterministic Algorithms：{'開啟' if bool(train_settings.deterministic_algorithms) else '關閉'}\n"
-        f"- TF32：{'開啟' if bool(train_settings.allow_tf32) else '關閉'}\n"
-        f"- Inner Validation：{'開啟' if bool(train_settings.use_inner_validation) else '關閉'}"
-    )
-    if bool(train_settings.use_inner_validation):
-        print(
-            f"- Inner Validation 月數：{int(train_settings.inner_validation_months)}\n"
-            f"- Early Stopping Patience：{int(train_settings.early_stopping_patience)}\n"
-            f"- Early Stopping Min Delta：{float(train_settings.early_stopping_min_delta):g}"
-        )
 
 
 def _print_artifact_status(
@@ -1728,154 +1610,15 @@ def _print_artifact_status(
             )))
 
 
-def _run_binary_post_train_validation(
-    request: argparse.Namespace,
-    *,
-    workflow_settings,
-    program_name: str,
-    step_start: int = 1,
-    total_steps: int = 1,
-) -> int:
-    if not workflow_settings.is_binary_classification:
-        return 0
-    print("\n=== Binary DL Filter 模型工件更新 ===")
-    print(
-        f"[{int(step_start)}/{int(total_steps)}] "
-        "匯出正式 forward-OOS runtime scores"
-    )
-    rc = _run_command(
-        "export-scores",
-        _build_export_score_argv(request, scope="forward_oos"),
-        program_name=program_name,
-    )
-    if rc == 0:
-        print(
-            "\n模型工件更新完成。策略績效比較請另開 "
-            "python apps/research.py compare。"
-        )
-    return int(rc)
-
-def _interactive_workflow(program_name: str, *, workflow_settings=None) -> int:
-    if workflow_settings is None:
-        filter_id = _policy_filter_id()
-        train_args = _policy_train_settings(filter_id)
-    else:
-        filter_id = normalize_filter_id(workflow_settings.filter_id)
-        if workflow_settings.model_architecture != BREAKOUT_QUALITY_MODEL_ARCHITECTURE:
-            raise ValueError(
-                "binary workflow model architecture必須與active policy一致: "
-                f"workflow={workflow_settings.model_architecture}, "
-                f"policy={BREAKOUT_QUALITY_MODEL_ARCHITECTURE}"
-            )
-        train_args = _policy_train_settings(filter_id)
-        train_args.experiment_profile = str(workflow_settings.experiment_profile)
-        train_args.seed = int(workflow_settings.seed)
-    _print_policy_defaults(filter_id, train_args)
-    dataset = INTERACTIVE_DATASET_PROFILE
-    max_tickers = INTERACTIVE_MAX_TICKERS
-    evaluate_oos = INTERACTIVE_EVALUATE_OOS
-    print("完整研究流程固定使用 Full dataset、全部股票，並執行 OOS。")
-    refresh_mode, refresh_reasons = _dataset_refresh_plan(
-        filter_id,
-        dataset,
-        max_tickers=max_tickers,
-    )
-    if refresh_mode == "rebuild":
-        print("偵測到 dataset 需要完整重建，workflow 將自動重建：")
-        for reason in refresh_reasons:
-            print(f"- {reason}")
-        rebuild_dataset = False
-    elif refresh_mode == "relabel":
-        print("偵測到只有 Label policy 改變，workflow 將沿用 feature bank 快速 relabel：")
-        for reason in refresh_reasons:
-            print(f"- {reason}")
-        rebuild_dataset = False
-    else:
-        print("dataset 自動偵測：目前工件與來源資料一致。")
-        rebuild_dataset = _prompt_bool(
-            "是否強制完整重建 dataset（即使目前不需要）",
-            False,
-        )
-    train_payload = dict(vars(train_args))
-    train_payload.pop("filter_id", None)
-    request = argparse.Namespace(
-        filter_id=filter_id,
-        dataset=dataset,
-        max_tickers=max_tickers,
-        rebuild_dataset=rebuild_dataset,
-        evaluate_oos=evaluate_oos,
-        **train_payload,
-    )
-    print(
-        "\n即將執行：Full dataset（全部股票）→ train → export research scores "
-        "→ OOS 簡易模型報表 → export forward-OOS scores"
-    )
-    if evaluate_oos:
-        print("模型報表將顯示 OOS 最終泛化評估；本入口不執行策略績效比較。")
-    if not _prompt_bool("確認開始", True):
-        print("已取消。")
-        return 0
-    rc = _run_workflow(request, program_name=program_name)
-    if rc != 0:
-        return int(rc)
-    if workflow_settings is None:
-        workflow_settings = get_breakout_quality_workflow_settings()
-    return _run_binary_post_train_validation(
-        request,
-        workflow_settings=workflow_settings,
-        program_name=program_name,
-    )
-
-
-def _interactive_build_dataset(program_name: str) -> int:
-    filter_id = _policy_filter_id()
-    _print_policy_defaults(filter_id)
-    dataset = INTERACTIVE_DATASET_PROFILE
-    max_tickers = INTERACTIVE_MAX_TICKERS
-    print("建立 dataset 固定使用 Full dataset 與全部股票。")
-    if not _prompt_bool("確認建立／覆蓋 dataset 工件", False):
-        print("已取消。")
-        return 0
-    argv = ["--dataset", dataset, "--filter-id", filter_id]
-    if max_tickers > 0:
-        argv.extend(["--max-tickers", str(max_tickers)])
-    return _run_command("build-dataset", argv, program_name=program_name)
-
-
-def _interactive_train(program_name: str) -> int:
-    filter_id = _policy_filter_id()
-    request = _policy_train_settings(filter_id)
-    _print_policy_defaults(filter_id, request)
-    if not _prompt_bool("確認開始訓練（既有同 filter_id 模型會更新）", False):
-        print("已取消。")
-        return 0
-    return _run_command(
-        "train",
-        _build_train_argv(request),
-        program_name=program_name,
-    )
 
 
 
 
-def _interactive_report(program_name: str) -> int:
-    filter_id = _policy_filter_id()
-    _print_policy_defaults(filter_id)
-    print(
-        "易讀研究報表固定納入最終 OOS；不得依同一段 OOS 回頭調整 "
-        "threshold、epochs、learning rate、feature、label 或模型。"
-    )
-    return _run_command(
-        "report",
-        [
-            "--filter-id",
-            filter_id,
-            "--experiment-profile",
-            BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-            "--include-oos",
-        ],
-        program_name=program_name,
-    )
+
+
+
+
+
 
 
 
@@ -2450,50 +2193,6 @@ def _prepare_continuous_research_inputs(
     return 0
 
 
-def _interactive_continuous_full_train(program_name: str, settings) -> int:
-    _print_workflow_status(settings)
-    profile = get_breakout_quality_experiment_profile(settings.experiment_profile)
-    if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
-        print(
-            "\n即將執行：確認canonical Dataset來源 → 建立daily stock-day index／target "
-            "→ 以Selection內Inner Validation選epoch → 完整Selection重訓 "
-            "→ checkpoint後評估全市場與breakout-candidate 2021+ Pre-Test OOS。"
-        )
-        print("Daily feature採lazy materialization；不建立expanded 300×10 daily feature artifact。")
-    else:
-        print(
-            "\n即將執行：確認Dataset／Continuous Target → 以Selection內Inner Validation選epoch "
-            "→ 完整Selection重訓 → checkpoint後才評估forward OOS。"
-        )
-    print(
-        f"Profile={profile.name}｜Objective={profile.training_objective}｜"
-        f"Loss={profile.loss_name}｜Epoch metric={profile.epoch_selection_metric}"
-    )
-    print("此為Pre-Test研究Gate：不取代正式Rolling evidence；模型完成後可直接執行Pre-Test策略比較。")
-    upstream_plan = _collect_continuous_research_input_plan(settings)
-    _render_continuous_research_input_plan(settings, upstream_plan)
-    if upstream_plan.blocked:
-        print("目前存在不可由canonical producer確定性補建的前置工件；本次不執行。")
-        return 2
-    if not _prompt_bool("確認開始（含必要自動前置）", True):
-        print("已取消。")
-        return 0
-    code = _prepare_continuous_research_inputs(program_name, settings)
-    if code != 0:
-        return int(code)
-    argv = [
-        "--filter-id", settings.filter_id,
-        "--model-architecture", settings.model_architecture,
-        "--experiment-profile", settings.experiment_profile,
-        "--seed", str(settings.seed),
-    ]
-    return int(
-        _run_command(
-            "train-continuous-ranker",
-            argv,
-            program_name=program_name,
-        )
-    )
 
 
 def _rolling_mode_point_in_time_dir(settings, mode, *, fixed_window: bool) -> Path | None:

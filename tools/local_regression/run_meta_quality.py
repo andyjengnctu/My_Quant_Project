@@ -764,6 +764,9 @@ def main(argv=None) -> int:
                 + [item["path"] for item in maintenance_summary["oversized_transient_tests"]]
                 + [f"{item['module_id']}/{item['audit_id']}" for item in maintenance_summary["disabled_audits"]]
                 + [item["path"] for item in maintenance_summary.get("retired_dedicated_tests", [])]
+                + [f"{item['path']}::{item['name']}" for item in maintenance_summary.get("private_zero_callers", [])]
+                + [f"{item['path']}:{item['line']}" for item in maintenance_summary.get("experiment_execution_branches", [])]
+                + [item["reason"] for item in maintenance_summary.get("growth_reviews", [])]
             )
             or "(none)"
         ),

@@ -465,22 +465,6 @@ def calc_sell_net_total_milli_from_milli(exec_price_milli: int, qty: int, params
     return gross_sell_milli - sell_fee_milli - tax_milli
 
 
-def _resolve_fee_schedule(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> Dict[str, int]:
-    buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, fixed_risk_ppm = _resolve_fee_schedule_tuple(
-        params,
-        ticker=ticker,
-        security_profile=security_profile,
-        trade_date=trade_date,
-        cfi_code=cfi_code,
-        security_name=security_name,
-    )
-    return {
-        "buy_fee_ppm": buy_fee_ppm,
-        "sell_fee_ppm": sell_fee_ppm,
-        "tax_ppm": tax_ppm,
-        "min_fee_milli": min_fee_milli,
-        "fixed_risk_ppm": fixed_risk_ppm,
-    }
 
 
 def build_buy_ledger(fill_price_milli: int, qty: int, params) -> Dict[str, int]:

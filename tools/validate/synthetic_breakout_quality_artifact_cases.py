@@ -96,12 +96,6 @@ from .synthetic_breakout_quality_support import (
     tempfile,
 )
 
-def _clear_breakout_quality_caches() -> None:
-    load_model_artifact_contract.cache_clear()
-    load_runtime_artifact_contract.cache_clear()
-    load_split_assignment_frame.cache_clear()
-    load_score_table.cache_clear()
-    load_shared_group_score_table.cache_clear()
 
 def _validate_signal_runtime_wiring(results, case_id: str) -> None:
     dates = pd.date_range("2025-01-01", periods=5, freq="D")

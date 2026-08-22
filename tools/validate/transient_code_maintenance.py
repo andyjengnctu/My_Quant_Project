@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
+from collections import Counter
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,19 @@ TEST_MODULE_PREFIXES = (
     "tools.local_regression",
 )
 TRANSIENT_TEST_LINE_THRESHOLD = 2000
+GROWTH_PYTHON_DELTA_REVIEW = 1500
+GROWTH_VALIDATE_DELTA_REVIEW = 800
+SOURCE_SHAPE_DELTA_REVIEW = 250
+SOURCE_SHAPE_NEW_VALIDATOR_REVIEW = 120
+EXPERIMENT_VALIDATOR_PATTERN = re.compile(r"(?:^|_)(?:mr\d+[a-z]?|sr(?:_|\d)|c\d+)(?:_|$)", re.IGNORECASE)
+EXPERIMENT_ID_PATTERN = re.compile(r"\b(?:MR|SR)-\d+[A-Z]?\b|\bC\d+\b")
+SOURCE_SHAPE_TOKENS = (
+    "read_text(",
+    "read_source_text(",
+    "read_source_ast(",
+    "ast.parse(",
+    "inspect.getsource(",
+)
 
 
 def _module_name(project_root: Path, path: Path) -> str:
@@ -207,6 +222,258 @@ def _retired_dedicated_test_candidates(
     return candidates
 
 
+
+def _iter_python_paths(project_root: Path) -> list[Path]:
+    paths: list[Path] = []
+    for root_name in ("apps", "config", "core", "filters", "services", "strategies", "tools"):
+        root = project_root / root_name
+        if root.is_dir():
+            paths.extend(sorted(root.rglob("*.py")))
+    return paths
+
+
+def _private_zero_caller_candidates(project_root: Path) -> list[dict[str, Any]]:
+    """Return conservative top-level private definitions with no lexical caller.
+
+    This is advisory only.  It intentionally ignores decorated definitions and any name
+    that appears anywhere else in the Python tree, including tests and compatibility code.
+    """
+
+    paths = _iter_python_paths(project_root)
+    token_re = re.compile(r"\b[A-Za-z_]\w*\b")
+    counts: Counter[str] = Counter()
+    sources: dict[Path, str] = {}
+    for path in paths:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        sources[path] = text
+        counts.update(token_re.findall(text))
+
+    candidates: list[dict[str, Any]] = []
+    for path, text in sources.items():
+        try:
+            tree = ast.parse(text, filename=str(path))
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if not node.name.startswith("_") or node.name.startswith("__"):
+                continue
+            if getattr(node, "decorator_list", None) or counts[node.name] != 1:
+                continue
+            candidates.append({
+                "path": path.relative_to(project_root).as_posix(),
+                "name": node.name,
+                "line_count": int(node.end_lineno - node.lineno + 1),
+                "reason": "top_level_private_definition_has_no_other_lexical_reference",
+            })
+    return candidates
+
+
+def _literal_strings(node: ast.AST) -> list[str]:
+    values: list[str] = []
+    for child in ast.walk(node):
+        if isinstance(child, ast.Constant) and isinstance(child.value, str):
+            values.append(child.value)
+    return values
+
+
+def _experiment_execution_branch_candidates(project_root: Path) -> list[dict[str, Any]]:
+    """Find MR/SR/Cxx identity literals that directly control executable branches."""
+
+    candidates: list[dict[str, Any]] = []
+    for root_name in ("core", "filters", "services"):
+        root = project_root / root_name
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*.py")):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"), filename=str(path))
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                condition: ast.AST | None = None
+                if isinstance(node, (ast.If, ast.IfExp, ast.While)):
+                    condition = node.test
+                elif isinstance(node, ast.Match):
+                    condition = node.subject
+                    match_literals = []
+                    for case in node.cases:
+                        match_literals.extend(_literal_strings(case.pattern))
+                    literals = match_literals
+                    hits = sorted({hit for value in literals for hit in EXPERIMENT_ID_PATTERN.findall(value)})
+                    if hits:
+                        candidates.append({
+                            "path": path.relative_to(project_root).as_posix(),
+                            "line": int(node.lineno),
+                            "identities": hits,
+                            "reason": "experiment_identity_literal_controls_execution_branch",
+                        })
+                    continue
+                if condition is None:
+                    continue
+                hits = sorted({hit for value in _literal_strings(condition) for hit in EXPERIMENT_ID_PATTERN.findall(value)})
+                if hits:
+                    candidates.append({
+                        "path": path.relative_to(project_root).as_posix(),
+                        "line": int(node.lineno),
+                        "identities": hits,
+                        "reason": "experiment_identity_literal_controls_execution_branch",
+                    })
+    return candidates
+
+
+def _source_shape_validator_inventory(project_root: Path) -> dict[str, Any]:
+    functions: dict[str, dict[str, Any]] = {}
+    total_loc = 0
+    validate_root = project_root / "tools" / "validate"
+    for path in sorted(validate_root.glob("synthetic*_cases.py")):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        lines = text.splitlines()
+        try:
+            tree = ast.parse(text, filename=str(path))
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("validate_"):
+                continue
+            source = "\n".join(lines[node.lineno - 1:node.end_lineno])
+            if not any(token in source for token in SOURCE_SHAPE_TOKENS):
+                continue
+            line_count = int(node.end_lineno - node.lineno + 1)
+            key = f"{path.relative_to(project_root).as_posix()}::{node.name}"
+            functions[key] = {
+                "path": path.relative_to(project_root).as_posix(),
+                "validator": node.name,
+                "line_count": line_count,
+            }
+            total_loc += line_count
+    return {"line_count": total_loc, "validator_count": len(functions), "functions": functions}
+
+
+def _git_text(project_root: Path, revision: str, rel_path: str) -> str | None:
+    try:
+        proc = subprocess.run(
+            ["git", "show", f"{revision}:{rel_path}"],
+            cwd=project_root, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=8,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _git_parent_available(project_root: Path) -> bool:
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD^"],
+            cwd=project_root, capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def _git_growth_summary(project_root: Path, current_source_shape: dict[str, Any]) -> dict[str, Any]:
+    summary = {
+        "available": False, "python_added": 0, "python_deleted": 0, "python_delta": 0,
+        "validate_added": 0, "validate_deleted": 0, "validate_delta": 0,
+        "new_python_files": 0, "source_shape_delta": 0, "new_experiment_validators": [],
+        "new_large_source_shape_validators": [], "review_reasons": [],
+    }
+    if not _git_parent_available(project_root):
+        return summary
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--numstat", "HEAD^", "HEAD", "--", "*.py"],
+            cwd=project_root, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=8,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return summary
+    if proc.returncode != 0:
+        return summary
+    summary["available"] = True
+    changed_paths: list[str] = []
+    for raw in proc.stdout.splitlines():
+        parts = raw.split("\t")
+        if len(parts) != 3:
+            continue
+        add_text, del_text, rel_path = parts
+        if not add_text.isdigit() or not del_text.isdigit():
+            continue
+        added, deleted = int(add_text), int(del_text)
+        summary["python_added"] += added
+        summary["python_deleted"] += deleted
+        if rel_path.startswith("tools/validate/"):
+            summary["validate_added"] += added
+            summary["validate_deleted"] += deleted
+        if deleted == 0 and added > 0 and _git_text(project_root, "HEAD^", rel_path) is None:
+            summary["new_python_files"] += 1
+        changed_paths.append(rel_path)
+    summary["python_delta"] = summary["python_added"] - summary["python_deleted"]
+    summary["validate_delta"] = summary["validate_added"] - summary["validate_deleted"]
+
+    previous_shape_loc = 0
+    previous_validator_names: set[str] = set()
+    for rel_path in sorted(set(changed_paths)):
+        if not rel_path.startswith("tools/validate/") or not rel_path.endswith("_cases.py"):
+            continue
+        old = _git_text(project_root, "HEAD^", rel_path)
+        if old is None:
+            continue
+        try:
+            tree = ast.parse(old)
+        except SyntaxError:
+            continue
+        lines = old.splitlines()
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("validate_"):
+                continue
+            previous_validator_names.add(node.name)
+            source = "\n".join(lines[node.lineno - 1:node.end_lineno])
+            if any(token in source for token in SOURCE_SHAPE_TOKENS):
+                previous_shape_loc += int(node.end_lineno - node.lineno + 1)
+
+    current_changed_shape_loc = 0
+    for rel_path in sorted(set(changed_paths)):
+        if not rel_path.startswith("tools/validate/") or not rel_path.endswith("_cases.py"):
+            continue
+        path = project_root / rel_path
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        lines = text.splitlines()
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("validate_"):
+                continue
+            source = "\n".join(lines[node.lineno - 1:node.end_lineno])
+            is_source_shape = any(token in source for token in SOURCE_SHAPE_TOKENS)
+            if is_source_shape:
+                line_count = int(node.end_lineno - node.lineno + 1)
+                current_changed_shape_loc += line_count
+                if node.name not in previous_validator_names and line_count >= SOURCE_SHAPE_NEW_VALIDATOR_REVIEW:
+                    summary["new_large_source_shape_validators"].append({
+                        "path": rel_path, "validator": node.name, "line_count": line_count,
+                    })
+            if node.name not in previous_validator_names and EXPERIMENT_VALIDATOR_PATTERN.search(node.name):
+                summary["new_experiment_validators"].append({"path": rel_path, "validator": node.name})
+    summary["source_shape_delta"] = current_changed_shape_loc - previous_shape_loc
+
+    if summary["python_delta"] > GROWTH_PYTHON_DELTA_REVIEW:
+        summary["review_reasons"].append("python_loc_delta_above_review_threshold")
+    if summary["validate_delta"] > GROWTH_VALIDATE_DELTA_REVIEW:
+        summary["review_reasons"].append("validation_loc_delta_above_review_threshold")
+    if summary["source_shape_delta"] > SOURCE_SHAPE_DELTA_REVIEW:
+        summary["review_reasons"].append("source_shape_validator_growth_above_review_threshold")
+    if summary["new_experiment_validators"]:
+        summary["review_reasons"].append("new_experiment_specific_validator")
+    if summary["new_large_source_shape_validators"]:
+        summary["review_reasons"].append("new_large_source_shape_validator")
+    return summary
+
 def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     index = _module_index(root)
@@ -267,12 +534,23 @@ def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
                 )
 
     retired_dedicated_tests = _retired_dedicated_test_candidates(root, index)
+    private_zero_callers = _private_zero_caller_candidates(root)
+    experiment_execution_branches = _experiment_execution_branch_candidates(root)
+    source_shape_inventory = _source_shape_validator_inventory(root)
+    growth = _git_growth_summary(root, source_shape_inventory)
+    growth_reviews = [
+        {"reason": reason}
+        for reason in growth.get("review_reasons", [])
+    ]
 
     candidate_count = (
         len(stale_modules)
         + len(disabled_audits)
         + len(oversized_transient_tests)
         + len(retired_dedicated_tests)
+        + len(private_zero_callers)
+        + len(experiment_execution_branches)
+        + len(growth_reviews)
     )
     return {
         "status": "REVIEW" if candidate_count else "CLEAN",
@@ -282,11 +560,21 @@ def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
         "disabled_audits": disabled_audits,
         "oversized_transient_tests": oversized_transient_tests,
         "retired_dedicated_tests": retired_dedicated_tests,
+        "private_zero_callers": private_zero_callers,
+        "experiment_execution_branches": experiment_execution_branches,
+        "source_shape_inventory": {
+            "line_count": source_shape_inventory["line_count"],
+            "validator_count": source_shape_inventory["validator_count"],
+        },
+        "growth": growth,
+        "growth_reviews": growth_reviews,
         "advisory_only": True,
         "policy": (
             "Remove only after the research decision is recorded and the module is no longer "
             "reachable from current runtime or an active formal Audit. Retired dedicated "
-            "validators should be replaced by reusable generic contracts when their math remains useful."
+            "validators should be replaced by reusable generic contracts when their math remains useful. "
+            "Growth, source-shape, experiment-specific validator and zero-caller findings are REVIEW-only; "
+            "they are never deletion authority by themselves."
         ),
     }
 

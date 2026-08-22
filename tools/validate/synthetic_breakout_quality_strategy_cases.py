@@ -1203,11 +1203,19 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         else "CLEAN"
     )
     retired_dedicated_tests = maintenance.get("retired_dedicated_tests")
+    private_zero_callers = maintenance.get("private_zero_callers")
+    experiment_execution_branches = maintenance.get("experiment_execution_branches")
+    growth_reviews = maintenance.get("growth_reviews")
+    source_shape_inventory = maintenance.get("source_shape_inventory")
+    growth = maintenance.get("growth")
     maintenance_lists = (
         maintenance.get("stale_modules"),
         maintenance.get("disabled_audits"),
         maintenance.get("oversized_transient_tests"),
         retired_dedicated_tests,
+        private_zero_callers,
+        experiment_execution_branches,
+        growth_reviews,
     )
     maintenance_category_count = (
         sum(len(items) for items in maintenance_lists)
@@ -1216,7 +1224,7 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
     )
     check(
         "transient_code_maintenance_scan_is_advisory_and_internally_consistent",
-        (True, True, True, True, True, True),
+        (True, True, True, True, True, True, True, True),
         (
                     maintenance_count_valid,
                     maintenance.get("status") == maintenance_expected_status,
@@ -1228,6 +1236,11 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
                     maintenance_category_count == maintenance_candidate_count
                     if maintenance_count_valid and maintenance_category_count is not None
                     else False,
+                    isinstance(source_shape_inventory, dict)
+                    and type(source_shape_inventory.get("line_count")) is int
+                    and type(source_shape_inventory.get("validator_count")) is int,
+                    isinstance(growth, dict)
+                    and isinstance(growth.get("review_reasons"), list),
                 ),
     )
 

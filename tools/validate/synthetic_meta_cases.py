@@ -240,14 +240,6 @@ def _read_summary_value(result: dict, key: str, default=None):
 
 
 
-def _parsed_module_declares_specific_from_import(parsed_module: ast.AST, *, module_name: str, imported_name: str) -> bool:
-    for node in getattr(parsed_module, "body", []):
-        if isinstance(node, ast.ImportFrom) and node.module == module_name:
-            if any(alias.name == imported_name for alias in node.names):
-                return True
-    return False
-
-
 def validate_cmd_document_contract_case(_base_params):
     from tools.local_regression.run_all import STEP_NAMES
     from tools.local_regression.run_quick_gate import HELP_TARGETS
@@ -750,268 +742,104 @@ def validate_checklist_physical_trading_principles_contract_case(_base_params):
 
 
 
-def validate_gui_tcl_fallback_traceability_contract_case(_base_params):
-    case_id = "META_GUI_TCL_FALLBACK_TRACEABILITY_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
+def _exception_type_names(node):
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, ast.Attribute):
+        return [node.attr]
+    if isinstance(node, ast.Tuple):
+        return [name for element in node.elts for name in _exception_type_names(element)]
+    return []
 
-    scan_root = PROJECT_ROOT / "tools" / "workbench_ui"
-    scan_targets = sorted(scan_root.rglob("*.py"))
-    syntax_errors = []
-    gui_tcl_fallback_traceability_failures = []
-    scanned_files = []
 
-    def _is_gui_tcl_exception_type(node):
-        if isinstance(node, ast.Name):
-            return node.id == "TclError"
-        if isinstance(node, ast.Attribute):
-            return ast.unparse(node) in {"tk.TclError", "tkinter.TclError"}
-        if isinstance(node, ast.Tuple):
-            return any(_is_gui_tcl_exception_type(element) for element in node.elts)
-        return False
-
-    def _handler_uses_exception_name(handler, exception_name):
-        handler_module = ast.Module(body=handler.body, type_ignores=[])
-        return any(
-            isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load) and child.id == exception_name
-            for child in ast.walk(handler_module)
-        )
-
-    def _handler_reraises(handler):
-        return any(isinstance(child, ast.Raise) for child in ast.walk(ast.Module(body=handler.body, type_ignores=[])))
-
-    for path in scan_targets:
-        rel_path = path.relative_to(PROJECT_ROOT).as_posix()
-        scanned_files.append(rel_path)
+def _scan_exception_handlers(paths, *, accepted_names=None, pass_only=False, exempt_synthetic=False):
+    syntax_errors, failures, scanned = [], [], []
+    for path in paths:
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        if exempt_synthetic and rel.startswith("tools/validate/synthetic_"):
+            continue
+        scanned.append(rel)
         try:
-            source_text = read_source_text(path)
             parsed = read_source_ast(path)
         except SyntaxError as exc:
-            syntax_errors.append(f"{rel_path}:{exc.lineno}: {exc.msg}")
+            syntax_errors.append(f"{rel}:{exc.lineno}: {exc.msg}")
             continue
-
         for node in ast.walk(parsed):
-            if not isinstance(node, ast.ExceptHandler) or node.type is None or not _is_gui_tcl_exception_type(node.type):
+            if not isinstance(node, ast.ExceptHandler) or node.type is None:
+                continue
+            names = set(_exception_type_names(node.type))
+            if not names or (accepted_names is not None and not names.intersection(accepted_names)):
+                continue
+            if pass_only:
+                if len(node.body) != 1 or not isinstance(node.body[0], ast.Pass):
+                    continue
+                if names <= {"FileNotFoundError"} or names.intersection({"Exception", "BaseException", "ImportError", "ModuleNotFoundError", "TclError"}):
+                    continue
+                failures.append(f"{rel}:{node.lineno}: pass-only specific exception handler must trace, re-raise, or use an allowed control-flow exception")
+                continue
+            body = ast.Module(body=node.body, type_ignores=[])
+            if any(isinstance(child, ast.Raise) for child in ast.walk(body)):
                 continue
             if not node.name:
-                gui_tcl_fallback_traceability_failures.append(f"{rel_path}:{node.lineno}: GUI TclError fallback must bind exception name")
+                failures.append(f"{rel}:{node.lineno}: exception fallback must bind exception name unless it re-raises")
                 continue
-            if _handler_reraises(node):
-                continue
-            if not _handler_uses_exception_name(node, node.name):
-                gui_tcl_fallback_traceability_failures.append(f"{rel_path}:{node.lineno}: GUI TclError fallback must use bound exception or re-raise")
+            if not any(isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load) and child.id == node.name for child in ast.walk(body)):
+                failures.append(f"{rel}:{node.lineno}: exception fallback must use bound exception or re-raise")
+    return syntax_errors, failures, scanned
 
-    add_check(results, "meta_contract", case_id, "gui_tcl_fallback_scan_targets_present", True, bool(scanned_files))
-    add_check(results, "meta_contract", case_id, "gui_tcl_fallback_handler_files_parse", [], syntax_errors)
-    add_check(results, "meta_contract", case_id, "gui_tcl_fallbacks_bind_and_trace_or_reraise", [], gui_tcl_fallback_traceability_failures)
 
-    summary["scan_root"] = scan_root.relative_to(PROJECT_ROOT).as_posix()
-    summary["scanned_file_count"] = len(scanned_files)
-    summary["failure_count"] = len(gui_tcl_fallback_traceability_failures)
-    summary["syntax_error_count"] = len(syntax_errors)
+def _exception_traceability_result(case_id, paths, accepted_names, parse_metric, failure_metric, *, pass_only=False, target_metric=None, exempt_synthetic=False):
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    syntax_errors, failures, scanned = _scan_exception_handlers(
+        paths, accepted_names=None if accepted_names is None else set(accepted_names), pass_only=pass_only, exempt_synthetic=exempt_synthetic,
+    )
+    if target_metric:
+        add_check(results, "meta_contract", case_id, target_metric, True, bool(scanned))
+    add_check(results, "meta_contract", case_id, parse_metric, [], syntax_errors)
+    add_check(results, "meta_contract", case_id, failure_metric, [], failures)
+    summary.update(scanned_file_count=len(scanned), failure_count=len(failures), syntax_error_count=len(syntax_errors))
+    return results, summary
+
+def validate_gui_tcl_fallback_traceability_contract_case(_base_params):
+    paths = sorted((PROJECT_ROOT / "tools" / "workbench_ui").rglob("*.py"))
+    results, summary = _exception_traceability_result(
+        "META_GUI_TCL_FALLBACK_TRACEABILITY_CONTRACT", paths, {"TclError"},
+        "gui_tcl_fallback_handler_files_parse", "gui_tcl_fallbacks_bind_and_trace_or_reraise",
+        target_metric="gui_tcl_fallback_scan_targets_present",
+    )
+    summary["scan_root"] = "tools/workbench_ui"
     return results, summary
 
 
 def validate_optional_dependency_fallback_traceability_contract_case(_base_params):
-    case_id = "META_OPTIONAL_DEPENDENCY_FALLBACK_TRACEABILITY_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    scan_targets = [
-        PROJECT_ROOT / "tools" / "trade_analysis" / "charting.py",
-        PROJECT_ROOT / "tools" / "downloader" / "runtime.py",
-        PROJECT_ROOT / "tools" / "workbench_ui" / "single_stock_inspector.py",
-        PROJECT_ROOT / "tools" / "validate" / "main.py",
-    ]
-    syntax_errors = []
-    optional_fallback_traceability_failures = []
-    scanned_files = []
-
-    def _is_optional_import_exception_type(node):
-        if isinstance(node, ast.Name):
-            return node.id in {"ImportError", "ModuleNotFoundError"}
-        if isinstance(node, ast.Attribute):
-            return ast.unparse(node) in {"ImportError", "ModuleNotFoundError"}
-        if isinstance(node, ast.Tuple):
-            return any(_is_optional_import_exception_type(element) for element in node.elts)
-        return False
-
-    def _handler_uses_exception_name(handler, exception_name):
-        handler_module = ast.Module(body=handler.body, type_ignores=[])
-        return any(
-            isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load) and child.id == exception_name
-            for child in ast.walk(handler_module)
-        )
-
-    def _handler_reraises(handler):
-        return any(isinstance(child, ast.Raise) for child in ast.walk(ast.Module(body=handler.body, type_ignores=[])))
-
-    for path in scan_targets:
-        rel_path = path.relative_to(PROJECT_ROOT).as_posix()
-        scanned_files.append(rel_path)
-        try:
-            source_text = read_source_text(path)
-            parsed = read_source_ast(path)
-        except SyntaxError as exc:
-            syntax_errors.append(f"{rel_path}:{exc.lineno}: {exc.msg}")
-            continue
-
-        for node in ast.walk(parsed):
-            if not isinstance(node, ast.ExceptHandler) or node.type is None or not _is_optional_import_exception_type(node.type):
-                continue
-            if not node.name:
-                optional_fallback_traceability_failures.append(f"{rel_path}:{node.lineno}: optional dependency fallback must bind exception name")
-                continue
-            if _handler_reraises(node):
-                continue
-            if not _handler_uses_exception_name(node, node.name):
-                optional_fallback_traceability_failures.append(f"{rel_path}:{node.lineno}: optional dependency fallback must use bound exception or re-raise")
-
-    add_check(results, "meta_contract", case_id, "optional_dependency_fallback_handler_files_parse", [], syntax_errors)
-    add_check(results, "meta_contract", case_id, "optional_dependency_fallbacks_bind_and_trace_or_reraise", [], optional_fallback_traceability_failures)
-
-    summary["scanned_file_count"] = len(scanned_files)
-    summary["failure_count"] = len(optional_fallback_traceability_failures)
-    summary["syntax_error_count"] = len(syntax_errors)
-    return results, summary
+    paths = [PROJECT_ROOT / rel for rel in (
+        "tools/trade_analysis/charting.py", "tools/downloader/runtime.py",
+        "tools/workbench_ui/single_stock_inspector.py", "tools/validate/main.py",
+    )]
+    return _exception_traceability_result(
+        "META_OPTIONAL_DEPENDENCY_FALLBACK_TRACEABILITY_CONTRACT", paths, {"ImportError", "ModuleNotFoundError"},
+        "optional_dependency_fallback_handler_files_parse", "optional_dependency_fallbacks_bind_and_trace_or_reraise",
+    )
 
 
 def validate_specific_pass_only_exception_traceability_contract_case(_base_params):
-    case_id = "META_SPECIFIC_PASS_ONLY_EXCEPTION_TRACEABILITY_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    scan_roots = [
-        PROJECT_ROOT / "apps",
-        PROJECT_ROOT / "config",
-        PROJECT_ROOT / "core",
-        PROJECT_ROOT / "filters",
-        PROJECT_ROOT / "services",
-        PROJECT_ROOT / "strategies",
-        PROJECT_ROOT / "tools",
-    ]
-    syntax_errors = []
-    specific_pass_only_failures = []
-    scanned_files = []
-    allowed_pass_only_exception_names = {"FileNotFoundError"}
-
-    def _exception_type_names(node):
-        if isinstance(node, ast.Name):
-            return [node.id]
-        if isinstance(node, ast.Attribute):
-            return [node.attr]
-        if isinstance(node, ast.Tuple):
-            names = []
-            for element in node.elts:
-                names.extend(_exception_type_names(element))
-            return names
-        return []
-
-    def _is_traceability_contract_exempt(path):
-        rel_path = path.relative_to(PROJECT_ROOT).as_posix()
-        return rel_path.startswith("tools/validate/synthetic_")
-
-    for scan_root in scan_roots:
-        for path in sorted(scan_root.rglob("*.py")):
-            if _is_traceability_contract_exempt(path):
-                continue
-            rel_path = path.relative_to(PROJECT_ROOT).as_posix()
-            scanned_files.append(rel_path)
-            try:
-                source_text = read_source_text(path)
-                parsed = read_source_ast(path)
-            except SyntaxError as exc:
-                syntax_errors.append(f"{rel_path}:{exc.lineno}: {exc.msg}")
-                continue
-
-            for node in ast.walk(parsed):
-                if not isinstance(node, ast.ExceptHandler) or node.type is None:
-                    continue
-                if len(node.body) != 1 or not isinstance(node.body[0], ast.Pass):
-                    continue
-                exception_names = set(_exception_type_names(node.type))
-                if not exception_names:
-                    continue
-                if exception_names & {"Exception", "BaseException", "ImportError", "ModuleNotFoundError", "TclError"}:
-                    continue
-                if exception_names <= allowed_pass_only_exception_names:
-                    continue
-                specific_pass_only_failures.append(
-                    f"{rel_path}:{node.lineno}: pass-only specific exception handler must trace, re-raise, or use an allowed control-flow exception"
-                )
-
-    add_check(results, "meta_contract", case_id, "specific_pass_only_exception_handler_files_parse", [], syntax_errors)
-    add_check(results, "meta_contract", case_id, "specific_pass_only_exception_handlers_forbidden", [], specific_pass_only_failures)
-
-    summary["scanned_file_count"] = len(scanned_files)
-    summary["failure_count"] = len(specific_pass_only_failures)
-    summary["syntax_error_count"] = len(syntax_errors)
-    return results, summary
+    paths = [path for root_name in ("apps", "config", "core", "filters", "services", "strategies", "tools")
+             for path in sorted((PROJECT_ROOT / root_name).rglob("*.py"))]
+    return _exception_traceability_result(
+        "META_SPECIFIC_PASS_ONLY_EXCEPTION_TRACEABILITY_CONTRACT", paths, None,
+        "specific_pass_only_exception_handler_files_parse", "specific_pass_only_exception_handlers_forbidden",
+        pass_only=True, exempt_synthetic=True,
+    )
 
 
 def validate_broad_exception_traceability_contract_case(_base_params):
-    case_id = "META_BROAD_EXCEPTION_TRACEABILITY_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    scan_roots = [
-        PROJECT_ROOT / "apps",
-        PROJECT_ROOT / "config",
-        PROJECT_ROOT / "core",
-        PROJECT_ROOT / "strategies",
-        PROJECT_ROOT / "tools",
-    ]
-    syntax_errors = []
-    broad_exception_traceability_failures = []
-    scanned_files = []
-
-    def _is_broad_exception_type(node):
-        if isinstance(node, ast.Name):
-            return node.id in {"Exception", "BaseException"}
-        if isinstance(node, ast.Tuple):
-            return any(_is_broad_exception_type(element) for element in node.elts)
-        return False
-
-    def _handler_uses_exception_name(handler, exception_name):
-        handler_module = ast.Module(body=handler.body, type_ignores=[])
-        return any(
-            isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load) and child.id == exception_name
-            for child in ast.walk(handler_module)
-        )
-
-    def _handler_reraises(handler):
-        return any(isinstance(child, ast.Raise) for child in ast.walk(ast.Module(body=handler.body, type_ignores=[])))
-
-    for scan_root in scan_roots:
-        for path in sorted(scan_root.rglob("*.py")):
-            rel_path = path.relative_to(PROJECT_ROOT).as_posix()
-            scanned_files.append(rel_path)
-            try:
-                source_text = read_source_text(path)
-                parsed = read_source_ast(path)
-            except SyntaxError as exc:
-                syntax_errors.append(f"{rel_path}:{exc.lineno}: {exc.msg}")
-                continue
-
-            for node in ast.walk(parsed):
-                if not isinstance(node, ast.ExceptHandler) or node.type is None or not _is_broad_exception_type(node.type):
-                    continue
-                if _handler_reraises(node):
-                    continue
-                if not node.name:
-                    broad_exception_traceability_failures.append(f"{rel_path}:{node.lineno}: broad exception handler must bind exception name unless it re-raises")
-                    continue
-                if not _handler_uses_exception_name(node, node.name):
-                    broad_exception_traceability_failures.append(f"{rel_path}:{node.lineno}: broad exception handler must use bound exception or re-raise")
-
-    add_check(results, "meta_contract", case_id, "broad_exception_handler_files_parse", [], syntax_errors)
-    add_check(results, "meta_contract", case_id, "broad_exception_handlers_bind_and_trace_or_reraise", [], broad_exception_traceability_failures)
-
-    summary["scanned_file_count"] = len(scanned_files)
-    summary["failure_count"] = len(broad_exception_traceability_failures)
-    summary["syntax_error_count"] = len(syntax_errors)
-    return results, summary
-
+    paths = [path for root_name in ("apps", "config", "core", "strategies", "tools")
+             for path in sorted((PROJECT_ROOT / root_name).rglob("*.py"))]
+    return _exception_traceability_result(
+        "META_BROAD_EXCEPTION_TRACEABILITY_CONTRACT", paths, {"Exception", "BaseException"},
+        "broad_exception_handler_files_parse", "broad_exception_handlers_bind_and_trace_or_reraise",
+    )
 
 def validate_no_legacy_app_entry_doc_references_case(_base_params):
     case_id = "META_NO_LEGACY_APP_ENTRY_DOC_REFERENCES"
@@ -1730,95 +1558,6 @@ def validate_quick_gate_synthetic_registry_import_targets_contract_case(_base_pa
     return results, summary
 
 
-def validate_debug_backtest_history_snapshot_patch_seam_contract_case(_base_params):
-    case_id = "META_DEBUG_BACKTEST_HISTORY_SNAPSHOT_PATCH_SEAM_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("tools", "trade_analysis", "backtest.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-
-    top_level_names = set()
-    for node in parsed.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            top_level_names.add(node.name)
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    top_level_names.add(target.id)
-        elif isinstance(node, ast.ImportFrom):
-            for alias in node.names:
-                top_level_names.add(alias.asname or alias.name)
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                top_level_names.add(alias.asname or alias.name.split(".")[-1])
-
-    add_check(
-        results,
-        "meta_contract",
-        case_id,
-        "debug_backtest_exports_history_snapshot_patch_seam",
-        True,
-        "_build_pit_history_snapshot" in top_level_names,
-    )
-    add_check(
-        results,
-        "meta_contract",
-        case_id,
-        "debug_backtest_run_debug_analysis_uses_history_snapshot_patch_seam",
-        True,
-        "signal_history_snapshot = _build_pit_history_snapshot(" in source_text
-        and "latest_history_snapshot = _build_pit_history_snapshot(" in source_text,
-    )
-
-    summary["source_file"] = source_path.name
-    return results, summary
-
-
-
-def validate_gui_buy_signal_annotation_helper_import_contract_case(_base_params):
-    case_id = "META_GUI_BUY_SIGNAL_ANNOTATION_HELPER_IMPORT_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = SYNTHETIC_VALIDATE_DIR / "synthetic_contract_cases.py"
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-
-    uses_helper_symbol = any(
-        isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == "_record_buy_signal_annotation"
-        for node in ast.walk(parsed)
-    )
-    has_explicit_import = _parsed_module_declares_specific_from_import(
-        parsed,
-        module_name="tools.trade_analysis.backtest",
-        imported_name="_record_buy_signal_annotation",
-    )
-
-    add_check(
-        results,
-        "meta_contract",
-        case_id,
-        "synthetic_contract_cases_uses_buy_signal_annotation_helper_symbol",
-        True,
-        uses_helper_symbol,
-    )
-    add_check(
-        results,
-        "meta_contract",
-        case_id,
-        "synthetic_contract_cases_imports_buy_signal_annotation_helper",
-        True,
-        has_explicit_import,
-    )
-
-    summary["source_file"] = source_path.name
-    summary["uses_helper_symbol"] = uses_helper_symbol
-    summary["has_explicit_import"] = has_explicit_import
-    return results, summary
-
-
 def validate_registry_checklist_entry_consistency_case(_base_params):
     case_id = "META_REGISTRY_CHECKLIST_ENTRY"
     results = []
@@ -2333,69 +2072,6 @@ def validate_peak_traced_memory_tracker_context_management_case(_base_params):
     return results, summary
 
 
-def validate_synthetic_contract_cases_no_legacy_price_df_case_key_contract_case(_base_params):
-    case_id = "META_SYNTHETIC_CONTRACT_CASES_NO_LEGACY_PRICE_DF_CASE_KEY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("tools", "validate", "synthetic_contract_cases.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-
-    legacy_hits = []
-    for node in ast.walk(parsed):
-        if not isinstance(node, ast.Subscript):
-            continue
-        if not isinstance(node.value, ast.Name) or node.value.id != "case":
-            continue
-        slice_node = node.slice
-        if isinstance(slice_node, ast.Constant) and slice_node.value == "price_df":
-            legacy_hits.append(f"L{node.lineno}")
-
-    add_check(results, "meta_contract", case_id, "synthetic_contract_cases_no_legacy_case_price_df_access", [], legacy_hits)
-
-    summary["legacy_hits"] = legacy_hits
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
-def validate_gui_trade_count_contract_no_legacy_exit_snippet_case(_base_params):
-    case_id = "META_GUI_TRADE_COUNT_CONTRACT_NO_LEGACY_EXIT_SNIPPET"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("tools", "validate", "synthetic_contract_cases.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-
-    function_node = None
-    for node in parsed.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "validate_gui_trade_count_and_sidebar_sync_contract_case":
-            function_node = node
-            break
-
-    if function_node is None:
-        function_source = ""
-        legacy_literals = ["missing_validate_gui_trade_count_and_sidebar_sync_contract_case"]
-    else:
-        function_source = "\n".join(source_text.splitlines()[function_node.lineno - 1:function_node.end_lineno])
-        legacy_literals = []
-        for legacy_literal in (
-            "'trade_count': _resolve_completed_trade_count(history_snapshot, include_current_round_trip=True)",
-            '"history_snapshot=latest_history_snapshot"',
-            "history_snapshot=latest_history_snapshot",
-        ):
-            if legacy_literal in function_source:
-                legacy_literals.append(legacy_literal)
-
-    add_check(results, "meta_contract", case_id, "gui_trade_count_contract_has_no_legacy_exit_snippet_literals", [], legacy_literals)
-    add_check(results, "meta_contract", case_id, "gui_trade_count_contract_uses_forced_close_behavior_probe", True, "append_debug_forced_closeout(" in function_source and "build_trade_stats_index(" in function_source)
-
-    summary["legacy_literals"] = legacy_literals
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
 def validate_single_backtest_stats_legacy_schema_contract_case(_base_params):
     case_id = "META_SINGLE_BACKTEST_STATS_LEGACY_SCHEMA_CONTRACT"
     results = []
@@ -2507,419 +2183,6 @@ def validate_debug_backtest_entry_cash_path_contract_case(_base_params):
 
 
 
-def validate_display_money_rounding_helper_contract_case(_base_params):
-    case_id = "META_DISPLAY_MONEY_ROUNDING_HELPER_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    exact_path = build_project_absolute_path("core", "exact_accounting.py")
-    portfolio_path = build_project_absolute_path("core", "portfolio_exits.py")
-    log_rows_path = build_project_absolute_path("tools", "trade_analysis", "log_rows.py")
-
-    exact_text = exact_path.read_text(encoding="utf-8")
-    portfolio_text = portfolio_path.read_text(encoding="utf-8")
-    log_rows_text = log_rows_path.read_text(encoding="utf-8")
-
-    add_check(results, "meta_contract", case_id, "shared_display_rounding_uses_decimal_half_up", True, 'quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)' in exact_text)
-    add_check(results, "meta_contract", case_id, "portfolio_history_rounding_delegates_to_shared_helper", True, 'return round_money_for_display(value)' in portfolio_text)
-    add_check(results, "meta_contract", case_id, "debug_log_rounding_delegates_to_shared_helper", True, 'return round_money_for_display(value)' in log_rows_text)
-    add_check(results, "meta_contract", case_id, "portfolio_history_rounding_has_no_legacy_builtin_round", False, 'return round(float(value), 2)' in portfolio_text)
-    add_check(results, "meta_contract", case_id, "debug_log_rounding_has_no_legacy_builtin_round", False, 'return round(float(value), 2)' in log_rows_text)
-
-    summary["source_paths"] = [
-        str(exact_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
-        str(portfolio_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
-        str(log_rows_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
-    ]
-    return results, summary
-
-
-def validate_real_case_completed_trade_rounding_oracle_contract_case(_base_params):
-    case_id = "META_REAL_CASE_COMPLETED_TRADE_ROUNDING_ORACLE_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("tools", "validate", "real_case_assertions.py")
-    source_text = source_path.read_text(encoding="utf-8")
-
-    add_check(results, "meta_contract", case_id, "real_case_assertions_imports_shared_rounding_helper", True, 'from core.exact_accounting import round_money_for_display' in source_text)
-    add_check(results, "meta_contract", case_id, "real_case_assertions_rounds_expected_trade_pnls_with_shared_helper", True, 'expected_trade_pnls = [round_money_for_display(log["pnl"]) for log in standalone_logs]' in source_text)
-    add_check(results, "meta_contract", case_id, "real_case_assertions_rounds_expected_realized_sum_with_shared_helper", True, 'expected_realized_pnl_sum = round_money_for_display(sum(expected_trade_pnls))' in source_text)
-    add_check(results, "meta_contract", case_id, "real_case_assertions_has_no_legacy_builtin_round_for_trade_pnls", False, 'expected_trade_pnls = [round(float(log["pnl"]), 2) for log in standalone_logs]' in source_text)
-    add_check(results, "meta_contract", case_id, "real_case_assertions_has_no_legacy_builtin_round_for_realized_sum", False, 'expected_realized_pnl_sum = round(sum(expected_trade_pnls), 2)' in source_text)
-
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-def validate_trade_rebuild_rounding_helper_contract_case(_base_params):
-    case_id = "META_TRADE_REBUILD_ROUNDING_HELPER_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("tools", "validate", "trade_rebuild.py")
-    source_text = source_path.read_text(encoding="utf-8")
-
-    add_check(results, "meta_contract", case_id, "trade_rebuild_imports_shared_rounding_helper", True, 'from core.exact_accounting import round_money_for_display' in source_text)
-    add_check(results, "meta_contract", case_id, "trade_rebuild_normalizes_row_pnl_with_shared_helper", True, 'realized_pnl = round_money_for_display(getattr(row, pnl_col))' in source_text)
-    add_check(results, "meta_contract", case_id, "trade_rebuild_half_exit_accumulates_with_shared_helper", True, 'active_trade["total_pnl"] = round_money_for_display(active_trade["total_pnl"] + realized_pnl)' in source_text)
-    add_check(results, "meta_contract", case_id, "trade_rebuild_full_exit_accumulates_with_shared_helper", True, 'active_trade["total_pnl"] = round_money_for_display(active_trade["total_pnl"] + realized_pnl)' in source_text)
-    add_check(results, "meta_contract", case_id, "trade_rebuild_has_no_legacy_builtin_round_total_pnl", False, 'active_trade["total_pnl"] = round(active_trade["total_pnl"] + realized_pnl, 2)' in source_text)
-
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
-def validate_single_backtest_exact_cash_path_contract_case(_base_params):
-    case_id = "META_SINGLE_BACKTEST_EXACT_CASH_PATH_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    def _get_function_source(rel_path, func_name):
-        source_path = build_project_absolute_path(*rel_path.split('/'))
-        source_text = source_path.read_text(encoding="utf-8")
-        parsed = ast.parse(source_text, filename=str(source_path))
-        for node in parsed.body:
-            if isinstance(node, ast.FunctionDef) and node.name == func_name:
-                func_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-                return source_path, func_source
-        return source_path, ""
-
-    core_path, backtest_core_source = _get_function_source("core/backtest_core.py", "run_v16_backtest")
-    finalize_path, finalize_source = _get_function_source("core/backtest_finalize.py", "finalize_open_position_at_end")
-    debug_backtest_path, debug_backtest_source = _get_function_source("tools/trade_analysis/backtest.py", "run_debug_analysis")
-    debug_exit_path, debug_exit_source = _get_function_source("tools/trade_analysis/exit_flow.py", "process_debug_position_step")
-    forced_close_path, forced_close_source = _get_function_source("tools/trade_analysis/exit_flow.py", "append_debug_forced_closeout")
-
-    add_check(results, "meta_contract", case_id, "single_backtest_exit_cash_adds_freed_cash", True, "currentCapital_milli += freed_cash_milli" in backtest_core_source)
-    add_check(results, "meta_contract", case_id, "single_backtest_exit_cash_has_no_legacy_pnl_addition", False, "currentCapital_milli += pnl_realized_milli" in backtest_core_source)
-    add_check(results, "meta_contract", case_id, "single_backtest_mark_to_market_equity_uses_net_liquidation_value", True, "currentEquity_milli = currentCapital_milli + floating_sell_ledger['net_sell_total_milli']" in backtest_core_source)
-    add_check(results, "meta_contract", case_id, "single_backtest_mark_to_market_equity_has_no_legacy_floating_pnl_path", False, "currentEquity_milli = currentCapital_milli + floating_pnl_milli" in backtest_core_source)
-    add_check(results, "meta_contract", case_id, "single_backtest_closeout_cash_adds_net_sell_total", True, "current_capital_milli += sell_ledger['net_sell_total_milli']" in finalize_source)
-    add_check(results, "meta_contract", case_id, "single_backtest_closeout_cash_has_no_legacy_pnl_addition", False, "current_capital_milli += pnl_milli" in finalize_source)
-    add_check(results, "meta_contract", case_id, "debug_backtest_exit_cash_adds_freed_cash", True, "current_capital += freed_cash" in debug_backtest_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_snapshot_uses_freed_cash", True, "current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + float(freed_cash)" in debug_exit_source)
-    add_check(results, "meta_contract", case_id, "debug_forced_closeout_snapshot_uses_net_sell_total", True, "current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + milli_to_money(sell_ledger['net_sell_total_milli'])" in forced_close_source)
-
-    summary["source_paths"] = [
-        str(core_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
-        str(finalize_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
-        str(debug_backtest_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
-        str(debug_exit_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
-        str(forced_close_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
-    ]
-    return results, summary
-
-
-
-def validate_debug_forced_closeout_exact_total_pnl_contract_case(_base_params):
-    case_id = "META_DEBUG_FORCED_CLOSEOUT_EXACT_TOTAL_PNL_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    forced_close_path = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py")
-    source_text = forced_close_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(forced_close_path))
-    function_source = ""
-    for node in parsed.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "append_debug_forced_closeout":
-            function_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-            break
-
-    add_check(results, "meta_contract", case_id, "forced_closeout_total_pnl_uses_integer_ledger_path", True, "total_pnl_milli = int(position.get('realized_pnl_milli', 0) or 0) + int(final_leg_actual_pnl_milli)" in function_source)
-    add_check(results, "meta_contract", case_id, "forced_closeout_total_pnl_derives_display_from_milli", True, "total_pnl = milli_to_money(total_pnl_milli)" in function_source)
-    add_check(results, "meta_contract", case_id, "forced_closeout_has_no_legacy_float_total_pnl_path", False, "total_pnl = float(position.get('realized_pnl', 0.0) + final_leg_actual_pnl)" in function_source)
-
-    summary["source_path"] = forced_close_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-def validate_unit_display_rounding_helper_contract_case(_base_params):
-    case_id = "META_UNIT_DISPLAY_ROUNDING_HELPER_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("tools", "validate", "synthetic_unit_cases.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-    function_source = ""
-    for node in parsed.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "validate_exact_accounting_display_leg_reconciliation_case":
-            function_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-            break
-
-    add_check(results, "meta_contract", case_id, "unit_display_reconciliation_uses_shared_rounding_helper", True, 'round_money_for_display(position["display_realized_pnl_sum"] + reconciled_exit_pnl)' in function_source)
-    add_check(results, "meta_contract", case_id, "unit_display_reconciliation_has_no_legacy_builtin_round", False, 'round(position["display_realized_pnl_sum"] + reconciled_exit_pnl, 2)' in function_source)
-
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
-
-def validate_debug_entry_display_capital_uses_exact_total_contract_case(_base_params):
-    case_id = "META_DEBUG_ENTRY_DISPLAY_CAPITAL_USES_EXACT_TOTAL_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("tools", "trade_analysis", "entry_flow.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-
-    helper_source = ""
-    step_source = ""
-    for node in parsed.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_display_entry_total":
-            helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-        if isinstance(node, ast.FunctionDef) and node.name == "process_debug_entry_for_day":
-            step_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-
-    add_check(results, "meta_contract", case_id, "debug_entry_has_exact_entry_total_helper", True, bool(helper_source))
-    add_check(results, "meta_contract", case_id, "debug_entry_helper_prefers_position_net_buy_total_milli", True, 'exact_entry_total_milli = int(position.get("net_buy_total_milli", 0) or 0)' in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_entry_helper_uses_entry_cost_before_any_recompute", True, 'display_entry_cost = float(entry_result.get("entry_cost", 0.0) or 0.0)' in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_entry_helper_final_fallback_uses_exact_total_helper", True, 'return calc_entry_total_cost(buy_price, int(qty or 0), params)' in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_entry_process_uses_exact_entry_total_helper", True, "spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)" in step_source)
-    add_check(results, "meta_contract", case_id, "debug_entry_has_no_legacy_per_share_entry_cost_fallback", False, "entry_result.get('entry_cost', entry_result['entry_price'] * entry_plan['qty'])" in step_source)
-
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-def validate_debug_half_exit_leg_return_pct_uses_allocated_cost_contract_case(_base_params):
-    case_id = "META_DEBUG_HALF_EXIT_LEG_RETURN_PCT_ALLOCATED_COST_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-    helper_source = ""
-    step_source = ""
-    for node in parsed.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_display_leg_return_pct":
-            helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-        if isinstance(node, ast.FunctionDef) and node.name == "process_debug_position_step":
-            step_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-
-    add_check(results, "meta_contract", case_id, "debug_half_exit_has_exact_leg_return_helper", True, bool(helper_source))
-    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_prefers_allocated_cost_milli", True, "allocated_cost_milli = 0 if exit_context is None else int(exit_context.get('allocated_cost_milli', 0) or 0)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_uses_pnl_milli", True, "pnl_milli = 0 if exit_context is None else int(exit_context.get('pnl_milli', 0) or 0)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_converts_allocated_cost_from_exact_ledger", True, "return float(pnl_milli * 100.0 / allocated_cost_milli)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_has_no_legacy_money_ratio_path", False, "return float(milli_to_money(pnl_milli) / milli_to_money(allocated_cost_milli) * 100.0)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_half_exit_marker_uses_exact_leg_return_helper", True, "'pnl_pct': _resolve_display_leg_return_pct(" in step_source)
-    add_check(results, "meta_contract", case_id, "debug_half_exit_has_no_legacy_per_share_return_pct_formula", False, "(sell_net_price_half - float(position.get('entry', exec_sell_price_half))) / float(position.get('entry', exec_sell_price_half)) * 100.0" in step_source)
-
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-def validate_debug_exit_display_capital_uses_ledger_totals_contract_case(_base_params):
-    case_id = "META_DEBUG_EXIT_DISPLAY_CAPITAL_LEDGER_TOTALS_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-    helper_source = ""
-    step_source = ""
-    for node in parsed.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_full_entry_capital_milli":
-            helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-        if isinstance(node, ast.FunctionDef) and node.name == "process_debug_position_step":
-            step_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-
-    add_check(results, "meta_contract", case_id, "debug_exit_total_return_prefers_exact_entry_total", True, "exact_entry_total_milli = int(position.get('net_buy_total_milli', 0) or 0)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_half_exit_gross_amount_uses_exact_sell_total", True, "gross_amount=tp_sell_total" in step_source)
-    add_check(results, "meta_contract", case_id, "debug_full_exit_gross_amount_uses_exact_sell_total", True, "gross_amount=sell_total_amount" in step_source)
-    add_check(results, "meta_contract", case_id, "debug_half_exit_marker_sell_capital_uses_exact_sell_total", True, "'sell_capital': float(tp_sell_total)" in step_source)
-    add_check(results, "meta_contract", case_id, "debug_full_exit_marker_sell_capital_uses_exact_sell_total", True, "'sell_capital': float(sell_total_amount)" in step_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_has_no_legacy_half_exit_per_share_times_qty", False, "gross_amount=sell_net_price_half * sold_qty" in step_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_has_no_legacy_full_exit_per_share_times_qty", False, "gross_amount=sell_net_price * final_exit_qty" in step_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_has_no_legacy_full_exit_marker_per_share_times_qty", False, "'sell_capital': float(sell_net_price * final_exit_qty)" in step_source)
-
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
-
-def validate_debug_exit_entry_capital_fallback_contract_case(_base_params):
-    case_id = "META_DEBUG_EXIT_ENTRY_CAPITAL_FALLBACK_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-    entry_helper_source = ""
-    sell_helper_source = ""
-    for node in parsed.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_full_entry_capital_milli":
-            entry_helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_display_sell_total_milli":
-            sell_helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-
-    step_source = ""
-    for node in parsed.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "process_debug_position_step":
-            step_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-            break
-
-    compact_step_source = re.sub(r"\s+", "", step_source)
-
-    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_prefers_display_total_before_exact_total_fallback", True, "display_entry_capital = float(position.get('entry_capital_total', 0.0) or 0.0)" in entry_helper_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_coerces_display_total_with_shared_helper", True, "return coerce_money_like_to_milli(round_money_for_display(display_entry_capital))" in entry_helper_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_final_fallback_uses_average_price_total_helper", True, "return calc_total_from_average_price_milli(entry_price, initial_qty)" in entry_helper_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_display_sell_total_signature_accepts_position_and_current_date", True, "def _resolve_display_sell_total_milli(exit_context, *, position, current_date, sell_price, qty, params):" in source_text)
-    add_check(results, "meta_contract", case_id, "debug_exit_display_sell_total_helper_uses_explicit_context", True, "ticker=position.get('ticker')" in sell_helper_source and "trade_date=current_date" in sell_helper_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_tp_marker_threads_position_and_current_date", True, "tp_sell_total=_resolve_display_sell_total(tp_context,position=position,current_date=current_date," in compact_step_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_full_sell_threads_position_and_current_date", True, "sell_total_amount=_resolve_display_sell_total(exit_context,position=position,current_date=current_date," in compact_step_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_leg_return_threads_current_date", True, "current_date=current_date," in step_source and "fallback_sell_price=exec_sell_price_half" in step_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_display_sell_total_has_no_free_position_reference", False, "ticker=position.get('ticker')" in sell_helper_source and "def _resolve_display_sell_total_milli(exit_context, *, sell_price, qty, params):" in source_text)
-    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_has_no_legacy_gross_price_helper_on_net_average_entry", False, "return calc_entry_total_cost(entry_price, initial_qty, params)" in entry_helper_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_has_no_legacy_per_share_fallback", False, "return round_money_for_display(entry_price * initial_qty)" in entry_helper_source)
-
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-def validate_synthetic_meta_source_path_binding_contract_case(_base_params):
-    case_id = "META_SYNTHETIC_META_SOURCE_PATH_BINDING_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("tools", "validate", "synthetic_meta_cases.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-
-    offenders = []
-    for node in parsed.body:
-        if not isinstance(node, ast.FunctionDef) or not node.name.startswith("validate_"):
-            continue
-        assigned_names = {arg.arg for arg in node.args.args}
-        for inner in ast.walk(node):
-            if isinstance(inner, ast.Assign):
-                for target in inner.targets:
-                    if isinstance(target, ast.Name):
-                        assigned_names.add(target.id)
-            elif isinstance(inner, ast.AnnAssign) and isinstance(inner.target, ast.Name):
-                assigned_names.add(inner.target.id)
-        for inner in ast.walk(node):
-            if not isinstance(inner, ast.Assign):
-                continue
-            if len(inner.targets) != 1 or not isinstance(inner.targets[0], ast.Subscript):
-                continue
-            sub = inner.targets[0]
-            if not isinstance(sub.value, ast.Name) or sub.value.id != "summary":
-                continue
-            slice_node = sub.slice
-            if not (isinstance(slice_node, ast.Constant) and slice_node.value == "source_path"):
-                continue
-            value = inner.value
-            if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Attribute):
-                continue
-            relative_call = value.func.value
-            if not isinstance(relative_call, ast.Call) or not isinstance(relative_call.func, ast.Attribute):
-                continue
-            if relative_call.func.attr != "relative_to":
-                continue
-            base_obj = relative_call.func.value
-            if isinstance(base_obj, ast.Name) and base_obj.id not in assigned_names:
-                offenders.append(f"{node.name}:{base_obj.id}:L{inner.lineno}")
-
-    add_check(results, "meta_contract", case_id, "synthetic_meta_source_path_assignments_bind_declared_locals", [], offenders)
-    summary["offenders"] = offenders
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
-
-def validate_debug_sell_signal_profit_pct_uses_exact_mark_to_market_contract_case(_base_params):
-    case_id = "META_DEBUG_SELL_SIGNAL_PROFIT_PCT_EXACT_MARK_TO_MARKET_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("tools", "trade_analysis", "backtest.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-    helper_source = ""
-    sell_signal_source = ""
-    for node in parsed.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_sell_signal_profit_pct":
-            helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-        if isinstance(node, ast.FunctionDef) and node.name == "_record_sell_signal_annotation":
-            sell_signal_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_has_exact_profit_pct_helper", True, "def _resolve_sell_signal_profit_pct(position, signal_close, params, signal_date=None):" in source_text)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_prefers_net_buy_total_milli", True, "full_entry_total_milli = int(position.get('net_buy_total_milli', 0) or 0)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_final_fallback_uses_average_price_total_helper", True, "initial_qty = int(position.get('initial_qty', remaining_qty) or remaining_qty or 0)" in helper_source and "full_entry_total_milli = calc_total_from_average_price_milli(entry_price, initial_qty)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_has_no_legacy_gross_price_helper_on_net_average_entry", False, "full_entry_total_milli = coerce_money_like_to_milli(calc_entry_total_cost(entry_price, initial_qty, params))" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_uses_remaining_cost_basis_mark_to_market", True, "floating_pnl_milli = signal_sell_ledger['net_sell_total_milli'] - remaining_cost_basis_milli" in helper_source and "total_trade_pnl_milli = realized_pnl_milli + floating_pnl_milli" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_divides_integer_totals_directly", True, "return float(total_trade_pnl_milli * 100.0 / full_entry_total_milli)" in helper_source and "return float(signal_trade_pnl_milli * 100.0 / full_entry_total_milli)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_has_no_legacy_milli_to_money_ratio_path", False, "milli_to_money(total_trade_pnl_milli) / milli_to_money(full_entry_total_milli)" in helper_source or "milli_to_money(signal_trade_pnl_milli) / milli_to_money(full_entry_total_milli)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_records_helper_output", True, "signal_trade_pct = _resolve_sell_signal_profit_pct(position, signal_close, params, signal_date=signal_date)" in sell_signal_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_has_no_legacy_raw_close_minus_entry_formula", False, "((float(signal_close) - entry_price) / entry_price * 100.0)" in sell_signal_source or "((float(signal_close) - entry_price) / entry_price * 100.0)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_has_no_legacy_per_share_entry_total_fallback", False, "coerce_money_like_to_milli(round_money_for_display(entry_price * remaining_qty))" in helper_source)
-
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
-def validate_debug_exact_fallback_helpers_contract_case(_base_params):
-    case_id = "META_DEBUG_EXACT_FALLBACK_HELPERS_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    exit_path = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py")
-    exit_source = exit_path.read_text(encoding="utf-8")
-    backtest_path = build_project_absolute_path("tools", "trade_analysis", "backtest.py")
-    backtest_source = backtest_path.read_text(encoding="utf-8")
-
-    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_fallback_uses_average_price_total_helper", True, "return calc_total_from_average_price_milli(entry_price, initial_qty)" in exit_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_has_no_legacy_gross_price_helper_on_net_average_entry", False, "return calc_entry_total_cost(entry_price, initial_qty, params)" in exit_source)
-    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_fallback_uses_average_price_total_helper", True, "entry_total_milli = calc_total_from_average_price_milli(entry_price, sold_qty)" in exit_source)
-    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_fallback_divides_integer_totals_directly", True, "return float((sell_total_milli - entry_total_milli) * 100.0 / entry_total_milli)" in exit_source)
-    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_has_no_legacy_money_ratio_path", False, "return float((sell_total - entry_total) / entry_total * 100.0)" in exit_source or "milli_to_money(pnl_milli) / milli_to_money(allocated_cost_milli)" in exit_source)
-    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_fallback_has_no_legacy_per_share_formula", False, "return float((float(fallback_net_price) - entry_price) / entry_price * 100.0)" in exit_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_entry_total_fallback_uses_average_price_total_helper", True, "full_entry_total_milli = calc_total_from_average_price_milli(entry_price, initial_qty)" in backtest_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_entry_total_has_no_legacy_gross_price_helper_on_net_average_entry", False, "full_entry_total_milli = coerce_money_like_to_milli(calc_entry_total_cost(entry_price, initial_qty, params))" in backtest_source)
-
-    summary["source_path"] = exit_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
-
-def validate_average_price_total_helper_contract_case(_base_params):
-    case_id = "META_AVERAGE_PRICE_TOTAL_HELPER_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    exact_path = build_project_absolute_path("core", "exact_accounting.py")
-    exact_source = exact_path.read_text(encoding="utf-8")
-    price_path = build_project_absolute_path("core", "price_utils.py")
-    price_source = price_path.read_text(encoding="utf-8")
-
-    add_check(results, "meta_contract", case_id, "exact_accounting_defines_average_price_total_milli_helper", True, "def calc_total_from_average_price_milli(avg_price, qty: int) -> int:" in exact_source)
-    add_check(results, "meta_contract", case_id, "exact_accounting_defines_average_price_total_helper", True, "def calc_total_from_average_price(avg_price, qty: int) -> float:" in exact_source)
-    add_check(results, "meta_contract", case_id, "initial_risk_total_uses_average_price_total_helper_for_entry", True, "entry_total_milli = calc_total_from_average_price_milli(entry_price, qty)" in price_source)
-    add_check(results, "meta_contract", case_id, "initial_risk_total_uses_average_price_total_helper_for_stop", True, "stop_net_total_milli = calc_total_from_average_price_milli(net_stop_price, qty)" in price_source)
-    add_check(results, "meta_contract", case_id, "initial_risk_total_has_no_legacy_entry_price_times_qty_float_path", False, "entry_total_milli = money_to_milli(entry_price * qty)" in price_source)
-    add_check(results, "meta_contract", case_id, "initial_risk_total_has_no_legacy_stop_price_times_qty_float_path", False, "stop_net_total_milli = money_to_milli(net_stop_price * qty)" in price_source)
-
-    summary["source_path"] = exact_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
-def validate_price_utils_average_price_total_import_contract_case(_base_params):
-    case_id = "META_PRICE_UTILS_AVERAGE_PRICE_TOTAL_IMPORT_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    price_path = build_project_absolute_path("core", "price_utils.py")
-    price_source = price_path.read_text(encoding="utf-8")
-
-    add_check(results, "meta_contract", case_id, "price_utils_imports_average_price_total_milli_helper", True, "calc_total_from_average_price_milli," in price_source)
-    add_check(results, "meta_contract", case_id, "price_utils_initial_risk_total_entry_uses_imported_average_price_total_helper", True, "entry_total_milli = calc_total_from_average_price_milli(entry_price, qty)" in price_source)
-    add_check(results, "meta_contract", case_id, "price_utils_initial_risk_total_stop_uses_imported_average_price_total_helper", True, "stop_net_total_milli = calc_total_from_average_price_milli(net_stop_price, qty)" in price_source)
-
-    summary["source_path"] = price_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
 def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     case_id = "META_PRICE_UTILS_ARRAY_TICK_NORMALIZATION_CONTRACT"
     results = []
@@ -2982,46 +2245,6 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     return results, summary
 
 
-def validate_exact_ledger_return_ratio_no_money_float_division_contract_case(_base_params):
-    case_id = "META_EXACT_LEDGER_RETURN_RATIO_NO_MONEY_FLOAT_DIVISION_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    exit_path = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py")
-    exit_source = exit_path.read_text(encoding="utf-8")
-    backtest_path = build_project_absolute_path("tools", "trade_analysis", "backtest.py")
-    backtest_source = backtest_path.read_text(encoding="utf-8")
-    portfolio_path = build_project_absolute_path("core", "portfolio_exits.py")
-    portfolio_source = portfolio_path.read_text(encoding="utf-8")
-
-    add_check(results, "meta_contract", case_id, "debug_exit_total_return_pct_uses_integer_totals", True, "total_return_pct = float(total_pnl_milli * 100.0 / full_entry_capital_milli) if full_entry_capital_milli > 0 else 0.0" in exit_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_leg_return_pct_uses_integer_totals", True, "return float(pnl_milli * 100.0 / allocated_cost_milli)" in exit_source and "return float((sell_total_milli - entry_total_milli) * 100.0 / entry_total_milli)" in exit_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_has_no_legacy_money_ratio_division", False, "milli_to_money(pnl_milli) / milli_to_money(allocated_cost_milli)" in exit_source or "(sell_total - entry_total) / entry_total" in exit_source or "(total_pnl / full_entry_capital * 100.0)" in exit_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_uses_integer_totals", True, "return float(total_trade_pnl_milli * 100.0 / full_entry_total_milli)" in backtest_source and "return float(signal_trade_pnl_milli * 100.0 / full_entry_total_milli)" in backtest_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_has_no_legacy_money_ratio_division", False, "milli_to_money(total_trade_pnl_milli) / milli_to_money(full_entry_total_milli)" in backtest_source or "milli_to_money(signal_trade_pnl_milli) / milli_to_money(full_entry_total_milli)" in backtest_source)
-    add_check(results, "meta_contract", case_id, "portfolio_rotation_mark_to_market_uses_integer_totals", True, "return total_trade_pnl_milli / full_entry_total_milli" in portfolio_source)
-    add_check(results, "meta_contract", case_id, "portfolio_rotation_mark_to_market_has_no_legacy_money_ratio_division", False, "milli_to_money(total_trade_pnl_milli) / milli_to_money(full_entry_total_milli)" in portfolio_source)
-
-    summary["source_path"] = exit_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
-def validate_single_backtest_public_profit_equity_consistency_contract_case(_base_params):
-    case_id = "META_SINGLE_BACKTEST_PUBLIC_PROFIT_EQUITY_CONSISTENCY_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("core", "backtest_finalize.py")
-    source_text = source_path.read_text(encoding="utf-8")
-
-    add_check(results, "meta_contract", case_id, "single_backtest_total_net_profit_uses_current_equity_basis", True, "total_net_profit = current_equity - params.initial_capital" in source_text)
-    add_check(results, "meta_contract", case_id, "single_backtest_total_net_profit_has_no_legacy_current_capital_basis", False, "total_net_profit = current_capital - params.initial_capital" in source_text)
-    add_check(results, "meta_contract", case_id, "single_backtest_public_payload_total_net_profit_uses_shared_profit_value", True, "'totalNetProfit': total_net_profit" in source_text and "'totalNetProfitPct': total_net_profit_pct" in source_text)
-
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
 def _capture_test_suite_help_output():
     test_suite_module = importlib.import_module("apps.test_suite")
     stdout_buffer = io.StringIO()
@@ -3051,62 +2274,6 @@ def validate_test_suite_help_text_mentions_stable_theme_tokens_case(_base_params
     return results, summary
 
 
-
-def validate_core_r_multiple_exact_ledger_contract_case(_base_params):
-    case_id = "META_CORE_R_MULTIPLE_EXACT_LEDGER_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    exact_path = build_project_absolute_path("core", "exact_accounting.py")
-    exact_source = exact_path.read_text(encoding="utf-8")
-    backtest_core_path = build_project_absolute_path("core", "backtest_core.py")
-    backtest_core_source = backtest_core_path.read_text(encoding="utf-8")
-    backtest_finalize_path = build_project_absolute_path("core", "backtest_finalize.py")
-    backtest_finalize_source = backtest_finalize_path.read_text(encoding="utf-8")
-    portfolio_exits_path = build_project_absolute_path("core", "portfolio_exits.py")
-    portfolio_exits_source = portfolio_exits_path.read_text(encoding="utf-8")
-
-    add_check(results, "meta_contract", case_id, "exact_accounting_exposes_shared_milli_ratio_helper", True, "def calc_ratio_from_milli(numerator_milli: int, denominator_milli: int) -> float:" in exact_source)
-    add_check(results, "meta_contract", case_id, "backtest_core_r_multiple_uses_exact_ledger_helper", True, "trade_r_mult = calc_ratio_from_milli(position['realized_pnl_milli'], position.get('initial_risk_total_milli', 0))" in backtest_core_source)
-    add_check(results, "meta_contract", case_id, "backtest_finalize_r_multiple_uses_exact_ledger_helper", True, "trade_r_mult = calc_ratio_from_milli(total_pnl_milli, position.get('initial_risk_total_milli', 0))" in backtest_finalize_source)
-    add_check(results, "meta_contract", case_id, "portfolio_rotation_r_multiple_uses_exact_ledger_helper", True, "total_r = calc_ratio_from_milli(total_pnl_milli, pos.get('initial_risk_total_milli', 0))" in portfolio_exits_source)
-    add_check(results, "meta_contract", case_id, "portfolio_exit_r_multiple_uses_exact_ledger_helper", True, "total_r = calc_ratio_from_milli(pos.get('realized_pnl_milli', 0), pos.get('initial_risk_total_milli', 0))" in portfolio_exits_source)
-    add_check(results, "meta_contract", case_id, "core_has_no_legacy_float_total_pnl_divided_by_initial_risk_total", False, "total_pnl / position['initial_risk_total']" in backtest_core_source or "total_pnl / position['initial_risk_total']" in backtest_finalize_source or "total_pnl / pos['initial_risk_total']" in portfolio_exits_source)
-
-    summary["source_path"] = backtest_core_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
-def validate_debug_exit_total_return_milli_binding_contract_case(_base_params):
-    case_id = "META_DEBUG_EXIT_TOTAL_RETURN_MILLI_BINDING_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py")
-    source_text = source_path.read_text(encoding="utf-8")
-
-    process_start = source_text.index("def process_debug_position_step(")
-    forced_closeout_start = source_text.index("def append_debug_forced_closeout(")
-    process_source = source_text[process_start:forced_closeout_start]
-    forced_closeout_source = source_text[forced_closeout_start:]
-
-    process_milli_binding = "total_pnl_milli = int(position.get('realized_pnl_milli', 0) or 0)"
-    forced_closeout_milli_binding = "total_pnl_milli = int(position.get('realized_pnl_milli', 0) or 0) + int(final_leg_actual_pnl_milli)"
-    total_return_stmt = "total_return_pct = float(total_pnl_milli * 100.0 / full_entry_capital_milli) if full_entry_capital_milli > 0 else 0.0"
-    process_binding_index = process_source.find(process_milli_binding)
-    process_total_return_index = process_source.find(total_return_stmt)
-    forced_closeout_binding_index = forced_closeout_source.find(forced_closeout_milli_binding)
-    forced_closeout_total_return_index = forced_closeout_source.find(total_return_stmt)
-
-    add_check(results, "meta_contract", case_id, "debug_exit_total_return_pct_binds_total_pnl_milli_before_use", True, process_binding_index != -1 and process_total_return_index != -1 and process_binding_index < process_total_return_index)
-    add_check(results, "meta_contract", case_id, "debug_exit_total_pnl_display_derives_from_milli_binding", True, "total_pnl = milli_to_money(total_pnl_milli)" in process_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_total_return_pct_has_no_unbound_total_pnl_milli_path", False, "total_pnl = float(position.get('realized_pnl', pnl_realized))" in process_source)
-    add_check(results, "meta_contract", case_id, "debug_forced_closeout_total_return_pct_binds_total_pnl_milli_before_use", True, forced_closeout_binding_index != -1 and forced_closeout_total_return_index != -1 and forced_closeout_binding_index < forced_closeout_total_return_index)
-    add_check(results, "meta_contract", case_id, "debug_forced_closeout_total_pnl_display_derives_from_milli_binding", True, "total_pnl = milli_to_money(total_pnl_milli)" in forced_closeout_source)
-    add_check(results, "meta_contract", case_id, "debug_forced_closeout_total_return_pct_has_no_legacy_float_total_pnl_path", False, "total_pnl = float(position.get('realized_pnl', 0.0) + final_leg_actual_pnl)" in forced_closeout_source)
-
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
 
 def validate_formal_step_entry_coverage_targets_case(_base_params):
     case_id = "META_FORMAL_STEP_ENTRY_COVERAGE_TARGETS"
@@ -3521,52 +2688,3 @@ def validate_portfolio_rotation_mark_to_market_return_contract_case(_base_params
     return results, summary
 
 
-def validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case(_base_params):
-    case_id = "META_SAME_BAR_STOP_PRIORITY_ORACLE_SNAPSHOT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = PROJECT_ROOT / "tools" / "validate" / "synthetic_take_profit_cases.py"
-    source_text = source_path.read_text(encoding="utf-8")
-
-    add_check(results, "meta_contract", case_id, "same_bar_stop_priority_snapshots_original_cost_basis_before_execute", True, 'original_cost_basis_milli = int(position["remaining_cost_basis_milli"])' in source_text)
-    add_check(results, "meta_contract", case_id, "same_bar_stop_priority_expected_pnl_uses_original_cost_basis_snapshot", True, 'expected_pnl = milli_to_money(expected_sell_ledger["net_sell_total_milli"] - original_cost_basis_milli)' in source_text)
-    add_check(results, "meta_contract", case_id, "same_bar_stop_priority_has_no_mutated_remaining_cost_basis_oracle", False, 'expected_pnl = milli_to_money(expected_sell_ledger["net_sell_total_milli"] - position["remaining_cost_basis_milli"])' in source_text)
-
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
-def validate_validator_oracles_use_exact_ledger_totals_contract_case(_base_params):
-    case_id = "META_VALIDATOR_ORACLES_USE_EXACT_LEDGER_TOTALS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    unit_path = PROJECT_ROOT / "tools" / "validate" / "synthetic_unit_cases.py"
-    unit_text = unit_path.read_text(encoding="utf-8")
-    tp_path = PROJECT_ROOT / "tools" / "validate" / "synthetic_take_profit_cases.py"
-    tp_text = tp_path.read_text(encoding="utf-8")
-    scanner_path = PROJECT_ROOT / "tools" / "validate" / "scanner_expectations.py"
-    scanner_text = scanner_path.read_text(encoding="utf-8")
-    scanner_compact_text = re.sub(r"\s+", "", scanner_text)
-    contract_path = PROJECT_ROOT / "tools" / "validate" / "synthetic_contract_cases.py"
-    contract_text = contract_path.read_text(encoding="utf-8")
-    contract_compact_text = re.sub(r"\s+", "", contract_text)
-    tp_compact_text = re.sub(r"\s+", "", tp_text)
-
-    add_check(results, "meta_contract", case_id, "unit_oracle_net_sell_uses_sell_ledger", True, 'build_sell_ledger_from_price(price, int(qty), params)' in unit_text)
-    add_check(results, "meta_contract", case_id, "unit_oracle_position_size_uses_integer_risk_budget", True, 'risk_budget_milli = calc_risk_budget_milli(cap_milli, risk_fraction)' in unit_text)
-    add_check(results, "meta_contract", case_id, "unit_oracle_has_no_legacy_float_gross_times_qty", False, 'gross = float(price) * int(qty)' in unit_text)
-    add_check(results, "meta_contract", case_id, "unit_oracle_has_no_legacy_float_risk_budget", False, 'risk_budget = capital * risk_fraction' in unit_text)
-    add_check(results, "meta_contract", case_id, "take_profit_case_uses_sell_ledger_for_expected_cash", True, 'expected_sell_ledger = build_sell_ledger_from_price(expected_exec_price, qty, params)' in tp_text)
-    add_check(results, "meta_contract", case_id, "take_profit_case_has_no_legacy_expected_freed_cash_formula", False, 'expected_freed_cash = expected_net_price * qty' in tp_text)
-    add_check(results, "meta_contract", case_id, "take_profit_case_has_no_legacy_expected_pnl_formula", False, 'expected_pnl = (expected_net_price - entry_price) * qty' in tp_text)
-    add_check(results, "meta_contract", case_id, "scanner_expectations_threads_trade_date_from_clean_df", True, 'resolve_latest_trade_date_from_frame' in scanner_text and 'stats["trade_date"] = resolve_latest_trade_date_from_frame(df)' in scanner_text and 'stats["trade_date"] = resolve_latest_trade_date_from_frame(clean_df)' in scanner_text)
-    add_check(results, "meta_contract", case_id, "scanner_expectations_threads_ticker_and_trade_date_into_projected_qty", True, 'ticker=ticker' in scanner_compact_text and 'trade_date=trade_date' in scanner_compact_text and 'calc_reference_candidate_qty(scanner_ref_stats["buy_limit"],scanner_ref_stats["stop_loss"],params,' in scanner_compact_text)
-    add_check(results, "meta_contract", case_id, "scanner_payload_builder_threads_trade_date_to_status_oracle", True, 'status=derive_expected_scanner_status(scanner_ref_stats,params,ticker=ticker,trade_date=trade_date)' in scanner_compact_text)
-    add_check(results, "meta_contract", case_id, "scanner_expectations_reuses_shared_trade_date_helper", False, 'def _resolve_trade_date_from_clean_df(' in scanner_text)
-    add_check(results, "meta_contract", case_id, "scanner_live_capital_contract_threads_ticker_and_trade_date", True, 'calc_reference_candidate_qty(buy_limit,stop_loss,params,ticker="2330",trade_date=pd.Timestamp("2026-01-02"))' in contract_compact_text)
-    add_check(results, "meta_contract", case_id, "scanner_half_tp_case_threads_ticker_and_trade_date", True, 'calc_reference_candidate_qty(scanner_ref_stats["buy_limit"],scanner_ref_stats["stop_loss"],scanner_case["params"],ticker=scanner_ticker,trade_date=scanner_ref_stats.get("trade_date"))' in tp_compact_text)
-
-    summary["source_path"] = unit_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary

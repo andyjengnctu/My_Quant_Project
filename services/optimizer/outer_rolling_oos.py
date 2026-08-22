@@ -1510,9 +1510,6 @@ def _month_start(value) -> pd.Timestamp:
     return pd.Timestamp(year=int(ts.year), month=int(ts.month), day=1)
 
 
-def _month_end(value) -> pd.Timestamp:
-    start = _month_start(value)
-    return start + pd.DateOffset(months=1) - pd.Timedelta(days=1)
 
 
 def _parse_oos_boundary(value, *, default: pd.Timestamp, year_boundary: str = "start") -> pd.Timestamp:

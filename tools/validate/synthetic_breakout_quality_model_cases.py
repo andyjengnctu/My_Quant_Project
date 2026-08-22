@@ -1643,10 +1643,9 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
 
 
 
-def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params):
-    """Pin MR-13H as a target-only simplification of MR-13E."""
-
-    case_id = "BREAKOUT_QUALITY_MR13H_NO_BREACH_TARGET"
+def validate_breakout_quality_full_horizon_target_components_contract_case(_base_params):
+    """Protect reusable full-horizon opportunity and pure-MFE target mathematics."""
+    case_id = "BREAKOUT_QUALITY_FULL_HORIZON_TARGET_COMPONENTS"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
@@ -1655,445 +1654,111 @@ def validate_breakout_quality_mr13h_no_breach_target_contract_case(_base_params)
     horizon = int(spec.horizon_bars)
     highs = np.full(horizon, 102.0, dtype=np.float64)
     lows = np.full(horizon, 99.0, dtype=np.float64)
-    highs[4] = 103.0
-    lows[4] = 89.0
-    highs[19] = 125.0
-    lows[19] = 95.0
-
-    old_target = daily_opportunity_no_time_target_from_cached_path(
-        highs,
-        lows,
-        anchor_price=100.0,
-        available_bars=horizon,
-        spec=spec,
+    highs[4], lows[4], highs[19], lows[19] = 103.0, 89.0, 125.0, 95.0
+    truncated = daily_opportunity_no_time_target_from_cached_path(
+        highs, lows, anchor_price=100.0, available_bars=horizon, spec=spec,
     )
-    new_target = daily_full_horizon_opportunity_target_from_cached_path(
-        highs,
-        lows,
-        anchor_price=100.0,
-        available_bars=horizon,
-        spec=spec,
+    full = daily_full_horizon_opportunity_target_from_cached_path(
+        highs, lows, anchor_price=100.0, available_bars=horizon, spec=spec,
     )
     check(
-        "mr13h_keeps_risk_breach_as_diagnostic_but_does_not_truncate_later_peak",
-        (5, 20, 1.4),
-        (
-                    int(new_target.first_risk_breach_bar),
-                    int(new_target.opportunity_bar),
-                    round(float(new_target.target_raw_r), 6),
-                ),
-    )
-    check_true(
-        "mr13e_reference_still_truncates_before_first_breach",
-        bool(old_target.opportunity_bar < new_target.first_risk_breach_bar),
+        "full_horizon_keeps_breach_diagnostic_without_truncating_later_peak",
+        (5, 20, 1.4, True),
+        (int(full.first_risk_breach_bar), int(full.opportunity_bar), round(float(full.target_raw_r), 6), truncated.opportunity_bar < full.first_risk_breach_bar),
     )
 
     no_breach_high = np.linspace(101.0, 112.0, horizon, dtype=np.float64)
     no_breach_low = np.full(horizon, 97.0, dtype=np.float64)
     old_no_breach = daily_opportunity_no_time_target_from_cached_path(
-        no_breach_high,
-        no_breach_low,
-        anchor_price=100.0,
-        available_bars=horizon,
-        spec=spec,
+        no_breach_high, no_breach_low, anchor_price=100.0, available_bars=horizon, spec=spec,
     )
     new_no_breach = daily_full_horizon_opportunity_target_from_cached_path(
-        no_breach_high,
-        no_breach_low,
-        anchor_price=100.0,
-        available_bars=horizon,
-        spec=spec,
+        no_breach_high, no_breach_low, anchor_price=100.0, available_bars=horizon, spec=spec,
     )
     check(
-        "no_breach_path_is_exactly_unchanged_by_mr13h",
-        (
-                    old_no_breach.target_raw_r,
-                    old_no_breach.opportunity_bar,
-                    old_no_breach.adverse_return_to_peak,
-                ),
-        (
-                    new_no_breach.target_raw_r,
-                    new_no_breach.opportunity_bar,
-                    new_no_breach.adverse_return_to_peak,
-                ),
+        "full_horizon_no_breach_path_matches_reference_target",
+        (old_no_breach.target_raw_r, old_no_breach.opportunity_bar, old_no_breach.adverse_return_to_peak),
+        (new_no_breach.target_raw_r, new_no_breach.opportunity_bar, new_no_breach.adverse_return_to_peak),
         tol=1e-12,
     )
 
     dates = pd.date_range("2020-01-01", periods=horizon + 3, freq="D")
-    frame = pd.DataFrame(
-        {
-            "Open": np.full(len(dates), 100.0),
-            "High": np.concatenate(([100.0], highs, [102.0, 102.0])),
-            "Low": np.concatenate(([100.0], lows, [99.0, 99.0])),
-            "Close": np.full(len(dates), 100.0),
-            "Volume": np.full(len(dates), 1000.0),
-        },
-        index=dates,
+    frame = pd.DataFrame({
+        "Open": np.full(len(dates), 100.0),
+        "High": np.concatenate(([100.0], highs, [102.0, 102.0])),
+        "Low": np.concatenate(([100.0], lows, [99.0, 99.0])),
+        "Close": np.full(len(dates), 100.0),
+        "Volume": np.full(len(dates), 1000.0),
+    }, index=dates)
+    full_batch = compute_daily_opportunity_target_batch(
+        frame, np.asarray([0], dtype=np.int64), spec=spec, target_id=DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
     )
-    old_batch = compute_daily_opportunity_target_batch(
-        frame,
-        np.asarray([0], dtype=np.int64),
-        spec=spec,
-        target_id=DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
-    )
-    new_batch = compute_daily_opportunity_target_batch(
-        frame,
-        np.asarray([0], dtype=np.int64),
-        spec=spec,
-        target_id=DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
-    )
-    check(
-        "vectorized_daily_target_matches_scalar_semantics_for_both_targets",
-        (
-                    round(float(old_target.target_raw_r), 6),
-                    round(float(new_target.target_raw_r), 6),
-                    new_target.first_risk_breach_bar,
-                    new_target.opportunity_bar,
-                ),
-        (
-                    round(float(old_batch.target_raw_r[0]), 6),
-                    round(float(new_batch.target_raw_r[0]), 6),
-                    int(new_batch.first_risk_breach_bar[0]),
-                    int(new_batch.opportunity_bar[0]),
-                ),
-    )
-
-    profile_e = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    profile_h = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    fixed_fields = (
-        "optimizer_name",
-        "training_sampling_mode",
-        "training_objective",
-        "loss_name",
-        "epoch_selection_metric",
-        "training_label_scope",
-        "training_sample_scope",
-    )
-    check(
-        "mr13h_keeps_mr13e_training_profile_fixed_except_target_identity",
-        tuple(getattr(profile_e, field) for field in fixed_fields),
-        tuple(getattr(profile_h, field) for field in fixed_fields),
-    )
-    spec_h = get_continuous_ranker_research_spec(
-        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    check(
-        "mr13h_identity_reference_and_pairwise_reduction_are_explicit",
-        (
-                    "MR-13H",
-                    DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-                    DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
-                    True,
-                ),
-        (
-                    spec_h.model_research_id,
-                    spec_h.reference_profile_name,
-                    spec_h.pairwise_reduction,
-                    profile_h.continuous_target_id,
-                    bool(spec_h.selection_pit_authorized),
-                ),
-    )
-    from config.breakout_quality import BREAKOUT_QUALITY_CONTINUOUS_RANKER_PIT_GATE_PROFILES
-    check(
-        "mr13h_uses_single_profile_pit_authorization_not_mr13e_same_target_batch",
-        False,
-        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
-                in {profile for _model_id, profile in BREAKOUT_QUALITY_CONTINUOUS_RANKER_PIT_GATE_PROFILES},
-    )
-
-    contract = build_daily_full_horizon_opportunity_contract(DEFAULT_LABEL_POLICY)
-    check(
-        "mr13h_contract_discloses_full_horizon_no_breach_semantics",
-        (
-                    DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
-                    True,
-                    int(DEFAULT_LABEL_POLICY.label_horizon_bars),
-                ),
-        (
-                    contract["target_id"],
-                    "diagnostic only" in str(contract["risk_rule"]).lower()
-                    and "never truncates" in str(contract["risk_rule"]).lower(),
-                    int(contract["horizon_bars"]),
-                ),
-    )
-
-    from services.breakout_quality.daily_target_comparison import (
-        _comparison_metrics,
-        _pure_mfe_float32_relation_tolerance,
-    )
-
-    audit_frame = pd.DataFrame(
-        {
-            "date": pd.to_datetime(["2020-01-01", "2020-01-01", "2020-01-02", "2020-01-02"]),
-            "reference_target_r": [0.2, 0.5, 0.1, 0.9],
-            "candidate_target_r": [0.2, 1.2, 0.1, 1.1],
-            "first_risk_breach_bar": [-1, 5, -1, 8],
-            "reference_opportunity_bar": [4, 3, 6, 7],
-            "candidate_opportunity_bar": [4, 20, 6, 15],
-            "minimum_low_return": [-0.095, -0.105, -0.05, -0.12],
-            "reference_adverse_return": [0.02, 0.10, 0.03, 0.10],
-            "candidate_adverse_return": [0.02, 0.10, 0.03, 0.10],
-        }
-    )
-    metrics, _daily = _comparison_metrics(
-        audit_frame, top_k=1, risk_barrier_return=-0.10, barrier_band_return=0.01
-    )
-    check(
-        "label_audit_reports_breach_change_and_no_breach_invariant_without_training",
-        (0.5, 0.5, 0.0),
-        (
-                    float(metrics["risk_breach_rate"]),
-                    float(metrics["changed_target_rate"]),
-                    float(metrics["no_breach_max_abs_target_delta_r"]),
-                ),
-        tol=1e-12,
-    )
-    cliff = dict(metrics["barrier_cliff"])
-    check(
-        "label_audit_reports_configured_just_above_vs_just_below_barrier_cliff",
-        (1, 1, 0.0, 1.0),
-        (
-                    int(dict(cliff["just_above"])["sample_count"]),
-                    int(dict(cliff["just_below"])["sample_count"]),
-                    round(float(dict(cliff["just_above"])["changed_target_rate"]), 6),
-                    round(float(dict(cliff["just_below"])["changed_target_rate"]), 6),
-                ),
-    )
-
-    pure_mfe = daily_full_horizon_pure_mfe_target_from_cached_path(
-        highs,
-        lows,
-        anchor_price=100.0,
-        available_bars=horizon,
-        spec=spec,
-    )
-    check(
-        "mr13k_keeps_mr13h_peak_and_diagnostics_but_removes_exact_adverse_r_penalty",
-        (
-                    new_target.opportunity_bar,
-                    new_target.first_risk_breach_bar,
-                    round(float(new_target.favorable_return), 6),
-                    round(float(new_target.adverse_return_to_peak), 6),
-                    round(float(new_target.adverse_return_to_peak) / float(spec.risk_budget_return), 6),
-                ),
-        (
-                    pure_mfe.opportunity_bar,
-                    pure_mfe.first_risk_breach_bar,
-                    round(float(pure_mfe.favorable_return), 6),
-                    round(float(pure_mfe.adverse_return_to_peak), 6),
-                    round(float(pure_mfe.target_raw_r - new_target.target_raw_r), 6),
-                ),
+    pure = daily_full_horizon_pure_mfe_target_from_cached_path(
+        highs, lows, anchor_price=100.0, available_bars=horizon, spec=spec,
     )
     pure_batch = compute_daily_opportunity_target_batch(
-        frame,
-        np.asarray([0], dtype=np.int64),
-        spec=spec,
-        target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        frame, np.asarray([0], dtype=np.int64), spec=spec, target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
     )
     check(
-        "mr13k_vectorized_pure_mfe_matches_scalar_semantics",
-        round(float(pure_mfe.target_raw_r), 6),
-        round(float(pure_batch.target_raw_r[0]), 6),
-    )
-    profile_k = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    spec_k = get_continuous_ranker_research_spec(
-        DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    check(
-        "mr13k_is_target_only_change_from_mr13h_and_pit_is_authorized_after_forward_go",
+        "full_horizon_targets_preserve_scalar_vector_and_removed_adverse_relation",
         (
-                    tuple(getattr(profile_h, field) for field in fixed_fields),
-                    "MR-13K",
-                    DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-                    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-                    True,
-                ),
+            round(float(full.target_raw_r), 6), round(float(pure.target_raw_r), 6),
+            full.opportunity_bar, full.first_risk_breach_bar,
+            round(float(full.adverse_return_to_peak) / float(spec.risk_budget_return), 6),
+        ),
         (
-                    tuple(getattr(profile_k, field) for field in fixed_fields),
-                    spec_k.model_research_id,
-                    spec_k.reference_profile_name,
-                    profile_k.continuous_target_id,
-                    bool(spec_k.selection_pit_authorized),
-                ),
-    )
-    pure_contract = build_daily_full_horizon_pure_mfe_contract(DEFAULT_LABEL_POLICY)
-    check(
-        "mr13k_contract_discloses_pure_mfe_without_adverse_penalty",
-        (DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID, False, False),
-        (
-                    pure_contract["target_id"],
-                    bool(pure_contract["adverse_penalty_included"]),
-                    "adverse_return" in str(pure_contract["formula"]),
-                ),
+            round(float(full_batch.target_raw_r[0]), 6), round(float(pure_batch.target_raw_r[0]), 6),
+            pure.opportunity_bar, pure.first_risk_breach_bar,
+            round(float(pure.target_raw_r - full.target_raw_r), 6),
+        ),
     )
 
+    opportunity_contract = build_daily_full_horizon_opportunity_contract(DEFAULT_LABEL_POLICY)
+    pure_contract = build_daily_full_horizon_pure_mfe_contract(DEFAULT_LABEL_POLICY)
+    check(
+        "full_horizon_target_contracts_disclose_no_truncation_and_pure_mfe_semantics",
+        (DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID, True, DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID, False, False),
+        (
+            opportunity_contract["target_id"],
+            "diagnostic only" in str(opportunity_contract["risk_rule"]).lower() and "never truncates" in str(opportunity_contract["risk_rule"]).lower(),
+            pure_contract["target_id"], bool(pure_contract["adverse_penalty_included"]),
+            "adverse_return" in str(pure_contract["formula"]),
+        ),
+    )
+
+    from services.breakout_quality.daily_target_comparison import _comparison_metrics, _pure_mfe_float32_relation_tolerance
+    audit_frame = pd.DataFrame({
+        "date": pd.to_datetime(["2020-01-01", "2020-01-01", "2020-01-02", "2020-01-02"]),
+        "reference_target_r": [0.2, 0.5, 0.1, 0.9], "candidate_target_r": [0.2, 1.2, 0.1, 1.1],
+        "first_risk_breach_bar": [-1, 5, -1, 8], "reference_opportunity_bar": [4, 3, 6, 7],
+        "candidate_opportunity_bar": [4, 20, 6, 15], "minimum_low_return": [-0.095, -0.105, -0.05, -0.12],
+        "reference_adverse_return": [0.02, 0.10, 0.03, 0.10], "candidate_adverse_return": [0.02, 0.10, 0.03, 0.10],
+    })
+    metrics, _daily = _comparison_metrics(audit_frame, top_k=1, risk_barrier_return=-0.10, barrier_band_return=0.01)
+    check(
+        "full_horizon_target_audit_keeps_breach_change_and_no_breach_invariant",
+        (0.5, 0.5, 0.0),
+        (float(metrics["risk_breach_rate"]), float(metrics["changed_target_rate"]), float(metrics["no_breach_max_abs_target_delta_r"])),
+        tol=1e-12,
+    )
     persisted_candidate = np.asarray([500.0], dtype=np.float32).astype(np.float64)
     persisted_reference = np.asarray([499.9], dtype=np.float32).astype(np.float64)
     persisted_adverse = np.asarray([0.01], dtype=np.float32).astype(np.float64)
-    persisted_error = np.abs(
-        (persisted_candidate - persisted_reference)
-        - persisted_adverse / float(spec.risk_budget_return)
+    persisted_error = np.abs((persisted_candidate - persisted_reference) - persisted_adverse / float(spec.risk_budget_return))
+    tolerance = _pure_mfe_float32_relation_tolerance(
+        persisted_candidate, persisted_reference, persisted_adverse, risk_budget_return=float(spec.risk_budget_return),
     )
-    persisted_tolerance = _pure_mfe_float32_relation_tolerance(
-        persisted_candidate,
-        persisted_reference,
-        persisted_adverse,
-        risk_budget_return=float(spec.risk_budget_return),
-    )
-    check(
-        "mr13k_label_audit_accepts_only_float32_quantization_error_not_fixed_magic_tolerance",
-        (True, True),
-        (
-                    bool(persisted_error[0] > 2e-6),
-                    bool(persisted_error[0] <= persisted_tolerance[0]),
-                ),
-    )
+    check("pure_mfe_relation_tolerance_tracks_float32_quantization", (True, True), (bool(persisted_error[0] > 2e-6), bool(persisted_error[0] <= tolerance[0])))
 
-    candidate_profile_name = DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    reference_profile_name = DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    candidate_profile_obj = get_breakout_quality_experiment_profile(candidate_profile_name)
-    reference_profile_obj = get_breakout_quality_experiment_profile(reference_profile_name)
-    risk_budget = abs(float(DEFAULT_LABEL_POLICY.max_adverse_return))
-    audit_table = pd.DataFrame(
-        {
-            "ticker": ["A", "B"],
-            "date": pd.to_datetime(["2020-01-01", "2020-01-02"]),
-            "source_pos": [1, 2],
-            "label_eval_end_date": pd.to_datetime(["2020-02-28", "2020-02-28"]),
-            "target_first_risk_breach_bar": [-1, 5],
-            "target_opportunity_bar": [4, 7],
-            "target_minimum_low_return": [-0.02, -0.04],
-            "target_adverse_return_to_peak": [0.02, 0.04],
-            "target_favorable_return": [0.20, 0.30],
-        }
-    )
-    reference_raw = np.asarray(
-        [
-            0.20 / risk_budget - 0.02 / risk_budget,
-            0.30 / risk_budget - 0.04 / risk_budget,
-        ],
-        dtype=np.float32,
-    )
-    candidate_raw = np.asarray(
-        [0.20 / risk_budget, 0.30 / risk_budget],
-        dtype=np.float32,
-    )
-    candidate_data = SimpleNamespace(
-        profile=candidate_profile_obj,
-        group_table=audit_table.copy(),
-        raw_target=candidate_raw,
-        target_valid=np.ones(2, dtype=bool),
-    )
-    reference_data = SimpleNamespace(
-        profile=reference_profile_obj,
-        group_table=audit_table.copy(),
-        raw_target=reference_raw,
-        target_valid=np.ones(2, dtype=bool),
-    )
-    with tempfile.TemporaryDirectory() as audit_tmp:
-        from services.breakout_quality import daily_target_comparison as target_comparison_module
-
-        with patch.object(
-            target_comparison_module,
-            "load_daily_universal_ranker_data",
-            side_effect=[candidate_data, reference_data],
-        ):
-            audit_payload = target_comparison_module.compare_daily_targets(
-                filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
-                model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-                candidate_profile=candidate_profile_name,
-                reference_profile=reference_profile_name,
-                allow_stale_source=False,
-                project_root=Path(audit_tmp),
-            )
-        audit_json = json.loads(
-            (
-                Path(audit_tmp)
-                / str(audit_payload["artifacts"]["json"])
-            ).read_text(encoding="utf-8")
-        )
-    check(
-        "mr13k_label_audit_preserves_string_target_ids_through_numeric_relation_check_and_json_write",
-        (
-                    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-                    DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
-                ),
-        (
-                    audit_json["candidate_target_id"],
-                    audit_json["reference_target_id"],
-                ),
-    )
-
-    from filters.breakout_quality.daily_ranker_data import (
-        build_daily_ranker_split,
-        resolve_daily_training_universe_start,
-    )
+    from filters.breakout_quality.daily_ranker_data import resolve_daily_training_universe_start
     benchmark_dates = pd.date_range("2004-01-01", periods=305, freq="D")
-    resolved_training_start = resolve_daily_training_universe_start(
-        benchmark_dates, feature_window_bars=300
-    )
     check(
-        "daily_universal_training_start_is_data_driven_by_complete_benchmark_feature_window",
+        "daily_training_universe_start_uses_complete_feature_window",
         pd.Timestamp(benchmark_dates[299]).normalize(),
-        resolved_training_start,
+        resolve_daily_training_universe_start(benchmark_dates, feature_window_bars=300),
     )
-
-    split_dates = pd.date_range("2004-09-08", "2021-03-31", freq="D")
-    split_group_table = pd.DataFrame(
-        {"date": split_dates, "label_eval_end_date": split_dates}
-    )
-    split_policy = {
-        "selection_start_date": "2011-01-01",
-        "selection_end_date": "2020-12-31",
-        "oos_start_date": "2021-01-01",
-        "effective_oos_end_date": "2021-03-31",
-    }
-    missing_training_start_rejected = False
-    try:
-        build_daily_ranker_split(
-            SimpleNamespace(
-                group_table=split_group_table,
-                outer_policy=split_policy,
-                summary={},
-            ),
-            inner_validation_months=24,
-        )
-    except ValueError as exc:
-        missing_training_start_rejected = (
-            "training_universe_start_date" in str(exc)
-            and "selection_start_date" in str(exc)
-        )
-    check_true(
-        "daily_ranker_split_rejects_missing_training_universe_start_instead_of_optimizer_fallback",
-        missing_training_start_rejected,
-    )
-
-    valid_split = build_daily_ranker_split(
-        SimpleNamespace(
-            group_table=split_group_table,
-            outer_policy=split_policy,
-            summary={"training_universe_start_date": "2004-09-08"},
-        ),
-        inner_validation_months=24,
-    )
-    check(
-        "daily_ranker_split_uses_data_driven_training_universe_start_not_optimizer_selection_start",
-        "2004-09-08",
-        valid_split.report["selection_start_date"],
-    )
-
-    summary["model_research_id"] = "MR-13H/MR-13K"
     summary["training_performed"] = False
     return results, summary
-
-
 
 def validate_breakout_quality_reusable_model_component_contract_case(_base_params):
     """Protect reusable ranker components without pinning closed experiment identities."""
@@ -2552,154 +2217,63 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
 
 
 
-def validate_breakout_quality_mr13m_low_adverse_ranker_contract_case(_base_params):
-    """Pin MR-13M as an adverse-only same-day pairwise path-safety experiment."""
-
-    case_id = "BREAKOUT_QUALITY_MR13M_LOW_ADVERSE_RANKER"
+def validate_breakout_quality_low_adverse_target_component_contract_case(_base_params):
+    """Protect the reusable full-horizon negative-adverse target transform."""
+    case_id = "BREAKOUT_QUALITY_LOW_ADVERSE_TARGET_COMPONENT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    from config.breakout_quality import (
-        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-        BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-        DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        get_breakout_quality_model_research_settings,
-    )
     from filters.breakout_quality.continuous_target import (
         DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
         build_daily_full_horizon_low_adverse_contract,
         daily_full_horizon_low_adverse_target_from_cached_path,
     )
-
-    profile_h = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    profile_m = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    spec_m = get_continuous_ranker_research_spec(
-        DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
-    active_research = get_breakout_quality_model_research_settings()
-
-    fixed_fields = (
-        "optimizer_name",
-        "training_sampling_mode",
-        "training_objective",
-        "loss_name",
-        "epoch_selection_metric",
-        "training_label_scope",
-        "training_sample_scope",
-        "model_architecture",
-    )
-    check(
-        "mr13m_profile_is_registered_and_active_resolver_does_not_change_production_workflow",
-        (
-                    DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-                    BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
-                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-                ),
-        (
-                    profile_m.name,
-                    active_research.experiment_profile,
-                    BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
-                ),
-    )
-    check(
-        "mr13m_keeps_mr13h_training_contract_except_target_identity",
-        tuple(getattr(profile_h, field) for field in fixed_fields),
-        tuple(getattr(profile_m, field) for field in fixed_fields),
-    )
-    check(
-        "mr13m_identity_target_pairwise_semantics_and_pit_stage_are_explicit",
-        (
-                    "MR-13M",
-                    DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
-                    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-                    True,
-                ),
-        (
-                    spec_m.model_research_id,
-                    profile_m.continuous_target_id,
-                    spec_m.pairwise_reduction,
-                    bool(spec_m.selection_pit_authorized),
-                ),
-    )
-
-    target_spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
-    horizon = int(target_spec.horizon_bars)
+    spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
+    horizon = int(spec.horizon_bars)
     highs = np.linspace(101.0, 120.0, horizon, dtype=np.float64)
     lows = np.full(horizon, 98.0, dtype=np.float64)
     lows[5] = 94.0
     source = daily_full_horizon_opportunity_target_from_cached_path(
-        highs, lows, anchor_price=100.0, available_bars=horizon, spec=target_spec
+        highs, lows, anchor_price=100.0, available_bars=horizon, spec=spec,
     )
-    adverse_only = daily_full_horizon_low_adverse_target_from_cached_path(
-        highs, lows, anchor_price=100.0, available_bars=horizon, spec=target_spec
+    adverse = daily_full_horizon_low_adverse_target_from_cached_path(
+        highs, lows, anchor_price=100.0, available_bars=horizon, spec=spec,
     )
     check(
-        "mr13m_reuses_exact_mr13h_peak_and_diagnostics_but_target_is_negative_adverse_r_only",
+        "low_adverse_target_reuses_peak_diagnostics_and_is_negative_adverse_r",
         (
-                    source.opportunity_bar,
-                    source.first_risk_breach_bar,
-                    round(float(source.favorable_return), 6),
-                    round(float(source.adverse_return_to_peak), 6),
-                    round(-float(source.adverse_return_to_peak) / float(target_spec.risk_budget_return), 6),
-                ),
+            source.opportunity_bar, source.first_risk_breach_bar,
+            round(float(source.favorable_return), 6), round(float(source.adverse_return_to_peak), 6),
+            round(-float(source.adverse_return_to_peak) / float(spec.risk_budget_return), 6),
+        ),
         (
-                    adverse_only.opportunity_bar,
-                    adverse_only.first_risk_breach_bar,
-                    round(float(adverse_only.favorable_return), 6),
-                    round(float(adverse_only.adverse_return_to_peak), 6),
-                    round(float(adverse_only.target_raw_r), 6),
-                ),
+            adverse.opportunity_bar, adverse.first_risk_breach_bar,
+            round(float(adverse.favorable_return), 6), round(float(adverse.adverse_return_to_peak), 6),
+            round(float(adverse.target_raw_r), 6),
+        ),
     )
-
     dates = pd.date_range("2020-01-01", periods=horizon + 3, freq="D")
-    frame = pd.DataFrame(
-        {
-            "Open": np.full(len(dates), 100.0),
-            "High": np.concatenate(([100.0], highs, [102.0, 102.0])),
-            "Low": np.concatenate(([100.0], lows, [99.0, 99.0])),
-            "Close": np.full(len(dates), 100.0),
-            "Volume": np.full(len(dates), 1000.0),
-        },
-        index=dates,
-    )
+    frame = pd.DataFrame({
+        "Open": np.full(len(dates), 100.0), "High": np.concatenate(([100.0], highs, [102.0, 102.0])),
+        "Low": np.concatenate(([100.0], lows, [99.0, 99.0])), "Close": np.full(len(dates), 100.0),
+        "Volume": np.full(len(dates), 1000.0),
+    }, index=dates)
     batch = compute_daily_opportunity_target_batch(
-        frame,
-        np.asarray([0], dtype=np.int64),
-        spec=target_spec,
-        target_id=DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+        frame, np.asarray([0], dtype=np.int64), spec=spec, target_id=DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     )
-    check(
-        "mr13m_vectorized_target_matches_scalar_negative_adverse_semantics",
-        round(float(adverse_only.target_raw_r), 6),
-        round(float(batch.target_raw_r[0]), 6),
-    )
+    check("low_adverse_target_scalar_vector_parity", round(float(adverse.target_raw_r), 6), round(float(batch.target_raw_r[0]), 6))
     contract = build_daily_full_horizon_low_adverse_contract(DEFAULT_LABEL_POLICY)
     check(
-        "mr13m_contract_is_strategy_agnostic_and_excludes_mfe_reward",
+        "low_adverse_target_contract_is_strategy_agnostic_without_mfe_reward",
         (DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID, False, True, False, False),
         (
-                    contract["target_id"],
-                    bool(contract["mfe_reward_included"]),
-                    bool(contract["higher_is_better"]),
-                    bool(contract["requires_strategy_candidate_membership"]),
-                    "favorable_return /" in str(contract["formula"]),
-                ),
+            contract["target_id"], bool(contract["mfe_reward_included"]), bool(contract["higher_is_better"]),
+            bool(contract["requires_strategy_candidate_membership"]), "favorable_return /" in str(contract["formula"]),
+        ),
     )
-
-    summary["model_research_id"] = spec_m.model_research_id
-    summary["active_model_research"] = active_research.experiment_profile
     summary["training_performed"] = False
     return results, summary
-
-
-
-
 
 def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_params):
     """Pin the profile-driven continuous-ranker boundary before adding new Daily MR variants."""
