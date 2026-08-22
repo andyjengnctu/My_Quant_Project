@@ -1974,8 +1974,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "legacy_walk_forward_policy_symbol_rejected", True, invalid_legacy_symbol_rejected)
 
     callbacks_source = Path(optimizer_callbacks.__file__).read_text(encoding="utf-8")
-    static_ensemble_dashboard_source = (project_root / "tools" / "optimizer" / "static_ensemble_dashboard.py").read_text(encoding="utf-8")
-    optimizer_main_source = (project_root / "tools" / "optimizer" / "main.py").read_text(encoding="utf-8")
+    static_ensemble_dashboard_source = (project_root / "services" / "optimizer" / "static_ensemble_dashboard.py").read_text(encoding="utf-8")
+    optimizer_main_source = (project_root / "services" / "optimizer" / "application.py").read_text(encoding="utf-8")
     optimizer_robustness_source = (project_root / "services" / "optimizer" / "robustness.py").read_text(encoding="utf-8")
     optimizer_outer_rolling_source = (project_root / "services" / "optimizer" / "outer_rolling_oos.py").read_text(encoding="utf-8")
     optimizer_walk_forward_source = (project_root / "services" / "optimizer" / "walk_forward.py").read_text(encoding="utf-8")
