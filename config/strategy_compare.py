@@ -303,7 +303,7 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         },
         "output_root": "outputs/strategy_compare/robustness/extending_window/oos_2021_forward",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/oos_2021_forward",
-        "initial_checkpoint_cache_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/shared_initial_checkpoints",
+        "checkpoint_cache_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/shared_fitting_checkpoints",
     },
     "extending_window_rolling": {
         "label": "Extending-Window Multi-seed Robustness Test | Rolling Test",
@@ -327,7 +327,7 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         },
         "output_root": "outputs/strategy_compare/robustness/extending_window/rolling_2021_forward",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/rolling_2021_forward",
-        "initial_checkpoint_cache_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/shared_initial_checkpoints",
+        "checkpoint_cache_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/shared_fitting_checkpoints",
     },
     "selection_pit": {
         "label": "Selection PIT Multi-seed robustness (Legacy)",
@@ -856,10 +856,10 @@ def get_strategy_multi_seed_robustness_settings(
         ),
         output_root=str(raw.get("output_root") or "").strip(),
         model_work_root=str(raw.get("model_work_root") or "").strip(),
-        initial_checkpoint_cache_root=(
+        checkpoint_cache_root=(
             None
-            if raw.get("initial_checkpoint_cache_root") in (None, "")
-            else str(raw.get("initial_checkpoint_cache_root")).strip()
+            if raw.get("checkpoint_cache_root") in (None, "")
+            else str(raw.get("checkpoint_cache_root")).strip()
         ),
     )
     if settings.suite_id is None:

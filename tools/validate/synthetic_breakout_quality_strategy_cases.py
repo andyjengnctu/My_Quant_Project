@@ -2073,18 +2073,28 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
 
     oos_robustness = get_strategy_multi_seed_robustness_settings("extending_window_oos")
     rolling_robustness = get_strategy_multi_seed_robustness_settings("extending_window_rolling")
-    oos_cache_root = str(oos_robustness.initial_checkpoint_cache_root or "").strip()
-    rolling_cache_root = str(rolling_robustness.initial_checkpoint_cache_root or "").strip()
+    oos_cache_root = str(oos_robustness.checkpoint_cache_root or "").strip()
+    rolling_cache_root = str(rolling_robustness.checkpoint_cache_root or "").strip()
     check_true(
-        "current_oos_and_rolling_robustness_share_benchmark_initial_checkpoint_cache",
+        "current_oos_and_rolling_robustness_share_fitting_identity_checkpoint_cache",
         bool(oos_cache_root)
                 and oos_cache_root == rolling_cache_root
                 and not Path(oos_cache_root).is_absolute()
-                and '"initial_checkpoint_cache_root"' in strategy_compare_config_source
-                and "--checkpoint-reuse-source-fold-dir" in multi_seed_source
-                and "cross_mode_initial_checkpoint_reuse" in point_in_time_source
+                and '"checkpoint_cache_root"' in strategy_compare_config_source
+                and "--checkpoint-cache-root" in multi_seed_source
+                and "fitting_identity_checkpoint_reuse" in point_in_time_source
                 and "source_score_reused" in point_in_time_source
-                and "source_score_reused" in multi_seed_source,
+                and "fold_training_identity" in point_in_time_source,
+    )
+
+    check_true(
+        "multi_seed_long_training_progress_is_seed_fixed_and_surfaces_live_epoch",
+        "class _FixedProgressBlock" in multi_seed_source
+        and "def _trainer_epoch_progress(" in multi_seed_source
+        and 'env["BREAKOUT_QUALITY_COMPACT_CONSOLE"] = "0"' in multi_seed_source
+        and 'env["PYTHONUNBUFFERED"] = "1"' in multi_seed_source
+        and "active fold" in multi_seed_source
+        and "epoch {phase}" in multi_seed_source,
     )
 
     check_true(

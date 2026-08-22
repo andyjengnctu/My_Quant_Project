@@ -260,7 +260,7 @@ class StrategyMultiSeedRobustnessSettings:
     paired_contrasts: tuple[Mapping[str, str], ...]
     output_root: str
     model_work_root: str
-    initial_checkpoint_cache_root: str | None = None
+    checkpoint_cache_root: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -298,7 +298,7 @@ class StrategyMultiSeedRobustnessSettings:
             "paired_contrasts": [dict(item) for item in self.paired_contrasts],
             "output_root": self.output_root,
             "model_work_root": self.model_work_root,
-            "initial_checkpoint_cache_root": self.initial_checkpoint_cache_root,
+            "checkpoint_cache_root": self.checkpoint_cache_root,
         }
 
 
@@ -409,10 +409,10 @@ def validate_strategy_multi_seed_robustness_settings(
         contrast_ids.add(contrast_id)
     _validate_relative_path(settings.output_root, field_name="multi_seed.output_root")
     _validate_relative_path(settings.model_work_root, field_name="multi_seed.model_work_root")
-    if settings.initial_checkpoint_cache_root is not None:
+    if settings.checkpoint_cache_root is not None:
         _validate_relative_path(
-            settings.initial_checkpoint_cache_root,
-            field_name="multi_seed.initial_checkpoint_cache_root",
+            settings.checkpoint_cache_root,
+            field_name="multi_seed.checkpoint_cache_root",
         )
 
 

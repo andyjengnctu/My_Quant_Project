@@ -240,10 +240,10 @@ def parse_args(argv=None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--checkpoint-reuse-source-fold-dir",
+        "--checkpoint-cache-root",
         default=None,
         help=(
-            "可選的跨evaluation-mode初始checkpoint來源fold；只在模型fitting contract完全相容時"
+            "可選的fitting-identity checkpoint cache根目錄；每個fold只在模型fitting contract完全相同時"
             "重用權重並依目前fold重新評分，不重用來源score。"
         ),
     )
@@ -262,12 +262,12 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("fold-months與inner-validation-months必須>=1")
     if args.fold_anchor_date not in (None, ""):
         _iso_timestamp(args.fold_anchor_date, field_name="fold_anchor_date")
-    if args.checkpoint_reuse_source_fold_dir not in (None, ""):
-        source_fold_dir = Path(str(args.checkpoint_reuse_source_fold_dir)).resolve()
-        if not source_fold_dir.is_dir():
+    if args.checkpoint_cache_root not in (None, ""):
+        cache_root = Path(str(args.checkpoint_cache_root)).resolve()
+        if cache_root.exists() and not cache_root.is_dir():
             raise ValueError(
-                "checkpoint-reuse-source-fold-dir不存在或不是資料夾: "
-                f"{source_fold_dir}"
+                "checkpoint-cache-root存在但不是資料夾: "
+                f"{cache_root}"
             )
     if args.train_window_months is not None:
         if int(args.train_window_months) <= int(args.inner_validation_months):
@@ -896,9 +896,9 @@ def _fold_training_contract_is_compatible(
     expected_planned = expected_contract.get("planned_periods")
     if not isinstance(candidate_planned, dict) or not isinstance(expected_planned, dict):
         return False
-    # score_end only controls how far an already-fitted model is evaluated.  OOS single-block
-    # and Rolling's first annual fold therefore share one model whenever all fitting periods
-    # and the common score_start/information cutoff are identical.
+    # score_end only controls how far an already-fitted model is evaluated.  Any OOS / Rolling
+    # folds therefore share one model whenever all fitting periods plus the common
+    # score_start/information cutoff are identical; no calendar year is special-cased.
     for field in ("validation_start", "validation_end", "score_start", "history_start"):
         if candidate_planned.get(field) != expected_planned.get(field):
             return False
@@ -912,6 +912,128 @@ def _fold_training_contract_is_compatible(
             if candidate_values.get(phase) != expected_values.get(phase):
                 return False
     return True
+
+
+def _fold_training_identity_payload(contract: dict[str, Any]) -> dict[str, Any]:
+    """Canonical model-fitting identity; score-only horizon fields are excluded."""
+
+    planned = dict(contract.get("planned_periods") or {})
+    observed = dict(contract.get("observed_periods") or {})
+    group_counts = dict(contract.get("group_counts") or {})
+    event_row_counts = dict(contract.get("event_row_counts") or {})
+    payload = {
+        key: contract.get(key)
+        for key in (
+            "filter_id",
+            "model_architecture",
+            "experiment_profile",
+            "continuous_target_id",
+            "training_label_scope",
+            "training_sample_scope",
+            "seed",
+            "model_information_cutoff",
+            "model_spec",
+            "experiment_settings",
+            "training_settings",
+            "source_contract",
+            "lookahead_contract",
+        )
+    }
+    payload["planned_periods"] = {
+        key: planned.get(key)
+        for key in ("validation_start", "validation_end", "score_start", "history_start")
+    }
+    payload["observed_periods"] = {
+        phase: observed.get(phase) for phase in ("inner_train", "validation", "final_refit")
+    }
+    payload["group_counts"] = {
+        phase: group_counts.get(phase) for phase in ("inner_train", "validation", "final_refit")
+    }
+    payload["event_row_counts"] = {
+        phase: event_row_counts.get(phase) for phase in ("inner_train", "validation", "final_refit")
+    }
+    return payload
+
+
+def fold_training_identity(contract: dict[str, Any]) -> str:
+    return _json_fingerprint(_fold_training_identity_payload(contract))
+
+
+def _checkpoint_cache_entry_dir(cache_root: Path, fold_contract: dict[str, Any]) -> Path:
+    return Path(cache_root).resolve() / fold_training_identity(fold_contract)
+
+
+def _publish_fold_checkpoint_to_cache(
+    *, fold_dir: Path, cache_root: Path | None, fold_contract: dict[str, Any]
+) -> dict[str, Any] | None:
+    if cache_root is None:
+        return None
+    source_fold_dir = Path(fold_dir).resolve()
+    manifest_path = source_fold_dir / FOLD_MANIFEST_FILENAME
+    model_path = source_fold_dir / DEFAULT_MODEL_FILENAME
+    if not (manifest_path.is_file() and model_path.is_file()):
+        raise RuntimeError(f"PIT fold缺少可發布checkpoint: {source_fold_dir.name}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict) or not _fold_training_contract_is_compatible(
+        manifest, expected_contract=fold_contract
+    ):
+        raise RuntimeError(f"PIT fold fitting identity與目前contract不一致: {source_fold_dir.name}")
+    checkpoint_manifest = build_file_manifest(model_path)
+    if checkpoint_manifest != dict(manifest.get("artifacts") or {}).get("checkpoint"):
+        raise RuntimeError(f"PIT fold checkpoint hash/size與manifest不一致: {source_fold_dir.name}")
+
+    identity = fold_training_identity(fold_contract)
+    entry_dir = _checkpoint_cache_entry_dir(Path(cache_root), fold_contract)
+    cached_manifest_path = entry_dir / FOLD_MANIFEST_FILENAME
+    cached_model_path = entry_dir / DEFAULT_MODEL_FILENAME
+    if cached_manifest_path.is_file() and cached_model_path.is_file():
+        try:
+            cached_manifest = json.loads(cached_manifest_path.read_text(encoding="utf-8"))
+            cached_checkpoint = build_file_manifest(cached_model_path)
+            cached_identity = fold_training_identity(cached_manifest)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
+            cached_checkpoint = {}
+            cached_identity = ""
+        if cached_identity == identity and cached_checkpoint == checkpoint_manifest:
+            return {
+                "training_identity": identity,
+                "cache_entry": str(entry_dir),
+                "reused_existing_cache": True,
+            }
+        if cached_identity == identity and cached_checkpoint != checkpoint_manifest:
+            raise RuntimeError(
+                "同一fitting identity產生不同checkpoint；"
+                f"identity={identity}, cached={cached_checkpoint.get('sha256')}, "
+                f"current={checkpoint_manifest.get('sha256')}"
+            )
+
+    entry_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = entry_dir.parent / f".{entry_dir.name}.publish_{os.getpid()}_{time.time_ns()}"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=False)
+    try:
+        shutil.copy2(model_path, staging / DEFAULT_MODEL_FILENAME)
+        shutil.copy2(manifest_path, staging / FOLD_MANIFEST_FILENAME)
+        write_json(
+            staging / "cache_manifest.json",
+            {
+                "schema_version": 1,
+                "training_identity": identity,
+                "source_fold_id": str(manifest.get("fold_id") or source_fold_dir.name),
+                "checkpoint": checkpoint_manifest,
+                "published_at_utc": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        shutil.rmtree(entry_dir, ignore_errors=True)
+        staging.replace(entry_dir)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+    return {
+        "training_identity": identity,
+        "cache_entry": str(entry_dir),
+        "reused_existing_cache": False,
+    }
 
 
 def _rescore_fold_from_compatible_checkpoint(
@@ -1043,7 +1165,7 @@ def _rescore_fold_from_compatible_checkpoint(
     return frame, rescored_manifest
 
 
-def _rescore_fold_from_external_checkpoint(
+def _rescore_fold_from_fitting_checkpoint(
     *,
     source_fold_dir: Path,
     target_fold_dir: Path,
@@ -1055,7 +1177,7 @@ def _rescore_fold_from_external_checkpoint(
     torch_module,
     plan,
 ) -> tuple[pd.DataFrame, dict[str, Any]] | None:
-    """Materialize a compatible checkpoint from another evaluation mode, then rescore locally.
+    """Materialize a compatible checkpoint from the shared fitting-identity cache, then rescore locally.
 
     Only ``model.pt`` and its fold manifest are imported.  The source score file is never
     copied, so OOS single-block scores cannot leak into Rolling annual score artifacts (or
@@ -1089,7 +1211,7 @@ def _rescore_fold_from_external_checkpoint(
 
     target_fold_dir.parent.mkdir(parents=True, exist_ok=True)
     staging = target_fold_dir.parent / (
-        f".{target_fold_dir.name}.external_checkpoint_reuse_{os.getpid()}_{time.time_ns()}"
+        f".{target_fold_dir.name}.fitting_checkpoint_reuse_{os.getpid()}_{time.time_ns()}"
     )
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True, exist_ok=False)
@@ -1110,13 +1232,13 @@ def _rescore_fold_from_external_checkpoint(
             return None
         frame, manifest = rescored
         # The mode-local rescore helper refreshes checkpoint metadata for a score-only
-        # contract change.  Cross-mode reuse is stricter: restore the exact source
+        # contract change.  Fitting-identity reuse is stricter: restore the exact source
         # checkpoint bytes so OOS and Rolling share one identical fitted artifact SHA.
         shutil.copy2(source_model_path, staging / DEFAULT_MODEL_FILENAME)
         manifest = {
             **manifest,
             "migration": {
-                "kind": "cross_mode_initial_checkpoint_reuse",
+                "kind": "fitting_identity_checkpoint_reuse",
                 "training_contract_unchanged": True,
                 "source_fold_id": str(source_manifest.get("fold_id") or ""),
                 "source_checkpoint": source_checkpoint_manifest,
@@ -1715,7 +1837,7 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
     reused_fold_count = 0
     migrated_fold_count = 0
     rescored_checkpoint_fold_count = 0
-    external_checkpoint_reuse_fold_count = 0
+    fitting_checkpoint_reuse_fold_count = 0
     built_fold_count = 0
     fold_progress = InlineProgress()
     for fold_index, (fold, ids) in enumerate(zip(folds, fold_details), start=1):
@@ -1733,7 +1855,7 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
         )
         migrated = False
         rescored_checkpoint = False
-        external_checkpoint_reuse = False
+        fitting_checkpoint_reuse = False
         if reused is None and bool(args.resume):
             reused = _rescore_fold_from_compatible_checkpoint(
                 fold_dir=fold_dir,
@@ -1749,10 +1871,13 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
         if (
             reused is None
             and bool(args.resume)
-            and args.checkpoint_reuse_source_fold_dir not in (None, "")
+            and args.checkpoint_cache_root not in (None, "")
         ):
-            reused = _rescore_fold_from_external_checkpoint(
-                source_fold_dir=Path(str(args.checkpoint_reuse_source_fold_dir)),
+            cache_entry = _checkpoint_cache_entry_dir(
+                Path(str(args.checkpoint_cache_root)), fold_contract
+            )
+            reused = _rescore_fold_from_fitting_checkpoint(
+                source_fold_dir=cache_entry,
                 target_fold_dir=fold_dir,
                 bundle=bundle,
                 ids=ids,
@@ -1762,7 +1887,7 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
                 torch_module=torch,
                 plan=plan,
             )
-            external_checkpoint_reuse = reused is not None
+            fitting_checkpoint_reuse = reused is not None
         if reused is None and bool(args.resume):
             reused = _migrate_compatible_legacy_fold(
                 point_in_time_dir=point_in_time_dir,
@@ -1774,8 +1899,8 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
             migrated = reused is not None
         if reused is not None:
             frame, manifest = reused
-            if external_checkpoint_reuse:
-                external_checkpoint_reuse_fold_count += 1
+            if fitting_checkpoint_reuse:
+                fitting_checkpoint_reuse_fold_count += 1
             elif rescored_checkpoint:
                 rescored_checkpoint_fold_count += 1
             elif migrated:
@@ -1783,8 +1908,8 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
             else:
                 reused_fold_count += 1
             if not compact_console:
-                if external_checkpoint_reuse:
-                    reuse_label = "重用跨mode初始checkpoint並依目前fold重評score"
+                if fitting_checkpoint_reuse:
+                    reuse_label = "重用fitting identity checkpoint並依目前fold重評score"
                 elif rescored_checkpoint:
                     reuse_label = "重用既有checkpoint並重評score universe"
                 elif migrated:
@@ -1843,6 +1968,12 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
                     + f" | score={len(frame):,}"
                     + f" | {format_elapsed(time.perf_counter() - fold_started)}"
                 )
+        if args.checkpoint_cache_root not in (None, ""):
+            _publish_fold_checkpoint_to_cache(
+                fold_dir=fold_dir,
+                cache_root=Path(str(args.checkpoint_cache_root)),
+                fold_contract=fold_contract,
+            )
         score_frames.append(frame)
         fold_manifests.append(manifest)
         coverage_rows.append(
@@ -1954,7 +2085,7 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
             "exact_reuse": int(reused_fold_count),
             "legacy_migration": int(migrated_fold_count),
             "local_checkpoint_rescore": int(rescored_checkpoint_fold_count),
-            "cross_mode_initial_checkpoint_reuse": int(external_checkpoint_reuse_fold_count),
+            "fitting_identity_checkpoint_reuse": int(fitting_checkpoint_reuse_fold_count),
             "built": int(built_fold_count),
         },
         "folds": [_combined_fold_record(args, item) for item in fold_manifests],
@@ -1993,7 +2124,7 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
             + f" | 重用={reused_fold_count}"
             + f" | 遷移重用={migrated_fold_count}"
             + f" | checkpoint重評={rescored_checkpoint_fold_count}"
-            + f" | 跨mode初始checkpoint={external_checkpoint_reuse_fold_count}"
+            + f" | fitting identity checkpoint={fitting_checkpoint_reuse_fold_count}"
             + f" | 新建={built_fold_count}"
             + f" | groups={validation['scored_group_count']:,}"
             + f" | coverage={validation['coverage_rate']:.2%}"
@@ -2017,7 +2148,7 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
                     ("Reused folds", reused_fold_count),
                     ("Migrated legacy folds", migrated_fold_count),
                     ("Checkpoint-only rescored folds", rescored_checkpoint_fold_count),
-                    ("Cross-mode initial checkpoint folds", external_checkpoint_reuse_fold_count),
+                    ("Fitting-identity checkpoint folds", fitting_checkpoint_reuse_fold_count),
                     ("Built folds", built_fold_count),
                     ("Scored groups", f"{validation['scored_group_count']:,}"),
                     (
@@ -2055,7 +2186,7 @@ def build_selection_point_in_time_scores(
     checkpoint_only: bool = False,
     plan_only: bool = False,
     point_in_time_dir_override: str | None = None,
-    checkpoint_reuse_source_fold_dir: str | None = None,
+    checkpoint_cache_root: str | None = None,
     allow_stale_source: bool = False,
     single_score_block: bool = False,
 ) -> int:
@@ -2095,11 +2226,8 @@ def build_selection_point_in_time_scores(
         argv.append("--plan-only")
     if point_in_time_dir_override is not None:
         argv.extend(["--point-in-time-dir-override", str(point_in_time_dir_override)])
-    if checkpoint_reuse_source_fold_dir is not None:
-        argv.extend([
-            "--checkpoint-reuse-source-fold-dir",
-            str(checkpoint_reuse_source_fold_dir),
-        ])
+    if checkpoint_cache_root is not None:
+        argv.extend(["--checkpoint-cache-root", str(checkpoint_cache_root)])
     if allow_stale_source:
         argv.append("--allow-stale-source")
     return _run_point_in_time_scores(parse_args(argv))
@@ -2114,6 +2242,7 @@ __all__ = [
     "FOLD_SCORE_FILENAME",
     "POINT_IN_TIME_SCHEMA_VERSION",
     "build_selection_point_in_time_scores",
+    "fold_training_identity",
     "main",
     "parse_args",
 ]

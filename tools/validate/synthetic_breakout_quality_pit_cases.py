@@ -48,6 +48,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     from tools.filters.breakout_quality.build_point_in_time_scores import (
         _build_fold_periods,
         _fold_training_contract_is_compatible,
+        fold_training_identity,
         _resolve_training_universe_start,
         _stable_fold_id,
     )
@@ -182,6 +183,26 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "pit_fold_reuse_ignores_score_horizon_but_rejects_training_identity_change",
         _fold_training_contract_is_compatible(same_contract, expected_contract=expected_contract)
         and not _fold_training_contract_is_compatible(changed_contract, expected_contract=expected_contract),
+    )
+
+    oos_2023 = {
+        **expected_contract,
+        "model_information_cutoff": "2022-12-31",
+        "planned_periods": {
+            **expected_contract["planned_periods"],
+            "validation_end": "2022-12-31",
+            "score_start": "2023-01-01",
+            "score_end": "2026-03-02",
+        },
+    }
+    rolling_2023 = {
+        **oos_2023,
+        "planned_periods": {**oos_2023["planned_periods"], "score_end": "2023-12-31"},
+    }
+    check_true(
+        "pit_fitting_identity_cache_is_date_generic_not_initial_year_special_case",
+        fold_training_identity(oos_2023) == fold_training_identity(rolling_2023)
+        and fold_training_identity(oos_2023) != fold_training_identity(expected_contract),
     )
 
     summary.update({

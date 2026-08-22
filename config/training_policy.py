@@ -571,7 +571,8 @@ def get_strategy_parameter_training_policy_snapshot(*, evaluation_mode: str) -> 
     if mode == "split":
         mode = "oos"
     # Current Strategy Parameter SSOT is one cross-time schedule.  OOS freezes the
-    # same 2021 initial member that Rolling consumes, so both current modes share
+    # member effective at its configured score start, while Rolling consumes the same
+    # schedule, so both current modes share
     # the rolling per-fold optimizer budget; the 1000-trial single-fold default
     # remains for independent Study/OOS optimizer workflows, not this artifact SSOT.
     rolling_like = mode in {"oos", "rolling"}

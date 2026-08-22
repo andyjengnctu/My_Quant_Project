@@ -20,6 +20,7 @@ import math
 import os
 from pathlib import Path
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -1640,7 +1641,7 @@ def build_multi_seed_robustness_contract(
             "console_mode": robustness.console_mode,
             "progress_interval_seconds": float(robustness.progress_interval_seconds),
             "yearly_report": bool(robustness.yearly_report),
-            "initial_checkpoint_cache_root": robustness.initial_checkpoint_cache_root,
+            "checkpoint_cache_root": robustness.checkpoint_cache_root,
         },
         "retention": {
             "keep_checkpoints": bool(robustness.keep_checkpoints),
@@ -2669,190 +2670,11 @@ def _validate_training_artifacts(
 
 PIT_FOLD_MANIFEST_FILENAME = "manifest.json"
 PIT_FOLD_MODEL_FILENAME = "model.pt"
-INITIAL_CHECKPOINT_CACHE_MANIFEST_FILENAME = "cache_manifest.json"
 
-
-def _initial_checkpoint_training_identity(manifest: dict[str, Any]) -> str:
-    """Fingerprint only the model-fitting contract, excluding score-only horizon fields."""
-
-    planned = dict(manifest.get("planned_periods") or {})
-    observed = dict(manifest.get("observed_periods") or {})
-    group_counts = dict(manifest.get("group_counts") or {})
-    event_row_counts = dict(manifest.get("event_row_counts") or {})
-    payload = {
-        key: manifest.get(key)
-        for key in (
-            "filter_id",
-            "model_architecture",
-            "experiment_profile",
-            "continuous_target_id",
-            "training_label_scope",
-            "training_sample_scope",
-            "seed",
-            "model_information_cutoff",
-            "model_spec",
-            "experiment_settings",
-            "training_settings",
-            "source_contract",
-            "lookahead_contract",
-        )
-    }
-    payload["planned_periods"] = {
-        key: planned.get(key)
-        for key in ("validation_start", "validation_end", "score_start", "history_start")
-    }
-    payload["observed_periods"] = {
-        phase: observed.get(phase) for phase in ("inner_train", "validation", "final_refit")
-    }
-    payload["group_counts"] = {
-        phase: group_counts.get(phase) for phase in ("inner_train", "validation", "final_refit")
-    }
-    payload["event_row_counts"] = {
-        phase: event_row_counts.get(phase) for phase in ("inner_train", "validation", "final_refit")
-    }
-    return canonical_json_sha256(payload, length=32)
-
-
-def _initial_checkpoint_cache_dir(
-    *, cache_root: str | None, benchmark_id: str | None, dl_id: str, seed: int,
-) -> Path | None:
-    if cache_root in (None, "") or benchmark_id in (None, ""):
-        return None
-    return (
-        PROJECT_ROOT
-        / str(cache_root)
-        / str(benchmark_id)
-        / _unit_key(str(dl_id), int(seed))
-    ).resolve()
-
-
-def _find_initial_pit_fold_dir(model_dir: Path, *, comparison_start: str) -> Path | None:
-    folds_root = Path(model_dir).resolve() / "folds"
-    if not folds_root.is_dir():
-        return None
-    target_start = pd.Timestamp(comparison_start).strftime("%Y-%m-%d")
-    matches: list[Path] = []
-    for candidate in sorted(path for path in folds_root.iterdir() if path.is_dir()):
-        manifest_path = candidate / PIT_FOLD_MANIFEST_FILENAME
-        model_path = candidate / PIT_FOLD_MODEL_FILENAME
-        if not (manifest_path.is_file() and model_path.is_file()):
-            continue
-        try:
-            manifest = _read_json(manifest_path)
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-        planned = dict(manifest.get("planned_periods") or {})
-        raw_start = str(planned.get("score_start") or "").strip()
-        if not raw_start:
-            continue
-        if pd.Timestamp(raw_start).strftime("%Y-%m-%d") == target_start:
-            matches.append(candidate)
-    if len(matches) > 1:
-        raise RuntimeError(
-            "multi-seed PIT初始checkpoint fold不唯一: "
-            + ", ".join(path.name for path in matches)
-        )
-    return matches[0] if matches else None
-
-
-def _publish_initial_checkpoint_cache(
-    *,
-    model_dir: Path,
-    cache_dir: Path | None,
-    comparison_start: str,
-    benchmark_id: str | None,
-    dl_id: str,
-    seed: int,
-) -> dict[str, Any] | None:
-    """Persist the common 2021 fitted model outside disposable OOS/Rolling work trees."""
-
-    if cache_dir is None:
-        return None
-    source_fold_dir = _find_initial_pit_fold_dir(
-        model_dir, comparison_start=comparison_start
-    )
-    if source_fold_dir is None:
-        raise RuntimeError(
-            f"multi-seed PIT找不到score_start={comparison_start}的初始checkpoint fold"
-        )
-    source_manifest_path = source_fold_dir / PIT_FOLD_MANIFEST_FILENAME
-    source_model_path = source_fold_dir / PIT_FOLD_MODEL_FILENAME
-    source_manifest = _read_json(source_manifest_path)
-    source_checkpoint_manifest = build_file_manifest(source_model_path)
-    if source_checkpoint_manifest != dict(source_manifest.get("artifacts") or {}).get("checkpoint"):
-        raise RuntimeError(
-            f"multi-seed PIT初始checkpoint hash/size與fold manifest不一致: {source_fold_dir.name}"
-        )
-    source_model_sha = str(source_checkpoint_manifest["sha256"])
-    training_identity = _initial_checkpoint_training_identity(source_manifest)
-
-    existing_manifest_path = cache_dir / PIT_FOLD_MANIFEST_FILENAME
-    existing_model_path = cache_dir / PIT_FOLD_MODEL_FILENAME
-    if existing_manifest_path.is_file() and existing_model_path.is_file():
-        try:
-            existing_manifest = _read_json(existing_manifest_path)
-            existing_checkpoint_manifest = build_file_manifest(existing_model_path)
-            if existing_checkpoint_manifest != dict(existing_manifest.get("artifacts") or {}).get(
-                "checkpoint"
-            ):
-                raise ValueError("cached checkpoint manifest mismatch")
-            existing_identity = _initial_checkpoint_training_identity(existing_manifest)
-            existing_model_sha = str(existing_checkpoint_manifest["sha256"])
-        except (OSError, ValueError, json.JSONDecodeError):
-            existing_identity = ""
-            existing_model_sha = ""
-        if existing_identity == training_identity and existing_model_sha != source_model_sha:
-            raise RuntimeError(
-                "同一benchmark seed／DL source／fitting contract產生不同初始checkpoint；"
-                f"dl_id={dl_id}, seed={seed}, cached={existing_model_sha}, current={source_model_sha}"
-            )
-        if existing_identity == training_identity and existing_model_sha == source_model_sha:
-            return {
-                "cache_dir": str(cache_dir),
-                "model_sha256": source_model_sha,
-                "training_identity": training_identity,
-                "reused_existing_cache": True,
-            }
-
-    staging = cache_dir.parent / (
-        f".{cache_dir.name}.publish_{os.getpid()}_{time.time_ns()}"
-    )
-    shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir(parents=True, exist_ok=False)
-    try:
-        shutil.copy2(source_model_path, staging / PIT_FOLD_MODEL_FILENAME)
-        shutil.copy2(source_manifest_path, staging / PIT_FOLD_MANIFEST_FILENAME)
-        _write_json(
-            staging / INITIAL_CHECKPOINT_CACHE_MANIFEST_FILENAME,
-            {
-                "schema_version": 1,
-                "benchmark_id": benchmark_id,
-                "dl_id": str(dl_id),
-                "seed": int(seed),
-                "comparison_start": pd.Timestamp(comparison_start).strftime("%Y-%m-%d"),
-                "training_identity": training_identity,
-                "model_sha256": source_model_sha,
-                "source_fold_id": str(source_manifest.get("fold_id") or source_fold_dir.name),
-                "source_score_reused": False,
-                "published_at_utc": datetime.now(timezone.utc).isoformat(),
-            },
-        )
-        cache_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.rmtree(cache_dir, ignore_errors=True)
-        staging.replace(cache_dir)
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging, ignore_errors=True)
-    return {
-        "cache_dir": str(cache_dir),
-        "model_sha256": source_model_sha,
-        "training_identity": training_identity,
-        "reused_existing_cache": False,
-    }
 
 def _training_command(
     *, arm: StrategyComparisonArm, dl_id: str, seed: int, model_dir: Path, research_dir: Path, settings,
-    comparison_start: str, comparison_end: str, checkpoint_reuse_source_fold_dir: Path | None = None,
+    comparison_start: str, comparison_end: str, checkpoint_cache_root: Path | None = None,
 ) -> list[str]:
     dl = settings.dl_sources[str(dl_id)]
     if str(dl.score_source) == "selection_point_in_time":
@@ -2876,11 +2698,8 @@ def _training_command(
             command.extend(["--fold-anchor-date", fold_anchor_date])
         if _source_point_in_time_single_score_block(settings=settings, dl_id=str(dl_id)):
             command.append("--single-score-block")
-        if checkpoint_reuse_source_fold_dir is not None and checkpoint_reuse_source_fold_dir.is_dir():
-            command.extend([
-                "--checkpoint-reuse-source-fold-dir",
-                str(checkpoint_reuse_source_fold_dir.resolve()),
-            ])
+        if checkpoint_cache_root is not None:
+            command.extend(["--checkpoint-cache-root", str(checkpoint_cache_root.resolve())])
         return command
     return [
         sys.executable, "-m", "tools.filters.breakout_quality.train_continuous_ranker",
@@ -2922,15 +2741,10 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     dl_id = str(job["dl_id"])
     dl = settings.dl_sources[dl_id]
     is_selection_pit = str(dl.score_source) == "selection_point_in_time"
-    checkpoint_cache_dir = (
+    checkpoint_cache_root = (
         None
-        if job.get("initial_checkpoint_cache_dir") in (None, "")
-        else Path(str(job["initial_checkpoint_cache_dir"])).resolve()
-    )
-    checkpoint_reuse_source_fold_dir = (
-        checkpoint_cache_dir
-        if is_selection_pit and checkpoint_cache_dir is not None and checkpoint_cache_dir.is_dir()
-        else None
+        if job.get("checkpoint_cache_root") in (None, "")
+        else Path(str(job["checkpoint_cache_root"])).resolve()
     )
     started = time.perf_counter()
     artifacts = None
@@ -2952,22 +2766,9 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         except (FileNotFoundError, ValueError):
             artifacts = None
     if artifacts is not None:
-        cache = (
-            _publish_initial_checkpoint_cache(
-                model_dir=model_dir,
-                cache_dir=checkpoint_cache_dir,
-                comparison_start=str(job["comparison_start"]),
-                benchmark_id=job.get("benchmark_id"),
-                dl_id=dl_id,
-                seed=seed,
-            )
-            if is_selection_pit and checkpoint_cache_dir is not None
-            else None
-        )
         return {
             "artifacts": artifacts,
             "reused": True,
-            "initial_checkpoint_cache": cache,
             "wall_elapsed_sec": round(time.perf_counter() - started, 3),
         }
 
@@ -2991,7 +2792,8 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     shutil.rmtree(research_dir, ignore_errors=True)
     research_dir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
-    env["BREAKOUT_QUALITY_COMPACT_CONSOLE"] = "1"
+    env["BREAKOUT_QUALITY_COMPACT_CONSOLE"] = "0"
+    env["PYTHONUNBUFFERED"] = "1"
     trainer_registry = job["trainer_registry"]
     trainer_registry_lock = job["trainer_registry_lock"]
     trainer_key = str(job["trainer_key"])
@@ -3006,7 +2808,7 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
                 settings=settings,
                 comparison_start=str(job["comparison_start"]),
                 comparison_end=str(job["comparison_end"]),
-                checkpoint_reuse_source_fold_dir=checkpoint_reuse_source_fold_dir,
+                checkpoint_cache_root=checkpoint_cache_root,
             ),
             cwd=str(PROJECT_ROOT),
             env=env,
@@ -3042,22 +2844,9 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         comparison_start=str(job["comparison_start"]),
         comparison_end=str(job["comparison_end"]),
     )
-    cache = (
-        _publish_initial_checkpoint_cache(
-            model_dir=model_dir,
-            cache_dir=checkpoint_cache_dir,
-            comparison_start=str(job["comparison_start"]),
-            benchmark_id=job.get("benchmark_id"),
-            dl_id=dl_id,
-            seed=seed,
-        )
-        if is_selection_pit and checkpoint_cache_dir is not None
-        else None
-    )
     return {
         "artifacts": artifacts,
         "reused": False,
-        "initial_checkpoint_cache": cache,
         "wall_elapsed_sec": round(time.perf_counter() - started, 3),
     }
 
@@ -3074,7 +2863,7 @@ def _training_units(
     comparison_end: str,
     reuse_completed: bool,
     benchmark_id: str | None = None,
-    initial_checkpoint_cache_root: str | None = None,
+    checkpoint_cache_root: str | None = None,
 ) -> deque[dict[str, Any]]:
     units: deque[dict[str, Any]] = deque()
     source_groups = _training_source_groups(stochastic_arms, settings=settings)
@@ -3089,11 +2878,15 @@ def _training_units(
                 continue
             representative_arm = arm_entries[0][1]
             source_unit = _unit_key(dl_id, int(seed))
-            initial_checkpoint_cache_dir = _initial_checkpoint_cache_dir(
-                cache_root=initial_checkpoint_cache_root,
-                benchmark_id=benchmark_id,
-                dl_id=str(dl_id),
-                seed=int(seed),
+            checkpoint_cache_dir = (
+                None
+                if checkpoint_cache_root in (None, "") or benchmark_id in (None, "")
+                else (
+                    PROJECT_ROOT
+                    / str(checkpoint_cache_root)
+                    / str(benchmark_id)
+                    / _unit_key(str(dl_id), int(seed))
+                ).resolve()
             )
             units.append({
                 "arm": representative_arm,
@@ -3110,10 +2903,10 @@ def _training_units(
                 "comparison_end": str(comparison_end),
                 "reuse_completed": bool(reuse_completed),
                 "benchmark_id": benchmark_id,
-                "initial_checkpoint_cache_dir": (
+                "checkpoint_cache_root": (
                     None
-                    if initial_checkpoint_cache_dir is None
-                    else str(initial_checkpoint_cache_dir)
+                    if checkpoint_cache_dir is None
+                    else str(checkpoint_cache_dir)
                 ),
             })
     return units
@@ -3124,6 +2917,44 @@ def _format_elapsed(seconds: float) -> str:
     hours, rem = divmod(total, 3600)
     minutes, sec = divmod(rem, 60)
     return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+
+
+_EPOCH_LOG_RE = re.compile(r"Epoch\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
+_EPOCH_PHASE_RE = re.compile(r"(Epoch\s*選擇|Fold歷史資料重訓|完整 Selection(?: 重訓| 訓練)?)")
+_PIT_TRAINING_FOLD_RE = re.compile(r"fold_\d{8}_\d{8}.*訓練並評分")
+
+
+def _trainer_epoch_progress(meta: dict[str, Any]) -> tuple[str, int, int] | None:
+    """Read the active epoch phase from the redirected canonical trainer log tail."""
+
+    log_path = Path(str(meta["research_dir"])).resolve() / "train.log"
+    if not log_path.is_file():
+        return None
+    try:
+        with log_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - 131072), os.SEEK_SET)
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    # Restrict epoch parsing to the latest actively-trained PIT fold.  Without this boundary,
+    # the just-completed fold's final refit epoch can briefly appear beside the next fold while
+    # the next fold is still preparing data.
+    fold_matches = list(_PIT_TRAINING_FOLD_RE.finditer(text))
+    if fold_matches:
+        text = text[fold_matches[-1].start():]
+    phase_matches = list(_EPOCH_PHASE_RE.finditer(text))
+    if not phase_matches:
+        return None
+    phase_match = phase_matches[-1]
+    epoch_matches = list(_EPOCH_LOG_RE.finditer(text, phase_match.end()))
+    phase_raw = str(phase_match.group(1))
+    phase = "select" if phase_raw.startswith("Epoch") else "refit"
+    if not epoch_matches:
+        return (phase, 0, 0)
+    epoch_match = epoch_matches[-1]
+    return (phase, int(epoch_match.group(1)), int(epoch_match.group(2)))
 
 
 def _pit_saved_fold_progress(meta: dict[str, Any]) -> tuple[int, int] | None:
@@ -5065,7 +4896,7 @@ def run_multi_seed_robustness(
         comparison_end=comparison_end,
         reuse_completed=cfg.reuse_completed,
         benchmark_id=cfg.benchmark_id,
-        initial_checkpoint_cache_root=cfg.initial_checkpoint_cache_root,
+        checkpoint_cache_root=cfg.checkpoint_cache_root,
     )
     training_cleanup_targets = []
     for meta in pending_trainings:
@@ -5354,19 +5185,13 @@ def run_multi_seed_robustness(
                 tag = "[PIT RECOVER]"
             else:
                 tag = "[TRAIN DONE]"
-            cache_meta = dict(trained.get("initial_checkpoint_cache") or {})
-            cache_note = (
-                " | 2021 checkpoint cache="
-                + ("reuse" if bool(cache_meta.get("reused_existing_cache")) else "publish")
-                if cache_meta else ""
-            )
             fold_note = ""
             if fold_reuse:
                 fold_note = (
                     " | folds="
                     f"reuse:{int(fold_reuse.get('exact_reuse', 0) or 0)}"
                     f"/rescore:{int(fold_reuse.get('local_checkpoint_rescore', 0) or 0)}"
-                    f"/cross-mode:{int(fold_reuse.get('cross_mode_initial_checkpoint_reuse', 0) or 0)}"
+                    f"/fitting-cache:{int(fold_reuse.get('fitting_identity_checkpoint_reuse', 0) or 0)}"
                     f"/migrate:{int(fold_reuse.get('legacy_migration', 0) or 0)}"
                     f"/built:{built_folds}"
                 )
@@ -5378,8 +5203,7 @@ def run_multi_seed_robustness(
                 + f"| epoch={artifacts['selected_epoch']} "
                 + f"| elapsed={_format_elapsed(artifacts.get('training_elapsed_sec', trained['wall_elapsed_sec']))}"
                 + fold_note
-                + cache_note
-            )
+                            )
             for arm_order, arm in meta["replay_arms"]:
                 queue_replay_if_ready(
                     arm_order=int(arm_order),
@@ -5411,10 +5235,25 @@ def run_multi_seed_robustness(
                 else:
                     saved, expected = pit_progress
                     fold_text = f" | PIT {saved}/{expected} | remain {max(0, expected - saved)}"
+                epoch_progress = _trainer_epoch_progress(meta)
+                if pit_progress is None:
+                    active_fold_text = ""
+                else:
+                    saved, expected = pit_progress
+                    active_fold_text = (
+                        "" if saved >= expected else f" | active fold {saved + 1}/{expected}"
+                    )
+                if epoch_progress is None:
+                    epoch_text = active_fold_text
+                else:
+                    phase, epoch, epoch_count = epoch_progress
+                    epoch_label = f"epoch {phase} {epoch}/{epoch_count}" if epoch_count > 0 else f"epoch {phase} -"
+                    epoch_text = active_fold_text + f" | {epoch_label}"
                 parts.append(
                     f"{meta['dl_id']} {meta['source_order']}/{meta['source_count']}"
                     f" | {_format_elapsed(now - float(meta['submitted_at']))}"
                     + fold_text
+                    + epoch_text
                 )
             action = str(metas[0].get("display_action_tag") or "[TRAIN]")
             lines.append(
@@ -5618,7 +5457,7 @@ def run_multi_seed_robustness(
         f"{cleanup_tag}：checkpoints={'保留' if cfg.keep_checkpoints else '已清除'}｜"
         f"scores={'保留' if cfg.keep_scores else '已清除'}｜"
         f"replay details={'保留' if cfg.keep_replay_details else '已清除'}"
-        + ("｜2021 shared checkpoint cache=保留" if cfg.initial_checkpoint_cache_root else "")
+        + ("｜fitting-identity checkpoint cache=保留" if cfg.checkpoint_cache_root else "")
     )
     print("永久工件：")
     permanent_paths = [
