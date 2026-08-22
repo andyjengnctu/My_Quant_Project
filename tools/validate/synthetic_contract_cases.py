@@ -392,10 +392,7 @@ def validate_quick_gate_bare_except_guard_contract_case(_base_params):
             encoding="utf-8",
         )
 
-        def _fake_compile(source, cfile=None, doraise=False, *args, **kwargs):
-            return cfile or source
-
-        with patch.object(run_quick_gate_module, "iter_python_files", return_value=[typed_except_file, bare_except_file]),              patch.object(run_quick_gate_module.py_compile, "compile", side_effect=_fake_compile):
+        with patch.object(run_quick_gate_module, "iter_python_files", return_value=[typed_except_file, bare_except_file]):
             static_results = run_quick_gate_module.run_static_checks()
 
         bare_step = _find_step_payload(static_results, "bare_except_scan")
@@ -672,23 +669,22 @@ def validate_local_regression_summary_contract_case(_base_params):
         quick_gate_json = json.loads((run_dir / "quick_gate_summary.json").read_text(encoding="utf-8"))
         add_check(results, "output_contract", case_id, "quick_gate_summary_required_keys", [], sorted(REQUIRED_QUICK_GATE_SUMMARY_KEYS - set(quick_gate_json.keys())))
 
-        compile_probe_calls = []
-
-        def _fake_compile(source, cfile=None, doraise=False, *args, **kwargs):
-            compile_probe_calls.append({"source": source, "cfile": cfile, "doraise": doraise})
-            return cfile or source
-
-        with patch.object(run_quick_gate_module, "iter_python_files", return_value=[run_quick_gate_module.PROJECT_ROOT / "apps" / "test_suite.py"]), \
-             patch.object(run_quick_gate_module.py_compile, "compile", side_effect=_fake_compile):
+        valid_compile_path = run_quick_gate_module.PROJECT_ROOT / "apps" / "test_suite.py"
+        with patch.object(run_quick_gate_module, "iter_python_files", return_value=[valid_compile_path]):
             static_results = run_quick_gate_module.run_static_checks()
-
+        py_compile_result = next(item for item in static_results if item.get("name") == "py_compile")
         compileall_result = next(item for item in static_results if item.get("name") == "compileall")
-        compile_probe_path = Path(str(compile_probe_calls[0]["cfile"])) if compile_probe_calls else None
-        compile_probe_resolved = str(compile_probe_path.resolve()) if compile_probe_path is not None else ""
-        project_root_resolved = str(run_quick_gate_module.PROJECT_ROOT.resolve())
-        add_check(results, "output_contract", case_id, "quick_gate_compileall_temp_cfile_present", True, bool(compile_probe_calls and compile_probe_calls[0].get("cfile")))
-        add_check(results, "output_contract", case_id, "quick_gate_compileall_temp_cfile_outside_project_root", True, bool(compile_probe_resolved) and not compile_probe_resolved.startswith(project_root_resolved))
-        add_check(results, "output_contract", case_id, "quick_gate_compileall_result_stays_pass_with_temp_cfile", "PASS", compileall_result.get("status"))
+        add_check(results, "output_contract", case_id, "quick_gate_in_memory_py_compile_passes_valid_source", "PASS", py_compile_result.get("status"))
+        add_check(results, "output_contract", case_id, "quick_gate_in_memory_compileall_equivalent_passes_valid_source", "PASS", compileall_result.get("status"))
+
+        invalid_compile_path = temp_path / "invalid_compile_probe.py"
+        invalid_compile_path.write_text("def broken(:\n    pass\n", encoding="utf-8")
+        with patch.object(run_quick_gate_module, "iter_python_files", return_value=[invalid_compile_path]):
+            invalid_static_results = run_quick_gate_module.run_static_checks()
+        invalid_py_compile = next(item for item in invalid_static_results if item.get("name") == "py_compile")
+        invalid_compileall = next(item for item in invalid_static_results if item.get("name") == "compileall")
+        add_check(results, "output_contract", case_id, "quick_gate_in_memory_py_compile_rejects_invalid_source", "FAIL", invalid_py_compile.get("status"))
+        add_check(results, "output_contract", case_id, "quick_gate_in_memory_compileall_equivalent_rejects_invalid_source", "FAIL", invalid_compileall.get("status"))
 
         runtime_run_dir = temp_path / "quick_gate_runtime_failure"
         runtime_run_dir.mkdir(parents=True, exist_ok=True)

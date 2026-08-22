@@ -4,7 +4,6 @@ import ast
 import contextlib
 import io
 import os
-import py_compile
 import runpy
 import shutil
 import sys
@@ -142,6 +141,7 @@ def _capture_python_script_inline(
     *,
     env: Optional[Dict[str, str]] = None,
     input_text: Optional[str] = None,
+    cleanup_project_imports: bool = True,
 ) -> Dict[str, Any]:
     script_path = str(args[1]).replace("\\", "/")
     started = time.time()
@@ -181,7 +181,8 @@ def _capture_python_script_inline(
         captured_returncode = 127
         print(f'[quick_gate] inline_launch_failed: {launch_error_type}: {launch_error_message}', file=stderr_buffer)
     finally:
-        _cleanup_inline_imports(module_snapshot)
+        if cleanup_project_imports:
+            _cleanup_inline_imports(module_snapshot)
         sys.argv = original_argv
         sys.stdin = original_stdin
         os.chdir(previous_cwd)
@@ -212,13 +213,16 @@ def _run_python_cli_probe(
     timeout: int,
     env: Optional[Dict[str, str]] = None,
     input_text: Optional[str] = None,
+    cleanup_project_imports: bool = True,
 ) -> Dict[str, Any]:
     if (
         len(args) >= 2
         and str(args[0]) == sys.executable
         and str(args[1]).replace("\\", "/") in INLINE_CLI_TARGETS
     ):
-        return _capture_python_script_inline(args, env=env, input_text=input_text)
+        return _capture_python_script_inline(
+            args, env=env, input_text=input_text, cleanup_project_imports=cleanup_project_imports
+        )
     return run_command(args, timeout=timeout, env=env, input_text=input_text)
 
 
@@ -238,14 +242,6 @@ def iter_python_files() -> List[Path]:
             continue
         files.append(path)
     return sorted(files)
-
-
-def _compile_to_temp_pyc(source_path: Path, *, pyc_root: Path) -> Path:
-    relative_path = source_path.relative_to(PROJECT_ROOT)
-    pyc_path = pyc_root / relative_path.parent / f"{relative_path.name}c"
-    pyc_path.parent.mkdir(parents=True, exist_ok=True)
-    py_compile.compile(str(source_path), cfile=str(pyc_path), doraise=True)
-    return pyc_path
 
 
 def _load_synthetic_registry_symbol_resolution() -> Dict[str, Any]:
@@ -295,36 +291,43 @@ def run_static_checks() -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
 
     py_compile_errors = []
-    for path in py_files:
-        try:
-            compile(path.read_text(encoding="utf-8"), str(path), "exec")
-        except SyntaxError as exc:
-            py_compile_errors.append(f"{path.relative_to(PROJECT_ROOT)}:{exc.lineno}: {exc.msg}")
-    results.append(summarize_result("py_compile", not py_compile_errors, detail=f"檢查 {len(py_files)} 個 Python 檔案", extra={"errors": py_compile_errors}))
-
-    pyc_compile_errors = []
-    with tempfile.TemporaryDirectory(prefix="quick_gate_compileall_") as temp_dir:
-        pyc_root = Path(temp_dir)
-        for path in py_files:
-            try:
-                _compile_to_temp_pyc(path, pyc_root=pyc_root)
-            except py_compile.PyCompileError as exc:
-                pyc_compile_errors.append(f"{path.relative_to(PROJECT_ROOT)}: {exc.msg}")
-            except Exception as exc:
-                pyc_compile_errors.append(f"{path.relative_to(PROJECT_ROOT)}: {type(exc).__name__}: {exc}")
-    results.append(summarize_result("compileall", not pyc_compile_errors, detail=f"compileall 等價檢查 {len(py_files)} 個 Python 檔案", extra={"errors": pyc_compile_errors}))
-
+    compileall_errors = []
     bare_except_hits = []
     bare_except_scan_errors = []
     for path in py_files:
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            rel_path = path.relative_to(PROJECT_ROOT)
+        except ValueError:
+            rel_path = path
+        try:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(path))
         except SyntaxError as exc:
-            bare_except_scan_errors.append(f"{path.relative_to(PROJECT_ROOT)}:{exc.lineno}: {exc.msg}")
+            detail = f"{rel_path}:{exc.lineno}: {exc.msg}"
+            py_compile_errors.append(detail)
+            compileall_errors.append(detail)
+            bare_except_scan_errors.append(detail)
             continue
+        except Exception as exc:
+            detail = f"{rel_path}: {type(exc).__name__}: {exc}"
+            py_compile_errors.append(detail)
+            compileall_errors.append(detail)
+            bare_except_scan_errors.append(detail)
+            continue
+
+        try:
+            compile(tree, str(path), "exec")
+        except Exception as exc:
+            detail = f"{rel_path}: {type(exc).__name__}: {exc}"
+            py_compile_errors.append(detail)
+            compileall_errors.append(detail)
+
         for node in ast.walk(tree):
             if isinstance(node, ast.ExceptHandler) and node.type is None:
-                bare_except_hits.append(f"{path.relative_to(PROJECT_ROOT)}:{node.lineno}")
+                bare_except_hits.append(f"{rel_path}:{node.lineno}")
+
+    results.append(summarize_result("py_compile", not py_compile_errors, detail=f"檢查 {len(py_files)} 個 Python 檔案", extra={"errors": py_compile_errors}))
+    results.append(summarize_result("compileall", not compileall_errors, detail=f"compileall 等價檢查 {len(py_files)} 個 Python 檔案（共用單次in-memory bytecode compile）", extra={"errors": compileall_errors}))
     results.append(
         summarize_result(
             "bare_except_scan",
@@ -675,15 +678,21 @@ def _usage_matches(stdout: str, expected_usage: str) -> bool:
 
 def check_help(timeout: int) -> List[Dict[str, Any]]:
     results = []
-    for args, expected_usage in HELP_TARGETS:
-        outcome = _run_python_cli_probe(args, timeout=timeout)
-        first_line = outcome["stdout"].splitlines()[0] if outcome["stdout"].strip() else _outcome_detail(outcome, expected_usage)
-        ok = (
-            (not outcome.get("timed_out"))
-            and outcome["returncode"] == 0
-            and _usage_matches(outcome["stdout"], expected_usage)
-        )
-        results.append(summarize_result(f"help::{Path(args[1]).name}", ok, detail=first_line, extra={"expected_usage": expected_usage}))
+    module_snapshot = dict(sys.modules)
+    try:
+        for args, expected_usage in HELP_TARGETS:
+            outcome = _run_python_cli_probe(
+                args, timeout=timeout, cleanup_project_imports=False
+            )
+            first_line = outcome["stdout"].splitlines()[0] if outcome["stdout"].strip() else _outcome_detail(outcome, expected_usage)
+            ok = (
+                (not outcome.get("timed_out"))
+                and outcome["returncode"] == 0
+                and _usage_matches(outcome["stdout"], expected_usage)
+            )
+            results.append(summarize_result(f"help::{Path(args[1]).name}", ok, detail=first_line, extra={"expected_usage": expected_usage}))
+    finally:
+        _cleanup_inline_imports(module_snapshot)
     return results
 
 

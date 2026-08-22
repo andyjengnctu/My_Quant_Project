@@ -822,6 +822,9 @@ def validate_synthetic_candidate_order_fill_layer_separation_case(base_params):
     add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "missed_buy_row_emitted_once", 1, len(missed_miss_rows))
     add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "missed_buy_does_not_enter_portfolio", 0, len(missed_outcome["portfolio"]))
 
+    matrix_results, matrix_summary = _run_resource_aware_entry_selection_matrix_case(base_params)
+    results.extend(matrix_results)
+    summary["resource_aware_policy_count"] = matrix_summary.get("policy_count", 0)
     summary["candidate_only_status"] = None if scanner_result is None else scanner_result.get("status")
     return results, summary
 
@@ -1270,3 +1273,157 @@ def validate_synthetic_ensemble_reentry_consensus_watchlist_case(base_params):
     summary["watchlist_member_count"] = len(watchlists_by_member)
     return results, summary
 
+
+
+
+def _run_resource_aware_entry_selection_matrix_case(base_params):
+    """Exercise every reusable resource-aware selector through the canonical router."""
+
+    from core import portfolio_entry_selection_max_dl as max_dl
+    from core.portfolio_entries import (
+        reorder_candidates_for_resource_aware_quality,
+        select_resource_aware_action_candidates,
+    )
+    from core.strategy_params import V16StrategyParams
+
+    case_id = "RESOURCE_AWARE_ENTRY_SELECTION_MATRIX"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    params = V16StrategyParams()
+    params.use_breakout_quality_ranking = True
+    params.breakout_quality_score_threshold = 0.5
+
+    def candidate(ticker, price, qty, score, policy, expected_excess_r, safety_score):
+        cost_milli = build_buy_ledger_from_price(price, qty, params)["net_buy_total_milli"]
+        rank = {
+            "available": True,
+            "score": float(score),
+            "expected_r_available": True,
+            "expected_r": float(1.0 + score),
+            "expected_excess_r_available": True,
+            "expected_excess_r": float(expected_excess_r),
+            "daily_score_percentile": float(score),
+        }
+        return {
+            "ticker": ticker,
+            "type": "normal",
+            "limit_px": float(price),
+            "init_sl": float(price) * 0.95,
+            "init_trail": float(price) * 0.95,
+            "target_price": float(price) * 1.10,
+            "entry_atr": float(price) * 0.05,
+            "qty": int(qty),
+            "max_qty": int(qty),
+            "proj_cost_milli": int(cost_milli),
+            "proj_cost": float(cost_milli) / 1000.0,
+            "is_orderable": True,
+            "params_obj": params,
+            "sizing_capital": 2_000_000.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_ranking_policy": policy,
+            "breakout_quality_score": float(score),
+            "breakout_quality_safety_score": float(safety_score),
+            "breakout_quality_safety_score_available": True,
+            "breakout_quality_rank": rank,
+            "date": "2024-01-01",
+            "breakout_quality_score_date": "2024-01-01",
+        }
+
+    seed = (
+        ("A", 100.0, 1400, 0.20, 0.03, 0.10),
+        ("B", 100.0, 1350, 0.19, 0.02, 0.20),
+        ("C", 100.0, 700, 0.99, 0.45, 0.90),
+        ("D", 100.0, 750, 0.98, 0.40, 0.80),
+        ("E", 100.0, 900, 0.97, 0.28, 0.70),
+        ("F", 100.0, 850, 0.50, 0.22, 0.30),
+    )
+    policies = (
+        "resource-aware-binary",
+        "resource-aware-binary-basket",
+        "resource-aware-continuous",
+        "resource-aware-continuous-capital-preserving",
+        "resource-aware-continuous-max-dl",
+        "resource-aware-continuous-max-dl-feasible-ascent",
+        "resource-aware-continuous-expected-pnl-feasible-ascent",
+        "resource-aware-continuous-excess-alpha-feasible-ascent",
+        "resource-aware-continuous-excess-alpha-no-r0-feasible-ascent",
+        "resource-aware-continuous-excess-alpha-constrained-optimal",
+        "resource-aware-continuous-score-constrained-optimal",
+        "resource-aware-continuous-score-safety-constrained-optimal",
+        "resource-aware-continuous-score-residual-safety-constrained-optimal",
+        "resource-aware-continuous-score-no-r0-constrained-optimal",
+        "resource-aware-continuous-score-capital-no-r0-constrained-optimal",
+        "resource-aware-continuous-score-capital-pareto-no-r0-constrained-optimal",
+    )
+    policy_failures = []
+    for policy in policies:
+        rows = [candidate(t, price, qty, score, policy, excess_r, safety) for t, price, qty, score, excess_r, safety in seed]
+        try:
+            order, diag = reorder_candidates_for_resource_aware_quality(
+                rows,
+                available_cash=350_000.0,
+                sizing_equity=2_000_000.0,
+                pre_market_occupied=8,
+                max_positions=10,
+                params=params,
+            )
+            selected = select_resource_aware_action_candidates(order, diag)
+            if len(order) != len(rows) or len(selected) > len(rows) or not diag.get("selector"):
+                policy_failures.append(policy)
+        except Exception as exc:
+            policy_failures.append(f"{policy}:{type(exc).__name__}")
+    add_check(results, "portfolio_entry_selection", case_id, "all_reusable_policies_route_without_error", [], policy_failures)
+
+    one_row = [candidate("X", 100.0, 100, 0.5, "resource-aware-continuous", 0.1, 0.2)]
+    add_check(results, "portfolio_entry_selection", case_id, "action_limit_zero", 0, len(select_resource_aware_action_candidates(one_row, {"pre_market_order_limit": 0})))
+    add_check(results, "portfolio_entry_selection", case_id, "action_limit_one", 1, len(select_resource_aware_action_candidates(one_row, {"pre_market_order_limit": 1})))
+    try:
+        select_resource_aware_action_candidates(one_row, {"pre_market_order_limit": -1})
+    except ValueError:
+        negative_limit_rejected = True
+    else:
+        negative_limit_rejected = False
+    add_check(results, "portfolio_entry_selection", case_id, "negative_action_limit_rejected", True, negative_limit_rejected)
+
+    edge_payloads = (
+        {},
+        {"breakout_quality_rank": None},
+        {"breakout_quality_rank": {}},
+        {"breakout_quality_rank": {"expected_r_available": True, "expected_r": "bad"}},
+        {"breakout_quality_rank": {"expected_r_available": True, "expected_r": "nan"}},
+        {"breakout_quality_rank": {"expected_r_available": True, "expected_r": 1.2}},
+        {"breakout_quality_rank": {"expected_excess_r_available": True, "expected_excess_r": "bad"}},
+        {"breakout_quality_rank": {"expected_excess_r_available": True, "expected_excess_r": "inf"}},
+        {"breakout_quality_rank": {"expected_excess_r_available": True, "expected_excess_r": 0.2}},
+    )
+    for payload in edge_payloads:
+        max_dl._candidate_expected_r(payload)
+        max_dl._candidate_expected_excess_r(payload)
+    for mode in ("expected_pnl", "excess_alpha", "score_capital", "score"):
+        max_dl._objective_selector_name(mode, suffix="probe", no_r0=False)
+        max_dl._objective_selector_name(mode, suffix="probe", no_r0=True)
+    feasibility = [
+        max_dl._max_dl_basket_is_feasible(x, target_count=2, reserve_floor_milli=100)
+        for x in (
+            {"selected_count": 2, "reserved_cost_milli": 100},
+            {"selected_count": 1, "reserved_cost_milli": 100},
+            {"selected_count": 2, "reserved_cost_milli": 99},
+        )
+    ]
+    add_check(results, "portfolio_entry_selection", case_id, "max_dl_feasibility_edges", [True, False, False], feasibility)
+
+    malformed_row = {}
+    base_rank = {id(malformed_row): 0}
+    malformed_rejections = 0
+    for quality_key in (
+        max_dl._expected_pnl_basket_quality_key,
+        max_dl._excess_alpha_basket_quality_key,
+        max_dl._score_capital_basket_quality_key,
+    ):
+        try:
+            quality_key({"selected_rows": [malformed_row], "selected_plans": []}, base_rank=base_rank)
+        except ValueError:
+            malformed_rejections += 1
+    add_check(results, "portfolio_entry_selection", case_id, "economic_quality_rejects_row_plan_length_mismatch", 3, malformed_rejections)
+    summary["policy_count"] = len(policies)
+    return results, summary
