@@ -21,6 +21,7 @@ from core.strategy_param_artifacts import (
     POLICY_FILENAME_BY_NAME,
     STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION,
     compute_strategy_param_file_sha256,
+    compute_strategy_param_scientific_sha256,
     normalize_strategy_param_evaluation_mode,
     normalize_strategy_param_family,
     resolve_strategy_param_artifact_path,
@@ -138,6 +139,7 @@ def build_strategy_parameter_manifest_payload(
         artifacts[policy] = {
             "path": _project_relative(root, path),
             "sha256": compute_strategy_param_file_sha256(path),
+            "scientific_sha256": compute_strategy_param_scientific_sha256(path),
         }
         source = dict(preserved_sources.get(policy) or {})
         if source:
@@ -198,6 +200,7 @@ def build_strategy_parameter_benchmark_manifest_payload(
         artifacts[policy] = {
             "path": _project_relative(root, path),
             "sha256": compute_strategy_param_file_sha256(path),
+            "scientific_sha256": compute_strategy_param_scientific_sha256(path),
         }
         source = dict(preserved_sources.get(policy) or {})
         if source:

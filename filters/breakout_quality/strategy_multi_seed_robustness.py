@@ -85,7 +85,6 @@ from core.report_metrics import (
     TRADE_RESULT_METRICS,
 )
 from core.strategy_param_artifacts import (
-    compute_strategy_param_file_sha256,
     resolve_strategy_param_benchmark_artifact_path,
     resolve_strategy_param_benchmark_manifest_path,
 )
@@ -96,6 +95,10 @@ from core.strategy_comparison import (
     strategy_comparison_param_binding_key,
 )
 from filters.breakout_quality.artifacts import build_file_manifest, compute_file_sha256
+from core.strategy_param_artifacts import (
+    STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA,
+    compute_strategy_param_scientific_sha256,
+)
 from filters.breakout_quality.dataset_store import resolve_dataset_paths
 from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_COVERAGE_FILENAME,
@@ -743,7 +746,10 @@ def _prepare_benchmark_strategy_parameter_artifacts(
                 **binding,
                 "path": Path(result["path"]),
                 "manifest_path": Path(result["manifest_path"]),
-                "sha256": str(result["sha256"]),
+                # ``sha256`` is the replay-scientific strategy-param identity.
+                # Byte-level publication integrity stays separately auditable.
+                "sha256": str(result["scientific_sha256"]),
+                "file_sha256": str(result["sha256"]),
                 "manifest_sha256": compute_file_sha256(Path(result["manifest_path"])),
             }
     return bindings
@@ -752,25 +758,62 @@ def _prepare_benchmark_strategy_parameter_artifacts(
 def _benchmark_identity_payload(
     bindings: dict[tuple[str, int], dict[str, Any]]
 ) -> dict[str, Any]:
-    """Return replay-scientific parameter identity for each arm/seed.
+    """Return parameter scientific identity plus non-scientific publication hashes.
 
-    The raw benchmark-manifest file SHA is deliberately not scientific identity:
-    manifests contain publication metadata (for example ``updated_at`` and current
-    seed membership) that can change without changing the fitted parameter payload
-    consumed by replay.  The manifest SHA remains stored on each observation as
-    provenance, while stale/replay identity is pinned by the parameter JSON SHA and
-    the surrounding trials/dataset/period/arm contract.
+    ``sha256`` is the stable runtime-effective schedule identity.  ``file_sha256``
+    and ``manifest_sha256`` remain available only for provenance / exact-byte legacy
+    migration; contract construction removes them before computing the scientific
+    fingerprint.
     """
 
     return {
         f"{arm_id}:seed={seed}": {
+            "identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA,
             "family": item["family"],
             "evaluation_mode": item["evaluation_mode"],
             "param_policy": item["param_policy"],
             "sha256": item["sha256"],
+            "file_sha256": item.get("file_sha256"),
+            "manifest_sha256": item.get("manifest_sha256"),
         }
         for (arm_id, seed), item in sorted(bindings.items())
     }
+
+
+def _scientific_benchmark_parameter_identities(
+    identities: dict[str, Any],
+) -> dict[str, Any]:
+    """Strip byte-level publication provenance from robustness scientific identity."""
+
+    result: dict[str, Any] = {}
+    for key, raw in dict(identities or {}).items():
+        item = dict(raw or {})
+        result[str(key)] = {
+            field: item.get(field)
+            for field in (
+                "identity_schema", "family", "evaluation_mode", "param_policy", "sha256"
+            )
+            if item.get(field) not in (None, "")
+        }
+    return result
+
+
+def _benchmark_parameter_publication_identities(
+    identities: dict[str, Any],
+) -> dict[str, Any]:
+    """Return exact-byte provenance excluded from scientific fingerprinting."""
+
+    result: dict[str, Any] = {}
+    for key, raw in dict(identities or {}).items():
+        item = dict(raw or {})
+        publication = {
+            field: item.get(field)
+            for field in ("file_sha256", "manifest_sha256")
+            if item.get(field) not in (None, "")
+        }
+        if publication:
+            result[str(key)] = publication
+    return result
 
 
 def _strategy_only_benchmark_arms(
@@ -1394,6 +1437,13 @@ def build_multi_seed_robustness_contract(
     if not resolved_period:
         resolved_period = {"start": settings.start_date, "end": settings.end_date}
     identities = dict(artifact_identities or {})
+    raw_benchmark_parameter_identities = dict(benchmark_parameter_identities or {})
+    scientific_benchmark_parameter_identities = _scientific_benchmark_parameter_identities(
+        raw_benchmark_parameter_identities
+    )
+    benchmark_parameter_publication_identities = _benchmark_parameter_publication_identities(
+        raw_benchmark_parameter_identities
+    )
     parameter_identities = {}
     for arm in (*fixed, *stochastic):
         param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
@@ -1508,7 +1558,7 @@ def build_multi_seed_robustness_contract(
         "comparison_period": resolved_period,
         "parameter_artifact_identities": parameter_identities,
         "benchmark_id": robustness.benchmark_id,
-        "benchmark_parameter_artifact_identities": dict(benchmark_parameter_identities or {}),
+        "benchmark_parameter_artifact_identities": scientific_benchmark_parameter_identities,
         "seed_count": int(robustness.seed_count),
         "seed_generator_seed": int(robustness.seed_generator_seed),
         "resolved_seeds": list(seeds),
@@ -1538,6 +1588,7 @@ def build_multi_seed_robustness_contract(
     model_artifact_identity = _model_artifact_identity_payload(scientific)
     contract = {
         **scientific,
+        "benchmark_parameter_publication_identities": benchmark_parameter_publication_identities,
         "model_artifact_fingerprint": canonical_json_sha256(
             model_artifact_identity, length=16
         ),
@@ -1601,6 +1652,7 @@ def _model_artifact_identity_payload(scientific: dict[str, Any]) -> dict[str, An
 
 
 _SEED_EXPANSION_NON_SCIENTIFIC_KEYS = frozenset({
+    "benchmark_parameter_publication_identities",
     "model_artifact_fingerprint",
     "paired_contrasts",
     "report_schema_version",
@@ -1614,15 +1666,7 @@ _SEED_EXPANSION_NON_SCIENTIFIC_KEYS = frozenset({
 def _benchmark_parameter_identities_for_seeds(
     identities: dict[str, Any], seeds: tuple[int, ...],
 ) -> dict[str, Any]:
-    """Return replay-relevant per-seed parameter identities.
-
-    ``manifest_sha256`` is intentionally excluded from cross-run compatibility:
-    benchmark manifests contain publication metadata (for example ``updated_at``
-    and current benchmark membership) that can change while the fitted parameter
-    payload and replay semantics remain byte-identical.  Parameter payload SHA,
-    family/evaluation mode/policy and the surrounding robustness scientific
-    contract still have to match.
-    """
+    """Return replay-scientific per-seed parameter identities only."""
 
     suffixes = tuple(f":seed={int(seed)}" for seed in seeds)
     result: dict[str, Any] = {}
@@ -1631,8 +1675,89 @@ def _benchmark_parameter_identities_for_seeds(
             continue
         item = dict(raw or {})
         item.pop("manifest_sha256", None)
+        item.pop("file_sha256", None)
         result[str(key)] = item
     return result
+
+
+def _benchmark_parameter_identities_compatible(
+    candidate_contract: dict[str, Any],
+    current_contract: dict[str, Any],
+    *,
+    seeds: tuple[int, ...],
+) -> bool:
+    """Compare per-seed strategy-param identity with one safe legacy migration.
+
+    New contracts store the runtime-scientific SHA.  Legacy contracts stored raw
+    JSON byte SHA under the same field.  A legacy row can be upgraded only when its
+    old SHA exactly equals the *current* parameter file SHA; exact bytes prove that
+    the old observation used the same payload.  If a publication refresh already
+    replaced those bytes, we deliberately refuse to guess.
+    """
+
+    candidate = _benchmark_parameter_identities_for_seeds(
+        dict(candidate_contract.get("benchmark_parameter_artifact_identities") or {}), seeds
+    )
+    current = _benchmark_parameter_identities_for_seeds(
+        dict(current_contract.get("benchmark_parameter_artifact_identities") or {}), seeds
+    )
+    current_publication = dict(
+        current_contract.get("benchmark_parameter_publication_identities") or {}
+    )
+    if set(candidate) != set(current):
+        return False
+    for key in sorted(current):
+        old = dict(candidate[key] or {})
+        new = dict(current[key] or {})
+        for field in ("family", "evaluation_mode", "param_policy"):
+            if str(old.get(field) or "") != str(new.get(field) or ""):
+                return False
+        old_schema = str(old.get("identity_schema") or "").strip()
+        new_schema = str(new.get("identity_schema") or "").strip()
+        old_sha = _normalized_hash_value(old.get("sha256"))
+        new_sha = _normalized_hash_value(new.get("sha256"))
+        if old_schema:
+            if old_schema != new_schema or old_sha != new_sha:
+                return False
+            continue
+        # Pre-runtime-identity contract: sha256 was the raw JSON file SHA.
+        current_file_sha = _normalized_hash_value(
+            dict(current_publication.get(key) or {}).get("file_sha256")
+        )
+        if not current_file_sha or old_sha != current_file_sha:
+            return False
+    return True
+
+
+def _rebind_legacy_strategy_param_identity_rows(
+    frame: pd.DataFrame,
+    *,
+    source_contract: dict[str, Any],
+    current_contract: dict[str, Any],
+) -> pd.DataFrame:
+    """Upgrade safely proven legacy raw-SHA rows to runtime-scientific SHA."""
+
+    if frame.empty:
+        return frame
+    output = frame.copy()
+    source_identities = dict(source_contract.get("benchmark_parameter_artifact_identities") or {})
+    current_identities = dict(current_contract.get("benchmark_parameter_artifact_identities") or {})
+    current_publication = dict(current_contract.get("benchmark_parameter_publication_identities") or {})
+    for idx, row in output.iterrows():
+        key = f"{str(row.get('arm_id') or '')}:seed={int(row.get('seed'))}"
+        old = dict(source_identities.get(key) or {})
+        new = dict(current_identities.get(key) or {})
+        if not old or not new:
+            continue
+        if str(old.get("identity_schema") or "").strip():
+            continue
+        old_sha = _normalized_hash_value(row.get("strategy_param_sha256"))
+        current_file_sha = _normalized_hash_value(
+            dict(current_publication.get(key) or {}).get("file_sha256")
+        )
+        if old_sha and current_file_sha and old_sha == current_file_sha:
+            output.at[idx, "strategy_param_sha256"] = str(new.get("sha256") or "")
+    return output
 
 
 def _seed_expansion_compatibility_payload(
@@ -1659,12 +1784,6 @@ def _seed_expansion_compatibility_payload(
     }
     normalized["seed_count"] = len(seeds)
     normalized["resolved_seeds"] = [int(seed) for seed in seeds]
-    normalized["benchmark_parameter_artifact_identities"] = (
-        _benchmark_parameter_identities_for_seeds(
-            dict(contract.get("benchmark_parameter_artifact_identities") or {}),
-            seeds,
-        )
-    )
     return normalized
 
 
@@ -1706,6 +1825,10 @@ def _seed_expansion_source_run(
             candidate_contract, seeds=candidate_seeds
         ) != _seed_expansion_compatibility_payload(
             contract, seeds=candidate_seeds
+        ):
+            continue
+        if not _benchmark_parameter_identities_compatible(
+            candidate_contract, contract, seeds=candidate_seeds
         ):
             continue
         if best is None or len(candidate_seeds) > len(best[2]):
@@ -1769,6 +1892,9 @@ def _import_seed_expansion_results(
     source_root, source_contract, source_seeds = source
     source_results = _load_seed_results(source_root / SEED_RESULTS_FILENAME)
     source_yearly = _load_seed_yearly_results(source_root / SEED_YEARLY_RESULTS_FILENAME)
+    source_results = _rebind_legacy_strategy_param_identity_rows(
+        source_results, source_contract=source_contract, current_contract=contract
+    )
     _validate_seed_results_frame(
         source_results, stochastic_arms=stochastic_arms, seeds=source_seeds
     )
@@ -4653,7 +4779,8 @@ def show_multi_seed_robustness_status(*, robustness_id: str | None = None) -> No
             return
         resolved_benchmark_bindings[unit] = {
             **item,
-            "sha256": compute_file_sha256(path),
+            "sha256": compute_strategy_param_scientific_sha256(path),
+            "file_sha256": compute_file_sha256(path),
             "manifest_sha256": compute_file_sha256(manifest_path),
         }
     contract = build_multi_seed_robustness_contract(

@@ -1037,7 +1037,15 @@ def restore_selection_historical_p2_from_completed_strategy_compare(
             if not isinstance(pair_payload, dict):
                 continue
             metadata = dict(pair_payload.get("metadata") or {})
-            source_sha = str(metadata.get("params_file_sha256") or "").strip().lower()
+            # New Strategy Compare metadata stores runtime-scientific identity in
+            # ``params_file_sha256`` and exact publication bytes separately. Historical
+            # P2 restoration is a byte-preserving recovery path, so prefer the raw
+            # source-file SHA while retaining compatibility with older reports.
+            source_sha = str(
+                metadata.get("params_source_file_sha256")
+                or metadata.get("params_file_sha256")
+                or ""
+            ).strip().lower()
             candidate = metadata.get("no_filter_params")
             if not source_sha or not isinstance(candidate, dict):
                 continue

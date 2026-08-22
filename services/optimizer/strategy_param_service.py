@@ -31,6 +31,7 @@ from core.strategy_param_artifacts import (
     POLICY_FILENAME_BY_NAME,
     COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY,
     compute_strategy_param_file_sha256,
+    compute_strategy_param_scientific_sha256,
     normalize_strategy_param_evaluation_mode,
     normalize_strategy_param_family,
     normalize_strategy_param_policy,
@@ -1259,9 +1260,10 @@ def _benchmark_fast_republish_source(
     source_payload = _load_json_object_permissive(source_path)
     if source_payload is None:
         return None
-    normalized_source = normalize_strategy_param_payload_for_persistence(source_payload)
-    normalized_target = normalize_strategy_param_payload_for_persistence(target_payload)
-    if normalized_source != normalized_target:
+    # Publication metadata (for example created_at/meta diagnostics) is allowed to
+    # differ.  Fast repair is safe when both retained payloads resolve to the same
+    # replay-scientific schedule identity.
+    if compute_strategy_param_scientific_sha256(source_path) != compute_strategy_param_scientific_sha256(target_path):
         return None
     return source_path.resolve()
 
@@ -1306,6 +1308,10 @@ def _benchmark_manifest_matches_current_policy(
     if not expected_sha or not target_path.is_file():
         return False
     if expected_sha != compute_strategy_param_file_sha256(target_path):
+        return False
+    expected_scientific_sha = str(artifact.get("scientific_sha256") or "").strip().lower()
+    actual_scientific_sha = compute_strategy_param_scientific_sha256(target_path)
+    if expected_scientific_sha and expected_scientific_sha != actual_scientific_sha:
         return False
     artifact_payload = _load_json_object(target_path)
     if artifact_payload is None:
@@ -1503,6 +1509,7 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
         return {
             "action": "REUSE", "path": target, "manifest_path": manifest_path,
             "sha256": compute_strategy_param_file_sha256(target),
+            "scientific_sha256": compute_strategy_param_scientific_sha256(target),
             "initial_2021_member_sha256": str(initial_sha),
         }
 
@@ -1539,6 +1546,7 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
         return {
             "action": "REPAIR", "path": target, "manifest_path": manifest,
             "sha256": compute_strategy_param_file_sha256(target),
+            "scientific_sha256": compute_strategy_param_scientific_sha256(target),
             "initial_2021_member_sha256": str(initial_member_sha),
         }
 
@@ -1619,6 +1627,7 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
         "action": "REBUILD" if str(state["action"]) == "REBUILD" else "BUILD",
         "path": target, "manifest_path": manifest,
         "sha256": compute_strategy_param_file_sha256(target),
+        "scientific_sha256": compute_strategy_param_scientific_sha256(target),
         "initial_2021_member_sha256": str(initial_member_sha),
     }
 

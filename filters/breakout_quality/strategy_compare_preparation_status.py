@@ -38,6 +38,7 @@ from filters.breakout_quality.artifacts import (
 from core.console_report import project_relative_display_path
 from core.research_orchestration import resolve_research_artifact_action
 from core.strategy_param_artifacts import (
+    compute_strategy_param_scientific_sha256,
     resolve_strategy_param_artifact_path,
     resolve_strategy_param_manifest_path,
 )
@@ -830,12 +831,16 @@ def _collect_parameter_artifact_status(
             ready = bool(artifact_ready and policy_identity_ready)
             all_artifacts_ready = bool(all_artifacts_ready and ready)
             any_target_exists = bool(any_target_exists or path.exists())
-            sha256 = compute_file_sha256(path) if path.is_file() else None
+            file_sha256 = compute_file_sha256(path) if path.is_file() else None
+            scientific_sha256 = (
+                compute_strategy_param_scientific_sha256(path) if path.is_file() else None
+            )
             display_path = project_relative_display_path(path, project_root=root)
             artifact_key = strategy_comparison_param_artifact_key(source_id, param_policy)
             artifact_identities[artifact_key] = {
                 "path": display_path,
-                "sha256": sha256,
+                "sha256": scientific_sha256,
+                "file_sha256": file_sha256,
                 "param_policy": param_policy,
                 "identity_status": policy_identity_status,
                 "coverage_start": None if policy is None else policy.get("coverage_start"),
@@ -850,7 +855,8 @@ def _collect_parameter_artifact_status(
                     else artifact_status
                 ),
                 "path": display_path,
-                "sha256": sha256,
+                "sha256": scientific_sha256,
+                "file_sha256": file_sha256,
                 "selector": None if policy is None else policy.get("selector"),
                 "coverage_start": None if policy is None else policy.get("coverage_start"),
                 "coverage_end": None if policy is None else policy.get("coverage_end"),

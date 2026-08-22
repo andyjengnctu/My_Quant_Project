@@ -16,15 +16,20 @@ from typing import Any, Mapping
 
 from core.active_param_ensemble import (
     ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
+    build_active_param_ensemble_schedule,
     get_active_param_ensemble_date_range,
+    get_active_param_ensemble_policy,
     is_active_param_ensemble_payload,
     resolve_active_param_ensemble_mode,
 )
-from core.file_integrity import load_json_strict
+from core.file_integrity import canonical_json_sha256, load_json_strict
+from core.raw_universe_contract import resolve_raw_universe_required_min_rows
+from core.rolling_oos_params import build_active_param_schedule, is_rolling_oos_param_set_payload
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
 from core.serialization_utils import json_native_value
 
-STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION = 3
+STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION = 4
+STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA = "strategy_param_runtime_v1"
 STRATEGY_PARAM_ROOT_RELATIVE = Path("models") / "strategy_params"
 STRATEGY_PARAM_CANONICAL_DIRNAME = "canonical"
 STRATEGY_PARAM_BENCHMARK_DIRNAME = "benchmark"
@@ -371,11 +376,107 @@ def resolve_strategy_param_benchmark_manifest_path(
 
 
 def compute_strategy_param_file_sha256(path: str | Path) -> str:
+    """Return byte-level artifact integrity SHA.
+
+    This hash intentionally changes when publication/provenance metadata changes.
+    It must not be used as the scientific identity of a replay parameter schedule.
+    """
+
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def build_strategy_param_runtime_identity_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a strategy-param artifact onto replay-affecting semantics only.
+
+    Optimizer exports carry publication/provenance fields such as ``created_at`` and
+    diagnostic ``meta``.  Re-publishing the same effective-date parameter schedule
+    must not invalidate Strategy Compare or multi-seed observations merely because
+    those fields changed.  The scientific identity is therefore the canonical
+    runtime schedule consumed by portfolio replay, plus selector/ensemble policy and
+    the raw-universe contract that can change the replay universe.
+    """
+
+    normalized = normalize_strategy_param_payload_for_persistence(payload)
+    selector = str(
+        normalized.get("selector")
+        or dict(normalized.get("meta") or {}).get("selector")
+        or ""
+    ).strip()
+    universe_min_rows = resolve_raw_universe_required_min_rows(normalized)
+
+    if is_active_param_ensemble_payload(normalized):
+        schedule = build_active_param_ensemble_schedule(normalized)
+        return {
+            "identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA,
+            "kind": "active_param_ensemble",
+            "mode": resolve_active_param_ensemble_mode(normalized),
+            "selector": selector,
+            "raw_universe_required_min_rows": universe_min_rows,
+            "ensemble_policy": get_active_param_ensemble_policy(normalized),
+            "schedule": [
+                {
+                    "effective_start": str(record.get("effective_date_text") or ""),
+                    "effective_end": str(record.get("effective_end_date_text") or ""),
+                    # Replay consumes the ordered member parameter sets plus the
+                    # member key.  Optimizer provenance such as seed, selected
+                    # trial, scores/ranks and diagnostics must not turn a pure
+                    # publication refresh into a new scientific schedule.
+                    "members": [
+                        {
+                            "member_index": int(member.get("member_index") or idx),
+                            "params": json_native_value(dict(member.get("params") or {})),
+                        }
+                        for idx, member in enumerate(
+                            list(record.get("members") or []), start=1
+                        )
+                    ],
+                }
+                for record in schedule
+            ],
+        }
+
+    if is_rolling_oos_param_set_payload(normalized):
+        schedule = build_active_param_schedule(normalized)
+        return {
+            "identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA,
+            "kind": "rolling_param_schedule",
+            "mode": "rolling",
+            "selector": selector,
+            "raw_universe_required_min_rows": universe_min_rows,
+            "schedule": [
+                {
+                    "effective_start": str(record.get("effective_date_text") or ""),
+                    "effective_end": str(record.get("effective_end_date_text") or ""),
+                    "params": json_native_value(dict(record.get("params") or {})),
+                }
+                for record in schedule
+            ],
+        }
+
+    direct_params = normalized.get("params")
+    if isinstance(direct_params, Mapping):
+        return {
+            "identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA,
+            "kind": "static_params",
+            "selector": selector,
+            "raw_universe_required_min_rows": universe_min_rows,
+            "params": json_native_value(dict(direct_params)),
+        }
+
+    raise ValueError("無法建立strategy parameter runtime scientific identity")
+
+
+def compute_strategy_param_scientific_sha256(path: str | Path) -> str:
+    """Return stable replay-scientific identity, excluding publication metadata."""
+
+    payload = load_json_strict(path)
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"strategy parameter JSON根層必須是object: {path}")
+    return canonical_json_sha256(build_strategy_param_runtime_identity_payload(payload))
 
 
 def load_strategy_param_manifest(project_root: str | Path, *, family: str, evaluation_mode: str) -> dict[str, Any] | None:
@@ -459,6 +560,7 @@ def freeze_strategy_param_payload_for_period(
 
 __all__ = [
     "STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION",
+    "STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA",
     "STRATEGY_PARAM_ROOT_RELATIVE",
     "STRATEGY_PARAM_CANONICAL_DIRNAME",
     "STRATEGY_PARAM_BENCHMARK_DIRNAME",
@@ -487,6 +589,8 @@ __all__ = [
     "resolve_strategy_param_benchmark_artifact_path",
     "resolve_strategy_param_benchmark_manifest_path",
     "compute_strategy_param_file_sha256",
+    "compute_strategy_param_scientific_sha256",
+    "build_strategy_param_runtime_identity_payload",
     "load_strategy_param_manifest",
     "freeze_strategy_param_payload_for_period",
 ]

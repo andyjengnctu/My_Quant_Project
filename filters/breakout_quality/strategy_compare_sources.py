@@ -17,8 +17,8 @@ from core.active_param_ensemble import (
 )
 from core.buy_sort import BREAKOUT_QUALITY_RANKING_POLICY_SCORE
 from core.model_paths import resolve_default_primary_param_source_record
-from core.file_integrity import canonical_json_sha256
 from core.strategy_param_artifacts import (
+    build_strategy_param_runtime_identity_payload,
     freeze_strategy_param_payload_for_period,
     resolve_strategy_param_artifact_path,
 )
@@ -343,15 +343,18 @@ def apply_strategy_param_evaluation_view(
 
 
 def strategy_param_source_identity_sha256(source: dict[str, Any], *, source_path: Path) -> str:
-    """Hash the parameter content actually consumed by this evaluation.
+    """Hash only the replay-affecting parameter content consumed by this evaluation.
 
-    Rolling hashes the full schedule; OOS hashes its in-memory frozen view.  This
-    keeps OOS result reuse stable when later Rolling-only members are appended to
-    the same physical JSON.
+    Rolling hashes the runtime-effective full schedule; OOS hashes its in-memory
+    frozen view. Publication/provenance fields such as ``created_at`` and diagnostic
+    ``meta`` are deliberately excluded, so re-publishing byte-different JSON cannot
+    invalidate an otherwise identical Strategy Compare replay.
     """
     payload = source.get("payload")
     if isinstance(payload, dict):
-        return canonical_json_sha256(payload)
+        from core.file_integrity import canonical_json_sha256
+
+        return canonical_json_sha256(build_strategy_param_runtime_identity_payload(payload))
     return _sha256_file(Path(source_path))
 
 

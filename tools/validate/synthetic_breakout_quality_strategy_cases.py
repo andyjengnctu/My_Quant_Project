@@ -1396,6 +1396,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     from config.strategy_compare import get_strategy_multi_seed_robustness_settings
     from filters.breakout_quality.strategy_multi_seed_robustness import (
         _benchmark_identity_payload,
+        _benchmark_parameter_identities_compatible,
+        _scientific_benchmark_parameter_identities,
+        _rebind_legacy_strategy_param_identity_rows,
         _build_durable_result_artifacts,
         _model_artifact_identity_payload,
         _seed_expansion_compatibility_payload,
@@ -1418,13 +1421,18 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     )
     from core.strategy_param_artifacts import (
         STRATEGY_PARAM_WORK_SCOPE_BENCHMARK,
+        STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA,
         compute_strategy_param_file_sha256,
+        compute_strategy_param_scientific_sha256,
         resolve_strategy_param_optimizer_work_dir,
     )
     from services.optimizer.strategy_param_service import (
         _benchmark_fast_republish_source,
         _benchmark_manifest_matches_current_policy,
         _benchmark_schedule_build_contract,
+    )
+    from filters.breakout_quality.strategy_compare_sources import (
+        strategy_param_source_identity_sha256,
     )
 
     check(
@@ -1544,10 +1552,10 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "romd_reference_baselines": {},
         "fixed_arms": [],
         "benchmark_parameter_artifact_identities": {
-            "C61:seed=11": {"sha256": "full-11"},
-            "C58:seed=11": {"sha256": "min-11"},
-            "C61:seed=22": {"sha256": "full-22"},
-            "C58:seed=22": {"sha256": "min-22"},
+            "C61:seed=11": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "full-11"},
+            "C58:seed=11": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "min-11"},
+            "C61:seed=22": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "full-22"},
+            "C58:seed=22": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "min-22"},
         },
     }
     expanded_contract = {
@@ -1556,10 +1564,10 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "resolved_seeds": [11, 22, 33, 44],
         "benchmark_parameter_artifact_identities": {
             **prefix_contract["benchmark_parameter_artifact_identities"],
-            "C61:seed=33": {"sha256": "full-33"},
-            "C58:seed=33": {"sha256": "min-33"},
-            "C61:seed=44": {"sha256": "full-44"},
-            "C58:seed=44": {"sha256": "min-44"},
+            "C61:seed=33": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "full-33"},
+            "C58:seed=33": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "min-33"},
+            "C61:seed=44": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "full-44"},
+            "C58:seed=44": {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "min-44"},
         },
     }
     changed_trials_contract = dict(expanded_contract)
@@ -1570,7 +1578,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     )
     changed_prefix_param_contract["benchmark_parameter_artifact_identities"][
         "C61:seed=11"
-    ] = {"sha256": "full-11-changed"}
+    ] = {"identity_schema": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA, "sha256": "full-11-changed"}
     manifest_refresh_contract = dict(prefix_contract)
     manifest_refresh_contract["benchmark_parameter_artifact_identities"] = {
         key: {**dict(value), "manifest_sha256": f"manifest-{key}"}
@@ -1594,8 +1602,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     }
     check_true(
         "robustness_benchmark_manifest_publication_sha_does_not_change_scientific_param_identity",
-        _benchmark_identity_payload(benchmark_binding_a)
-        == _benchmark_identity_payload(benchmark_binding_b),
+        _scientific_benchmark_parameter_identities(_benchmark_identity_payload(benchmark_binding_a))
+        == _scientific_benchmark_parameter_identities(_benchmark_identity_payload(benchmark_binding_b)),
     )
 
     check_true(
@@ -1606,8 +1614,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         == _seed_expansion_compatibility_payload(manifest_refresh_contract, seeds=(11, 22))
         and prefix_identity
         != _seed_expansion_compatibility_payload(changed_trials_contract, seeds=(11, 22))
-        and prefix_identity
-        != _seed_expansion_compatibility_payload(changed_prefix_param_contract, seeds=(11, 22))
+        and _benchmark_parameter_identities_compatible(
+            prefix_contract, expanded_contract, seeds=(11, 22)
+        )
+        and not _benchmark_parameter_identities_compatible(
+            prefix_contract, changed_prefix_param_contract, seeds=(11, 22)
+        )
         and "[SEED EXPANSION REUSE]" in multi_seed_source
         and "[COMPATIBLE RESULT REUSE]" in multi_seed_source
         and "len(candidate_seeds) > len(current_seeds)" in multi_seed_source,
@@ -1634,14 +1646,24 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_root = Path(temp_dir)
         target = temp_root / "min_base_best.json"
-        target.write_text(
-            json.dumps({
-                "selector": benchmark_policy,
-                "meta": {"last_oos_date": "2026-03-02"},
-            }),
-            encoding="utf-8",
-        )
+        target_payload = {
+            "schema_type": "rolling_oos_param_set",
+            "schema_version": 1,
+            "selector": benchmark_policy,
+            "created_at": "2026-08-22T12:00:00+08:00",
+            "meta": {"last_oos_date": "2026-03-02", "diagnostic": "a"},
+            "params_by_effective_date": {
+                "2021-01-01": {"high_len": 201, "atr_len": 14},
+                "2022-01-01": {"high_len": 205, "atr_len": 14},
+            },
+            "folds": [
+                {"effective_start": "2021-01-01", "effective_end": "2021-12-31"},
+                {"effective_start": "2022-01-01", "effective_end": "2026-03-02"},
+            ],
+        }
+        target.write_text(json.dumps(target_payload), encoding="utf-8")
         target_sha = compute_strategy_param_file_sha256(target)
+        target_scientific_sha = compute_strategy_param_scientific_sha256(target)
         manifest_path = temp_root / "min_manifest.json"
         manifest = {
             "benchmark_id": str(benchmark["benchmark_id"]),
@@ -1664,6 +1686,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             "artifacts": {
                 benchmark_policy: {
                     "sha256": target_sha,
+                    "scientific_sha256": target_scientific_sha,
                     "source": {
                         "build_contract": benchmark_build_contract,
                         "schedule_kind": "annual_refit",
@@ -1698,14 +1721,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             comparison_end_date="2026-03-02",
             build_contract=stale_contract,
         )
-        target.write_text(
-            json.dumps({
-                "selector": benchmark_policy,
-                "meta": {"last_oos_date": "2026-03-02"},
-                "tampered": True,
-            }),
-            encoding="utf-8",
-        )
+        tampered_payload = json.loads(json.dumps(target_payload))
+        tampered_payload["params_by_effective_date"]["2022-01-01"]["high_len"] = 210
+        target.write_text(json.dumps(tampered_payload), encoding="utf-8")
         stale_sha_rejected = not _benchmark_manifest_matches_current_policy(
             manifest_path,
             benchmark=benchmark,
@@ -1728,8 +1746,17 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         fast_target = temp_root / "models" / "strategy_params" / "benchmark" / "x" / "min_base_best_seed.json"
         fast_target.parent.mkdir(parents=True, exist_ok=True)
         fast_payload = {
+            "schema_type": "rolling_oos_param_set",
+            "schema_version": 1,
             "selector": benchmark_policy,
-            "meta": {"last_oos_date": "2026-03-02"},
+            "created_at": "2026-08-22T12:00:00+08:00",
+            "meta": {"last_oos_date": "2026-03-02", "diagnostic": "target"},
+            "params_by_effective_date": {
+                "2021-01-01": {"high_len": 201, "atr_len": 14}
+            },
+            "folds": [
+                {"effective_start": "2021-01-01", "effective_end": "2026-03-02"}
+            ],
         }
         fast_target.write_text(json.dumps(fast_payload), encoding="utf-8")
         fast_work_root = resolve_strategy_param_optimizer_work_dir(
@@ -1747,7 +1774,10 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             / "roos_base_best.json"
         )
         fast_source.parent.mkdir(parents=True, exist_ok=True)
-        fast_source.write_text(json.dumps(fast_payload), encoding="utf-8")
+        fast_source_payload = json.loads(json.dumps(fast_payload))
+        fast_source_payload["created_at"] = "2026-08-22T13:00:00+08:00"
+        fast_source_payload["meta"]["diagnostic"] = "workspace"
+        fast_source.write_text(json.dumps(fast_source_payload), encoding="utf-8")
         retained_contract = dict(benchmark_build_contract)
         retained_contract["schema"] = "robustness_strategy_schedule_work_v2"
         (fast_work_root / "work_contract.json").write_text(
@@ -1775,11 +1805,125 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             build_contract=changed_fit_contract,
             comparison_end_date="2026-03-02",
         )
+        publication_raw_differs_but_scientific_matches = (
+            compute_strategy_param_file_sha256(fast_target)
+            != compute_strategy_param_file_sha256(fast_source)
+            and compute_strategy_param_scientific_sha256(fast_target)
+            == compute_strategy_param_scientific_sha256(fast_source)
+        )
     check_true(
         "robustness_benchmark_publication_only_stale_uses_fast_repair_not_optimizer_resume",
         publication_only_repair == fast_source.resolve()
         and scientific_change_not_repairable is None,
     )
+
+    check_true(
+        "strategy_param_runtime_identity_ignores_created_at_and_diagnostic_metadata",
+        publication_raw_differs_but_scientific_matches,
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir) / "runtime_source.json"
+        runtime_payload = json.loads(json.dumps(target_payload))
+        temp_path.write_text(json.dumps(runtime_payload), encoding="utf-8")
+        compare_sha_a = strategy_param_source_identity_sha256(
+            {"kind": "rolling_oos_param_schedule", "payload": runtime_payload},
+            source_path=temp_path,
+        )
+        runtime_payload["created_at"] = "2026-08-22T14:00:00+08:00"
+        runtime_payload["meta"]["diagnostic"] = "compare-refresh"
+        temp_path.write_text(json.dumps(runtime_payload), encoding="utf-8")
+        compare_sha_b = strategy_param_source_identity_sha256(
+            {"kind": "rolling_oos_param_schedule", "payload": runtime_payload},
+            source_path=temp_path,
+        )
+        runtime_payload["params_by_effective_date"]["2022-01-01"]["high_len"] = 211
+        compare_sha_c = strategy_param_source_identity_sha256(
+            {"kind": "rolling_oos_param_schedule", "payload": runtime_payload},
+            source_path=temp_path,
+        )
+    check_true(
+        "strategy_compare_param_identity_reuses_runtime_scientific_hash_not_publication_bytes",
+        compare_sha_a == compare_sha_b and compare_sha_b != compare_sha_c,
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        left = temp_root / "ensemble_left.json"
+        right = temp_root / "ensemble_right.json"
+        ensemble_payload = {
+            "schema_type": "active_param_ensemble",
+            "schema_version": 1,
+            "mode": "rolling",
+            "selector": benchmark_policy,
+            "created_at": "2026-08-22T12:00:00+08:00",
+            "random_seed_ensemble": {"seed_count": 2, "min_agree": 2},
+            "meta": {"last_oos_date": "2026-03-02", "diagnostic": "left"},
+            "params_ensemble_by_effective_date": {
+                "2021-01-01": [
+                    {"member_index": 1, "seed": 101, "score": 1.1, "params": {"high_len": 201}},
+                    {"member_index": 2, "seed": 202, "score": 2.2, "params": {"high_len": 205}},
+                ]
+            },
+            "folds": [
+                {"effective_start": "2021-01-01", "effective_end": "2026-03-02"}
+            ],
+        }
+        left.write_text(json.dumps(ensemble_payload), encoding="utf-8")
+        right_payload = json.loads(json.dumps(ensemble_payload))
+        right_payload["created_at"] = "2026-08-22T13:00:00+08:00"
+        right_payload["meta"]["diagnostic"] = "right"
+        right_payload["params_ensemble_by_effective_date"]["2021-01-01"][0]["score"] = 99.0
+        right.write_text(json.dumps(right_payload), encoding="utf-8")
+        stable_ensemble_identity = (
+            compute_strategy_param_scientific_sha256(left)
+            == compute_strategy_param_scientific_sha256(right)
+        )
+        right_payload["params_ensemble_by_effective_date"]["2021-01-01"][0]["params"]["high_len"] = 202
+        right.write_text(json.dumps(right_payload), encoding="utf-8")
+        runtime_ensemble_change_detected = (
+            compute_strategy_param_scientific_sha256(left)
+            != compute_strategy_param_scientific_sha256(right)
+        )
+    check_true(
+        "strategy_param_runtime_identity_tracks_ensemble_params_not_optimizer_member_provenance",
+        stable_ensemble_identity and runtime_ensemble_change_detected,
+    )
+
+    legacy_prefix_contract = {
+        **prefix_contract,
+        "benchmark_parameter_artifact_identities": {
+            "C61:seed=11": {"sha256": "raw-full-11"},
+            "C58:seed=11": {"sha256": "raw-min-11"},
+            "C61:seed=22": {"sha256": "raw-full-22"},
+            "C58:seed=22": {"sha256": "raw-min-22"},
+        },
+    }
+    legacy_current_contract = {
+        **prefix_contract,
+        "benchmark_parameter_publication_identities": {
+            "C61:seed=11": {"file_sha256": "raw-full-11"},
+            "C58:seed=11": {"file_sha256": "raw-min-11"},
+            "C61:seed=22": {"file_sha256": "raw-full-22"},
+            "C58:seed=22": {"file_sha256": "raw-min-22"},
+        },
+    }
+    legacy_rows = pd.DataFrame([
+        {"arm_id": "C61", "seed": 11, "strategy_param_sha256": "raw-full-11"},
+        {"arm_id": "C58", "seed": 11, "strategy_param_sha256": "raw-min-11"},
+    ])
+    rebound_legacy_rows = _rebind_legacy_strategy_param_identity_rows(
+        legacy_rows, source_contract=legacy_prefix_contract, current_contract=legacy_current_contract
+    )
+    check_true(
+        "robustness_legacy_raw_param_identity_migrates_only_with_exact_current_file_sha",
+        _benchmark_parameter_identities_compatible(
+            legacy_prefix_contract, legacy_current_contract, seeds=(11, 22)
+        )
+        and str(rebound_legacy_rows.iloc[0]["strategy_param_sha256"]) == "full-11"
+        and str(rebound_legacy_rows.iloc[1]["strategy_param_sha256"]) == "min-11",
+    )
+
 
     identity_frame = pd.DataFrame([{
         "arm_id": "C59",
