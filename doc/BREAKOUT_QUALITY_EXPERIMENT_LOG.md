@@ -9817,3 +9817,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 修正Round 2殘留的`2021-only OOS + 2022+ Rolling tail stitch`：current canonical與benchmark策略參數都只建立一份`2021→latest`完整Rolling schedule；OOS只在replay讀取時作in-memory freeze，不再觸發第二次參數訓練或寫出frozen JSON。
 - Robustness benchmark只擁有固定seed題庫；`trials_per_fold`、train window、OOS cadence、search space與Optimizer parallel policy全部繼承canonical Optimizer。移除獨立`ROBUSTNESS_BENCHMARK_STRATEGY_TRIALS_PER_FOLD`數值owner。
 - 直接效果：benchmark策略參數訓練一次交給canonical rolling Optimizer建立全部年度fold，恢復Optimizer既有fold-level parallelism；不開TPE trial-level parallel，以保持各seed TPE trajectory可覆現。舊split producer若已有`initial_2021` Optimizer work，會先搬到新的full-schedule work root再交由canonical resume guard判斷可否接續，避免無條件丟棄已跑的2021 trials。
+
+### 2026-08-22 — Current Robustness matrix收斂為single-seed Compare Suite的純multi-seed版本
+
+- 使用者決策：`Extending-Window Multi-seed Robustness Test`不得額外加入固定production reference；比較對象與contrasts必須和`Extending-Window Test`完全相同，只把seed從單一production seed擴為benchmark seed題庫，最後增加跨seed aggregate。
+- Current `extending_current`因此六個arms `C61/C62/C58/C63/C59/C60`全部改為strategy-seed-sensitive；九個suite contrasts全部作same-seed paired contrasts。C59/C60仍是model-seed-sensitive子集並以同seed訓練E/K/M；C59/C60的same-seed DL-off baseline仍為C58。
+- C62/C63不再使用production canonical params。Benchmark Optimizer service正式支援`base-finalist-best`與`base-finalists-agree`兩個first-class policies；同一`seed × family`只做一次Optimizer search，再從同一workspace發布兩個selector artifacts，避免因政策比較重複搜尋。
+- Robustness不再自動BUILD production canonical Full/Min params作前置；current必要parameter artifacts全部隔離於`models/strategy_params/benchmark/<benchmark_id>/`。此調整改變robustness scientific contract，舊completed run不作current結果REUSE；既有歷史證據與工件保留。
+

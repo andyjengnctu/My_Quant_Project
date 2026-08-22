@@ -181,8 +181,8 @@ DURABLE_RESULT_FILENAMES = {
     "report": REPORT_FILENAME,
 }
 SCIENTIFIC_DURABLE_RESULT_KEYS = ("seed_results", "seed_yearly_results")
-ROBUSTNESS_SCHEMA_VERSION = 11
-ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 5
+ROBUSTNESS_SCHEMA_VERSION = 12
+ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 6
 ROBUSTNESS_MODEL_ARTIFACT_CONTRACT_VERSION = 2
 TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
@@ -603,8 +603,10 @@ def _robustness_arms(
         stochastic = tuple(enabled_by_id[arm_id] for arm_id in robustness.stochastic_arm_ids)
     except KeyError as exc:
         raise ValueError(f"multi-seed robustness引用未啟用或不存在的arm: {exc.args[0]}") from exc
-    if not fixed or not stochastic:
-        raise ValueError("multi-seed robustness需要fixed baseline與stochastic arms")
+    if not stochastic:
+        raise ValueError("multi-seed robustness至少需要一個per-seed arm")
+    if robustness.benchmark_id is None and not fixed:
+        raise ValueError("legacy multi-seed robustness需要fixed baseline")
     return fixed, stochastic
 
 
@@ -1259,12 +1261,13 @@ def _pit_fold_count_for_period(start: str, end: str, fold_months: int) -> int:
 def _render_robustness_execution_plan(
     *, cfg, settings, status: dict[str, Any], fixed_arms, stochastic_arms
 ) -> tuple[str, dict[str, Any]]:
-    # Current end-to-end benchmark uses fixed production consensus references only
-    # as context. C61/C58/C59/C60 all require per-seed benchmark strategy params;
-    # C59/C60 additionally retrain DL sources with the exact same seed.
+    # Current end-to-end benchmark repeats the complete Compare Suite per seed.
+    # Canonical production params are not a robustness prerequisite; every current
+    # arm resolves benchmark-only same-seed params, while model arms additionally
+    # retrain their DL sources with that exact seed.
     if cfg.benchmark_id is not None:
         model_arms = _model_seed_sensitive_arms(settings, cfg, tuple(stochastic_arms))
-        required_sources = tuple(sorted({arm.param_source for arm in fixed_arms}))
+        required_sources = ()
     else:
         model_arms = tuple(stochastic_arms)
         required_sources = _required_parameter_sources(tuple(fixed_arms), tuple(stochastic_arms))
@@ -1304,7 +1307,7 @@ def _render_robustness_execution_plan(
         rows.append((
             "RUN/REUSE",
             arm.name,
-            "Production finalists-agree consensus reference；固定顯示，不作same-seed paired baseline",
+            "Legacy fixed reference",
         ))
     model_ids = {arm.arm_id for arm in model_arms}
     for arm in stochastic_arms:
@@ -1320,6 +1323,11 @@ def _render_robustness_execution_plan(
             action = "PARAM+REPLAY"
         rows.append((action, arm.name, description))
     training_sources = _training_source_groups(tuple(model_arms), settings=settings)
+    optimizer_families = tuple(sorted({
+        str(settings.parameter_sources[str(arm.param_source)].canonical_family or "").strip()
+        for arm in stochastic_arms
+        if str(settings.parameter_sources[str(arm.param_source)].canonical_family or "").strip()
+    })) if cfg.benchmark_id is not None else ()
     pit_workload_rows: list[tuple[str, str]] = []
     if settings.profile_id in {"selection_pit", "extending_window_oos", "extending_window_rolling"} and start is not None and end is not None:
         fold_counts = []
@@ -1362,6 +1370,13 @@ def _render_robustness_execution_plan(
         (
             "策略Benchmark單元",
             f"{cfg.seed_count * len(stochastic_arms)}（{len(stochastic_arms)} per-seed strategy arms × {cfg.seed_count} seeds）",
+        ),
+        *(
+            ((
+                "策略Optimizer搜尋",
+                f"{cfg.seed_count * len(optimizer_families)}（{len(optimizer_families)} families × {cfg.seed_count} seeds；Best/Agree共用search）",
+            ),)
+            if optimizer_families else ()
         ),
         (
             "模型訓練單元",
@@ -4283,9 +4298,10 @@ def render_multi_seed_robustness_report(
             "- 舊robustness工件若未永久保存model prediction／Future Target conversion欄位，report-only refresh會顯示`-`，不為補報表重訓或重跑strategy replay。",
             "- resolved seeds只用於重現；不得挑best seed或依本報表組seed ensemble。",
             (
-                f"- {full_name}／{min_name}在current end-to-end benchmark中使用per-seed strategy params；只有C62/C63 finalists-agree屬固定production consensus context。"
+                f"- {full_name}／{min_name}及其餘current Compare Suite arms全部逐benchmark seed使用same-seed strategy params；"
+                "有DL dependency的arms再以相同seed訓練模型。"
                 if "full" in references
-                else f"- {min_name}在current end-to-end benchmark中使用per-seed strategy params；fixed finalists-agree僅作production consensus context。"
+                else f"- {min_name}及其餘current Compare Suite arms全部逐benchmark seed使用same-seed strategy params。"
             ),
             "- 同一DL source／seed只訓練一次，允許fan-out到不同runtime selector replay；此reuse不改變模型scientific condition。",
             "- Extending-Window Rolling robustness只評估config既定scientific condition；不得依結果回頭調整training semantics或使用future fold結果擬合當下模型。",

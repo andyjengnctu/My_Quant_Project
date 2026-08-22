@@ -1198,7 +1198,7 @@ def _benchmark_build_contract_scientific_payload(contract: dict[str, Any]) -> di
     return {
         str(key): value
         for key, value in dict(contract or {}).items()
-        if str(key) != "schema"
+        if str(key) not in {"schema", "policy"}
     }
 
 
@@ -1351,8 +1351,12 @@ def _resolve_robustness_benchmark_strategy_parameter_state(
     normalized_policy = normalize_strategy_param_policy(policy)
     if mode not in {"oos", "rolling"}:
         raise ValueError("robustness benchmark策略參數只支援oos/rolling")
-    if normalized_policy != "base_finalist_best":
-        raise ValueError("robustness benchmark per-seed策略參數固定使用base-finalist-best")
+    supported_policies = set(COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY.values())
+    if normalized_policy not in supported_policies:
+        raise ValueError(
+            "robustness benchmark per-seed策略參數只支援Strategy Compare first-class policies: "
+            + ",".join(sorted(supported_policies))
+        )
     benchmark = get_robustness_benchmark_policy_snapshot()
     if str(benchmark_id) != str(benchmark["benchmark_id"]):
         raise ValueError(f"benchmark_id與current SSOT不一致: {benchmark_id}")
@@ -1568,6 +1572,9 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
     common = dict(
         project_root=root,
         dataset=str(dataset),
+        # One optimizer search produces both first-class selector outputs.  Use the
+        # canonical best selector as the search anchor, then publish every available
+        # Strategy Compare policy from the same workspace below.
         param_policy="base-finalist-best",
         trials_per_fold=trials,
         max_positions=int(max_positions),
@@ -1591,44 +1598,83 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
         result = prepare_selection_historical_p2_params(
             **common, recover_completed_strategy_compare=False
         )
-    source_path = Path(result["params_path"]).resolve()
-    _assert_optimizer_work_source(source_path=source_path, work_root=work_root)
-    if not source_path.is_file():
+    requested_source = Path(result["params_path"]).resolve()
+    _assert_optimizer_work_source(source_path=requested_source, work_root=work_root)
+    if not requested_source.is_file():
         raise FileNotFoundError(
             "Benchmark Optimizer完成但找不到策略參數輸出: "
-            + _project_relative(root, source_path)
+            + _project_relative(root, requested_source)
         )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    _copy_json_payload(source_path, target)
 
-    initial_member_sha = _benchmark_effective_member_sha256(target)
+    published_paths: dict[str, Path] = {}
+    source_records: dict[str, dict[str, Any]] = {}
+    for compare_policy, optimizer_policy in COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY.items():
+        source_path = _benchmark_workspace_source_path(
+            work_root, family=family, policy=optimizer_policy
+        ).resolve()
+        if not source_path.is_file():
+            continue
+        _assert_optimizer_work_source(source_path=source_path, work_root=work_root)
+        policy_target = resolve_strategy_param_benchmark_artifact_path(
+            root,
+            benchmark_id=str(benchmark_id),
+            seed=int(seed),
+            family=family,
+            evaluation_mode="rolling",
+            policy=optimizer_policy,
+        )
+        policy_target.parent.mkdir(parents=True, exist_ok=True)
+        _copy_json_payload(source_path, policy_target)
+        initial_member_sha = _benchmark_effective_member_sha256(policy_target)
+        policy_contract = _benchmark_schedule_build_contract(
+            benchmark_id=str(benchmark_id),
+            seed=int(seed),
+            family=family,
+            policy=optimizer_policy,
+            dataset=str(dataset),
+            max_positions=int(max_positions),
+            rotation=str(rotation),
+            fixed_risk=float(fixed_risk),
+            max_position_cap_pct=float(max_position_cap_pct),
+        )
+        source_records[optimizer_policy] = {
+            "benchmark_initial_2021_member_sha256": str(initial_member_sha),
+            "same_seed_oos_rolling_initial_required": True,
+            "schedule_kind": "annual_refit",
+            "same_json_oos_rolling": True,
+            "build_contract": policy_contract,
+            "path": _project_relative(root, source_path),
+        }
+        published_paths[compare_policy] = policy_target
+
+    if policy not in source_records or not target.is_file():
+        raise FileNotFoundError(
+            "Benchmark Optimizer完成但requested selector輸出不存在: "
+            f"family={family}, policy={policy}"
+        )
     manifest = refresh_strategy_parameter_benchmark_manifest(
-        root, benchmark_id=str(benchmark_id), seed=int(seed), family=family,
+        root,
+        benchmark_id=str(benchmark_id),
+        seed=int(seed),
+        family=family,
         evaluation_mode="rolling",
-        source_records={
-            policy: {
-                "benchmark_initial_2021_member_sha256": str(initial_member_sha),
-                "same_seed_oos_rolling_initial_required": True,
-                "schedule_kind": "annual_refit",
-                "same_json_oos_rolling": True,
-                "build_contract": build_contract,
-                "path": _project_relative(root, source_path),
-            }
-        },
+        source_records=source_records,
     )
     if not bool(quiet):
         _print_published_strategy_param_paths(
             root,
             title=f"Benchmark 正式策略參數 | {benchmark_id} | seed={int(seed)}",
-            paths={policy: target},
+            paths=published_paths,
             manifest_path=manifest,
         )
+    requested_initial_member_sha = _benchmark_effective_member_sha256(target)
     return {
         "action": "REBUILD" if str(state["action"]) == "REBUILD" else "BUILD",
-        "path": target, "manifest_path": manifest,
+        "path": target,
+        "manifest_path": manifest,
         "sha256": compute_strategy_param_file_sha256(target),
         "scientific_sha256": compute_strategy_param_scientific_sha256(target),
-        "initial_2021_member_sha256": str(initial_member_sha),
+        "initial_2021_member_sha256": str(requested_initial_member_sha),
     }
 
 

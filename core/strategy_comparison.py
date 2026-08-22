@@ -365,8 +365,8 @@ def validate_strategy_multi_seed_robustness_settings(
             )
     fixed_ids = tuple(str(value).strip() for value in settings.fixed_arm_ids if str(value).strip())
     stochastic_ids = tuple(str(value).strip() for value in settings.stochastic_arm_ids if str(value).strip())
-    if not fixed_ids:
-        raise ValueError("multi-seed robustness至少需要一個fixed arm ID")
+    if settings.benchmark_id is None and not fixed_ids:
+        raise ValueError("legacy multi-seed robustness至少需要一個fixed arm ID")
     if not stochastic_ids:
         raise ValueError("multi-seed robustness至少需要一個stochastic arm ID")
     if len(set(fixed_ids)) != len(fixed_ids):
@@ -384,16 +384,15 @@ def validate_strategy_multi_seed_robustness_settings(
             raise ValueError("end-to-end robustness benchmark至少需要一個strategy-seed arm")
         if not model_ids:
             raise ValueError("end-to-end robustness benchmark至少需要一個model-seed arm")
-        if not consensus_ids:
-            raise ValueError("end-to-end robustness benchmark至少需要一個production consensus reference")
         if not set(model_ids).issubset(set(benchmark_ids)):
             raise ValueError("model_seed_sensitive_arm_ids必須是benchmark_strategy_arm_ids子集")
-        if set(benchmark_ids) & set(consensus_ids):
-            raise ValueError("benchmark strategy arms與consensus references不得重疊")
         if tuple(stochastic_ids) != tuple(benchmark_ids):
             raise ValueError("current end-to-end benchmark的stochastic_arm_ids必須等於benchmark_strategy_arm_ids")
-        if tuple(fixed_ids) != tuple(consensus_ids):
-            raise ValueError("current end-to-end benchmark的fixed_arm_ids必須等於consensus_reference_arm_ids")
+        if fixed_ids or consensus_ids:
+            raise ValueError(
+                "current end-to-end robustness不得另設fixed/production consensus arms；"
+                "必須逐seed執行完整Compare Suite"
+            )
     contrast_ids: set[str] = set()
     for raw in settings.paired_contrasts:
         spec = dict(raw or {})

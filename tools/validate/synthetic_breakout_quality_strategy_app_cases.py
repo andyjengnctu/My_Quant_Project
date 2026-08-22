@@ -275,7 +275,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 seed=seed,
                 family=family,
                 evaluation_mode="oos",
-                policy="base-finalist-best",
+                policy=policy,
             )
             == resolve_strategy_param_benchmark_artifact_path(
                 Path(__file__).resolve().parents[2],
@@ -283,9 +283,25 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 seed=seed,
                 family=family,
                 evaluation_mode="rolling",
-                policy="base-finalist-best",
+                policy=policy,
             )
             for family in STRATEGY_PARAM_FAMILIES
+            for policy in ("base-finalist-best", "base-finalists-agree")
+        ),
+    )
+    current_robustness = [
+        strategy_config.get_strategy_multi_seed_robustness_settings(str(mode["robustness_id"]))
+        for mode in strategy_config.get_strategy_rolling_test_modes()
+    ]
+    check_true(
+        "current_robustness_is_exact_multi_seed_form_of_compare_suite",
+        all(
+            tuple(item.stochastic_arm_ids) == expected_arm_ids
+            and tuple(item.benchmark_strategy_arm_ids) == expected_arm_ids
+            and not tuple(item.fixed_arm_ids)
+            and not tuple(item.consensus_reference_arm_ids)
+            and tuple(spec["contrast_id"] for spec in item.paired_contrasts) == expected_contrast_ids
+            for item in current_robustness
         ),
     )
 

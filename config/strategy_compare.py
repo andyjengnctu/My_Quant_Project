@@ -277,8 +277,8 @@ STRATEGY_COMPARE_PROFILES = {
 }
 
 # Multiple-seed robustness各研究階段以獨立config profile呈現於正式選單。
-# Current OOS／Rolling robustness只引用Compare Suite；fixed／stochastic membership與paired contrasts
-# 由suite arm的model dependency自動推導，不得再於profile重複維護比較矩陣。
+# Current OOS／Rolling robustness只引用Compare Suite；所有suite arms與contrasts都逐seed重複，
+# 僅model-seed-sensitive子集由arm的DL dependency推導，不得再於profile重複維護比較矩陣。
 # Historical robustness profiles保留顯式membership供artifact compatibility；orchestration不得改動
 # 單次Strategy Compare arm identity/fingerprint。
 STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
@@ -703,31 +703,27 @@ def _arm_has_seed_sensitive_model_dependency(arm: StrategyComparisonArm) -> bool
 def _derived_robustness_membership(
     profile_settings: StrategyComparisonSettings,
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    """Derive end-to-end benchmark roles from arm semantics, never arm IDs.
+    """Derive current robustness roles from the shared Compare Suite.
 
-    Production finalists-agree DL-off arms are fixed consensus references.  Every
-    other current suite arm uses per-benchmark-seed strategy parameters; the subset
-    with DL dependencies additionally retrains model sources with that same seed.
+    Current robustness is exactly the single-seed Compare Suite repeated for every
+    benchmark seed.  Therefore every enabled suite arm is strategy-seed-sensitive;
+    only arms with DL dependencies additionally retrain model sources with that seed.
+    The first tuple is intentionally empty and exists only for the legacy fixed-arm
+    compatibility shape used by disabled historical robustness profiles.
     """
-    consensus: list[str] = []
-    benchmark: list[str] = []
-    model_sensitive: list[str] = []
-    for arm in profile_settings.enabled_arms:
-        policy = resolve_strategy_comparison_arm_param_policy(profile_settings, arm)
-        has_model = _arm_has_seed_sensitive_model_dependency(arm)
-        if policy == "base-finalists-agree" and not has_model:
-            consensus.append(arm.arm_id)
-            continue
-        benchmark.append(arm.arm_id)
-        if has_model:
-            model_sensitive.append(arm.arm_id)
-    if not consensus or not benchmark or not model_sensitive:
+    benchmark = tuple(arm.arm_id for arm in profile_settings.enabled_arms)
+    model_sensitive = tuple(
+        arm.arm_id
+        for arm in profile_settings.enabled_arms
+        if _arm_has_seed_sensitive_model_dependency(arm)
+    )
+    if not benchmark or not model_sensitive:
         raise ValueError(
             "Compare Suite end-to-end robustness角色不完整: "
-            f"suite={profile_settings.suite_id}, consensus={consensus}, "
-            f"benchmark={benchmark}, model_sensitive={model_sensitive}"
+            f"suite={profile_settings.suite_id}, benchmark={list(benchmark)}, "
+            f"model_sensitive={list(model_sensitive)}"
         )
-    return tuple(consensus), tuple(benchmark), tuple(model_sensitive)
+    return (), benchmark, model_sensitive
 
 
 def _derived_stochastic_contrasts(
@@ -883,14 +879,14 @@ def get_strategy_multi_seed_robustness_settings(
                 "multi-seed robustness suite與Strategy Compare profile不一致: "
                 f"robustness={settings.suite_id}, profile={profile_settings.suite_id}"
             )
-        consensus_ids, benchmark_ids, model_ids = _derived_robustness_membership(profile_settings)
+        fixed_ids, benchmark_ids, model_ids = _derived_robustness_membership(profile_settings)
         settings = replace(
             settings,
-            fixed_arm_ids=consensus_ids,
+            fixed_arm_ids=fixed_ids,
             stochastic_arm_ids=benchmark_ids,
             benchmark_strategy_arm_ids=benchmark_ids,
             model_seed_sensitive_arm_ids=model_ids,
-            consensus_reference_arm_ids=consensus_ids,
+            consensus_reference_arm_ids=(),
             paired_contrasts=_derived_stochastic_contrasts(profile_settings, benchmark_ids),
         )
         validate_strategy_multi_seed_robustness_settings(settings)

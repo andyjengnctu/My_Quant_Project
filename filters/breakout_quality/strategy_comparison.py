@@ -466,7 +466,15 @@ def _compact_execution_plan_item(value: object) -> str:
         parts = text.split(":")
         seed = next((part.split("=", 1)[1] for part in parts if part.startswith("seed=")), "?")
         family = next((part for part in parts if part in {"full", "min"}), "params")
-        text = f"Benchmark {family.title()} | seed {seed}"
+        policy = next(
+            (part for part in parts if part in {"base-finalist-best", "base-finalists-agree"}),
+            "",
+        )
+        policy_label = {
+            "base-finalist-best": "Best",
+            "base-finalists-agree": "Agree",
+        }.get(policy, policy)
+        text = f"Bench {family.title()} {policy_label} | {seed}".replace("  ", " ")
     elif text.startswith("param:"):
         source = text.split(":", 1)[1]
         source = source.replace("_oos", "").replace("_rolling", "")
@@ -500,7 +508,7 @@ def _compact_execution_plan_description(value: object) -> str:
         policy_count = len([item for item in policies.split(",") if item.strip()])
         text = "canonical params" + (f" | {policy_count} policies" if policy_count else "")
     elif "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立" in text:
-        text = "same-seed params | no prod fallback"
+        text = "same-seed selector | shared search"
     elif text.startswith("canonical Dataset需更新："):
         missing_count = None
         marker = "dataset 工件缺少:"

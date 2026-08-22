@@ -1433,9 +1433,11 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         resolve_strategy_param_optimizer_work_dir,
     )
     from services.optimizer.strategy_param_service import (
+        _benchmark_build_contract_scientific_payload,
         _benchmark_fast_republish_source,
         _benchmark_manifest_matches_current_policy,
         _benchmark_schedule_build_contract,
+        ensure_robustness_benchmark_strategy_parameter_artifact,
     )
     from filters.breakout_quality.strategy_compare_sources import (
         strategy_param_source_identity_sha256,
@@ -1583,6 +1585,93 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         fixed_risk=0.01,
         max_position_cap_pct=20.0,
     )
+    benchmark_agree_contract = _benchmark_schedule_build_contract(
+        benchmark_id=str(benchmark["benchmark_id"]),
+        seed=benchmark_seed,
+        family=benchmark_family,
+        policy="base_finalists_agree",
+        dataset="full",
+        max_positions=10,
+        rotation="off",
+        fixed_risk=0.01,
+        max_position_cap_pct=20.0,
+    )
+    check_true(
+        "robustness_best_and_finalists_agree_share_one_optimizer_search_contract",
+        _benchmark_build_contract_scientific_payload(benchmark_build_contract)
+        == _benchmark_build_contract_scientific_payload(benchmark_agree_contract)
+        and benchmark_build_contract["policy"] != benchmark_agree_contract["policy"],
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        optimizer_calls = {"count": 0}
+
+        def fake_full_benchmark_optimizer(**kwargs):
+            optimizer_calls["count"] += 1
+            active_dir = Path(kwargs["output_relative_dir"]) / "active_params"
+            active_dir.mkdir(parents=True, exist_ok=True)
+            for selector, filename in (
+                ("base_finalist_best", "roos_base_best.json"),
+                ("base_finalists_agree", "roos_base_finalists_agree.json"),
+            ):
+                payload = {
+                    "schema_type": "active_param_ensemble",
+                    "schema_version": 1,
+                    "mode": "rolling",
+                    "selector": selector,
+                    "params_ensemble_by_effective_date": {
+                        "2021-01-01": [
+                            {
+                                "member_index": 1,
+                                "seed": benchmark_seed,
+                                "params": {"high_len": 201, "atr_len": 14},
+                            }
+                        ]
+                    },
+                    "meta": {"last_oos_date": "2026-03-02"},
+                    "summary": {"oos_end_date": "2026-03-02"},
+                }
+                (active_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
+            return {"params_path": active_dir / "roos_base_best.json"}
+
+        ensure_kwargs = {
+            "benchmark_id": str(benchmark["benchmark_id"]),
+            "seed": benchmark_seed,
+            "family": "full",
+            "evaluation_mode": "rolling",
+            "comparison_end_date": "2026-03-02",
+            "dataset": "full",
+            "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+            "experiment_profile": UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+            "max_positions": 10,
+            "rotation": "off",
+            "fixed_risk": 0.01,
+            "max_position_cap_pct": 20.0,
+            "quiet": True,
+        }
+        with patch(
+            "services.optimizer.strategy_param_training.prepare_selection_historical_full_roos_params",
+            side_effect=fake_full_benchmark_optimizer,
+        ):
+            best_result = ensure_robustness_benchmark_strategy_parameter_artifact(
+                temp_root, policy="base-finalist-best", **ensure_kwargs
+            )
+            agree_result = ensure_robustness_benchmark_strategy_parameter_artifact(
+                temp_root, policy="base-finalists-agree", **ensure_kwargs
+            )
+        benchmark_manifest = json.loads(
+            Path(agree_result["manifest_path"]).read_text(encoding="utf-8")
+        )
+        check_true(
+            "robustness_same_seed_family_search_publishes_best_and_agree_once",
+            optimizer_calls["count"] == 1
+            and str(best_result["action"]) in {"BUILD", "REBUILD"}
+            and str(agree_result["action"]) == "REUSE"
+            and {"base_finalist_best", "base_finalists_agree"}.issubset(
+                set(benchmark_manifest.get("artifacts") or {})
+            ),
+        )
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_root = Path(temp_dir)
         target = temp_root / "min_base_best.json"
