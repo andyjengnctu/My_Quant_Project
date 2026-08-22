@@ -51,7 +51,7 @@ from core.report_metrics import (
     PORTFOLIO_RESULT_METRICS,
     TRADE_RESULT_METRICS,
 )
-from core.report_style import best_worst_signals, signal_for_workflow_status, styled_signal
+from core.report_style import best_worst_signals, styled_signal, styled_workflow_status
 from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
@@ -556,21 +556,11 @@ def render_strategy_execution_plan_surface(
     for label, value in metadata_rows:
         rendered = value
         if str(label) == "整體狀態":
-            rendered = styled_signal(
-                value,
-                signal_for_workflow_status(value),
-                target="console",
-                bold=True,
-            )
+            rendered = styled_workflow_status(value)
         styled_metadata.append((label, rendered))
     styled_actions = [
         (
-            styled_signal(
-                action,
-                signal_for_workflow_status(action),
-                target="console",
-                bold=True,
-            ),
+            styled_workflow_status(action),
             _compact_execution_plan_item(item),
             _compact_execution_plan_description(description),
         )
@@ -592,10 +582,7 @@ def render_execution_plan(
     plan: StrategyPreparationPlan = status["preparation_plan"]
     ordered_actions = sorted(
         plan.actions,
-        key=lambda item: (
-            0 if item.artifact_key.startswith("param:") else 1,
-            item.artifact_key,
-        ),
+        key=lambda item: (int(item.execution_priority), item.artifact_key),
     )
     blocked = plan.blocked
     rows = []

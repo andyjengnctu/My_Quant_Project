@@ -71,23 +71,25 @@ def _show_model_status() -> None:
     handler()
 
 
-def _prepare_strategy_model_prerequisites(*, profile_id: str) -> int:
-    _, handler = _load_provider_handler("strategy_prerequisite_handler")
-    return int(
-        handler(
-            program_name="apps/research.py compare prerequisite",
-            profile_ids=(str(profile_id),),
-        )
-        or 0
-    )
+def _strategy_model_artifact_scope(action) -> str:
+    """Map a shared Research artifact action to the provider's model-side scope."""
+
+    key = str(getattr(action, "artifact_key", ""))
+    return "upstream" if key.startswith("model-upstream:") else "models"
 
 
-def _prepare_strategy_model_upstream_prerequisites(*, profile_id: str) -> int:
-    _, handler = _load_provider_handler("strategy_upstream_handler")
+def _prepare_strategy_model_artifacts(*, profile_id: str, scope: str) -> int:
+    """Dispatch Strategy Compare model dependencies through one provider contract."""
+
+    _, handler = _load_provider_handler("strategy_artifact_handler")
+    normalized_scope = str(scope).strip().lower()
+    if normalized_scope not in {"upstream", "models"}:
+        raise ValueError(f"不支援的Strategy Compare model artifact scope: {scope!r}")
     return int(
         handler(
-            program_name="apps/research.py compare upstream",
+            program_name=f"apps/research.py compare {normalized_scope}",
             profile_ids=(str(profile_id),),
+            scope=normalized_scope,
         )
         or 0
     )
@@ -181,8 +183,8 @@ def _run_current_comparison(*, profile_id: str, confirm: bool) -> dict:
         settings=settings,
         quiet=True,
         producer_handlers={
-            "model_training": lambda _action: _prepare_strategy_model_prerequisites(
-                profile_id=profile_id
+            "model_training": lambda action: _prepare_strategy_model_artifacts(
+                profile_id=profile_id, scope=_strategy_model_artifact_scope(action)
             )
         },
     )
@@ -215,9 +217,21 @@ def _strategy_compare_profile_menu(profile_id: str) -> int:
             print(f"\n目前操作已中止，返回{settings.profile_label}選單。")
 
 
+def _run_current_robustness(*, robustness_id: str, confirm: bool) -> dict:
+    from filters.breakout_quality.strategy_multi_seed_robustness import run_multi_seed_robustness
+
+    robustness = get_strategy_multi_seed_robustness_settings(robustness_id)
+    return run_multi_seed_robustness(
+        robustness_id=robustness_id,
+        confirm=confirm,
+        model_upstream_preparer=lambda: _prepare_strategy_model_artifacts(
+            profile_id=robustness.profile_id, scope="upstream"
+        ),
+    )
+
+
 def _strategy_multi_seed_robustness_menu(robustness_id: str) -> int:
     from filters.breakout_quality.strategy_multi_seed_robustness import (
-        run_multi_seed_robustness,
         show_latest_multi_seed_robustness_report,
         show_multi_seed_robustness_status,
     )
@@ -238,13 +252,7 @@ def _strategy_multi_seed_robustness_menu(robustness_id: str) -> int:
             return 0
         try:
             if choice == "1":
-                run_multi_seed_robustness(
-                    robustness_id=robustness_id,
-                    confirm=True,
-                    model_upstream_preparer=lambda: _prepare_strategy_model_upstream_prerequisites(
-                        profile_id=robustness.profile_id
-                    ),
-                )
+                _run_current_robustness(robustness_id=robustness_id, confirm=True)
             elif choice == "2":
                 show_multi_seed_robustness_status(robustness_id=robustness_id)
             elif choice == "3":
@@ -601,18 +609,13 @@ def main(argv=None) -> int:
                     + " ".join(rest[action_index + 1:])
                 )
             from filters.breakout_quality.strategy_multi_seed_robustness import (
-                run_multi_seed_robustness,
                 show_latest_multi_seed_robustness_report,
                 show_multi_seed_robustness_status,
             )
             if action == "run":
-                robustness = get_strategy_multi_seed_robustness_settings(robustness_id)
-                run_multi_seed_robustness(
+                _run_current_robustness(
                     robustness_id=robustness_id,
                     confirm=is_interactive_console(),
-                    model_upstream_preparer=lambda: _prepare_strategy_model_upstream_prerequisites(
-                        profile_id=robustness.profile_id
-                    ),
                 )
                 return 0
             if action in {"status", "show"}:

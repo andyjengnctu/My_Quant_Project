@@ -12,6 +12,7 @@ inline HTML text color so the same semantic palette is preserved without icons.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 from core.display_common import C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, console_color_enabled
@@ -75,16 +76,50 @@ def signal_for_workflow_status(value: Any) -> str:
     """
 
     status = str(value or "").strip().upper()
-    if status in {"READY", "REUSE", "DONE", "PASS"}:
-        return SIGNAL_POSITIVE
-    if status in {
+    positive = {"READY", "REUSE", "DONE", "PASS"}
+    warning = {
         "PREPARABLE", "BUILD", "REBUILD", "RESUME", "MIGRATE", "DERIVE",
         "CHECK", "WARN", "WARNING", "PARTIAL",
-    }:
+    }
+    negative = {"BLOCKED", "NOT_RUN", "FAIL", "FAILED", "ERROR"}
+    neutral_actions = {"RUN", "REPORT", "RUN/REUSE", "PARAM+REPLAY", "TRAIN+REPLAY"}
+    if status in neutral_actions:
+        return SIGNAL_NEUTRAL
+    if status in positive:
+        return SIGNAL_POSITIVE
+    if status in warning:
         return SIGNAL_WARNING
-    if status in {"BLOCKED", "NOT_RUN", "FAIL", "FAILED", "ERROR"}:
+    if status in negative:
         return SIGNAL_NEGATIVE
+
+    # Progress/status labels often add a scope prefix (for example
+    # ``[TRAIN DONE]`` or ``[BASELINE REUSE]``).  Parse semantic status tokens
+    # here instead of teaching every renderer a second color vocabulary.
+    tokens = set(re.findall(r"[A-Z][A-Z0-9_]*", status))
+    if tokens & negative:
+        return SIGNAL_NEGATIVE
+    if tokens & warning:
+        return SIGNAL_WARNING
+    if tokens & positive:
+        return SIGNAL_POSITIVE
     return SIGNAL_NEUTRAL
+
+
+def styled_workflow_status(
+    value: Any,
+    *,
+    target: str = "console",
+    bold: bool = True,
+) -> str:
+    """Style a workflow/action status through the project-wide semantic palette."""
+
+    return styled_signal(
+        value,
+        signal_for_workflow_status(value),
+        target=target,
+        bold=bold,
+    )
+
 
 def signal_for_delta(
     value: Any,
@@ -284,4 +319,5 @@ __all__ = [
     "markdown_tone",
     "markdown_signal",
     "styled_signal",
+    "styled_workflow_status",
 ]

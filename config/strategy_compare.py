@@ -41,6 +41,7 @@ from core.strategy_comparison import (
     StrategyPreparationPolicy,
     resolve_strategy_comparison_arm_param_policy,
     validate_strategy_comparison_settings,
+    validate_strategy_compare_gpu_train_workers,
     validate_strategy_multi_seed_robustness_settings,
     validate_strategy_runtime_integration_settings,
 )
@@ -91,17 +92,16 @@ STRATEGY_COMPARE_ROLLING_TEST_MODES = (
     },
 )
 STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE = "extending_window_oos"
-# Backward-compatible aliases only.  Current robustness scientific seed policy is
-# owned by config/training_policy.py ROBUSTNESS_BENCHMARK_* and profiles below do
-# not define a second seed count/generator.
-STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT = ROBUSTNESS_BENCHMARK_SEED_COUNT
-STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED = ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED
 STRATEGY_COMPARE_GPU_TRAIN_WORKERS = 2
+validate_strategy_compare_gpu_train_workers(STRATEGY_COMPARE_GPU_TRAIN_WORKERS)
 STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS = 60.0
+STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT = (
+    "models/research/breakout_quality/strategy_compare/"
+    "extending_window/shared_fitting_checkpoints"
+)
 STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS = 1
 STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED = True
 STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE = "compact"
-STRATEGY_COMPARE_ROBUSTNESS_PROGRESS_INTERVAL_SECONDS = STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS
 STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT = True
 STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS = False
 STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES = False
@@ -292,7 +292,7 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
         "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
         "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
-        "progress_interval_seconds": STRATEGY_COMPARE_ROBUSTNESS_PROGRESS_INTERVAL_SECONDS,
+        "progress_interval_seconds": STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
         "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
         "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
         "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
@@ -304,7 +304,7 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         },
         "output_root": "outputs/strategy_compare/robustness/extending_window/oos_2021_forward",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/oos_2021_forward",
-        "checkpoint_cache_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/shared_fitting_checkpoints",
+        "checkpoint_cache_root": STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
     },
     "extending_window_rolling": {
         "label": "Extending-Window Multi-seed Robustness Test | Rolling Test",
@@ -316,7 +316,7 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
         "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
         "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
-        "progress_interval_seconds": STRATEGY_COMPARE_ROBUSTNESS_PROGRESS_INTERVAL_SECONDS,
+        "progress_interval_seconds": STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
         "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
         "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
         "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
@@ -328,19 +328,19 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         },
         "output_root": "outputs/strategy_compare/robustness/extending_window/rolling_2021_forward",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/rolling_2021_forward",
-        "checkpoint_cache_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/extending_window/shared_fitting_checkpoints",
+        "checkpoint_cache_root": STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
     },
     "selection_pit": {
         "label": "Selection PIT Multi-seed robustness (Legacy)",
         "enabled": False,
         "profile_id": "selection_pit",
-        "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
-        "seed_generator_seed": STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED,
+        "seed_count": ROBUSTNESS_BENCHMARK_SEED_COUNT,
+        "seed_generator_seed": ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
         "gpu_train_workers": STRATEGY_COMPARE_GPU_TRAIN_WORKERS,
         "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
         "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
         "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
-        "progress_interval_seconds": STRATEGY_COMPARE_ROBUSTNESS_PROGRESS_INTERVAL_SECONDS,
+        "progress_interval_seconds": STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
         "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
         "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
         "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
@@ -360,13 +360,13 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "label": "Forward-OOS Multi-seed robustness (Legacy)",
         "enabled": False,
         "profile_id": "forward_oos",
-        "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
-        "seed_generator_seed": STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED,
+        "seed_count": ROBUSTNESS_BENCHMARK_SEED_COUNT,
+        "seed_generator_seed": ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
         "gpu_train_workers": STRATEGY_COMPARE_GPU_TRAIN_WORKERS,
         "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
         "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
         "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
-        "progress_interval_seconds": STRATEGY_COMPARE_ROBUSTNESS_PROGRESS_INTERVAL_SECONDS,
+        "progress_interval_seconds": STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
         "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
         "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
         "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
@@ -1320,6 +1320,7 @@ __all__ = [
     "STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL",
     "STRATEGY_COMPARE_ROLLING_TEST_MODES",
     "STRATEGY_COMPARE_GPU_TRAIN_WORKERS",
+    "STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT",
     "STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS",
     "STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES",
     "STRATEGY_RUNTIME_INTEGRATION",

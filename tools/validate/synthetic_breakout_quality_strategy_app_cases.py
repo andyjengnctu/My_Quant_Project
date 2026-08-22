@@ -358,6 +358,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     from core.training_scheduler import pop_next_seed_diverse_unit
     from services.research import breakout_quality_application as model_application
     from filters.breakout_quality import strategy_multi_seed_robustness as robustness_runtime
+    from config.research import get_active_model_research_provider
 
     application_source = read_source_text(
         project_root / "services" / "research" / "breakout_quality_application.py"
@@ -365,8 +366,24 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     robustness_source = read_source_text(
         project_root / "filters" / "breakout_quality" / "strategy_multi_seed_robustness.py"
     )
+    research_entry_source = read_source_text(project_root / "apps" / "research.py")
+    training_contract_source = read_source_text(
+        project_root / "services" / "research" / "strategy_compare_training.py"
+    )
+    training_process_source = read_source_text(
+        project_root / "services" / "research" / "training_process.py"
+    )
+    provider = get_active_model_research_provider()
     check_true(
-        "normal_and_robustness_share_gpu_training_worker_ssot_and_seed_diverse_scheduler",
+        "strategy_compare_model_provider_uses_one_scoped_artifact_handler",
+        str(provider.strategy_artifact_handler) == "prepare_strategy_compare_artifacts"
+        and not hasattr(provider, "strategy_prerequisite_handler")
+        and not hasattr(provider, "strategy_upstream_handler")
+        and "strategy_artifact_handler" in research_entry_source
+        and "_strategy_model_artifact_scope" in research_entry_source,
+    )
+    check_true(
+        "normal_and_robustness_share_gpu_training_worker_scheduler_and_process_ssot",
         int(strategy_config.STRATEGY_COMPARE_GPU_TRAIN_WORKERS) >= 1
         and float(strategy_config.STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS) > 0.0
         and all(
@@ -375,9 +392,28 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             for mode in modes
         )
         and "ThreadPoolExecutor(max_workers=worker_count)" in application_source
-        and "subprocess.Popen(" in application_source
         and "pop_next_seed_diverse_unit(jobs, futures.values())" in application_source
-        and "pop_next_seed_diverse_unit(" in robustness_source,
+        and "pop_next_seed_diverse_unit(" in robustness_source
+        and "build_strategy_compare_trainer_command(" in application_source
+        and "build_strategy_compare_trainer_command(" in robustness_source
+        and "run_logged_training_process(" in application_source
+        and "run_logged_training_process(" in robustness_source
+        and "subprocess.Popen(" not in application_source
+        and "subprocess.Popen(" not in robustness_source
+        and "subprocess.Popen(" in training_process_source
+        and "--inner-validation-months" in training_contract_source
+        and "--checkpoint-cache-root" in training_contract_source,
+    )
+    check_true(
+        "single_and_multi_seed_share_fitting_checkpoint_cache_root",
+        bool(str(strategy_config.STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT).strip())
+        and "multi_seed_robustness" not in str(strategy_config.STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT)
+        and all(
+            str(strategy_config.get_strategy_multi_seed_robustness_settings(str(mode["robustness_id"])).checkpoint_cache_root)
+            == str(strategy_config.STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT)
+            for mode in modes
+        )
+        and "STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT" in application_source,
     )
 
     single_seed_pending = robustness_runtime.deque([
@@ -417,7 +453,27 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and normal_command[:3]
         == [model_application.sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores"]
         and "--resume" in normal_args
+        and "--inner-validation-months" in normal_args
+        and "--checkpoint-cache-root" in normal_args
         and "--single-score-block" not in normal_args,
+    )
+
+    preparation_status_source = read_source_text(
+        project_root / "filters" / "breakout_quality" / "strategy_compare_preparation_status.py"
+    )
+    comparison_source = read_source_text(
+        project_root / "filters" / "breakout_quality" / "strategy_comparison.py"
+    )
+    check_true(
+        "single_and_multi_seed_share_upstream_then_params_then_models_dependency_semantics",
+        "resolve_planned_comparison_period_from_upstream(" in preparation_status_source
+        and "execution_priority=10" in preparation_status_source
+        and 'scope="upstream"' in research_entry_source
+        and "scope=_strategy_model_artifact_scope(action)" in research_entry_source
+        and "model phase開始前canonical upstream尚未READY" in application_source
+        and "resolve_planned_comparison_period_from_upstream(" in robustness_source
+        and "rows = [*upstream_rows, *param_rows, *benchmark_rows]" in robustness_source
+        and "int(item.execution_priority)" in comparison_source,
     )
 
     pending_trainings = robustness_runtime.deque([

@@ -47,11 +47,28 @@ from config.breakout_quality import (
 )
 from core.display_common import InlineProgress, render_elapsed
 from core.training_progress import read_trainer_epoch_progress
+from core.strategy_comparison import validate_strategy_compare_gpu_train_workers
 from core.training_scheduler import pop_next_seed_diverse_unit
+from core.report_style import (
+    SIGNAL_NEGATIVE,
+    SIGNAL_POSITIVE,
+    SIGNAL_WARNING,
+    styled_signal,
+    styled_workflow_status,
+)
 from core.runtime_utils import (
     is_interactive_console,
     resolve_cli_program_name,
     run_cli_entrypoint,
+)
+from services.research.strategy_compare_training import (
+    STRATEGY_COMPARE_TRAINER_ENV,
+    STRATEGY_COMPARE_TRAINER_LOG_TAIL_CHARS,
+    build_strategy_compare_trainer_command,
+)
+from services.research.training_process import (
+    run_logged_training_process,
+    terminate_registered_training_processes,
 )
 from filters.breakout_quality.artifact_dependency_registry import (
     collect_model_upstream_preparation_plan,
@@ -122,7 +139,6 @@ from core.console_report import (
 )
 
 
-STRATEGY_COMPARE_TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
 
 COMMAND_MODULES = {
@@ -1793,13 +1809,13 @@ def _print_workflow_status(settings=None) -> None:
     for label, paths in grouped_status:
         existing = sum(path.is_file() for path in paths)
         if existing == len(paths):
-            status, tone = "完整", "green"
+            status, signal = "完整", SIGNAL_POSITIVE
         elif existing == 0:
-            status, tone = "缺少", "red"
+            status, signal = "缺少", SIGNAL_NEGATIVE
         else:
-            status, tone = "不完整", "yellow"
+            status, signal = "不完整", SIGNAL_WARNING
         status_rows.append(
-            (paint(f"[{status}]", tone, enabled=color_enabled, bold=True), label)
+            (styled_signal(f"[{status}]", signal, target="console", bold=True), label)
         )
     print(
         render_section(
@@ -2156,24 +2172,19 @@ def _prepare_continuous_research_inputs(
             failure_prefix="模型研究前置",
             on_action=lambda action: print(
                 "  Upstream "
-                + paint(
-                    action.action,
-                    "green" if action.action == "REUSE" else "yellow",
-                    enabled=color_enabled,
-                    bold=True,
-                )
+                + styled_workflow_status(action.action)
                 + f" | {action.artifact_key.split(':', 1)[-1]} | {action.path}"
             ),
         )
     except RuntimeError as exc:
-        print(paint("[Upstream] FAIL", "red", enabled=color_enabled, bold=True) + f"｜{exc}")
+        print(styled_workflow_status("[Upstream] FAIL") + f"｜{exc}")
         return 2
 
     if not outcome.executed:
         for action in outcome.plan.actions:
             print(
                 "  Upstream "
-                + paint("REUSE", "green", enabled=color_enabled, bold=True)
+                + styled_workflow_status("REUSE")
                 + f" | {action.artifact_key.split(':', 1)[-1]} | {action.path}"
             )
 
@@ -2187,7 +2198,7 @@ def _prepare_continuous_research_inputs(
                 schedule = load_min_roos_risk_schedule(PROJECT_ROOT)
             except (FileNotFoundError, OSError, ValueError, KeyError, TypeError) as exc:
                 print(
-                    paint("[Risk params] BLOCKED", "red", enabled=color_enabled, bold=True)
+                    styled_workflow_status("[Risk params] BLOCKED")
                     + f"｜{exc}"
                 )
                 print(
@@ -2196,7 +2207,7 @@ def _prepare_continuous_research_inputs(
                 )
                 return 2
             print(
-                paint("[Risk params] READY", "green", enabled=color_enabled, bold=True)
+                styled_workflow_status("[Risk params] READY")
                 + "｜historical-effective Min ROOS atr_len / atr_times_init"
                 + f"｜periods={len(schedule)}"
             )
@@ -2413,12 +2424,7 @@ def _prepare_strategy_compare_model_upstream(
     for item in plan.actions:
         print(
             "  Upstream "
-            + paint(
-                item.action,
-                "green" if item.action == "REUSE" else "yellow",
-                enabled=color_enabled,
-                bold=True,
-            )
+            + styled_workflow_status(item.action)
             + f" | {item.artifact_key.split(':', 1)[-1]} | {item.description}"
             + f" | {project_relative_display_path(item.path, project_root=PROJECT_ROOT)}"
         )
@@ -2490,7 +2496,7 @@ def _strategy_compare_required_model_sources(profile_ids: tuple[str, ...] | None
     return tuple(comparisons), tuple(dedup.values())
 
 
-def prepare_strategy_compare_model_upstream_artifacts(
+def _prepare_strategy_compare_model_upstream_artifacts(
     *,
     program_name: str,
     profile_ids: tuple[str, ...],
@@ -2542,18 +2548,29 @@ def prepare_strategy_compare_model_upstream_artifacts(
     return 0
 
 
-def prepare_strategy_compare_model_artifacts(
+def prepare_strategy_compare_artifacts(
     *,
     program_name: str,
     profile_ids: tuple[str, ...],
+    scope: str,
 ) -> int:
-    """Canonical model-work prerequisite handler for Strategy Compare orchestration."""
+    """Single provider hook for Strategy Compare model-side dependencies."""
 
-    return int(
-        _prepare_strategy_compare_model_artifacts(
-            program_name, profile_ids=tuple(str(value) for value in profile_ids)
+    normalized_scope = str(scope).strip().lower()
+    selected = tuple(str(value) for value in profile_ids)
+    if normalized_scope == "upstream":
+        return int(
+            _prepare_strategy_compare_model_upstream_artifacts(
+                program_name=program_name, profile_ids=selected
+            )
         )
-    )
+    if normalized_scope == "models":
+        return int(
+            _prepare_strategy_compare_model_artifacts(
+                program_name, profile_ids=selected
+            )
+        )
+    raise ValueError(f"不支援的Strategy Compare artifact scope: {scope!r}")
 
 
 def _strategy_compare_model_build_command(
@@ -2562,95 +2579,20 @@ def _strategy_compare_model_build_command(
     workflow,
     pit_dir_override: Path | None,
 ) -> tuple[list[str], list[str], dict[str, object]]:
-    """Build one canonical trainer subprocess command without changing identity."""
+    """Delegate canonical Strategy Compare trainer CLI construction to the shared SSOT."""
 
-    if source.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
-        args = [
-            "--filter-id", str(source.filter_id),
-            "--model-architecture", str(source.model_architecture),
-            "--experiment-profile", str(source.experiment_profile),
-            "--seed", str(workflow.seed),
-        ]
-        return (
-            [
-                sys.executable,
-                "-m",
-                "tools.filters.breakout_quality.train_continuous_ranker",
-                *args,
-            ],
-            args,
-            {"score_source": str(source.score_source)},
-        )
+    from config.strategy_compare import STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT
 
-    if source.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-        raise ValueError(
-            f"不支援的Strategy Compare model score source: {source.score_source!r}"
-        )
-    if not workflow.rolling_authorized:
-        raise ValueError(
-            "設定的Rolling PIT source未授權current Rolling workflow: "
-            f"{source.dl_id}"
-        )
-
-    fold_months = int(
-        source.point_in_time_fold_months
-        if source.point_in_time_fold_months is not None
-        else workflow.point_in_time_fold_months
+    return build_strategy_compare_trainer_command(
+        source=source,
+        workflow=workflow,
+        seed=int(workflow.seed),
+        point_in_time_dir_override=pit_dir_override,
+        checkpoint_cache_root=(
+            PROJECT_ROOT / STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT
+        ),
+        resume=True,
     )
-    score_start_date = (
-        str(source.point_in_time_score_start_date)
-        if source.point_in_time_score_start_date not in (None, "")
-        else str(workflow.point_in_time_score_start_date)
-    )
-    score_end_date = (
-        source.point_in_time_score_end_date
-        if source.point_in_time_score_end_date not in (None, "")
-        else workflow.point_in_time_score_end_date
-    )
-    args = [
-        "--filter-id", str(source.filter_id),
-        "--model-architecture", str(source.model_architecture),
-        "--experiment-profile", str(source.experiment_profile),
-        "--score-start-date", score_start_date,
-        "--fold-months", str(fold_months),
-        "--inner-validation-months", str(workflow.point_in_time_inner_validation_months),
-        "--seed", str(workflow.seed),
-        "--resume",
-    ]
-    if source.point_in_time_fold_anchor_date not in (None, ""):
-        args.extend(["--fold-anchor-date", str(source.point_in_time_fold_anchor_date)])
-    if source.point_in_time_single_score_block:
-        args.append("--single-score-block")
-    if score_end_date:
-        args.extend(["--score-end-date", str(score_end_date)])
-    if pit_dir_override is not None:
-        args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
-    return (
-        [
-            sys.executable,
-            "-m",
-            "tools.filters.breakout_quality.build_point_in_time_scores",
-            *args,
-        ],
-        args,
-        {
-            "score_source": str(source.score_source),
-            "score_start_date": score_start_date,
-            "score_end_date": score_end_date,
-            "fold_months": fold_months,
-        },
-    )
-
-
-def _terminate_strategy_compare_model_process(proc: subprocess.Popen) -> None:
-    if proc.poll() is not None:
-        return
-    proc.terminate()
-    try:
-        proc.wait(timeout=STRATEGY_COMPARE_TRAINER_TERMINATION_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
 
 
 def _run_strategy_compare_model_build_subprocess(
@@ -2659,41 +2601,18 @@ def _run_strategy_compare_model_build_subprocess(
     active_processes: dict[str, subprocess.Popen],
     active_processes_lock: Lock,
 ) -> dict[str, object]:
-    log_path = Path(str(job["log_path"]))
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ)
-    env[COMPACT_CONSOLE_ENV] = "0"
-    env["PYTHONUNBUFFERED"] = "1"
-    env["BREAKOUT_QUALITY_EPOCH_PROGRESS_MARKERS"] = "1"
-    started = time.perf_counter()
-    with log_path.open("w", encoding="utf-8") as handle:
-        proc = subprocess.Popen(
-            list(job["command"]),
-            cwd=str(PROJECT_ROOT),
-            env=env,
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        key = str(job["dl_id"])
-        with active_processes_lock:
-            active_processes[key] = proc
-        try:
-            returncode = proc.wait()
-        except BaseException:
-            _terminate_strategy_compare_model_process(proc)
-            raise
-        finally:
-            with active_processes_lock:
-                active_processes.pop(key, None)
-    elapsed = time.perf_counter() - started
-    if int(returncode or 0) != 0:
-        tail = log_path.read_text(encoding="utf-8", errors="replace")[-5000:]
-        raise RuntimeError(
-            "Strategy Compare canonical模型訓練失敗: "
-            f"dl_id={job['dl_id']}, returncode={returncode}; log_tail={tail}"
-        )
-    return {"elapsed_sec": elapsed, "returncode": int(returncode or 0)}
+    result = run_logged_training_process(
+        command=list(job["command"]),
+        log_path=Path(str(job["log_path"])),
+        cwd=PROJECT_ROOT,
+        registry=active_processes,
+        registry_lock=active_processes_lock,
+        registry_key=str(job["dl_id"]),
+        env_overrides=STRATEGY_COMPARE_TRAINER_ENV,
+        failure_prefix=f"Strategy Compare canonical模型訓練失敗: dl_id={job['dl_id']}",
+        log_tail_chars=STRATEGY_COMPARE_TRAINER_LOG_TAIL_CHARS,
+    )
+    return result
 
 
 def _prepare_strategy_compare_model_artifacts(
@@ -2718,11 +2637,12 @@ def _prepare_strategy_compare_model_artifacts(
     comparison = comparisons[0]
 
     from config.strategy_compare import (
+        STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
         STRATEGY_COMPARE_GPU_TRAIN_WORKERS,
         STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
     )
 
-    worker_count = max(1, int(STRATEGY_COMPARE_GPU_TRAIN_WORKERS))
+    worker_count = validate_strategy_compare_gpu_train_workers(STRATEGY_COMPARE_GPU_TRAIN_WORKERS)
     color_enabled = console_color_enabled()
     print(
         paint("策略比較模型工件準備", "cyan", enabled=color_enabled, bold=True)
@@ -2730,17 +2650,36 @@ def _prepare_strategy_compare_model_artifacts(
         + f" | dataset={comparison.dataset} | GPU workers={worker_count}"
     )
 
-    selected_profile_ids = (
-        tuple(str(value) for value in profile_ids)
-        if profile_ids is not None
-        else tuple(str(item.profile_id) for item in comparisons)
-    )
-    code = prepare_strategy_compare_model_upstream_artifacts(
-        program_name=program_name,
-        profile_ids=selected_profile_ids,
-    )
-    if code != 0:
-        return int(code)
+    # Upstream production is a separate Research dependency phase. Model-only
+    # execution must not build Dataset/Target as a side effect, otherwise the
+    # shared ordering (upstream -> params -> models) is bypassed.
+    pending_upstream: list[str] = []
+    seen_upstream: set[tuple[str, str, str]] = set()
+    for _dl_id, source in sources:
+        upstream_identity = (
+            str(source.filter_id),
+            str(source.model_architecture),
+            str(source.experiment_profile),
+        )
+        if upstream_identity in seen_upstream:
+            continue
+        seen_upstream.add(upstream_identity)
+        plan = collect_model_upstream_preparation_plan(
+            PROJECT_ROOT,
+            filter_id=upstream_identity[0],
+            model_architecture=upstream_identity[1],
+            experiment_profile=upstream_identity[2],
+            dataset=str(comparison.dataset),
+            max_tickers=0,
+        )
+        pending_upstream.extend(
+            item.artifact_key for item in plan.actions if item.action != "REUSE"
+        )
+    if pending_upstream:
+        raise RuntimeError(
+            "Strategy Compare model phase開始前canonical upstream尚未READY: "
+            + ", ".join(sorted(set(pending_upstream)))
+        )
 
     jobs: deque[dict[str, object]] = deque()
     audit_jobs: list[dict[str, object]] = []
@@ -2809,7 +2748,7 @@ def _prepare_strategy_compare_model_artifacts(
 
         for dl_id in legacy_reuse:
             print(
-                paint("[REUSE]", "green", enabled=color_enabled, bold=True)
+                styled_workflow_status("[REUSE]")
                 + f" {dl_id} | Frozen compatibility model/report/scores"
             )
 
@@ -2858,7 +2797,7 @@ def _prepare_strategy_compare_model_artifacts(
                         elapsed_sec=float(result["elapsed_sec"]),
                     )
                     progress.print_line(
-                        paint("[TRAIN DONE]", "green", enabled=color_enabled, bold=True)
+                        styled_workflow_status("[TRAIN DONE]")
                         + f" seed={job['seed']} | {job['dl_id']}"
                         + f" | elapsed={render_elapsed(float(result['elapsed_sec']))}"
                     )
@@ -2891,10 +2830,9 @@ def _prepare_strategy_compare_model_artifacts(
                     time.sleep(0.25)
             progress.finish()
         except BaseException:
-            with active_processes_lock:
-                processes = list(active_processes.values())
-            for proc in processes:
-                _terminate_strategy_compare_model_process(proc)
+            terminate_registered_training_processes(
+                active_processes, active_processes_lock
+            )
             progress.finish()
             raise
         finally:
@@ -2932,9 +2870,7 @@ def _prepare_strategy_compare_model_artifacts(
                 elapsed_sec=time.perf_counter() - stage_started,
             )
 
-    print(
-        paint("策略比較所需模型工件已就緒", "green", enabled=color_enabled, bold=True)
-    )
+    print(styled_workflow_status("[READY]") + " 策略比較所需模型工件已就緒")
     return 0
 
 
@@ -3147,8 +3083,7 @@ __all__ = [
     "COMMAND_DESCRIPTIONS",
     "COMMAND_MODULES",
     "main",
-    "prepare_strategy_compare_model_artifacts",
-    "prepare_strategy_compare_model_upstream_artifacts",
+    "prepare_strategy_compare_artifacts",
     "run_model_training_menu",
     "show_model_status",
 ]

@@ -225,8 +225,24 @@ class StrategyComparisonArm:
         }
 
 
-MULTI_SEED_GPU_TRAIN_WORKERS_MIN = 1
-MULTI_SEED_GPU_TRAIN_WORKERS_MAX = 2
+STRATEGY_COMPARE_GPU_TRAIN_WORKERS_MIN = 1
+STRATEGY_COMPARE_GPU_TRAIN_WORKERS_MAX = 2
+
+
+def validate_strategy_compare_gpu_train_workers(value: int) -> int:
+    """Validate the shared top-level Strategy Compare GPU training concurrency."""
+
+    workers = int(value)
+    if not (
+        STRATEGY_COMPARE_GPU_TRAIN_WORKERS_MIN
+        <= workers
+        <= STRATEGY_COMPARE_GPU_TRAIN_WORKERS_MAX
+    ):
+        raise ValueError(
+            "Strategy Compare gpu_train_workers必須介於"
+            f"{STRATEGY_COMPARE_GPU_TRAIN_WORKERS_MIN}～{STRATEGY_COMPARE_GPU_TRAIN_WORKERS_MAX}"
+        )
+    return workers
 
 
 @dataclass(frozen=True)
@@ -325,16 +341,7 @@ def validate_strategy_multi_seed_robustness_settings(
         raise ValueError("multi-seed robustness benchmark_id不可空白")
     if settings.strategy_trials_per_fold is not None and int(settings.strategy_trials_per_fold) < 1:
         raise ValueError("multi-seed robustness strategy_trials_per_fold必須>=1")
-    gpu_train_workers = int(settings.gpu_train_workers)
-    if not (
-        MULTI_SEED_GPU_TRAIN_WORKERS_MIN
-        <= gpu_train_workers
-        <= MULTI_SEED_GPU_TRAIN_WORKERS_MAX
-    ):
-        raise ValueError(
-            "multi-seed robustness gpu_train_workers必須介於"
-            f"{MULTI_SEED_GPU_TRAIN_WORKERS_MIN}～{MULTI_SEED_GPU_TRAIN_WORKERS_MAX}"
-        )
+    validate_strategy_compare_gpu_train_workers(settings.gpu_train_workers)
     if int(settings.cpu_replay_workers) < 1:
         raise ValueError("multi-seed robustness cpu_replay_workers必須>=1")
     if str(settings.console_mode) not in {"compact", "verbose"}:
@@ -1197,8 +1204,9 @@ def strategy_comparison_fingerprint(
 
 
 __all__ = [
-    "MULTI_SEED_GPU_TRAIN_WORKERS_MIN",
-    "MULTI_SEED_GPU_TRAIN_WORKERS_MAX",
+    "STRATEGY_COMPARE_GPU_TRAIN_WORKERS_MIN",
+    "STRATEGY_COMPARE_GPU_TRAIN_WORKERS_MAX",
+    "validate_strategy_compare_gpu_train_workers",
     "StrategyArtifactBuilder",
     "StrategyComparisonArm",
     "StrategyComparisonContrast",

@@ -1328,6 +1328,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     training_progress_source = (project_root / "core/training_progress.py").read_text(
         encoding="utf-8"
     )
+    strategy_training_source = (
+        project_root / "services/research/strategy_compare_training.py"
+    ).read_text(encoding="utf-8")
     strategy_reuse_source = (
         project_root / "filters/breakout_quality/strategy_compare_reuse.py"
     ).read_text(encoding="utf-8")
@@ -2179,8 +2182,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         bool(oos_cache_root)
                 and oos_cache_root == rolling_cache_root
                 and not Path(oos_cache_root).is_absolute()
-                and '"checkpoint_cache_root"' in strategy_compare_config_source
-                and "--checkpoint-cache-root" in multi_seed_source
+                and "multi_seed_robustness" not in oos_cache_root
+                and "STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT" in strategy_compare_config_source
+                and "--checkpoint-cache-root" in strategy_training_source
                 and "fitting_identity_checkpoint_reuse" in point_in_time_source
                 and "source_score_reused" in point_in_time_source
                 and "fold_training_identity" in point_in_time_source,
@@ -2191,9 +2195,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "class _FixedProgressBlock" in multi_seed_source
         and "def _trainer_epoch_progress(" in multi_seed_source
         and "read_trainer_epoch_progress" in multi_seed_source
-        and 'env["BREAKOUT_QUALITY_COMPACT_CONSOLE"] = "0"' in multi_seed_source
-        and 'env["PYTHONUNBUFFERED"] = "1"' in multi_seed_source
-        and 'env["BREAKOUT_QUALITY_EPOCH_PROGRESS_MARKERS"] = "1"' in multi_seed_source
+        and 'COMPACT_CONSOLE_ENV: "0"' in strategy_training_source
+        and '"PYTHONUNBUFFERED": "1"' in strategy_training_source
+        and '"BREAKOUT_QUALITY_EPOCH_PROGRESS_MARKERS": "1"' in strategy_training_source
         and "def read_trainer_epoch_progress(" in training_progress_source
         and "_EPOCH_PROGRESS_MARKER_RE" in training_progress_source
         and "_PIT_TRAINING_FOLD_RE" in training_progress_source
@@ -2227,7 +2231,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and "_EXECUTION_PLAN_DESCRIPTION_WIDTH = 44" in comparison_source
                 and "action_colors =" not in multi_seed_source
                 and "def signal_for_workflow_status(" in report_style_source
-                and "signal_for_workflow_status" in comparison_source,
+                and "def styled_workflow_status(" in report_style_source
+                and "styled_workflow_status" in comparison_source,
     )
 
 

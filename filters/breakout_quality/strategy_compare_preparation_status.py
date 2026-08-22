@@ -12,6 +12,7 @@ from typing import Any, Mapping
 import pandas as pd
 
 from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT
+from config.breakout_quality import get_breakout_quality_workflow_settings
 from core.active_param_ensemble import get_active_param_ensemble_date_range
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
@@ -42,6 +43,7 @@ from core.strategy_param_artifacts import (
     resolve_strategy_param_artifact_path,
     resolve_strategy_param_manifest_path,
 )
+from filters.breakout_quality.dataset_store import resolve_dataset_paths
 from filters.breakout_quality.expected_r_calibration import (
     EXPECTED_R_CALIBRATION_METHOD,
     resolve_expected_r_calibration_paths,
@@ -54,6 +56,7 @@ from filters.breakout_quality.excess_r_calibration import (
 )
 from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
+    resolve_filter_output_dir,
     resolve_filter_model_output_dir,
     resolve_selection_point_in_time_audit_json_path,
     resolve_selection_point_in_time_manifest_path,
@@ -67,6 +70,7 @@ from filters.breakout_quality.ranking_score_store import (
     load_selection_point_in_time_ranking_contract,
     resolve_continuous_ranker_oos_score_path,
 )
+from filters.breakout_quality.splits import resolve_breakout_quality_outer_policy
 from filters.breakout_quality.strategy_compare_dl_artifacts import (
     collect_dl_artifact_status as _collect_dl_artifact_status,
     model_upstream_prerequisite_blockers,
@@ -249,6 +253,96 @@ def resolve_comparison_period(
             )
         )
     return str(common_start.date()), str(common_end.date()), "dl_runtime_common_overlap"
+
+
+def resolve_planned_comparison_period_from_upstream(
+    *,
+    project_root: Path = PROJECT_ROOT,
+    settings: StrategyComparisonSettings,
+    required_dl_sources: set[str] | tuple[str, ...] | None = None,
+) -> tuple[str | None, str | None, str]:
+    """Resolve a pre-score period hint from canonical upstream truth.
+
+    Final READY comparison coverage still comes from validated runtime score artifacts.
+    This hint exists only so deterministic parameter producers do not need to wait for
+    model scoring when canonical Dataset truth already fixes the legal configured horizon.
+    """
+
+    if settings.start_date is not None and settings.end_date is not None:
+        start = pd.Timestamp(settings.start_date).normalize()
+        end = pd.Timestamp(settings.end_date).normalize()
+        if end < start:
+            raise ValueError("策略比較設定期間不合法")
+        return str(start.date()), str(end.date()), "config_explicit"
+
+    if required_dl_sources is None:
+        _params, _required, runtime_required = _resolve_required_artifact_sources(settings)
+        source_ids = tuple(sorted(runtime_required))
+    else:
+        source_ids = tuple(sorted(str(value) for value in required_dl_sources))
+    if not source_ids:
+        return None, None, "upstream_pending"
+
+    periods: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    root = Path(project_root).resolve()
+    for dl_id in source_ids:
+        source = settings.dl_sources[dl_id]
+        if str(source.score_source) != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            return None, None, "runtime_pending"
+        dataset_paths = resolve_dataset_paths(
+            resolve_filter_output_dir(root, filter_id=str(source.filter_id))
+        )
+        summary = _read_json(dataset_paths.summary)
+        if summary is None:
+            return None, None, "upstream_pending"
+        stored_dataset = str(summary.get("dataset") or "").strip().lower()
+        expected_dataset = str(settings.dataset).strip().lower()
+        if stored_dataset and stored_dataset != expected_dataset:
+            raise ValueError(
+                "Strategy Compare Dataset profile不一致: "
+                f"expected={expected_dataset}, actual={stored_dataset}"
+            )
+        source_range = dict(summary.get("source_data_date_range") or {})
+        source_end = str(source_range.get("end") or "").strip()
+        if not source_end:
+            return None, None, "upstream_pending"
+        outer = resolve_breakout_quality_outer_policy(
+            root, source_data_end_date=source_end
+        )
+        workflow = get_breakout_quality_workflow_settings(
+            experiment_profile=str(source.experiment_profile)
+        )
+        configured_start = (
+            source.point_in_time_score_start_date
+            if source.point_in_time_score_start_date not in (None, "")
+            else workflow.point_in_time_score_start_date
+        )
+        configured_end = (
+            source.point_in_time_score_end_date
+            if source.point_in_time_score_end_date not in (None, "")
+            else workflow.point_in_time_score_end_date
+        )
+        start = pd.Timestamp(
+            str(configured_start or outer["oos_start_date"])
+        ).normalize()
+        end = pd.Timestamp(
+            str(
+                outer["effective_oos_end_date"]
+                if configured_end in (None, "")
+                or str(configured_end).strip().lower() == "auto"
+                else configured_end
+            )
+        ).normalize()
+        periods.append((start, end))
+    common_start = max(value[0] for value in periods)
+    common_end = min(value[1] for value in periods)
+    if common_end < common_start:
+        raise ValueError("Strategy Compare model sources沒有共同planned score期間")
+    return (
+        str(common_start.date()),
+        str(common_end.date()),
+        "upstream_planned_runtime",
+    )
 
 
 def _validate_param_training_identity(
@@ -1044,10 +1138,20 @@ def collect_artifact_status(
             settings=settings,
             runtime_periods=runtime_periods,
         )
-    # When the evaluation horizon is runtime-derived, strategy parameters depend on the
-    # score artifacts that define that horizon.  This keeps the graph PREPARABLE while
-    # those scores are BUILD/REBUILD/RESUME, and prevents Optimizer from receiving a stale
-    # comparison_end=None snapshot.
+        if comparison_start is None or comparison_end is None:
+            (
+                comparison_start,
+                comparison_end,
+                comparison_period_source,
+            ) = resolve_planned_comparison_period_from_upstream(
+                project_root=root,
+                settings=settings,
+                required_dl_sources=runtime_required_dl_sources,
+            )
+    # When neither runtime nor canonical upstream truth can determine the horizon,
+    # score artifacts remain the dependency that ultimately defines final READY coverage.
+    # A canonical-upstream planned horizon only removes needless producer ordering drift;
+    # final runtime coverage is re-read after model production.
     comparison_period_dependencies = (
         tuple(
             f"dl:{dl_id}:forward_scores"
@@ -1094,6 +1198,7 @@ __all__ = [
     "collect_artifact_status",
     "model_upstream_prerequisite_blockers",
     "resolve_comparison_period",
+    "resolve_planned_comparison_period_from_upstream",
     "resolve_param_source_path",
     "resolve_required_param_policies_for_source",
 ]

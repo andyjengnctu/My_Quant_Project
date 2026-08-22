@@ -52,7 +52,6 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_TORCH_DEVICE,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
-    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
     get_breakout_quality_workflow_settings,
 )
@@ -102,12 +101,10 @@ from core.strategy_param_artifacts import (
     STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA,
     compute_strategy_param_scientific_sha256,
 )
-from filters.breakout_quality.dataset_store import resolve_dataset_paths
 from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_COVERAGE_FILENAME,
     SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
     SELECTION_POINT_IN_TIME_SCORE_FILENAME,
-    resolve_filter_output_dir,
 )
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
@@ -116,7 +113,6 @@ from filters.breakout_quality.ranking_score_store import (
     load_continuous_ranker_oos_score_table_from_path,
     load_selection_point_in_time_score_table_from_path,
 )
-from filters.breakout_quality.splits import resolve_breakout_quality_outer_policy
 from filters.breakout_quality.strategy_compare_sources import (
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
@@ -128,6 +124,15 @@ from filters.breakout_quality.strategy_compare_replay import (
     run_standalone_baseline,
 )
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
+from services.research.strategy_compare_training import (
+    STRATEGY_COMPARE_TRAINER_ENV,
+    STRATEGY_COMPARE_TRAINER_LOG_TAIL_CHARS,
+    build_strategy_compare_trainer_command,
+)
+from services.research.training_process import (
+    run_logged_training_process,
+    terminate_registered_training_processes,
+)
 from services.optimizer.strategy_param_service import (
     ensure_robustness_benchmark_strategy_parameter_artifact,
     inspect_robustness_benchmark_strategy_parameter_artifact,
@@ -139,9 +144,13 @@ from core.report_style import (
     best_worst_signals,
     signal_for_delta,
     styled_signal,
+    styled_workflow_status,
     terminal_signal,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
+from filters.breakout_quality.strategy_compare_preparation_status import (
+    resolve_planned_comparison_period_from_upstream,
+)
 from filters.breakout_quality.strategy_comparison import (
     _arm_runtime_spec,
     _resolved_ranking_options,
@@ -153,9 +162,6 @@ from filters.breakout_quality.strategy_comparison import (
 )
 from filters.breakout_quality.strategy_compare_reporting import capacity_summary
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
-from filters.breakout_quality.artifact_dependency_registry import (
-    collect_model_upstream_preparation_plan,
-)
 from filters.breakout_quality.strategy_compare_preparation_status import (
     collect_artifact_status as collect_strategy_preparation_status,
 )
@@ -184,7 +190,6 @@ SCIENTIFIC_DURABLE_RESULT_KEYS = ("seed_results", "seed_yearly_results")
 ROBUSTNESS_SCHEMA_VERSION = 12
 ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 6
 ROBUSTNESS_MODEL_ARTIFACT_CONTRACT_VERSION = 2
-TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
 MEAN_METRICS: tuple[tuple[str, str, str], ...] = (
     ("報酬", "total_return_pct", "%"),
@@ -782,7 +787,7 @@ def _prepare_benchmark_strategy_parameter_artifacts(
                 )
                 built_by_unit[unit] = result
                 print(
-                    paint(f"[PARAM {result['action']}]", "green", enabled=console_color_enabled(), bold=True)
+                    "[" + styled_workflow_status(str(result["action"])) + "]"
                     + f" seed={seed} {binding['family']}/{binding['evaluation_mode']} "
                     + f"{binding['param_policy']}"
                 )
@@ -1105,127 +1110,41 @@ def _contract_paired_contrasts(
     return tuple(resolved)
 
 
-def _model_upstream_rows(settings, stochastic_arms) -> tuple[list[tuple[str, str, str]], list[str]]:
-    """Render model upstream work from the shared Research preparation contract."""
+def _model_upstream_rows(status: dict[str, Any]) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """Render upstream work directly from the shared Strategy preparation plan."""
 
+    plan = status.get("preparation_plan")
+    if plan is None:
+        raise RuntimeError("Strategy Compare status缺少preparation_plan")
     rows: list[tuple[str, str, str]] = []
     blockers: list[str] = []
-    seen: set[tuple[str, str]] = set()
-    for dl_id, _arm_entries in _training_source_groups(tuple(stochastic_arms), settings=settings):
-        dl = settings.dl_sources[str(dl_id)]
-        key = (str(dl.filter_id), str(dl.experiment_profile))
-        if key in seen:
+    for item in plan.actions:
+        if not str(item.artifact_key).startswith("model-upstream:"):
             continue
-        seen.add(key)
-        plan = collect_model_upstream_preparation_plan(
-            PROJECT_ROOT,
-            filter_id=str(dl.filter_id),
-            model_architecture=str(dl.model_architecture),
-            experiment_profile=str(dl.experiment_profile),
-            dataset=str(settings.dataset),
-            max_tickers=0,
-        )
-        pending = [item for item in plan.actions if item.action != "REUSE"]
-        if not pending:
-            profile = get_breakout_quality_experiment_profile(str(dl.experiment_profile))
-            description = (
-                "重用canonical Dataset／source OHLCV truth；daily windows與固定target由"
-                "canonical trainer即時計算，不需要legacy market-set工件"
-                if str(profile.training_sample_scope)
-                == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
-                else "重用canonical Dataset／Continuous Target truth；isolated trainer不得建立新的Label／Target定義"
-            )
-            rows.append(("REUSE", f"model-upstream:{dl.experiment_profile}", description))
-            continue
-        if plan.blocked:
-            reasons = [item.description for item in pending if item.action == "BLOCKED"]
-            blockers.extend(reasons)
-            rows.append((
-                "BLOCKED",
-                f"model-upstream:{dl.experiment_profile}",
-                "；".join(reasons) or "Research dependency graph判定model upstream不可自動補建",
-            ))
-            continue
-        action = "REBUILD" if any(item.action == "REBUILD" for item in pending) else (
-            "RESUME" if any(item.action == "RESUME" for item in pending) else "BUILD"
-        )
-        rows.append((
-            action,
-            f"model-upstream:{dl.experiment_profile}",
-            "；".join(item.description for item in pending)
-            + "；確認後由canonical model-training producer依Research dependency graph補建並re-plan",
-        ))
+        rows.append((item.action, item.artifact_key, item.description))
+        if item.action == "BLOCKED":
+            blockers.append(f"{item.artifact_key}: {item.description}")
     return rows, blockers
 
 
 def _comparison_period_from_upstream(settings, stochastic_arms, status: dict[str, Any]) -> tuple[str, str]:
-    if settings.start_date is not None and settings.end_date is not None:
-        start = pd.Timestamp(str(settings.start_date)).normalize()
-        end = pd.Timestamp(str(settings.end_date)).normalize()
-        if end < start:
-            raise RuntimeError("Multiple-seed robustness設定期間不合法")
-        return str(start.date()), str(end.date())
-
-    runtime_periods: list[tuple[pd.Timestamp, pd.Timestamp]] = []
-    seen_sources: set[tuple[str, str]] = set()
-    for dl_id, _arm_entries in _training_source_groups(tuple(stochastic_arms), settings=settings):
-        dl = settings.dl_sources[str(dl_id)]
-        filter_id = str(dl.filter_id)
-        source_key = (filter_id, str(dl.experiment_profile))
-        if source_key in seen_sources:
-            continue
-        seen_sources.add(source_key)
-        dataset = resolve_dataset_paths(
-            resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
+    del status  # Period planning is owned by the shared Strategy preparation resolver.
+    required_dl_ids = {
+        str(dl_id)
+        for dl_id, _arm_entries in _training_source_groups(
+            tuple(stochastic_arms), settings=settings
         )
-        summary = _read_json(dataset.summary)
-        if summary is None:
-            raise RuntimeError(
-                "Multiple-seed robustness無法讀取canonical Dataset summary: "
-                + project_relative_display_path(dataset.summary, project_root=PROJECT_ROOT)
-            )
-        stored_dataset = str(summary.get("dataset") or "").strip().lower()
-        expected_dataset = str(settings.dataset).strip().lower()
-        if stored_dataset and stored_dataset != expected_dataset:
-            raise RuntimeError(
-                "Multiple-seed robustness Dataset profile不一致: "
-                f"expected={expected_dataset}, actual={stored_dataset}"
-            )
-        source_range = dict(summary.get("source_data_date_range") or {})
-        source_end = str(source_range.get("end") or "").strip()
-        if not source_end:
-            raise RuntimeError(
-                "Multiple-seed robustness無法由Dataset解析Forward OOS期間: "
-                + project_relative_display_path(dataset.summary, project_root=PROJECT_ROOT)
-            )
-        outer = resolve_breakout_quality_outer_policy(
-            PROJECT_ROOT, source_data_end_date=source_end
+    }
+    start, end, _source = resolve_planned_comparison_period_from_upstream(
+        project_root=PROJECT_ROOT,
+        settings=settings,
+        required_dl_sources=required_dl_ids,
+    )
+    if start is None or end is None:
+        raise RuntimeError(
+            "Multiple-seed robustness尚無法由canonical upstream truth解析共同策略期間"
         )
-        configured_start = _source_point_in_time_score_start_date(
-            settings=settings, dl_id=str(dl_id)
-        )
-        configured_end = _source_point_in_time_score_end_date(
-            settings=settings, dl_id=str(dl_id)
-        )
-        period_start = pd.Timestamp(
-            str(configured_start or outer["oos_start_date"])
-        ).normalize()
-        period_end = pd.Timestamp(
-            str(
-                outer["effective_oos_end_date"]
-                if configured_end in (None, "") or str(configured_end).lower() == "auto"
-                else configured_end
-            )
-        ).normalize()
-        runtime_periods.append((period_start, period_end))
-    if not runtime_periods:
-        raise RuntimeError("Multiple-seed robustness沒有可解析Forward OOS期間的stochastic source")
-    start = max(item[0] for item in runtime_periods)
-    end = min(item[1] for item in runtime_periods)
-    if end < start:
-        raise RuntimeError("Multiple-seed robustness stochastic sources沒有共同Forward OOS期間")
-    return str(start.date()), str(end.date())
-
+    return str(start), str(end)
 
 def _parameter_plan_rows(
     *, settings, status: dict[str, Any], required_sources: tuple[str, ...]
@@ -1274,7 +1193,7 @@ def _render_robustness_execution_plan(
     param_rows, param_blockers = _parameter_plan_rows(
         settings=settings, status=status, required_sources=required_sources
     )
-    upstream_rows, upstream_blockers = _model_upstream_rows(settings, model_arms)
+    upstream_rows, upstream_blockers = _model_upstream_rows(status)
     blockers = [*param_blockers, *upstream_blockers]
     upstream_pending = any(row[0] in {"BUILD", "REBUILD", "RESUME"} for row in upstream_rows)
     if upstream_pending and not upstream_blockers:
@@ -1302,7 +1221,7 @@ def _render_robustness_execution_plan(
         for row in (*param_rows, *benchmark_rows, *upstream_rows)
     )
     overall = "BLOCKED" if blockers else "PREPARABLE" if pending_work else "READY"
-    rows = [*param_rows, *benchmark_rows, *upstream_rows]
+    rows = [*upstream_rows, *param_rows, *benchmark_rows]
     for arm in fixed_arms:
         rows.append((
             "RUN/REUSE",
@@ -2701,59 +2620,26 @@ def _training_command(
     *, arm: StrategyComparisonArm, dl_id: str, seed: int, model_dir: Path, research_dir: Path, settings,
     comparison_start: str, comparison_end: str, checkpoint_cache_root: Path | None = None,
 ) -> list[str]:
+    """Build the per-seed command through the shared Strategy Compare trainer SSOT."""
+
+    del arm  # Arm semantics affect replay; trainer identity is owned by the DL source + seed.
     dl = settings.dl_sources[str(dl_id)]
-    if str(dl.score_source) == "selection_point_in_time":
-        command = [
-            sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores",
-            "--filter-id", dl.filter_id,
-            "--model-architecture", dl.model_architecture,
-            "--experiment-profile", dl.experiment_profile,
-            "--seed", str(int(seed)),
-            "--fold-months", str(
-                _source_point_in_time_fold_months(settings=settings, dl_id=str(dl_id))
-            ),
-            "--score-start-date", str(comparison_start),
-            "--score-end-date", str(comparison_end),
-            "--point-in-time-dir-override", str(model_dir.resolve()),
-        ]
-        fold_anchor_date = _source_point_in_time_fold_anchor_date(
-            settings=settings, dl_id=str(dl_id)
-        )
-        if fold_anchor_date is not None:
-            command.extend(["--fold-anchor-date", fold_anchor_date])
-        if _source_point_in_time_single_score_block(settings=settings, dl_id=str(dl_id)):
-            command.append("--single-score-block")
-        if checkpoint_cache_root is not None:
-            command.extend(["--checkpoint-cache-root", str(checkpoint_cache_root.resolve())])
-        return command
-    return [
-        sys.executable, "-m", "tools.filters.breakout_quality.train_continuous_ranker",
-        "--filter-id", dl.filter_id, "--model-architecture", dl.model_architecture,
-        "--experiment-profile", dl.experiment_profile, "--seed", str(int(seed)),
-        "--model-output-dir", str(model_dir.resolve()),
-        "--research-output-dir", str(research_dir.resolve()),
-    ]
-
-
-def _terminate_trainer_process(proc: subprocess.Popen) -> None:
-    if proc.poll() is not None:
-        return
-    proc.terminate()
-    try:
-        proc.wait(timeout=TRAINER_TERMINATION_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
-
-
-def _terminate_active_trainers(
-    registry: dict[str, subprocess.Popen],
-    registry_lock: Lock,
-) -> None:
-    with registry_lock:
-        processes = list(registry.values())
-    for proc in processes:
-        _terminate_trainer_process(proc)
+    workflow = get_breakout_quality_workflow_settings(
+        experiment_profile=str(dl.experiment_profile)
+    )
+    command, _args, _metadata = build_strategy_compare_trainer_command(
+        source=dl,
+        workflow=workflow,
+        seed=int(seed),
+        score_start_date=str(comparison_start),
+        score_end_date=str(comparison_end),
+        point_in_time_dir_override=model_dir,
+        checkpoint_cache_root=checkpoint_cache_root,
+        model_output_dir=model_dir,
+        research_output_dir=research_dir,
+        resume=True,
+    )
+    return command
 
 
 def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
@@ -2816,50 +2702,32 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         model_dir.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(research_dir, ignore_errors=True)
     research_dir.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ)
-    env["BREAKOUT_QUALITY_COMPACT_CONSOLE"] = "0"
-    env["PYTHONUNBUFFERED"] = "1"
-    env["BREAKOUT_QUALITY_EPOCH_PROGRESS_MARKERS"] = "1"
     trainer_registry = job["trainer_registry"]
     trainer_registry_lock = job["trainer_registry_lock"]
     trainer_key = str(job["trainer_key"])
-    with train_log_path.open("w", encoding="utf-8") as train_log:
-        proc = subprocess.Popen(
-            _training_command(
-                arm=arm,
-                dl_id=dl_id,
-                seed=seed,
-                model_dir=model_dir,
-                research_dir=research_dir,
-                settings=settings,
-                comparison_start=str(job["comparison_start"]),
-                comparison_end=str(job["comparison_end"]),
-                checkpoint_cache_root=checkpoint_cache_root,
-            ),
-            cwd=str(PROJECT_ROOT),
-            env=env,
-            stdout=train_log,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        with trainer_registry_lock:
-            trainer_registry[trainer_key] = proc
-        try:
-            returncode = proc.wait()
-        except BaseException:
-            _terminate_trainer_process(proc)
-            raise
-        finally:
-            with trainer_registry_lock:
-                trainer_registry.pop(trainer_key, None)
-    if int(returncode or 0) != 0:
-        train_tail = ""
-        if train_log_path.is_file():
-            train_tail = train_log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
-        raise RuntimeError(
-            f"multi-seed模型訓練失敗: arm={arm.name}, seed_index={job['seed_order']}; "
-            f"returncode={returncode}; log_tail={train_tail}"
-        )
+    run_logged_training_process(
+        command=_training_command(
+            arm=arm,
+            dl_id=dl_id,
+            seed=seed,
+            model_dir=model_dir,
+            research_dir=research_dir,
+            settings=settings,
+            comparison_start=str(job["comparison_start"]),
+            comparison_end=str(job["comparison_end"]),
+            checkpoint_cache_root=checkpoint_cache_root,
+        ),
+        log_path=train_log_path,
+        cwd=PROJECT_ROOT,
+        registry=trainer_registry,
+        registry_lock=trainer_registry_lock,
+        registry_key=trainer_key,
+        env_overrides=STRATEGY_COMPARE_TRAINER_ENV,
+        failure_prefix=(
+            f"multi-seed模型訓練失敗: arm={arm.name}, seed_index={job['seed_order']}"
+        ),
+        log_tail_chars=STRATEGY_COMPARE_TRAINER_LOG_TAIL_CHARS,
+    )
     artifacts = _validate_training_artifacts(
         arm=arm,
         dl_id=dl_id,
@@ -3198,7 +3066,7 @@ def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dic
             }
             color_enabled = console_color_enabled()
             print(
-                paint("[BASELINE REUSE]", "green", enabled=color_enabled, bold=True)
+                styled_workflow_status("[BASELINE REUSE]")
                 + f" {arm.name} | {project_relative_display_path(reusable_dir, project_root=PROJECT_ROOT)}"
             )
             continue
@@ -4547,9 +4415,8 @@ def run_multi_seed_robustness(
                 f"returncode={upstream_code}"
             )
 
-    post_upstream_rows, post_upstream_blockers = _model_upstream_rows(
-        settings, model_arms
-    )
+    status = collect_artifact_status(settings=settings)
+    post_upstream_rows, post_upstream_blockers = _model_upstream_rows(status)
     post_upstream_pending = [
         row for row in post_upstream_rows if row[0] in {"BUILD", "REBUILD", "RESUME"}
     ]
@@ -4638,7 +4505,7 @@ def run_multi_seed_robustness(
                 manifest_payload["report_refreshed_at_utc"] = datetime.now(timezone.utc).isoformat()
                 _write_json(run_root / MANIFEST_FILENAME, manifest_payload)
             print(
-                paint("[ROBUSTNESS REUSE]", "green", enabled=console_color_enabled(), bold=True)
+                styled_workflow_status("[ROBUSTNESS REUSE]")
                 + f" fingerprint={contract['fingerprint']} | completed scientific result"
             )
             _print_report_tables(summary)
@@ -4686,7 +4553,7 @@ def run_multi_seed_robustness(
         })
         _write_json(manifest_path, manifest)
         print(
-            paint("[FAILED]", "red", enabled=console_color_enabled(), bold=True)
+            styled_workflow_status("[FAILED]")
             + " Multiple-seed robustness前置回放階段已停止；可由同一入口接續。"
             + f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
         )
@@ -4909,22 +4776,22 @@ def run_multi_seed_robustness(
                 displayed_done_units += 1
             if strategy_action == "RUN_SCIENTIFIC":
                 print_event(
-                    paint(f"[DONE {displayed_done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
+                    "[" + styled_workflow_status("DONE") + f" {displayed_done_units}/{total_units}]"
                     + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name}"
                 )
             elif strategy_action == "REBUILD_CONTEXT":
                 print_event(
-                    paint("[BASELINE CONTEXT REBUILD]", "yellow", enabled=color_enabled, bold=True)
+                    styled_workflow_status("[BASELINE CONTEXT REBUILD]")
                     + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} | scientific result reuse"
                 )
             elif unit_key in completed:
                 print_event(
-                    paint(f"[REUSE {displayed_done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
+                    "[" + styled_workflow_status("REUSE") + f" {displayed_done_units}/{total_units}]"
                     + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name}"
                 )
             elif unit_key in scientific_completed:
                 print_event(
-                    paint("[REBUILD ATTRIBUTION]", "yellow", enabled=color_enabled, bold=True)
+                    styled_workflow_status("[REBUILD ATTRIBUTION]")
                     + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} | scientific result reuse"
                 )
 
@@ -5023,9 +4890,7 @@ def run_multi_seed_robustness(
                 if str(row.get("arm_id")) == min_ref_arm and int(row.get("seed")) == int(result["seed"])
             ), None)
             delta_min = None if min_row is None else romd - float(min_row.get("return_over_max_drawdown"))
-            done_tag = paint(
-                f"[DONE {done_units}/{total_units}]", "green", enabled=color_enabled, bold=True
-            )
+            done_tag = "[" + styled_workflow_status("DONE") + f" {done_units}/{total_units}]"
             delta_text = (
                 "ΔMin=N/A"
                 if delta_min is None else terminal_signal(
@@ -5185,7 +5050,7 @@ def run_multi_seed_robustness(
                     f"/built:{built_folds}"
                 )
             print_event(
-                paint(tag, "green", enabled=color_enabled, bold=True)
+                styled_workflow_status(tag)
                 + f" seed {meta['seed_order']}/{len(seeds)} | "
                 f"模型來源 {meta['source_order']}/{meta['source_count']} {meta['dl_id']} "
                 + f"| replay targets={len(meta['replay_arms'])} "
@@ -5301,7 +5166,7 @@ def run_multi_seed_robustness(
         harvest_replays()
         training_progress.clear()
     except BaseException as exc:
-        _terminate_active_trainers(active_trainers, active_trainers_lock)
+        terminate_registered_training_processes(active_trainers, active_trainers_lock)
         write_progress_manifest()
         manifest.update({
             "status": "FAILED",
@@ -5313,7 +5178,7 @@ def run_multi_seed_robustness(
         })
         _write_json(manifest_path, manifest)
         print_event(
-            paint("[FAILED]", "red", enabled=color_enabled, bold=True)
+            styled_workflow_status("[FAILED]")
             + " Multiple-seed robustness已停止；可修正後由同一入口接續。"
             + f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
         )
@@ -5418,7 +5283,7 @@ def run_multi_seed_robustness(
         })
         _write_json(manifest_path, manifest)
         print(
-            paint("[FAILED]", "red", enabled=console_color_enabled(), bold=True)
+            styled_workflow_status("[FAILED]")
             + " Multiple-seed robustness彙總階段失敗；seed結果已保留，可由同一入口接續。"
             + f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
         )
@@ -5441,7 +5306,7 @@ def run_multi_seed_robustness(
         progress.finish()
     _print_report_tables(summary)
     print(f"\n總耗時：{_format_elapsed(summary['elapsed_sec'])}")
-    cleanup_tag = paint("暫存清理", "green", enabled=color_enabled, bold=True)
+    cleanup_tag = styled_workflow_status("暫存清理")
     print(
         f"{cleanup_tag}：checkpoints={'保留' if cfg.keep_checkpoints else '已清除'}｜"
         f"scores={'保留' if cfg.keep_scores else '已清除'}｜"
