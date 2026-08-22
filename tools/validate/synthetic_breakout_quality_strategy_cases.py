@@ -1322,6 +1322,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     multi_seed_source = (
         project_root / "filters/breakout_quality/strategy_multi_seed_robustness.py"
     ).read_text(encoding="utf-8")
+    continuous_ranker_source = (
+        project_root / "services/breakout_quality/train_continuous_ranker.py"
+    ).read_text(encoding="utf-8")
     strategy_reuse_source = (
         project_root / "filters/breakout_quality/strategy_compare_reuse.py"
     ).read_text(encoding="utf-8")
