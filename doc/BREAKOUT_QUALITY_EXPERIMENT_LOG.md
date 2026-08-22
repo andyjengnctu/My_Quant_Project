@@ -9825,3 +9825,10 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - C62/C63不再使用production canonical params。Benchmark Optimizer service正式支援`base-finalist-best`與`base-finalists-agree`兩個first-class policies；同一`seed × family`只做一次Optimizer search，再從同一workspace發布兩個selector artifacts，避免因政策比較重複搜尋。
 - Robustness不再自動BUILD production canonical Full/Min params作前置；current必要parameter artifacts全部隔離於`models/strategy_params/benchmark/<benchmark_id>/`。此調整改變robustness scientific contract，舊completed run不作current結果REUSE；既有歷史證據與工件保留。
 
+
+### 2026-08-23 — Research application-boundary formal synthetic closure + Robustness Registry SSOT sync
+
+- 基準：`test-branch-1_20260823_000658_7cc67b2.zip`，SHA256=`42d798449adb47d3f8eacf160241fce082dfc9ca8a3f21a2327c6ff0ffcab5a5`。使用者正式`apps/run_bundle.py`結果：quick gate／chain checks／ml smoke PASS；consistency唯一FAIL為`STRATEGY_COMPARE_RESOLVED_PLAN_TRANSITION.interactive_status_and_run_share_same_resolved_plan`，meta quality唯一FAIL `coverage_synthetic_suite_runs_successfully`由同一synthetic failure連帶造成。
+- 根因是validator仍以source-string硬要求`apps/research.py`直接包含`resolve_comparison_plan(settings=settings)`；前一輪application boundary已正確把canonical resolver移至`services/research/strategy_compare_application.py`，因此production行為正確而舊synthetic誤判。修正後synthetic直接以isolated mock呼叫驗證：service解析出的同一`ResolvedComparisonPlan`同時供renderer與`apps/research.py` execution使用；不再把implementation owner固定成App source字串。同時把`services/research/strategy_compare_application.py`加入該case的`impacted_modules`，使後續service變更必定命中此contract。
+- 全專案同步檢查另發現Registry `SR-C58/C61/C62/C63`仍殘留「Robustness fixed REUSE」舊敘述，與2026-08-22已採用之current六arm same-seed end-to-end benchmark及config/Experiment Log衝突；四列已改為逐benchmark seed使用同seed策略參數，年度aggregate side文字亦由`fixed baseline/stochastic`改為功能語意`DL-off baseline/DL-on ranking`。未改任何MR/SR/Cxx identity、arm集合、seed題庫、Optimizer/model/交易語意或Research Queue優先序。
+- Decision：**FORMAL_SYNTHETIC_FALSE_FAILURE_CLOSED / APPLICATION_SERVICE_BOUNDARY_PRESERVED / REGISTRY_CURRENT_TRUTH_SYNCED / SCIENCE_UNCHANGED / FORMAL_RERUN_PENDING**。

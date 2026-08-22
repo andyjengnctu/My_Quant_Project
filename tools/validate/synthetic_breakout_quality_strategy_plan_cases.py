@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import tempfile
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -241,13 +242,65 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
             missing_period_rejected = False
         check_true("ready_plan_rejects_missing_comparison_period_before_execution", missing_period_rejected)
 
-    app_source = (Path(__file__).resolve().parents[2] / "apps" / "research.py").read_text(
-        encoding="utf-8"
-    )
+    from apps import research as research_app
+    from services.research import strategy_compare_application as strategy_compare_app_service
+
+    with (
+        patch.object(
+            strategy_compare_app_service,
+            "get_strategy_comparison_settings",
+            return_value=base,
+        ),
+        patch.object(
+            strategy_comparison_module,
+            "resolve_comparison_plan",
+            return_value=resolved,
+        ) as resolve_mock,
+        patch.object(
+            strategy_comparison_module,
+            "render_execution_plan",
+            return_value="synthetic resolved plan",
+        ) as render_mock,
+    ):
+        service_settings, service_plan, rendered_plan = (
+            strategy_compare_app_service.resolve_strategy_comparison_execution(base.profile_id)
+        )
+
+    with (
+        patch.object(
+            research_app,
+            "resolve_strategy_comparison_execution",
+            return_value=(base, resolved, "synthetic resolved plan"),
+        ),
+        patch.object(
+            research_app,
+            "execute_strategy_comparison",
+            return_value={"status": "COMPLETED"},
+        ) as execute_mock,
+        patch("builtins.print"),
+    ):
+        app_result = research_app._run_current_comparison(
+            profile_id=base.profile_id,
+            confirm=False,
+        )
+
+    resolve_call = resolve_mock.call_args
+    render_call = render_mock.call_args
+    execute_call = execute_mock.call_args
     check_true(
         "interactive_status_and_run_share_same_resolved_plan",
-        "resolved_plan = resolve_comparison_plan(settings=settings)" in app_source
-                and "resolved_plan=resolved_plan" in app_source,
+        service_settings is base
+                and service_plan is resolved
+                and rendered_plan == "synthetic resolved plan"
+                and resolve_call is not None
+                and resolve_call.kwargs.get("settings") is base
+                and render_call is not None
+                and render_call.kwargs.get("settings") is base
+                and render_call.kwargs.get("status") == resolved.status_dict()
+                and execute_call is not None
+                and execute_call.kwargs.get("settings") is base
+                and execute_call.kwargs.get("resolved_plan") is resolved
+                and app_result == {"status": "COMPLETED"},
     )
 
     summary["profile_id"] = base.profile_id
