@@ -526,6 +526,70 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
                         and "778532" in pit_console
                         and "100.00%" in pit_markdown,
         )
+        check_true(
+            "breakout_quality_pit_build_simple_report_omits_audit_only_metrics",
+            "Daily rho" not in pit_console and "Global rho" not in pit_console,
+        )
+
+        pit_override = simple_root / "models" / "synthetic_pit_override"
+        pit_override.mkdir(parents=True, exist_ok=True)
+        (pit_override / "selection_point_in_time_manifest.json").write_text(
+            json.dumps(
+                {
+                    "coverage": {
+                        "scored_group_count": 630589,
+                        "expected_group_count": 630589,
+                        "coverage_rate": 1.0,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        (pit_override / "selection_point_in_time_audit.json").write_text(
+            json.dumps(
+                {
+                    "score_coverage": {
+                        "scored_group_count": 630589,
+                        "expected_group_count": 630589,
+                        "coverage_rate": 1.0,
+                    },
+                    "decision_contract": {"primary_metric_scope": "all_valid_target"},
+                    "metrics": {
+                        "all_valid_target": {
+                            "mean_daily_spearman": 0.2119,
+                            "global_spearman": 0.1642,
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (pit_override / "selection_point_in_time_audit.md").write_text(
+            "# Synthetic PIT audit\n",
+            encoding="utf-8",
+        )
+        with patch.object(app_breakout_quality, "PROJECT_ROOT", simple_root):
+            _audit_report_path, audit_console = _capture_stdout(
+                app_breakout_quality._emit_breakout_quality_simple_report,
+                "audit-point-in-time-scores",
+                [
+                    "--filter-id", "synthetic_quality",
+                    "--model-architecture", BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+                    "--experiment-profile", STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+                    "--point-in-time-dir-override", str(pit_override),
+                ],
+                returncode=0,
+                elapsed_sec=0.75,
+            )
+        check_true(
+            "breakout_quality_pit_audit_simple_report_reads_actual_override_artifacts",
+            "Score coverage" in audit_console
+            and "100.00%" in audit_console
+            and "630589" in audit_console
+            and "0.2119" in audit_console
+            and "0.1642" in audit_console
+            and "None" not in audit_console,
+        )
 
         compare_dir = (
             simple_root / "outputs" / "filters" / "breakout_quality"

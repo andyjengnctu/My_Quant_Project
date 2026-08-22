@@ -731,49 +731,71 @@ def _simple_report_details(
             if pit_override_raw in (None, "")
             else Path(str(pit_override_raw)).resolve()
         )
-        audit_json = (
-            pit_override / "selection_point_in_time_audit.json"
+        pit_manifest = (
+            pit_override / "selection_point_in_time_manifest.json"
             if pit_override is not None
-            else resolve_selection_point_in_time_audit_json_path(
+            else resolve_selection_point_in_time_manifest_path(
                 PROJECT_ROOT, filter_id, architecture, profile
             )
         )
-        payload = load_json_object_or_none(audit_json) or {}
-        coverage = dict(payload.get("score_coverage") or {})
-        if command == "build-point-in-time-scores" and not coverage:
-            pit_manifest = (
-                pit_override / "selection_point_in_time_manifest.json"
-                if pit_override is not None
-                else resolve_selection_point_in_time_manifest_path(
-                    PROJECT_ROOT, filter_id, architecture, profile
-                )
-            )
-            manifest_payload = load_json_object_or_none(pit_manifest) or {}
-            coverage = dict(manifest_payload.get("coverage") or {})
-        decision = dict(payload.get("decision_contract") or {})
-        primary_scope = str(decision.get("primary_metric_scope") or "pass_only_target")
-        primary = dict((payload.get("metrics") or {}).get(primary_scope) or {})
-        if not primary:
-            primary = dict(payload.get("primary_metrics") or payload.get("pass_only_metrics") or {})
-        if not primary:
-            target_quality = dict(payload.get("target_quality") or {})
-            primary = dict(target_quality.get("primary") or {})
+        manifest_payload = load_json_object_or_none(pit_manifest) or {}
+        coverage = dict(manifest_payload.get("coverage") or {})
         rows.extend(
             [
                 ("Score coverage", _fmt_simple_metric(coverage.get("coverage_rate"), percent=True)),
-                ("Scored groups", coverage.get("scored_group_count")),
-                ("Daily rho", _fmt_simple_metric(primary.get("mean_daily_spearman"))),
-                ("Global rho", _fmt_simple_metric(primary.get("global_spearman"))),
+                (
+                    "Scored groups",
+                    coverage.get("scored_group_count")
+                    if coverage.get("scored_group_count") is not None
+                    else "-",
+                ),
             ]
         )
-        candidate = (
-            pit_override / "selection_point_in_time_audit.md"
-            if pit_override is not None
-            else resolve_selection_point_in_time_audit_markdown_path(
-                PROJECT_ROOT, filter_id, architecture, profile
+        if command == "audit-point-in-time-scores":
+            audit_json = (
+                pit_override / "selection_point_in_time_audit.json"
+                if pit_override is not None
+                else resolve_selection_point_in_time_audit_json_path(
+                    PROJECT_ROOT, filter_id, architecture, profile
+                )
             )
-        )
-        detail_report = candidate if candidate.is_file() else None
+            payload = load_json_object_or_none(audit_json) or {}
+            audit_coverage = dict(payload.get("score_coverage") or {})
+            if audit_coverage:
+                rows[-2:] = [
+                    (
+                        "Score coverage",
+                        _fmt_simple_metric(audit_coverage.get("coverage_rate"), percent=True),
+                    ),
+                    (
+                        "Scored groups",
+                        audit_coverage.get("scored_group_count")
+                        if audit_coverage.get("scored_group_count") is not None
+                        else "-",
+                    ),
+                ]
+            decision = dict(payload.get("decision_contract") or {})
+            primary_scope = str(decision.get("primary_metric_scope") or "pass_only_target")
+            primary = dict((payload.get("metrics") or {}).get(primary_scope) or {})
+            if not primary:
+                primary = dict(payload.get("primary_metrics") or payload.get("pass_only_metrics") or {})
+            if not primary:
+                target_quality = dict(payload.get("target_quality") or {})
+                primary = dict(target_quality.get("primary") or {})
+            rows.extend(
+                [
+                    ("Daily rho", _fmt_simple_metric(primary.get("mean_daily_spearman"))),
+                    ("Global rho", _fmt_simple_metric(primary.get("global_spearman"))),
+                ]
+            )
+            candidate = (
+                pit_override / "selection_point_in_time_audit.md"
+                if pit_override is not None
+                else resolve_selection_point_in_time_audit_markdown_path(
+                    PROJECT_ROOT, filter_id, architecture, profile
+                )
+            )
+            detail_report = candidate if candidate.is_file() else None
     elif command in {"report", "workflow"}:
         report_json = resolve_filter_report_json_path(
             PROJECT_ROOT, filter_id, architecture, profile
@@ -2821,9 +2843,15 @@ def _prepare_strategy_compare_model_artifacts(
                         str(job["source"].score_source)
                         == SCORE_SOURCE_SELECTION_POINT_IN_TIME
                     )
+                    report_args = list(result["report_args"])
+                    if is_pit and "--point-in-time-dir-override" not in report_args:
+                        report_args.extend([
+                            "--point-in-time-dir-override",
+                            str(Path(str(job["model_dir"])).resolve()),
+                        ])
                     _emit_breakout_quality_simple_report(
                         "build-point-in-time-scores" if is_pit else "train-continuous-ranker",
-                        list(result["report_args"]),
+                        report_args,
                         returncode=0,
                         elapsed_sec=float(result["elapsed_sec"]),
                     )
@@ -2832,12 +2860,9 @@ def _prepare_strategy_compare_model_artifacts(
                             "--filter-id", str(job["source"].filter_id),
                             "--model-architecture", str(job["source"].model_architecture),
                             "--experiment-profile", str(job["source"].experiment_profile),
+                            "--point-in-time-dir-override",
+                            str(Path(str(job["model_dir"])).resolve()),
                         ]
-                        if job.get("pit_dir_override") is not None:
-                            audit_args.extend([
-                                "--point-in-time-dir-override",
-                                str(job["pit_dir_override"]),
-                            ])
                         _emit_breakout_quality_simple_report(
                             "audit-point-in-time-scores",
                             audit_args,
