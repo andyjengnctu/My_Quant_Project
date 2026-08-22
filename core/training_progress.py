@@ -18,10 +18,78 @@ _PIT_TRAINING_FOLD_RE = re.compile(r"fold_\d{8}_\d{8}.*訓練並評分")
 _PIT_PLAN_RE = re.compile(r"\[PIT plan\]\s*建立\s*(\d+)\s*個fold", re.IGNORECASE)
 _PIT_ACTIVE_FOLD_RE = re.compile(r"PIT fold\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
 _PIT_COMPLETE_RE = re.compile(r"PIT Scores 完成\s*\|\s*folds=(\d+)", re.IGNORECASE)
+_PIT_PROGRESS_MARKER_RE = re.compile(
+    r"__BQ_PIT_PROGRESS__\s+completed=(\d+)\s+total=(\d+)\s+active=(\d+)",
+    re.IGNORECASE,
+)
+PIT_PROGRESS_MARKER_ENV = "BREAKOUT_QUALITY_PIT_PROGRESS_MARKERS"
+PIT_PROGRESS_CONTEXT_ENV = "BREAKOUT_QUALITY_PIT_PROGRESS_CONTEXT"
 _PIT_FOLD_ID_RE = re.compile(r"fold_\d{8}_\d{8}", re.IGNORECASE)
 _PIT_VERBOSE_ACTIVE_FOLD_RE = re.compile(
     r"(fold_\d{8}_\d{8})[^\n]*訓練並評分", re.IGNORECASE
 )
+
+
+def _pit_progress_markers_enabled() -> bool:
+    value = os.environ.get(PIT_PROGRESS_MARKER_ENV, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def set_trainer_pit_progress_context(
+    *,
+    completed: int,
+    total: int,
+    active: int | None,
+    emit: bool = False,
+) -> None:
+    """Set one canonical PIT-progress context for the active trainer process.
+
+    The context is process-local and is only materialized when Strategy Compare
+    explicitly enables machine-readable PIT progress markers.
+    """
+
+    if not _pit_progress_markers_enabled():
+        return
+    completed_i = int(completed)
+    total_i = int(total)
+    active_i = 0 if active is None else int(active)
+    if total_i < 0 or completed_i < 0 or completed_i > total_i:
+        raise ValueError(
+            f"invalid PIT progress context: completed={completed_i}, total={total_i}"
+        )
+    if active_i < 0 or active_i > total_i:
+        raise ValueError(
+            f"invalid PIT active fold: active={active_i}, total={total_i}"
+        )
+    os.environ[PIT_PROGRESS_CONTEXT_ENV] = f"{completed_i}:{total_i}:{active_i}"
+    if emit:
+        emit_trainer_pit_progress_marker()
+
+
+def clear_trainer_pit_progress_context() -> None:
+    os.environ.pop(PIT_PROGRESS_CONTEXT_ENV, None)
+
+
+def emit_trainer_pit_progress_marker() -> None:
+    """Emit the current PIT progress as a machine-readable trainer-log marker."""
+
+    if not _pit_progress_markers_enabled():
+        return
+    raw = os.environ.get(PIT_PROGRESS_CONTEXT_ENV, "").strip()
+    if not raw:
+        return
+    parts = raw.split(":")
+    if len(parts) != 3:
+        return
+    try:
+        completed, total, active = (int(value) for value in parts)
+    except ValueError:
+        return
+    print(
+        "__BQ_PIT_PROGRESS__ "
+        f"completed={completed} total={total} active={active}",
+        flush=True,
+    )
 
 
 def _read_trainer_log_tail(log_path: str | Path, *, max_bytes: int = 262144) -> str | None:
@@ -66,6 +134,15 @@ def read_trainer_pit_progress(log_path: str | Path) -> tuple[int, int] | None:
     tail = _read_trainer_log_tail(log_path) or ""
     if not head and not tail:
         return None
+
+    markers = list(_PIT_PROGRESS_MARKER_RE.finditer(tail))
+    if markers:
+        marker = markers[-1]
+        completed_count = int(marker.group(1))
+        total_count = int(marker.group(2))
+        if total_count > 0:
+            completed_count = min(max(0, completed_count), total_count)
+            return completed_count, total_count
 
     completed = list(_PIT_COMPLETE_RE.finditer(tail))
     if completed:
@@ -181,7 +258,12 @@ def render_training_unit_progress(
 
 
 __all__ = [
+    "PIT_PROGRESS_CONTEXT_ENV",
+    "PIT_PROGRESS_MARKER_ENV",
+    "clear_trainer_pit_progress_context",
+    "emit_trainer_pit_progress_marker",
     "read_trainer_epoch_progress",
     "read_trainer_pit_progress",
     "render_training_unit_progress",
+    "set_trainer_pit_progress_context",
 ]

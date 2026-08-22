@@ -136,6 +136,7 @@ from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
 )
+from core.training_progress import emit_trainer_pit_progress_marker
 
 RANKER_SCHEMA_VERSION = 2
 RANKER_SCORE_FILENAME = "continuous_ranker_scores.csv"
@@ -149,6 +150,10 @@ def _emit_epoch_progress_marker(phase: str, epoch: int, total_epochs: int) -> No
     value = os.environ.get(EPOCH_PROGRESS_MARKER_ENV, "").strip().lower()
     if value not in {"1", "true", "yes", "on"}:
         return
+    # PIT context is emitted from the same canonical epoch heartbeat when the
+    # caller is a point-in-time builder.  This keeps fold progress near the log
+    # tail instead of forcing outer orchestrators to infer it from console text.
+    emit_trainer_pit_progress_marker()
     print(
         f"__BQ_EPOCH_PROGRESS__ phase={str(phase)} epoch={int(epoch)}/{int(total_epochs)}",
         flush=True,

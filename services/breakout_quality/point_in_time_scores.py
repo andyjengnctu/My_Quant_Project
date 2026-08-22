@@ -17,6 +17,10 @@ import numpy as np
 import pandas as pd
 
 from core.display_common import InlineProgress, format_elapsed
+from core.training_progress import (
+    clear_trainer_pit_progress_context,
+    set_trainer_pit_progress_context,
+)
 
 from config.breakout_quality import (
     BREAKOUT_QUALITY_ALLOW_TF32,
@@ -1840,7 +1844,20 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
     fitting_checkpoint_reuse_fold_count = 0
     built_fold_count = 0
     fold_progress = InlineProgress()
+    if folds:
+        set_trainer_pit_progress_context(
+            completed=0,
+            total=len(folds),
+            active=1,
+            emit=True,
+        )
     for fold_index, (fold, ids) in enumerate(zip(folds, fold_details), start=1):
+        set_trainer_pit_progress_context(
+            completed=fold_index - 1,
+            total=len(folds),
+            active=fold_index,
+            emit=True,
+        )
         fold_contract = _fold_contract_payload(args, bundle, fold, ids)
         fingerprint = _json_fingerprint(fold_contract)
         fold_dir = _point_in_time_fold_dir_for_args(args, str(fold["fold_id"]))
@@ -1994,6 +2011,13 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
                 "checkpoint_sha256": str(manifest["artifacts"]["checkpoint"]["sha256"]),
             }
         )
+        set_trainer_pit_progress_context(
+            completed=fold_index,
+            total=len(folds),
+            active=(fold_index + 1 if fold_index < len(folds) else None),
+            emit=True,
+        )
+    clear_trainer_pit_progress_context()
 
     combined = pd.concat(score_frames, ignore_index=True)
     combined = combined.sort_values(

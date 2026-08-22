@@ -681,16 +681,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     with tempfile.TemporaryDirectory(prefix="strategy_progress_log_") as temp_dir:
         progress_log = Path(temp_dir) / "train.log"
         progress_log.write_text(
-            "[PIT plan] 建立 6 個fold的合法 train/validation/score partitions...\n"
-            "Selection point-in-time fold plan\n"
-            "fold_20210101_20211231  2021-01-01 ～ 2021-12-31\n"
-            "fold_20220101_20221231  2022-01-01 ～ 2022-12-31\n"
-            "fold_20230101_20231231  2023-01-01 ～ 2023-12-31\n"
-            "fold_20240101_20241231  2024-01-01 ～ 2024-12-31\n"
-            "fold_20250101_20251231  2025-01-01 ～ 2025-12-31\n"
-            "fold_20260101_20260302  2026-01-01 ～ 2026-03-02\n"
-            "執行環境\n"
-            "fold_20230101_20231231：訓練並評分 2023-01-01 ～ 2023-12-31\n",
+            "__BQ_PIT_PROGRESS__ completed=2 total=6 active=3\n"
+            "__BQ_EPOCH_PROGRESS__ phase=select epoch=1/200\n",
             encoding="utf-8",
         )
         check(
@@ -698,9 +690,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             (2, 6),
             read_trainer_pit_progress(progress_log),
         )
+        # The machine marker must remain sufficient even when the verbose PIT plan
+        # is absent from the bounded log window.
         progress_log.write_text(
-            progress_log.read_text(encoding="utf-8")
-            + "PIT Scores 完成 | folds=6 | 重用=2 | 新建=4\n",
+            "__BQ_PIT_PROGRESS__ completed=6 total=6 active=0\n",
             encoding="utf-8",
         )
         check(
