@@ -448,6 +448,45 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "--inner-validation-months" in training_contract_source
         and "--checkpoint-cache-root" in training_contract_source,
     )
+    from services.research.strategy_compare_training import (
+        _validate_selection_pit_score_period,
+    )
+
+    auto_period_manifest = {
+        "score_period": {"start": "2021-01-01", "end": "2026-03-02"},
+        "score_start_resolution": {
+            "mode": "auto_earliest_legal",
+            "resolved_score_start": "2021-01-01",
+        },
+        "evaluation_policy": {"score_end_resolution": "auto_available_end"},
+        "available_history_period": {"start": "2003-09-25", "end": "2026-03-02"},
+    }
+    check(
+        "strategy_compare_training_validator_treats_auto_bounds_as_semantic_resolution",
+        ("2021-01-01", "2026-03-02"),
+        _validate_selection_pit_score_period(
+            auto_period_manifest,
+            comparison_start="auto",
+            comparison_end="auto",
+        ),
+    )
+    stale_auto_period_rejected = False
+    try:
+        _validate_selection_pit_score_period(
+            {
+                **auto_period_manifest,
+                "score_period": {"start": "2021-01-01", "end": "2025-12-31"},
+            },
+            comparison_start="2021-01-01",
+            comparison_end="auto",
+        )
+    except ValueError:
+        stale_auto_period_rejected = True
+    check_true(
+        "strategy_compare_training_validator_rejects_auto_end_not_equal_to_available_history_end",
+        stale_auto_period_rejected,
+    )
+
     check_true(
         "normal_and_robustness_share_one_per_arm_replay_argument_owner",
         "run_strategy_compare_active_arm(" in orchestration_source

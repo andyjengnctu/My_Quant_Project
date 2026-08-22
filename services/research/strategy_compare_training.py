@@ -171,6 +171,77 @@ def _normalize_date(value: Any) -> str:
     return text[:10]
 
 
+def _is_auto_date(value: Any) -> bool:
+    return str(value or "").strip().lower() == "auto"
+
+
+def _validate_selection_pit_score_period(
+    manifest: Mapping[str, Any],
+    *,
+    comparison_start: str | None,
+    comparison_end: str | None,
+) -> tuple[str, str]:
+    """Validate configured/dynamic PIT bounds against the persisted resolution.
+
+    ``auto`` is a semantic sentinel, not a date.  The PIT producer resolves it from
+    canonical upstream truth and records both the resolution mode and the concrete
+    available-history boundary in the manifest.  Consumers must validate that
+    resolution instead of comparing the literal string ``auto`` with an ISO date.
+    """
+
+    period = dict(manifest.get("score_period") or {})
+    actual_start = _normalize_date(period.get("start"))
+    actual_end = _normalize_date(period.get("end"))
+
+    if comparison_start not in (None, ""):
+        if _is_auto_date(comparison_start):
+            resolution = dict(manifest.get("score_start_resolution") or {})
+            resolved_start = _normalize_date(resolution.get("resolved_score_start"))
+            if (
+                str(resolution.get("mode") or "") != "auto_earliest_legal"
+                or actual_start != resolved_start
+            ):
+                raise ValueError(
+                    "Strategy Compare PIT自動比較起始日解析不一致: "
+                    f"actual={actual_start}, resolved={resolved_start}, "
+                    f"mode={resolution.get('mode')!r}"
+                )
+        else:
+            required_start = _normalize_date(comparison_start)
+            if actual_start != required_start:
+                raise ValueError(
+                    "Strategy Compare PIT比較起始日不一致: "
+                    f"expected={required_start}, actual={actual_start}"
+                )
+
+    if comparison_end not in (None, ""):
+        if _is_auto_date(comparison_end):
+            evaluation_policy = dict(manifest.get("evaluation_policy") or {})
+            available_history = dict(manifest.get("available_history_period") or {})
+            available_end = _normalize_date(available_history.get("end"))
+            resolution_mode = str(
+                evaluation_policy.get("score_end_resolution") or ""
+            )
+            if (
+                resolution_mode != "auto_available_end"
+                or actual_end != available_end
+            ):
+                raise ValueError(
+                    "Strategy Compare PIT自動比較結束日解析不一致: "
+                    f"actual={actual_end}, available={available_end}, "
+                    f"mode={resolution_mode!r}"
+                )
+        else:
+            required_end = _normalize_date(comparison_end)
+            if actual_end != required_end:
+                raise ValueError(
+                    "Strategy Compare PIT比較結束日不一致: "
+                    f"expected={required_end}, actual={actual_end}"
+                )
+
+    return actual_start, actual_end
+
+
 def validate_strategy_compare_training_artifacts(
     *,
     project_root: str | Path,
@@ -193,8 +264,6 @@ def validate_strategy_compare_training_artifacts(
 
     root = Path(project_root).resolve()
     model_root = Path(model_dir).resolve()
-    required_start = None if comparison_start in (None, "") else _normalize_date(comparison_start)
-    required_end = None if comparison_end in (None, "") else _normalize_date(comparison_end)
     score_source = str(source.score_source)
 
     if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
@@ -230,19 +299,11 @@ def validate_strategy_compare_training_artifacts(
         actual_anchor = str(manifest.get("fold_anchor_date") or "").strip() or None
         if expected_anchor is not None and actual_anchor != expected_anchor:
             raise ValueError("Strategy Compare PIT fold_anchor_date不一致")
-        period = dict(manifest.get("score_period") or {})
-        actual_start = _normalize_date(period.get("start"))
-        actual_end = _normalize_date(period.get("end"))
-        if required_start is not None and actual_start != required_start:
-            raise ValueError(
-                "Strategy Compare PIT比較起始日不一致: "
-                f"expected={required_start}, actual={actual_start}"
-            )
-        if required_end is not None and actual_end != required_end:
-            raise ValueError(
-                "Strategy Compare PIT比較結束日不一致: "
-                f"expected={required_end}, actual={actual_end}"
-            )
+        actual_start, actual_end = _validate_selection_pit_score_period(
+            manifest,
+            comparison_start=comparison_start,
+            comparison_end=comparison_end,
+        )
         folds = [dict(item or {}) for item in list(manifest.get("folds") or [])]
         if not folds:
             raise ValueError("Strategy Compare PIT manifest沒有folds")
@@ -269,6 +330,16 @@ def validate_strategy_compare_training_artifacts(
 
     if score_source != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
         raise ValueError(f"不支援的Strategy Compare score source: {score_source!r}")
+    if _is_auto_date(comparison_start) or _is_auto_date(comparison_end):
+        raise ValueError(
+            "Continuous Strategy Compare training validation需要已解析的具體比較期間"
+        )
+    required_start = (
+        None if comparison_start in (None, "") else _normalize_date(comparison_start)
+    )
+    required_end = (
+        None if comparison_end in (None, "") else _normalize_date(comparison_end)
+    )
     if research_dir in (None, ""):
         raise ValueError("Continuous Strategy Compare training validation缺少research_dir")
     research_root = Path(research_dir).resolve()
