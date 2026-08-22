@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from core.console_report import project_relative_display_path
+from core.serialization_utils import json_native_value as _json_native
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.excess_r_calibration import (
     EXPECTED_EXCESS_R_CALIBRATION_METHOD,
@@ -31,20 +32,6 @@ from filters.breakout_quality.ranking_score_store import (
     load_selection_point_in_time_score_table,
 )
 
-
-def _json_native(value: Any) -> Any:
-    if value is None or isinstance(value, (str, bool, int)):
-        return value
-    if isinstance(value, np.integer):
-        return int(value)
-    if isinstance(value, (float, np.floating)):
-        number = float(value)
-        return number if math.isfinite(number) else None
-    if isinstance(value, dict):
-        return {str(k): _json_native(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_native(v) for v in value]
-    return str(value)
 
 
 def _selection_score_frame(

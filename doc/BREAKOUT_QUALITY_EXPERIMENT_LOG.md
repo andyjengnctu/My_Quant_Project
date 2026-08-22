@@ -9843,3 +9843,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 防回歸synthetic改驗「唯一owner」而非「single/multi各自呼叫同一low-level helper」：兩條orchestration都必須進shared training/replay owner，且不得直接持有trainer command、logged process、PIT audit或engine replay；dual-model case另直接驗證explicit same-seed safety override precedence。
 - Decision：**EXECUTION_SSOT_CLOSED / C60_SAME_SEED_SAFETY_FIXED / C60_ROBUSTNESS_RERUN_REQUIRED / FORMAL_RERUN_PENDING**。
 
+### 2026-08-23 — Robustness benchmark seed documentation SSOT closure
+
+- 基準：`test-branch-1_20260823_045002_9597d57.zip`，SHA256=`31f9e9d5eb60c36c6734d67c2d5baf781c5775ee06da3887348455ed68513b12`。全專案call-graph／targeted synthetic複查未再發現single-seed／multi-seed training、PIT READY、per-arm replay或C60 same-seed safety correctness分叉。
+- 治理問題：`config/training_policy.py`已依C8成為可由使用者調整的唯一`end_to_end_v1` benchmark題庫SSOT，當前snapshot解析4 seeds；但`PROJECT_SETTINGS` E12、Registry、CMD、Architecture、Research Queue與formal checklist B189仍殘留「固定2 seeds／固定兩題」文字。這些文件若繼續硬編數值，會與C8衝突並可能誘發後續維護把使用者config錯改回文件快照。
+- 修正：current文件全部改為只引用`config/training_policy.py`當前`seed_count / seed_generator_seed / resolved_seeds`；validator只可驗證runtime忠實消費current config，固定測例需要特定seed時必須使用隔離override。歷史Experiment Log中的2／4／8／16-seed實驗紀錄保持原值，不改寫歷史證據。
+- Runtime／science不變：本輪不修改`config/training_policy.py`、Compare Suite、Optimizer trials/window/search space、model training、same-seed binding、artifact identity或交易語意。
+- C1維護收尾：全專案normalized AST exact-duplicate掃描只剩Expected-R與Expected Excess-R兩個calibration service各自複製的`_json_native()`；兩者已改用既有`core/serialization_utils.py::json_native_value`，只收斂JSON serialization primitive，不改calibration數學或工件schema。
+- Decision：**DOCUMENTATION_SSOT_CLOSED / USER_CONFIG_REMAINS_AUTHORITATIVE / NO_ADDITIONAL_RUNTIME_REFACTOR_REQUIRED**。
