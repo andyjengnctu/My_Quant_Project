@@ -188,7 +188,7 @@ def render_audit_status(
             render_key_values(
                 (
                     ("設定檔", "config/audit.py"),
-                    ("Catalog", "tools/audit/catalog.py"),
+                    ("Catalog", "services/audit/catalog.py"),
                     ("Module", module_id),
                     ("整體狀態", preparation_plan.overall_status if preparation_plan.actions else status["overall_status"]),
                     ("輸出根目錄", AUDIT_OUTPUT_ROOT),

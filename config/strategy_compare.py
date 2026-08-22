@@ -914,15 +914,10 @@ def get_strategy_multi_seed_robustness_settings(
         profile_settings.dl_sources[str(arm.dl_id)].score_source
         for arm in stochastic if arm.dl_id
     }
-    expected_score_source = (
-        "selection_point_in_time"
-        if settings.profile_id in {"selection_pit", "extending_window_oos", "extending_window_rolling"}
-        else "continuous_ranker_oos"
-    )
-    if score_sources != {expected_score_source}:
+    if len(score_sources) > 1:
         raise ValueError(
-            "multi-seed stochastic arms的score source與robustness階段不一致: "
-            f"expected={expected_score_source}, actual={sorted(score_sources)}"
+            "multi-seed stochastic DL arms必須使用同一score source: "
+            f"actual={sorted(score_sources)}"
         )
     reference_pool = stochastic if settings.benchmark_id is not None else fixed
     reference_role = "same-seed benchmark baseline" if settings.benchmark_id is not None else "fixed baseline"

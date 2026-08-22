@@ -42,6 +42,7 @@ from filters.breakout_quality.paths import (
     resolve_selection_point_in_time_manifest_path,
     resolve_selection_point_in_time_score_path,
 )
+from filters.breakout_quality.strategy_compare_contracts import build_strategy_preparation_action
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
@@ -90,31 +91,6 @@ def _resolve_action(
         rebuild_stale_artifacts=bool(settings.preparation.rebuild_stale_artifacts),
         resume_partial_artifacts=bool(settings.preparation.resume_parameter_training),
         resumable=bool(resumable),
-    )
-
-
-def _preparation_action(
-    *,
-    action_id: str,
-    artifact_key: str,
-    action: str,
-    builder_type: str | None,
-    description: str,
-    path: str,
-    dependencies: tuple[str, ...] = (),
-    producer_work_type: str | None = None,
-    execution_priority: int = 100,
-) -> StrategyPreparationAction:
-    return StrategyPreparationAction(
-        action_id=action_id,
-        artifact_key=artifact_key,
-        action=action,
-        builder_type=builder_type,
-        description=description,
-        path=path,
-        dependencies=tuple(dependencies),
-        producer_work_type=producer_work_type,
-        execution_priority=int(execution_priority),
     )
 
 
@@ -255,7 +231,7 @@ def _collect_model_upstream_dependencies(
             )
         )
         actions.append(
-            _preparation_action(
+            build_strategy_preparation_action(
                 action_id=artifact_key,
                 artifact_key=artifact_key,
                 action=action,
@@ -443,7 +419,7 @@ def _collect_selection_pit_source_status(
             "sha256": sha256,
         }
         actions.append(
-            _preparation_action(
+            build_strategy_preparation_action(
                 action_id=f"dl:{dl_id}:{key}",
                 artifact_key=f"dl:{dl_id}:{key}",
                 action=action,
@@ -583,7 +559,7 @@ def _collect_continuous_ranker_source_status(
             "sha256": sha256,
         }
         actions.append(
-            _preparation_action(
+            build_strategy_preparation_action(
                 action_id=f"dl:{dl_id}:{key}",
                 artifact_key=f"dl:{dl_id}:{key}",
                 action=action,
@@ -742,7 +718,7 @@ def _collect_standard_model_source_status(
             else "model_training"
         )
         actions.append(
-            _preparation_action(
+            build_strategy_preparation_action(
                 action_id=f"dl:{dl_id}:{key}",
                 artifact_key=f"dl:{dl_id}:{key}",
                 action=action,

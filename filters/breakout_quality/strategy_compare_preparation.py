@@ -13,6 +13,7 @@ from core.strategy_comparison import (
     StrategyPreparationPlan,
 )
 from filters.breakout_quality.export_scores import export_forward_oos_scores
+from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_SELECTION_POINT_IN_TIME
 from filters.breakout_quality.strategy_compare_preparation_status import (
     collect_preparation_status,
     model_upstream_prerequisite_blockers,
@@ -199,7 +200,9 @@ def _execute_preparation_action(
             experiment_profile=source.experiment_profile,
             phase_id=settings.profile_id,
             selection_runtime_start_date=(
-                settings.start_date if settings.profile_id == "selection_pit" else None
+                settings.start_date
+                if source.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+                else None
             ),
         )
         return

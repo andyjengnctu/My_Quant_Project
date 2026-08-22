@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.strategy_comparison import StrategyPreparationAction
+
 STRATEGY_COMPARE_SCHEMA_VERSION = 7
 
 COMPARISON_MODE_HARD_FILTER = "hard-filter"
@@ -34,3 +36,30 @@ def comparison_labels(comparison_mode: str) -> dict[str, str]:
             "difference_text": "use_breakout_quality_ranking=False vs True（hard filter 兩組皆 False）",
         }
     raise ValueError(f"不支援的 comparison_mode: {comparison_mode}")
+
+def build_strategy_preparation_action(
+    *,
+    action_id: str,
+    artifact_key: str,
+    action: str,
+    builder_type: str | None,
+    description: str,
+    path: str,
+    dependencies: tuple[str, ...] = (),
+    producer_work_type: str | None = None,
+    execution_priority: int = 100,
+) -> StrategyPreparationAction:
+    """Build one canonical preparation-plan action record."""
+
+    return StrategyPreparationAction(
+        action_id=action_id,
+        artifact_key=artifact_key,
+        action=action,
+        builder_type=builder_type,
+        description=description,
+        path=path,
+        dependencies=tuple(dependencies),
+        producer_work_type=producer_work_type,
+        execution_priority=int(execution_priority),
+    )
+

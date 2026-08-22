@@ -113,6 +113,7 @@ from filters.breakout_quality.paths import (
 )
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
+    SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     DAILY_RANKER_OOS_SCORE_FILENAME,
     CONTINUOUS_RANKER_SCORE_FILENAME,
     load_continuous_ranker_oos_score_table_from_path,
@@ -982,15 +983,10 @@ def _arm_training_dl_ids(settings, arm: StrategyComparisonArm) -> tuple[str, ...
         source_ids.append(safety_dl_id)
     unique = tuple(dict.fromkeys(source_ids))
     score_sources = {str(settings.dl_sources[dl_id].score_source) for dl_id in unique}
-    expected = (
-        "selection_point_in_time"
-        if settings.profile_id in {"selection_pit", "extending_window_oos", "extending_window_rolling"}
-        else "continuous_ranker_oos"
-    )
-    if score_sources != {expected}:
+    if len(score_sources) != 1:
         raise ValueError(
-            "stochastic arm的primary/secondary score source與robustness階段不一致: "
-            f"arm={arm.arm_id}, expected={expected}, actual={sorted(score_sources)}"
+            "stochastic arm的primary/secondary必須使用同一score source: "
+            f"arm={arm.arm_id}, actual={sorted(score_sources)}"
         )
     return unique
 
@@ -1191,9 +1187,14 @@ def _render_robustness_execution_plan(
         if str(settings.parameter_sources[str(arm.param_source)].canonical_family or "").strip()
     })) if cfg.benchmark_id is not None else ()
     pit_workload_rows: list[tuple[str, str]] = []
-    if settings.profile_id in {"selection_pit", "extending_window_oos", "extending_window_rolling"} and start is not None and end is not None:
+    pit_training_sources = tuple(
+        (dl_id, arm_entries)
+        for dl_id, arm_entries in training_sources
+        if settings.dl_sources[str(dl_id)].score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+    )
+    if pit_training_sources and start is not None and end is not None:
         fold_counts = []
-        for dl_id, _arm_entries in training_sources:
+        for dl_id, _arm_entries in pit_training_sources:
             fold_counts.append(
                 1
                 if _source_point_in_time_single_score_block(settings=settings, dl_id=str(dl_id))

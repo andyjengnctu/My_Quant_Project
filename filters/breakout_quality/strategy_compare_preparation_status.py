@@ -78,6 +78,7 @@ from filters.breakout_quality.strategy_compare_dl_artifacts import (
     model_upstream_prerequisite_blockers,
     resolve_required_artifact_sources as _resolve_required_artifact_sources,
 )
+from filters.breakout_quality.strategy_compare_contracts import build_strategy_preparation_action
 from filters.breakout_quality.strategy_compare_sources import (
     resolve_project_relative_path as _resolve_relative_path,
     PARAM_POLICY_SPECS,
@@ -550,39 +551,13 @@ def _validate_param_training_identity(
                 return False, "FULL_ROOS_SEARCH_FIELDS_MISMATCH", manifest_path
     return True, "READY", manifest_path
 
-def _preparation_action(
-    *,
-    action_id: str,
-    artifact_key: str,
-    action: str,
-    builder_type: str | None,
-    description: str,
-    path: str,
-    dependencies: tuple[str, ...] = (),
-    producer_work_type: str | None = None,
-    execution_priority: int = 100,
-) -> StrategyPreparationAction:
-    return StrategyPreparationAction(
-        action_id=action_id,
-        artifact_key=artifact_key,
-        action=action,
-        builder_type=builder_type,
-        description=description,
-        path=path,
-        dependencies=tuple(dependencies),
-        producer_work_type=producer_work_type,
-        execution_priority=int(execution_priority),
-    )
-
-
-
-
 def _collect_expected_r_calibration_status(
     *,
     root: Path,
     settings: StrategyComparisonSettings,
     dl_rows: dict[str, Any],
     artifact_identities: dict[str, Any],
+    runtime_periods: Mapping[str, tuple[str | None, str | None]],
     actions: list[StrategyPreparationAction],
 ):
     expected_r_rows: dict[str, Any] = {}
@@ -623,22 +598,21 @@ def _collect_expected_r_calibration_status(
                 f"Expected-PnL calibration builder要求runtime/fit為同一frozen ranker identity: "
                 f"{arm.arm_id}/{arm.dl_id}/{fit_dl_id}"
             )
-        if settings.profile_id in {"selection_pit", "extending_window_oos", "extending_window_rolling"} and runtime_dl.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-            raise ValueError(f"Selection Expected-PnL runtime必須使用Selection PIT score: {arm.arm_id}")
-        if settings.profile_id == "forward_oos" and runtime_dl.score_source != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
-            raise ValueError(f"Forward Expected-PnL runtime必須使用frozen OOS score: {arm.arm_id}")
+        runtime_score_source = str(runtime_dl.score_source)
+        if runtime_score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            expected_selection_start = settings.start_date
+            expected_forward_cutoff = None
+        elif runtime_score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+            expected_selection_start = None
+            expected_forward_cutoff = (runtime_periods.get(arm.dl_id) or (None, None))[0]
+        else:
+            raise ValueError(
+                f"Expected-PnL runtime score source不支援: {arm.arm_id}/{runtime_score_source}"
+            )
         runtime_score_key = f"dl:{arm.dl_id}:forward_scores"
         fit_score_key = f"dl:{fit_dl_id}:forward_scores"
         runtime_sha = str((artifact_identities.get(runtime_score_key) or {}).get("sha256") or "")
         fit_sha = str((artifact_identities.get(fit_score_key) or {}).get("sha256") or "")
-        expected_selection_start = (
-            settings.start_date if settings.profile_id in {"selection_pit", "extending_window_oos", "extending_window_rolling"} else None
-        )
-        expected_forward_cutoff = (
-            (runtime_periods.get(arm.dl_id) or (None, None))[0]
-            if settings.profile_id == "forward_oos"
-            else None
-        )
         paths = resolve_expected_r_calibration_paths(
             root,
             filter_id=runtime_dl.filter_id,
@@ -681,7 +655,7 @@ def _collect_expected_r_calibration_status(
             description = "Research artifact policy禁止自動建立／重建Expected-R calibration"
         artifact_key = f"runtime:{arm.arm_id}:expected_r_calibration"
         display_path = project_relative_display_path(paths["manifest"], project_root=root)
-        actions.append(_preparation_action(
+        actions.append(build_strategy_preparation_action(
             action_id=artifact_key,
             artifact_key=artifact_key,
             action=action,
@@ -830,7 +804,7 @@ def _collect_expected_excess_r_calibration_status(
             description = "Research artifact policy禁止自動建立／重建Expected Excess-R calibration"
         artifact_key = f"runtime:{arm.arm_id}:expected_excess_r_calibration"
         display_path = project_relative_display_path(paths["manifest"], project_root=root)
-        actions.append(_preparation_action(
+        actions.append(build_strategy_preparation_action(
             action_id=artifact_key,
             artifact_key=artifact_key,
             action=action,
@@ -1051,7 +1025,7 @@ def _collect_parameter_artifact_status(
                 *tuple(key for key in upstream_candidates if key in existing_action_keys)[:1],
             )))
         actions.append(
-            _preparation_action(
+            build_strategy_preparation_action(
                 action_id=f"param:{source_id}",
                 artifact_key=f"param:{source_id}",
                 action=action,
@@ -1115,6 +1089,7 @@ def collect_preparation_status(
         settings=settings,
         dl_rows=dl_rows,
         artifact_identities=artifact_identities,
+        runtime_periods=runtime_periods,
         actions=actions,
     )
     expected_excess_r_rows = _collect_expected_excess_r_calibration_status(

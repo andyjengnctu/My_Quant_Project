@@ -135,6 +135,9 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
         provider.module == "services.research.breakout_quality_application"
         and "from services.optimizer.application import main" in research_shell_source
         and "from services.audit.runner import" in research_shell_source
+        and "from services.research.strategy_compare_application import" in research_shell_source
+        and "from filters.breakout_quality.strategy_comparison" not in research_shell_source
+        and "from filters.breakout_quality.strategy_multi_seed_robustness" not in research_shell_source
         and "from tools.optimizer" not in research_shell_source
         and "from tools.audit" not in research_shell_source,
     )
@@ -1017,6 +1020,10 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
         get_breakout_quality_workflow_settings,
     )
     from config.strategy_compare import get_strategy_runtime_integration_settings
+    from services.research.strategy_compare_application import (
+        dispatch_runtime_integration_action,
+        runtime_integration_execution_enabled,
+    )
     from core.strategy_comparison import (
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
     )
@@ -1059,12 +1066,10 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
                     and dict(forward["dl_runtime_options"]).get("selection_only") is False,
     )
     check_true(
-        "runtime_integration_legacy_gate_is_disabled_after_framework_migration_while_anchor_identity_is_preserved",
-        not cfg.enabled
+        "runtime_integration_legacy_gate_is_not_executable_from_current_research_while_anchor_identity_is_preserved",
+        not runtime_integration_execution_enabled()
                     and runtime["experiment_profile"] == workflow.experiment_profile
                     and cfg.comparison_anchor_experiment_profile != workflow.experiment_profile
-                    and cfg.selection_profile_id == "selection_pit"
-                    and cfg.forward_profile_id == "forward_oos"
                     and selection["candidate_arm_id"] == cfg.selection_candidate_arm_id
                     and forward["candidate_arm_id"] == cfg.forward_candidate_arm_id,
     )
@@ -1270,12 +1275,17 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
                     and missing_rank["score_source"] == "canonical_runtime"
                     and outside_coverage_rejected,
     )
-    research_source = (Path(__file__).resolve().parents[2] / "apps" / "research.py").read_text(encoding="utf-8")
+    blocked_mutations = []
+    for blocked_action in ("run", "promote"):
+        try:
+            dispatch_runtime_integration_action(blocked_action)
+        except RuntimeError as exc:
+            blocked_mutations.append("historical compatibility" in str(exc))
+        else:
+            blocked_mutations.append(False)
     check_true(
-        "runtime_promotion_is_explicit_gate_guarded_menu_action",
-        "套用／更新正式 Runtime" in research_source
-                    and "apply_or_refresh_runtime_promotion" in research_source
-                    and 'action in {"promote", "apply", "refresh"}' in research_source,
+        "runtime_integration_historical_mutations_fail_closed_before_producer_dispatch",
+        blocked_mutations == [True, True],
     )
 
     check(
