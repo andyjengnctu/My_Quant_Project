@@ -353,6 +353,34 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         (int(selected_training["seed"]), str(selected_training["dl_id"])),
     )
 
+    class _TtyBuffer:
+        def __init__(self):
+            self.parts = []
+
+        def isatty(self):
+            return True
+
+        def write(self, value):
+            self.parts.append(str(value))
+            return len(str(value))
+
+        def flush(self):
+            return None
+
+    tty_buffer = _TtyBuffer()
+    fixed_progress = robustness_runtime._FixedProgressBlock(stream=tty_buffer)
+    fixed_progress.update(["seed-1 first", "seed-2 first"])
+    first_render_len = len(tty_buffer.parts)
+    fixed_progress.update(["seed-1 next", "seed-2 next"])
+    second_render = "".join(tty_buffer.parts[first_render_len:])
+    fixed_progress.clear()
+    check_true(
+        "robustness_training_progress_redraws_fixed_seed_lines_in_place",
+        "\x1b[1A" in second_render
+        and "seed-1 next" in second_render
+        and "seed-2 next" in second_render,
+    )
+
     with tempfile.TemporaryDirectory(prefix="robustness_atomic_retry_") as temp_dir:
         target = Path(temp_dir) / "manifest.json"
         target.write_text("old\n", encoding="utf-8")

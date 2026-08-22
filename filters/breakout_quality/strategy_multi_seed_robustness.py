@@ -3149,18 +3149,52 @@ def _pit_saved_fold_progress(meta: dict[str, Any]) -> tuple[int, int] | None:
     return min(saved, expected), expected
 
 
-def _training_progress_label(meta: dict[str, Any], *, now: float, seed_count: int) -> str:
-    label = (
-        f"seed {meta['seed_order']}/{seed_count} ({int(meta['seed'])}) | "
-        f"模型來源 {meta['source_order']}/{meta['source_count']} {meta['dl_id']} | "
-        f"replay targets={len(meta['replay_arms'])} | "
-        f"elapsed={_format_elapsed(now-float(meta['submitted_at']))}"
-    )
-    pit_progress = _pit_saved_fold_progress(meta)
-    if pit_progress is not None:
-        saved, expected = pit_progress
-        label += f" | PIT folds saved={saved}/{expected} | remaining={max(0, expected-saved)}"
-    return label
+class _FixedProgressBlock:
+    """Redraw a bounded set of TTY lines in place; redirected output stays quiet."""
+
+    def __init__(self, stream=None):
+        self.stream = stream if stream is not None else sys.stdout
+        self.inline = bool(getattr(self.stream, "isatty", lambda: False)())
+        self._line_count = 0
+        self._active = False
+
+    def _rewind_to_first_line(self) -> None:
+        if self._active and self._line_count > 1:
+            self.stream.write(f"\r\x1b[{self._line_count - 1}A")
+        elif self._active:
+            self.stream.write("\r")
+
+    def update(self, lines: list[str]) -> None:
+        values = [str(line).replace("\r", " ").replace("\n", " ") for line in lines]
+        if not values or not self.inline:
+            return
+        if self._active and len(values) != self._line_count:
+            self.clear()
+        if self._active:
+            self._rewind_to_first_line()
+        for index, value in enumerate(values):
+            self.stream.write("\r\x1b[2K" + value)
+            if index < len(values) - 1:
+                self.stream.write("\n")
+        self.stream.flush()
+        self._line_count = len(values)
+        self._active = True
+
+    def clear(self) -> None:
+        if not self.inline or not self._active:
+            return
+        self._rewind_to_first_line()
+        for index in range(self._line_count):
+            self.stream.write("\r\x1b[2K")
+            if index < self._line_count - 1:
+                self.stream.write("\n")
+        if self._line_count > 1:
+            self.stream.write(f"\r\x1b[{self._line_count - 1}A")
+        else:
+            self.stream.write("\r")
+        self.stream.flush()
+        self._line_count = 0
+        self._active = False
 
 
 def _pop_next_training_unit(
@@ -4989,9 +5023,18 @@ def run_multi_seed_robustness(
         )
     color_enabled = console_color_enabled()
     progress = InlineProgress()
+    training_progress = _FixedProgressBlock()
     min_ref_arm = str(dict(dict(contract.get("romd_reference_baselines") or {}).get("min") or {}).get("arm_id") or "")
 
+    def print_event(text: str) -> None:
+        training_progress.clear()
+        progress.print_line(text)
+
     def progress_update(text: str) -> None:
+        if training_futures:
+            print_event(text)
+            return
+        training_progress.clear()
         if cfg.console_mode == "verbose":
             progress.print_line(text)
             return
@@ -5045,22 +5088,22 @@ def run_multi_seed_robustness(
             if unit_key in completed:
                 displayed_done_units += 1
             if strategy_action == "RUN_SCIENTIFIC":
-                progress.print_line(
+                print_event(
                     paint(f"[DONE {displayed_done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
                     + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name}"
                 )
             elif strategy_action == "REBUILD_CONTEXT":
-                progress.print_line(
+                print_event(
                     paint("[BASELINE CONTEXT REBUILD]", "yellow", enabled=color_enabled, bold=True)
                     + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} | scientific result reuse"
                 )
             elif unit_key in completed:
-                progress.print_line(
+                print_event(
                     paint(f"[REUSE {displayed_done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
                     + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name}"
                 )
             elif unit_key in scientific_completed:
-                progress.print_line(
+                print_event(
                     paint("[REBUILD ATTRIBUTION]", "yellow", enabled=color_enabled, bold=True)
                     + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} | scientific result reuse"
                 )
@@ -5171,7 +5214,7 @@ def run_multi_seed_robustness(
                     enabled=color_enabled,
                 )
             )
-            progress.print_line(
+            print_event(
                 f"{done_tag} seed {meta['seed_order']}/{len(seeds)} | "
                 f"對象 {meta['arm_order']}/{len(stochastic_arms)} {meta['name']} | "
                 f"RoMD={romd:.2f} | {delta_text} | "
@@ -5327,7 +5370,7 @@ def run_multi_seed_robustness(
                     f"/migrate:{int(fold_reuse.get('legacy_migration', 0) or 0)}"
                     f"/built:{built_folds}"
                 )
-            progress.print_line(
+            print_event(
                 paint(tag, "green", enabled=color_enabled, bold=True)
                 + f" seed {meta['seed_order']}/{len(seeds)} | "
                 f"模型來源 {meta['source_order']}/{meta['source_count']} {meta['dl_id']} "
@@ -5347,6 +5390,41 @@ def run_multi_seed_robustness(
         if finished:
             write_progress_manifest()
 
+    def render_seed_training_progress(now: float) -> None:
+        if not training_futures:
+            training_progress.clear()
+            return
+        active_by_seed: dict[int, list[dict[str, Any]]] = {}
+        for meta in training_futures.values():
+            active_by_seed.setdefault(int(meta["seed"]), []).append(meta)
+        lines: list[str] = []
+        for seed_order, seed in enumerate(seeds, start=1):
+            metas = active_by_seed.get(int(seed), [])
+            if not metas:
+                continue
+            metas.sort(key=lambda item: int(item["source_order"]))
+            parts: list[str] = []
+            for meta in metas:
+                pit_progress = _pit_saved_fold_progress(meta)
+                if pit_progress is None:
+                    fold_text = ""
+                else:
+                    saved, expected = pit_progress
+                    fold_text = f" | PIT {saved}/{expected} | remain {max(0, expected - saved)}"
+                parts.append(
+                    f"{meta['dl_id']} {meta['source_order']}/{meta['source_count']}"
+                    f" | {_format_elapsed(now - float(meta['submitted_at']))}"
+                    + fold_text
+                )
+            action = str(metas[0].get("display_action_tag") or "[TRAIN]")
+            lines.append(
+                paint(action, "cyan", enabled=color_enabled, bold=True)
+                + f" seed {seed_order}/{len(seeds)} ({int(seed)}) | "
+                + " ; ".join(parts)
+            )
+        training_progress.update(lines)
+
+
     def submit_trainings() -> None:
         while pending_trainings and len(training_futures) < int(cfg.gpu_train_workers):
             meta = _pop_next_training_unit(pending_trainings, training_futures)
@@ -5356,7 +5434,6 @@ def run_multi_seed_robustness(
             pit_progress = _pit_saved_fold_progress(meta)
             if pit_progress is None:
                 action_tag = "[TRAIN]"
-                resume_note = ""
             else:
                 saved_folds, expected_folds = pit_progress
                 if saved_folds >= expected_folds:
@@ -5365,18 +5442,10 @@ def run_multi_seed_robustness(
                     action_tag = "[TRAIN RESUME]"
                 else:
                     action_tag = "[TRAIN]"
-                resume_note = f" | saved checkpoints={saved_folds}/{expected_folds}"
-            progress.print_line(
-                paint(action_tag, "cyan", enabled=color_enabled, bold=True)
-                + f" seed {meta['seed_order']}/{len(seeds)} ({int(meta['seed'])}) | "
-                f"模型來源 {meta['source_order']}/{meta['source_count']} {meta['dl_id']} "
-                + f"| replay targets={len(meta['replay_arms'])} "
-                + resume_note
-                + f" | GPU processes={len(training_futures)}/{cfg.gpu_train_workers} "
-                + f"| completed={done_units}/{total_units}"
-            )
+            meta["display_action_tag"] = action_tag
         if training_futures:
             write_progress_manifest()
+            render_seed_training_progress(time.perf_counter())
 
     next_print = time.perf_counter() + float(cfg.progress_interval_seconds)
     try:
@@ -5388,31 +5457,21 @@ def run_multi_seed_robustness(
             submit_trainings()
             now = time.perf_counter()
             if now >= next_print and (training_futures or replay_futures or ready_replays):
-                tag = "[TRAIN PROGRESS]" if training_futures else "[REPLAY PROGRESS]"
-                progress.print_line(
-                    paint(tag, "cyan", enabled=color_enabled, bold=True)
-                    + f" GPU running={len(training_futures)}/{cfg.gpu_train_workers}"
-                    + f" | CPU replay={len(replay_futures)}/{cfg.cpu_replay_workers}"
-                    + f" | replay queued={len(ready_replays)}"
-                    + f" | completed={done_units}/{total_units}"
-                    + f" | total={_format_elapsed(now-started_total)}"
-                )
-                for worker_index, meta in enumerate(training_futures.values(), start=1):
-                    progress.print_line(
-                        f"  [GPU {worker_index}/{cfg.gpu_train_workers}] "
-                        + _training_progress_label(meta, now=now, seed_count=len(seeds))
-                    )
-                for replay_index, meta in enumerate(replay_futures.values(), start=1):
-                    progress.print_line(
-                        f"  [CPU REPLAY {replay_index}/{cfg.cpu_replay_workers}] "
-                        + f"seed {meta['seed_order']}/{len(seeds)} ({int(meta['seed'])}) | "
-                        + f"{meta['name']} | "
-                        + f"elapsed={_format_elapsed(now-float(meta.get('submitted_at', now)))}"
+                if training_futures:
+                    render_seed_training_progress(now)
+                else:
+                    progress_update(
+                        paint("[REPLAY PROGRESS]", "cyan", enabled=color_enabled, bold=True)
+                        + f" CPU replay={len(replay_futures)}/{cfg.cpu_replay_workers}"
+                        + f" | queued={len(ready_replays)}"
+                        + f" | completed={done_units}/{total_units}"
+                        + f" | total={_format_elapsed(now-started_total)}"
                     )
                 next_print = now + float(cfg.progress_interval_seconds)
             if pending_trainings or training_futures or ready_replays or replay_futures:
                 time.sleep(0.25)
         harvest_replays()
+        training_progress.clear()
     except BaseException as exc:
         _terminate_active_trainers(active_trainers, active_trainers_lock)
         write_progress_manifest()
@@ -5425,7 +5484,7 @@ def run_multi_seed_robustness(
             "resumable": True,
         })
         _write_json(manifest_path, manifest)
-        progress.print_line(
+        print_event(
             paint("[FAILED]", "red", enabled=color_enabled, bold=True)
             + " Multiple-seed robustness已停止；可修正後由同一入口接續。"
             + f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
