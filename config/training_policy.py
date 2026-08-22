@@ -106,7 +106,7 @@ OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 6  # local_min_score finalist rev
 OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT = 1000
 
 # Rolling OOS 與 Selection rolling adaptation 每個 fold 的預設 trial 數。
-OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 15
+OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 20
 
 # Canonical optimizer stochastic seed for ordinary production/single-seed training.
 OPTIMIZER_RANDOM_SEED_DEFAULT = 42
@@ -115,7 +115,7 @@ OPTIMIZER_RANDOM_SEED_DEFAULT = 42
 # 同一 benchmark seed 必須同時供 Strategy Optimizer 與所有 DL model source 使用；
 # resolved sequence 是跨版本可重現的 scientific identity，不得由 Strategy Compare 另設第二份。
 ROBUSTNESS_BENCHMARK_ID = "end_to_end_v1"
-ROBUSTNESS_BENCHMARK_SEED_COUNT = 4
+ROBUSTNESS_BENCHMARK_SEED_COUNT = 2
 ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED = 20260810
 
 def resolve_robustness_benchmark_seeds(
