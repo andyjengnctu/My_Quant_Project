@@ -1377,8 +1377,10 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and "best_worst_signals" in diagnostics_source
                 and "_render_metric_notes" not in diagnostics_source
                 and 'lines = ["註解", "----"]' not in diagnostics_source
-                and '"top_target_r": _finite(metrics.get("top_decile_target_mean"))' in diagnostics_source
-                and '"bottom_target_r": _finite(metrics.get("bottom_decile_target_mean"))' in diagnostics_source
+                and '"top_target_r": finite_number(metrics.get("top_decile_target_mean"))' in diagnostics_source
+                and '"bottom_target_r": finite_number(metrics.get("bottom_decile_target_mean"))' in diagnostics_source
+                and "from core.report_style import best_worst_signals, finite_number, styled_signal" in diagnostics_source
+                and "def _finite(" not in diagnostics_source
                 and '"top_target_r": top' in diagnostics_source
                 and '"bottom_target_r": bottom' in diagnostics_source
                 and '"r_conversion_efficiency", "RCE"' in report_metrics_source
