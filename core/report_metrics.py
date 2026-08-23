@@ -79,6 +79,23 @@ EXECUTION_STRATEGY_RESULT_METRICS = (
 )
 
 
+def upside_survival_initial_stop_metric(threshold_r: float) -> ReportMetricSpec:
+    threshold = float(threshold_r)
+    return ReportMetricSpec(
+        f"initial_stop_before_{threshold:g}r_rate",
+        f"+{threshold:g}R前初始Stop",
+        "%",
+        2,
+        "lower",
+    )
+
+
+UPSIDE_SURVIVAL_BASE_METRICS = (
+    ReportMetricSpec("full_horizon_mfe_mean_r", "Full-MFE", "R", 2, "higher"),
+    ReportMetricSpec("full_horizon_adverse_to_peak_mean_r", "Adverse", "R", 2, "lower"),
+    ReportMetricSpec("realized_mean_r", "Realized EV", "R", 2, "higher"),
+)
+
 
 R_ACTUAL_TRADE_METRICS = (
     RAnalysisMetricSpec(
@@ -223,6 +240,8 @@ __all__ = [
     "TRADE_RESULT_METRICS",
     "EXECUTION_CAPACITY_METRICS",
     "EXECUTION_STRATEGY_RESULT_METRICS",
+    "upside_survival_initial_stop_metric",
+    "UPSIDE_SURVIVAL_BASE_METRICS",
     "PAIR_MAIN_METRICS",
     "R_ACTUAL_TRADE_METRICS",
     "R_MODEL_PREDICTION_METRICS",

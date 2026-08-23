@@ -2508,17 +2508,17 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "pair_upside_realization_refresh_required" in comparison_source
         and '"REFRESH"' in comparison_source
         and '"Diagnostics | Upside Realization"' in comparison_source
-        and 'render_section("3. Upside Realization / Stop-before-Upside")' in comparison_source
-        and "render_upside_realization_summary_table" in comparison_source
-        and "render_first_passage_summary_table" in comparison_source
+        and 'render_section("3. Upside Survival / First-Passage")' in comparison_source
+        and "render_upside_survival_summary_table" in comparison_source
         and "STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS" in strategy_compare_config_source,
     )
 
     from filters.breakout_quality.strategy_compare_diagnostics import (
         render_first_passage_summary_table,
         render_upside_realization_summary_table,
+        render_upside_survival_summary_table,
     )
-    unavailable_text = render_upside_realization_summary_table({
+    unavailable_text = render_upside_survival_summary_table({
         "upside_realization": [],
         "upside_realization_unavailable": [{
             "arm_id": "C59",
@@ -2547,6 +2547,60 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "0/2 (0.00%)" in first_passage_text
         and "+3R" in first_passage_text
         and "1/1 (100.00%)" in first_passage_text,
+    )
+
+    compact_diagnostics = {
+        "upside_realization": [
+            {
+                "arm_id": "C59", "name": "Synthetic E",
+                "full_horizon_mfe_mean_r": 1.20,
+                "full_horizon_adverse_to_peak_mean_r": 0.30,
+                "realized_mean_r": 1.10,
+                "thresholds": {
+                    "1R": {"actual_initial_stop_before_first_upside_rate": 0.10},
+                    "2R": {"actual_initial_stop_before_first_upside_rate": 0.08},
+                    "3R": {"actual_initial_stop_before_first_upside_rate": 0.05},
+                },
+            },
+            {
+                "arm_id": "C60", "name": "Synthetic KM",
+                "full_horizon_mfe_mean_r": 0.90,
+                "full_horizon_adverse_to_peak_mean_r": 0.20,
+                "realized_mean_r": 0.80,
+                "thresholds": {
+                    "1R": {"actual_initial_stop_before_first_upside_rate": 0.20},
+                    "2R": {"actual_initial_stop_before_first_upside_rate": 0.22},
+                    "3R": {"actual_initial_stop_before_first_upside_rate": 0.15},
+                },
+            },
+        ],
+        "upside_realization_contract": {"upside_r_thresholds": [1.0, 2.0, 3.0]},
+    }
+    compact_text = render_upside_survival_summary_table(compact_diagnostics, target="plain")
+    check_true(
+        "upside_survival_main_report_is_compact_and_retains_decision_metrics",
+        "+1R前初始Stop" in compact_text
+        and "+2R前初始Stop" in compact_text
+        and "+3R前初始Stop" in compact_text
+        and "Full-MFE" in compact_text
+        and "Adverse" in compact_text
+        and "Realized EV" in compact_text
+        and "Path Coverage" not in compact_text
+        and "Risk≤首次達標" not in compact_text
+        and "其中拉高Stop" not in compact_text,
+    )
+
+    compact_markdown = render_upside_survival_summary_table(
+        compact_diagnostics, target="markdown"
+    )
+    check_true(
+        "upside_survival_main_report_uses_shared_best_worst_color_semantics",
+        '#188038' in compact_markdown
+        and '#C62828' in compact_markdown
+        and '<span style="color:#188038;">8.00%</span>' in compact_markdown
+        and '<span style="color:#C62828;">22.00%</span>' in compact_markdown
+        and '<span style="color:#C62828;">0.30R</span>' in compact_markdown
+        and '<span style="color:#188038;">0.20R</span>' in compact_markdown,
     )
 
     check_true(

@@ -9912,3 +9912,10 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 防回歸：新增 DatetimeIndex-only OHLCV synthetic，明確禁止依賴實體 `Date` 欄並驗證 +1R/+2R first-passage bar/date。
 - Decision：**ENGINEERING_BUG_FIXED / SCIENCE_UNCHANGED / FIRST_PASSAGE_RERUN_REQUIRED**。既有 `UNAVAILABLE` diagnostics 應由 current stale/backfill contract 自動 `REFRESH`；C59/C60 replay 保持 REUSE。
 
+
+### 2026-08-23 — Strategy Compare Upside Survival main-report simplification
+
+- 使用者決策：主 Strategy Compare 的第 3 節只保留最具決策價值的 First-Passage 指標，避免 final-peak proxy、canonical risk、all-stop／raised-stop 等詳細診斷同時佔用主畫面；完整證據仍保留於 `strategy_diagnostics.md`／JSON，不刪除 canonical diagnostics payload。
+- 主表改為 `Upside Survival / First-Passage`，每 arm 只顯示 config-defined `+kR前初始Stop`（目前設定為 +1R/+2R/+3R）、`Full-MFE`、`Adverse`、`Realized EV`。前者直接量測 future 確實首次達到 +kR 的交易中，實際策略是否在首次達標前／同日由初始 Stop 出場；同日仍依 D2 保守視為 Stop 先發生。
+- 色彩契約：主表 metric 的 label／direction 正式放入 `core/report_metrics.py`；`+kR前初始Stop` 與 `Adverse` 為 lower-is-better，`Full-MFE` 與 `Realized EV` 為 higher-is-better。renderer 只透過 `best_worst_signals` + `styled_signal` 套用與全專案相同的 green/red best/worst 語意，不以數值正負建立第二套規則。
+- Decision：**REPORT_SURFACE_SIMPLIFIED / DETAILED_EVIDENCE_RETAINED / SCIENCE_UNCHANGED**。不改 diagnostics schema、C59/C60 replay、Target、score、模型、參數、OOS／Rolling 或 robustness identity。

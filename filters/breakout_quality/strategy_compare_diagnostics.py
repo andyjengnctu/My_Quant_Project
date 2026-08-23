@@ -29,6 +29,8 @@ from core.report_metrics import (
     R_ANALYSIS_MERGED_METRICS,
     R_MODEL_PREDICTION_METRICS,
     R_SELECTION_TRANSLATION_METRICS,
+    UPSIDE_SURVIVAL_BASE_METRICS,
+    upside_survival_initial_stop_metric,
     RAnalysisMetricSpec,
 )
 from core.report_style import best_worst_signals, finite_number, styled_signal
@@ -1901,6 +1903,106 @@ def _count_of_count_rate(count: Any, total: Any, rate: Any) -> str:
     if rate_value is None:
         return f"{count_value}/{total_value}"
     return f"{count_value}/{total_value} ({rate_value * 100.0:.2f}%)"
+
+
+def render_upside_survival_summary_table(
+    diagnostics: dict[str, Any], *, target: str = "plain"
+) -> str:
+    """Render the compact decision surface for upside survival / first-passage."""
+
+    rows = list(diagnostics.get("upside_realization") or [])
+    unavailable = list(diagnostics.get("upside_realization_unavailable") or [])
+    if not rows:
+        if not unavailable:
+            return "沒有可用的path-conversion診斷。"
+        return "沒有可用的path-conversion診斷。\n" + "\n".join(
+            f"- {row.get('arm_id') or '-'} {row.get('name') or '-'}："
+            f"{row.get('status') or 'UNAVAILABLE'} | {row.get('reason') or '未提供原因'}"
+            for row in unavailable
+        )
+
+    thresholds = [
+        float(value)
+        for value in dict(diagnostics.get("upside_realization_contract") or {}).get(
+            "upside_r_thresholds", []
+        )
+    ]
+    metrics = (
+        *(upside_survival_initial_stop_metric(threshold) for threshold in thresholds),
+        *UPSIDE_SURVIVAL_BASE_METRICS,
+    )
+
+    arm_values: dict[str, dict[str, float | None]] = {}
+    for row in rows:
+        arm_id = str(row.get("arm_id") or "-")
+        threshold_payload = dict(row.get("thresholds") or {})
+        values: dict[str, float | None] = {
+            "full_horizon_mfe_mean_r": finite_number(row.get("full_horizon_mfe_mean_r")),
+            "full_horizon_adverse_to_peak_mean_r": finite_number(
+                row.get("full_horizon_adverse_to_peak_mean_r")
+            ),
+            "realized_mean_r": finite_number(row.get("realized_mean_r")),
+        }
+        for threshold in thresholds:
+            item = dict(threshold_payload.get(f"{threshold:g}R") or {})
+            values[f"initial_stop_before_{threshold:g}r_rate"] = finite_number(
+                item.get("actual_initial_stop_before_first_upside_rate")
+            )
+        arm_values[arm_id] = values
+
+    signals_by_metric = {
+        metric.key: best_worst_signals(
+            {arm_id: values.get(metric.key) for arm_id, values in arm_values.items()},
+            preference=metric.preference,
+        )
+        for metric in metrics
+    }
+
+    headers = ["編號", "比較對象", *(metric.label for metric in metrics)]
+    body: list[tuple[object, ...]] = []
+    for row in rows:
+        arm_id = str(row.get("arm_id") or "-")
+        values = arm_values.get(arm_id, {})
+        rendered: list[str] = []
+        for metric in metrics:
+            numeric = values.get(metric.key)
+            if metric.key.startswith("initial_stop_before_"):
+                text = "-" if numeric is None else f"{numeric * 100.0:.{metric.digits}f}{metric.unit}"
+            else:
+                text = _fmt(numeric, digits=metric.digits, unit=metric.unit)
+            rendered.append(
+                _value_with_signal(
+                    text,
+                    signals_by_metric.get(metric.key, {}).get(arm_id),
+                    target=target,
+                )
+            )
+        body.append((arm_id, str(row.get("name") or "-"), *rendered))
+
+    widths = []
+    for index, header in enumerate(headers):
+        values = [str(header), *(str(row[index]) for row in body)]
+        widths.append(max(_display_width(value) for value in values))
+    separator = "  ".join("-" * width for width in widths)
+    lines = [
+        "  ".join(_pad_cell(str(header), widths[index]) for index, header in enumerate(headers)),
+        separator,
+    ]
+    lines.extend(
+        "  ".join(_pad_cell(str(value), widths[index]) for index, value in enumerate(row))
+        for row in body
+    )
+    lines.extend([
+        "",
+        "註：+kR前初始Stop＝future horizon內確實首次到達+kR者中，實際策略在首次達標前／同日由初始Stop出場的比例；同日保守視為Stop先發生。",
+    ])
+    if unavailable:
+        lines.extend(
+            f"未產生 {row.get('arm_id') or '-'} {row.get('name') or '-'}："
+            f"{row.get('status') or 'UNAVAILABLE'} | {row.get('reason') or '未提供原因'}"
+            for row in unavailable
+        )
+    return "\n".join(lines)
 
 
 def render_upside_realization_summary_table(
