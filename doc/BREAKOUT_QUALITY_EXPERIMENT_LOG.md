@@ -9903,3 +9903,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 報表：原 `Upside Realization / Stop-before-Upside` final-peak 表保留作歷史兼容；主 `strategy_comparison.md`／console 同節追加 compact First-Passage table，`strategy_diagnostics.md` 追加完整 Markdown 定義。diagnostics schema=`3→4`、Upside Realization schema=`1→2`；舊 pair replay scientific identity 不變，只會 `REFRESH Diagnostics`／backfill，不應重新 replay C59/C60。
 - 防回歸：synthetic 明確驗證「先 +2R、後 stop、再 final peak」在舊 peak 指標可為 stop-before-peak，但新 first-passage 必須判定 `actual stop before first +2R = 0`；另驗 canonical risk-before-upside、initial-stop subset、daily feature-bank first-passage bar/date 與主報表可見性。
 - Decision：**FIRST_PASSAGE_DIAGNOSTIC_IMPLEMENTED / SCIENCE_UNCHANGED / CURRENT RESULTS_PENDING_RERUN**。不新增 MR／SR／Cxx／AUD identity；Research Queue 優先順序與今晚 robustness 計畫不因本工程變更自動改動。
+
+### 2026-08-23 First-Passage canonical date-index bug fix
+
+- 問題：First-Passage diagnostics 在真實 OOS backfill 產生 `KeyError: 'Date'`，C59/C60 均為 `UNAVAILABLE`。
+- 根因：`sanitize_ohlcv_dataframe()` 會把原始 `Date`／`Time` 欄 canonicalize 成 DatetimeIndex；`LazyDailyFeatureBank` 既有 daily path 也一直以 index 作交易日真理，但新增 first-passage `_frame_dates` 誤讀已不存在的實體 `frame["Date"]`。
+- 修正：first-passage 日期改為直接消費 canonical sanitized frame index；不重建日期、不改 Target、training samples、score、replay、arm 或 scientific identity。
+- 防回歸：新增 DatetimeIndex-only OHLCV synthetic，明確禁止依賴實體 `Date` 欄並驗證 +1R/+2R first-passage bar/date。
+- Decision：**ENGINEERING_BUG_FIXED / SCIENCE_UNCHANGED / FIRST_PASSAGE_RERUN_REQUIRED**。既有 `UNAVAILABLE` diagnostics 應由 current stale/backfill contract 自動 `REFRESH`；C59/C60 replay 保持 REUSE。
+

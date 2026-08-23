@@ -2344,6 +2344,42 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
 
 
 
+    # Canonical sanitized OHLCV keeps trading dates in the DatetimeIndex, not in
+    # a physical ``Date`` column.  First-passage timing must consume that same index.
+    from filters.breakout_quality.daily_ranker_data import LazyDailyFeatureBank
+
+    canonical_index_frame = pd.DataFrame(
+        {
+            "Open": [10.0, 10.0, 10.0, 10.0],
+            "High": [10.1, 11.1, 12.1, 13.1],
+            "Low": [9.9, 9.8, 9.7, 9.6],
+            "Close": [10.0, 10.5, 11.0, 12.0],
+            "Volume": [1000.0, 1000.0, 1000.0, 1000.0],
+        },
+        index=pd.DatetimeIndex(["2020-01-01", "2020-01-02", "2020-01-03", "2020-01-04"]),
+    )
+    canonical_index_bank = LazyDailyFeatureBank(
+        frames=(canonical_index_frame,),
+        benchmark=canonical_index_frame,
+        ticker_ids=np.asarray([0], dtype=np.int32),
+        source_positions=np.asarray([0], dtype=np.int32),
+        benchmark_positions=np.asarray([0], dtype=np.int32),
+        policy=SimpleNamespace(feature_window_bars=1),
+    )
+    canonical_index_passage = canonical_index_bank.future_first_passage(
+        np.asarray([0], dtype=np.int64),
+        horizon_bars=3,
+        return_thresholds=(0.1, 0.2),
+    )
+    check_true(
+        "daily_first_passage_uses_canonical_datetime_index_without_date_column",
+        "Date" not in canonical_index_frame.columns
+        and int(canonical_index_passage[0.1][0][0]) == 1
+        and str(canonical_index_passage[0.1][1][0]) == "2020-01-02"
+        and int(canonical_index_passage[0.2][0][0]) == 2
+        and str(canonical_index_passage[0.2][1][0]) == "2020-01-03",
+    )
+
     pure_mfe_groups = pd.DataFrame([
         {
             "ticker": "AAA", "group_index": 0, "date": "2020-01-01", "target_adverse_r": 0.4,

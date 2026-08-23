@@ -71,8 +71,12 @@ class LazyDailyFeatureBank:
             )
             for frame in frames
         )
+        # ``sanitize_ohlcv_dataframe`` canonicalizes the trading date into the
+        # DataFrame index (the source column may originally be ``Date`` or ``Time``).
+        # Keep first-passage timing on that same SSOT instead of assuming a physical
+        # ``Date`` column still exists after sanitization.
         self._frame_dates = tuple(
-            pd.to_datetime(frame["Date"], errors="raise").to_numpy(dtype="datetime64[D]")
+            pd.DatetimeIndex(frame.index).normalize().to_numpy(dtype="datetime64[D]")
             for frame in frames
         )
         self._benchmark_array = benchmark[
