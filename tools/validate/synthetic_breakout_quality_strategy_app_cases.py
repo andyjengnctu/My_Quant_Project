@@ -188,6 +188,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         resolve_strategy_param_artifact_path,
         resolve_strategy_param_benchmark_artifact_path,
     )
+    from filters.breakout_quality.strategy_compare_dl_artifacts import (
+        resolve_arm_runtime_dl_source_ids,
+    )
 
     modes = strategy_config.get_strategy_rolling_test_modes()
     settings_by_mode = {
@@ -224,7 +227,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         set(strategy_config.STRATEGY_PARAM_SOURCES)
         == {"full_oos", "min_oos", "full_rolling", "min_rolling"}
         and set(strategy_config.STRATEGY_DL_SOURCES)
-        == {"CONT13E_ROLL", "CONT13K_ROLL", "CONT13M_ROLL"}
+        == {"CONT13E_ROLL", "CONT13K_ROLL", "CONT13M_ROLL", "CONT13P_ROLL"}
         and set(strategy_config.STRATEGY_COMPARE_ARMS) == set(expected_arm_ids)
         and set(strategy_config.STRATEGY_COMPARE_CONTRASTS) == set(expected_contrast_ids)
         and {"full_roos", "min_roos", "selection_min_roos", "selection_full_roos"}
@@ -331,6 +334,24 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and tuple(spec["contrast_id"] for spec in item.paired_contrasts) == expected_contrast_ids
             for item in current_robustness
         ),
+    )
+    c64_checks = []
+    for current_settings in settings_by_mode.values():
+        c64 = current_settings.arms["C64"]
+        c64_options = dict(c64.dl_runtime_options or {})
+        runtime_sources = resolve_arm_runtime_dl_source_ids(current_settings, c64)
+        c64_checks.append(
+            c64.dl_id == "CONT13P_ROLL"
+            and runtime_sources == ("CONT13P_ROLL",)
+            and c64_options.get("safety_dl_id") == "CONT13P_ROLL"
+            and c64_options.get("safety_score_column") == "conditional_safety_score"
+            and not c64_options.get("safety_residualization")
+            and c64_options.get("safety_constraint")
+            == "baseline_coverage_and_score_sum_floor_v1"
+        )
+    check_true(
+        "c64_single_model_dual_head_runtime_uses_one_pit_source_and_no_second_residualization",
+        bool(c64_checks) and all(c64_checks),
     )
 
     enabled_dl_profiles = {
@@ -930,6 +951,52 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         "mr12b_keeps_event_score_date_while_mr13a_refreshes_latest_completed_information_date",
         ["2020-01-02", "2020-01-09"],
         lookup_dates,
+    )
+
+    dual_head_lookup_columns = []
+
+    def _fake_dual_head_lookup(**kwargs):
+        dual_head_lookup_columns.append(kwargs.get("score_column"))
+        date = pd.Timestamp(kwargs["signal_date"]).strftime("%Y-%m-%d")
+        return {
+            "score": 0.82 if kwargs.get("score_column") is None else 0.74,
+            "available": True,
+            "score_date": date,
+            "score_source": "selection_point_in_time",
+        }
+
+    with patch(
+        "filters.breakout_quality.runtime.lookup_selection_point_in_time_candidate_score",
+        side_effect=_fake_dual_head_lookup,
+    ):
+        with breakout_quality_ranking_source_context(
+            score_source="selection_point_in_time",
+            model_architecture="inception_time_conditional_mfe_safety_v1",
+            experiment_profile="daily_universal_conditional_mfe_safety_full_list_ndcg_pairwise",
+            ranking_options={
+                "safety_dl_id": "CONT13P_ROLL",
+                "safety_filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                "safety_score_source": "selection_point_in_time",
+                "safety_model_architecture": "inception_time_conditional_mfe_safety_v1",
+                "safety_experiment_profile": "daily_universal_conditional_mfe_safety_full_list_ndcg_pairwise",
+                "safety_score_column": "conditional_safety_score",
+            },
+        ):
+            dual_head_payload = resolve_breakout_quality_candidate_rank(
+                ticker="2330",
+                signal_date=pd.Timestamp("2021-01-05"),
+                information_date=pd.Timestamp("2021-01-04"),
+                high_len=275,
+            )
+    check(
+        "mr13p_runtime_reads_primary_and_conditional_safety_from_explicit_columns_of_one_source",
+        ([None, "conditional_safety_score"], 0.82, 0.74, "CONT13P_ROLL"),
+        (
+            dual_head_lookup_columns,
+            float(dual_head_payload["score"]),
+            float(dual_head_payload["safety_score"]),
+            dual_head_payload["safety_dl_id"],
+        ),
     )
 
     daily_params = replace(

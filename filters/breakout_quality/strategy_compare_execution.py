@@ -68,7 +68,7 @@ def resolve_strategy_compare_ranking_options(
 
     The precedence is deliberate: a caller-supplied benchmark seed override is the
     scientific identity of a robustness replay.  Canonical mode-specific PIT paths are
-    only a fallback for the normal single-seed pipeline.  This prevents a dual-model
+    only a fallback for the normal single-seed pipeline.  This prevents a multi-source or multi-head
     arm from silently mixing benchmark primary scores with production safety scores.
     """
 
@@ -80,7 +80,7 @@ def resolve_strategy_compare_ranking_options(
         return options
     safety_dl_id = str(options.get("safety_dl_id") or "").strip()
     if not safety_dl_id or safety_dl_id not in settings.dl_sources:
-        raise ValueError(f"dual-model safety arm缺少合法safety_dl_id: {arm.arm_id}")
+        raise ValueError(f"safety-constrained arm缺少合法safety_dl_id: {arm.arm_id}")
     source = settings.dl_sources[safety_dl_id]
     safety_override = dict((score_overrides or {}).get(safety_dl_id) or {})
     if not safety_override and str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME:

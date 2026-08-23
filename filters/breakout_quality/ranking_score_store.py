@@ -98,6 +98,10 @@ PIT_REQUIRED_SCORE_COLUMNS = (
     "fold_id",
     "model_information_cutoff",
 )
+PIT_OPTIONAL_SCORE_COLUMNS = (
+    "primary_mfe_score",
+    "conditional_safety_score",
+)
 
 
 @dataclass(frozen=True)
@@ -220,6 +224,21 @@ def _validate_score_eligibility_contract(
             "Selection PIT daily score eligibility contract過舊或不一致；"
             "策略使用前請重新建立PIT Scores並重新執行PIT audit"
         )
+    if (
+        str(profile.training_objective)
+        == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
+    ):
+        score_columns = dict(manifest.get("score_columns") or {})
+        expected_columns = {
+            "primary": "breakout_quality_score",
+            "primary_mfe": "primary_mfe_score",
+            "conditional_safety": "conditional_safety_score",
+        }
+        if score_columns != expected_columns:
+            raise ValueError(
+                "Conditional MFE-Safety PIT artifact缺少dual-head score contract；"
+                "請以目前producer重建PIT Scores與audit"
+            )
 
 
 def derive_point_in_time_model_validation_gate(audit: dict[str, Any]) -> dict[str, Any]:
@@ -505,7 +524,10 @@ def _load_selection_point_in_time_score_table_from_path_cached(
     missing = sorted(set(PIT_REQUIRED_SCORE_COLUMNS).difference(table.columns))
     if missing:
         raise ValueError(f"Selection PIT score table缺少欄位: {missing}")
-    table = table[list(PIT_REQUIRED_SCORE_COLUMNS)].copy()
+    retained_columns = list(PIT_REQUIRED_SCORE_COLUMNS) + [
+        column for column in PIT_OPTIONAL_SCORE_COLUMNS if column in table.columns
+    ]
+    table = table[retained_columns].copy()
     table["ticker"] = table["ticker"].fillna("").astype(str).str.strip()
     table["date"] = pd.to_datetime(table["date"], errors="raise").dt.strftime("%Y-%m-%d")
     table["group_index"] = pd.to_numeric(table["group_index"], errors="raise").astype(np.int64)
@@ -521,6 +543,15 @@ def _load_selection_point_in_time_score_table_from_path_cached(
     values = table["breakout_quality_score"].to_numpy(dtype=np.float64, copy=False)
     if not np.isfinite(values).all() or bool(((values < 0.0) | (values > 1.0)).any()):
         raise ValueError("Selection PIT score必須全部為0到1的有限值")
+    for score_column in PIT_OPTIONAL_SCORE_COLUMNS:
+        if score_column not in table.columns:
+            continue
+        table[score_column] = pd.to_numeric(table[score_column], errors="raise").astype(float)
+        optional_values = table[score_column].to_numpy(dtype=np.float64, copy=False)
+        if not np.isfinite(optional_values).all() or bool(
+            ((optional_values < 0.0) | (optional_values > 1.0)).any()
+        ):
+            raise ValueError(f"Selection PIT {score_column}必須全部為0到1的有限值")
     if table.duplicated(["ticker", "date"]).any():
         raise ValueError("Selection PIT score table同一ticker/date出現重複Score")
     if table.duplicated(["group_index"]).any():
@@ -964,6 +995,15 @@ def load_continuous_ranker_oos_score_table_from_path(
     scores = frame["model_score"].to_numpy(dtype=np.float64, copy=False)
     if not np.isfinite(scores).all() or ((scores < 0.0) | (scores > 1.0)).any():
         raise ValueError("Continuous ranker OOS model_score必須為0~1有限數值")
+    for score_column in PIT_OPTIONAL_SCORE_COLUMNS:
+        if score_column not in frame.columns:
+            continue
+        frame[score_column] = pd.to_numeric(frame[score_column], errors="raise").astype(float)
+        optional_scores = frame[score_column].to_numpy(dtype=np.float64, copy=False)
+        if not np.isfinite(optional_scores).all() or ((optional_scores < 0.0) | (optional_scores > 1.0)).any():
+            raise ValueError(
+                f"Continuous ranker OOS {score_column}必須為0~1有限數值"
+            )
     if frame.duplicated(["ticker", "date"]).any():
         raise ValueError("Continuous ranker OOS score同ticker/date必須唯一")
     available_from = str(frame["date"].min())
@@ -999,6 +1039,7 @@ def lookup_continuous_ranker_oos_candidate_score(
     model_architecture: str,
     experiment_profile: str,
     score_path_override: str | None = None,
+    score_column: str | None = None,
 ) -> dict[str, Any]:
     contract = None
     if score_path_override is None:
@@ -1044,7 +1085,16 @@ def lookup_continuous_ranker_oos_candidate_score(
                 raise ValueError(
                     f"Continuous ranker OOS lookup非唯一: ticker={ticker_text}, date={date_text}"
                 )
-            score = float(row["model_score"])
+            resolved_score_column = str(score_column or "model_score").strip()
+            if resolved_score_column not in row.index:
+                raise ValueError(
+                    f"Continuous ranker OOS score缺少指定欄位: {resolved_score_column}"
+                )
+            score = float(row[resolved_score_column])
+            if not np.isfinite(score) or not 0.0 <= score <= 1.0:
+                raise ValueError(
+                    f"Continuous ranker OOS {resolved_score_column}必須為0~1有限值"
+                )
             group_index = int(row["group_index"])
     profile = get_breakout_quality_experiment_profile(str(experiment_profile))
     return {
@@ -1077,6 +1127,7 @@ def lookup_selection_point_in_time_candidate_score(
     experiment_profile: str,
     score_path_override: str | None = None,
     manifest_path_override: str | None = None,
+    score_column: str | None = None,
 ) -> dict[str, Any]:
     contract = (
         None
@@ -1115,7 +1166,16 @@ def lookup_selection_point_in_time_candidate_score(
             row = table.loc[key]
             if isinstance(row, pd.DataFrame):
                 raise ValueError(f"Selection PIT score lookup非唯一: ticker={ticker_text}, date={date_text}")
-            score = float(row["breakout_quality_score"])
+            resolved_score_column = str(score_column or "breakout_quality_score").strip()
+            if resolved_score_column not in row.index:
+                raise ValueError(
+                    f"Selection PIT score缺少指定欄位: {resolved_score_column}"
+                )
+            score = float(row[resolved_score_column])
+            if not np.isfinite(score) or not 0.0 <= score <= 1.0:
+                raise ValueError(
+                    f"Selection PIT {resolved_score_column}必須為0~1有限值"
+                )
             fold_id = str(row["fold_id"])
             information_cutoff = str(row["model_information_cutoff"])
             group_index = int(row["group_index"])

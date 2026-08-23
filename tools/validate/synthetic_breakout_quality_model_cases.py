@@ -2388,20 +2388,16 @@ def validate_breakout_quality_conditional_mfe_safety_single_model_contract_case(
     spec = get_continuous_ranker_research_spec(profile.name)
     recipe = get_continuous_ranker_execution_recipe(profile.name)
     check(
-        "mr13p_identity_objective_architecture_and_model_gate_only_are_explicit",
+        "mr13p_identity_objective_and_architecture_are_explicit",
         (
             "MR-13P",
             TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
             "inception_time_conditional_mfe_safety_v1",
-            False,
-            False,
         ),
         (
             spec.model_research_id,
             profile.training_objective,
             profile.model_architecture,
-            bool(spec.selection_pit_authorized),
-            bool(spec.current_time_validation_authorized),
         ),
     )
     semantics = training_semantics(profile)

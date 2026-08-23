@@ -1550,8 +1550,8 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days_dual_head",
         score_semantic_id="daily_conditional_mfe_safety_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-        selection_pit_authorized=False,
-        current_time_validation_authorized=False,
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
     ),
     DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE,

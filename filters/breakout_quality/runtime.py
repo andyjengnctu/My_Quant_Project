@@ -370,10 +370,13 @@ def resolve_breakout_quality_candidate_rank(
         safety_source = str(options.get("safety_score_source") or "").strip()
         if safety_dl_id or safety_filter_id or safety_profile or safety_architecture or safety_source:
             if not all((safety_dl_id, safety_filter_id, safety_profile, safety_architecture, safety_source)):
-                raise ValueError("dual-model safety ranking options缺少完整secondary source identity")
+                raise ValueError("safety-constrained ranking options缺少完整secondary source identity")
             safety_score_path_override = str(
                 options.get("safety_score_path_override") or ""
             ).strip()
+            safety_score_column = str(
+                options.get("safety_score_column") or ""
+            ).strip() or None
             safety_manifest_path_override = str(
                 options.get("safety_score_manifest_path_override") or ""
             ).strip()
@@ -388,6 +391,7 @@ def resolve_breakout_quality_candidate_rank(
                     score_path_override=(
                         None if not safety_score_path_override else safety_score_path_override
                     ),
+                    score_column=safety_score_column,
                 )
             elif safety_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
                 safety_payload = lookup_selection_point_in_time_candidate_score(
@@ -403,10 +407,11 @@ def resolve_breakout_quality_candidate_rank(
                     manifest_path_override=(
                         None if not safety_manifest_path_override else safety_manifest_path_override
                     ),
+                    score_column=safety_score_column,
                 )
             else:
                 raise ValueError(
-                    "dual-model safety source只支援selection_point_in_time或continuous_ranker_oos"
+                    "safety-constrained secondary source只支援selection_point_in_time或continuous_ranker_oos"
                 )
             payload = dict(payload)
             payload.update({

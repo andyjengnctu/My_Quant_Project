@@ -41,6 +41,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
 )
 from config.breakout_quality import (
+    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_workflow_settings,
 )
@@ -79,6 +80,7 @@ from services.breakout_quality.continuous_ranker_pipeline import (
     build_training_scope_mask,
     fit_final,
     load_continuous_ranker_data,
+    predict_conditional_mfe_safety_scores,
     predict_scores,
     resolve_ranker_execution_plan,
     select_epoch,
@@ -95,6 +97,10 @@ REQUIRED_SCORE_COLUMNS = (
     "breakout_quality_score",
     "fold_id",
     "model_information_cutoff",
+)
+OPTIONAL_SCORE_COLUMNS = (
+    "primary_mfe_score",
+    "conditional_safety_score",
 )
 
 
@@ -715,7 +721,10 @@ def _validate_score_frame(frame: pd.DataFrame, *, fold_contract: dict[str, Any])
     missing = sorted(set(REQUIRED_SCORE_COLUMNS) - set(frame.columns))
     if missing:
         raise ValueError(f"point-in-time fold score缺少欄位: {missing}")
-    work = frame[list(REQUIRED_SCORE_COLUMNS)].copy()
+    retained_columns = list(REQUIRED_SCORE_COLUMNS) + [
+        column for column in OPTIONAL_SCORE_COLUMNS if column in frame.columns
+    ]
+    work = frame[retained_columns].copy()
     work["ticker"] = work["ticker"].astype(str)
     work["date"] = pd.to_datetime(work["date"], errors="raise").dt.strftime("%Y-%m-%d")
     work["group_index"] = pd.to_numeric(work["group_index"], errors="raise").astype(np.int64)
@@ -726,6 +735,13 @@ def _validate_score_frame(frame: pd.DataFrame, *, fold_contract: dict[str, Any])
         raise ValueError("point-in-time fold score含非有限值")
     if bool(((work["breakout_quality_score"] < 0.0) | (work["breakout_quality_score"] > 1.0)).any()):
         raise ValueError("point-in-time fold score超出[0,1]")
+    for score_column in OPTIONAL_SCORE_COLUMNS:
+        if score_column not in work.columns:
+            continue
+        work[score_column] = pd.to_numeric(work[score_column], errors="raise").astype(np.float64)
+        values = work[score_column].to_numpy(dtype=np.float64, copy=False)
+        if not np.isfinite(values).all() or bool(((values < 0.0) | (values > 1.0)).any()):
+            raise ValueError(f"point-in-time fold {score_column}超出[0,1]或含非有限值")
     if bool(work["group_index"].duplicated().any()):
         raise ValueError("point-in-time fold score group_index重複")
     expected_fold_id = str(fold_contract["fold_id"])
@@ -1040,20 +1056,38 @@ def _rescore_fold_from_compatible_checkpoint(
         model.load_state_dict(checkpoint["model_state_dict"], strict=True)
         model.to(plan.device)
         model.eval()
-        scores = predict_scores(
-            torch_module,
-            model,
-            bundle,
-            ids["score_ids"],
-            batch_size=int(args.evaluation_batch_size),
-            plan=plan,
-        )
+        conditional_heads = None
+        if (
+            bundle.profile.training_objective
+            == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
+        ):
+            conditional_heads = predict_conditional_mfe_safety_scores(
+                torch_module,
+                model,
+                bundle,
+                ids["score_ids"],
+                batch_size=int(args.evaluation_batch_size),
+                plan=plan,
+            )
+            scores = conditional_heads["primary_mfe"]
+        else:
+            scores = predict_scores(
+                torch_module,
+                model,
+                bundle,
+                ids["score_ids"],
+                batch_size=int(args.evaluation_batch_size),
+                plan=plan,
+            )
         if len(scores) != len(ids["score_ids"]):
             return None
         frame = bundle.group_table.iloc[ids["score_ids"]][
             ["ticker", "date", "group_index"]
         ].copy()
         frame["breakout_quality_score"] = scores
+        if conditional_heads is not None:
+            frame["primary_mfe_score"] = conditional_heads["primary_mfe"]
+            frame["conditional_safety_score"] = conditional_heads["conditional_safety"]
         frame["fold_id"] = str(fold_contract["fold_id"])
         frame["model_information_cutoff"] = fold_contract["model_information_cutoff"]
         frame = _validate_score_frame(frame, fold_contract=fold_contract)
@@ -1354,20 +1388,38 @@ def _train_fold(
         args=args,
         plan=plan,
     )
-    scores = predict_scores(
-        torch,
-        model,
-        bundle,
-        ids["score_ids"],
-        batch_size=int(args.evaluation_batch_size),
-        plan=plan,
-    )
+    conditional_heads = None
+    if (
+        bundle.profile.training_objective
+        == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
+    ):
+        conditional_heads = predict_conditional_mfe_safety_scores(
+            torch,
+            model,
+            bundle,
+            ids["score_ids"],
+            batch_size=int(args.evaluation_batch_size),
+            plan=plan,
+        )
+        scores = conditional_heads["primary_mfe"]
+    else:
+        scores = predict_scores(
+            torch,
+            model,
+            bundle,
+            ids["score_ids"],
+            batch_size=int(args.evaluation_batch_size),
+            plan=plan,
+        )
     if len(scores) != len(ids["score_ids"]):
         raise ValueError(f"{fold_id} inference score count不一致")
     frame = bundle.group_table.iloc[ids["score_ids"]][
         ["ticker", "date", "group_index"]
     ].copy()
     frame["breakout_quality_score"] = scores
+    if conditional_heads is not None:
+        frame["primary_mfe_score"] = conditional_heads["primary_mfe"]
+        frame["conditional_safety_score"] = conditional_heads["conditional_safety"]
     frame["fold_id"] = fold_id
     frame["model_information_cutoff"] = fold_contract["model_information_cutoff"]
     frame = _validate_score_frame(frame, fold_contract=fold_contract)
@@ -1994,6 +2046,16 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
         "training_label_scope": str(bundle.profile.training_label_scope),
         "training_sample_scope": str(bundle.profile.training_sample_scope),
         "score_column": "breakout_quality_score",
+        "score_columns": (
+            {
+                "primary": "breakout_quality_score",
+                "primary_mfe": "primary_mfe_score",
+                "conditional_safety": "conditional_safety_score",
+            }
+            if bundle.profile.training_objective
+            == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
+            else {"primary": "breakout_quality_score"}
+        ),
         "score_period": {
             "start": str(score_start.date()),
             "end": str(score_end.date()),

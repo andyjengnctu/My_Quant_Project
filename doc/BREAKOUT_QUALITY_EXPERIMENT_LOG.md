@@ -9972,3 +9972,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Engineering fix：正式簡易報表新增精簡 `Conditional MFE-Safety Model Gate` 表，固定顯示三個 split × 兩個 head 的 `Daily rho / Global rho / Pair`，直接消費既有 canonical report payload，不重算 metric、不重訓模型。模型選單 `[3] 查看目前Workflow、工件與模型報表` 在既有 report 存在時也直接重畫同一摘要，因此本次既有 Seed42 結果不需要重新訓練；詳細 Top/Bottom 等仍留在 `continuous_ranker_report.md`，避免長流程洗版。
 - Scientific status：**FORWARD_RESULT_AVAILABLE_PENDING_REVIEW / MODEL_GATE_ONLY**。本輪只修報表可見性；尚未依 Conditional Safety Forward metrics做 GO／REJECT，也不授權 PIT、runtime source、strategy arm、robustness 或 promotion。
 
+### 2026-08-23 — MR-13P Forward Model Gate GO；C64 single-model conversion arm implementation
+
+- 使用者透過正式模型報表審閱MR-13P dual-head Forward evidence。Primary MFE：Validation Daily/Global/Pair=`0.4348/0.4335/65.07%`、Forward OOS=`0.3953/0.3019/63.64%`、breakout slice=`0.3736/0.3771/64.41%`；Conditional Safety：Validation=`0.3199/0.3067/61.05%`、Forward OOS=`0.3234/0.2900/61.17%`、breakout slice=`0.2824/0.3179/62.33%`。Conditional Forward沒有validation-only collapse，Primary MFE亦未相對MR-13K既有Forward evidence明顯崩壞，因此**MR-13P Forward Model Gate = GO**。
+- 同次Primary MFE OOS Top-K Lift=`+1.2486R`，未因global/daily rho改善而同步擴張；因此不把Model Gate GO解讀成策略GO，依conversion-first原則直接進最小portfolio conversion contrast，不新增模型層Audit。
+- 正式配置`DL-CONT13P-ROLL / CONT13P_ROLL`與`SR-C64`。C64與C58共用Min `base-finalist-best`策略參數與既有exact constrained selector；Primary最大化MR-13P Pure-MFE head，secondary直接讀**同一PIT artifact**的`conditional_safety_score`並套`baseline_coverage_and_score_sum_floor_v1`。因secondary target已在training時對true MFE residualize，runtime明確禁止再做C60的`same_day_rank_ols_v1`。
+- PIT producer擴充為single-model dual-head score contract：每個fold只訓一個MR-13P checkpoint、一次shared-encoder inference同時輸出`breakout_quality_score`/`primary_mfe_score`/`conditional_safety_score`；artifact manifest明確宣告score columns。Strategy runtime允許primary與secondary指向同一DL source，但只有明確指定不同`conditional_safety_score`欄位才合法，避免把同一primary score誤當safety。
+- Current Compare Suite加入C64與`C64-C58/C64-C59/C64-C60`三個controlled contrasts；OOS/Rolling/single/multi仍共用同一suite SSOT。Robustness framework會由suite自然辨識C64為model-seed-sensitive，但**目前研究決策仍是ROBUSTNESS_DEFERRED**，不因framework可執行而自動長跑。
+- C64 conversion Gate尚無策略結果。下一個最小證據是single-seed OOS：主判斷`+2R前初始Stop↓`，並共同檢查`+1R/+3R`、Full-MFE、Adverse、Realized EV、Return、RoMD；不能明顯改善C59即停止，不先做robustness/stability。
+- Decision：**MR-13P FORWARD_MODEL_GATE_GO / C64 IMPLEMENTED_RESULT_PENDING / SINGLE_SEED_CONVERSION_FIRST / ROBUSTNESS_DEFERRED / NOT_PROMOTED**。
+

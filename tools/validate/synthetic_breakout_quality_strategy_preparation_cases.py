@@ -177,7 +177,7 @@ def append_strategy_compare_preparation_contract_checks(
         "run_comparison",
         side_effect=lambda **kwargs: captured_replay_kwargs.append(dict(kwargs)) or {"ok": True},
     ):
-        for arm_id in ("C59", "C60"):
+        for arm_id in ("C59", "C60", "C64"):
             execution_module.run_strategy_compare_active_arm(
                 settings=pit_bundle_settings,
                 arm=pit_bundle_settings.arms[arm_id],
@@ -188,10 +188,13 @@ def append_strategy_compare_preparation_contract_checks(
                 comparison_end="2026-03-02",
                 param_evaluation_mode="rolling",
             )
-    c59_kwargs, c60_kwargs = captured_replay_kwargs
+    c59_kwargs, c60_kwargs, c64_kwargs = captured_replay_kwargs
     c59_primary = Path(str(c59_kwargs.get("selection_pit_score_path_override") or ""))
     c60_primary = Path(str(c60_kwargs.get("selection_pit_score_path_override") or ""))
     c60_safety = Path(str((c60_kwargs.get("ranking_options") or {}).get("safety_score_path_override") or ""))
+    c64_primary = Path(str(c64_kwargs.get("selection_pit_score_path_override") or ""))
+    c64_options = dict(c64_kwargs.get("ranking_options") or {})
+    c64_safety = Path(str(c64_options.get("safety_score_path_override") or ""))
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "current_c59_c60_execution_consumes_models_pit_bundle_without_legacy_audit_fallback",
@@ -200,8 +203,16 @@ def append_strategy_compare_preparation_contract_checks(
             path.name == "selection_point_in_time_scores.csv"
             and "models/filters/breakout_quality" in path.as_posix()
             and "outputs/" not in path.as_posix()
-            for path in (c59_primary, c60_primary, c60_safety)
+            for path in (c59_primary, c60_primary, c60_safety, c64_primary, c64_safety)
         ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "c64_execution_reuses_same_dual_head_pit_artifact_and_selects_conditional_safety_column",
+        True,
+        c64_primary == c64_safety
+        and c64_options.get("safety_score_column") == "conditional_safety_score"
+        and not c64_options.get("safety_residualization"),
     )
 
     from filters.breakout_quality import strategy_compare_preparation as preparation_module

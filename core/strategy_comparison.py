@@ -991,8 +991,13 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 safety_dl_id = str(options.get("safety_dl_id") or "").strip()
                 if not safety_dl_id or safety_dl_id not in settings.dl_sources:
                     raise ValueError(f"arm {key} 必須指定合法safety_dl_id")
-                if safety_dl_id == arm.dl_id:
-                    raise ValueError(f"arm {key} safety_dl_id不得與primary dl_id相同")
+                safety_score_column = str(options.get("safety_score_column") or "").strip()
+                if safety_dl_id == arm.dl_id and not safety_score_column:
+                    raise ValueError(
+                        f"arm {key} 同源single-model safety必須明確指定不同的safety_score_column"
+                    )
+                if safety_score_column in {"breakout_quality_score", "model_score"}:
+                    raise ValueError(f"arm {key} safety_score_column不得指向primary score欄位")
                 primary_source = settings.dl_sources[arm.dl_id]
                 safety_source = settings.dl_sources[safety_dl_id]
                 allowed_safety_sources = {"selection_point_in_time", "continuous_ranker_oos"}

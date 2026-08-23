@@ -124,7 +124,7 @@ def resolve_arm_runtime_dl_source_ids(
         ).strip()
         if not safety_dl_id or safety_dl_id not in settings.dl_sources:
             raise ValueError(
-                f"dual-model safety arm缺少合法safety_dl_id: {arm.arm_id}"
+                f"safety-constrained arm缺少合法safety_dl_id: {arm.arm_id}"
             )
         source_ids.append(safety_dl_id)
 

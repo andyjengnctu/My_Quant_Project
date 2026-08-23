@@ -47,7 +47,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 54
+STRATEGY_COMPARE_SCHEMA_VERSION = 55
 
 # =============================================================================
 # 1. 常用設定
@@ -151,16 +151,18 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED = "Min MR-13E Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13K_SCORE_CONSTRAINED = "Min MR-13K Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_SAFETY_CONSTRAINED = "Min MR-13K + MR-13M Safety"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_RESIDUAL_SAFETY_CONSTRAINED = "Min MR-13K + MR-13M Residual Safety"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13P_CONDITIONAL_SAFETY_CONSTRAINED = "Min MR-13P Conditional Safety"
 
 # Current Compare Suite是「比較誰／比較哪些差」的唯一真理來源。
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
 STRATEGY_COMPARE_SUITES = {
     "extending_current": {
-        "arm_ids": ("C61", "C62", "C58", "C63", "C59", "C60"),
+        "arm_ids": ("C61", "C62", "C58", "C63", "C59", "C60", "C64"),
         "contrast_ids": (
             "C62-C61", "C63-C58", "C62-C63",
             "C61-C58", "C59-C58", "C59-C61",
             "C60-C58", "C60-C61", "C60-C59",
+            "C64-C58", "C64-C59", "C64-C60",
         ),
         "display_name_bases": {
             "C61": "Full Base-Finalist-Best",
@@ -169,6 +171,7 @@ STRATEGY_COMPARE_SUITES = {
             "C63": "Min Base-Finalists-Agree",
             "C59": "Min MR-13E Constrained",
             "C60": "Min MR-13K + MR-13M Residual Safety",
+            "C64": "Min MR-13P Conditional Safety",
         },
     },
 }
@@ -222,6 +225,7 @@ STRATEGY_COMPARE_PROFILES = {
             "C63": "min_oos",
             "C59": "min_oos",
             "C60": "min_oos",
+            "C64": "min_oos",
         },
     },
     "extending_window_rolling": {
@@ -509,6 +513,21 @@ STRATEGY_DL_SOURCES = {
     },
 
 
+    "CONT13P_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_conditional_mfe_safety_v1",
+        "experiment_profile": "daily_universal_conditional_mfe_safety_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": "MR-13P Extending-Window single-model dual-head PIT score；primary=Pure-MFE，secondary=learned Conditional Safety。",
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
+
+
 }
 
 # =============================================================================
@@ -608,6 +627,29 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C64": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13P_CONDITIONAL_SAFETY_CONSTRAINED,
+        "description": (
+            "MR-13P single-model conversion Gate：Primary直接最大化Pure-MFE head；"
+            "同一PIT artifact的conditional_safety_score直接作baseline-relative safety floor，"
+            "training target已conditionalize，因此runtime不再做OLS residualization。"
+        ),
+        "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13P_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-safety-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+            "safety_dl_id": "CONT13P_ROLL",
+            "safety_score_column": "conditional_safety_score",
+            "safety_constraint": "baseline_coverage_and_score_sum_floor_v1",
+        },
+        "robustness_role": "off",
+    },
 }
 
 # =============================================================================
@@ -625,6 +667,9 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C60-C58": {"left": "C60", "right": "C58", "description": "{left}相對{right}的增量策略效果"},
     "C60-C61": {"left": "C60", "right": "C61", "description": "{left}相對{right}的整體策略結果；不是單一DL效果"},
     "C60-C59": {"left": "C60", "right": "C59", "description": "{left}相對{right}的同政策比較"},
+    "C64-C58": {"left": "C64", "right": "C58", "description": "MR-13P conditional conversion相對Min baseline的增量策略效果"},
+    "C64-C59": {"left": "C64", "right": "C59", "description": "MR-13P conditional conversion相對目前C59 MR-13E conversion reference"},
+    "C64-C60": {"left": "C64", "right": "C60", "description": "model-level conditional safety相對C60 runtime post-hoc residual safety"},
 }
 
 def _merge_compatibility_catalog(
