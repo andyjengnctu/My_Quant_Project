@@ -2627,7 +2627,15 @@ def _run_strategy_compare_model_build_subprocess(
         registry=active_processes,
         registry_lock=active_processes_lock,
         registry_key=str(job["dl_id"]),
-        failure_prefix=f"Strategy Compare canonical模型訓練失敗: dl_id={job['dl_id']}",
+        failure_prefix=(
+            f"Strategy Compare canonical模型訓練失敗: dl_id={job['dl_id']}"
+            + (
+                " | preflight_reuse_validation="
+                + str(job["preflight_reuse_validation_error"])
+                if job.get("preflight_reuse_validation_error")
+                else ""
+            )
+        ),
         resume=True,
     )
 
@@ -2767,6 +2775,7 @@ def _prepare_strategy_compare_model_artifacts(
                     str(source.model_architecture),
                     str(source.experiment_profile),
                 )
+            reuse_validation_error = None
             if str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
                 try:
                     validate_strategy_compare_training_artifacts(
@@ -2779,8 +2788,8 @@ def _prepare_strategy_compare_model_artifacts(
                         comparison_start=None,
                         comparison_end=None,
                     )
-                except (OSError, ValueError, KeyError, TypeError):
-                    pass
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    reuse_validation_error = f"{type(exc).__name__}: {exc}"
                 else:
                     ready_reuse.append(str(dl_id))
                     continue
@@ -2803,6 +2812,7 @@ def _prepare_strategy_compare_model_artifacts(
                 "comparison_start": None,
                 "comparison_end": None,
                 "log_path": log_root / f"{source_index:02d}_{dl_id}.log",
+                "preflight_reuse_validation_error": reuse_validation_error,
             }
             jobs.append(job)
 
