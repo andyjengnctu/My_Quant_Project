@@ -2340,6 +2340,36 @@ def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
     )
 
 
+def _run_continuous_forward_model_gate(program_name: str, settings) -> int:
+    """Train the active continuous model and emit its Forward-OOS model report.
+
+    This is the legal entry for model-gate-only research profiles.  It deliberately
+    does not build PIT/rolling artifacts or change current-time authorization.
+    """
+
+    _print_workflow_status(settings)
+    upstream_plan = _collect_continuous_research_input_plan(settings)
+    _render_continuous_research_input_plan(settings, upstream_plan)
+    if upstream_plan.blocked:
+        print("目前存在不可由canonical producer確定性補建的前置工件；本次不執行。")
+        return 0
+    if not _prompt_bool("確認訓練目前模型並產生Forward-OOS模型報表（含必要自動前置）", True):
+        return 0
+    code = _prepare_continuous_research_inputs(program_name, settings)
+    if code != 0:
+        return int(code)
+    return int(
+        _run_command(
+            "train-continuous-ranker",
+            [
+                "--filter-id", str(settings.filter_id),
+                "--model-architecture", str(settings.model_architecture),
+                "--experiment-profile", str(settings.experiment_profile),
+                "--seed", str(int(settings.seed)),
+            ],
+            program_name=program_name,
+        )
+    )
 
 
 def _run_continuous_pit_profile(
@@ -3022,7 +3052,12 @@ def _interactive_model_research(program_name: str) -> int:
         research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
-        print(render_menu_item(1, "Extending-Window Test", default=True))
+        primary_label = (
+            "Extending-Window Test"
+            if settings.rolling_authorized
+            else "訓練目前模型 → Forward-OOS模型報表"
+        )
+        print(render_menu_item(1, primary_label, default=True))
         print(render_menu_item(2, "Fixed-Window Stability Test"))
         print(render_menu_item(3, "查看目前Workflow與工件狀態"))
         print(render_menu_item(4, "比較目前 Target 與 reference Target"))
@@ -3037,7 +3072,9 @@ def _interactive_model_research(program_name: str) -> int:
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         if choice == "1":
-            return _interactive_continuous_pit_validation(program_name, settings)
+            if settings.rolling_authorized:
+                return _interactive_continuous_pit_validation(program_name, settings)
+            return _run_continuous_forward_model_gate(program_name, settings)
         if choice == "2":
             return _interactive_continuous_stability_validation(program_name, settings)
         if choice == "3":

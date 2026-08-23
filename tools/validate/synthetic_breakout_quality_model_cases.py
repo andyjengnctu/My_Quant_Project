@@ -600,6 +600,69 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
                 ),
     )
 
+    from services.research import breakout_quality_application as research_app
+
+    model_gate_settings = SimpleNamespace(
+        is_binary_classification=False,
+        is_continuous_ranker=True,
+        rolling_authorized=False,
+        filter_id="synthetic_quality",
+        model_architecture="synthetic_arch",
+        experiment_profile="synthetic_model_gate_profile",
+        seed=42,
+    )
+    ready_plan = SimpleNamespace(blocked=False, actions=(), overall_status="READY")
+    gate_commands = []
+
+    def _record_model_gate_command(command, args, *, program_name):
+        gate_commands.append((str(command), list(args), str(program_name)))
+        return 23
+
+    with (
+        patch.object(research_app, "_print_workflow_status"),
+        patch.object(research_app, "_collect_continuous_research_input_plan", return_value=ready_plan),
+        patch.object(research_app, "_render_continuous_research_input_plan"),
+        patch.object(research_app, "_prompt_bool", return_value=True),
+        patch.object(research_app, "_prepare_continuous_research_inputs", return_value=0),
+        patch.object(research_app, "_run_command", side_effect=_record_model_gate_command),
+    ):
+        model_gate_rc = research_app._run_continuous_forward_model_gate(
+            "apps/research.py model", model_gate_settings
+        )
+    check_true(
+        "model_gate_only_continuous_profile_uses_direct_forward_model_gate_without_pit",
+        model_gate_rc == 23
+        and gate_commands == [(
+            "train-continuous-ranker",
+            [
+                "--filter-id", "synthetic_quality",
+                "--model-architecture", "synthetic_arch",
+                "--experiment-profile", "synthetic_model_gate_profile",
+                "--seed", "42",
+            ],
+            "apps/research.py model",
+        )],
+    )
+
+    with (
+        patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
+        patch.object(
+            research_app,
+            "get_continuous_ranker_research_spec",
+            return_value=SimpleNamespace(reference_profile_name=None),
+        ),
+        patch("builtins.input", return_value=""),
+        patch.object(research_app, "_run_continuous_forward_model_gate", return_value=29) as forward_gate,
+        patch.object(research_app, "_interactive_continuous_pit_validation", return_value=31) as pit_gate,
+    ):
+        menu_rc = research_app._interactive_model_research("apps/research.py model")
+    check_true(
+        "model_gate_only_continuous_profile_enter_routes_to_forward_gate_not_rolling_pit",
+        menu_rc == 29
+        and forward_gate.call_count == 1
+        and pit_gate.call_count == 0,
+    )
+
     from filters.breakout_quality.contract import RUNTIME_SCOPE_WORKFLOW
     from filters.breakout_quality.export_scores import _run_daily_continuous_workflow_export
 

@@ -9957,3 +9957,10 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Regression：新增 synthetic contract，明確驗證 MR-13P 與 canonical Pure-MFE diagnostic owner 可以共享 `daily_full_horizon_pure_mfe_r_v1`，而 diagnostics owner 仍唯一由 config 決定。
 - Scientific status：**MR-13P RESULT_PENDING / MODEL_GATE_ONLY 不變**；本修正不改 target、architecture、loss、training、score、PIT authorization、Strategy Compare arm 或任何既有研究結果。
 - GPT 端在修正第一個 formal blocker 後完整執行 synthetic consistency suite，另發現一個先前被第一個 exception 遮住的 test-fixture 問題：`validate_breakout_quality_app_simple_report_contract_case` 直接以 current active model profile 呼叫 Rolling Timing context；MR-13P 依法為 MODEL_GATE_ONLY，故正確 fail-closed。修正僅將該 synthetic output-contract case 以隔離 override 指向既有已授權 current-time profile，測試 Rolling Timing report identity 而不放寬 MR-13P authorization；屬 C8 所要求的 config-isolated fixture 修正。
+
+### 2026-08-23 — MR-13P Model-Gate-only menu routing closure
+
+- 使用者在正式 `apps/research.py → [1] 模型訓練` 進入 MR-13P 後，current continuous menu 的 `[1]/Enter` 仍固定路由 `Extending-Window Test`；MR-13P 依法 `current_time_validation_authorized=False`，因此在任何模型訓練前即正確 fail-closed 為「目前Active Profile尚未授權Rolling PIT」，造成已實作的 Seed42 Forward Model Gate 沒有正式互動入口。
+- 修正：continuous model menu 的 primary action 改由 active workflow authorization 驅動。已授權 current Rolling 的 profile 維持 `[1] Extending-Window Test`；未授權 current Rolling 的 model-gate-only profile 改顯示 `[1] 訓練目前模型 → Forward-OOS模型報表`，並只委派 canonical `train-continuous-ranker` producer（含既有 upstream preparation）建立單次 Forward model/report。不得由此入口建立 PIT／Rolling artifact，也不改 `selection_pit_authorized`／`current_time_validation_authorized`。
+- Regression：新增 direct synthetic 驗證 model-gate action 只呼叫 `train-continuous-ranker` 且 identity/seed 由 current settings 傳遞；另驗 `[Enter]` 在 `rolling_authorized=False` 時只進 Forward Model Gate、不觸發 `_interactive_continuous_pit_validation`。
+- Scientific status：**MR-13P RESULT_PENDING / MODEL_GATE_ONLY 不變**；本修正只恢復合法 UI route，不改 target、architecture、loss、training recipe、seed、PIT authorization、Strategy Compare 或 promotion。
