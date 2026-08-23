@@ -19,7 +19,6 @@ import json
 import math
 import os
 from pathlib import Path
-import random
 import re
 import shutil
 import subprocess
@@ -54,6 +53,7 @@ from config.breakout_quality import (
     get_breakout_quality_experiment_profile,
     get_breakout_quality_workflow_settings,
 )
+from config.training_policy import resolve_robustness_benchmark_seeds
 from config.strategy_compare import (
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_settings,
@@ -82,7 +82,7 @@ from core.console_report import (
     render_table,
     render_title,
 )
-from core.display_common import FixedProgressBlock, InlineProgress
+from core.display_common import FixedProgressBlock, InlineProgress, format_elapsed
 from core.report_metrics import (
     CORE_STRATEGY_RESULT_METRICS,
     EXECUTION_STRATEGY_RESULT_METRICS,
@@ -109,6 +109,9 @@ from core.strategy_param_artifacts import (
     STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA,
     compute_strategy_param_scientific_sha256,
 )
+from filters.breakout_quality.point_in_time_schedule import (
+    build_point_in_time_fold_periods,
+)
 from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_COVERAGE_FILENAME,
     SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
@@ -128,6 +131,9 @@ from filters.breakout_quality.strategy_compare_replay import (
 from filters.breakout_quality.strategy_compare_execution import (
     run_strategy_compare_active_arm,
     run_strategy_compare_baseline_arm,
+)
+from filters.breakout_quality.strategy_compare_dl_artifacts import (
+    resolve_arm_runtime_dl_source_ids,
 )
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
 from services.research.strategy_compare_training import (
@@ -154,11 +160,13 @@ from core.report_style import (
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from filters.breakout_quality.strategy_comparison import (
-    _find_reusable_baseline_source,
     _load_direct_selection_r,
     collect_artifact_status,
     render_strategy_aggregate_report,
     render_strategy_execution_plan_surface,
+)
+from filters.breakout_quality.strategy_compare_reuse import (
+    _find_reusable_baseline_source,
 )
 from filters.breakout_quality.strategy_compare_runtime import _arm_runtime_spec
 from filters.breakout_quality.strategy_compare_reporting import capacity_summary
@@ -533,16 +541,14 @@ def _build_common_report_payload(
 
 
 def resolve_multi_seed_values(*, seed_count: int, generator_seed: int) -> tuple[int, ...]:
-    rng = random.Random(int(generator_seed))
-    values: list[int] = []
-    seen: set[int] = set()
-    while len(values) < int(seed_count):
-        value = int(rng.randrange(1, 2**31 - 1))
-        if value in seen:
-            continue
-        seen.add(value)
-        values.append(value)
-    return tuple(values)
+    """Compatibility facade over the benchmark seed SSOT in training_policy."""
+
+    return tuple(
+        resolve_robustness_benchmark_seeds(
+            seed_count=int(seed_count),
+            generator_seed=int(generator_seed),
+        )
+    )
 
 
 def _robustness_arms(
@@ -953,34 +959,6 @@ def _required_parameter_sources(
     return tuple(sorted({arm.param_source for arm in (*fixed_arms, *stochastic_arms)}))
 
 
-def _arm_training_dl_ids(settings, arm: StrategyComparisonArm) -> tuple[str, ...]:
-    """Return every stochastic model source that must share the arm seed.
-
-    Dual-model safety arms are a single scientific strategy unit.  Their primary
-    opportunity source and secondary safety source must therefore be trained with
-    the same generated seed; fixing the secondary model at Seed42 would only test
-    partial robustness of the arm.
-    """
-
-    primary = str(arm.dl_id or "").strip()
-    if not primary:
-        raise ValueError(f"stochastic arm缺少dl_id: {arm.arm_id}")
-    source_ids = [primary]
-    safety_dl_id = str(dict(arm.dl_runtime_options or {}).get("safety_dl_id") or "").strip()
-    if safety_dl_id:
-        if safety_dl_id not in settings.dl_sources:
-            raise ValueError(f"stochastic arm引用不存在的safety_dl_id: {arm.arm_id}/{safety_dl_id}")
-        source_ids.append(safety_dl_id)
-    unique = tuple(dict.fromkeys(source_ids))
-    score_sources = {str(settings.dl_sources[dl_id].score_source) for dl_id in unique}
-    if len(score_sources) != 1:
-        raise ValueError(
-            "stochastic arm的primary/secondary必須使用同一score source: "
-            f"arm={arm.arm_id}, actual={sorted(score_sources)}"
-        )
-    return unique
-
-
 def _training_source_groups(
     stochastic_arms: tuple[StrategyComparisonArm, ...],
     *,
@@ -991,7 +969,7 @@ def _training_source_groups(
     for arm_order, arm in enumerate(stochastic_arms, start=1):
         if not arm.dl_enabled or not str(arm.dl_id or "").strip():
             continue
-        for dl_id in _arm_training_dl_ids(settings, arm):
+        for dl_id in resolve_arm_runtime_dl_source_ids(settings, arm):
             if dl_id not in groups:
                 groups[dl_id] = []
                 order.append(dl_id)
@@ -1096,16 +1074,6 @@ def _parameter_plan_rows(
     return rows, blockers
 
 
-def _pit_fold_count_for_period(start: str, end: str, fold_months: int) -> int:
-    current = pd.Timestamp(start).normalize()
-    end_ts = pd.Timestamp(end).normalize()
-    count = 0
-    while current <= end_ts:
-        count += 1
-        current = current + pd.DateOffset(months=int(fold_months))
-    return count
-
-
 def _render_robustness_execution_plan(
     *, cfg, settings, status: dict[str, Any], fixed_arms, stochastic_arms
 ) -> tuple[str, dict[str, Any]]:
@@ -1188,8 +1156,18 @@ def _render_robustness_execution_plan(
             fold_counts.append(
                 1
                 if _source_point_in_time_single_score_block(settings=settings, dl_id=str(dl_id))
-                else _pit_fold_count_for_period(
-                    start, end, _source_point_in_time_fold_months(settings=settings, dl_id=str(dl_id))
+                else len(
+                    build_point_in_time_fold_periods(
+                        start,
+                        end,
+                        fold_months=_source_point_in_time_fold_months(
+                            settings=settings, dl_id=str(dl_id)
+                        ),
+                        fold_anchor=_source_point_in_time_fold_anchor_date(
+                            settings=settings, dl_id=str(dl_id)
+                        ),
+                        single_score_block=False,
+                    )
                 )
             )
         if fold_counts:
@@ -1454,7 +1432,7 @@ def build_multi_seed_robustness_contract(
                 "dl_id": arm.dl_id,
                 "dl_runtime_mode": arm.dl_runtime_mode,
                 "dl_runtime_options": dict(arm.dl_runtime_options or {}),
-                "runtime_dl_sources": [source_contract(dl_id) for dl_id in _arm_training_dl_ids(settings, arm)],
+                "runtime_dl_sources": [source_contract(dl_id) for dl_id in resolve_arm_runtime_dl_source_ids(settings, arm)],
             })
         return payload
 
@@ -2563,13 +2541,6 @@ def _training_units(
                 ),
             })
     return units
-
-
-def _format_elapsed(seconds: float) -> str:
-    total = max(0, int(round(float(seconds))))
-    hours, rem = divmod(total, 3600)
-    minutes, sec = divmod(rem, 60)
-    return f"{hours:02d}:{minutes:02d}:{sec:02d}"
 
 
 def _pop_next_training_unit(
@@ -4552,9 +4523,9 @@ def run_multi_seed_robustness(
                 f"{done_tag} seed {meta['seed_order']}/{len(seeds)} | "
                 f"對象 {meta['arm_order']}/{len(stochastic_arms)} {meta['name']} | "
                 f"RoMD={romd:.2f} | {delta_text} | "
-                f"train={_format_elapsed(result.get('training_elapsed_sec', 0))} | "
-                f"replay={_format_elapsed(result.get('replay_elapsed_sec', 0))} | "
-                f"total={_format_elapsed(time.perf_counter()-started_total)}"
+                f"train={format_elapsed(result.get('training_elapsed_sec', 0))} | "
+                f"replay={format_elapsed(result.get('replay_elapsed_sec', 0))} | "
+                f"total={format_elapsed(time.perf_counter()-started_total)}"
             )
         if finished:
             write_progress_manifest()
@@ -4584,7 +4555,7 @@ def run_multi_seed_robustness(
         unit_identity = (arm.arm_id, int(seed))
         if unit_identity in completed or unit_identity in queued_replay_units:
             return
-        required_dl_ids = _arm_training_dl_ids(settings, arm)
+        required_dl_ids = resolve_arm_runtime_dl_source_ids(settings, arm)
         source_keys = tuple((dl_id, int(seed)) for dl_id in required_dl_ids)
         if any(key not in trained_artifacts for key in source_keys):
             return
@@ -4704,7 +4675,7 @@ def run_multi_seed_robustness(
                 f"模型來源 {meta['source_order']}/{meta['source_count']} {meta['dl_id']} "
                 + f"| replay targets={len(meta['replay_arms'])} "
                 + f"| epoch={artifacts['selected_epoch']} "
-                + f"| elapsed={_format_elapsed(artifacts.get('training_elapsed_sec', trained['wall_elapsed_sec']))}"
+                + f"| elapsed={format_elapsed(artifacts.get('training_elapsed_sec', trained['wall_elapsed_sec']))}"
                 + fold_note
                             )
             for arm_order, arm in meta["replay_arms"]:
@@ -4777,7 +4748,7 @@ def run_multi_seed_robustness(
                         + f" CPU replay={len(replay_futures)}/{cfg.cpu_replay_workers}"
                         + f" | queued={len(ready_replays)}"
                         + f" | completed={done_units}/{total_units}"
-                        + f" | total={_format_elapsed(now-started_total)}"
+                        + f" | total={format_elapsed(now-started_total)}"
                     )
                 next_print = now + float(cfg.progress_interval_seconds)
             if pending_trainings or training_futures or ready_replays or replay_futures:
@@ -4924,7 +4895,7 @@ def run_multi_seed_robustness(
     if progress.inline:
         progress.finish()
     _print_report_tables(summary)
-    print(f"\n總耗時：{_format_elapsed(summary['elapsed_sec'])}")
+    print(f"\n總耗時：{format_elapsed(summary['elapsed_sec'])}")
     cleanup_tag = styled_workflow_status("暫存清理")
     print(
         f"{cleanup_tag}：checkpoints={'保留' if cfg.keep_checkpoints else '已清除'}｜"

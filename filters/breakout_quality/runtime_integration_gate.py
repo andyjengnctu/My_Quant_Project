@@ -507,17 +507,15 @@ def _robustness_checks(
     an unnecessary model retrain merely to recreate a control that already exists.
     """
 
-    from filters.breakout_quality.strategy_multi_seed_robustness import (
-        SUMMARY_FILENAME,
-        resolve_multi_seed_values,
-    )
+    from config.training_policy import resolve_robustness_benchmark_seeds
+    from filters.breakout_quality.strategy_multi_seed_robustness import SUMMARY_FILENAME
 
     cfg = get_strategy_multi_seed_robustness_settings(robustness_id)
     settings = get_strategy_comparison_settings(cfg.profile_id)
     candidate, _baseline = _resolve_candidate_and_baseline(settings)
     candidate_source = settings.dl_sources[str(candidate.dl_id)]
     expected_seeds = tuple(
-        resolve_multi_seed_values(
+        resolve_robustness_benchmark_seeds(
             seed_count=cfg.seed_count,
             generator_seed=cfg.seed_generator_seed,
         )

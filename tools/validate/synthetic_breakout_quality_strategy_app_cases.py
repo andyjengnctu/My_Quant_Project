@@ -407,6 +407,21 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     orchestration_source = read_source_text(
         project_root / "filters" / "breakout_quality" / "strategy_comparison.py"
     )
+    dl_artifact_source = read_source_text(
+        project_root / "filters" / "breakout_quality" / "strategy_compare_dl_artifacts.py"
+    )
+    pit_contract_source = read_source_text(
+        project_root / "filters" / "breakout_quality" / "strategy_compare_pit_contract.py"
+    )
+    pit_schedule_source = read_source_text(
+        project_root / "filters" / "breakout_quality" / "point_in_time_schedule.py"
+    )
+    pit_producer_source = read_source_text(
+        project_root / "services" / "breakout_quality" / "point_in_time_scores.py"
+    )
+    runtime_gate_source = read_source_text(
+        project_root / "filters" / "breakout_quality" / "runtime_integration_gate.py"
+    )
     provider = get_active_model_research_provider()
     check_true(
         "strategy_compare_model_provider_uses_one_scoped_artifact_handler",
@@ -448,8 +463,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "--inner-validation-months" in training_contract_source
         and "--checkpoint-cache-root" in training_contract_source,
     )
-    from services.research.strategy_compare_training import (
-        _validate_selection_pit_score_period,
+    from filters.breakout_quality.strategy_compare_pit_contract import (
+        validate_selection_pit_score_period,
     )
 
     auto_period_manifest = {
@@ -464,7 +479,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     check(
         "strategy_compare_training_validator_treats_auto_bounds_as_semantic_resolution",
         ("2021-01-01", "2026-03-02"),
-        _validate_selection_pit_score_period(
+        validate_selection_pit_score_period(
             auto_period_manifest,
             comparison_start="auto",
             comparison_end="auto",
@@ -472,7 +487,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
     stale_auto_period_rejected = False
     try:
-        _validate_selection_pit_score_period(
+        validate_selection_pit_score_period(
             {
                 **auto_period_manifest,
                 "score_period": {"start": "2021-01-01", "end": "2025-12-31"},
@@ -615,6 +630,43 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "resolve_planned_comparison_period_from_upstream(" not in robustness_source
         and "rows = [*upstream_rows, *param_rows, *benchmark_rows]" in robustness_source
         and "int(item.execution_priority)" in comparison_source,
+    )
+
+    check_true(
+        "robustness_seed_generation_has_one_training_policy_owner",
+        "resolve_robustness_benchmark_seeds(" in robustness_source
+        and "random.Random(" not in robustness_source
+        and "resolve_robustness_benchmark_seeds(" in runtime_gate_source
+        and "from filters.breakout_quality.strategy_multi_seed_robustness import (" not in runtime_gate_source,
+    )
+    check_true(
+        "single_and_multi_seed_share_arm_model_dependency_resolver",
+        "def resolve_arm_runtime_dl_source_ids(" in dl_artifact_source
+        and "def resolve_arm_artifact_dl_source_ids(" in dl_artifact_source
+        and "resolve_arm_artifact_dl_source_ids(settings, arm)" in dl_artifact_source
+        and "resolve_arm_runtime_dl_source_ids(settings, arm)" in robustness_source
+        and "def _arm_training_dl_ids(" not in robustness_source,
+    )
+    check_true(
+        "strategy_compare_pit_ready_contract_has_one_owner",
+        "def load_validated_selection_pit_strategy_compare_contract(" in pit_contract_source
+        and "def validate_selection_pit_score_period(" in pit_contract_source
+        and "strategy_compare_pit_contract import" in dl_artifact_source
+        and "strategy_compare_pit_contract import" in training_contract_source
+        and "def _validate_selection_pit_score_period(" not in training_contract_source
+        and "load_selection_point_in_time_ranking_contract(" not in training_contract_source,
+    )
+    check_true(
+        "pit_fold_schedule_is_shared_by_producer_and_robustness_workload",
+        "def build_point_in_time_fold_periods(" in pit_schedule_source
+        and "build_point_in_time_fold_periods" in pit_producer_source
+        and "build_point_in_time_fold_periods" in robustness_source
+        and "def _pit_fold_count_for_period(" not in robustness_source,
+    )
+    check_true(
+        "robustness_elapsed_display_reuses_common_formatter",
+        "from core.display_common import FixedProgressBlock, InlineProgress, format_elapsed" in robustness_source
+        and "def _format_elapsed(" not in robustness_source,
     )
 
     pending_trainings = robustness_runtime.deque([

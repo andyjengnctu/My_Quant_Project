@@ -676,9 +676,16 @@ def append_strategy_compare_preparation_contract_checks(
     )
 
     failed_gate_contract = SimpleNamespace(
+        seed=42,
         model_validation_gate={"status": "FAIL", "checks": {"synthetic": False}},
         available_from="2016-04-01",
         available_through="2020-12-31",
+        manifest={
+            "fold_months": 12,
+            "single_score_block": False,
+            "score_period": {"start": "2014-01-01", "end": "2020-12-31"},
+            "folds": [{"selected_epoch": 2}],
+        },
         manifest_path=Path("models/synthetic/selection_point_in_time_manifest.json"),
         audit_path=Path("outputs/synthetic/selection_point_in_time_audit.json"),
         score_path=Path("models/synthetic/selection_point_in_time_scores.csv"),
@@ -687,7 +694,7 @@ def append_strategy_compare_preparation_contract_checks(
     failed_actions = []
     with patch.object(
         dl_artifacts_module,
-        "load_selection_point_in_time_ranking_contract",
+        "load_validated_selection_pit_strategy_compare_contract",
         return_value=failed_gate_contract,
     ) as failed_gate_loader:
         failed_row, failed_ready = dl_artifacts_module._collect_selection_pit_source_status(
@@ -715,7 +722,9 @@ def append_strategy_compare_preparation_contract_checks(
         and all("WARN: Model Gate=FAIL" in action.description for action in failed_actions)
         and all("仍允許既定strategy-conversion replay" in action.description for action in failed_actions)
         and failed_gate_loader.call_count == 1
-        and failed_gate_loader.call_args.kwargs.get("require_model_validation_pass") is False,
+        and failed_gate_loader.call_args.kwargs.get("seed") == 42
+        and failed_gate_loader.call_args.kwargs.get("comparison_start") is None
+        and failed_gate_loader.call_args.kwargs.get("comparison_end") is None,
     )
 
     partial_period_rejected = False

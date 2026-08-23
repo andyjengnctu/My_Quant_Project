@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from config.breakout_quality import get_breakout_quality_workflow_settings
 from core.console_report import project_relative_display_path
 from core.research_orchestration import resolve_research_artifact_action
 from core.strategy_comparison import (
@@ -43,14 +44,18 @@ from filters.breakout_quality.paths import (
     resolve_selection_point_in_time_score_path,
 )
 from filters.breakout_quality.strategy_compare_contracts import build_strategy_preparation_action
+from filters.breakout_quality.strategy_compare_pit_contract import (
+    load_validated_selection_pit_strategy_compare_contract,
+)
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     load_continuous_ranker_oos_contract,
-    load_selection_point_in_time_ranking_contract,
     resolve_continuous_ranker_oos_score_path,
 )
+
+
 
 
 def model_upstream_prerequisite_blockers(
@@ -94,6 +99,80 @@ def _resolve_action(
     )
 
 
+def resolve_arm_runtime_dl_source_ids(
+    settings: StrategyComparisonSettings,
+    arm: Any,
+) -> tuple[str, ...]:
+    """Return model sources consumed directly by one strategy replay arm.
+
+    This is the shared runtime-dependency definition for single- and multi-seed
+    Strategy Compare.  Robustness may change only the seed/output namespace; it
+    must not rediscover primary/secondary model membership independently.
+    """
+
+    source_ids: list[str] = []
+    primary = str(getattr(arm, "dl_id", None) or "").strip()
+    if bool(getattr(arm, "dl_enabled", False)) and primary:
+        if primary not in settings.dl_sources:
+            raise ValueError(f"arm引用不存在的dl_id: {arm.arm_id}/{primary}")
+        source_ids.append(primary)
+
+    if arm.dl_runtime_mode in {
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
+    }:
+        safety_dl_id = str(
+            dict(arm.dl_runtime_options or {}).get("safety_dl_id") or ""
+        ).strip()
+        if not safety_dl_id or safety_dl_id not in settings.dl_sources:
+            raise ValueError(
+                f"dual-model safety arm缺少合法safety_dl_id: {arm.arm_id}"
+            )
+        source_ids.append(safety_dl_id)
+
+    unique = tuple(dict.fromkeys(source_ids))
+    if len(unique) > 1:
+        score_sources = {str(settings.dl_sources[dl_id].score_source) for dl_id in unique}
+        if len(score_sources) != 1:
+            raise ValueError(
+                "同一runtime arm的primary/secondary必須使用同一score source: "
+                f"arm={arm.arm_id}, actual={sorted(score_sources)}"
+            )
+    return unique
+
+
+def resolve_arm_artifact_dl_source_ids(
+    settings: StrategyComparisonSettings,
+    arm: Any,
+) -> tuple[str, ...]:
+    """Return every DL artifact dependency needed to prepare one arm."""
+
+    source_ids = list(resolve_arm_runtime_dl_source_ids(settings, arm))
+    options = dict(arm.dl_runtime_options or {})
+    if (
+        arm.dl_runtime_mode
+        == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT
+    ):
+        fit_dl_id = str(options.get("expected_r_fit_dl_id") or "").strip()
+        if not fit_dl_id or fit_dl_id not in settings.dl_sources:
+            raise ValueError(
+                f"Expected-PnL arm缺少合法expected_r_fit_dl_id: {arm.arm_id}"
+            )
+        source_ids.append(fit_dl_id)
+    if arm.dl_runtime_mode in {
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
+    }:
+        fit_dl_id = str(options.get("expected_excess_r_fit_dl_id") or "").strip()
+        if not fit_dl_id or fit_dl_id not in settings.dl_sources:
+            raise ValueError(
+                f"Excess-Alpha arm缺少合法expected_excess_r_fit_dl_id: {arm.arm_id}"
+            )
+        source_ids.append(fit_dl_id)
+    return tuple(dict.fromkeys(source_ids))
+
+
 def resolve_required_artifact_sources(
     settings: StrategyComparisonSettings,
 ) -> tuple[set[str], set[str], set[str]]:
@@ -101,9 +180,8 @@ def resolve_required_artifact_sources(
 
     required_param_sources = {arm.param_source for arm in settings.enabled_arms}
     # Parameter builders may deterministically derive one execution-mode artifact
-    # from another canonical parameter source (for example OOS fixed-cutoff freeze).
-    # Include that dependency in the same preparation graph so callers never need
-    # a manual prerequisite step.
+    # from another canonical parameter source.  Include the dependency in the same
+    # preparation graph so callers never need a manual prerequisite step.
     pending_param_sources = list(required_param_sources)
     while pending_param_sources:
         source_id = pending_param_sources.pop()
@@ -119,49 +197,13 @@ def resolve_required_artifact_sources(
                 )
             required_param_sources.add(dependency_id)
             pending_param_sources.append(dependency_id)
-    required_dl_sources = {
-        arm.dl_id for arm in settings.enabled_arms if arm.dl_enabled and arm.dl_id
-    }
-    runtime_required_dl_sources = set(required_dl_sources)
+
+    required_dl_sources: set[str] = set()
+    runtime_required_dl_sources: set[str] = set()
     for arm in settings.enabled_arms:
-        if arm.dl_runtime_mode in {
-            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
-            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
-        }:
-            safety_dl_id = str(
-                dict(arm.dl_runtime_options or {}).get("safety_dl_id") or ""
-            ).strip()
-            if not safety_dl_id or safety_dl_id not in settings.dl_sources:
-                raise ValueError(
-                    f"dual-model safety arm缺少合法safety_dl_id: {arm.arm_id}"
-                )
-            required_dl_sources.add(safety_dl_id)
-            runtime_required_dl_sources.add(safety_dl_id)
-        if (
-            arm.dl_runtime_mode
-            == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT
-        ):
-            fit_dl_id = str(
-                dict(arm.dl_runtime_options or {}).get("expected_r_fit_dl_id") or ""
-            ).strip()
-            if not fit_dl_id or fit_dl_id not in settings.dl_sources:
-                raise ValueError(
-                    f"Expected-PnL arm缺少合法expected_r_fit_dl_id: {arm.arm_id}"
-                )
-            required_dl_sources.add(fit_dl_id)
-        if arm.dl_runtime_mode in {
-            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
-            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
-            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
-        }:
-            fit_dl_id = str(
-                dict(arm.dl_runtime_options or {}).get("expected_excess_r_fit_dl_id") or ""
-            ).strip()
-            if not fit_dl_id or fit_dl_id not in settings.dl_sources:
-                raise ValueError(
-                    f"Excess-Alpha arm缺少合法expected_excess_r_fit_dl_id: {arm.arm_id}"
-                )
-            required_dl_sources.add(fit_dl_id)
+        required_dl_sources.update(resolve_arm_artifact_dl_source_ids(settings, arm))
+        runtime_required_dl_sources.update(resolve_arm_runtime_dl_source_ids(settings, arm))
+
     for source_id in required_param_sources:
         trained_with = settings.parameter_sources[source_id].trained_with_dl_id
         if trained_with:
@@ -287,39 +329,18 @@ def _collect_selection_pit_source_status(
     pit_gate_status: str | None = None
     try:
         pit_override_dir = _selection_pit_override_dir(root, source)
-        pit_contract = load_selection_point_in_time_ranking_contract(
-            str(root),
-            source.filter_id,
-            source.model_architecture,
-            source.experiment_profile,
-            require_model_validation_pass=False,
-            point_in_time_dir_override=pit_override_dir,
+        workflow = get_breakout_quality_workflow_settings(
+            experiment_profile=str(source.experiment_profile)
         )
-        expected_fold_months = getattr(source, "point_in_time_fold_months", None)
-        if expected_fold_months is not None and int(pit_contract.manifest.get("fold_months", -1)) != int(expected_fold_months):
-            raise ValueError(
-                "Selection PIT fold cadence與Strategy Compare mode不一致: "
-                f"expected={int(expected_fold_months)}, actual={pit_contract.manifest.get('fold_months')!r}"
-            )
-        expected_single_block = bool(getattr(source, "point_in_time_single_score_block", False))
-        manifest_payload = getattr(pit_contract, "manifest", None)
-        if manifest_payload is not None:
-            actual_single_block = bool(dict(manifest_payload).get("single_score_block", False))
-            if actual_single_block != expected_single_block:
-                raise ValueError(
-                    "Selection PIT score-block mode與Strategy Compare mode不一致: "
-                    f"expected_single={expected_single_block}, actual_single={actual_single_block}"
-                )
-        elif expected_single_block:
-            raise ValueError("Selection PIT OOS mode缺少可驗證single_score_block的manifest")
-        expected_anchor = getattr(source, "point_in_time_fold_anchor_date", None)
-        if expected_anchor not in (None, ""):
-            actual_anchor = str(pit_contract.manifest.get("fold_anchor_date") or "").strip()
-            if actual_anchor != str(expected_anchor):
-                raise ValueError(
-                    "Selection PIT fold anchor與Strategy Compare mode不一致: "
-                    f"expected={expected_anchor}, actual={actual_anchor or None}"
-                )
+        pit_contract = load_validated_selection_pit_strategy_compare_contract(
+            root=root,
+            source=source,
+            workflow=workflow,
+            seed=int(workflow.seed),
+            point_in_time_dir_override=pit_override_dir,
+            comparison_start=settings.start_date,
+            comparison_end=settings.end_date,
+        )
         pit_gate_status = str(
             pit_contract.model_validation_gate.get("status") or ""
         ).strip().upper() or None
@@ -812,6 +833,9 @@ def collect_dl_artifact_status(
 
 __all__ = [
     "collect_dl_artifact_status",
+    "load_validated_selection_pit_strategy_compare_contract",
     "model_upstream_prerequisite_blockers",
+    "resolve_arm_artifact_dl_source_ids",
+    "resolve_arm_runtime_dl_source_ids",
     "resolve_required_artifact_sources",
 ]

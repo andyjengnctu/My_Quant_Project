@@ -32,9 +32,9 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260818_165751_ec32ec7.zip`，SHA256 `eb4d9267429fc582a1e7e4f03e69fa404093bc2d05eca14f9b4c956838ed751c`；fresh extraction=`/tmp/mqp_c56_full`。此基準已含C56 Seed42 Forward GO證據，本輪在其上建立C56/C57 full-flow驗證。 |
-| SHA256／最新結果 | MR-13E仍是production anchor。C56 Seed42 Forward=`148.34% Return / 12.86% MDD / 11.53 RoMD / 47.90% Win / 1.14R EV`，B2 concept GO但未promotion。依使用者決策，下一步先完成C57 Selection與Selection/Forward同seed雙source8-seed robustness；C54/C55不同行。 |
-| 程式版本範圍 | Active sequence architecture仍為`inception_time_v1`；Strategy Compare schema=`41`：Selection=`C32/C23/C42/C57`、Forward=`C1/C3/C44/C56`。C57/C56使用13K primary + 13M residual safety；C53/C54/C55已退historical compatibility。Robustness stochastic只=C57/C56且每seed同seed建立13K+13M；production workflow/runtime仍C42/C44。 |
+| 基準 ZIP | `test-branch-1_20260823_061330_85b4aa6.zip`，SHA256 `86557e5bc9eac958dc803549ef716d06f9805de814c95af92edd066cd50c5ba4`；本輪Research SSOT稽核以fresh extraction=`research_full_ssot_audit/`開始，後續修正於同一基準的fresh worktree完成。 |
+| SHA256／最新結果 | 本輪不新增scientific result或promotion判定。Current Strategy Compare只以`extending_current` suite執行OOS／Rolling，arms=`C61/C62/C58/C63/C59/C60`、九個same-seed contrasts；production identity仍維持既有C42/C44，除非另有正式promotion decision。 |
+| 程式版本範圍 | Active sequence architecture仍為`inception_time_v1`；current Strategy Compare第一層只保留Extending-Window Test與Extending-Window Multi-seed Robustness Test，OOS／Rolling共用同一suite。Robustness是single-seed suite的純multi-seed版本；benchmark seed count／generator／resolved sequence只讀`config/training_policy.py`當前值，目前seed_count=4；C59/C60額外model-seed-sensitive。Legacy Selection/Frozen C56/C57矩陣只保留historical compatibility。 |
 | Policy 預設 | filter=`breakout_quality_v1`、architecture=`inception_time_v1`、Seed=`42`；Model Research profile=`daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise`；Production workflow profile=`daily_universal_no_time_full_list_ndcg_pairwise`。PIT score start=`auto`、fold=`12` months、inner validation=`24` months；MR-13O research-spec固定`selection_pit_authorized=False`。 |
 | 當前最佳實證模型 | Production仍為`MR-13E / daily_universal_no_time_full_list_ndcg_pairwise` + Min/all-off + exact K/R0 constrained。C56目前是最有價值的research alternative之一，但只有Seed42 Forward正向證據；先完整補Selection/robustness再判讀。Plan C-M與Plan A依Research Queue排在C56 full-flow之後。 |
 | Dataset | 沿用既有`breakout_quality_v1` 300×10 feature bank與固定百分比Label。使用者已於2026-08-04重新訓練`inception_time_v1 / unique_group_sampling`，產生新的model／split／manifest；research report、forward-OOS scores與正式策略比較仍待選單流程執行。10A Market Bank與其他legacy工件保留於獨立路徑供歷史重現 |
@@ -9851,3 +9851,14 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Runtime／science不變：本輪不修改`config/training_policy.py`、Compare Suite、Optimizer trials/window/search space、model training、same-seed binding、artifact identity或交易語意。
 - C1維護收尾：全專案normalized AST exact-duplicate掃描只剩Expected-R與Expected Excess-R兩個calibration service各自複製的`_json_native()`；兩者已改用既有`core/serialization_utils.py::json_native_value`，只收斂JSON serialization primitive，不改calibration數學或工件schema。
 - Decision：**DOCUMENTATION_SSOT_CLOSED / USER_CONFIG_REMAINS_AUTHORITATIVE / NO_ADDITIONAL_RUNTIME_REFACTOR_REQUIRED**。
+
+### 2026-08-23 — Research SSOT closure：seed／DL dependency／PIT READY／fold schedule ownership收斂
+
+- 程式基準：`test-branch-1_20260823_061330_85b4aa6.zip`，SHA256=`86557e5bc9eac958dc803549ef716d06f9805de814c95af92edd066cd50c5ba4`。本輪不修改模型architecture、Target、loss、seed設定值、Optimizer science、strategy params、suite arms／contrasts、portfolio accounting或production identity。
+- Benchmark seed generation唯一owner固定為`config/training_policy.py::resolve_robustness_benchmark_seeds()`；Robustness保留compatibility facade但不得再自行使用`random.Random`重建題庫，historical runtime gate亦直接讀canonical resolver。
+- Arm model dependency唯一owner集中於`filters/breakout_quality/strategy_compare_dl_artifacts.py`：single preparation與multi-seed runtime source grouping都引用同一resolver；dual-model primary／secondary score-source compatibility只驗一次。
+- Selection-PIT READY legality集中於`filters/breakout_quality/strategy_compare_pit_contract.py`；preparation/status與training completion均讀同一seed／fold cadence／score-block／anchor／auto period／selected-epoch contract，避免再次出現`auto`語意雙軌。
+- PIT calendar fold schedule集中於`filters/breakout_quality/point_in_time_schedule.py`；canonical producer與Robustness workload estimate共同使用，Robustness不再自行以月份遞增估fold count。elapsed display改回`core/display_common.py::format_elapsed`；Strategy Compare diagnostics的finite-number coercion亦直接重用`core/report_style.py::finite_number`，不再保留相同私有實作。
+- `doc/TEST_SUITE_CHECKLIST.md`中B226/B228/B250舊C56/C57 Selection/Forward文字改標historical snapshot；current contract仍只由B189與`config/strategy_compare.py`定義。
+- 此輪屬maintenance SSOT closure，不產生新MR/SR/Cxx identity，不要求既有non-Robustness模型重訓，也不改既有研究結果。
+

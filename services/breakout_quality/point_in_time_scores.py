@@ -48,6 +48,11 @@ from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
 from filters.breakout_quality.models.factory import build_model
+from filters.breakout_quality.point_in_time_schedule import (
+    FOLD_CALENDAR_ANCHOR,
+    build_point_in_time_fold_periods,
+    stable_point_in_time_fold_id,
+)
 from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_COVERAGE_FILENAME,
     SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
@@ -81,7 +86,6 @@ from services.breakout_quality.continuous_ranker_pipeline import (
 
 POINT_IN_TIME_SCHEMA_VERSION = 2
 AUTO_SCORE_START_VALUE = "auto"
-FOLD_CALENDAR_ANCHOR = pd.Timestamp("2000-01-01")
 FOLD_MANIFEST_FILENAME = "manifest.json"
 FOLD_SCORE_FILENAME = "scores.csv"
 REQUIRED_SCORE_COLUMNS = (
@@ -332,76 +336,10 @@ def _json_fingerprint(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _stable_fold_id(score_start: pd.Timestamp, score_end: pd.Timestamp) -> str:
-    return f"fold_{score_start:%Y%m%d}_{score_end:%Y%m%d}"
-
-
-def _build_fold_periods(
-    score_start: pd.Timestamp,
-    score_end: pd.Timestamp,
-    *,
-    fold_months: int,
-    fold_anchor: pd.Timestamp | None = None,
-    single_score_block: bool = False,
-) -> list[dict[str, Any]]:
-    """Build calendar-anchored folds whose later boundaries never shift.
-
-    The first fold may be partial when the resolved earliest legal score date falls
-    inside an anchored bucket.  Every later fold follows the fixed 2000-01-01
-    calendar anchor, so prepending older history does not rename or retrain existing
-    periods such as the original 2014-01-01~2014-12-31 fold.
-    """
-
-    start = pd.Timestamp(score_start).normalize()
-    end = pd.Timestamp(score_end).normalize()
-    months = int(fold_months)
-    if months < 1:
-        raise ValueError("fold_months必須>=1")
-    if end < start:
-        raise ValueError("point-in-time score期間不合法")
-    if bool(single_score_block):
-        return [{
-            "fold_id": _stable_fold_id(start, end),
-            "score_start": start,
-            "score_end": end,
-        }]
-
-    anchor = (
-        FOLD_CALENDAR_ANCHOR
-        if fold_anchor is None
-        else pd.Timestamp(fold_anchor).normalize()
-    )
-    month_delta = (start.year - anchor.year) * 12 + (
-        start.month - anchor.month
-    )
-    bucket_index = month_delta // months
-    bucket_start = (
-        anchor + pd.DateOffset(months=bucket_index * months)
-    ).normalize()
-    bucket_end = (
-        bucket_start + pd.DateOffset(months=months) - pd.Timedelta(days=1)
-    ).normalize()
-
-    folds: list[dict[str, Any]] = []
-    cursor = start
-    while cursor <= end:
-        fold_end = min(end, bucket_end)
-        folds.append(
-            {
-                "fold_id": _stable_fold_id(cursor, fold_end),
-                "score_start": cursor,
-                "score_end": fold_end,
-            }
-        )
-        cursor = (bucket_end + pd.Timedelta(days=1)).normalize()
-        bucket_start = cursor
-        bucket_end = (
-            bucket_start + pd.DateOffset(months=months) - pd.Timedelta(days=1)
-        ).normalize()
-    if not folds:
-        raise ValueError("point-in-time score期間沒有任何fold")
-    return folds
-
+# Historical private names remain compatibility aliases; the implementation lives in
+# filters.breakout_quality.point_in_time_schedule so every caller uses one schedule.
+_stable_fold_id = stable_point_in_time_fold_id
+_build_fold_periods = build_point_in_time_fold_periods
 
 def _group_event_count(event_group_index: np.ndarray, group_ids: np.ndarray) -> int:
     return int(np.isin(event_group_index, np.asarray(group_ids, dtype=np.int64)).sum())

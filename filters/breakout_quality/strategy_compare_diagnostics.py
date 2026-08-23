@@ -20,7 +20,7 @@ from core.report_metrics import (
     R_SELECTION_TRANSLATION_METRICS,
     RAnalysisMetricSpec,
 )
-from core.report_style import best_worst_signals, styled_signal
+from core.report_style import best_worst_signals, finite_number, styled_signal
 from core.strategy_comparison import StrategyComparisonSettings
 
 from core.exact_accounting import (
@@ -956,7 +956,7 @@ def backfill_pair_selection_diagnostics(
         return False
     existing = dict(payload.get("selection_diagnostics") or {})
     active_existing = dict(existing.get("score_ranking") or {})
-    if _finite(active_existing.get("orderable_score_coverage_rate")) is not None:
+    if finite_number(active_existing.get("orderable_score_coverage_rate")) is not None:
         return False
 
     score_path_raw = str(metadata.get("score_path") or "").strip()
@@ -1009,8 +1009,8 @@ def backfill_pair_selection_diagnostics(
     delta_keys = set(baseline_diag) | set(active_diag)
     diagnostic_delta = {}
     for key in delta_keys:
-        left = _finite(active_diag.get(key))
-        right = _finite(baseline_diag.get(key))
+        left = finite_number(active_diag.get(key))
+        right = finite_number(baseline_diag.get(key))
         diagnostic_delta[key] = None if left is None or right is None else left - right
     diagnostics = {
         "no_filter": baseline_diag,
@@ -1055,7 +1055,7 @@ def backfill_pair_r_conversion_diagnostic(
 
     diagnostics = dict(payload.get("selection_diagnostics") or {})
     existing = dict(diagnostics.get("selection_r_conversion") or {})
-    if _finite(existing.get("r_conversion_efficiency")) is not None and str(
+    if finite_number(existing.get("r_conversion_efficiency")) is not None and str(
         existing.get("comparison_basis") or ""
     ) == "target_covered_exclusive_realized_trade_mean_r":
         return False
@@ -1080,16 +1080,6 @@ def backfill_pair_r_conversion_diagnostic(
 flatten_candidate_replay_rows = _flatten_candidate_replay_rows
 
 # Human-readable aggregate report reuse layer.
-def _finite(value: Any) -> float | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
-
-
 def _read_json(path: Path) -> dict[str, Any] | None:
     if not path.is_file():
         return None
@@ -1131,15 +1121,15 @@ def _selection_pit_prediction_row(
         "score_source": source.score_source,
         "scope": str(contract.get("primary_metric_label") or scope),
         "continuous_target_id": str(payload.get("continuous_target_id") or ""),
-        "global_spearman": _finite(metrics.get("global_spearman")),
-        "mean_daily_spearman": _finite(metrics.get("mean_daily_spearman")),
-        "pairwise_concordance": _finite(metrics.get("pairwise_concordance")),
-        "top_target_r": _finite(metrics.get("top_decile_target_mean")),
-        "bottom_target_r": _finite(metrics.get("bottom_decile_target_mean")),
-        "top_bottom_target_spread_r": _finite(metrics.get("top_bottom_target_spread")),
+        "global_spearman": finite_number(metrics.get("global_spearman")),
+        "mean_daily_spearman": finite_number(metrics.get("mean_daily_spearman")),
+        "pairwise_concordance": finite_number(metrics.get("pairwise_concordance")),
+        "top_target_r": finite_number(metrics.get("top_decile_target_mean")),
+        "bottom_target_r": finite_number(metrics.get("bottom_decile_target_mean")),
+        "top_bottom_target_spread_r": finite_number(metrics.get("top_bottom_target_spread")),
         "valid_year_count": int(direction.get("valid_year_count") or 0),
         "positive_spearman_year_count": int(direction.get("positive_spearman_year_count") or 0),
-        "positive_spearman_year_rate": _finite(direction.get("positive_spearman_year_rate")),
+        "positive_spearman_year_rate": finite_number(direction.get("positive_spearman_year_rate")),
         "artifact": project_relative_display_path(path, project_root=root),
         "available": True,
     }
@@ -1159,17 +1149,17 @@ def _continuous_prediction_row(
             "available": False,
         }
     metrics = dict((payload.get("split_metrics") or {}).get("oos") or {})
-    top = _finite(metrics.get("top_score_decile_raw_target_mean"))
-    bottom = _finite(metrics.get("bottom_score_decile_raw_target_mean"))
+    top = finite_number(metrics.get("top_score_decile_raw_target_mean"))
+    bottom = finite_number(metrics.get("bottom_score_decile_raw_target_mean"))
     spread = None if top is None or bottom is None else top - bottom
     return {
         "dl_id": dl_id,
         "score_source": source.score_source,
         "scope": "Forward OOS all eligible stock-days",
         "continuous_target_id": str(payload.get("continuous_target_id") or ""),
-        "global_spearman": _finite(metrics.get("global_spearman_vs_raw_target")),
-        "mean_daily_spearman": _finite(metrics.get("mean_daily_spearman")),
-        "pairwise_concordance": _finite(metrics.get("pairwise_concordance")),
+        "global_spearman": finite_number(metrics.get("global_spearman_vs_raw_target")),
+        "mean_daily_spearman": finite_number(metrics.get("mean_daily_spearman")),
+        "pairwise_concordance": finite_number(metrics.get("pairwise_concordance")),
         "top_target_r": top,
         "bottom_target_r": bottom,
         "top_bottom_target_spread_r": spread,
@@ -1227,37 +1217,37 @@ def _selection_translation_rows(
             continue
 
         def delta(key: str) -> float | None:
-            left = _finite(active.get(key))
-            right = _finite(baseline.get(key))
+            left = finite_number(active.get(key))
+            right = finite_number(baseline.get(key))
             return None if left is None or right is None else left - right
 
         scenario = scenarios.get(on_arm.arm_id) or {}
         conversion = dict(diagnostics.get("selection_r_conversion") or {})
-        target_selection_delta_r = _finite(
+        target_selection_delta_r = finite_number(
             conversion.get("paired_target_selection_edge_r")
         )
-        realized_selection_delta_r = _finite(scenario.get("direct_selection_delta_r"))
-        r_conversion_efficiency = _finite(conversion.get("r_conversion_efficiency"))
-        realized_selection_edge_r = _finite(
+        realized_selection_delta_r = finite_number(scenario.get("direct_selection_delta_r"))
+        r_conversion_efficiency = finite_number(conversion.get("r_conversion_efficiency"))
+        realized_selection_edge_r = finite_number(
             conversion.get("paired_realized_selection_edge_r")
         )
         by_arm[on_arm.arm_id] = {
             "arm_id": on_arm.arm_id,
             "name": on_arm.name,
             "dl_id": on_arm.dl_id,
-            "score_coverage": _finite(active.get("orderable_score_coverage_rate")),
+            "score_coverage": finite_number(active.get("orderable_score_coverage_rate")),
             "paired_target_selection_edge_r": target_selection_delta_r,
             "paired_realized_selection_edge_r": realized_selection_edge_r,
             "r_conversion_efficiency": r_conversion_efficiency,
-            "selected_target_mean_r": _finite(active.get("selected_target_mean_r")),
+            "selected_target_mean_r": finite_number(active.get("selected_target_mean_r")),
             "selected_target_mean_r_delta": delta("selected_target_mean_r"),
-            "selected_target_percentile": _finite(active.get("selected_target_percentile_mean")),
+            "selected_target_percentile": finite_number(active.get("selected_target_percentile_mean")),
             "selected_target_percentile_delta": delta("selected_target_percentile_mean"),
-            "target_top_k_retention": _finite(active.get("target_top_k_retention_mean")),
+            "target_top_k_retention": finite_number(active.get("target_top_k_retention_mean")),
             "target_top_k_retention_delta": delta("target_top_k_retention_mean"),
-            "target_opportunity_gap_r": _finite(active.get("target_opportunity_gap_r_mean")),
+            "target_opportunity_gap_r": finite_number(active.get("target_opportunity_gap_r_mean")),
             "target_opportunity_gap_r_delta": delta("target_opportunity_gap_r_mean"),
-            "direct_selection_delta_r": _finite(scenario.get("direct_selection_delta_r")),
+            "direct_selection_delta_r": finite_number(scenario.get("direct_selection_delta_r")),
         }
     return [by_arm[arm.arm_id] for arm in settings.enabled_arms if arm.arm_id in by_arm]
 
@@ -1271,12 +1261,12 @@ def _execution_rows(
         rows.append({
             "arm_id": arm.arm_id,
             "name": arm.name,
-            "avg_exposure_pct": _finite(scenario.get("avg_exposure_pct")),
-            "reserved_buy_fill_rate_pct": _finite(scenario.get("reserved_buy_fill_rate_pct")),
-            "avg_orderable_candidates": _finite(scenario.get("avg_orderable_candidates")),
-            "candidate_supply_gap_days": _finite(scenario.get("candidate_supply_gap_days")),
-            "underfilled_end_days": _finite(scenario.get("underfilled_end_days")),
-            "end_position_gap_slot_days": _finite(scenario.get("end_position_gap_slot_days")),
+            "avg_exposure_pct": finite_number(scenario.get("avg_exposure_pct")),
+            "reserved_buy_fill_rate_pct": finite_number(scenario.get("reserved_buy_fill_rate_pct")),
+            "avg_orderable_candidates": finite_number(scenario.get("avg_orderable_candidates")),
+            "candidate_supply_gap_days": finite_number(scenario.get("candidate_supply_gap_days")),
+            "underfilled_end_days": finite_number(scenario.get("underfilled_end_days")),
+            "end_position_gap_slot_days": finite_number(scenario.get("end_position_gap_slot_days")),
         })
     return rows
 
@@ -1310,26 +1300,26 @@ def _r_analysis_rows(
             "name": arm.name,
             "dl_id": arm.dl_id,
             "continuous_target_id": str(model.get("continuous_target_id") or ""),
-            "portfolio_avg_r": _finite(scenario.get("portfolio_avg_r")),
-            "portfolio_median_r": _finite(scenario.get("portfolio_median_r")),
-            "mean_daily_spearman": _finite(model.get("mean_daily_spearman")),
-            "global_spearman": _finite(model.get("global_spearman")),
-            "pairwise_concordance": _finite(model.get("pairwise_concordance")),
-            "top_target_r": _finite(model.get("top_target_r")),
-            "bottom_target_r": _finite(model.get("bottom_target_r")),
-            "top_bottom_target_spread_r": _finite(model.get("top_bottom_target_spread_r")),
-            "score_coverage": _finite(translation.get("score_coverage")),
-            "paired_target_selection_edge_r": _finite(translation.get("paired_target_selection_edge_r")),
-            "r_conversion_efficiency": _finite(translation.get("r_conversion_efficiency")),
-            "selected_target_mean_r": _finite(translation.get("selected_target_mean_r")),
-            "selected_target_mean_r_delta": _finite(translation.get("selected_target_mean_r_delta")),
-            "selected_target_percentile": _finite(translation.get("selected_target_percentile")),
-            "selected_target_percentile_delta": _finite(translation.get("selected_target_percentile_delta")),
-            "target_top_k_retention": _finite(translation.get("target_top_k_retention")),
-            "target_top_k_retention_delta": _finite(translation.get("target_top_k_retention_delta")),
-            "target_opportunity_gap_r": _finite(translation.get("target_opportunity_gap_r")),
-            "target_opportunity_gap_r_delta": _finite(translation.get("target_opportunity_gap_r_delta")),
-            "direct_selection_delta_r": _finite(translation.get("direct_selection_delta_r")),
+            "portfolio_avg_r": finite_number(scenario.get("portfolio_avg_r")),
+            "portfolio_median_r": finite_number(scenario.get("portfolio_median_r")),
+            "mean_daily_spearman": finite_number(model.get("mean_daily_spearman")),
+            "global_spearman": finite_number(model.get("global_spearman")),
+            "pairwise_concordance": finite_number(model.get("pairwise_concordance")),
+            "top_target_r": finite_number(model.get("top_target_r")),
+            "bottom_target_r": finite_number(model.get("bottom_target_r")),
+            "top_bottom_target_spread_r": finite_number(model.get("top_bottom_target_spread_r")),
+            "score_coverage": finite_number(translation.get("score_coverage")),
+            "paired_target_selection_edge_r": finite_number(translation.get("paired_target_selection_edge_r")),
+            "r_conversion_efficiency": finite_number(translation.get("r_conversion_efficiency")),
+            "selected_target_mean_r": finite_number(translation.get("selected_target_mean_r")),
+            "selected_target_mean_r_delta": finite_number(translation.get("selected_target_mean_r_delta")),
+            "selected_target_percentile": finite_number(translation.get("selected_target_percentile")),
+            "selected_target_percentile_delta": finite_number(translation.get("selected_target_percentile_delta")),
+            "target_top_k_retention": finite_number(translation.get("target_top_k_retention")),
+            "target_top_k_retention_delta": finite_number(translation.get("target_top_k_retention_delta")),
+            "target_opportunity_gap_r": finite_number(translation.get("target_opportunity_gap_r")),
+            "target_opportunity_gap_r_delta": finite_number(translation.get("target_opportunity_gap_r_delta")),
+            "direct_selection_delta_r": finite_number(translation.get("direct_selection_delta_r")),
         })
     return rows
 
@@ -1370,14 +1360,14 @@ def build_strategy_diagnostics(
 
 
 def _fmt(value: Any, *, digits: int = 3, unit: str = "") -> str:
-    numeric = _finite(value)
+    numeric = finite_number(value)
     if numeric is None:
         return "-"
     return f"{numeric:.{digits}f}{unit}"
 
 
 def _fmt_pct_fraction(value: Any) -> str:
-    numeric = _finite(value)
+    numeric = finite_number(value)
     return "-" if numeric is None else f"{numeric * 100.0:.2f}%"
 
 
