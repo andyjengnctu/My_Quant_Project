@@ -1,6 +1,6 @@
 # 專案設定
 
-1. 每輪開始專案修改或檢查前，必須先讀取並遵守 `doc/PROJECT_SETTINGS.md`。本文件為全專案最高層治理原則，只保存長期穩定、跨模組且可泛化的專案級規則；可變設定、current identity、實驗狀態、工件實作細節與歷史結果，應由各自的 `config/`、Registry、Architecture、Research Queue 或 Experiment Log 持有，不得在本文件建立第二份真理來源。
+1. 每輪開始專案修改或檢查前，必須先讀取並遵守 `doc/PROJECT_SETTINGS.md`。本文件為全專案最高層治理原則；除 E 章明確列出的專案例外外，只保存長期穩定、跨模組且可泛化的專案級規則。可變設定、current identity、實驗狀態、工件實作細節與歷史結果，應由各自的 `config/`、Registry、Architecture、Research Queue 或 Experiment Log 持有，不得在本文件建立第二份真理來源。
 2. 使用者明確要求「完整檢查」時，GPT 必須進入全專案檢查模式，以表格逐項檢查：(1) 本文件 A 至 E 的全部適用條款；(2) 雖未列於本文件但依本輪基準與架構應檢查的其他項目。各項必須有獨立檢查結論，不得以 formal suite PASS 或其他項目結果代替；所有適用項目完成前不得宣稱完整檢查完成。
 
 
@@ -41,15 +41,15 @@
 2. 統計口徑必須完全一致：成交、未成交、miss buy、EV、勝率與 Round-Trip PnL 不得因路徑、顯示或用途不同而改變定義。
 3. 避免 magic number；公式、參數與比較規則必須可解釋。
 4. 禁止裸 except；所有被捕捉且非純 control-flow／feature probe 的異常都必須可追蹤。
-5. 架構調整不得明顯犧牲效率；若提高未來策略修改或 ML／DRL／LLM 升級複雜度，必須先明確說明。
+5. 架構調整不得無必要地明顯犧牲效率；correctness、scientific semantics、PIT legality 與 SSOT 優先於效能。若必要的正確實作會造成明顯效能或未來維護成本，必須明確說明 trade-off，再於不改變上述語意的前提下優化。
 6. 正式 application entry 位於 `apps/`；可重用的正式 domain／service／core logic 不得放入單一 App；`tools/` 只承擔驗證、診斷與開發輔助，不得成為正式 runtime 的第二份規則來源。
 7. 拆分、合併、移動或重新命名檔案時，必須遵守單一職責、分層呼叫、禁止反向依賴、禁止循環依賴、禁止規則分叉與禁止重複實作。
 8. `config/` 的正式可調參數不得被 GPT、validator 或 formal suite 以目前值／預設值硬編成唯一合法答案；測試只能驗證 schema、合法性、跨欄契約及 runtime 是否忠實採用設定。固定測試案例必須使用隔離 override，不得修改或限制實際 config。
-9. `apps/research.py` 可作統一使用者入口，但模型訓練、Optimizer、Strategy Compare、Audit 等 domain 必須維持獨立 application／service 責任與 canonical producer ownership。正式流程須先建立可稽核 dependency plan；consumer／orchestrator 只能解析、驗證、委派與消費，不得建立新的 scientific identity、改變 target／architecture／loss／hyperparameter、挑選模型／seed、複製 producer 邏輯，或以 side effect 越權建立下游 artifact。可確定的依賴應由 canonical producer 執行 REUSE／BUILD／REBUILD／RESUME 並重新 plan；只有需要新的研究選擇或缺少不可確定建立的上游真理時才能 BLOCKED。前置建立只確認一次；任一步驟失敗即停止下游正式回放／報表並保留可接續工件。
+9. `apps/research.py` 可作統一使用者入口，但模型訓練、Optimizer、Strategy Compare、Audit 等 domain 必須維持獨立 application／service 責任與 canonical producer ownership。正式流程須先建立可稽核 dependency plan；**authorization 與 scientific contract legality 優先於 dependency completeness**。只有在 current authorization 與 scientific contract 允許的前提下，可確定的缺失依賴才由 canonical producer 執行 REUSE／BUILD／REBUILD／RESUME 並重新 plan；未授權 workflow 不得因依賴技術上可建立而繞過 BLOCKED。consumer／orchestrator 只能解析、驗證、委派與消費，不得建立新的 scientific identity、改變 target／architecture／loss／hyperparameter、挑選模型／seed、複製 producer 邏輯，或以 side effect 越權建立下游 artifact。需要新的研究選擇、未取得必要 authorization，或缺少不可確定建立的上游真理時才可 BLOCKED。前置建立只確認一次；任一步驟失敗即停止下游正式回放／報表並保留可接續工件。
 10. Strategy parameter truth 只能由 canonical Optimizer producer 產生；其他工作類型不得建立第二套 search／stitch／freeze／seed／trial semantics。同一 scientific parameter truth 不得因 OOS／Rolling 或其他 evaluation mode 建立第二份 physical truth，只能依各 mode 的合法時間語意解析與消費同一 canonical lineage。
 11. Artifact reuse 必須依完整 canonical contract／identity 驗證，不得僅因檔案存在即視為 READY；不同 scientific identity、evaluation identity、benchmark scope 或 semantic purpose 的 artifacts 必須隔離，不得互相覆寫或錯誤 REUSE。Composite／multi-source 工作的各依賴也必須解析至彼此相容的 identity。
 12. 研究品質 gate 與最終策略績效 gate 必須分層；受控 FAIL／WARN 是否允許繼續由正式 research spec 決定。Research、benchmark、candidate 或 per-seed transient artifact 不得因建立完成、通過診斷流程或取得較佳結果而自動覆寫 production truth、挑 best seed、形成隱含 ensemble 或自動 promotion；promotion 必須有明確 decision 與所需 evidence。
-13. 臨時研究、Audit、診斷與 dedicated synthetic 屬可拋棄工程資產。被採納的研究成果必須將仍有效的定義與 producer／service 移入正式 domain，再退役原 experiment／Audit implementation；未採納或已結案資產則在確認 runtime／compatibility dependency 後連同專屬 registration、helper 與 tests 一併退役。自動瘦身只能提出候選，不得因檔名、年齡或行數直接刪除；除非另有研究決策，promotion／遷移必須 behavior-preserving。
+13. 臨時研究、Audit、診斷與 dedicated synthetic 的 **implementation 資產**屬可拋棄工程資產。被採納的研究成果必須將仍有效的定義與 producer／service 移入正式 domain，再退役原 experiment／Audit implementation；未採納或已結案的 implementation 則在確認 runtime／compatibility dependency 後，連同專屬 registration、helper 與 tests 一併退役。退役 implementation 不得刪除或改寫 Registry／Experiment Log 中的 scientific identity、decision、原始結果與維持歷史可追溯性所必要的 evidence。自動瘦身只能提出候選，不得因檔名、年齡或行數直接刪除；除非另有研究決策，promotion／遷移必須 behavior-preserving。
 14. Meta-quality 可執行輕量的 dead-code／research-debt 候選掃描，但其詳細掃描集合由正式 test contract 持有；此類維護訊號預設不得單獨形成 formal FAIL。
 15. Prefetch、parallelism、cache 或其他 performance optimization 只能改變 execution strategy，不得改變 sample membership／order、seed、optimizer updates、loss、determinism 或其他 scientific semantics；具體 execution knob 由 config 持有，不屬 scientific identity，performance benchmark 結果只記錄於對應實驗紀錄。
 
@@ -58,9 +58,9 @@
 
 1. 杜絕未來函數：任何候選、掛單、成交、停損、停利、延續判斷與統計，都不得偷看當下尚未知的未來資料。
 2. 不確定時一律採最保守、最不利於績效的可執行解讀。
-3. 受限使用者盤中無法操作，必須盤前完成掛單（包含買入標的、買入股數、買價上限），並且無法在同天買入又賣出同一隻股票，也禁止當沖交易。
+3. 受限使用者盤中無法進行新的人工交易決策，必須盤前完成買入掛單決策（包含買入標的、買入股數、買價上限）；盤中不得依新資訊重新選股、改配資金或進行 discretionary 操作，且無法在同天買入又賣出同一隻股票，也禁止當沖交易。成交後依盤前既定規則機械建立的保護單依 D5 處理，不視為新的盤中交易決策。
 4. 由於 D3 的限制，交易當日資金運用必須在盤前鎖定；即使掛單未成交，盤中亦不得將該資金重新分配至其他股票。
-5. 受限券商無法賣出未持倉股票，停損／停利掛單只能在買入成交後依實際成交價建立。
+5. 受限券商無法賣出未持倉股票，停損／停利掛單只能在買入成交後，依盤前既定規則與實際成交價機械建立；不得藉成交後資訊新增 discretionary 判斷或改變原策略規則。
 6. 資金、權益、PnL、報酬率、勝率、EV 與 Round-Trip 定義，必須以扣除手續費、稅金後的淨值為準，且不得因半倉、顯示或報表需求分叉。
 7. 執行條件與統計口徑必須全專案保持一致，包含風險 sizing、停損／停利、trailing stop、延續候選、失效、hit 判斷、觸發紀錄等。
 8. 掛單、成交、觸發、執行、失效、達標與結算必須分層定義。
@@ -70,13 +70,13 @@
 
 1. `apps/portfolio_sim.py` 自動開瀏覽器暫時允許。
 2. `doc/ToDo.md` 是使用者自行維護的私人工作筆記，不是專案 research backlog、current status、決策依據或 GPT 待辦來源。除非使用者當輪明確要求讀取／整理 `doc/ToDo.md`，GPT 不得主動讀取、引用、依賴或用其內容推導下一步；formal／GPT 最嚴格檢查亦排除該檔。一般使用者註解同屬使用者自有備忘／說明；若其文字被正式介面直接讀取，仍視為正式輸出。
-3. 暫時只使用還原價，不考慮 raw。
+3. 暫時只使用還原價，不考慮 raw；但任何還原處理都必須符合 D1 的 point-in-time legality，不得讓歷史決策日取得當時尚未知的未來公司行動或其他未來資訊。
 4. `doc/FINMIND_API_TOKEN.md` 為使用者本機私有憑證文件；其內容與是否被 `apps/package_zip.py` 收錄，暫時排除於 GPT 與 formal 最嚴格檢查及修正範圍之外。除非使用者另行要求，不得主動修改、移除、遮罩、加入 `.gitignore` 或調整打包器排除規則。
 5. 凡分析、修改或測試 `breakout_quality`，開始新的 scientific identity、設計或程式修改前必須依序讀取 `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`、`doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md` 與 `doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md`。Registry 是 identity／namespace／current state 的唯一真理；Experiment Log 是已完成 evidence／result／decision 的唯一真理；Research Queue 只管理尚未完成的研究問題、優先順序、前置條件與停止條件。開始、完成、改變優先順序或結案時須同步更新對應文件；未取得結果不得預標成功／失敗，未開始實作的項目不得預占 scientific identity。
-6. `breakout_quality` architecture identity 只表示模型結構或輸入表示；training recipe、loss、optimizer、augmentation 等實驗差異由 experiment profile／research identity 管理。已淘汰 architecture 只可作 historical compatibility，不得成為新的 current experiment identity。
-7. `breakout_quality` 的 OOS 可持續用於實驗結果比較、錯誤歸因、年度／regime 診斷、策略經濟效果評估及形成下一個實驗假設；不得因 OOS 已被查看而禁止後續研究。但任何 Train／Validation、loss、gradient、early stopping、epoch 選擇、threshold／calibration、normalization、feature／label、sample weighting 或 hyperparameter optimization 均不得讀取或使用 OOS rows、labels、scores 或其統計量。若同一 OOS 被反覆使用，應標記為「迭代研究 OOS 證據」，不得宣稱是 untouched holdout。
+6. `breakout_quality` architecture identity 只表示模型結構或輸入表示；training recipe、loss、optimizer、augmentation 等實驗差異由 experiment profile／research identity 管理。已淘汰的 historical architecture identity 不得直接復活為新的 current identity；若未來重新研究相同或近似結構，必須建立新的 research identity，並依 Registry 規則判定是否需要新的 architecture identity。
+7. `breakout_quality` 的 OOS 可持續用於實驗結果比較、錯誤歸因、年度／regime 診斷、策略經濟效果評估及形成下一個實驗假設；人類研究決策可以受已觀察的迭代 OOS evidence 啟發，但不得把 OOS 資料或其統計直接輸入下一輪 computational fitting／selection pipeline。任何 Train／Validation、loss、gradient、early stopping、epoch 選擇、threshold／calibration、normalization、feature／label、sample weighting 或 hyperparameter optimization 均不得讀取或使用 OOS rows、labels、scores 或其統計量。若同一 OOS 被反覆使用，應標記為「迭代研究 OOS 證據」，不得宣稱是 untouched holdout。
 8. `breakout_quality` 的 canonical identity namespace、prefix 與 allocation 規則由 Experiment Registry 唯一持有；程式 alias 僅作 compatibility。已使用的 scientific identity 永久保留，不得回收或憑記憶重用。
-9. `breakout_quality` 的研究 Audit 必須遵守「最小必要證據」原則。開始 Audit 前必須先定義待決策問題、真正阻擋決策的關鍵不確定性，以及可停止分析並做出 GO／REJECT／NEXT EXPERIMENT 的條件；只有既有證據不足且新的 Audit 可能實質改變決策時才新增 Audit。Audit 次數不設硬性上限；一旦證據足以支持決策，就必須停止 Audit 鏈並直接進入決策或下一個受控實驗。
+9. `breakout_quality` 的**研究假說／evidence Audit**必須遵守「最小必要證據」原則；本條不限制頂層第 2 條的 engineering full-project inspection。開始 research Audit 前必須先定義待決策問題、真正阻擋決策的關鍵不確定性，以及可停止分析並做出 GO／REJECT／NEXT EXPERIMENT 的條件；只有既有證據不足且新的 Audit 可能實質改變決策時才新增 Audit。Audit 次數不設硬性上限；一旦證據足以支持決策，就必須停止 Audit 鏈並直接進入決策或下一個受控實驗。
 10. Daily-universal model research 必須維持 strategy-agnostic stock-day universe；breakout qualification、candidate membership、portfolio cash／holdings／selector state 等策略執行資訊，不得在沒有明確新 research decision 下滲入通用模型 Target／Input。若通用模型需要 risk／economic geometry，只能使用與模型目標必要且 decision-time 合法的資訊；strategy execution-specific geometry 不得無理由滲入 universal target。模型若使用 risk／cost／accounting semantics，必須直接重用 canonical risk/accounting SSOT，不得在 DL 模組建立第二套公式；歷史參數或其他 input 缺失不得以未來資訊回填。
 11. `breakout_quality` 的時間驗證、Strategy Compare 與 Robustness 額外遵守以下 scientific invariants：
    - **時間合法性**：任一 prediction／fold 的 training、target maturity、validation、normalization、sample weighting、parameter fitting 與其他自動決策，都必須在該 prediction／fold 的 information cutoff 前合法可得；evaluation 結果不得回頭影響當下模型或參數。
@@ -85,4 +85,4 @@
    - **Compare Suite SSOT**：同一 comparison framework 的 arms、contrasts 與 policies 必須由單一 canonical Compare Suite 定義；single／multi、OOS／Rolling 不得各自維護第二份 scientific matrix。Multi-seed robustness 必須是 canonical single-seed suite 的 end-to-end 多 seed 延伸；除 seed 集合與跨-seed aggregate 外，不得私自改變 scientific arms／contrasts。
    - **Robustness seed semantics**：Benchmark seeds 必須由單一 config-driven specification 可重現地產生；同一 benchmark seed 必須一致傳遞至所有 declared seed-sensitive components，各 component 不得持有獨立值或隱含 fallback，也不得挑 best seed、fallback production／其他 seed，或把 benchmark sampling 與 production ensemble／consensus sampling 混用。
    - **Checkpoint / score reuse**：Model checkpoint reuse 必須依 scientific fitting identity；純 evaluation horizon／mode label 不得使相同 fit 成為不同 scientific model。Checkpoint 可依 fitting identity 共用，但 score 仍須依各自 score universe／evaluation contract 產生，不得跨 evaluation identity 誤用。完全相同且宣告 deterministic 的 fitting identity 若產生不相容 artifact，必須 fail-fast。
-   - **Authorization / identity**：Scientific workflow 的執行資格必須由 canonical research identity／authorization contract 明確決定；UI 可顯示未授權工作類型及 BLOCKED 原因，但 builder／consumer 不得繞過底層 authorization。Logical evaluation source identity 可以表達不同 consumption semantics，但不得因此複製相同 physical truth。
+   - **Authorization / identity**：Scientific workflow 的執行資格必須由 canonical research identity／authorization contract 明確決定，且 authorization 優先於 dependency completeness；UI 可顯示未授權工作類型及 BLOCKED 原因，但 builder／consumer 不得因所需工件技術上可建立而繞過底層 authorization。Logical evaluation source identity 可以表達不同 consumption semantics，但不得因此複製相同 physical truth。
