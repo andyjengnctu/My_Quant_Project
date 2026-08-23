@@ -9919,3 +9919,33 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 主表改為 `Upside Survival / First-Passage`，每 arm 只顯示 config-defined `+kR前初始Stop`（目前設定為 +1R/+2R/+3R）、`Full-MFE`、`Adverse`、`Realized EV`。前者直接量測 future 確實首次達到 +kR 的交易中，實際策略是否在首次達標前／同日由初始 Stop 出場；同日仍依 D2 保守視為 Stop 先發生。
 - 色彩契約：主表 metric 的 label／direction 正式放入 `core/report_metrics.py`；`+kR前初始Stop` 與 `Adverse` 為 lower-is-better，`Full-MFE` 與 `Realized EV` 為 higher-is-better。renderer 只透過 `best_worst_signals` + `styled_signal` 套用與全專案相同的 green/red best/worst 語意，不以數值正負建立第二套規則。
 - Decision：**REPORT_SURFACE_SIMPLIFIED / DETAILED_EVIDENCE_RETAINED / SCIENCE_UNCHANGED**。不改 diagnostics schema、C59/C60 replay、Target、score、模型、參數、OOS／Rolling 或 robustness identity。
+
+### 2026-08-23 — First-Passage evidence後改採 Conversion-first 研究優先序
+
+- 使用者實機 current Extending-Window single-seed evidence 已完成。OOS：C59=`166.49% / MDD 15.92% / RoMD 10.45 / EV 1.24R`，C60=`150.20% / 12.90% / 11.64 / 1.14R`；Rolling：C59=`201.10% / 15.92% / 12.63 / 1.11R`，C60=`136.12% / 15.54% / 8.76 / 0.81R`。
+- First-Passage 的 actual initial-stop-before-upside 指標六個 OOS／Rolling × `+1R/+2R/+3R` 比較皆為 C59 較低。最具辨識力的 `+2R前初始Stop`：OOS C59=`3/34 (8.82%)`、C60=`9/40 (22.50%)`；Rolling C59=`6/41 (14.63%)`、C60=`9/37 (24.32%)`。這支持「full-horizon upside 可學，但較低 adverse 本身不等於較高可實現轉換；survivability / risk-truncated upside 更接近策略需要」的研究假說。
+- 使用者研究優先序決策：**先解決模型訊號到實際交易的轉換率；只有找到相對 C59 更好的 candidate，才投入 Fixed-Window Stability 或 Extending-Window Multi-seed Robustness。** 因此既定 robustness 長跑與 Fixed-Window 暫時降為 conversion candidate 之後的 validation gate，不再作目前開發前置。
+- 下一個受控方向先採 provisional **Survivable Pure-MFE / risk-truncated Pure-MFE**：只隔離 `first canonical risk breach truncation`，不再額外扣 continuous adverse penalty；尚未開始實作，故**不預占 MR identity**。若它不能改善 conversion，後續才依結果判斷是否需要相同 survivable Target 的 causal path-dynamics representation、first-passage / competing-risk Target，或重新評估 Plan C-M 的 conditional adverse stacking。
+- 研究治理：目前 2021→latest OOS 已屬**迭代研究 OOS 證據**，可用於人類 GO/STOP 與下一假說，但不得把 OOS rows／labels／scores／統計輸入 training、selection、threshold、normalization 或其他 computational fitting pipeline。
+- Decision：**CONVERSION_FIRST / C59_SINGLE_SEED_REFERENCE / ROBUSTNESS_DEFERRED_UNTIL_BETTER_CANDIDATE / NO_NEW_ID_ALLOCATED**。
+
+### 2026-08-23 — MR-13P Single-model Conditional MFE–Safety experiment start
+
+- 使用者決策：Conversion-first主線先利用MR-13K Pure-MFE與MR-13M Low-Adverse已確認的component learnability，不先做Survivable Pure-MFE hard-stop Target，也不先跑robustness/stability。
+- Registry正式配置`MR-13P`與新architecture identity `ARCH-inception_time_conditional_mfe_safety_v1`；profile=`daily_universal_conditional_mfe_safety_full_list_ndcg_pairwise`。此identity只表示本輪single-model conditional learning experiment，尚無結果、PIT、runtime DL source或strategy arm。
+- Scientific question：能否在保留Pure-MFE primary ordering的同時，讓同一shared encoder額外學到「給定MFE水準後，比同類股票更低adverse」的incremental safety signal，避免C60兩個獨立expert於runtime post-hoc residualization造成upside/safety互相抵消。
+- Supervision contract：每日先由future labels計算Pure-MFE percentile `U`與Low-Adverse percentile `S`；只在training label domain內以含intercept同日OLS建立`S=a+bU+e`，secondary raw target=`e`，再同日percentile化供full-list Delta-NDCG pairwise。Future truth只作supervision，不進inference input，不使用OOS rows/scores/statistics做任何fitting。
+- Architecture contract：單一InceptionTime shared encoder；primary MFE head輸出`U` ranking，conditional safety head接收shared latent與`stop-gradient(primary prediction)`。Conditional loss不得回傳primary-head weights，但兩個head皆可透過各自loss更新shared encoder。兩個ranking loss在相同percentile scale固定等權平均，不做loss-weight sweep。
+- Model Gate：epoch selection以Validation conditional-safety Daily Spearman為primary selection metric；同時報告MFE head self-target ranking以確認primary upside representation沒有明顯崩壞。只有Forward Model Gate支持新增incremental safety learnability時，才另配置最小single-seed conversion strategy contrast；在此之前不得自動build PIT、runtime source、robustness或promotion。
+- Decision：**MR-13P_IMPLEMENTATION_STARTED / RESULT_PENDING / CONVERSION_FIRST / NO_RUNTIME_ID_YET**。
+
+
+
+### 2026-08-23 — MR-13P single-model conditional MFE–Safety implementation complete
+
+- Engineering status：`IMPLEMENTED / RESULT_PENDING / READY_FOR_SEED42_FORWARD_MODEL_GATE`。本輪只完成模型、target transform、trainer、Forward report與synthetic contract；未執行正式Seed42 training，因此沒有模型GO/FAIL、PIT、runtime DL source、strategy arm或promotion結果。
+- Canonical target transform：每日以true Pure-MFE percentile為primary axis，Low-Adverse percentile對Pure-MFE percentile做含intercept OLS；residual再用既有same-date average-rank percentile轉成[0,1] secondary supervision。這是label transform，future MFE/adverse不得進inference input。
+- Architecture：`inception_time_conditional_mfe_safety_v1`重用InceptionTime shared encoder；Primary MFE head與Conditional Safety head各為two-logit ranking head。Conditional head接收shared latent與`stop-gradient` primary MFE probability；secondary loss不更新primary-head weights，但可更新shared encoder。
+- Training：兩head都使用同一full-list Delta-NDCG pairwise loss，固定`0.5*(L_mfe + L_conditional)`，不做loss-weight／threshold／score-fusion sweep；epoch selection固定Validation Conditional-Safety Daily Spearman，並同步保存Primary MFE Daily Spearman作preservation evidence。
+- Forward artifact semantics：checkpoint寫入前只建立Selection supervision；OOS conditional target與所有Forward metrics在checkpoint後才建立。研究score sidecar保存`primary_mfe_score`、`conditional_safety_score`與OOS conditional target；正式`model_score`仍是Primary MFE，MR-13P目前`MODEL_GATE_ONLY / NO_PIT / NO_RUNTIME_SOURCE`。
+- GPT targeted checks：conditional residual same-date mean/covariance contract、雙head gradient isolation、single-pass dual-head inference、dual-head full-list optimizer step、`select_epoch → final refit → Forward metrics` synthetic pipeline，以及既有policy／continuous-ranker／pairwise／PIT contracts皆PASS。正式本機test suite未由GPT執行。

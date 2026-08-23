@@ -48,7 +48,14 @@ def market_batch_to_torch(torch: Any, batch: MarketSetBatch, device) -> tuple[An
     )
 
 
-def forward_breakout_quality_model(model: Any, feature_tensor: Any, context_tensor: Any, market_inputs=None):
+def forward_breakout_quality_model(
+    model: Any,
+    feature_tensor: Any,
+    context_tensor: Any,
+    market_inputs=None,
+    *,
+    output_head: str | None = None,
+):
     requires_market = bool(getattr(model, "requires_market_set", False))
     if requires_market:
         if market_inputs is None:
@@ -56,6 +63,11 @@ def forward_breakout_quality_model(model: Any, feature_tensor: Any, context_tens
         return model(feature_tensor, context_tensor, market_inputs)
     if market_inputs is not None:
         raise ValueError("非 market-set model 不得收到 market inputs")
+    if output_head is not None:
+        forward_head = getattr(model, "forward_output_head", None)
+        if forward_head is None:
+            raise ValueError("requested output head但model未提供forward_output_head")
+        return forward_head(feature_tensor, context_tensor, str(output_head))
     return model(feature_tensor, context_tensor)
 
 
@@ -71,6 +83,7 @@ def strict_parallel_batched_logits(
     execution_plan: TorchExecutionPlan | None = None,
     market_set_bank: IndexedMarketSetBank | None = None,
     market_group_indices: np.ndarray | None = None,
+    output_head: str | None = None,
 ) -> np.ndarray:
     """Run fixed-boundary inference while preserving row and reduction order.
 
@@ -92,8 +105,9 @@ def strict_parallel_batched_logits(
     else:
         idx = np.asarray(indices, dtype=np.int64)
         row_count = int(idx.size)
+    output_width = 4 if str(output_head or "").strip().lower() in {"conditional_both", "both"} else 2
     if row_count == 0:
-        return np.empty((0, 2), dtype=np.float32)
+        return np.empty((0, output_width), dtype=np.float32)
     explicit_market_groups = (
         None if market_group_indices is None else np.asarray(market_group_indices, dtype=np.int64)
     )
@@ -143,7 +157,7 @@ def strict_parallel_batched_logits(
 
     device_type = "cpu" if execution_plan is None else execution_plan.device_type
     worker_count = 1 if device_type == "cuda" else min(normalized_workers, len(jobs))
-    logits_np = np.empty((row_count, 2), dtype=np.float32)
+    logits_np = np.empty((row_count, output_width), dtype=np.float32)
     model.eval()
 
     def _batch_inputs(positions: np.ndarray):
@@ -181,7 +195,8 @@ def strict_parallel_batched_logits(
                 )
                 with context_manager:
                     batch_logits = forward_breakout_quality_model(
-                        model, feature_tensor, context_tensor, market_inputs
+                        model, feature_tensor, context_tensor, market_inputs,
+                        output_head=output_head,
                     )
                 logits_np[positions] = batch_logits.float().cpu().numpy()
         return logits_np
@@ -209,6 +224,7 @@ def strict_parallel_batched_logits(
                     torch.from_numpy(batch_features),
                     torch.from_numpy(batch_context),
                     market_inputs,
+                    output_head=output_head,
                 ).cpu().numpy().copy()
                 outputs.append((positions, batch_logits))
         return outputs

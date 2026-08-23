@@ -20,6 +20,7 @@ import pandas as pd
 from config.breakout_quality import (
     CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
@@ -732,6 +733,7 @@ def load_continuous_ranker_oos_contract(
     manifest_semantics = dict(manifest.get("training_semantics") or {})
     if profile.training_objective in {
         TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     }:
         expected_pairwise = dict(
@@ -758,6 +760,17 @@ def load_continuous_ranker_oos_contract(
             raise ValueError("Continuous pairwise ranker report batching contract不一致")
         if report_pairwise != expected_pairwise:
             raise ValueError("Continuous pairwise ranker report pairwise contract不一致")
+        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
+            expected_conditional = dict(
+                expected_training_semantics.get("conditional_mfe_safety_contract") or {}
+            )
+            report_conditional = dict(
+                report_training.get("conditional_mfe_safety_contract") or {}
+            )
+            if report_conditional != expected_conditional:
+                raise ValueError(
+                    "Conditional MFE-safety report training contract不一致"
+                )
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING:
         expected_listwise = dict(
             expected_training_semantics.get("listwise_contract") or {}

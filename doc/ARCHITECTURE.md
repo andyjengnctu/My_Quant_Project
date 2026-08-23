@@ -336,3 +336,9 @@ Breakout Quality 的研究身份與可執行語意必須分層，避免每個新
 ## Strategy Parameter Runtime Scientific Identity
 
 Current strategy-parameter artifacts intentionally maintain two hashes. `compute_strategy_param_file_sha256()` is exact-byte integrity/provenance and may change when `created_at`, optimizer diagnostics, manifest/publication metadata, or formatting changes. `compute_strategy_param_scientific_sha256()` projects the artifact through `build_strategy_param_runtime_identity_payload()` and hashes only replay-affecting selector/ensemble policy, raw-universe contract, effective-date coverage and runtime parameter members. Strategy Compare replay metadata, Robustness benchmark/result identity and cross-run reuse must use the runtime-scientific hash; raw file/manifest hashes may be retained only as integrity/provenance or exact-byte legacy migration evidence. Re-publishing an unchanged runtime schedule must therefore remain REUSE/REPAIR-compatible, while any effective runtime parameter change must remain stale.
+
+### MR-13P single-model conditional MFE-safety architecture
+
+- `inception_time_conditional_mfe_safety_v1` 是 `inception_time_v1` 的研究型雙 head architecture identity：300×10 sequence encoder、InceptionTime backbone、global-average embedding與primary two-logit MFE head沿用既有結構；另新增一個 conditional-safety two-logit head。
+- Primary head輸出 Pure-MFE rank score。Conditional head接收同一 shared latent 與 `stop-gradient(primary MFE softmax-pass probability)`；conditional loss不得回傳 primary-head weights，但兩個 head 的 loss 都可更新 shared encoder。這使 MFE 保持 primary axis，同時讓第二個 head學「在相同 MFE 水準下異常低 adverse」的 incremental safety signal。
+- MR-13P training profile使用兩個同尺度 [0,1] same-date percentile targets與 full-list Delta-NDCG pairwise loss，固定等權平均，不設 scalar MFE/MAE fusion weight。Conditional target中的 future MFE/adverse只屬 supervision，不是 inference feature；checkpoint／Forward score在 Model Gate 階段分別保存 primary MFE 與 conditional-safety score，`model_score`仍只指 primary MFE，不自動建立策略 runtime fusion。

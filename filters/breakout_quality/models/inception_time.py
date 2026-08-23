@@ -5,6 +5,9 @@ from __future__ import annotations
 
 def build_inception_time(nn, torch, *, feature_count: int, context_count: int, spec):
     use_risk_context = str(spec.architecture) == "inception_time_risk_context_v1"
+    use_conditional_mfe_safety = (
+        str(spec.architecture) == "inception_time_conditional_mfe_safety_v1"
+    )
     if bool(spec.use_dataset_context) != bool(use_risk_context):
         raise ValueError("InceptionTime dataset context contract與architecture不一致")
     if use_risk_context and int(context_count) != 5:
@@ -125,6 +128,11 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 self.context_network = None
                 classifier_input = module_output_channels
             self.classifier = nn.Linear(classifier_input, 2)
+            self.conditional_safety_classifier = (
+                nn.Linear(module_output_channels + 1, 2)
+                if use_conditional_mfe_safety
+                else None
+            )
 
         def encode(self, x):
             z = x.transpose(1, 2)
@@ -140,13 +148,45 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                     shortcut_index += 1
             return torch.mean(z, dim=2)
 
-        def forward(self, x, context):
+        def _encoded_for_heads(self, x, context):
             encoded = self.dropout(self.encode(x))
             if self.context_network is not None:
                 if context is None or context.ndim != 2 or int(context.shape[1]) != int(context_count):
                     raise ValueError("MR-13J risk context tensor shape不一致")
-                encoded = torch.cat([encoded, self.context_network(context)], dim=1)
-            return self.classifier(encoded)
+                return torch.cat([encoded, self.context_network(context)], dim=1), encoded
+            return encoded, encoded
+
+        def forward_conditional_heads(self, x, context):
+            if self.conditional_safety_classifier is None:
+                raise ValueError("目前architecture沒有conditional MFE-Safety heads")
+            primary_input, shared_encoded = self._encoded_for_heads(x, context)
+            primary_logits = self.classifier(primary_input)
+            primary_probability = torch.softmax(primary_logits.float(), dim=1)[:, 1]
+            conditional_context = primary_probability.detach().to(shared_encoded.dtype).unsqueeze(1)
+            conditional_logits = self.conditional_safety_classifier(
+                torch.cat([shared_encoded, conditional_context], dim=1)
+            )
+            return primary_logits, conditional_logits
+
+        def forward_output_head(self, x, context, output_head: str):
+            head = str(output_head).strip().lower()
+            if head in {"primary", "mfe", "primary_mfe"}:
+                if self.conditional_safety_classifier is not None:
+                    return self.forward_conditional_heads(x, context)[0]
+                primary_input, _shared = self._encoded_for_heads(x, context)
+                return self.classifier(primary_input)
+            if head in {"conditional_safety", "safety"}:
+                return self.forward_conditional_heads(x, context)[1]
+            if head in {"conditional_both", "both"}:
+                primary_logits, conditional_logits = self.forward_conditional_heads(x, context)
+                return torch.cat([primary_logits, conditional_logits], dim=1)
+            raise ValueError(f"未知InceptionTime output head: {output_head!r}")
+
+        def forward(self, x, context):
+            if self.conditional_safety_classifier is not None:
+                return self.forward_conditional_heads(x, context)[0]
+            primary_input, _shared = self._encoded_for_heads(x, context)
+            return self.classifier(primary_input)
 
     return InceptionTimeClassifier()
 

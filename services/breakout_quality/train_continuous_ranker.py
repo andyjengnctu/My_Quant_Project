@@ -36,6 +36,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
     get_continuous_ranker_execution_recipe,
@@ -68,6 +69,10 @@ from config.breakout_quality import (
 )
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets, source_data_end
+from filters.breakout_quality.conditional_mfe_safety import (
+    ConditionalMfeSafetyTargets,
+    build_conditional_mfe_safety_targets,
+)
 from filters.breakout_quality.continuous_ranker_quality import (
     daily_top_k_metrics as shared_daily_top_k_metrics,
 )
@@ -110,6 +115,7 @@ from filters.breakout_quality.ranker_sample_contract import (
     resolve_forward_oos_score_group_ids,
 )
 from filters.breakout_quality.ranker_training_contract import (
+    CONDITIONAL_MFE_SAFETY_TRAINING_CONTRACT,
     LISTWISE_TRAINING_CONTRACT,
     PAIRWISE_TRAINING_CONTRACT,
     training_semantics,
@@ -1091,6 +1097,7 @@ def _train_epoch(
         TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
     }:
         batches = _date_coherent_batches(
             ids_all,
@@ -1121,8 +1128,40 @@ def _train_epoch(
             continue
         optimizer.zero_grad(set_to_none=True)
         with autocast_context(torch, plan):
-            logits = model(xb, cb)
-            if training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
+            if training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
+                if target.ndim != 2 or int(target.shape[1]) != 2:
+                    raise ValueError("conditional MFE-safety target必須為[N,2]")
+                if not hasattr(model, "forward_conditional_heads"):
+                    raise ValueError("conditional MFE-safety objective需要dual-head model architecture")
+                primary_logits, conditional_logits = model.forward_conditional_heads(xb, cb)
+                primary_margin = primary_logits.float()[:, LABEL_PASS] - primary_logits.float()[:, LABEL_REJECT]
+                conditional_margin = conditional_logits.float()[:, LABEL_PASS] - conditional_logits.float()[:, LABEL_REJECT]
+                batch_dates = group_dates_series.iloc[ids].to_numpy()
+                primary_loss, primary_supervision = _pairwise_logistic_loss(
+                    torch,
+                    primary_margin,
+                    target[:, 0],
+                    batch_dates,
+                    reduction=str(pairwise_reduction),
+                )
+                conditional_loss, conditional_supervision = _pairwise_logistic_loss(
+                    torch,
+                    conditional_margin,
+                    target[:, 1],
+                    batch_dates,
+                    reduction=str(pairwise_reduction),
+                )
+                if primary_loss is None or conditional_loss is None:
+                    continue
+                # Both targets are canonical same-date percentiles on the same
+                # scale. Equal head mean is fixed by contract; there is no lambda.
+                loss = 0.5 * (primary_loss + conditional_loss)
+                loss_weight = int(max(1, primary_supervision + conditional_supervision))
+            else:
+                logits = model(xb, cb)
+            if training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
+                pass
+            elif training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
                 score = torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]
                 loss = F.mse_loss(score, target, reduction="mean")
                 loss_weight = int(len(ids))
@@ -1180,6 +1219,7 @@ def _train_epoch(
             in {
                 TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
                 TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
+                TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
             }
             and str(pairwise_reduction)
             == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
@@ -1220,8 +1260,11 @@ def _train_epoch(
         TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
         TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
         TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
+        TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
     }:
         # Preserve historical scalar-regression reporting semantics exactly.
+        # Conditional dual-head training reports the actual equal-head mean per
+        # optimizer batch instead of inventing a cross-head pair-count weight.
         return float(np.mean(losses))
     return float(weighted_loss_sum / float(weighted_loss_count))
 
@@ -1255,6 +1298,97 @@ def predict_scores(
     shifted = logits.astype(np.float64) - logits.max(axis=1, keepdims=True)
     exp = np.exp(shifted)
     return (exp[:, LABEL_PASS] / exp.sum(axis=1)).astype(np.float32)
+
+
+def build_conditional_targets(
+    group_table: pd.DataFrame,
+    percentile_target: np.ndarray,
+) -> ConditionalMfeSafetyTargets:
+    """Return aligned MR-13P supervision for every currently-labeled row."""
+
+    primary = np.asarray(percentile_target, dtype=np.float32)
+    if primary.ndim != 1 or len(primary) != len(group_table):
+        raise ValueError("conditional MFE-safety percentile target shape不一致")
+    valid = np.isfinite(primary)
+    return build_conditional_mfe_safety_targets(
+        group_table,
+        valid,
+        primary_mfe_percentile=primary,
+    )
+
+
+def predict_conditional_mfe_safety_scores(
+    torch,
+    model,
+    feature_bank: np.ndarray,
+    group_context: np.ndarray,
+    group_ids: np.ndarray,
+    *,
+    batch_size: int,
+    plan,
+) -> dict[str, np.ndarray]:
+    """Return both MR-13P head probabilities from one shared-encoder inference pass."""
+
+    ids = np.asarray(group_ids, dtype=np.int64)
+    logits = strict_parallel_batched_logits(
+        torch,
+        model,
+        feature_bank,
+        group_context,
+        indices=ids,
+        batch_size=int(batch_size),
+        workers=1,
+        execution_plan=plan,
+        output_head="conditional_both",
+    ).astype(np.float32)
+    if logits.ndim != 2 or int(logits.shape[1]) != 4:
+        raise ValueError("conditional MFE-safety model output必須為[N,4]")
+
+    def pass_probability(pair: np.ndarray) -> np.ndarray:
+        shifted = pair.astype(np.float64) - pair.max(axis=1, keepdims=True)
+        exp = np.exp(shifted)
+        return (exp[:, LABEL_PASS] / exp.sum(axis=1)).astype(np.float32)
+
+    return {
+        "primary_mfe": pass_probability(logits[:, :2]),
+        "conditional_safety": pass_probability(logits[:, 2:]),
+    }
+
+
+def conditional_mfe_safety_metrics(
+    group_ids: np.ndarray,
+    group_table: pd.DataFrame,
+    raw_mfe_target: np.ndarray,
+    targets: ConditionalMfeSafetyTargets,
+    scores: dict[str, np.ndarray],
+    *,
+    include_top_k_quality: bool = False,
+) -> dict[str, Any]:
+    """Return explicit primary-preservation and conditional-safety model gates."""
+
+    ids = np.asarray(group_ids, dtype=np.int64)
+    primary_scores = np.asarray(scores["primary_mfe"], dtype=np.float32)
+    conditional_scores = np.asarray(scores["conditional_safety"], dtype=np.float32)
+    if len(primary_scores) != len(ids) or len(conditional_scores) != len(ids):
+        raise ValueError("conditional MFE-safety score/group長度不一致")
+    return {
+        "primary_mfe": split_metrics(
+            ids,
+            group_table,
+            np.asarray(raw_mfe_target, dtype=np.float32),
+            targets.primary_mfe_percentile,
+            primary_scores,
+            include_top_k_quality=bool(include_top_k_quality),
+        ),
+        "conditional_safety": split_metrics(
+            ids,
+            group_table,
+            targets.conditional_safety_residual,
+            targets.conditional_safety_percentile,
+            conditional_scores,
+            include_top_k_quality=bool(include_top_k_quality),
+        ),
+    }
 
 
 def predict_dual_component_r(
@@ -1405,6 +1539,8 @@ def _training_target_for_profile(
     percentile_target: np.ndarray,
     group_table: pd.DataFrame,
 ) -> np.ndarray:
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
+        return build_conditional_targets(group_table, percentile_target).training_target
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
         return build_pareto_component_percentile_targets(group_table, raw_target)
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
@@ -1447,7 +1583,16 @@ def select_epoch(
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
     execution_recipe = get_continuous_ranker_execution_recipe(str(args.experiment_profile))
-    training_target = _training_target_for_profile(profile, raw_target, percentile_target, group_table)
+    conditional_targets = (
+        build_conditional_targets(group_table, percentile_target)
+        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
+        else None
+    )
+    training_target = (
+        conditional_targets.training_target
+        if conditional_targets is not None
+        else _training_target_for_profile(profile, raw_target, percentile_target, group_table)
+    )
     raw_r_loss_name = (
         str(profile.loss_name)
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
@@ -1469,6 +1614,7 @@ def select_epoch(
     grad_scaler = build_grad_scaler(torch, plan)
     best_epoch = 0
     best_daily_spearman = -math.inf
+    best_primary_mfe_daily_spearman = -math.inf
     best_validation_mse = math.inf
     best_validation_huber = math.inf
     best_validation_mse_raw_r = math.inf
@@ -1486,6 +1632,8 @@ def select_epoch(
             if raw_r_loss_name == "mse_raw_r"
             else "Validation mean daily Pareto pair concordance"
             if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING
+            else "Validation conditional-safety mean daily Spearman"
+            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
             else "Validation mean daily Spearman"
         )
         print(f"\nEpoch選擇（依{label}）")
@@ -1516,36 +1664,76 @@ def select_epoch(
             raw_r_loss_name=raw_r_loss_name,
             raw_r_huber_delta_r=raw_r_delta,
         )
-        validation_scores = predict_scores(
-            torch,
-            model,
-            feature_bank,
-            group_context,
-            validation_ids,
-            batch_size=int(args.evaluation_batch_size),
-            plan=plan,
-            training_objective=profile.training_objective,
-        )
-        if bool(evaluate_train_metrics):
-            train_scores = predict_scores(
+        validation_conditional_metrics = None
+        if conditional_targets is not None:
+            validation_head_scores = predict_conditional_mfe_safety_scores(
                 torch,
                 model,
                 feature_bank,
                 group_context,
-                train_ids,
+                validation_ids,
+                batch_size=int(args.evaluation_batch_size),
+                plan=plan,
+            )
+            validation_conditional_metrics = conditional_mfe_safety_metrics(
+                validation_ids,
+                group_table,
+                raw_target,
+                conditional_targets,
+                validation_head_scores,
+            )
+            validation_scores = validation_head_scores["primary_mfe"]
+            validation_metrics = validation_conditional_metrics["primary_mfe"]
+        else:
+            validation_scores = predict_scores(
+                torch,
+                model,
+                feature_bank,
+                group_context,
+                validation_ids,
                 batch_size=int(args.evaluation_batch_size),
                 plan=plan,
                 training_objective=profile.training_objective,
             )
-            train_metrics = split_metrics(
-                train_ids,
+            validation_metrics = split_metrics(
+                validation_ids,
                 group_table,
                 raw_target,
                 percentile_target,
-                train_scores,
+                validation_scores,
                 raw_r_regression_loss_name=raw_r_loss_name,
                 raw_r_huber_delta_r=raw_r_delta,
             )
+        if bool(evaluate_train_metrics):
+            if conditional_targets is not None:
+                train_head_scores = predict_conditional_mfe_safety_scores(
+                    torch, model, feature_bank, group_context, train_ids,
+                    batch_size=int(args.evaluation_batch_size), plan=plan,
+                )
+                train_conditional_metrics = conditional_mfe_safety_metrics(
+                    train_ids, group_table, raw_target, conditional_targets, train_head_scores
+                )
+                train_metrics = train_conditional_metrics["primary_mfe"]
+            else:
+                train_scores = predict_scores(
+                    torch,
+                    model,
+                    feature_bank,
+                    group_context,
+                    train_ids,
+                    batch_size=int(args.evaluation_batch_size),
+                    plan=plan,
+                    training_objective=profile.training_objective,
+                )
+                train_metrics = split_metrics(
+                    train_ids,
+                    group_table,
+                    raw_target,
+                    percentile_target,
+                    train_scores,
+                    raw_r_regression_loss_name=raw_r_loss_name,
+                    raw_r_huber_delta_r=raw_r_delta,
+                )
         else:
             train_metrics = {
                 "group_count": int(len(train_ids)),
@@ -1554,19 +1742,18 @@ def select_epoch(
                     "epoch selection仍只依完整validation metric"
                 ),
             }
-        validation_metrics = split_metrics(
-            validation_ids,
-            group_table,
-            raw_target,
-            percentile_target,
-            validation_scores,
-            raw_r_regression_loss_name=raw_r_loss_name,
-            raw_r_huber_delta_r=raw_r_delta,
-        )
-        daily_spearman = validation_metrics.get("mean_daily_spearman")
+        if validation_conditional_metrics is not None:
+            primary_daily_spearman = validation_metrics.get("mean_daily_spearman")
+            daily_spearman = validation_conditional_metrics["conditional_safety"].get("mean_daily_spearman")
+            validation_mse = float(
+                validation_conditional_metrics["conditional_safety"]["mse_vs_daily_percentile"]
+            )
+        else:
+            primary_daily_spearman = validation_metrics.get("mean_daily_spearman")
+            daily_spearman = primary_daily_spearman
+            validation_mse = float(validation_metrics["mse_vs_daily_percentile"])
         if daily_spearman is None or not math.isfinite(float(daily_spearman)):
             raise ValueError("continuous model validation mean daily Spearman不可用")
-        validation_mse = float(validation_metrics["mse_vs_daily_percentile"])
         validation_pareto_metrics = None
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
             validation_pareto_metrics = pareto_pair_concordance_metrics(
@@ -1642,6 +1829,8 @@ def select_epoch(
         if improved:
             best_epoch = int(epoch)
             best_daily_spearman = float(daily_spearman)
+            if primary_daily_spearman is not None and math.isfinite(float(primary_daily_spearman)):
+                best_primary_mfe_daily_spearman = float(primary_daily_spearman)
             best_validation_mse = validation_mse
             if validation_pareto_metrics is not None:
                 best_pareto_concordance = float(
@@ -1664,6 +1853,7 @@ def select_epoch(
             "batch_loss": float(batch_loss),
             "inner_train_metrics": train_metrics,
             "inner_validation_metrics": validation_metrics,
+            "inner_validation_conditional_mfe_safety_metrics": validation_conditional_metrics,
             "inner_validation_pareto_metrics": validation_pareto_metrics,
             "elapsed_sec": round(float(elapsed), 3),
             "is_best_epoch": bool(improved),
@@ -1678,6 +1868,13 @@ def select_epoch(
                 print(
                     f"  Epoch {epoch:>3}/{int(args.epochs)} | {loss_text} | Val MAE {float(validation_mae):.4f}R "
                     f"| Val Daily Spearman {float(daily_spearman):.4f} | {elapsed:.1f}s{marker}"
+                )
+            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
+                print(
+                    f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
+                    f"| Val Conditional rho {float(daily_spearman):.4f} "
+                    f"| Val MFE rho {float(primary_daily_spearman):.4f} "
+                    f"| {elapsed:.1f}s{marker}"
                 )
             elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
                 print(
@@ -1705,6 +1902,16 @@ def select_epoch(
     return {
         "best_epoch": int(best_epoch),
         "best_validation_mean_daily_spearman": float(best_daily_spearman),
+        "best_validation_conditional_safety_mean_daily_spearman": (
+            float(best_daily_spearman)
+            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
+            else None
+        ),
+        "best_validation_primary_mfe_mean_daily_spearman": (
+            None
+            if not math.isfinite(best_primary_mfe_daily_spearman)
+            else float(best_primary_mfe_daily_spearman)
+        ),
         "best_validation_mean_daily_pareto_pair_concordance": (
             None if not math.isfinite(best_pareto_concordance) else float(best_pareto_concordance)
         ),

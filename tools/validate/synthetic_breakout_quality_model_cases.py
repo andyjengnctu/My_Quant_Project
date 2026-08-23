@@ -2275,6 +2275,128 @@ def validate_breakout_quality_low_adverse_target_component_contract_case(_base_p
     summary["training_performed"] = False
     return results, summary
 
+def validate_breakout_quality_conditional_mfe_safety_single_model_contract_case(_base_params):
+    """Protect MR-13P single-model conditional target/head semantics."""
+
+    case_id = "BREAKOUT_QUALITY_CONDITIONAL_MFE_SAFETY_SINGLE_MODEL"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    from config.breakout_quality import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_execution_recipe,
+        get_continuous_ranker_research_spec,
+    )
+    from filters.breakout_quality.conditional_mfe_safety import (
+        build_conditional_mfe_safety_targets,
+    )
+    from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from filters.breakout_quality.models.runtime import require_torch
+
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    spec = get_continuous_ranker_research_spec(profile.name)
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    check(
+        "mr13p_identity_objective_architecture_and_model_gate_only_are_explicit",
+        (
+            "MR-13P",
+            TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
+            "inception_time_conditional_mfe_safety_v1",
+            False,
+            False,
+        ),
+        (
+            spec.model_research_id,
+            profile.training_objective,
+            profile.model_architecture,
+            bool(spec.selection_pit_authorized),
+            bool(spec.current_time_validation_authorized),
+        ),
+    )
+    semantics = training_semantics(profile)
+    conditional_contract = dict(semantics.get("conditional_mfe_safety_contract") or {})
+    check(
+        "mr13p_uses_full_list_dual_head_equal_weight_stop_gradient_contract",
+        (
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+            "fixed_equal_mean_no_lambda_sweep",
+            "stop_gradient_primary_mfe_probability",
+            False,
+            True,
+        ),
+        (
+            recipe.pairwise_reduction,
+            conditional_contract.get("head_weighting"),
+            conditional_contract.get("conditional_context"),
+            conditional_contract.get("primary_head_gradient_from_conditional_loss"),
+            conditional_contract.get("shared_encoder_gradient_from_both_heads"),
+        ),
+    )
+
+    frame = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-01-02"] * 5 + ["2026-01-05"] * 5),
+            "target_favorable_r": [1, 2, 3, 4, 5, 1, 2, 3, 4, 5],
+            "target_adverse_r": [0.1, 0.4, 0.3, 0.8, 0.5, 0.2, 0.2, 0.7, 0.6, 0.9],
+        }
+    )
+    valid = np.ones(len(frame), dtype=bool)
+    targets = build_conditional_mfe_safety_targets(frame, valid)
+    check("mr13p_training_target_has_two_same_scale_heads", (10, 2), targets.training_target.shape)
+    check_true(
+        "mr13p_conditional_target_is_finite_unit_interval",
+        bool(
+            np.isfinite(targets.training_target).all()
+            and (targets.training_target >= 0.0).all()
+            and (targets.training_target <= 1.0).all()
+        ),
+    )
+    orthogonal = True
+    for _date, day in frame.groupby("date", sort=True):
+        idx = day.index.to_numpy(dtype=np.int64)
+        u = targets.primary_mfe_percentile[idx].astype(np.float64)
+        residual = targets.conditional_safety_residual[idx].astype(np.float64)
+        orthogonal &= abs(float(np.mean(residual))) < 1e-6
+        orthogonal &= abs(float(np.dot(u - np.mean(u), residual))) < 1e-6
+    check_true(
+        "mr13p_conditional_residual_removes_same_date_linear_mfe_relation",
+        orthogonal,
+    )
+
+    torch, _nn = require_torch()
+    torch.manual_seed(7)
+    model = build_active_model(
+        feature_count=10,
+        context_count=0,
+        architecture="inception_time_conditional_mfe_safety_v1",
+    )
+    x = torch.randn(4, 300, 10)
+    context = torch.empty(4, 0)
+    primary_logits, safety_logits = model.forward_conditional_heads(x, context)
+    check(
+        "mr13p_one_model_exposes_two_two_logit_heads",
+        ((4, 2), (4, 2)),
+        (tuple(primary_logits.shape), tuple(safety_logits.shape)),
+    )
+    model.zero_grad(set_to_none=True)
+    safety_logits.sum().backward()
+    primary_grad = model.classifier.weight.grad
+    shared_grad = next(model.inception_modules[0].parameters()).grad
+    check_true(
+        "mr13p_safety_loss_cannot_backprop_into_primary_head_but_updates_shared_encoder",
+        primary_grad is None and shared_grad is not None,
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+
 def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_params):
     """Pin the profile-driven continuous-ranker boundary before adding new Daily MR variants."""
 
@@ -2349,7 +2471,10 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
             hasattr(daily_recipe, "phase"),
         ),
     )
-    from config.breakout_quality import TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING
+    from config.breakout_quality import (
+        TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
+        TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
+    )
 
     pairwise_specs = [
         get_continuous_ranker_research_spec(name)
@@ -2358,6 +2483,7 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
         in {
             TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
+            TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
         }
     ]
     non_default_owners = {}
