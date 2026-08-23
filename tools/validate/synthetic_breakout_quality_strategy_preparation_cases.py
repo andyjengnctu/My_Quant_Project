@@ -128,6 +128,29 @@ def append_strategy_compare_preparation_contract_checks(
         and "resolve_research_artifact_action" in research_contract_source,
     )
 
+    from config.strategy_compare import get_strategy_comparison_settings as _get_pit_bundle_settings
+    from filters.breakout_quality.paths import resolve_selection_point_in_time_score_path
+    from filters.breakout_quality.strategy_compare_dl_artifacts import _selection_pit_bundle_dir
+    pit_bundle_settings = _get_pit_bundle_settings("extending_window_rolling")
+    default_pit_source = next(
+        source
+        for source in pit_bundle_settings.dl_sources.values()
+        if str(source.score_source) == "selection_point_in_time"
+        and source.point_in_time_dirname in (None, "")
+    )
+    expected_default_pit_dir = resolve_selection_point_in_time_score_path(
+        project_root,
+        default_pit_source.filter_id,
+        default_pit_source.model_architecture,
+        default_pit_source.experiment_profile,
+    ).parent.resolve()
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_compare_default_pit_bundle_uses_one_models_namespace_for_score_manifest_audit",
+        expected_default_pit_dir,
+        _selection_pit_bundle_dir(project_root, default_pit_source),
+    )
+
     from filters.breakout_quality import strategy_compare_preparation as preparation_module
     score_action = StrategyPreparationAction(
         action_id="dl:TP1:forward_scores",
@@ -189,6 +212,63 @@ def append_strategy_compare_preparation_contract_checks(
             call.kwargs["action"].artifact_key
             for call in mocked_prepare_action.call_args_list
         ] == ["dl:TP1:forward_scores", "param:min_roos"],
+    )
+
+    repeated_model_score = StrategyPreparationAction(
+        action_id="dl:CONT13E_ROLL:forward_scores",
+        artifact_key="dl:CONT13E_ROLL:forward_scores",
+        action="RESUME",
+        builder_type="canonical_model_artifacts",
+        description="synthetic model resume",
+        path="models/filters/breakout_quality/selection_point_in_time_scores.csv",
+        producer_work_type="model_training",
+    )
+    repeated_model_audit = StrategyPreparationAction(
+        action_id="dl:CONT13E_ROLL:audit",
+        artifact_key="dl:CONT13E_ROLL:audit",
+        action="RESUME",
+        builder_type="canonical_model_artifacts",
+        description="synthetic audit resume",
+        path="models/filters/breakout_quality/selection_point_in_time_audit.json",
+        producer_work_type="model_training",
+    )
+    repeated_model_status = {
+        "comparison_ready": False,
+        "overall_status": "PREPARABLE",
+        "dl_sources": {
+            "CONT13E_ROLL": {
+                "status": "SELECTION_PIT_INVALID (ValueError)",
+                "validation_error": "synthetic stale manifest",
+            }
+        },
+        "preparation_plan": StrategyPreparationPlan.from_actions((
+            repeated_model_score, repeated_model_audit
+        )),
+    }
+    repeated_external_calls: list[str] = []
+    repeated_error = ""
+    try:
+        with redirect_stdout(io.StringIO()):
+            preparation_module.prepare_strategy_comparison_artifacts(
+                project_root=project_root,
+                settings=settings,
+                status=repeated_model_status,
+                status_refresher=iter((repeated_model_status, repeated_model_status)).__next__,
+                producer_handlers={
+                    "model_training": lambda action: repeated_external_calls.append(
+                        action.artifact_key
+                    ) or 0
+                },
+            )
+    except RuntimeError as exc:
+        repeated_error = str(exc)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "external_model_producer_never_repeats_same_scope_after_unsuccessful_replan",
+        True,
+        len(repeated_external_calls) == 1
+        and "已停止再次執行" in repeated_error
+        and "synthetic stale manifest" in repeated_error,
     )
 
     # Regression for the actual cross-producer failure: the rendering snapshot may have

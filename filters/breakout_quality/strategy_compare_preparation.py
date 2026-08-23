@@ -307,15 +307,52 @@ def _run_preparation_plan(
         raise RuntimeError("目前config已關閉auto_prepare")
 
     handlers = dict(producer_handlers or {})
+    completed_external_scopes: set[tuple[str, str]] = set()
+
+    def _external_scope(action: StrategyPreparationAction) -> tuple[str, str]:
+        return (
+            str(action.producer_work_type or ""),
+            str(action.builder_type or ""),
+        )
 
     def _execute(action: StrategyPreparationAction) -> None:
         external = handlers.get(str(action.producer_work_type or ""))
         if external is not None:
+            scope = _external_scope(action)
+            if scope in completed_external_scopes:
+                current = holder.get("status") or {}
+                current_plan = current.get("preparation_plan")
+                remaining: list[str] = []
+                if isinstance(current_plan, StrategyPreparationPlan):
+                    remaining = [
+                        item.artifact_key
+                        for item in current_plan.actions
+                        if item.runnable_work and _external_scope(item) == scope
+                    ]
+                dl_errors: list[str] = []
+                for artifact_key in remaining:
+                    parts = str(artifact_key).split(":")
+                    if len(parts) < 2 or parts[0] != "dl":
+                        continue
+                    row = dict((current.get("dl_sources") or {}).get(parts[1]) or {})
+                    reason = str(row.get("validation_error") or row.get("status") or "").strip()
+                    if reason:
+                        dl_errors.append(f"{parts[1]}={reason}")
+                detail = "; ".join(dict.fromkeys(dl_errors))
+                suffix = f" | {'; '.join(remaining)}" if remaining else ""
+                if detail:
+                    suffix += f" | {detail}"
+                raise RuntimeError(
+                    "同一外部producer scope已成功執行一次，但re-plan後工件仍未READY；"
+                    "為避免重複訓練／重跑Audit，已停止再次執行"
+                    + suffix
+                )
             code = int(external(action) or 0)
             if code != 0:
                 raise RuntimeError(
                     f"producer {action.producer_work_type}失敗: returncode={code}"
                 )
+            completed_external_scopes.add(scope)
             return
         current = holder.get("status") or {}
         comparison_period = dict(current.get("comparison_period") or {})

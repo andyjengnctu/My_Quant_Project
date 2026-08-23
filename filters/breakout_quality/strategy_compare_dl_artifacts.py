@@ -39,8 +39,6 @@ from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_SCORE_FILENAME,
     resolve_filter_artifact_paths,
     resolve_filter_model_output_dir,
-    resolve_selection_point_in_time_audit_json_path,
-    resolve_selection_point_in_time_manifest_path,
     resolve_selection_point_in_time_score_path,
 )
 from filters.breakout_quality.strategy_compare_contracts import build_strategy_preparation_action
@@ -299,16 +297,29 @@ def _collect_model_upstream_dependencies(
     return cache[upstream_identity]
 
 
-def _selection_pit_override_dir(root: Path, source: Any) -> Path | None:
-    dirname = None if getattr(source, "point_in_time_dirname", None) in (None, "") else str(source.point_in_time_dirname).strip()
-    if dirname is None:
-        return None
-    return (
-        resolve_filter_model_output_dir(
-            root, source.filter_id, source.model_architecture, source.experiment_profile
-        )
-        / dirname
-    ).resolve()
+def _selection_pit_bundle_dir(root: Path, source: Any) -> Path:
+    """Resolve the one directory that owns the complete PIT bundle.
+
+    Score/manifest/coverage and audit must be validated from the same namespace.
+    Passing ``None`` to the legacy loader would split the default lookup between
+    ``models/.../point_in_time`` and ``outputs/.../point_in_time``.
+    """
+
+    dirname = (
+        None
+        if getattr(source, "point_in_time_dirname", None) in (None, "")
+        else str(source.point_in_time_dirname).strip()
+    )
+    if dirname is not None:
+        return (
+            resolve_filter_model_output_dir(
+                root, source.filter_id, source.model_architecture, source.experiment_profile
+            )
+            / dirname
+        ).resolve()
+    return resolve_selection_point_in_time_score_path(
+        root, source.filter_id, source.model_architecture, source.experiment_profile
+    ).parent.resolve()
 
 
 def _collect_selection_pit_source_status(
@@ -327,8 +338,9 @@ def _collect_selection_pit_source_status(
     pit_ready = False
     pit_status = "MISSING"
     pit_gate_status: str | None = None
+    pit_validation_error: str | None = None
     try:
-        pit_override_dir = _selection_pit_override_dir(root, source)
+        pit_override_dir = _selection_pit_bundle_dir(root, source)
         workflow = get_breakout_quality_workflow_settings(
             experiment_profile=str(source.experiment_profile)
         )
@@ -360,6 +372,7 @@ def _collect_selection_pit_source_status(
                 str(pit_contract.available_through),
             )
     except (OSError, ValueError, KeyError, TypeError) as exc:
+        pit_validation_error = str(exc).strip() or type(exc).__name__
         pit_status = f"SELECTION_PIT_INVALID ({type(exc).__name__})"
 
     if pit_contract is not None:
@@ -369,34 +382,12 @@ def _collect_selection_pit_source_status(
             "forward_scores": pit_contract.score_path,
         }
     else:
-        pit_override_dir = _selection_pit_override_dir(root, source)
-        if pit_override_dir is not None:
-            files = {
-                "manifest": pit_override_dir / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
-                "audit": pit_override_dir / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
-                "forward_scores": pit_override_dir / SELECTION_POINT_IN_TIME_SCORE_FILENAME,
-            }
-        else:
-            files = {
-                "manifest": resolve_selection_point_in_time_manifest_path(
-                    root,
-                    source.filter_id,
-                    source.model_architecture,
-                    source.experiment_profile,
-                ),
-                "audit": resolve_selection_point_in_time_audit_json_path(
-                    root,
-                    source.filter_id,
-                    source.model_architecture,
-                    source.experiment_profile,
-                ),
-                "forward_scores": resolve_selection_point_in_time_score_path(
-                    root,
-                    source.filter_id,
-                    source.model_architecture,
-                    source.experiment_profile,
-                ),
-            }
+        pit_bundle_dir = _selection_pit_bundle_dir(root, source)
+        files = {
+            "manifest": pit_bundle_dir / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+            "audit": pit_bundle_dir / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
+            "forward_scores": pit_bundle_dir / SELECTION_POINT_IN_TIME_SCORE_FILENAME,
+        }
     # Rolling PIT scores / manifest / audit are model-research artifacts.
     # Strategy Compare is a consumer only: even when compatible fold checkpoints
     # already exist, rebuilding the PIT bundle also runs the PIT model Gate and
@@ -461,6 +452,7 @@ def _collect_selection_pit_source_status(
         {
             "ready": pit_ready,
             "status": pit_status,
+            "validation_error": pit_validation_error,
             "identity": source.as_dict(),
             "files": file_rows,
             "checkpoint_rebuild_blockers": list(checkpoint_rebuild_blockers),

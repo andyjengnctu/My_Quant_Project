@@ -9862,3 +9862,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - `doc/TEST_SUITE_CHECKLIST.md`中B226/B228/B250舊C56/C57 Selection/Forward文字改標historical snapshot；current contract仍只由B189與`config/strategy_compare.py`定義。
 - 此輪屬maintenance SSOT closure，不產生新MR/SR/Cxx identity，不要求既有non-Robustness模型重訓，也不改既有研究結果。
 
+### 2026-08-23 — Strategy Compare PIT bundle path / duplicate producer closure
+
+- 狀態：`IMPLEMENTED_FORMAL_RERUN_PENDING`；maintenance/runtime correctness closure，不建立新MR／SR／Cxx scientific identity。
+- 現象：Extending Rolling model preparation完成E/K/M並印出`[READY]`後，re-plan仍再次進入同一model producer，造成完整PIT Audit與簡易報表整組重跑。
+- 根因：training completion以明確`models/.../point_in_time/` bundle dir驗證score／manifest／coverage／audit；Strategy Compare status在default `point_in_time_dirname=None`時卻傳`None`給legacy loader，導致score／manifest／coverage從`models/.../point_in_time/`讀、audit反向fallback到`outputs/.../point_in_time/`，因此training自己READY但re-plan永遠判PIT invalid。
+- 修正：`strategy_compare_dl_artifacts.py`新增單一`_selection_pit_bundle_dir()`，default current PIT bundle與custom namespace皆以一個明確directory供canonical PIT contract／fallback file rows使用；另在external producer orchestration加入same-scope fail-fast guard，且model provider先以shared READY validator跳過已合法PIT source，禁止同一輪重複訓練／重跑Audit。
+- 研究影響：不改architecture／target／loss／seed／fold science／Full/Min params／strategy replay identity；既有合法E/K/M PIT工件應直接REUSE，不需重訓。
+

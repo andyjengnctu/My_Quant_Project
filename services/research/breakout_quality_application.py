@@ -68,6 +68,7 @@ from core.runtime_utils import (
 )
 from services.research.strategy_compare_training import (
     run_strategy_compare_training_unit,
+    validate_strategy_compare_training_artifacts,
 )
 from services.research.training_process import (
     terminate_registered_training_processes,
@@ -2701,6 +2702,7 @@ def _prepare_strategy_compare_model_artifacts(
     legacy_reuse: list[str] = []
     with tempfile.TemporaryDirectory(prefix="strategy_compare_model_training_") as temp_dir:
         log_root = Path(temp_dir)
+        ready_reuse: list[str] = []
         for source_index, (dl_id, source) in enumerate(sources, start=1):
             workflow = get_breakout_quality_workflow_settings(
                 experiment_profile=str(source.experiment_profile)
@@ -2765,6 +2767,24 @@ def _prepare_strategy_compare_model_artifacts(
                     str(source.model_architecture),
                     str(source.experiment_profile),
                 )
+            if str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+                try:
+                    validate_strategy_compare_training_artifacts(
+                        project_root=PROJECT_ROOT,
+                        source=source,
+                        workflow=workflow,
+                        seed=int(workflow.seed),
+                        model_dir=model_dir,
+                        research_dir=research_dir,
+                        comparison_start=None,
+                        comparison_end=None,
+                    )
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
+                else:
+                    ready_reuse.append(str(dl_id))
+                    continue
+
             job = {
                 "seed": int(workflow.seed),
                 "source_index": int(source_index),
@@ -2790,6 +2810,11 @@ def _prepare_strategy_compare_model_artifacts(
             print(
                 styled_workflow_status("[REUSE]")
                 + f" {dl_id} | Frozen compatibility model/report/scores"
+            )
+        for dl_id in ready_reuse:
+            print(
+                styled_workflow_status("[REUSE]")
+                + f" {dl_id} | Selection PIT model/score/audit工件已READY"
             )
 
         active_processes: dict[str, subprocess.Popen] = {}
