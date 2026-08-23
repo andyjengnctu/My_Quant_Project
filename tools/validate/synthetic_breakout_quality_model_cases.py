@@ -663,6 +663,27 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and pit_gate.call_count == 0,
     )
 
+    with (
+        patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
+        patch.object(
+            research_app,
+            "get_continuous_ranker_research_spec",
+            return_value=SimpleNamespace(reference_profile_name=None),
+        ),
+        patch("builtins.input", side_effect=["3", "0"]),
+        patch.object(research_app, "_print_workflow_status"),
+        patch.object(
+            research_app,
+            "_print_existing_continuous_ranker_report",
+            return_value=True,
+        ) as existing_report,
+    ):
+        status_menu_rc = research_app._interactive_model_research("apps/research.py model")
+    check_true(
+        "continuous_model_status_menu_renders_existing_model_report_without_retraining",
+        status_menu_rc == 0 and existing_report.call_count == 1,
+    )
+
     from filters.breakout_quality.contract import RUNTIME_SCOPE_WORKFLOW
     from filters.breakout_quality.export_scores import _run_daily_continuous_workflow_export
 

@@ -25,6 +25,7 @@ from config.breakout_quality import (
     DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
     DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
+    DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE,
 )
 from .checks import bind_checks
 
@@ -589,6 +590,116 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             and "0.2119" in audit_console
             and "0.1642" in audit_console
             and "None" not in audit_console,
+        )
+
+        conditional_profile = DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        conditional_architecture = "inception_time_conditional_mfe_safety_v1"
+        conditional_output_dir = app_breakout_quality.resolve_filter_model_output_dir(
+            simple_root,
+            "synthetic_quality",
+            conditional_architecture,
+            conditional_profile,
+        )
+        conditional_output_dir.mkdir(parents=True, exist_ok=True)
+        conditional_payload = {
+            "training": {
+                "selected_epoch": 1,
+                "epoch_selection": {
+                    "best_validation_mean_daily_spearman": 0.3125,
+                },
+            },
+            "split_metrics": {
+                "validation": {
+                    "group_count": 203481,
+                    "mean_daily_spearman": 0.4348,
+                    "global_spearman_vs_raw_target": 0.4335,
+                    "pairwise_concordance": 0.6507,
+                    "top_score_decile_raw_target_mean": 2.6964,
+                    "bottom_score_decile_raw_target_mean": 0.5097,
+                },
+                "oos": {
+                    "group_count": 608204,
+                    "mean_daily_spearman": 0.3953,
+                    "global_spearman_vs_raw_target": 0.3019,
+                    "pairwise_concordance": 0.6364,
+                    "top_score_decile_raw_target_mean": 2.2762,
+                    "bottom_score_decile_raw_target_mean": 0.6486,
+                },
+                "breakout_candidate_oos": {
+                    "group_count": 17346,
+                    "mean_daily_spearman": 0.3736,
+                    "global_spearman_vs_raw_target": 0.3771,
+                    "pairwise_concordance": 0.6441,
+                    "top_score_decile_raw_target_mean": 3.1338,
+                    "bottom_score_decile_raw_target_mean": 0.5352,
+                },
+            },
+            "conditional_mfe_safety_evaluation": {
+                "validation": {
+                    "primary_mfe": {
+                        "mean_daily_spearman": 0.4348,
+                        "global_spearman_vs_raw_target": 0.4335,
+                        "pairwise_concordance": 0.6507,
+                    },
+                    "conditional_safety": {
+                        "mean_daily_spearman": 0.3210,
+                        "global_spearman_vs_raw_target": 0.3100,
+                        "pairwise_concordance": 0.6120,
+                    },
+                },
+                "oos": {
+                    "primary_mfe": {
+                        "mean_daily_spearman": 0.3953,
+                        "global_spearman_vs_raw_target": 0.3019,
+                        "pairwise_concordance": 0.6364,
+                    },
+                    "conditional_safety": {
+                        "mean_daily_spearman": 0.2876,
+                        "global_spearman_vs_raw_target": 0.2744,
+                        "pairwise_concordance": 0.5988,
+                    },
+                },
+                "breakout_candidate_oos": {
+                    "primary_mfe": {
+                        "mean_daily_spearman": 0.3736,
+                        "global_spearman_vs_raw_target": 0.3771,
+                        "pairwise_concordance": 0.6441,
+                    },
+                    "conditional_safety": {
+                        "mean_daily_spearman": 0.3012,
+                        "global_spearman_vs_raw_target": 0.2955,
+                        "pairwise_concordance": 0.6077,
+                    },
+                },
+            },
+        }
+        (conditional_output_dir / app_breakout_quality.CONTINUOUS_RANKER_REPORT_FILENAME).write_text(
+            json.dumps(conditional_payload),
+            encoding="utf-8",
+        )
+        with patch.object(app_breakout_quality, "PROJECT_ROOT", simple_root):
+            conditional_report_path, conditional_console = _capture_stdout(
+                app_breakout_quality._emit_breakout_quality_simple_report,
+                "train-continuous-ranker",
+                [
+                    "--filter-id", "synthetic_quality",
+                    "--model-architecture", conditional_architecture,
+                    "--experiment-profile", conditional_profile,
+                ],
+                returncode=0,
+                elapsed_sec=2.0,
+            )
+        conditional_markdown = conditional_report_path.read_text(encoding="utf-8")
+        check_true(
+            "breakout_quality_mr13p_simple_report_prints_conditional_forward_model_gate",
+            "Conditional MFE-Safety Model Gate" in conditional_console
+            and "Forward OOS" in conditional_console
+            and "Conditional Safety" in conditional_console
+            and "0.2876" in conditional_console
+            and "59.88%" in conditional_console
+            and "Conditional MFE-Safety Model Gate" in conditional_markdown
+            and "0.2876" in conditional_markdown
+            and "59.88%" in conditional_markdown,
         )
 
         compare_dir = (

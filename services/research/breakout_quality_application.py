@@ -288,6 +288,39 @@ def _continuous_ranker_simple_report_payload(
     return load_json_object_or_none(output_dir / CONTINUOUS_RANKER_REPORT_FILENAME) or {}
 
 
+def _print_existing_continuous_ranker_report(settings) -> bool:
+    """Print the current persisted model summary without retraining."""
+
+    payload = _continuous_ranker_simple_report_payload(
+        filter_id=settings.filter_id,
+        architecture=settings.model_architecture,
+        profile=settings.experiment_profile,
+    )
+    if not payload:
+        return False
+    console = _render_continuous_ranker_simple_console(payload)
+    if not console:
+        return False
+    print("\n" + render_section("目前模型報表摘要"))
+    print(console)
+    detail_report = (
+        resolve_filter_model_output_dir(
+            PROJECT_ROOT,
+            settings.filter_id,
+            settings.model_architecture,
+            settings.experiment_profile,
+        )
+        / "continuous_ranker_report.md"
+    )
+    print(
+        render_status_paths(
+            (("詳細模型報表", detail_report, detail_report.is_file()),),
+            project_root=PROJECT_ROOT,
+        )
+    )
+    return True
+
+
 def _render_continuous_ranker_simple_console(payload: dict) -> str:
     metrics = dict(payload.get("split_metrics") or {})
     if not metrics:
@@ -323,6 +356,41 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             alignments=("left", "right", "right", "right", "right", "right", "right"),
         ),
     ]
+
+    conditional_eval = dict(payload.get("conditional_mfe_safety_evaluation") or {})
+    conditional_rows: list[tuple[str, ...]] = []
+    if conditional_eval:
+        for scope_label, scope_key in (
+            ("Validation", "validation"),
+            ("Forward OOS", "oos"),
+            ("Breakout slice", "breakout_candidate_oos"),
+        ):
+            scope = dict(conditional_eval.get(scope_key) or {})
+            for head_label, head_key in (
+                ("Primary MFE", "primary_mfe"),
+                ("Conditional Safety", "conditional_safety"),
+            ):
+                row = dict(scope.get(head_key) or {})
+                if not row:
+                    continue
+                conditional_rows.append(
+                    (
+                        scope_label,
+                        head_label,
+                        _fmt_simple_metric(row.get("mean_daily_spearman")),
+                        _fmt_simple_metric(row.get("global_spearman_vs_raw_target")),
+                        _fmt_simple_metric(row.get("pairwise_concordance"), percent=True),
+                    )
+                )
+        if conditional_rows:
+            lines.extend([
+                render_section("Conditional MFE-Safety Model Gate"),
+                render_table(
+                    ("Split", "Head", "Daily rho", "Global rho", "Pair"),
+                    conditional_rows,
+                    alignments=("left", "left", "right", "right", "right"),
+                ),
+            ])
 
     sample = dict((metrics.get("oos") or {}).get("top_k_quality") or {})
     if sample:
@@ -400,6 +468,39 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
             f"| {_fmt_simple_metric(row.get('top_score_decile_raw_target_mean'))} "
             f"| {_fmt_simple_metric(row.get('bottom_score_decile_raw_target_mean'))} |"
         )
+
+    conditional_eval = dict(payload.get("conditional_mfe_safety_evaluation") or {})
+    conditional_rows: list[tuple[str, str, dict]] = []
+    if conditional_eval:
+        for scope_label, scope_key in (
+            ("Validation", "validation"),
+            ("Forward OOS", "oos"),
+            ("Breakout slice", "breakout_candidate_oos"),
+        ):
+            scope = dict(conditional_eval.get(scope_key) or {})
+            for head_label, head_key in (
+                ("Primary MFE", "primary_mfe"),
+                ("Conditional Safety", "conditional_safety"),
+            ):
+                row = dict(scope.get(head_key) or {})
+                if row:
+                    conditional_rows.append((scope_label, head_label, row))
+        if conditional_rows:
+            lines.extend([
+                "",
+                "## Conditional MFE-Safety Model Gate",
+                "",
+                "| Split | Head | Daily rho | Global rho | Pair |",
+                "|---|---|---:|---:|---:|",
+            ])
+            for scope_label, head_label, row in conditional_rows:
+                lines.append(
+                    f"| {scope_label} | {head_label} "
+                    f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
+                    f"| {_fmt_simple_metric(row.get('global_spearman_vs_raw_target'))} "
+                    f"| {_fmt_simple_metric(row.get('pairwise_concordance'), percent=True)} |"
+                )
+
     sample = dict((metrics.get("oos") or {}).get("top_k_quality") or {})
     if sample:
         top_k = int(sample.get("top_k", 0) or 0)
@@ -3059,7 +3160,7 @@ def _interactive_model_research(program_name: str) -> int:
         )
         print(render_menu_item(1, primary_label, default=True))
         print(render_menu_item(2, "Fixed-Window Stability Test"))
-        print(render_menu_item(3, "查看目前Workflow與工件狀態"))
+        print(render_menu_item(3, "查看目前Workflow、工件與模型報表"))
         print(render_menu_item(4, "比較目前 Target 與 reference Target"))
         print(render_menu_item(5, "Timing Mode｜Rolling 訓練前後比較"))
         print(render_menu_item(0, "返回"))
@@ -3079,6 +3180,8 @@ def _interactive_model_research(program_name: str) -> int:
             return _interactive_continuous_stability_validation(program_name, settings)
         if choice == "3":
             _print_workflow_status(settings)
+            if not _print_existing_continuous_ranker_report(settings):
+                print("目前尚無可用的continuous model報表。")
             continue
         if choice == "4":
             if not research_spec.reference_profile_name:

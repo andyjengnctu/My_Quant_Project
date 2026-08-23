@@ -9964,3 +9964,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 修正：continuous model menu 的 primary action 改由 active workflow authorization 驅動。已授權 current Rolling 的 profile 維持 `[1] Extending-Window Test`；未授權 current Rolling 的 model-gate-only profile 改顯示 `[1] 訓練目前模型 → Forward-OOS模型報表`，並只委派 canonical `train-continuous-ranker` producer（含既有 upstream preparation）建立單次 Forward model/report。不得由此入口建立 PIT／Rolling artifact，也不改 `selection_pit_authorized`／`current_time_validation_authorized`。
 - Regression：新增 direct synthetic 驗證 model-gate action 只呼叫 `train-continuous-ranker` 且 identity/seed 由 current settings 傳遞；另驗 `[Enter]` 在 `rolling_authorized=False` 時只進 Forward Model Gate、不觸發 `_interactive_continuous_pit_validation`。
 - Scientific status：**MR-13P RESULT_PENDING / MODEL_GATE_ONLY 不變**；本修正只恢復合法 UI route，不改 target、architecture、loss、training recipe、seed、PIT authorization、Strategy Compare 或 promotion。
+
+### 2026-08-23 — MR-13P Seed42 Forward training completed；Conditional Forward metrics簡報可見性修正
+
+- 使用者已透過正式 `apps/research.py → 模型訓練 → 訓練目前模型 → Forward-OOS模型報表` 完成 MR-13P Seed42 training；耗時 `10:37.1`，selected epoch=`1`。Primary MFE Forward evidence：OOS Daily rho=`0.3953`、Pair=`63.64%`；breakout-candidate OOS Daily rho=`0.3736`、Pair=`64.41%`。選模時 Conditional Safety Validation rho=`0.3125`，顯示 secondary signal 在 Validation 可學。
+- Canonical `continuous_ranker_report` 已持久化 `conditional_mfe_safety_evaluation`，其中包含 Validation／Forward OOS／breakout-candidate 的 `Primary MFE` 與 `Conditional Safety` Daily rho、Global rho、Pair concordance；但 App 層簡易 console／`simple_reports/train-continuous-ranker.md` 只顯示 primary `split_metrics`，導致 Conditional Forward Model Gate 指標雖已計算卻未在正式互動摘要顯示。
+- Engineering fix：正式簡易報表新增精簡 `Conditional MFE-Safety Model Gate` 表，固定顯示三個 split × 兩個 head 的 `Daily rho / Global rho / Pair`，直接消費既有 canonical report payload，不重算 metric、不重訓模型。模型選單 `[3] 查看目前Workflow、工件與模型報表` 在既有 report 存在時也直接重畫同一摘要，因此本次既有 Seed42 結果不需要重新訓練；詳細 Top/Bottom 等仍留在 `continuous_ranker_report.md`，避免長流程洗版。
+- Scientific status：**FORWARD_RESULT_AVAILABLE_PENDING_REVIEW / MODEL_GATE_ONLY**。本輪只修報表可見性；尚未依 Conditional Safety Forward metrics做 GO／REJECT，也不授權 PIT、runtime source、strategy arm、robustness 或 promotion。
+
