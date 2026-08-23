@@ -507,6 +507,8 @@ def load_daily_universal_ranker_data(
     valid_adverse_chunks: list[np.ndarray] = []
     valid_opportunity_bar_chunks: list[np.ndarray] = []
     valid_first_breach_bar_chunks: list[np.ndarray] = []
+    valid_opportunity_date_chunks: list[np.ndarray] = []
+    valid_first_breach_date_chunks: list[np.ndarray] = []
     valid_minimum_low_return_chunks: list[np.ndarray] = []
 
     inference_ticker_id_chunks: list[np.ndarray] = []
@@ -664,6 +666,30 @@ def load_daily_universal_ranker_data(
             valid_adverse_chunks.append(np.asarray(valid_adverse, dtype=np.float32))
             valid_opportunity_bar_chunks.append(np.asarray(valid_opportunity_bar, dtype=np.int16))
             valid_first_breach_bar_chunks.append(np.asarray(valid_first_breach_bar, dtype=np.int16))
+            opportunity_dates = np.full(
+                len(valid_positions), np.datetime64("NaT"), dtype="datetime64[D]"
+            )
+            opportunity_mask = np.asarray(valid_opportunity_bar, dtype=np.int64) >= 1
+            if bool(np.any(opportunity_mask)):
+                opportunity_positions = (
+                    valid_positions[opportunity_mask]
+                    + np.asarray(valid_opportunity_bar, dtype=np.int64)[opportunity_mask]
+                )
+                opportunity_dates[opportunity_mask] = frame_dates.take(
+                    opportunity_positions
+                ).to_numpy(dtype="datetime64[D]")
+            valid_opportunity_date_chunks.append(opportunity_dates)
+            breach_dates = np.full(len(valid_positions), np.datetime64("NaT"), dtype="datetime64[D]")
+            breach_mask = np.asarray(valid_first_breach_bar, dtype=np.int64) >= 1
+            if bool(np.any(breach_mask)):
+                breach_positions = (
+                    valid_positions[breach_mask]
+                    + np.asarray(valid_first_breach_bar, dtype=np.int64)[breach_mask]
+                )
+                breach_dates[breach_mask] = frame_dates.take(breach_positions).to_numpy(
+                    dtype="datetime64[D]"
+                )
+            valid_first_breach_date_chunks.append(breach_dates)
             valid_minimum_low_return_chunks.append(np.asarray(valid_minimum_low_return, dtype=np.float32))
             if len(invalid_positions):
                 inference_ticker_id_chunks.append(
@@ -725,6 +751,8 @@ def load_daily_universal_ranker_data(
     valid_adverse = np.concatenate(valid_adverse_chunks)
     valid_opportunity_bar = np.concatenate(valid_opportunity_bar_chunks)
     valid_first_breach_bar = np.concatenate(valid_first_breach_bar_chunks)
+    valid_opportunity_dates = np.concatenate(valid_opportunity_date_chunks)
+    valid_first_breach_dates = np.concatenate(valid_first_breach_date_chunks)
     valid_minimum_low_return = np.concatenate(valid_minimum_low_return_chunks)
     valid_mfe_percentile = None
     valid_low_adverse_percentile = None
@@ -784,6 +812,14 @@ def load_daily_universal_ranker_data(
     adverse_r = adverse_return / risk_budget_return
     opportunity_bar = np.concatenate([valid_opportunity_bar, np.full(len(inference_dates), -1, dtype=np.int16)])
     first_breach_bar = np.concatenate([valid_first_breach_bar, np.full(len(inference_dates), -1, dtype=np.int16)])
+    opportunity_dates = np.concatenate([
+        valid_opportunity_dates.astype("datetime64[ns]"),
+        np.full(len(inference_dates), np.datetime64("NaT"), dtype="datetime64[ns]"),
+    ])
+    first_breach_dates = np.concatenate([
+        valid_first_breach_dates.astype("datetime64[ns]"),
+        np.full(len(inference_dates), np.datetime64("NaT"), dtype="datetime64[ns]"),
+    ])
     minimum_low_return = np.concatenate([valid_minimum_low_return, np.full(len(inference_dates), np.nan, dtype=np.float32)])
     group_count = int(len(raw_target))
     target_valid_count = int(target_valid.sum())
@@ -805,6 +841,8 @@ def load_daily_universal_ranker_data(
             "target_adverse_r": adverse_r,
             "target_opportunity_bar": opportunity_bar,
             "target_first_risk_breach_bar": first_breach_bar,
+            "target_opportunity_date": pd.to_datetime(opportunity_dates),
+            "target_first_risk_breach_date": pd.to_datetime(first_breach_dates),
             "target_minimum_low_return": minimum_low_return,
         }
     )

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+from functools import lru_cache
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -11,6 +13,15 @@ from typing import Any
 
 import pandas as pd
 
+from config.breakout_quality import (
+    SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    get_breakout_quality_experiment_profile,
+)
+from config.strategy_compare import (
+    STRATEGY_COMPARE_UPSIDE_REALIZATION_ADVERSE_BUCKET_EDGES_R,
+    STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS,
+)
 from core.console_report import project_relative_display_path
 from core.display_common import _display_width
 from core.report_metrics import (
@@ -31,6 +42,10 @@ from core.order_lot_policy import apply_board_lot_preferred_qty
 from core.price_utils import calc_position_size
 
 from filters.breakout_quality.artifacts import compute_file_sha256
+from filters.breakout_quality.continuous_target import (
+    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    load_validated_continuous_target_component_arrays,
+)
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
@@ -44,7 +59,138 @@ from filters.breakout_quality.strategy_compare_contracts import (
     COMPARISON_MODE_SCORE_RANKING,
     comparison_labels,
 )
-from filters.breakout_quality.trade_attribution import reconstruct_round_trips
+from filters.breakout_quality.trade_attribution import (
+    build_upside_realization_attribution,
+    reconstruct_round_trips,
+)
+
+STRATEGY_DIAGNOSTICS_SCHEMA_VERSION = 2
+UPSIDE_REALIZATION_SCHEMA_VERSION = 1
+
+
+def _upside_realization_contract() -> dict[str, Any]:
+    return {
+        "strategy_diagnostics_schema_version": STRATEGY_DIAGNOSTICS_SCHEMA_VERSION,
+        "schema_version": UPSIDE_REALIZATION_SCHEMA_VERSION,
+        "path_target_id": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        "upside_r_thresholds": [float(value) for value in STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS],
+        "adverse_bucket_edges_r": [float(value) for value in STRATEGY_COMPARE_UPSIDE_REALIZATION_ADVERSE_BUCKET_EDGES_R],
+        "actual_stop_source": "canonical_completed_trade_exit_type",
+        "peak_timing_source": "canonical_full_horizon_target_opportunity_date",
+        "same_day_stop_peak_policy": "conservative_stop_before_peak",
+    }
+
+
+def _upside_realization_contract_fingerprint() -> str:
+    raw = json.dumps(
+        _upside_realization_contract(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _pure_mfe_diagnostic_profile() -> str:
+    candidates = []
+    for profile_name in SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES:
+        profile = get_breakout_quality_experiment_profile(profile_name)
+        if (
+            str(profile.training_sample_scope) == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+            and str(profile.continuous_target_id or "") == DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID
+        ):
+            candidates.append(str(profile_name))
+    if len(candidates) != 1:
+        raise ValueError(
+            "full-horizon pure-MFE diagnostic profile必須唯一: "
+            f"found={candidates}"
+        )
+    return candidates[0]
+
+
+@lru_cache(maxsize=4)
+def _full_horizon_path_lookup_cached(
+    project_root_text: str, filter_id: str, architecture: str
+) -> pd.DataFrame:
+    root = Path(project_root_text).resolve()
+    bundle = load_profile_continuous_ranker_data(
+        filter_id=str(filter_id),
+        model_architecture=str(architecture),
+        experiment_profile=_pure_mfe_diagnostic_profile(),
+        preload_feature_bank=False,
+        allow_stale_source=False,
+        project_root=root,
+    )
+    groups = bundle.group_table.copy()
+    required = {
+        "ticker", "date", "target_adverse_r", "target_opportunity_bar",
+        "target_first_risk_breach_bar", "target_opportunity_date",
+        "target_first_risk_breach_date",
+    }
+    missing = sorted(required - set(groups.columns))
+    if missing:
+        raise ValueError(f"pure-MFE path lookup缺少欄位: {missing}")
+    if len(groups) != len(bundle.raw_target) or len(groups) != len(bundle.target_valid):
+        raise ValueError("pure-MFE path lookup group/target長度不一致")
+    target_manifest, target_arrays = load_validated_continuous_target_component_arrays(
+        root,
+        str(filter_id),
+        target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        expected_group_count=len(groups),
+        expected_dataset_policy=dict(bundle.summary.get("policy") or {}),
+        expected_dataset_artifacts=dict(bundle.summary.get("source_dataset_artifacts") or {}),
+    )
+    target_contract = dict(target_manifest.get("target_contract") or {})
+    risk_budget_return = float(target_contract.get("risk_budget_return") or 0.0)
+    if not math.isfinite(risk_budget_return) or risk_budget_return <= 0.0:
+        raise ValueError("pure-MFE target manifest缺少合法risk_budget_return")
+    target_valid = pd.Series(target_arrays["valid_mask"], index=groups.index).astype(bool)
+    opportunity_bar = pd.Series(target_arrays["opportunity_bar"], index=groups.index)
+    first_risk_breach_bar = pd.Series(target_arrays["first_risk_breach_bar"], index=groups.index)
+    if not opportunity_bar.equals(pd.to_numeric(groups["target_opportunity_bar"], errors="coerce")):
+        raise ValueError("pure-MFE persisted opportunity_bar與sample provider不一致")
+    if not first_risk_breach_bar.equals(pd.to_numeric(groups["target_first_risk_breach_bar"], errors="coerce")):
+        raise ValueError("pure-MFE persisted first_risk_breach_bar與sample provider不一致")
+    lookup = pd.DataFrame({
+        "ticker": groups["ticker"].fillna("").astype(str).str.strip(),
+        "score_event_date": pd.to_datetime(groups["date"], errors="raise").dt.strftime("%Y-%m-%d"),
+        "path_target_available": target_valid,
+        "full_horizon_mfe_r": pd.to_numeric(
+            pd.Series(target_arrays["target_raw_r"], index=groups.index), errors="coerce"
+        ),
+        "full_horizon_adverse_to_peak_r": pd.to_numeric(
+            pd.Series(target_arrays["adverse_return_to_peak"], index=groups.index), errors="coerce"
+        ) / risk_budget_return,
+        "full_horizon_opportunity_bar": pd.to_numeric(opportunity_bar, errors="coerce"),
+        "full_horizon_first_risk_breach_bar": pd.to_numeric(first_risk_breach_bar, errors="coerce"),
+        "full_horizon_opportunity_date": pd.to_datetime(groups["target_opportunity_date"], errors="coerce").dt.strftime("%Y-%m-%d"),
+        "full_horizon_first_risk_breach_date": pd.to_datetime(groups["target_first_risk_breach_date"], errors="coerce").dt.strftime("%Y-%m-%d"),
+    })
+    if bool(lookup.duplicated(["ticker", "score_event_date"]).any()):
+        raise ValueError("pure-MFE path lookup同ticker/date不唯一")
+    return lookup.reset_index(drop=True)
+
+
+def _join_full_horizon_path_diagnostics(
+    selected: pd.DataFrame, *, project_root: Path, filter_id: str, architecture: str
+) -> pd.DataFrame:
+    frame = pd.DataFrame(selected).copy()
+    if "score_event_date" not in frame.columns:
+        raise ValueError("selected target diagnostics缺少score_event_date")
+    frame["ticker"] = frame["ticker"].fillna("").astype(str).str.strip()
+    frame["score_event_date"] = pd.to_datetime(
+        frame["score_event_date"], errors="coerce"
+    ).dt.strftime("%Y-%m-%d").fillna("")
+    path_columns = {
+        "path_target_available", "full_horizon_mfe_r",
+        "full_horizon_adverse_to_peak_r", "full_horizon_opportunity_bar",
+        "full_horizon_first_risk_breach_bar", "full_horizon_opportunity_date",
+        "full_horizon_first_risk_breach_date",
+    }
+    frame = frame.drop(columns=[column for column in path_columns if column in frame.columns])
+    lookup = _full_horizon_path_lookup_cached(
+        str(Path(project_root).resolve()), str(filter_id), str(architecture)
+    )
+    return frame.merge(
+        lookup, on=["ticker", "score_event_date"], how="left", validate="many_to_one"
+    )
 
 
 def _finite_float(value: Any) -> float | None:
@@ -1076,6 +1222,139 @@ def backfill_pair_r_conversion_diagnostic(
     payload["selection_diagnostics"] = diagnostics
     return True
 
+
+def _upside_realization_is_current(payload: dict[str, Any]) -> bool:
+    diagnostics = dict(payload.get("selection_diagnostics") or {})
+    existing = dict(diagnostics.get("upside_realization") or {})
+    return (
+        str(existing.get("status") or "") == "READY"
+        and int(existing.get("schema_version") or 0) == UPSIDE_REALIZATION_SCHEMA_VERSION
+        and int(diagnostics.get("diagnostics_schema_version") or 0) == STRATEGY_DIAGNOSTICS_SCHEMA_VERSION
+        and str(existing.get("contract_fingerprint") or "") == _upside_realization_contract_fingerprint()
+    )
+
+
+def pair_upside_realization_refresh_required(pair_dir: Path) -> bool:
+    """Return whether a reusable score-ranking pair needs diagnostic/report backfill."""
+
+    payload = _read_json(Path(pair_dir) / "strategy_comparison.json")
+    if not isinstance(payload, dict):
+        return True
+    metadata = dict(payload.get("metadata") or {})
+    if str(metadata.get("comparison_mode") or "") != COMPARISON_MODE_SCORE_RANKING:
+        return False
+    return not _upside_realization_is_current(payload)
+
+
+def backfill_pair_upside_realization_diagnostic(
+    payload: dict[str, Any],
+    *,
+    pair_dir: Path,
+    project_root: Path,
+    active_trades_filename: str = "score_ranking_trades.csv",
+) -> bool:
+    """Refresh read-only path-conversion diagnostics without replaying the strategy."""
+
+    metadata = dict(payload.get("metadata") or {})
+    if str(metadata.get("comparison_mode") or "") != COMPARISON_MODE_SCORE_RANKING:
+        return False
+    contract_fingerprint = _upside_realization_contract_fingerprint()
+    diagnostics = dict(payload.get("selection_diagnostics") or {})
+    if _upside_realization_is_current(payload):
+        pair_metadata = dict(payload.get("metadata") or {})
+        pair_metadata["diagnostics_schema_version"] = STRATEGY_DIAGNOSTICS_SCHEMA_VERSION
+        pair_metadata["diagnostics_contract_fingerprint"] = contract_fingerprint
+        payload["metadata"] = pair_metadata
+        return False
+
+    filter_id = str(metadata.get("filter_id") or "").strip()
+    architecture = str(metadata.get("model_architecture") or "").strip()
+    if not filter_id or not architecture:
+        return False
+
+    baseline_target_path = Path(pair_dir) / "no_filter_selected_target_diagnostics.csv"
+    active_target_path = Path(pair_dir) / "score_ranking_selected_target_diagnostics.csv"
+    baseline_trades_path = Path(pair_dir) / "no_filter_trades.csv"
+    active_trades_path = Path(pair_dir) / str(active_trades_filename)
+    required_paths = (
+        baseline_target_path, active_target_path, baseline_trades_path, active_trades_path,
+    )
+    if not all(path.is_file() for path in required_paths):
+        return False
+
+    try:
+        baseline_selected = _join_full_horizon_path_diagnostics(
+            pd.read_csv(baseline_target_path, encoding="utf-8-sig"),
+            project_root=Path(project_root),
+            filter_id=filter_id,
+            architecture=architecture,
+        )
+        active_selected = _join_full_horizon_path_diagnostics(
+            pd.read_csv(active_target_path, encoding="utf-8-sig"),
+            project_root=Path(project_root),
+            filter_id=filter_id,
+            architecture=architecture,
+        )
+        baseline_result = build_upside_realization_attribution(
+            trade_history=pd.read_csv(baseline_trades_path, encoding="utf-8-sig"),
+            selected_path_diagnostics=baseline_selected,
+            upside_r_thresholds=tuple(STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS),
+            adverse_bucket_edges_r=tuple(STRATEGY_COMPARE_UPSIDE_REALIZATION_ADVERSE_BUCKET_EDGES_R),
+            scenario="no_filter",
+        )
+        active_result = build_upside_realization_attribution(
+            trade_history=pd.read_csv(active_trades_path, encoding="utf-8-sig"),
+            selected_path_diagnostics=active_selected,
+            upside_r_thresholds=tuple(STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS),
+            adverse_bucket_edges_r=tuple(STRATEGY_COMPARE_UPSIDE_REALIZATION_ADVERSE_BUCKET_EDGES_R),
+            scenario="score_ranking",
+        )
+    except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
+        diagnostics["upside_realization"] = {
+            "status": "UNAVAILABLE",
+            "schema_version": UPSIDE_REALIZATION_SCHEMA_VERSION,
+            "contract_fingerprint": contract_fingerprint,
+            "contract": _upside_realization_contract(),
+            "reason": str(exc),
+        }
+        diagnostics["diagnostics_schema_version"] = STRATEGY_DIAGNOSTICS_SCHEMA_VERSION
+        payload["selection_diagnostics"] = diagnostics
+        pair_metadata = dict(payload.get("metadata") or {})
+        pair_metadata["diagnostics_schema_version"] = STRATEGY_DIAGNOSTICS_SCHEMA_VERSION
+        pair_metadata["diagnostics_contract_fingerprint"] = contract_fingerprint
+        payload["metadata"] = pair_metadata
+        return True
+
+    baseline_selected.to_csv(baseline_target_path, index=False, encoding="utf-8-sig")
+    active_selected.to_csv(active_target_path, index=False, encoding="utf-8-sig")
+    baseline_result["detail"].to_csv(
+        Path(pair_dir) / "no_filter_upside_realization_trades.csv",
+        index=False, encoding="utf-8-sig",
+    )
+    active_result["detail"].to_csv(
+        Path(pair_dir) / "score_ranking_upside_realization_trades.csv",
+        index=False, encoding="utf-8-sig",
+    )
+    diagnostics["upside_realization"] = {
+        "status": "READY",
+        "schema_version": UPSIDE_REALIZATION_SCHEMA_VERSION,
+        "contract_fingerprint": contract_fingerprint,
+        "contract": _upside_realization_contract(),
+        "no_filter": baseline_result["summary"],
+        "score_ranking": active_result["summary"],
+        "score_ranking_joint_rows": active_result["joint_rows"],
+        "future_target_join_stage": "post_replay_offline_diagnostic_only",
+        "future_target_used_for_runtime_sort": False,
+    }
+    diagnostics["diagnostics_schema_version"] = STRATEGY_DIAGNOSTICS_SCHEMA_VERSION
+    payload["selection_diagnostics"] = diagnostics
+    pair_metadata = dict(payload.get("metadata") or {})
+    pair_metadata["diagnostics_schema_version"] = STRATEGY_DIAGNOSTICS_SCHEMA_VERSION
+    pair_metadata["diagnostics_contract_fingerprint"] = contract_fingerprint
+    payload["metadata"] = pair_metadata
+    return True
+
+
 # Stable public aliases for read-only consumers.
 flatten_candidate_replay_rows = _flatten_candidate_replay_rows
 
@@ -1252,6 +1531,49 @@ def _selection_translation_rows(
     return [by_arm[arm.arm_id] for arm in settings.enabled_arms if arm.arm_id in by_arm]
 
 
+
+def _upside_realization_rows(
+    *, settings: StrategyComparisonSettings, pair_payloads: dict[str, dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    summaries: dict[str, dict[str, Any]] = {}
+    joint_rows: list[dict[str, Any]] = []
+    for pair in pair_payloads.values():
+        _param_source, _rule_policy, _off_arm, on_arm = pair["arm_contract"]
+        if on_arm is None or not bool(on_arm.dl_enabled):
+            continue
+        payload = dict(pair.get("payload") or {})
+        diagnostics = dict(payload.get("selection_diagnostics") or {})
+        realization = dict(diagnostics.get("upside_realization") or {})
+        if str(realization.get("status") or "") != "READY":
+            continue
+        active = dict(realization.get("score_ranking") or {})
+        if not active:
+            continue
+        summaries[on_arm.arm_id] = {
+            "arm_id": on_arm.arm_id,
+            "name": on_arm.name,
+            **active,
+        }
+        for row in list(realization.get("score_ranking_joint_rows") or []):
+            joint_rows.append({
+                "arm_id": on_arm.arm_id,
+                "name": on_arm.name,
+                **dict(row or {}),
+            })
+    ordered = [
+        summaries[arm.arm_id]
+        for arm in settings.enabled_arms
+        if arm.arm_id in summaries
+    ]
+    arm_order = {arm.arm_id: index for index, arm in enumerate(settings.enabled_arms)}
+    joint_rows.sort(key=lambda row: (
+        arm_order.get(str(row.get("arm_id") or ""), 10**9),
+        str(row.get("mfe_bucket") or ""),
+        str(row.get("adverse_bucket") or ""),
+    ))
+    return ordered, joint_rows
+
+
 def _execution_rows(
     *, settings: StrategyComparisonSettings, scenarios: dict[str, dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -1340,7 +1662,12 @@ def build_strategy_diagnostics(
     selection_translation = _selection_translation_rows(
         settings=settings, pair_payloads=pair_payloads, scenarios=scenarios
     )
+    upside_realization, upside_realization_joint = _upside_realization_rows(
+        settings=settings, pair_payloads=pair_payloads
+    )
     return {
+        "diagnostics_schema_version": STRATEGY_DIAGNOSTICS_SCHEMA_VERSION,
+        "diagnostics_contract_fingerprint": _upside_realization_contract_fingerprint(),
         "reference_arm_id": str(reference_arm_id or ""),
         "model_prediction": model_prediction,
         "selection_translation": selection_translation,
@@ -1351,6 +1678,9 @@ def build_strategy_diagnostics(
             selection_translation=selection_translation,
         ),
         "execution_conversion": _execution_rows(settings=settings, scenarios=scenarios),
+        "upside_realization": upside_realization,
+        "upside_realization_joint": upside_realization_joint,
+        "upside_realization_contract": _upside_realization_contract(),
         "contract": {
             "model_metrics_source": "validated existing PIT audit / continuous ranker report",
             "strategy_metrics_source": "canonical Strategy Compare pair payloads",
@@ -1462,11 +1792,126 @@ def render_strategy_r_analysis_table(diagnostics: dict[str, Any], *, target: str
         body.append(values)
     return _render_grouped_table(top_headers, bottom_headers, body)
 
-def render_strategy_diagnostics_markdown(diagnostics: dict[str, Any]) -> str:
-    """Persist the same canonical three-table R view used by the aggregate report."""
 
-    return (
-        "# Strategy Compare 間接指標\n\n"
-        + render_strategy_r_analysis_table(diagnostics, target="markdown").rstrip()
-        + "\n"
-    )
+def _markdown_escape(value: Any) -> str:
+    return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def _count_rate(count: Any, rate: Any) -> str:
+    try:
+        count_value = int(count)
+    except (TypeError, ValueError):
+        return "-"
+    rate_value = finite_number(rate)
+    return str(count_value) if rate_value is None else f"{count_value} ({rate_value * 100.0:.2f}%)"
+
+
+def _count_of_count_rate(count: Any, total: Any, rate: Any) -> str:
+    try:
+        count_value = int(count)
+        total_value = int(total)
+    except (TypeError, ValueError):
+        return "-"
+    rate_value = finite_number(rate)
+    if rate_value is None:
+        return f"{count_value}/{total_value}"
+    return f"{count_value}/{total_value} ({rate_value * 100.0:.2f}%)"
+
+
+def render_upside_realization_markdown(diagnostics: dict[str, Any]) -> str:
+    rows = list(diagnostics.get("upside_realization") or [])
+    if not rows:
+        return "## Upside Realization / Stop-before-Upside\n\n沒有可用的path-conversion診斷。\n"
+    thresholds = [
+        float(value)
+        for value in dict(diagnostics.get("upside_realization_contract") or {}).get(
+            "upside_r_thresholds", []
+        )
+    ]
+    headers = [
+        "編號", "比較對象", "完成交易", "Path Coverage", "實際停損",
+        "停損早於/同日最終高點",
+    ] + [f"MFE≥{value:g}R 且停損早於高點" for value in thresholds] + [
+        "Full-MFE均值", "到峰值Adverse均值", "Realized均值",
+    ]
+    lines = [
+        "## Upside Realization / Stop-before-Upside",
+        "",
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(["---"] * len(headers)) + " |",
+    ]
+    for row in rows:
+        threshold_payload = dict(row.get("thresholds") or {})
+        values = [
+            str(row.get("arm_id") or "-"),
+            str(row.get("name") or "-"),
+            str(int(row.get("completed_trade_count") or 0)),
+            _fmt_pct_fraction(row.get("path_target_coverage_rate")),
+            _count_rate(row.get("actual_stop_out_count"), row.get("actual_stop_out_rate")),
+            _count_rate(row.get("stop_before_later_peak_count"), row.get("stop_before_later_peak_rate")),
+        ]
+        for threshold in thresholds:
+            item = dict(threshold_payload.get(f"{threshold:g}R") or {})
+            values.append(_count_of_count_rate(
+                item.get("stop_before_later_peak_count"),
+                item.get("full_horizon_mfe_at_least_count"),
+                item.get("stop_before_later_peak_rate"),
+            ))
+        values.extend([
+            _fmt(row.get("full_horizon_mfe_mean_r"), digits=2, unit="R"),
+            _fmt(row.get("full_horizon_adverse_to_peak_mean_r"), digits=2, unit="R"),
+            _fmt(row.get("realized_mean_r"), digits=2, unit="R"),
+        ])
+        lines.append("| " + " | ".join(_markdown_escape(value) for value in values) + " |")
+    lines.extend([
+        "",
+        "> `停損早於/同日最終高點`：completed trade 實際以停損出場，且 canonical full-horizon pure-MFE 的最終高點日期在停損日之後或同日；同日依保守盤中順序視為尚未證明可先實現高點。",
+        "> 此指標不等同「第一次到達 +kR 發生在停損之後」；目前 canonical target 保存的是最終 MFE peak timing，而非每個 +kR first-passage timing。",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def render_upside_realization_joint_markdown(diagnostics: dict[str, Any]) -> str:
+    rows = list(diagnostics.get("upside_realization_joint") or [])
+    if not rows:
+        return ""
+    headers = [
+        "編號", "比較對象", "Full-MFE區間", "到峰值Adverse區間", "交易數",
+        "停損率", "停損早於/同日最終高點率", "Realized均值",
+    ]
+    lines = [
+        "## Full-MFE × Adverse-to-Peak 轉化",
+        "",
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(["---"] * len(headers)) + " |",
+    ]
+    for row in rows:
+        values = [
+            str(row.get("arm_id") or "-"),
+            str(row.get("name") or "-"),
+            str(row.get("mfe_bucket") or "-"),
+            str(row.get("adverse_bucket") or "-"),
+            str(int(row.get("trade_count") or 0)),
+            _fmt_pct_fraction(row.get("stop_out_rate")),
+            _fmt_pct_fraction(row.get("stop_before_later_peak_rate")),
+            _fmt(row.get("realized_mean_r"), digits=2, unit="R"),
+        ]
+        lines.append("| " + " | ".join(_markdown_escape(value) for value in values) + " |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_strategy_diagnostics_markdown(diagnostics: dict[str, Any]) -> str:
+    """Persist canonical model/selection and path-conversion diagnostics."""
+
+    sections = [
+        "# Strategy Compare 間接指標\n",
+        render_strategy_r_analysis_table(diagnostics, target="markdown").rstrip(),
+        "",
+        render_upside_realization_markdown(diagnostics).rstrip(),
+    ]
+    joint = render_upside_realization_joint_markdown(diagnostics).rstrip()
+    if joint:
+        sections.extend(["", joint])
+    return "\n".join(sections).rstrip() + "\n"

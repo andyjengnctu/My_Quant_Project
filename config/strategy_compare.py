@@ -108,6 +108,11 @@ STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES = False
 STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS = False
 STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE = True
 
+# Strategy Compare read-only path-conversion diagnostics. These settings affect only
+# post-replay attribution/reporting; changing them must never invalidate portfolio replay.
+STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS = (1.0, 2.0, 3.0)
+STRATEGY_COMPARE_UPSIDE_REALIZATION_ADVERSE_BUCKET_EDGES_R = (0.5, 1.0)
+
 # Runtime promotion只讀取已存在的正式Strategy Compare / robustness工件；
 # Gate本身不訓練模型、不重跑策略，也不自動切換runtime default。
 STRATEGY_RUNTIME_INTEGRATION = {

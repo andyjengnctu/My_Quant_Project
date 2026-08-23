@@ -2277,6 +2277,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     from filters.breakout_quality.strategy_compare_diagnostics import (
         paired_trade_r_conversion_diagnostic,
     )
+    from filters.breakout_quality.trade_attribution import (
+        build_upside_realization_attribution,
+    )
     baseline_trades = pd.DataFrame([
         {"Date": "2020-01-02", "Ticker": "AAA", "Type": "買進 (test)", "進場類型": "normal", "買訊日": "2020-01-01", "成交價": 10.0},
         {"Date": "2020-01-03", "Ticker": "BBB", "Type": "買進 (test)", "進場類型": "normal", "買訊日": "2020-01-02", "成交價": 10.0},
@@ -2336,6 +2339,60 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and abs(float(partial_rce.get("paired_target_selection_edge_r")) - 1.0) < 1e-12
                 and abs(float(partial_rce.get("paired_realized_selection_edge_r")) - 2.0) < 1e-12
                 and abs(float(partial_rce.get("r_conversion_efficiency")) - 2.0) < 1e-12,
+    )
+
+
+    stop_trades = pd.DataFrame([
+        {"Date": "2020-02-03", "Ticker": "UP", "Type": "買進 (test)", "進場類型": "normal", "買訊日": "2020-02-02", "成交價": 10.0},
+        {"Date": "2020-02-05", "Ticker": "UP", "Type": "全倉結算(停損)", "成交價": 9.0, "R_Multiple": -1.0, "該筆總損益": -100.0},
+        {"Date": "2020-02-03", "Ticker": "OK", "Type": "買進 (test)", "進場類型": "normal", "買訊日": "2020-02-02", "成交價": 10.0},
+        {"Date": "2020-02-10", "Ticker": "OK", "Type": "全倉結算(指標)", "成交價": 12.0, "R_Multiple": 2.0, "該筆總損益": 200.0},
+    ])
+    stop_paths = pd.DataFrame([
+        {
+            "ticker": "UP", "trade_date": "2020-02-03", "signal_date": "2020-02-02",
+            "score_event_date": "2020-02-02", "path_target_available": True,
+            "full_horizon_mfe_r": 3.0, "full_horizon_adverse_to_peak_r": 1.2,
+            "full_horizon_opportunity_date": "2020-02-07",
+            "full_horizon_first_risk_breach_date": "2020-02-05",
+            "full_horizon_opportunity_bar": 5, "full_horizon_first_risk_breach_bar": 3,
+        },
+        {
+            "ticker": "OK", "trade_date": "2020-02-03", "signal_date": "2020-02-02",
+            "score_event_date": "2020-02-02", "path_target_available": True,
+            "full_horizon_mfe_r": 2.5, "full_horizon_adverse_to_peak_r": 0.3,
+            "full_horizon_opportunity_date": "2020-02-09",
+            "full_horizon_first_risk_breach_date": "",
+            "full_horizon_opportunity_bar": 6, "full_horizon_first_risk_breach_bar": -1,
+        },
+    ])
+    realization = build_upside_realization_attribution(
+        trade_history=stop_trades,
+        selected_path_diagnostics=stop_paths,
+        upside_r_thresholds=(1.0, 2.0, 3.0),
+        adverse_bucket_edges_r=(0.5, 1.0),
+        scenario="synthetic",
+    )
+    realization_summary = dict(realization.get("summary") or {})
+    check_true(
+        "upside_realization_counts_actual_stop_before_later_full_horizon_peak_on_canonical_completed_trades",
+        int(realization_summary.get("completed_trade_count") or 0) == 2
+        and int(realization_summary.get("path_target_covered_count") or 0) == 2
+        and int(realization_summary.get("actual_stop_out_count") or 0) == 1
+        and int(realization_summary.get("stop_before_later_peak_count") or 0) == 1
+        and int((realization_summary.get("thresholds") or {}).get("2R", {}).get("stop_before_later_peak_count") or 0) == 1
+        and abs(float((realization_summary.get("thresholds") or {}).get("3R", {}).get("stop_before_later_peak_rate")) - 1.0) < 1e-12,
+    )
+    check_true(
+        "strategy_diagnostics_has_independent_stale_contract_and_reuse_backfill_without_engine_schema_invalidation",
+        "STRATEGY_DIAGNOSTICS_SCHEMA_VERSION" in diagnostics_source
+        and "diagnostics_contract_fingerprint" in diagnostics_source
+        and "backfill_pair_upside_realization_diagnostic" in comparison_source
+        and "backfill_pair_upside_realization_diagnostic" in diagnostics_source
+        and "pair_upside_realization_refresh_required" in comparison_source
+        and '"REFRESH"' in comparison_source
+        and '"Diagnostics | Upside Realization"' in comparison_source
+        and "STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS" in strategy_compare_config_source,
     )
 
     check_true(

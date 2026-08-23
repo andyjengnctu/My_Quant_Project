@@ -586,6 +586,193 @@ def render_trade_attribution_markdown(result: dict[str, Any], *, metadata: dict[
     return "\n".join(lines)
 
 
+
+def build_upside_realization_attribution(
+    *,
+    trade_history: pd.DataFrame,
+    selected_path_diagnostics: pd.DataFrame,
+    upside_r_thresholds: tuple[float, ...],
+    adverse_bucket_edges_r: tuple[float, ...],
+    scenario: str,
+) -> dict[str, Any]:
+    """Measure how often selected trades fail to realize later full-horizon upside.
+
+    The full-horizon MFE/adverse path comes from the canonical continuous-target
+    truth joined after replay.  Actual stop-out identity and realized R come from
+    canonical completed trades.  A same-day stop versus later target peak is
+    treated conservatively as stop-before-peak because intraday ordering is not
+    observable under the project execution contract.
+    """
+
+    thresholds = tuple(sorted({float(value) for value in upside_r_thresholds}))
+    adverse_edges = tuple(sorted({float(value) for value in adverse_bucket_edges_r}))
+    if not thresholds or any(value <= 0.0 or not math.isfinite(value) for value in thresholds):
+        raise ValueError("upside_r_thresholds必須是有限正數")
+    if any(value <= 0.0 or not math.isfinite(value) for value in adverse_edges):
+        raise ValueError("adverse_bucket_edges_r必須是有限正數")
+
+    trades = reconstruct_round_trips(pd.DataFrame(trade_history), scenario=scenario)
+    selected = pd.DataFrame(selected_path_diagnostics).copy()
+    required = {
+        "ticker", "trade_date", "signal_date", "path_target_available",
+        "full_horizon_mfe_r", "full_horizon_adverse_to_peak_r",
+        "full_horizon_opportunity_date", "full_horizon_first_risk_breach_date",
+        "full_horizon_opportunity_bar", "full_horizon_first_risk_breach_bar",
+    }
+    missing = sorted(required - set(selected.columns))
+    if missing:
+        raise ValueError(f"upside realization selected path diagnostics缺欄位: {missing}")
+
+    for column in ("trade_date", "signal_date", "full_horizon_opportunity_date", "full_horizon_first_risk_breach_date"):
+        if column in selected.columns:
+            selected[column] = pd.to_datetime(selected[column], errors="coerce")
+    selected["ticker"] = selected["ticker"].fillna("").astype(str).str.strip()
+    join_keys = ["ticker", "trade_date", "signal_date"]
+    selected["trade_date"] = selected["trade_date"].dt.strftime("%Y-%m-%d").fillna("")
+    selected["signal_date"] = selected["signal_date"].dt.strftime("%Y-%m-%d").fillna("")
+    if bool(selected.duplicated(join_keys).any()):
+        bad = selected.loc[selected.duplicated(join_keys, keep=False), join_keys].iloc[0].to_dict()
+        raise ValueError(f"upside realization selection key不唯一: {bad}")
+
+    path_columns = [
+        *join_keys,
+        "score_event_date" if "score_event_date" in selected.columns else None,
+        "path_target_available",
+        "full_horizon_mfe_r",
+        "full_horizon_adverse_to_peak_r",
+        "full_horizon_opportunity_date",
+        "full_horizon_first_risk_breach_date",
+        "full_horizon_opportunity_bar",
+        "full_horizon_first_risk_breach_bar",
+    ]
+    path_columns = [column for column in path_columns if column is not None]
+    selected = selected[path_columns]
+
+    work = trades.copy()
+    if work.empty:
+        work["trade_date"] = pd.Series(dtype=str)
+        work["path_target_available"] = pd.Series(dtype=bool)
+        detail = work
+    else:
+        work["trade_date"] = work["entry_date"].astype(str)
+        work["signal_date"] = work["signal_date"].astype(str)
+        detail = work.merge(selected, on=join_keys, how="left", validate="many_to_one")
+
+    if detail.empty:
+        path_mask = pd.Series(dtype=bool)
+    else:
+        available = detail.get("path_target_available", pd.Series(False, index=detail.index))
+        if available.dtype == bool:
+            available = available.fillna(False)
+        else:
+            available = available.fillna(False).astype(str).str.lower().isin({"true", "1", "yes"})
+        mfe = pd.to_numeric(detail.get("full_horizon_mfe_r"), errors="coerce")
+        adverse = pd.to_numeric(detail.get("full_horizon_adverse_to_peak_r"), errors="coerce")
+        opportunity_date = pd.to_datetime(detail.get("full_horizon_opportunity_date"), errors="coerce")
+        exit_date = pd.to_datetime(detail.get("exit_date"), errors="coerce")
+        path_mask = available & mfe.map(math.isfinite) & adverse.map(math.isfinite) & opportunity_date.notna()
+        detail["path_target_available"] = path_mask
+        detail["actual_stop_out"] = detail.get("exit_type", "").fillna("").astype(str).str.contains("停損", regex=False)
+        detail["later_peak_after_stop"] = (
+            detail["actual_stop_out"]
+            & path_mask
+            & (opportunity_date >= exit_date)
+        )
+        first_breach_bar = pd.to_numeric(detail.get("full_horizon_first_risk_breach_bar"), errors="coerce")
+        opportunity_bar = pd.to_numeric(detail.get("full_horizon_opportunity_bar"), errors="coerce")
+        detail["canonical_risk_breach_before_peak"] = (
+            path_mask
+            & first_breach_bar.notna()
+            & opportunity_bar.notna()
+            & (first_breach_bar >= 1)
+            & (first_breach_bar <= opportunity_bar)
+        )
+        detail["realized_r"] = pd.to_numeric(detail.get("r_multiple"), errors="coerce")
+
+    covered = detail.loc[path_mask].copy() if len(detail) else detail.copy()
+    summary: dict[str, Any] = {
+        "completed_trade_count": int(len(detail)),
+        "path_target_covered_count": int(len(covered)),
+        "path_target_coverage_rate": (1.0 if not len(detail) else float(len(covered) / len(detail))),
+        "actual_stop_out_count": int(covered.get("actual_stop_out", pd.Series(dtype=bool)).sum()) if len(covered) else 0,
+        "actual_stop_out_rate": (None if not len(covered) else float(covered["actual_stop_out"].mean())),
+        "stop_before_later_peak_count": int(covered.get("later_peak_after_stop", pd.Series(dtype=bool)).sum()) if len(covered) else 0,
+        "stop_before_later_peak_rate": (None if not len(covered) else float(covered["later_peak_after_stop"].mean())),
+        "canonical_risk_breach_before_peak_count": int(covered.get("canonical_risk_breach_before_peak", pd.Series(dtype=bool)).sum()) if len(covered) else 0,
+        "full_horizon_mfe_mean_r": (None if not len(covered) else float(pd.to_numeric(covered["full_horizon_mfe_r"], errors="coerce").mean())),
+        "full_horizon_adverse_to_peak_mean_r": (None if not len(covered) else float(pd.to_numeric(covered["full_horizon_adverse_to_peak_r"], errors="coerce").mean())),
+        "realized_mean_r": (None if not len(covered) else float(pd.to_numeric(covered["realized_r"], errors="coerce").mean())),
+        "thresholds": {},
+    }
+    for threshold in thresholds:
+        key = f"{threshold:g}R"
+        eligible = covered.loc[pd.to_numeric(covered.get("full_horizon_mfe_r"), errors="coerce") >= threshold].copy()
+        stop_before = eligible.get("later_peak_after_stop", pd.Series(False, index=eligible.index)).fillna(False).astype(bool)
+        summary["thresholds"][key] = {
+            "full_horizon_mfe_at_least_count": int(len(eligible)),
+            "stop_before_later_peak_count": int(stop_before.sum()),
+            "stop_before_later_peak_rate": (None if not len(eligible) else float(stop_before.mean())),
+            "stop_before_later_peak_realized_mean_r": (
+                None if not int(stop_before.sum()) else float(pd.to_numeric(eligible.loc[stop_before, "realized_r"], errors="coerce").mean())
+            ),
+            "stop_before_later_peak_mfe_mean_r": (
+                None if not int(stop_before.sum()) else float(pd.to_numeric(eligible.loc[stop_before, "full_horizon_mfe_r"], errors="coerce").mean())
+            ),
+        }
+
+    mfe_edges = [-math.inf, *thresholds, math.inf]
+    mfe_labels = []
+    for index in range(len(mfe_edges) - 1):
+        left, right = mfe_edges[index], mfe_edges[index + 1]
+        if math.isinf(left):
+            mfe_labels.append(f"<{right:g}R")
+        elif math.isinf(right):
+            mfe_labels.append(f">={left:g}R")
+        else:
+            mfe_labels.append(f"{left:g}-{right:g}R")
+    adverse_bin_edges = [-math.inf, *adverse_edges, math.inf]
+    adverse_labels = []
+    for index in range(len(adverse_bin_edges) - 1):
+        left, right = adverse_bin_edges[index], adverse_bin_edges[index + 1]
+        if math.isinf(left):
+            adverse_labels.append(f"<{right:g}R")
+        elif math.isinf(right):
+            adverse_labels.append(f">={left:g}R")
+        else:
+            adverse_labels.append(f"{left:g}-{right:g}R")
+
+    joint_rows: list[dict[str, Any]] = []
+    if len(covered):
+        bucketed = covered.copy()
+        bucketed["mfe_bucket"] = pd.cut(
+            pd.to_numeric(bucketed["full_horizon_mfe_r"], errors="coerce"),
+            bins=mfe_edges, labels=mfe_labels, right=False,
+        )
+        bucketed["adverse_bucket"] = pd.cut(
+            pd.to_numeric(bucketed["full_horizon_adverse_to_peak_r"], errors="coerce"),
+            bins=adverse_bin_edges, labels=adverse_labels, right=False,
+        )
+        for (mfe_bucket, adverse_bucket), group in bucketed.groupby(
+            ["mfe_bucket", "adverse_bucket"], observed=True, sort=False
+        ):
+            joint_rows.append({
+                "mfe_bucket": str(mfe_bucket),
+                "adverse_bucket": str(adverse_bucket),
+                "trade_count": int(len(group)),
+                "stop_out_rate": float(group["actual_stop_out"].mean()),
+                "stop_before_later_peak_rate": float(group["later_peak_after_stop"].mean()),
+                "realized_mean_r": float(pd.to_numeric(group["realized_r"], errors="coerce").mean()),
+                "full_horizon_mfe_mean_r": float(pd.to_numeric(group["full_horizon_mfe_r"], errors="coerce").mean()),
+                "full_horizon_adverse_to_peak_mean_r": float(pd.to_numeric(group["full_horizon_adverse_to_peak_r"], errors="coerce").mean()),
+            })
+
+    return {
+        "summary": _json_native(summary),
+        "joint_rows": _json_native(joint_rows),
+        "detail": detail,
+    }
+
+
 def write_trade_attribution_outputs(
     *,
     project_root: str | Path,
@@ -639,6 +826,7 @@ def write_trade_attribution_outputs(
 __all__ = [
     "ATTRIBUTION_SCHEMA_VERSION",
     "build_trade_attribution",
+    "build_upside_realization_attribution",
     "reconstruct_round_trips",
     "render_trade_attribution_markdown",
     "write_trade_attribution_outputs",

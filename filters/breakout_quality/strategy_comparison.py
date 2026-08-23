@@ -75,7 +75,9 @@ from filters.breakout_quality.strategy_compare_sources import (
 from filters.breakout_quality.strategy_compare_diagnostics import (
     backfill_pair_r_conversion_diagnostic,
     backfill_pair_selection_diagnostics,
+    backfill_pair_upside_realization_diagnostic,
     build_strategy_diagnostics,
+    pair_upside_realization_refresh_required,
     render_strategy_diagnostics_markdown,
     render_strategy_r_analysis_table,
 )
@@ -131,7 +133,7 @@ from filters.breakout_quality.strategy_compare_preparation import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RESULT_SCHEMA_VERSION = 8
+RESULT_SCHEMA_VERSION = 9
 
 
 def _json_native(value: Any) -> Any:
@@ -510,6 +512,25 @@ def render_execution_plan(
                 else arm.name
             )
         rows.append((action, arm.arm_id, description))
+    stale_diagnostic_arms = [
+        arm.arm_id
+        for arm in settings.enabled_arms
+        if (
+            not blocked
+            and arm.dl_enabled
+            and isinstance(cached_pairs.get(arm.arm_id), dict)
+            and pair_upside_realization_refresh_required(
+                Path(cached_pairs[arm.arm_id]["source_pair_dir"])
+            )
+        )
+    ]
+    if stale_diagnostic_arms:
+        rows.append((
+            "REFRESH",
+            "Diagnostics | Upside Realization",
+            "既有pair replay保持REUSE；只回填path-conversion診斷與重產報表："
+            + ",".join(stale_diagnostic_arms),
+        ))
     rows.extend(
         (
             "NOT_RUN" if blocked else "REPORT",
@@ -1225,6 +1246,12 @@ def run_strategy_comparison(
                 pair_dir=pair_dir,
                 active_trades_filename=runtime_spec["active_trades_filename"],
             )
+            backfill_pair_upside_realization_diagnostic(
+                pair_payload,
+                pair_dir=pair_dir,
+                project_root=root,
+                active_trades_filename=runtime_spec["active_trades_filename"],
+            )
             _write_json(pair_dir / "strategy_comparison.json", pair_payload)
             materialize_strategy_pair_readable_report(
                 pair_payload,
@@ -1384,6 +1411,12 @@ def run_strategy_comparison(
         backfill_pair_r_conversion_diagnostic(
             pair_payload,
             pair_dir=pair_dir,
+            active_trades_filename=runtime_spec["active_trades_filename"],
+        )
+        backfill_pair_upside_realization_diagnostic(
+            pair_payload,
+            pair_dir=pair_dir,
+            project_root=root,
             active_trades_filename=runtime_spec["active_trades_filename"],
         )
         _write_json(pair_dir / "strategy_comparison.json", pair_payload)
