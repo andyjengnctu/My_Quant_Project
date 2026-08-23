@@ -2276,7 +2276,30 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     )
     from filters.breakout_quality.strategy_compare_diagnostics import (
         _full_horizon_path_lookup_cached,
+        _pure_mfe_diagnostic_profile,
         paired_trade_r_conversion_diagnostic,
+    )
+    from config.breakout_quality import (
+        DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        get_breakout_quality_experiment_profile,
+    )
+    from config.strategy_compare import STRATEGY_COMPARE_UPSIDE_REALIZATION_PATH_PROFILE
+    from filters.breakout_quality.continuous_target import (
+        DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    )
+
+    diagnostic_owner = _pure_mfe_diagnostic_profile()
+    diagnostic_owner_profile = get_breakout_quality_experiment_profile(diagnostic_owner)
+    conditional_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    check_true(
+        "upside_path_diagnostic_owner_is_explicit_when_research_profiles_share_pure_mfe_target",
+        diagnostic_owner == STRATEGY_COMPARE_UPSIDE_REALIZATION_PATH_PROFILE
+        and diagnostic_owner != DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        and str(diagnostic_owner_profile.continuous_target_id or "")
+        == str(conditional_profile.continuous_target_id or "")
+        == DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
     )
     from filters.breakout_quality.trade_attribution import (
         build_upside_realization_attribution,

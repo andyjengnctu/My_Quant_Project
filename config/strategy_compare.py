@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from config.breakout_quality import (
+    DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     get_breakout_quality_rolling_test_mode,
     get_breakout_quality_workflow_settings,
 )
@@ -112,6 +113,12 @@ STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE = True
 # post-replay attribution/reporting; changing them must never invalidate portfolio replay.
 STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS = (1.0, 2.0, 3.0)
 STRATEGY_COMPARE_UPSIDE_REALIZATION_ADVERSE_BUCKET_EDGES_R = (0.5, 1.0)
+# Canonical profile owner for the path components consumed by Upside/First-Passage
+# diagnostics.  Other research profiles may legitimately share the same primary target
+# (for example MR-13P), so target-id uniqueness must not be used as ownership.
+STRATEGY_COMPARE_UPSIDE_REALIZATION_PATH_PROFILE = (
+    DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+)
 
 # Runtime promotion只讀取已存在的正式Strategy Compare / robustness工件；
 # Gate本身不訓練模型、不重跑策略，也不自動切換runtime default。

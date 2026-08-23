@@ -711,14 +711,35 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
         "breakout_quality_timing_run_emits_simple_report_without_status_overwrite",
         timing_run_emit_ok and timing_status_does_not_overwrite,
     )
-    timing_context = app_breakout_quality._simple_report_context(
-        "timing-rolling-training",
-        ["run"],
-    )
-    timing_settings = app_breakout_quality.get_breakout_quality_rolling_timing_settings()
+    # Rolling Timing is a separately authorized workflow.  The active model-research
+    # profile may intentionally be MODEL_GATE_ONLY (for example MR-13P), so this
+    # output-contract test must use an isolated authorized timing profile instead of
+    # mutating or implicitly broadening the current research authorization.
+    from config import breakout_quality as breakout_quality_config
+
+    authorized_timing_profiles = [
+        profile_name
+        for profile_name in breakout_quality_config.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+        if breakout_quality_config.get_continuous_ranker_execution_recipe(
+            profile_name
+        ).current_time_validation_authorized
+    ]
+    if not authorized_timing_profiles:
+        raise AssertionError("synthetic timing report需要至少一個已授權current-time profile")
+    with patch.object(
+        breakout_quality_config,
+        "BREAKOUT_QUALITY_ROLLING_TIMING_EXPERIMENT_PROFILE",
+        authorized_timing_profiles[0],
+    ):
+        timing_context = app_breakout_quality._simple_report_context(
+            "timing-rolling-training",
+            ["run"],
+        )
+        timing_settings = app_breakout_quality.get_breakout_quality_rolling_timing_settings()
     check_true(
         "breakout_quality_timing_simple_report_uses_timing_profile_identity",
-        timing_context[2] == str(timing_settings.experiment_profile),
+        timing_context[2] == str(timing_settings.experiment_profile)
+        and timing_context[2] == str(authorized_timing_profiles[0]),
     )
 
     source = Path(app_breakout_quality.__file__).read_text(encoding="utf-8")

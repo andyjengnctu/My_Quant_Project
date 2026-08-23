@@ -13,13 +13,10 @@ from typing import Any
 
 import pandas as pd
 
-from config.breakout_quality import (
-    SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
-    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-    get_breakout_quality_experiment_profile,
-)
+from config.breakout_quality import get_breakout_quality_experiment_profile
 from config.strategy_compare import (
     STRATEGY_COMPARE_UPSIDE_REALIZATION_ADVERSE_BUCKET_EDGES_R,
+    STRATEGY_COMPARE_UPSIDE_REALIZATION_PATH_PROFILE,
     STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS,
 )
 from core.console_report import project_relative_display_path
@@ -75,6 +72,7 @@ def _upside_realization_contract() -> dict[str, Any]:
         "strategy_diagnostics_schema_version": STRATEGY_DIAGNOSTICS_SCHEMA_VERSION,
         "schema_version": UPSIDE_REALIZATION_SCHEMA_VERSION,
         "path_target_id": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        "path_profile": STRATEGY_COMPARE_UPSIDE_REALIZATION_PATH_PROFILE,
         "upside_r_thresholds": [float(value) for value in STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS],
         "adverse_bucket_edges_r": [float(value) for value in STRATEGY_COMPARE_UPSIDE_REALIZATION_ADVERSE_BUCKET_EDGES_R],
         "actual_stop_source": "canonical_completed_trade_exit_type",
@@ -97,20 +95,24 @@ def _upside_realization_contract_fingerprint() -> str:
 
 
 def _pure_mfe_diagnostic_profile() -> str:
-    candidates = []
-    for profile_name in SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES:
-        profile = get_breakout_quality_experiment_profile(profile_name)
-        if (
-            str(profile.training_sample_scope) == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
-            and str(profile.continuous_target_id or "") == DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID
-        ):
-            candidates.append(str(profile_name))
-    if len(candidates) != 1:
+    """Resolve the explicit canonical owner of path diagnostics.
+
+    A continuous target can be shared by multiple research profiles without those
+    profiles owning the same diagnostic producer semantics.  MR-13P intentionally
+    reuses the Pure-MFE primary target, so target-id uniqueness is not an ownership
+    contract.  Strategy Compare therefore consumes the profile explicitly declared
+    by its diagnostics configuration and validates that its target identity remains
+    compatible.
+    """
+    profile_name = str(STRATEGY_COMPARE_UPSIDE_REALIZATION_PATH_PROFILE)
+    profile = get_breakout_quality_experiment_profile(profile_name)
+    if str(profile.continuous_target_id or "") != DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID:
         raise ValueError(
-            "full-horizon pure-MFE diagnostic profile必須唯一: "
-            f"found={candidates}"
+            "Upside Realization path profile target identity不一致: "
+            f"profile={profile_name}, target={profile.continuous_target_id!r}, "
+            f"expected={DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID!r}"
         )
-    return candidates[0]
+    return profile_name
 
 
 @lru_cache(maxsize=4)
