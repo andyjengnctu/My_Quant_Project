@@ -19,11 +19,13 @@ from core.strategy_comparison import (
 from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
     SELECTION_POINT_IN_TIME_SCORE_FILENAME,
-    resolve_filter_model_output_dir,
 )
 from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+)
+from filters.breakout_quality.strategy_compare_pit_contract import (
+    resolve_strategy_compare_selection_pit_bundle_dir,
 )
 from filters.breakout_quality.strategy_compare_engine import run_comparison
 from filters.breakout_quality.strategy_compare_replay import run_standalone_baseline
@@ -37,27 +39,18 @@ from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+
 def selection_pit_mode_paths(
     source: Any,
     *,
     project_root: str | Path = PROJECT_ROOT,
-) -> dict[str, Path] | None:
-    dirname = (
-        None
-        if source.point_in_time_dirname in (None, "")
-        else str(source.point_in_time_dirname).strip()
+) -> dict[str, Path]:
+    """Resolve the exact PIT score/manifest bundle used by Strategy Compare replay."""
+
+    base = resolve_strategy_compare_selection_pit_bundle_dir(
+        root=project_root,
+        source=source,
     )
-    if dirname is None:
-        return None
-    base = (
-        resolve_filter_model_output_dir(
-            Path(project_root).resolve(),
-            str(source.filter_id),
-            str(source.model_architecture),
-            str(source.experiment_profile),
-        )
-        / dirname
-    ).resolve()
     return {
         "score": base / SELECTION_POINT_IN_TIME_SCORE_FILENAME,
         "manifest": base / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,

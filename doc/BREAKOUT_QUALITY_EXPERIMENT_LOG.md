@@ -9870,3 +9870,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 修正：`strategy_compare_dl_artifacts.py`新增單一`_selection_pit_bundle_dir()`，default current PIT bundle與custom namespace皆以一個明確directory供canonical PIT contract／fallback file rows使用；另在external producer orchestration加入same-scope fail-fast guard，且model provider先以shared READY validator跳過已合法PIT source，禁止同一輪重複訓練／重跑Audit。
 - 研究影響：不改architecture／target／loss／seed／fold science／Full/Min params／strategy replay identity；既有合法E/K/M PIT工件應直接REUSE，不需重訓。
 
+### 2026-08-23 — Strategy Compare PIT execution-consumer bundle resolver closure
+
+- 基準：`test-branch-1_20260823_112216_f95b15b.zip`，SHA256=`783e9d16f1bfc48044006314f82b67d7b5a4e00b684de9e147600598cf006d79`；maintenance/runtime correctness closure，不建立新MR／SR／Cxx scientific identity。
+- 現象：Extending Rolling前置已正確顯示E/K/M全部`REUSE`並開始C61/C62/C63 replay，但進入第一個DL-on current arm前仍拋出`找不到Selection PIT audit: outputs/.../point_in_time/selection_point_in_time_audit.json`。
+- 根因：上一輪只讓status/re-plan使用明確PIT bundle；`strategy_compare_execution.selection_pit_mode_paths()`在current Rolling的`point_in_time_dirname=None`時仍回傳`None`，使`strategy_compare_engine`重新走generic PIT loader，而generic legacy預設會把score／manifest放在`models/.../point_in_time/`、audit放到`outputs/.../point_in_time/`，因此正式replay consumer仍殘留第二個path owner。
+- 修正：default與mode-specific Strategy Compare PIT bundle directory統一由`strategy_compare_pit_contract.py::resolve_strategy_compare_selection_pit_bundle_dir()`解析；preparation/status與single/multi per-arm execution共用同一resolver。current default execution固定傳入`models/.../point_in_time/selection_point_in_time_scores.csv`與manifest override，正式replay不再重新觸發legacy audit path resolution；C60 secondary safety fallback亦走同一resolver。
+- 研究影響：不改architecture／target／loss／seed／PIT fold science／Full/Min params／Compare Suite或portfolio/accounting；既有E/K/M合法PIT bundle直接REUSE，不需重訓。已完成的C61/C62/C63 replay是否可跨本次中止直接cache REUSE仍由原pair fingerprint/integrity contract決定，不在本次修正另設例外。
+- Decision：**CURRENT_PIT_EXECUTION_PATH_SSOT_CLOSED / SCIENCE_UNCHANGED / FORMAL_RERUN_PENDING**。

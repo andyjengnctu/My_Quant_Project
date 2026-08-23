@@ -10,9 +10,50 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from filters.breakout_quality.paths import (
+    resolve_filter_model_output_dir,
+    resolve_selection_point_in_time_score_path,
+)
 from filters.breakout_quality.ranking_score_store import (
     load_selection_point_in_time_ranking_contract,
 )
+
+
+def resolve_strategy_compare_selection_pit_bundle_dir(
+    *,
+    root: str | Path,
+    source: Any,
+) -> Path:
+    """Resolve the one Strategy Compare directory that owns a complete PIT bundle.
+
+    Current default Rolling PIT artifacts live beside the score/manifest under
+    ``models/.../point_in_time``.  Mode-specific profiles may select a dedicated
+    model-output dirname.  Strategy Compare callers must use this resolver rather
+    than letting the generic legacy loader split audit lookup into ``outputs/``.
+    """
+
+    project_root = Path(root).resolve()
+    dirname = (
+        None
+        if getattr(source, "point_in_time_dirname", None) in (None, "")
+        else str(source.point_in_time_dirname).strip()
+    )
+    if dirname is not None:
+        return (
+            resolve_filter_model_output_dir(
+                project_root,
+                str(source.filter_id),
+                str(source.model_architecture),
+                str(source.experiment_profile),
+            )
+            / dirname
+        ).resolve()
+    return resolve_selection_point_in_time_score_path(
+        project_root,
+        str(source.filter_id),
+        str(source.model_architecture),
+        str(source.experiment_profile),
+    ).parent.resolve()
 
 
 def _normalize_contract_date(value: Any) -> str:
@@ -152,5 +193,6 @@ def load_validated_selection_pit_strategy_compare_contract(
 
 __all__ = [
     "load_validated_selection_pit_strategy_compare_contract",
+    "resolve_strategy_compare_selection_pit_bundle_dir",
     "validate_selection_pit_score_period",
 ]

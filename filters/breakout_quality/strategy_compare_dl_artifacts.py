@@ -39,11 +39,11 @@ from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_SCORE_FILENAME,
     resolve_filter_artifact_paths,
     resolve_filter_model_output_dir,
-    resolve_selection_point_in_time_score_path,
 )
 from filters.breakout_quality.strategy_compare_contracts import build_strategy_preparation_action
 from filters.breakout_quality.strategy_compare_pit_contract import (
     load_validated_selection_pit_strategy_compare_contract,
+    resolve_strategy_compare_selection_pit_bundle_dir,
 )
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
@@ -297,30 +297,6 @@ def _collect_model_upstream_dependencies(
     return cache[upstream_identity]
 
 
-def _selection_pit_bundle_dir(root: Path, source: Any) -> Path:
-    """Resolve the one directory that owns the complete PIT bundle.
-
-    Score/manifest/coverage and audit must be validated from the same namespace.
-    Passing ``None`` to the legacy loader would split the default lookup between
-    ``models/.../point_in_time`` and ``outputs/.../point_in_time``.
-    """
-
-    dirname = (
-        None
-        if getattr(source, "point_in_time_dirname", None) in (None, "")
-        else str(source.point_in_time_dirname).strip()
-    )
-    if dirname is not None:
-        return (
-            resolve_filter_model_output_dir(
-                root, source.filter_id, source.model_architecture, source.experiment_profile
-            )
-            / dirname
-        ).resolve()
-    return resolve_selection_point_in_time_score_path(
-        root, source.filter_id, source.model_architecture, source.experiment_profile
-    ).parent.resolve()
-
 
 def _collect_selection_pit_source_status(
     *,
@@ -340,7 +316,7 @@ def _collect_selection_pit_source_status(
     pit_gate_status: str | None = None
     pit_validation_error: str | None = None
     try:
-        pit_override_dir = _selection_pit_bundle_dir(root, source)
+        pit_override_dir = resolve_strategy_compare_selection_pit_bundle_dir(root=root, source=source)
         workflow = get_breakout_quality_workflow_settings(
             experiment_profile=str(source.experiment_profile)
         )
@@ -382,7 +358,7 @@ def _collect_selection_pit_source_status(
             "forward_scores": pit_contract.score_path,
         }
     else:
-        pit_bundle_dir = _selection_pit_bundle_dir(root, source)
+        pit_bundle_dir = resolve_strategy_compare_selection_pit_bundle_dir(root=root, source=source)
         files = {
             "manifest": pit_bundle_dir / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
             "audit": pit_bundle_dir / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,

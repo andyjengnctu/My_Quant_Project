@@ -130,7 +130,10 @@ def append_strategy_compare_preparation_contract_checks(
 
     from config.strategy_compare import get_strategy_comparison_settings as _get_pit_bundle_settings
     from filters.breakout_quality.paths import resolve_selection_point_in_time_score_path
-    from filters.breakout_quality.strategy_compare_dl_artifacts import _selection_pit_bundle_dir
+    from filters.breakout_quality.strategy_compare_execution import selection_pit_mode_paths
+    from filters.breakout_quality.strategy_compare_pit_contract import (
+        resolve_strategy_compare_selection_pit_bundle_dir,
+    )
     pit_bundle_settings = _get_pit_bundle_settings("extending_window_rolling")
     default_pit_source = next(
         source
@@ -148,7 +151,57 @@ def append_strategy_compare_preparation_contract_checks(
         results, "synthetic_breakout_quality", case_id,
         "strategy_compare_default_pit_bundle_uses_one_models_namespace_for_score_manifest_audit",
         expected_default_pit_dir,
-        _selection_pit_bundle_dir(project_root, default_pit_source),
+        resolve_strategy_compare_selection_pit_bundle_dir(
+            root=project_root,
+            source=default_pit_source,
+        ),
+    )
+    default_mode_paths = selection_pit_mode_paths(
+        default_pit_source,
+        project_root=project_root,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_compare_default_pit_execution_pins_models_score_and_manifest_paths",
+        (
+            expected_default_pit_dir / "selection_point_in_time_scores.csv",
+            expected_default_pit_dir / "selection_point_in_time_manifest.json",
+        ),
+        (default_mode_paths["score"], default_mode_paths["manifest"]),
+    )
+
+    from filters.breakout_quality import strategy_compare_execution as execution_module
+    captured_replay_kwargs: list[dict[str, Any]] = []
+    with patch.object(
+        execution_module,
+        "run_comparison",
+        side_effect=lambda **kwargs: captured_replay_kwargs.append(dict(kwargs)) or {"ok": True},
+    ):
+        for arm_id in ("C59", "C60"):
+            execution_module.run_strategy_compare_active_arm(
+                settings=pit_bundle_settings,
+                arm=pit_bundle_settings.arms[arm_id],
+                project_root=project_root,
+                params_path="models/strategy_params/canonical/synthetic.json",
+                output_dir="outputs/strategy_compare/synthetic",
+                comparison_start="2021-01-01",
+                comparison_end="2026-03-02",
+                param_evaluation_mode="rolling",
+            )
+    c59_kwargs, c60_kwargs = captured_replay_kwargs
+    c59_primary = Path(str(c59_kwargs.get("selection_pit_score_path_override") or ""))
+    c60_primary = Path(str(c60_kwargs.get("selection_pit_score_path_override") or ""))
+    c60_safety = Path(str((c60_kwargs.get("ranking_options") or {}).get("safety_score_path_override") or ""))
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "current_c59_c60_execution_consumes_models_pit_bundle_without_legacy_audit_fallback",
+        True,
+        all(
+            path.name == "selection_point_in_time_scores.csv"
+            and "models/filters/breakout_quality" in path.as_posix()
+            and "outputs/" not in path.as_posix()
+            for path in (c59_primary, c60_primary, c60_safety)
+        ),
     )
 
     from filters.breakout_quality import strategy_compare_preparation as preparation_module
