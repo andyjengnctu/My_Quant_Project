@@ -1359,7 +1359,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and "核心策略結果" in render_report_source
                 and "R 預測／轉化" in render_report_source
                 and "資金／執行" in render_report_source
-                and "5. 執行摘要" in render_report_source
+                and "6. 執行摘要" in render_report_source
                 and "render_strategy_run_execution_table" in render_report_source
                 and "報表分工" not in render_report_source
                 and "render_strategy_r_analysis_table" in render_report_source
@@ -1401,7 +1401,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and 'f"[DONE] {on_arm.arm_id} {on_arm.name} "' in comparison_source
                 and 'elapsed={format_elapsed(' in comparison_source
                 and 'total={format_elapsed(' in comparison_source
-                and 'render_section("5. 執行摘要")' in comparison_source
+                and 'render_section("6. 執行摘要")' in comparison_source
                 and "render_strategy_run_execution_table" in comparison_source
                 and "_selector_timing_table(" not in render_report_source,
     )
@@ -2275,6 +2275,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and not any(marker in report_style_source for marker in ("🟢", "🔴", "🟡", "⚪")),
     )
     from filters.breakout_quality.strategy_compare_diagnostics import (
+        _full_horizon_path_lookup_cached,
         paired_trade_r_conversion_diagnostic,
     )
     from filters.breakout_quality.trade_attribution import (
@@ -2342,10 +2343,78 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     )
 
 
+
+    pure_mfe_groups = pd.DataFrame([
+        {
+            "ticker": "AAA", "group_index": 0, "date": "2020-01-01", "target_adverse_r": 0.4,
+            "target_opportunity_bar": 3, "target_first_risk_breach_bar": -1,
+            "target_opportunity_date": "2020-01-04", "target_first_risk_breach_date": pd.NaT,
+        },
+        {
+            "ticker": "BBB", "group_index": 1, "date": "2020-01-02", "target_adverse_r": float("nan"),
+            "target_opportunity_bar": -1, "target_first_risk_breach_bar": -1,
+            "target_opportunity_date": pd.NaT, "target_first_risk_breach_date": pd.NaT,
+        },
+    ])
+    def synthetic_first_passage(group_ids, *, horizon_bars, return_thresholds):
+        assert list(group_ids) == [0, 1]
+        assert int(horizon_bars) == 3
+        result = {}
+        for threshold in return_thresholds:
+            if abs(float(threshold) - 0.1) < 1e-12:
+                result[threshold] = (
+                    np.asarray([1, -1], dtype=np.int16),
+                    np.asarray(["2020-01-02", "NaT"], dtype="datetime64[D]"),
+                )
+            elif abs(float(threshold) - 0.2) < 1e-12:
+                result[threshold] = (
+                    np.asarray([2, -1], dtype=np.int16),
+                    np.asarray(["2020-01-03", "NaT"], dtype="datetime64[D]"),
+                )
+            else:
+                result[threshold] = (
+                    np.asarray([-1, -1], dtype=np.int16),
+                    np.asarray(["NaT", "NaT"], dtype="datetime64[D]"),
+                )
+        return result
+
+    pure_mfe_bundle = SimpleNamespace(
+        group_table=pure_mfe_groups,
+        raw_target=np.asarray([2.5, np.nan], dtype=np.float32),
+        target_valid=np.asarray([True, False], dtype=bool),
+        target_manifest={
+            "target_contract": {
+                "target_id": "daily_full_horizon_pure_mfe_r_v1",
+                "risk_budget_return": 0.1,
+                "horizon_bars": 3,
+            }
+        },
+        feature_bank=SimpleNamespace(future_first_passage=synthetic_first_passage),
+    )
+    with patch(
+        "filters.breakout_quality.strategy_compare_diagnostics.load_profile_continuous_ranker_data",
+        return_value=pure_mfe_bundle,
+    ):
+        path_lookup = _full_horizon_path_lookup_cached.__wrapped__(
+            ".", "breakout_quality_v1", "inception_time_v1"
+        )
+    check_true(
+        "upside_path_lookup_consumes_canonical_daily_provider_without_nonexistent_persisted_component_bundle",
+        len(path_lookup) == 2
+        and bool(path_lookup.loc[0, "path_target_available"])
+        and not bool(path_lookup.loc[1, "path_target_available"])
+        and abs(float(path_lookup.loc[0, "full_horizon_mfe_r"]) - 2.5) < 1e-12
+        and abs(float(path_lookup.loc[0, "full_horizon_adverse_to_peak_r"]) - 0.4) < 1e-6
+        and int(path_lookup.loc[0, "full_horizon_opportunity_bar"]) == 3
+        and int(path_lookup.loc[0, "full_horizon_first_upside_1r_bar"]) == 1
+        and str(path_lookup.loc[0, "full_horizon_first_upside_2r_date"]) == "2020-01-03"
+        and int(path_lookup.loc[0, "full_horizon_first_upside_3r_bar"]) == -1,
+    )
+
     stop_trades = pd.DataFrame([
-        {"Date": "2020-02-03", "Ticker": "UP", "Type": "買進 (test)", "進場類型": "normal", "買訊日": "2020-02-02", "成交價": 10.0},
-        {"Date": "2020-02-05", "Ticker": "UP", "Type": "全倉結算(停損)", "成交價": 9.0, "R_Multiple": -1.0, "該筆總損益": -100.0},
-        {"Date": "2020-02-03", "Ticker": "OK", "Type": "買進 (test)", "進場類型": "normal", "買訊日": "2020-02-02", "成交價": 10.0},
+        {"Date": "2020-02-03", "Ticker": "UP", "Type": "買進 (test)", "進場類型": "normal", "買訊日": "2020-02-02", "成交價": 10.0, "停損價": 9.0},
+        {"Date": "2020-02-05", "Ticker": "UP", "Type": "全倉結算(停損)", "成交價": 9.0, "停損價": 9.0, "R_Multiple": -1.0, "該筆總損益": -100.0},
+        {"Date": "2020-02-03", "Ticker": "OK", "Type": "買進 (test)", "進場類型": "normal", "買訊日": "2020-02-02", "成交價": 10.0, "停損價": 9.0},
         {"Date": "2020-02-10", "Ticker": "OK", "Type": "全倉結算(指標)", "成交價": 12.0, "R_Multiple": 2.0, "該筆總損益": 200.0},
     ])
     stop_paths = pd.DataFrame([
@@ -2356,6 +2425,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             "full_horizon_opportunity_date": "2020-02-07",
             "full_horizon_first_risk_breach_date": "2020-02-05",
             "full_horizon_opportunity_bar": 5, "full_horizon_first_risk_breach_bar": 3,
+            "full_horizon_first_upside_1r_bar": 1, "full_horizon_first_upside_1r_date": "2020-02-03",
+            "full_horizon_first_upside_2r_bar": 2, "full_horizon_first_upside_2r_date": "2020-02-04",
+            "full_horizon_first_upside_3r_bar": 5, "full_horizon_first_upside_3r_date": "2020-02-07",
         },
         {
             "ticker": "OK", "trade_date": "2020-02-03", "signal_date": "2020-02-02",
@@ -2364,6 +2436,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             "full_horizon_opportunity_date": "2020-02-09",
             "full_horizon_first_risk_breach_date": "",
             "full_horizon_opportunity_bar": 6, "full_horizon_first_risk_breach_bar": -1,
+            "full_horizon_first_upside_1r_bar": 1, "full_horizon_first_upside_1r_date": "2020-02-03",
+            "full_horizon_first_upside_2r_bar": 3, "full_horizon_first_upside_2r_date": "2020-02-05",
+            "full_horizon_first_upside_3r_bar": -1, "full_horizon_first_upside_3r_date": "",
         },
     ])
     realization = build_upside_realization_attribution(
@@ -2381,7 +2456,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and int(realization_summary.get("actual_stop_out_count") or 0) == 1
         and int(realization_summary.get("stop_before_later_peak_count") or 0) == 1
         and int((realization_summary.get("thresholds") or {}).get("2R", {}).get("stop_before_later_peak_count") or 0) == 1
-        and abs(float((realization_summary.get("thresholds") or {}).get("3R", {}).get("stop_before_later_peak_rate")) - 1.0) < 1e-12,
+        and abs(float((realization_summary.get("thresholds") or {}).get("3R", {}).get("stop_before_later_peak_rate")) - 1.0) < 1e-12
+        and int((realization_summary.get("thresholds") or {}).get("2R", {}).get("actual_stop_before_first_upside_count") or 0) == 0
+        and int((realization_summary.get("thresholds") or {}).get("3R", {}).get("actual_stop_before_first_upside_count") or 0) == 1
+        and int((realization_summary.get("thresholds") or {}).get("3R", {}).get("actual_initial_stop_before_first_upside_count") or 0) == 1
+        and int((realization_summary.get("thresholds") or {}).get("3R", {}).get("canonical_risk_before_first_upside_count") or 0) == 1
+        and int((realization_summary.get("thresholds") or {}).get("2R", {}).get("canonical_upside_before_risk_count") or 0) == 2,
     )
     check_true(
         "strategy_diagnostics_has_independent_stale_contract_and_reuse_backfill_without_engine_schema_invalidation",
@@ -2392,14 +2472,55 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "pair_upside_realization_refresh_required" in comparison_source
         and '"REFRESH"' in comparison_source
         and '"Diagnostics | Upside Realization"' in comparison_source
+        and 'render_section("3. Upside Realization / Stop-before-Upside")' in comparison_source
+        and "render_upside_realization_summary_table" in comparison_source
+        and "render_first_passage_summary_table" in comparison_source
         and "STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS" in strategy_compare_config_source,
     )
 
+    from filters.breakout_quality.strategy_compare_diagnostics import (
+        render_first_passage_summary_table,
+        render_upside_realization_summary_table,
+    )
+    unavailable_text = render_upside_realization_summary_table({
+        "upside_realization": [],
+        "upside_realization_unavailable": [{
+            "arm_id": "C59",
+            "name": "Synthetic",
+            "status": "UNAVAILABLE",
+            "reason": "ValueError: synthetic reason",
+        }],
+    })
     check_true(
-        "strategy_diagnostics_reuse_existing_canonical_artifacts_without_raw_recalculation",
-        '"raw_market_or_trade_recalculation": False' in diagnostics_source
-                and '"audit"' in diagnostics_source
-                and '"report"' in diagnostics_source
+        "upside_realization_unavailable_reason_is_visible_on_main_report",
+        "C59 Synthetic" in unavailable_text
+        and "ValueError: synthetic reason" in unavailable_text,
+    )
+
+    first_passage_text = render_first_passage_summary_table({
+        "upside_realization": [{
+            "arm_id": "C59", "name": "Synthetic",
+            "thresholds": realization_summary.get("thresholds"),
+        }],
+        "upside_realization_contract": {"upside_r_thresholds": [1.0, 2.0, 3.0]},
+    })
+    check_true(
+        "first_passage_main_report_distinguishes_peak_before_stop_from_exact_threshold_timing",
+        "First-Passage Realization" in first_passage_text
+        and "+2R" in first_passage_text
+        and "0/2 (0.00%)" in first_passage_text
+        and "+3R" in first_passage_text
+        and "1/1 (100.00%)" in first_passage_text,
+    )
+
+    check_true(
+        "strategy_diagnostics_reuse_canonical_producers_without_target_formula_duplication",
+        '"path_components_source": "canonical daily profile sample provider"' in diagnostics_source
+                and '"diagnostic_target_formula_reimplementation": False' in diagnostics_source
+                and '"canonical_provider_may_materialize_from_source_ohlcv": True' in diagnostics_source
+                and '"first_passage_timing_source": "canonical_daily_ohlcv_used_by_pure_mfe_sample_provider"' in diagnostics_source
+                and "future_first_passage" in diagnostics_source
+                and "load_validated_continuous_target_component_arrays" not in diagnostics_source
                 and "selection_diagnostics" in diagnostics_source,
     )
 

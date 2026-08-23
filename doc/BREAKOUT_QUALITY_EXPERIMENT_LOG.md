@@ -9878,3 +9878,28 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 修正：default與mode-specific Strategy Compare PIT bundle directory統一由`strategy_compare_pit_contract.py::resolve_strategy_compare_selection_pit_bundle_dir()`解析；preparation/status與single/multi per-arm execution共用同一resolver。current default execution固定傳入`models/.../point_in_time/selection_point_in_time_scores.csv`與manifest override，正式replay不再重新觸發legacy audit path resolution；C60 secondary safety fallback亦走同一resolver。
 - 研究影響：不改architecture／target／loss／seed／PIT fold science／Full/Min params／Compare Suite或portfolio/accounting；既有E/K/M合法PIT bundle直接REUSE，不需重訓。已完成的C61/C62/C63 replay是否可跨本次中止直接cache REUSE仍由原pair fingerprint/integrity contract決定，不在本次修正另設例外。
 - Decision：**CURRENT_PIT_EXECUTION_PATH_SSOT_CLOSED / SCIENCE_UNCHANGED / FORMAL_RERUN_PENDING**。
+
+### 2026-08-23 — Upside Realization diagnostics 主報表可見性修正
+
+- 基準：`test-branch-1_20260823_145212_a33cfe4.zip`。使用者實機 OOS Strategy Compare plan 已正確顯示 `REFRESH Diagnostics | Upside Realization`，C59/C60 pair 亦走 REUSE/backfill，但完成後 console 與 `strategy_comparison.md` 仍只顯示既有核心表；新 Upside Realization 表僅存在於 `strategy_diagnostics.md`，造成正式人讀主畫面看不到本輪新增診斷。
+- 修正：`render_strategy_aggregate_report()` 正式加入 `Upside Realization / Stop-before-Upside` 核心表，位置在 `R 預測／轉化` 後、`資金／執行` 前；console 與 `strategy_comparison.md` 共用同一 renderer，因此 RUN／REUSE 口徑一致。詳細 `Full-MFE × Adverse-to-Peak` joint buckets 仍只保留於 `strategy_diagnostics.md`，避免 aggregate console 過度洗版。
+- Scientific semantics、C59/C60 replay identity、diagnostics schema/fingerprint、Target component SSOT、OOS/Rolling、參數與模型均不變；本輪只是正式人讀輸出可見性修正，不新增 MR/SR/Cxx/AUD identity，也不改 Research Queue 優先順序。
+
+### 2026-08-23 — Upside Realization canonical daily-provider source correction
+
+- 基準：`test-branch-1_20260823_145212_a33cfe4(1).zip`，SHA256=`30e6b286e3b21f2ad964f9408b9d423cb450f6ffd159aecdabd81815b8e0f73b`；承接上一輪主報表可見性修正，不新增MR／SR／Cxx／AUD scientific identity。
+- 實機證據：OOS Strategy Compare連續兩次都正確顯示`REFRESH Diagnostics | Upside Realization`，C59/C60各花約16秒backfill，但主表仍顯示「沒有可用的path-conversion診斷」。這表示renderer已正常，pair-level diagnostics卻持續落在非READY狀態。
+- 根因：上一版`_full_horizon_path_lookup_cached()`錯把daily-universal Pure-MFE target視為舊event-group target family，要求不存在的獨立persisted continuous-target component bundle。實際canonical owner是`load_profile_continuous_ranker_data()`；它已依Pure-MFE profile唯一產生`raw_target / target_valid / target_adverse_r / opportunity_bar / first_risk_breach_bar / path dates`。第一次呼叫完成canonical daily materialization後才在錯誤persisted-loader邊界失敗；exception不會進LRU cache，因此C59/C60各自重做約16秒後都成為UNAVAILABLE。
+- 修正：Upside Realization直接消費canonical profile-aware daily sample provider已產生的target/path components，不重新實作MFE／MAE／risk公式，也不建立第二份physical target artifact；diagnostics schema升版，舊UNAVAILABLE pair會自動REFRESH。aggregate/main report另保留`UNAVAILABLE reason`可見輸出並把project root正規化為相對路徑，避免未來silent empty table。
+- 防回歸：synthetic新增「只有canonical daily provider、沒有persisted Pure-MFE component bundle仍必須能建立path lookup」以及「UNAVAILABLE reason必須在主報表可見」兩項contract。
+- Decision：**ENGINEERING_BUG_FIXED / CANONICAL_DAILY_TARGET_OWNER_RESTORED / SCIENCE_UNCHANGED / FORMAL_RERUN_PENDING**。Research Queue優先順序、C59/C60 replay identity、OOS/Rolling、模型、參數與robustness題庫均不變。
+
+### 2026-08-23 — Strategy Compare First-Passage Realization diagnostics
+
+- 觸發證據：current Upside Realization 已能顯示 full-horizon MFE 與「實際 stop 早於/同日最終高點」，但該口徑會把「先到 +2R、之後 stop、再創更高峰」誤歸類為未實現 +2R。使用者要直接量測「DL 選中、未來確實會漲，但第一次到達有意義 upside 前已被實際策略 stop 打掉」的次數，因此 final-peak timing 不足以回答待決策問題。
+- First-Passage 定義：沿用 Pure-MFE canonical daily sample provider 的同一 OHLCV、score-event close、horizon 與 `risk_budget_return`，只在 post-replay diagnostic materialize configured `+1R/+2R/+3R` 的第一次 future-high hit bar/date；不改 target、training samples、score、replay 或任何 model/strategy scientific identity。門檻是否達到直接由 first-passage event 決定，不以 float32 MFE 門檻作新表分母。
+- Canonical survival：對每個實際可達的 +kR，若 canonical first risk-breach bar `<=` first-upside bar，依 D2 保守視為 risk 先發生；否則為 upside 先於 risk。這直接量測 `P(T_{+kR}<T_risk)`，不再以最終 peak proxy 取代 first-passage。
+- Actual conversion：同一 DL-selected completed trade 若實際 `全倉結算(停損)` 日期 `<=` target-defined first +kR date，即記為「實際 Stop≤首次達標」。trade-history 同時保存 entry 初始 stop 與 exit trigger stop；若 trigger 未高於初始 stop，歸為 initial-stop subset，已拉高則歸為 raised/trailing-stop subset，避免把 profitable trailing stop 與 MAE 導致的早期初始停損混為一談。
+- 報表：原 `Upside Realization / Stop-before-Upside` final-peak 表保留作歷史兼容；主 `strategy_comparison.md`／console 同節追加 compact First-Passage table，`strategy_diagnostics.md` 追加完整 Markdown 定義。diagnostics schema=`3→4`、Upside Realization schema=`1→2`；舊 pair replay scientific identity 不變，只會 `REFRESH Diagnostics`／backfill，不應重新 replay C59/C60。
+- 防回歸：synthetic 明確驗證「先 +2R、後 stop、再 final peak」在舊 peak 指標可為 stop-before-peak，但新 first-passage 必須判定 `actual stop before first +2R = 0`；另驗 canonical risk-before-upside、initial-stop subset、daily feature-bank first-passage bar/date 與主報表可見性。
+- Decision：**FIRST_PASSAGE_DIAGNOSTIC_IMPLEMENTED / SCIENCE_UNCHANGED / CURRENT RESULTS_PENDING_RERUN**。不新增 MR／SR／Cxx／AUD identity；Research Queue 優先順序與今晚 robustness 計畫不因本工程變更自動改動。

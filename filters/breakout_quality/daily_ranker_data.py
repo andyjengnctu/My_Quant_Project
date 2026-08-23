@@ -71,6 +71,10 @@ class LazyDailyFeatureBank:
             )
             for frame in frames
         )
+        self._frame_dates = tuple(
+            pd.to_datetime(frame["Date"], errors="raise").to_numpy(dtype="datetime64[D]")
+            for frame in frames
+        )
         self._benchmark_array = benchmark[
             ["Open", "High", "Low", "Close", "Volume"]
         ].to_numpy(dtype=np.float64, copy=True)
@@ -124,6 +128,79 @@ class LazyDailyFeatureBank:
         feature = self._normalized_window(self._benchmark_array, position)
         self._benchmark_feature_cache[position] = feature
         return feature
+
+    def future_first_passage(
+        self,
+        group_ids: np.ndarray,
+        *,
+        horizon_bars: int,
+        return_thresholds: tuple[float, ...],
+    ) -> dict[float, tuple[np.ndarray, np.ndarray]]:
+        """Materialize first future-high passage bars/dates from canonical OHLCV.
+
+        ``group_ids`` use this feature bank's canonical stock-day indexing.  The
+        returned bar is 1-based from the score event date and ``-1`` means the
+        threshold is not reached within the fixed horizon.  This is a read-only
+        post-fit utility; it does not alter training samples, features, or targets.
+        """
+
+        ids = np.asarray(group_ids, dtype=np.int64).reshape(-1)
+        horizon = int(horizon_bars)
+        thresholds = tuple(sorted({float(value) for value in return_thresholds}))
+        if horizon <= 0:
+            raise ValueError("future first-passage horizon_bars必須>0")
+        if not thresholds or any((not np.isfinite(value)) or value <= 0.0 for value in thresholds):
+            raise ValueError("future first-passage return_thresholds必須是有限正數")
+        if bool(np.any(ids < 0)) or bool(np.any(ids >= len(self))):
+            raise IndexError("future first-passage group id超出範圍")
+
+        bars = {value: np.full(len(ids), -1, dtype=np.int16) for value in thresholds}
+        dates = {
+            value: np.full(len(ids), np.datetime64("NaT"), dtype="datetime64[D]")
+            for value in thresholds
+        }
+        if len(ids) == 0:
+            return {value: (bars[value], dates[value]) for value in thresholds}
+
+        ticker_ids = self._ticker_ids[ids]
+        source_positions = self._source_positions[ids]
+        offsets = np.arange(1, horizon + 1, dtype=np.int64)
+        for ticker_id in np.unique(ticker_ids):
+            local_output = np.flatnonzero(ticker_ids == ticker_id)
+            local_positions = source_positions[local_output].astype(np.int64, copy=False)
+            frame = self._frame_arrays[int(ticker_id)]
+            frame_dates = self._frame_dates[int(ticker_id)]
+            complete = local_positions + horizon < len(frame)
+            if not bool(np.any(complete)):
+                continue
+            out_ids = local_output[complete]
+            positions = local_positions[complete]
+            future_index = positions[:, None] + offsets[None, :]
+            highs = frame[future_index, 1]
+            anchor = frame[positions, 3]
+            valid_path = (
+                np.isfinite(anchor)
+                & (anchor > 0.0)
+                & np.all(np.isfinite(highs) & (highs > 0.0), axis=1)
+            )
+            if not bool(np.any(valid_path)):
+                continue
+            valid_out = out_ids[valid_path]
+            valid_positions = positions[valid_path]
+            valid_highs = highs[valid_path]
+            valid_anchor = anchor[valid_path]
+            for threshold in thresholds:
+                hit = valid_highs >= valid_anchor[:, None] * (1.0 + float(threshold))
+                any_hit = hit.any(axis=1)
+                if not bool(np.any(any_hit)):
+                    continue
+                hit_out = valid_out[any_hit]
+                hit_positions = valid_positions[any_hit]
+                first_zero = hit[any_hit].argmax(axis=1).astype(np.int64)
+                first_bar = first_zero + 1
+                bars[threshold][hit_out] = first_bar.astype(np.int16)
+                dates[threshold][hit_out] = frame_dates[hit_positions + first_bar]
+        return {value: (bars[value], dates[value]) for value in thresholds}
 
     @property
     def shape(self) -> tuple[int, int, int]:

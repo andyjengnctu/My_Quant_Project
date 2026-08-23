@@ -44,7 +44,6 @@ from core.price_utils import calc_position_size
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.continuous_target import (
     DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-    load_validated_continuous_target_component_arrays,
 )
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from filters.breakout_quality.ranking_score_store import (
@@ -62,10 +61,11 @@ from filters.breakout_quality.strategy_compare_contracts import (
 from filters.breakout_quality.trade_attribution import (
     build_upside_realization_attribution,
     reconstruct_round_trips,
+    upside_first_passage_columns,
 )
 
-STRATEGY_DIAGNOSTICS_SCHEMA_VERSION = 2
-UPSIDE_REALIZATION_SCHEMA_VERSION = 1
+STRATEGY_DIAGNOSTICS_SCHEMA_VERSION = 4
+UPSIDE_REALIZATION_SCHEMA_VERSION = 2
 
 
 def _upside_realization_contract() -> dict[str, Any]:
@@ -76,8 +76,14 @@ def _upside_realization_contract() -> dict[str, Any]:
         "upside_r_thresholds": [float(value) for value in STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS],
         "adverse_bucket_edges_r": [float(value) for value in STRATEGY_COMPARE_UPSIDE_REALIZATION_ADVERSE_BUCKET_EDGES_R],
         "actual_stop_source": "canonical_completed_trade_exit_type",
+        "actual_stop_stage_source": "canonical_trade_history_entry_and_exit_stop_prices",
+        "path_component_source": "canonical_daily_profile_sample_provider",
         "peak_timing_source": "canonical_full_horizon_target_opportunity_date",
+        "first_passage_timing_source": "canonical_daily_ohlcv_used_by_pure_mfe_sample_provider",
+        "first_passage_threshold_basis": "score_event_close_plus_target_risk_budget_return_times_kR",
         "same_day_stop_peak_policy": "conservative_stop_before_peak",
+        "same_day_risk_upside_policy": "conservative_risk_before_upside",
+        "same_day_actual_stop_upside_policy": "conservative_stop_before_upside",
     }
 
 
@@ -129,40 +135,88 @@ def _full_horizon_path_lookup_cached(
         raise ValueError(f"pure-MFE path lookup缺少欄位: {missing}")
     if len(groups) != len(bundle.raw_target) or len(groups) != len(bundle.target_valid):
         raise ValueError("pure-MFE path lookup group/target長度不一致")
-    target_manifest, target_arrays = load_validated_continuous_target_component_arrays(
-        root,
-        str(filter_id),
-        target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-        expected_group_count=len(groups),
-        expected_dataset_policy=dict(bundle.summary.get("policy") or {}),
-        expected_dataset_artifacts=dict(bundle.summary.get("source_dataset_artifacts") or {}),
+    target_contract = dict(dict(bundle.target_manifest or {}).get("target_contract") or {})
+    if str(target_contract.get("target_id") or "") != DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID:
+        raise ValueError("pure-MFE canonical sample provider target identity不一致")
+
+    # Daily-universal targets are canonicalized by the profile-aware sample provider itself;
+    # unlike the older event-group target family, they do not own a second persisted
+    # continuous-target component bundle.  Consume the provider's already-computed target
+    # and path columns directly so this diagnostic stays on the same target SSOT without
+    # inventing a duplicate physical artifact requirement.
+    target_valid = pd.Series(bundle.target_valid, index=groups.index).astype(bool)
+    mfe_r = pd.to_numeric(pd.Series(bundle.raw_target, index=groups.index), errors="coerce")
+    adverse_r = pd.to_numeric(groups["target_adverse_r"], errors="coerce")
+    opportunity_bar = pd.to_numeric(groups["target_opportunity_bar"], errors="coerce")
+    first_risk_breach_bar = pd.to_numeric(
+        groups["target_first_risk_breach_bar"], errors="coerce"
     )
-    target_contract = dict(target_manifest.get("target_contract") or {})
+    if bool((target_valid & ~mfe_r.map(math.isfinite)).any()):
+        raise ValueError("pure-MFE canonical sample provider valid rows含非有限MFE")
+    if bool((target_valid & ~adverse_r.map(math.isfinite)).any()):
+        raise ValueError("pure-MFE canonical sample provider valid rows含非有限adverse")
+    if bool((target_valid & (opportunity_bar < 1)).any()):
+        raise ValueError("pure-MFE canonical sample provider valid rows的opportunity_bar必須>=1")
+
     risk_budget_return = float(target_contract.get("risk_budget_return") or 0.0)
+    horizon_bars = int(target_contract.get("horizon_bars") or 0)
     if not math.isfinite(risk_budget_return) or risk_budget_return <= 0.0:
-        raise ValueError("pure-MFE target manifest缺少合法risk_budget_return")
-    target_valid = pd.Series(target_arrays["valid_mask"], index=groups.index).astype(bool)
-    opportunity_bar = pd.Series(target_arrays["opportunity_bar"], index=groups.index)
-    first_risk_breach_bar = pd.Series(target_arrays["first_risk_breach_bar"], index=groups.index)
-    if not opportunity_bar.equals(pd.to_numeric(groups["target_opportunity_bar"], errors="coerce")):
-        raise ValueError("pure-MFE persisted opportunity_bar與sample provider不一致")
-    if not first_risk_breach_bar.equals(pd.to_numeric(groups["target_first_risk_breach_bar"], errors="coerce")):
-        raise ValueError("pure-MFE persisted first_risk_breach_bar與sample provider不一致")
+        raise ValueError("pure-MFE canonical sample provider缺少合法risk_budget_return")
+    if horizon_bars <= 0:
+        raise ValueError("pure-MFE canonical sample provider缺少合法horizon_bars")
+    r_thresholds = tuple(
+        sorted({float(value) for value in STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS})
+    )
+    return_thresholds = tuple(risk_budget_return * value for value in r_thresholds)
+    feature_bank = bundle.feature_bank
+    future_first_passage = getattr(feature_bank, "future_first_passage", None)
+    if not callable(future_first_passage):
+        raise ValueError("pure-MFE canonical daily feature bank不支援future first-passage materialization")
+    passage_by_return = future_first_passage(
+        pd.to_numeric(groups["group_index"], errors="raise").to_numpy(dtype="int64"),
+        horizon_bars=horizon_bars,
+        return_thresholds=return_thresholds,
+    )
+
     lookup = pd.DataFrame({
         "ticker": groups["ticker"].fillna("").astype(str).str.strip(),
         "score_event_date": pd.to_datetime(groups["date"], errors="raise").dt.strftime("%Y-%m-%d"),
         "path_target_available": target_valid,
-        "full_horizon_mfe_r": pd.to_numeric(
-            pd.Series(target_arrays["target_raw_r"], index=groups.index), errors="coerce"
-        ),
-        "full_horizon_adverse_to_peak_r": pd.to_numeric(
-            pd.Series(target_arrays["adverse_return_to_peak"], index=groups.index), errors="coerce"
-        ) / risk_budget_return,
-        "full_horizon_opportunity_bar": pd.to_numeric(opportunity_bar, errors="coerce"),
-        "full_horizon_first_risk_breach_bar": pd.to_numeric(first_risk_breach_bar, errors="coerce"),
-        "full_horizon_opportunity_date": pd.to_datetime(groups["target_opportunity_date"], errors="coerce").dt.strftime("%Y-%m-%d"),
-        "full_horizon_first_risk_breach_date": pd.to_datetime(groups["target_first_risk_breach_date"], errors="coerce").dt.strftime("%Y-%m-%d"),
+        "full_horizon_mfe_r": mfe_r,
+        "full_horizon_adverse_to_peak_r": adverse_r,
+        "full_horizon_opportunity_bar": opportunity_bar,
+        "full_horizon_first_risk_breach_bar": first_risk_breach_bar,
+        "full_horizon_opportunity_date": pd.to_datetime(
+            groups["target_opportunity_date"], errors="coerce"
+        ).dt.strftime("%Y-%m-%d"),
+        "full_horizon_first_risk_breach_date": pd.to_datetime(
+            groups["target_first_risk_breach_date"], errors="coerce"
+        ).dt.strftime("%Y-%m-%d"),
     })
+    for threshold_r, threshold_return in zip(r_thresholds, return_thresholds):
+        first_bar_column, first_date_column = upside_first_passage_columns(threshold_r)
+        passage_bar, passage_date = passage_by_return[threshold_return]
+        lookup[first_bar_column] = pd.to_numeric(
+            pd.Series(passage_bar, index=groups.index), errors="coerce"
+        )
+        lookup[first_date_column] = pd.to_datetime(
+            pd.Series(passage_date, index=groups.index), errors="coerce"
+        ).dt.strftime("%Y-%m-%d")
+        passage_valid = lookup[first_bar_column].ge(1) & lookup[first_date_column].notna()
+        should_reach = target_valid & (mfe_r >= threshold_r + 1e-5)
+        if bool((should_reach & ~passage_valid).any()):
+            bad = groups.loc[should_reach & ~passage_valid].iloc[0]
+            raise ValueError(
+                "pure-MFE first-passage與MFE門檻不一致: "
+                f"ticker={bad.get('ticker')}, date={bad.get('date')}, threshold={threshold_r:g}R"
+            )
+        impossible_reach = target_valid & (mfe_r < threshold_r - 1e-5) & passage_valid
+        if bool(impossible_reach.any()):
+            bad = groups.loc[impossible_reach].iloc[0]
+            raise ValueError(
+                "pure-MFE first-passage出現MFE未達門檻卻hit: "
+                f"ticker={bad.get('ticker')}, date={bad.get('date')}, threshold={threshold_r:g}R"
+            )
     if bool(lookup.duplicated(["ticker", "score_event_date"]).any()):
         raise ValueError("pure-MFE path lookup同ticker/date不唯一")
     return lookup.reset_index(drop=True)
@@ -183,6 +237,11 @@ def _join_full_horizon_path_diagnostics(
         "full_horizon_adverse_to_peak_r", "full_horizon_opportunity_bar",
         "full_horizon_first_risk_breach_bar", "full_horizon_opportunity_date",
         "full_horizon_first_risk_breach_date",
+        *(
+            column
+            for threshold in STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS
+            for column in upside_first_passage_columns(float(threshold))
+        ),
     }
     frame = frame.drop(columns=[column for column in path_columns if column in frame.columns])
     lookup = _full_horizon_path_lookup_cached(
@@ -1234,6 +1293,17 @@ def _upside_realization_is_current(payload: dict[str, Any]) -> bool:
     )
 
 
+def _diagnostic_error_reason(exc: BaseException, *, project_root: Path) -> str:
+    """Return a concise user-visible reason without leaking machine-specific root paths."""
+
+    text = f"{type(exc).__name__}: {exc}"
+    root_text = str(Path(project_root).resolve())
+    variants = {root_text, root_text.replace("\\", "/")}
+    for value in sorted((item for item in variants if item), key=len, reverse=True):
+        text = text.replace(value, ".")
+    return text.replace("\\", "/")
+
+
 def pair_upside_realization_refresh_required(pair_dir: Path) -> bool:
     """Return whether a reusable score-ranking pair needs diagnostic/report backfill."""
 
@@ -1315,7 +1385,7 @@ def backfill_pair_upside_realization_diagnostic(
             "schema_version": UPSIDE_REALIZATION_SCHEMA_VERSION,
             "contract_fingerprint": contract_fingerprint,
             "contract": _upside_realization_contract(),
-            "reason": str(exc),
+            "reason": _diagnostic_error_reason(exc, project_root=Path(project_root)),
         }
         diagnostics["diagnostics_schema_version"] = STRATEGY_DIAGNOSTICS_SCHEMA_VERSION
         payload["selection_diagnostics"] = diagnostics
@@ -1534,9 +1604,10 @@ def _selection_translation_rows(
 
 def _upside_realization_rows(
     *, settings: StrategyComparisonSettings, pair_payloads: dict[str, dict[str, Any]]
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     summaries: dict[str, dict[str, Any]] = {}
     joint_rows: list[dict[str, Any]] = []
+    unavailable_rows: list[dict[str, Any]] = []
     for pair in pair_payloads.values():
         _param_source, _rule_policy, _off_arm, on_arm = pair["arm_contract"]
         if on_arm is None or not bool(on_arm.dl_enabled):
@@ -1544,7 +1615,15 @@ def _upside_realization_rows(
         payload = dict(pair.get("payload") or {})
         diagnostics = dict(payload.get("selection_diagnostics") or {})
         realization = dict(diagnostics.get("upside_realization") or {})
-        if str(realization.get("status") or "") != "READY":
+        realization_status = str(realization.get("status") or "").strip()
+        if realization_status != "READY":
+            if realization_status:
+                unavailable_rows.append({
+                    "arm_id": on_arm.arm_id,
+                    "name": on_arm.name,
+                    "status": realization_status,
+                    "reason": str(realization.get("reason") or "未提供原因"),
+                })
             continue
         active = dict(realization.get("score_ranking") or {})
         if not active:
@@ -1571,7 +1650,8 @@ def _upside_realization_rows(
         str(row.get("mfe_bucket") or ""),
         str(row.get("adverse_bucket") or ""),
     ))
-    return ordered, joint_rows
+    unavailable_rows.sort(key=lambda row: arm_order.get(str(row.get("arm_id") or ""), 10**9))
+    return ordered, joint_rows, unavailable_rows
 
 
 def _execution_rows(
@@ -1662,9 +1742,11 @@ def build_strategy_diagnostics(
     selection_translation = _selection_translation_rows(
         settings=settings, pair_payloads=pair_payloads, scenarios=scenarios
     )
-    upside_realization, upside_realization_joint = _upside_realization_rows(
-        settings=settings, pair_payloads=pair_payloads
-    )
+    (
+        upside_realization,
+        upside_realization_joint,
+        upside_realization_unavailable,
+    ) = _upside_realization_rows(settings=settings, pair_payloads=pair_payloads)
     return {
         "diagnostics_schema_version": STRATEGY_DIAGNOSTICS_SCHEMA_VERSION,
         "diagnostics_contract_fingerprint": _upside_realization_contract_fingerprint(),
@@ -1680,11 +1762,14 @@ def build_strategy_diagnostics(
         "execution_conversion": _execution_rows(settings=settings, scenarios=scenarios),
         "upside_realization": upside_realization,
         "upside_realization_joint": upside_realization_joint,
+        "upside_realization_unavailable": upside_realization_unavailable,
         "upside_realization_contract": _upside_realization_contract(),
         "contract": {
             "model_metrics_source": "validated existing PIT audit / continuous ranker report",
             "strategy_metrics_source": "canonical Strategy Compare pair payloads",
-            "raw_market_or_trade_recalculation": False,
+            "path_components_source": "canonical daily profile sample provider",
+            "diagnostic_target_formula_reimplementation": False,
+            "canonical_provider_may_materialize_from_source_ohlcv": True,
         },
     }
 
@@ -1818,10 +1903,238 @@ def _count_of_count_rate(count: Any, total: Any, rate: Any) -> str:
     return f"{count_value}/{total_value} ({rate_value * 100.0:.2f}%)"
 
 
-def render_upside_realization_markdown(diagnostics: dict[str, Any]) -> str:
+def render_upside_realization_summary_table(
+    diagnostics: dict[str, Any], *, target: str = "plain"
+) -> str:
+    """Render the core path-conversion diagnostics on the main Strategy Compare surface."""
+
+    del target  # Neutral diagnostic table; detailed joint buckets remain in strategy_diagnostics.md.
+    rows = list(diagnostics.get("upside_realization") or [])
+    unavailable = list(diagnostics.get("upside_realization_unavailable") or [])
+    if not rows:
+        if not unavailable:
+            return "沒有可用的path-conversion診斷。"
+        return "沒有可用的path-conversion診斷。\n" + "\n".join(
+            f"- {row.get('arm_id') or '-'} {row.get('name') or '-'}："
+            f"{row.get('status') or 'UNAVAILABLE'} | {row.get('reason') or '未提供原因'}"
+            for row in unavailable
+        )
+    thresholds = [
+        float(value)
+        for value in dict(diagnostics.get("upside_realization_contract") or {}).get(
+            "upside_r_thresholds", []
+        )
+    ]
+    headers = [
+        "編號",
+        "比較對象",
+        "Path Coverage",
+        "實際停損",
+        "停損≤最終高點",
+        *[f"MFE≥{value:g}R且先停損" for value in thresholds],
+        "Full-MFE",
+        "Adverse",
+        "Realized",
+    ]
+    body: list[tuple[object, ...]] = []
+    for row in rows:
+        threshold_payload = dict(row.get("thresholds") or {})
+        threshold_values = []
+        for threshold in thresholds:
+            item = dict(threshold_payload.get(f"{threshold:g}R") or {})
+            threshold_values.append(
+                _count_of_count_rate(
+                    item.get("stop_before_later_peak_count"),
+                    item.get("full_horizon_mfe_at_least_count"),
+                    item.get("stop_before_later_peak_rate"),
+                )
+            )
+        body.append(
+            (
+                str(row.get("arm_id") or "-"),
+                str(row.get("name") or "-"),
+                _fmt_pct_fraction(row.get("path_target_coverage_rate")),
+                _count_rate(row.get("actual_stop_out_count"), row.get("actual_stop_out_rate")),
+                _count_rate(
+                    row.get("stop_before_later_peak_count"),
+                    row.get("stop_before_later_peak_rate"),
+                ),
+                *threshold_values,
+                _fmt(row.get("full_horizon_mfe_mean_r"), digits=2, unit="R"),
+                _fmt(row.get("full_horizon_adverse_to_peak_mean_r"), digits=2, unit="R"),
+                _fmt(row.get("realized_mean_r"), digits=2, unit="R"),
+            )
+        )
+    widths = []
+    for index, header in enumerate(headers):
+        values = [str(header), *(str(row[index]) for row in body)]
+        widths.append(max(_display_width(value) for value in values))
+    separator = "  ".join("-" * width for width in widths)
+    lines = [
+        "  ".join(_pad_cell(str(header), widths[index]) for index, header in enumerate(headers)),
+        separator,
+    ]
+    lines.extend(
+        "  ".join(_pad_cell(str(value), widths[index]) for index, value in enumerate(row))
+        for row in body
+    )
+    if unavailable:
+        lines.append("")
+        lines.extend(
+            f"未產生 {row.get('arm_id') or '-'} {row.get('name') or '-'}："
+            f"{row.get('status') or 'UNAVAILABLE'} | {row.get('reason') or '未提供原因'}"
+            for row in unavailable
+        )
+    return "\n".join(lines)
+
+
+def render_first_passage_summary_table(
+    diagnostics: dict[str, Any], *, target: str = "plain"
+) -> str:
+    """Render exact first-passage conversion for each configured target-R threshold."""
+
+    del target
     rows = list(diagnostics.get("upside_realization") or [])
     if not rows:
-        return "## Upside Realization / Stop-before-Upside\n\n沒有可用的path-conversion診斷。\n"
+        return ""
+    thresholds = [
+        float(value)
+        for value in dict(diagnostics.get("upside_realization_contract") or {}).get(
+            "upside_r_thresholds", []
+        )
+    ]
+    headers = [
+        "編號", "比較對象", "門檻", "Future達標", "Risk≤首次達標",
+        "首次達標<Risk", "實際Stop≤首次達標", "其中初始Stop", "其中拉高Stop",
+    ]
+    body: list[tuple[object, ...]] = []
+    for row in rows:
+        threshold_payload = dict(row.get("thresholds") or {})
+        for threshold in thresholds:
+            item = dict(threshold_payload.get(f"{threshold:g}R") or {})
+            total = item.get("first_upside_reached_count")
+            body.append((
+                str(row.get("arm_id") or "-"),
+                str(row.get("name") or "-"),
+                f"+{threshold:g}R",
+                str(int(total or 0)),
+                _count_of_count_rate(
+                    item.get("canonical_risk_before_first_upside_count"),
+                    total,
+                    item.get("canonical_risk_before_first_upside_rate"),
+                ),
+                _count_of_count_rate(
+                    item.get("canonical_upside_before_risk_count"),
+                    total,
+                    item.get("canonical_upside_before_risk_rate"),
+                ),
+                _count_of_count_rate(
+                    item.get("actual_stop_before_first_upside_count"),
+                    total,
+                    item.get("actual_stop_before_first_upside_rate"),
+                ),
+                _count_of_count_rate(
+                    item.get("actual_initial_stop_before_first_upside_count"),
+                    total,
+                    item.get("actual_initial_stop_before_first_upside_rate"),
+                ),
+                _count_of_count_rate(
+                    item.get("actual_raised_stop_before_first_upside_count"),
+                    total,
+                    item.get("actual_raised_stop_before_first_upside_rate"),
+                ),
+            ))
+    widths = []
+    for index, header in enumerate(headers):
+        values = [str(header), *(str(row[index]) for row in body)]
+        widths.append(max(_display_width(value) for value in values))
+    separator = "  ".join("-" * width for width in widths)
+    lines = [
+        "First-Passage Realization（+kR＝Pure-MFE target R；同日保守視為risk／stop先發生）",
+        "  ".join(_pad_cell(str(header), widths[index]) for index, header in enumerate(headers)),
+        separator,
+    ]
+    lines.extend(
+        "  ".join(_pad_cell(str(value), widths[index]) for index, value in enumerate(row))
+        for row in body
+    )
+    return "\n".join(lines)
+
+
+def render_first_passage_markdown(diagnostics: dict[str, Any]) -> str:
+    rows = list(diagnostics.get("upside_realization") or [])
+    if not rows:
+        return ""
+    thresholds = [
+        float(value)
+        for value in dict(diagnostics.get("upside_realization_contract") or {}).get(
+            "upside_r_thresholds", []
+        )
+    ]
+    headers = [
+        "編號", "比較對象", "門檻", "Future達標", "Risk≤首次達標",
+        "首次達標<Risk", "實際Stop≤首次達標", "其中初始Stop", "其中拉高Stop",
+    ]
+    lines = [
+        "### First-Passage Realization",
+        "",
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(["---"] * len(headers)) + " |",
+    ]
+    for row in rows:
+        threshold_payload = dict(row.get("thresholds") or {})
+        for threshold in thresholds:
+            item = dict(threshold_payload.get(f"{threshold:g}R") or {})
+            total = item.get("first_upside_reached_count")
+            values = [
+                str(row.get("arm_id") or "-"),
+                str(row.get("name") or "-"),
+                f"+{threshold:g}R",
+                str(int(total or 0)),
+                _count_of_count_rate(
+                    item.get("canonical_risk_before_first_upside_count"), total,
+                    item.get("canonical_risk_before_first_upside_rate"),
+                ),
+                _count_of_count_rate(
+                    item.get("canonical_upside_before_risk_count"), total,
+                    item.get("canonical_upside_before_risk_rate"),
+                ),
+                _count_of_count_rate(
+                    item.get("actual_stop_before_first_upside_count"), total,
+                    item.get("actual_stop_before_first_upside_rate"),
+                ),
+                _count_of_count_rate(
+                    item.get("actual_initial_stop_before_first_upside_count"), total,
+                    item.get("actual_initial_stop_before_first_upside_rate"),
+                ),
+                _count_of_count_rate(
+                    item.get("actual_raised_stop_before_first_upside_count"), total,
+                    item.get("actual_raised_stop_before_first_upside_rate"),
+                ),
+            ]
+            lines.append("| " + " | ".join(_markdown_escape(value) for value in values) + " |")
+    lines.extend([
+        "",
+        "> `+kR` 使用 Pure-MFE target 的 score-event close 與 target risk-budget R；不是策略實際 R_Multiple。",
+        "> `Risk≤首次達標` 使用同一 canonical target risk barrier；同日 high/low 順序不可知時，依保守原則視為 risk 先發生。",
+        "> `實際Stop≤首次達標` 表示該 DL-selected trade 的實際策略 stop exit 發生在 target-defined 第一次 +kR 當日或之前；並以 entry/exit trade-history stop price 拆成初始 stop 與已拉高 stop。",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def render_upside_realization_markdown(diagnostics: dict[str, Any]) -> str:
+    rows = list(diagnostics.get("upside_realization") or [])
+    unavailable = list(diagnostics.get("upside_realization_unavailable") or [])
+    if not rows:
+        lines = ["## Upside Realization / Stop-before-Upside", "", "沒有可用的path-conversion診斷。"]
+        for row in unavailable:
+            lines.append(
+                f"- `{row.get('arm_id') or '-'}` {row.get('name') or '-'}："
+                f"{row.get('status') or 'UNAVAILABLE'} | {row.get('reason') or '未提供原因'}"
+            )
+        lines.append("")
+        return "\n".join(lines)
     thresholds = [
         float(value)
         for value in dict(diagnostics.get("upside_realization_contract") or {}).get(
@@ -1863,10 +2176,17 @@ def render_upside_realization_markdown(diagnostics: dict[str, Any]) -> str:
             _fmt(row.get("realized_mean_r"), digits=2, unit="R"),
         ])
         lines.append("| " + " | ".join(_markdown_escape(value) for value in values) + " |")
+    if unavailable:
+        lines.extend(["", "未產生的 arm："])
+        for row in unavailable:
+            lines.append(
+                f"- `{row.get('arm_id') or '-'}` {row.get('name') or '-'}："
+                f"{row.get('status') or 'UNAVAILABLE'} | {row.get('reason') or '未提供原因'}"
+            )
     lines.extend([
         "",
         "> `停損早於/同日最終高點`：completed trade 實際以停損出場，且 canonical full-horizon pure-MFE 的最終高點日期在停損日之後或同日；同日依保守盤中順序視為尚未證明可先實現高點。",
-        "> 此指標不等同「第一次到達 +kR 發生在停損之後」；目前 canonical target 保存的是最終 MFE peak timing，而非每個 +kR first-passage timing。",
+        "> 上表仍保留既有 final-peak attribution；精確的「第一次到 +kR 前是否先 risk／stop」請以下方 First-Passage Realization 為準。",
         "",
     ])
     return "\n".join(lines)
@@ -1910,6 +2230,7 @@ def render_strategy_diagnostics_markdown(diagnostics: dict[str, Any]) -> str:
         render_strategy_r_analysis_table(diagnostics, target="markdown").rstrip(),
         "",
         render_upside_realization_markdown(diagnostics).rstrip(),
+        render_first_passage_markdown(diagnostics).rstrip(),
     ]
     joint = render_upside_realization_joint_markdown(diagnostics).rstrip()
     if joint:

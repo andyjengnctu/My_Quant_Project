@@ -28,7 +28,9 @@ _ROUND_TRIP_COLUMNS = [
     "signal_date",
     "candidate_date",
     "entry_price",
+    "initial_stop_price",
     "exit_price",
+    "exit_stop_trigger_price",
     "pnl",
     "r_multiple",
     "holding_calendar_days",
@@ -134,6 +136,7 @@ def reconstruct_round_trips(trade_history: pd.DataFrame, *, scenario: str) -> pd
                 "signal_date": _date_text(row.get("買訊日")),
                 "candidate_date": _date_text(row.get("候選日")),
                 "entry_price": _finite_float(row.get("成交價"), default=0.0),
+                "initial_stop_price": _finite_float(row.get("停損價"), default=float("nan")),
             }
             continue
 
@@ -153,6 +156,9 @@ def reconstruct_round_trips(trade_history: pd.DataFrame, *, scenario: str) -> pd
             **entry,
             "exit_date": exit_date,
             "exit_price": _finite_float(row.get("成交價"), default=0.0),
+            "exit_stop_trigger_price": _finite_float(
+                row.get("停損價"), default=float("nan")
+            ),
             "pnl": _finite_float(
                 row.get("該筆總損益") if "該筆總損益" in frame.columns else row.get("單筆損益"),
                 default=0.0,
@@ -197,7 +203,13 @@ def _normalize_closed_trade_rows(rows: list[dict[str, Any]], *, scenario: str) -
             "signal_date": _date_text((row or {}).get("signal_date")),
             "candidate_date": _date_text((row or {}).get("candidate_date")),
             "entry_price": _finite_float((row or {}).get("entry_price"), default=0.0),
+            "initial_stop_price": _finite_float(
+                (row or {}).get("initial_stop_price"), default=float("nan")
+            ),
             "exit_price": _finite_float((row or {}).get("exit_price"), default=0.0),
+            "exit_stop_trigger_price": _finite_float(
+                (row or {}).get("exit_stop_trigger_price"), default=float("nan")
+            ),
             "pnl": _finite_float((row or {}).get("pnl"), default=0.0),
             "r_multiple": _finite_float((row or {}).get("r_mult"), default=0.0),
             "holding_calendar_days": int((pd.Timestamp(exit_date) - pd.Timestamp(entry_date)).days),
@@ -587,6 +599,19 @@ def render_trade_attribution_markdown(result: dict[str, Any], *, metadata: dict[
 
 
 
+def upside_first_passage_columns(threshold_r: float) -> tuple[str, str]:
+    """Return stable sidecar column names for one target-defined upside threshold."""
+
+    value = float(threshold_r)
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError("first-passage threshold必須是有限正數")
+    token = f"{value:g}".replace("-", "m").replace(".", "p")
+    return (
+        f"full_horizon_first_upside_{token}r_bar",
+        f"full_horizon_first_upside_{token}r_date",
+    )
+
+
 def build_upside_realization_attribution(
     *,
     trade_history: pd.DataFrame,
@@ -613,17 +638,28 @@ def build_upside_realization_attribution(
 
     trades = reconstruct_round_trips(pd.DataFrame(trade_history), scenario=scenario)
     selected = pd.DataFrame(selected_path_diagnostics).copy()
+    first_passage_columns = {
+        column
+        for threshold in thresholds
+        for column in upside_first_passage_columns(threshold)
+    }
     required = {
         "ticker", "trade_date", "signal_date", "path_target_available",
         "full_horizon_mfe_r", "full_horizon_adverse_to_peak_r",
         "full_horizon_opportunity_date", "full_horizon_first_risk_breach_date",
         "full_horizon_opportunity_bar", "full_horizon_first_risk_breach_bar",
+        *first_passage_columns,
     }
     missing = sorted(required - set(selected.columns))
     if missing:
         raise ValueError(f"upside realization selected path diagnostics缺欄位: {missing}")
 
-    for column in ("trade_date", "signal_date", "full_horizon_opportunity_date", "full_horizon_first_risk_breach_date"):
+    date_columns = [
+        "trade_date", "signal_date", "full_horizon_opportunity_date",
+        "full_horizon_first_risk_breach_date",
+        *(upside_first_passage_columns(threshold)[1] for threshold in thresholds),
+    ]
+    for column in date_columns:
         if column in selected.columns:
             selected[column] = pd.to_datetime(selected[column], errors="coerce")
     selected["ticker"] = selected["ticker"].fillna("").astype(str).str.strip()
@@ -644,6 +680,11 @@ def build_upside_realization_attribution(
         "full_horizon_first_risk_breach_date",
         "full_horizon_opportunity_bar",
         "full_horizon_first_risk_breach_bar",
+        *(
+            column
+            for threshold in thresholds
+            for column in upside_first_passage_columns(threshold)
+        ),
     ]
     path_columns = [column for column in path_columns if column is not None]
     selected = selected[path_columns]
@@ -673,6 +714,26 @@ def build_upside_realization_attribution(
         path_mask = available & mfe.map(math.isfinite) & adverse.map(math.isfinite) & opportunity_date.notna()
         detail["path_target_available"] = path_mask
         detail["actual_stop_out"] = detail.get("exit_type", "").fillna("").astype(str).str.contains("停損", regex=False)
+        initial_stop_price = pd.to_numeric(detail.get("initial_stop_price"), errors="coerce")
+        exit_stop_trigger_price = pd.to_numeric(
+            detail.get("exit_stop_trigger_price"), errors="coerce"
+        )
+        stop_geometry_available = (
+            detail["actual_stop_out"]
+            & initial_stop_price.map(math.isfinite)
+            & exit_stop_trigger_price.map(math.isfinite)
+            & (initial_stop_price > 0.0)
+            & (exit_stop_trigger_price > 0.0)
+        )
+        stop_price_tolerance = 1e-9
+        detail["actual_initial_stop_out"] = (
+            stop_geometry_available
+            & (exit_stop_trigger_price <= initial_stop_price + stop_price_tolerance)
+        )
+        detail["actual_raised_stop_out"] = (
+            stop_geometry_available
+            & (exit_stop_trigger_price > initial_stop_price + stop_price_tolerance)
+        )
         detail["later_peak_after_stop"] = (
             detail["actual_stop_out"]
             & path_mask
@@ -702,12 +763,70 @@ def build_upside_realization_attribution(
         "full_horizon_mfe_mean_r": (None if not len(covered) else float(pd.to_numeric(covered["full_horizon_mfe_r"], errors="coerce").mean())),
         "full_horizon_adverse_to_peak_mean_r": (None if not len(covered) else float(pd.to_numeric(covered["full_horizon_adverse_to_peak_r"], errors="coerce").mean())),
         "realized_mean_r": (None if not len(covered) else float(pd.to_numeric(covered["realized_r"], errors="coerce").mean())),
+        "actual_initial_stop_out_count": int(covered.get("actual_initial_stop_out", pd.Series(dtype=bool)).sum()) if len(covered) else 0,
+        "actual_raised_stop_out_count": int(covered.get("actual_raised_stop_out", pd.Series(dtype=bool)).sum()) if len(covered) else 0,
         "thresholds": {},
     }
     for threshold in thresholds:
         key = f"{threshold:g}R"
-        eligible = covered.loc[pd.to_numeric(covered.get("full_horizon_mfe_r"), errors="coerce") >= threshold].copy()
-        stop_before = eligible.get("later_peak_after_stop", pd.Series(False, index=eligible.index)).fillna(False).astype(bool)
+        eligible = covered.loc[
+            pd.to_numeric(covered.get("full_horizon_mfe_r"), errors="coerce") >= threshold
+        ].copy()
+        stop_before = eligible.get(
+            "later_peak_after_stop", pd.Series(False, index=eligible.index)
+        ).fillna(False).astype(bool)
+
+        first_bar_column, first_date_column = upside_first_passage_columns(threshold)
+        all_first_bar = pd.to_numeric(covered.get(first_bar_column), errors="coerce")
+        all_first_date = pd.to_datetime(covered.get(first_date_column), errors="coerce")
+        first_passage_mask = all_first_bar.ge(1) & all_first_date.notna()
+        passage_eligible = covered.loc[first_passage_mask].copy()
+        first_bar = all_first_bar.loc[first_passage_mask]
+        first_date = all_first_date.loc[first_passage_mask]
+        passage_mfe = pd.to_numeric(
+            passage_eligible.get("full_horizon_mfe_r"), errors="coerce"
+        )
+        if bool((passage_mfe < threshold - 1e-5).any()):
+            bad = passage_eligible.loc[passage_mfe < threshold - 1e-5].iloc[0]
+            raise ValueError(
+                "first-passage hit但full-horizon MFE明顯未達門檻: "
+                f"ticker={bad.get('ticker')}, score_event_date={bad.get('score_event_date')}, "
+                f"threshold={threshold:g}R"
+            )
+        breach_bar = pd.to_numeric(
+            passage_eligible.get("full_horizon_first_risk_breach_bar"), errors="coerce"
+        )
+        if bool(breach_bar.isna().any()):
+            bad = passage_eligible.loc[breach_bar.isna()].iloc[0]
+            raise ValueError(
+                "first-passage row缺少canonical risk-breach bar: "
+                f"ticker={bad.get('ticker')}, score_event_date={bad.get('score_event_date')}"
+            )
+        canonical_risk_before_upside = (
+            (breach_bar >= 1) & (breach_bar <= first_bar)
+        )
+        canonical_upside_before_risk = ~canonical_risk_before_upside
+        exit_date = pd.to_datetime(passage_eligible.get("exit_date"), errors="coerce")
+        actual_stop = passage_eligible.get(
+            "actual_stop_out", pd.Series(False, index=passage_eligible.index)
+        ).fillna(False).astype(bool)
+        actual_initial_stop = passage_eligible.get(
+            "actual_initial_stop_out", pd.Series(False, index=passage_eligible.index)
+        ).fillna(False).astype(bool)
+        actual_raised_stop = passage_eligible.get(
+            "actual_raised_stop_out", pd.Series(False, index=passage_eligible.index)
+        ).fillna(False).astype(bool)
+        actual_stop_before_upside = actual_stop & (exit_date <= first_date)
+        actual_initial_stop_before_upside = actual_initial_stop & (exit_date <= first_date)
+        actual_raised_stop_before_upside = actual_raised_stop & (exit_date <= first_date)
+
+        detail.loc[passage_eligible.index, f"canonical_risk_before_first_{key}"] = (
+            canonical_risk_before_upside.to_numpy(dtype=bool)
+        )
+        detail.loc[passage_eligible.index, f"actual_stop_before_first_{key}"] = (
+            actual_stop_before_upside.to_numpy(dtype=bool)
+        )
+        passage_count = int(len(passage_eligible))
         summary["thresholds"][key] = {
             "full_horizon_mfe_at_least_count": int(len(eligible)),
             "stop_before_later_peak_count": int(stop_before.sum()),
@@ -717,6 +836,27 @@ def build_upside_realization_attribution(
             ),
             "stop_before_later_peak_mfe_mean_r": (
                 None if not int(stop_before.sum()) else float(pd.to_numeric(eligible.loc[stop_before, "full_horizon_mfe_r"], errors="coerce").mean())
+            ),
+            "first_upside_reached_count": passage_count,
+            "canonical_risk_before_first_upside_count": int(canonical_risk_before_upside.sum()),
+            "canonical_risk_before_first_upside_rate": (
+                None if not passage_count else float(canonical_risk_before_upside.mean())
+            ),
+            "canonical_upside_before_risk_count": int(canonical_upside_before_risk.sum()),
+            "canonical_upside_before_risk_rate": (
+                None if not passage_count else float(canonical_upside_before_risk.mean())
+            ),
+            "actual_stop_before_first_upside_count": int(actual_stop_before_upside.sum()),
+            "actual_stop_before_first_upside_rate": (
+                None if not passage_count else float(actual_stop_before_upside.mean())
+            ),
+            "actual_initial_stop_before_first_upside_count": int(actual_initial_stop_before_upside.sum()),
+            "actual_initial_stop_before_first_upside_rate": (
+                None if not passage_count else float(actual_initial_stop_before_upside.mean())
+            ),
+            "actual_raised_stop_before_first_upside_count": int(actual_raised_stop_before_upside.sum()),
+            "actual_raised_stop_before_first_upside_rate": (
+                None if not passage_count else float(actual_raised_stop_before_upside.mean())
             ),
         }
 
