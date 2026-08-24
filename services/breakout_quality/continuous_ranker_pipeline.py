@@ -263,6 +263,23 @@ def predict_conditional_mfe_safety_scores(
     )
 
 
+def predict_safety_conditional_mfe_scores(
+    torch,
+    model,
+    bundle: ContinuousRankerDataBundle,
+    group_ids: np.ndarray,
+    *,
+    batch_size: int,
+    plan,
+) -> dict[str, np.ndarray]:
+    """Return Raw Safety + final Conditional-MFE from one shared-encoder pass."""
+
+    return ranker_api.predict_safety_conditional_mfe_scores(
+        torch, model, bundle.feature_bank, bundle.group_context,
+        np.asarray(group_ids, dtype=np.int64), batch_size=int(batch_size), plan=plan,
+    )
+
+
 def build_checkpoint_payload(
     model,
     bundle: ContinuousRankerDataBundle,
@@ -305,6 +322,7 @@ __all__ = [
     "fit_final",
     "load_continuous_ranker_data",
     "predict_conditional_mfe_safety_scores",
+    "predict_safety_conditional_mfe_scores",
     "predict_scores",
     "primary_audit_metric_scope",
     "resolve_ranker_execution_plan",

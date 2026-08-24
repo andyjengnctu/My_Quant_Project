@@ -21,6 +21,8 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
@@ -765,6 +767,8 @@ def load_continuous_ranker_oos_contract(
     if profile.training_objective in {
         TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     }:
         expected_pairwise = dict(
@@ -802,6 +806,16 @@ def load_continuous_ranker_oos_contract(
                 raise ValueError(
                     "Conditional MFE-safety report training contract不一致"
                 )
+        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING:
+            expected_contract = dict(expected_training_semantics.get("conditional_mfe_single_head_contract") or {})
+            report_contract = dict(report_training.get("conditional_mfe_single_head_contract") or {})
+            if report_contract != expected_contract:
+                raise ValueError("Conditional-MFE single-head report training contract不一致")
+        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING:
+            expected_contract = dict(expected_training_semantics.get("safety_conditional_mfe_duo_head_contract") or {})
+            report_contract = dict(report_training.get("safety_conditional_mfe_duo_head_contract") or {})
+            if report_contract != expected_contract:
+                raise ValueError("Safety→Conditional-MFE duo-head report training contract不一致")
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING:
         expected_listwise = dict(
             expected_training_semantics.get("listwise_contract") or {}

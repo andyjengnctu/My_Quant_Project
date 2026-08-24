@@ -14,6 +14,8 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
@@ -64,6 +66,34 @@ CONDITIONAL_MFE_SAFETY_TRAINING_CONTRACT = {
 }
 
 
+CONDITIONAL_MFE_SINGLE_HEAD_TRAINING_CONTRACT = {
+    "sample_scope": "daily_eligible_stock_days",
+    "target": "same_date_percentile_of_pure_mfe_residual_after_same_date_OLS_on_true_low_adverse_safety_percentile",
+    "target_conditioning": "supervision_only_true_safety_percentile_no_future_feature",
+    "architecture": "single_head_inception_time",
+    "head_losses": "full_list_delta_ndcg_pairwise_logistic",
+    "epoch_selection": "conditional_mfe_mean_daily_spearman",
+    "runtime_score": "conditional_mfe_pass_probability",
+    "batching": "whole_date_pack_no_date_split",
+}
+
+SAFETY_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT = {
+    "sample_scope": "daily_eligible_stock_days",
+    "safety_target": "same_date_low_adverse_safety_percentile",
+    "conditional_mfe_target": "same_date_percentile_of_pure_mfe_residual_after_same_date_OLS_on_true_low_adverse_safety_percentile",
+    "target_conditioning": "supervision_only_true_safety_percentile_no_future_feature",
+    "architecture": "shared_encoder_raw_safety_head_plus_safety_conditioned_mfe_head",
+    "conditional_context": "stop_gradient_raw_safety_probability",
+    "safety_head_gradient_from_conditional_loss": False,
+    "shared_encoder_gradient_from_both_heads": True,
+    "head_losses": "full_list_delta_ndcg_pairwise_logistic_each_head",
+    "head_weighting": "fixed_equal_mean_no_lambda_sweep",
+    "epoch_selection": "conditional_mfe_mean_daily_spearman",
+    "runtime_score": "conditional_mfe_pass_probability_only",
+    "batching": "whole_date_pack_no_date_split",
+}
+
+
 RAW_R_REGRESSION_TRAINING_CONTRACT = {
     "sample_scope": "daily_eligible_stock_days",
     "target": "daily_opportunity_no_time_r_v1_raw_r",
@@ -87,6 +117,38 @@ LISTWISE_TRAINING_CONTRACT = {
 def training_semantics(profile) -> dict[str, Any]:
     """Return canonical artifact semantics for one continuous-ranker profile."""
 
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING:
+        recipe = get_continuous_ranker_execution_recipe(profile.name)
+        pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
+        pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
+        contract = dict(CONDITIONAL_MFE_SINGLE_HEAD_TRAINING_CONTRACT)
+        contract["pair_weighting"] = str(recipe.pairwise_reduction)
+        return {
+            "batching": contract["batching"],
+            "pairwise_contract": pairwise_contract,
+            "listwise_contract": None,
+            "raw_r_regression_contract": None,
+            "dual_component_r_regression_contract": None,
+            "conditional_mfe_safety_contract": None,
+            "conditional_mfe_single_head_contract": contract,
+            "safety_conditional_mfe_duo_head_contract": None,
+        }
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING:
+        recipe = get_continuous_ranker_execution_recipe(profile.name)
+        pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
+        pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
+        contract = dict(SAFETY_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT)
+        contract["pair_weighting"] = str(recipe.pairwise_reduction)
+        return {
+            "batching": contract["batching"],
+            "pairwise_contract": pairwise_contract,
+            "listwise_contract": None,
+            "raw_r_regression_contract": None,
+            "dual_component_r_regression_contract": None,
+            "conditional_mfe_safety_contract": None,
+            "conditional_mfe_single_head_contract": None,
+            "safety_conditional_mfe_duo_head_contract": contract,
+        }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
         recipe = get_continuous_ranker_execution_recipe(profile.name)
         pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
@@ -100,6 +162,8 @@ def training_semantics(profile) -> dict[str, Any]:
             "raw_r_regression_contract": None,
             "dual_component_r_regression_contract": None,
             "conditional_mfe_safety_contract": conditional_contract,
+            "conditional_mfe_single_head_contract": None,
+            "safety_conditional_mfe_duo_head_contract": None,
         }
     if profile.training_objective in {
         TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
@@ -126,6 +190,8 @@ def training_semantics(profile) -> dict[str, Any]:
             "raw_r_regression_contract": None,
             "dual_component_r_regression_contract": None,
             "conditional_mfe_safety_contract": None,
+            "conditional_mfe_single_head_contract": None,
+            "safety_conditional_mfe_duo_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING:
         return {
@@ -135,6 +201,8 @@ def training_semantics(profile) -> dict[str, Any]:
             "raw_r_regression_contract": None,
             "dual_component_r_regression_contract": None,
             "conditional_mfe_safety_contract": None,
+            "conditional_mfe_single_head_contract": None,
+            "safety_conditional_mfe_duo_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
         contract = dict(DUAL_COMPONENT_R_REGRESSION_TRAINING_CONTRACT)
@@ -145,6 +213,8 @@ def training_semantics(profile) -> dict[str, Any]:
             "raw_r_regression_contract": None,
             "dual_component_r_regression_contract": contract,
             "conditional_mfe_safety_contract": None,
+            "conditional_mfe_single_head_contract": None,
+            "safety_conditional_mfe_duo_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
         contract = dict(RAW_R_REGRESSION_TRAINING_CONTRACT)
@@ -161,6 +231,8 @@ def training_semantics(profile) -> dict[str, Any]:
             "raw_r_regression_contract": contract,
             "dual_component_r_regression_contract": None,
             "conditional_mfe_safety_contract": None,
+            "conditional_mfe_single_head_contract": None,
+            "safety_conditional_mfe_duo_head_contract": None,
         }
     return {
         "batching": "shuffled_unique_group_batches",

@@ -227,7 +227,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         set(strategy_config.STRATEGY_PARAM_SOURCES)
         == {"full_oos", "min_oos", "full_rolling", "min_rolling"}
         and set(strategy_config.STRATEGY_DL_SOURCES)
-        == {"CONT13E_ROLL", "CONT13K_ROLL", "CONT13M_ROLL", "CONT13P_ROLL"}
+        == {"CONT13E_ROLL", "CONT13K_ROLL", "CONT13M_ROLL", "CONT13P_ROLL", "CONT13Q_ROLL", "CONT13R_ROLL"}
         and set(strategy_config.STRATEGY_COMPARE_ARMS) == set(expected_arm_ids)
         and set(strategy_config.STRATEGY_COMPARE_CONTRASTS) == set(expected_contrast_ids)
         and {"full_roos", "min_roos", "selection_min_roos", "selection_full_roos"}

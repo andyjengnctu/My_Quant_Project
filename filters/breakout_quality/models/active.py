@@ -15,6 +15,7 @@ from filters.breakout_quality.models.spec import (
     INCEPTION_TIME_V1,
     INCEPTION_TIME_RISK_CONTEXT_V1,
     INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1,
+    INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
     get_model_spec,
     model_spec_from_manifest,
@@ -69,6 +70,7 @@ def build_active_model(
         INCEPTION_TIME_V1,
         INCEPTION_TIME_RISK_CONTEXT_V1,
         INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1,
+    INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1,
     }:
         return build_inception_time(
             nn,

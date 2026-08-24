@@ -8,6 +8,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_conditional_mfe_safety = (
         str(spec.architecture) == "inception_time_conditional_mfe_safety_v1"
     )
+    use_safety_conditional_mfe = (
+        str(spec.architecture) == "inception_time_safety_conditional_mfe_v1"
+    )
     if bool(spec.use_dataset_context) != bool(use_risk_context):
         raise ValueError("InceptionTime dataset context contract與architecture不一致")
     if use_risk_context and int(context_count) != 5:
@@ -133,6 +136,16 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 if use_conditional_mfe_safety
                 else None
             )
+            self.raw_safety_classifier = (
+                nn.Linear(module_output_channels, 2)
+                if use_safety_conditional_mfe
+                else None
+            )
+            self.conditional_mfe_classifier = (
+                nn.Linear(module_output_channels + 1, 2)
+                if use_safety_conditional_mfe
+                else None
+            )
 
         def encode(self, x):
             z = x.transpose(1, 2)
@@ -168,23 +181,46 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             )
             return primary_logits, conditional_logits
 
+        def forward_safety_conditional_mfe_heads(self, x, context):
+            if self.raw_safety_classifier is None or self.conditional_mfe_classifier is None:
+                raise ValueError("目前architecture沒有Safety→Conditional-MFE heads")
+            _primary_input, shared_encoded = self._encoded_for_heads(x, context)
+            safety_logits = self.raw_safety_classifier(shared_encoded)
+            safety_probability = torch.softmax(safety_logits.float(), dim=1)[:, 1]
+            safety_context = safety_probability.detach().to(shared_encoded.dtype).unsqueeze(1)
+            conditional_mfe_logits = self.conditional_mfe_classifier(
+                torch.cat([shared_encoded, safety_context], dim=1)
+            )
+            return safety_logits, conditional_mfe_logits
+
         def forward_output_head(self, x, context, output_head: str):
             head = str(output_head).strip().lower()
             if head in {"primary", "mfe", "primary_mfe"}:
                 if self.conditional_safety_classifier is not None:
                     return self.forward_conditional_heads(x, context)[0]
+                if self.conditional_mfe_classifier is not None:
+                    return self.forward_safety_conditional_mfe_heads(x, context)[1]
                 primary_input, _shared = self._encoded_for_heads(x, context)
                 return self.classifier(primary_input)
             if head in {"conditional_safety", "safety"}:
                 return self.forward_conditional_heads(x, context)[1]
             if head in {"conditional_both", "both"}:
+                if self.conditional_mfe_classifier is not None:
+                    safety_logits, conditional_mfe_logits = self.forward_safety_conditional_mfe_heads(x, context)
+                    return torch.cat([safety_logits, conditional_mfe_logits], dim=1)
                 primary_logits, conditional_logits = self.forward_conditional_heads(x, context)
                 return torch.cat([primary_logits, conditional_logits], dim=1)
+            if head in {"raw_safety", "safety_condition"}:
+                return self.forward_safety_conditional_mfe_heads(x, context)[0]
+            if head in {"conditional_mfe", "final"}:
+                return self.forward_safety_conditional_mfe_heads(x, context)[1]
             raise ValueError(f"未知InceptionTime output head: {output_head!r}")
 
         def forward(self, x, context):
             if self.conditional_safety_classifier is not None:
                 return self.forward_conditional_heads(x, context)[0]
+            if self.conditional_mfe_classifier is not None:
+                return self.forward_safety_conditional_mfe_heads(x, context)[1]
             primary_input, _shared = self._encoded_for_heads(x, context)
             return self.classifier(primary_input)
 

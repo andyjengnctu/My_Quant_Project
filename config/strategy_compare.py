@@ -152,17 +152,21 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13K_SCORE_CONSTRAINED = "Min MR-13K Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_SAFETY_CONSTRAINED = "Min MR-13K + MR-13M Safety"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_RESIDUAL_SAFETY_CONSTRAINED = "Min MR-13K + MR-13M Residual Safety"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13P_CONDITIONAL_SAFETY_CONSTRAINED = "Min MR-13P Conditional Safety"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13Q_CONDITIONAL_MFE_SINGLE = "Min MR-13Q Conditional-MFE Single"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_DUO = "Min MR-13R Conditional-MFE Duo"
 
 # Current Compare Suite是「比較誰／比較哪些差」的唯一真理來源。
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
 STRATEGY_COMPARE_SUITES = {
     "extending_current": {
-        "arm_ids": ("C61", "C62", "C58", "C63", "C59", "C60", "C64"),
+        "arm_ids": ("C61", "C62", "C58", "C63", "C59", "C60", "C64", "C65", "C66"),
         "contrast_ids": (
             "C62-C61", "C63-C58", "C62-C63",
             "C61-C58", "C59-C58", "C59-C61",
             "C60-C58", "C60-C61", "C60-C59",
             "C64-C58", "C64-C59", "C64-C60",
+            "C65-C58", "C65-C59", "C65-C64",
+            "C66-C58", "C66-C59", "C66-C64", "C66-C65",
         ),
         "display_name_bases": {
             "C61": "Full Base-Finalist-Best",
@@ -172,6 +176,8 @@ STRATEGY_COMPARE_SUITES = {
             "C59": "Min MR-13E Constrained",
             "C60": "Min MR-13K + MR-13M Residual Safety",
             "C64": "Min MR-13P Conditional Safety",
+            "C65": "Min MR-13Q Conditional-MFE Single",
+            "C66": "Min MR-13R Conditional-MFE Duo",
         },
     },
 }
@@ -226,6 +232,8 @@ STRATEGY_COMPARE_PROFILES = {
             "C59": "min_oos",
             "C60": "min_oos",
             "C64": "min_oos",
+            "C65": "min_oos",
+            "C66": "min_oos",
         },
     },
     "extending_window_rolling": {
@@ -526,6 +534,32 @@ STRATEGY_DL_SOURCES = {
             "options": {"resume": True, "allow_stale_source": False},
         },
     },
+    "CONT13Q_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_conditional_mfe_single_head_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": "MR-13Q reverse-conditional MFE single-head PIT score；final score直接代表J=U-E(U|S)。",
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
+    "CONT13R_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_safety_conditional_mfe_v1",
+        "experiment_profile": "daily_universal_safety_conditional_mfe_duo_head_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": "MR-13R Safety→Conditional-MFE duo-head PIT score；strategy只使用final Conditional-MFE head。",
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
 
 
 }
@@ -650,6 +684,44 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C65": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13Q_CONDITIONAL_MFE_SINGLE,
+        "description": (
+            "MR-13Q Single-head reverse-Conditional-MFE conversion arm；與C58共用Min base-finalist-best、"
+            "all-off、K/R0與canonical execution，唯一model change是直接最大化J=U-E(U|S) prediction。"
+        ),
+        "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13Q_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C66": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_DUO,
+        "description": (
+            "MR-13R Duo-head Safety→Conditional-MFE conversion arm；與C65完全相同strategy contract，"
+            "唯一差異是模型內顯式Raw Safety condition head；strategy仍只最大化final Conditional-MFE score。"
+        ),
+        "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13R_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
 }
 
 # =============================================================================
@@ -670,6 +742,13 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C64-C58": {"left": "C64", "right": "C58", "description": "MR-13P conditional conversion相對Min baseline的增量策略效果"},
     "C64-C59": {"left": "C64", "right": "C59", "description": "MR-13P conditional conversion相對目前C59 MR-13E conversion reference"},
     "C64-C60": {"left": "C64", "right": "C60", "description": "model-level conditional safety相對C60 runtime post-hoc residual safety"},
+    "C65-C58": {"left": "C65", "right": "C58", "description": "Single-head Conditional-MFE相對Min baseline的增量策略效果"},
+    "C65-C59": {"left": "C65", "right": "C59", "description": "Single-head Conditional-MFE相對C59 conversion reference"},
+    "C65-C64": {"left": "C65", "right": "C64", "description": "直接maximize Conditional-MFE相對MR-13P safety hard-floor formulation"},
+    "C66-C58": {"left": "C66", "right": "C58", "description": "Duo-head Conditional-MFE相對Min baseline的增量策略效果"},
+    "C66-C59": {"left": "C66", "right": "C59", "description": "Duo-head Conditional-MFE相對C59 conversion reference"},
+    "C66-C64": {"left": "C66", "right": "C64", "description": "Duo-head Conditional-MFE相對MR-13P safety hard-floor formulation"},
+    "C66-C65": {"left": "C66", "right": "C65", "description": "顯式Safety condition head相對Single-head的architecture controlled contrast"},
 }
 
 def _merge_compatibility_catalog(
