@@ -2561,6 +2561,16 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         and '_run_configured_continuous_ranker_model_gates(program_name)' in app_source
         and 'Conditional-MFE Single／Duo Forward Model Gate' not in app_source,
     )
+    daily_source = (
+        project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
+    ).read_text(encoding="utf-8")
+    oos_frame_init = 'oos_frame = bundle.group_table.iloc[forward_score_ids][["ticker", "date", "group_index"]].copy()'
+    check_true(
+        "reverse_conditional_forward_score_columns_are_written_only_after_oos_frame_initialization",
+        oos_frame_init in daily_source
+        and daily_source.index(oos_frame_init) < daily_source.index('oos_frame["conditional_mfe_score"]')
+        and daily_source.index(oos_frame_init) < daily_source.index('oos_frame["raw_safety_score"]'),
+    )
     check(
         "both_reverse_conditional_profiles_use_same_full_list_pairwise_reduction",
         get_continuous_ranker_execution_recipe(single.name).pairwise_reduction,

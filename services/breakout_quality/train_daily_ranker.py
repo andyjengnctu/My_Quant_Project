@@ -622,11 +622,6 @@ def run(args) -> int:
     candidate_ids = select_breakout_candidate_group_ids(
         bundle, split.oos_ids, allow_stale_source=bool(args.allow_stale_source)
     )
-    if reverse_forward_heads is not None:
-        oos_frame["raw_safety_score"] = reverse_forward_heads["raw_safety"]
-        oos_frame["conditional_mfe_score"] = reverse_forward_heads["conditional_mfe"]
-    elif conditional_mfe_single:
-        oos_frame["conditional_mfe_score"] = forward_scores
     if forward_components is not None:
         forward_position_by_group = {
             int(group_id): pos for pos, group_id in enumerate(forward_score_ids)
@@ -893,6 +888,11 @@ def run(args) -> int:
             forward_score_ids[evaluable_forward_mask]
         ]
     oos_frame["model_score"] = forward_scores
+    if reverse_forward_heads is not None:
+        oos_frame["raw_safety_score"] = reverse_forward_heads["raw_safety"]
+        oos_frame["conditional_mfe_score"] = reverse_forward_heads["conditional_mfe"]
+    elif conditional_mfe_single:
+        oos_frame["conditional_mfe_score"] = forward_scores
     if conditional_forward_heads is not None:
         oos_frame["primary_mfe_score"] = conditional_forward_heads["primary_mfe"]
         oos_frame["conditional_safety_score"] = conditional_forward_heads["conditional_safety"]
