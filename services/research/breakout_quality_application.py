@@ -29,6 +29,8 @@ from config.breakout_quality import (
     get_breakout_quality_continuous_ranker_comparison_settings,
     get_breakout_quality_experiment_profile,
     get_continuous_ranker_research_spec,
+    BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL,
+    BREAKOUT_QUALITY_CONDITIONAL_MFE_AB_MODEL_GATE_PROFILES,
 )
 from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
@@ -392,6 +394,31 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
                 ),
             ])
 
+    reverse_eval = dict(payload.get("reverse_conditional_mfe_evaluation") or {})
+    reverse_rows: list[tuple[str, ...]] = []
+    if reverse_eval:
+        for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
+            scope = dict(reverse_eval.get(scope_key) or {})
+            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Conditional MFE", "conditional_mfe")):
+                row = dict(scope.get(head_key) or {})
+                if not row:
+                    continue
+                reverse_rows.append((
+                    scope_label, head_label,
+                    _fmt_simple_metric(row.get("mean_daily_spearman")),
+                    _fmt_simple_metric(row.get("global_spearman_vs_raw_target")),
+                    _fmt_simple_metric(row.get("pairwise_concordance"), percent=True),
+                ))
+        if reverse_rows:
+            lines.extend([
+                render_section("Reverse-Conditional MFE Model Gate"),
+                render_table(
+                    ("Split", "Head", "Daily rho", "Global rho", "Pair"),
+                    reverse_rows,
+                    alignments=("left", "left", "right", "right", "right"),
+                ),
+            ])
+
     sample = dict((metrics.get("oos") or {}).get("top_k_quality") or {})
     if sample:
         top_k = int(sample.get("top_k", 0) or 0)
@@ -494,6 +521,31 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
                 "|---|---|---:|---:|---:|",
             ])
             for scope_label, head_label, row in conditional_rows:
+                lines.append(
+                    f"| {scope_label} | {head_label} "
+                    f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
+                    f"| {_fmt_simple_metric(row.get('global_spearman_vs_raw_target'))} "
+                    f"| {_fmt_simple_metric(row.get('pairwise_concordance'), percent=True)} |"
+                )
+
+    reverse_eval = dict(payload.get("reverse_conditional_mfe_evaluation") or {})
+    reverse_rows: list[tuple[str, str, dict]] = []
+    if reverse_eval:
+        for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
+            scope = dict(reverse_eval.get(scope_key) or {})
+            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Conditional MFE", "conditional_mfe")):
+                row = dict(scope.get(head_key) or {})
+                if row:
+                    reverse_rows.append((scope_label, head_label, row))
+        if reverse_rows:
+            lines.extend([
+                "",
+                "## Reverse-Conditional MFE Model Gate",
+                "",
+                "| Split | Head | Daily rho | Global rho | Pair |",
+                "|---|---|---:|---:|---:|",
+            ])
+            for scope_label, head_label, row in reverse_rows:
                 lines.append(
                     f"| {scope_label} | {head_label} "
                     f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
@@ -3137,6 +3189,48 @@ def _interactive_rolling_timing_mode(program_name: str, settings) -> int:
         except KeyboardInterrupt:
             print("\nTiming操作已中止，返回Timing Mode選單。")
 
+def _run_configured_continuous_ranker_model_gates(program_name: str) -> int:
+    configured = tuple(BREAKOUT_QUALITY_CONDITIONAL_MFE_AB_MODEL_GATE_PROFILES)
+    if len(configured) != 2:
+        raise ValueError("設定中的 Continuous Ranker Model Gate目前必須剛好有兩個profile")
+    rows = []
+    for model_id, profile_name in configured:
+        settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile_name))
+        rows.append((str(model_id), settings))
+    print("\n" + render_title(BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL))
+    print(render_table(
+        ("Model", "Profile", "Architecture", "Seed"),
+        [(model_id, settings.experiment_profile, settings.model_architecture, str(settings.seed)) for model_id, settings in rows],
+        alignments=("left", "left", "left", "right"),
+    ))
+    if not _prompt_bool("確認依設定順序訓練兩個模型並產生各自Forward-OOS Model Gate報表", True):
+        return 0
+    for model_id, settings in rows:
+        print("\n" + render_title(f"{model_id} Forward Model Gate"))
+        upstream_plan = _collect_continuous_research_input_plan(settings)
+        _render_continuous_research_input_plan(settings, upstream_plan)
+        if upstream_plan.blocked:
+            print(f"{model_id} 存在不可確定補建的前置工件；模型比較流程停止。")
+            return 1
+        code = _prepare_continuous_research_inputs(program_name, settings)
+        if code != 0:
+            return int(code)
+        code = _run_command(
+            "train-continuous-ranker",
+            [
+                "--filter-id", str(settings.filter_id),
+                "--model-architecture", str(settings.model_architecture),
+                "--experiment-profile", str(settings.experiment_profile),
+                "--seed", str(int(settings.seed)),
+            ],
+            program_name=program_name,
+        )
+        if code != 0:
+            return int(code)
+    print("\n設定中的 Continuous Rankers Forward Model Gate完成；請先比較各模型報表，再解讀Strategy Compare conversion。")
+    return 0
+
+
 def _interactive_model_research(program_name: str) -> int:
     settings = get_breakout_quality_model_research_settings()
     if settings.is_binary_classification:
@@ -3163,6 +3257,7 @@ def _interactive_model_research(program_name: str) -> int:
         print(render_menu_item(3, "查看目前Workflow、工件與模型報表"))
         print(render_menu_item(4, "比較目前 Target 與 reference Target"))
         print(render_menu_item(5, "Timing Mode｜Rolling 訓練前後比較"))
+        print(render_menu_item(6, BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL))
         print(render_menu_item(0, "返回"))
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
@@ -3224,6 +3319,8 @@ def _interactive_model_research(program_name: str) -> int:
                 experiment_profile=str(timing.experiment_profile)
             )
             return int(_interactive_rolling_timing_mode(program_name, timing_settings))
+        if choice == "6":
+            return int(_run_configured_continuous_ranker_model_gates(program_name))
         print("無效選項，請重新輸入。")
 
 def run_model_training_menu(program_name: str = "apps/research.py model") -> int:

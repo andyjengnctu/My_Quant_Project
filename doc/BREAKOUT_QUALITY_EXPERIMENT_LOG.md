@@ -9982,3 +9982,28 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - C64 conversion Gate尚無策略結果。下一個最小證據是single-seed OOS：主判斷`+2R前初始Stop↓`，並共同檢查`+1R/+3R`、Full-MFE、Adverse、Realized EV、Return、RoMD；不能明顯改善C59即停止，不先做robustness/stability。
 - Decision：**MR-13P FORWARD_MODEL_GATE_GO / C64 IMPLEMENTED_RESULT_PENDING / SINGLE_SEED_CONVERSION_FIRST / ROBUSTNESS_DEFERRED / NOT_PROMOTED**。
 
+
+### 2026-08-24 — C64 conversion evidence：hard safety floor rejected；Conditional research continues
+
+- 使用者完成C64 single-seed Extending OOS與Rolling。OOS C64：Return=`134.00%`、MDD=`13.20%`、RoMD=`10.15`、EV=`0.78R`；`+1/+2/+3R前初始Stop=15.38%/17.39%/7.69%`、Full-MFE=`0.82R`、Adverse=`0.19R`、Realized EV=`0.84R`。Rolling C64：Return=`180.29%`、MDD=`13.20%`、RoMD=`13.66`、EV=`1.15R`；`+1/+2/+3R前初始Stop=20.69%/16.67%/11.11%`、Full-MFE=`0.78R`、Adverse=`0.20R`、Realized EV=`1.17R`.
+- 主要reference C59：OOS `+2R前初始Stop=8.82%`、Full-MFE=`0.98R`、Adverse=`0.23R`、Realized EV=`1.28R`、Return=`166.49%`、RoMD=`10.45`；Rolling `14.63% / 1.04R / 0.27R / 1.14R / 201.10% / 12.63`。因此C64在兩mode都未改善預先固定的`+2R前初始Stop`主Gate，且Full-MFE分別下降`0.16R/0.26R`；OOS Realized EV/Return亦明顯退化。
+- 同時C64 Adverse在OOS/ Rolling均降至`0.19R/0.20R`，且Rolling RoMD=`13.66`高於C59=`12.63`，顯示MR-13P Conditional Safety不是無訊號；失敗集中在**basket-wide baseline-relative safety hard floor對upside侵入過強**，而非Model Gate反轉。
+- 使用者決策：不切換到Survivable Pure-MFE，**持續改善Conditional路線**。下一個最小controlled experiment先固定MR-13P模型與dual-head PIT scores，只改runtime application為primary-preserving/minimum-primary-regret secondary condition；不得使用score fusion、固定權重、OOS-derived threshold或新的basket-wide safety floor。只有該runtime formulation仍不足時，才開啟下一個單一conditional model formulation實驗；未開始實作前不配置新MR/SR identity。
+- Decision：**C64_HARD_FLOOR_FORMULATION_REJECTED / MR13P_MODEL_SIGNAL_RETAINED / CONDITIONAL_RESEARCH_CONTINUES / ROBUSTNESS_STILL_DEFERRED / NOT_PROMOTED**。
+
+### 2026-08-25 — MR-13Q/R Reverse-Conditional MFE A/B implementation started/completed；C65/C66 conversion arms configured
+
+- 使用者決策：同時嘗試兩種Conditional DL，直接比較**可學性**與**獲利轉換率**，不先二選一。共同economic target固定為`J = U - E(U|S)`：`U`為同日Pure-MFE percentile，`S`為同日Low-Adverse Safety percentile；每個交易日以含intercept OLS只對當日supervision truth估`E(U|S)`，取MFE residual後再同日percentile化。這是label transform，不把future MFE/adverse輸入inference。
+- `MR-13Q / daily_universal_conditional_mfe_single_head_full_list_ndcg_pairwise`：重用`inception_time_v1`，單一final head直接學Conditional-MFE J；只使用一個Full-list Delta-NDCG pairwise ranking loss，epoch selection與runtime score都只看J。
+- `MR-13R / daily_universal_safety_conditional_mfe_duo_head_full_list_ndcg_pairwise`：新增`inception_time_safety_conditional_mfe_v1`。shared encoder先由Raw Safety auxiliary head學S；final Conditional-MFE head接收shared latent與`stop-gradient(raw_safety_probability)`並學與MR-13Q**完全相同**的J。Conditional loss不得更新Safety head；兩head各用Full-list pairwise loss固定等尺度平均，不做loss-weight sweep。epoch selection與strategy score只看final J；Safety head不直接進selector。
+- 兩個model research均授權research-only PIT，供同一次controlled conversion comparison；此授權不等於Model Gate GO或production promotion。正式A/B model menu可一次依序執行MR-13Q/R Seed42 Forward Gate。
+- `C65`：Min `base-finalist-best` + MR-13Q；`C66`：完全相同strategy contract + MR-13R。兩者都保留C58等價K/R0/cash/sizing/orderability/execution與exact constrained solver，直接maximize final Conditional-MFE score；**不設C64 Safety hard floor、不做runtime OLS、不做score fusion**。`C66-C65`因此只歸因於模型內顯式Safety condition head。
+- Gate：Model先比較J Validation/Forward Daily rho、Global rho、Pair；MR-13R另檢Raw Safety learnability。Conversion主Gate固定`+2R前初始Stop↓`，並共同檢查Full-MFE、Adverse、Realized EV、Return、RoMD。若C65/C66都不能明顯改善C59，就停止reverse-conditional formulation，不投入robustness/stability。
+- Decision：**MR-13Q/R IMPLEMENTED_RESULT_PENDING / C65/C66 IMPLEMENTED_RESULT_PENDING / SINGLE_SEED_LEARNABILITY_AND_CONVERSION_FIRST / ROBUSTNESS_DEFERRED / NOT_PROMOTED**。
+
+
+### 2026-08-25 — MR-13Q/R 模型比較選單治理修正
+
+- 修正正式模型訓練選單把current experiment名稱直接寫成`Conditional-MFE Single／Duo Forward Model Gate`的錯誤；依`PROJECT_SETTINGS B13`，選單只顯示穩定工作類型`比較設定中的 Continuous Rankers`，current MR/profile集合仍完全由config驅動，進入後才顯示實際model/profile。
+- 同步補上原實作遺漏的`choice == "6"` dispatch；選入後委派設定中的兩個Forward Model Gate，不改MR-13Q/R target、architecture、loss、authorization、C65/C66或任何scientific semantics。
+- Decision：**MENU_GOVERNANCE_FIX_ONLY / SCIENTIFIC_SEMANTICS_UNCHANGED**。

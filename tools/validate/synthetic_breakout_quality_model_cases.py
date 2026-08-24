@@ -2477,6 +2477,149 @@ def validate_breakout_quality_conditional_mfe_safety_single_model_contract_case(
     summary["training_performed"] = False
     return results, summary
 
+
+def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_params):
+    """Protect MR-13Q/R common reverse-conditional target and only architecture difference."""
+
+    case_id = "BREAKOUT_QUALITY_REVERSE_CONDITIONAL_MFE_AB"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    from config.breakout_quality import (
+        DAILY_UNIVERSAL_CONDITIONAL_MFE_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SAFETY_CONDITIONAL_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_execution_recipe,
+        get_continuous_ranker_research_spec,
+    )
+    from filters.breakout_quality.conditional_mfe_opportunity import (
+        build_conditional_mfe_opportunity_targets,
+    )
+    from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from filters.breakout_quality.models.runtime import require_torch
+
+    single = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_CONDITIONAL_MFE_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    duo = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SAFETY_CONDITIONAL_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    single_spec = get_continuous_ranker_research_spec(single.name)
+    duo_spec = get_continuous_ranker_research_spec(duo.name)
+    check(
+        "reverse_conditional_ab_identity_objective_and_architecture_are_controlled",
+        (
+            "MR-13Q", TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING, "inception_time_v1",
+            "MR-13R", TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+            "inception_time_safety_conditional_mfe_v1",
+        ),
+        (
+            single_spec.model_research_id, single.training_objective, single.model_architecture,
+            duo_spec.model_research_id, duo.training_objective, duo.model_architecture,
+        ),
+    )
+    single_sem = dict(training_semantics(single).get("conditional_mfe_single_head_contract") or {})
+    duo_sem = dict(training_semantics(duo).get("safety_conditional_mfe_duo_head_contract") or {})
+    check(
+        "reverse_conditional_ab_share_same_final_target_and_strategy_score_semantics",
+        (
+            "same_date_percentile_of_pure_mfe_residual_after_same_date_OLS_on_true_low_adverse_safety_percentile",
+            "conditional_mfe_pass_probability",
+            "same_date_percentile_of_pure_mfe_residual_after_same_date_OLS_on_true_low_adverse_safety_percentile",
+            "conditional_mfe_pass_probability_only",
+        ),
+        (
+            single_sem.get("target"), single_sem.get("runtime_score"),
+            duo_sem.get("conditional_mfe_target"), duo_sem.get("runtime_score"),
+        ),
+    )
+    check(
+        "duo_head_uses_raw_safety_only_as_stop_gradient_condition",
+        ("same_date_low_adverse_safety_percentile", "stop_gradient_raw_safety_probability", False),
+        (
+            duo_sem.get("safety_target"), duo_sem.get("conditional_context"),
+            duo_sem.get("safety_head_gradient_from_conditional_loss"),
+        ),
+    )
+    check_true(
+        "both_reverse_conditional_profiles_are_research_authorized_for_pit_conversion",
+        bool(single_spec.selection_pit_authorized and duo_spec.selection_pit_authorized),
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    app_source = (
+        project_root / "services" / "research" / "breakout_quality_application.py"
+    ).read_text(encoding="utf-8")
+    check_true(
+        "model_research_menu_uses_stable_work_type_and_config_driven_ab_dispatch",
+        'render_menu_item(6, BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL)' in app_source
+        and 'if choice == "6":' in app_source
+        and '_run_configured_continuous_ranker_model_gates(program_name)' in app_source
+        and 'Conditional-MFE Single／Duo Forward Model Gate' not in app_source,
+    )
+    check(
+        "both_reverse_conditional_profiles_use_same_full_list_pairwise_reduction",
+        get_continuous_ranker_execution_recipe(single.name).pairwise_reduction,
+        get_continuous_ranker_execution_recipe(duo.name).pairwise_reduction,
+    )
+
+    frame = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-01-02"] * 6 + ["2026-01-05"] * 6),
+            "target_favorable_r": [1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 5, 6],
+            "target_adverse_r": [0.2, 0.8, 0.4, 1.0, 0.5, 0.9, 0.9, 0.2, 0.7, 0.3, 0.8, 0.4],
+        }
+    )
+    targets = build_conditional_mfe_opportunity_targets(frame, np.ones(len(frame), dtype=bool))
+    check("single_head_training_target_is_one_final_j", (12,), targets.single_head_training_target.shape)
+    check("duo_head_training_target_is_raw_safety_plus_same_final_j", (12, 2), targets.duo_head_training_target.shape)
+    check_true(
+        "reverse_conditional_targets_are_finite_unit_interval",
+        bool(np.isfinite(targets.duo_head_training_target).all()
+             and (targets.duo_head_training_target >= 0).all()
+             and (targets.duo_head_training_target <= 1).all()),
+    )
+    check_true(
+        "single_and_duo_final_conditional_mfe_targets_are_identical",
+        bool(np.allclose(targets.single_head_training_target, targets.duo_head_training_target[:, 1], atol=0, rtol=0)),
+    )
+    orthogonal = True
+    for _date, day in frame.groupby("date", sort=True):
+        idx = day.index.to_numpy(dtype=np.int64)
+        s = targets.low_adverse_safety_percentile[idx].astype(np.float64)
+        residual = targets.conditional_mfe_residual[idx].astype(np.float64)
+        orthogonal &= abs(float(np.mean(residual))) < 1e-6
+        orthogonal &= abs(float(np.dot(s - np.mean(s), residual))) < 1e-6
+    check_true("reverse_conditional_residual_removes_same_date_linear_safety_relation", orthogonal)
+
+    torch, _nn = require_torch()
+    torch.manual_seed(11)
+    model = build_active_model(feature_count=10, context_count=0, architecture="inception_time_safety_conditional_mfe_v1")
+    x = torch.randn(4, 300, 10)
+    context = torch.empty(4, 0)
+    safety_logits, conditional_logits = model.forward_safety_conditional_mfe_heads(x, context)
+    check(
+        "duo_head_model_exposes_raw_safety_and_final_conditional_mfe_heads",
+        ((4, 2), (4, 2), (4, 2)),
+        (tuple(safety_logits.shape), tuple(conditional_logits.shape), tuple(model(x, context).shape)),
+    )
+    model.zero_grad(set_to_none=True)
+    conditional_logits.sum().backward()
+    safety_grad = model.raw_safety_classifier.weight.grad
+    shared_grad = next(model.inception_modules[0].parameters()).grad
+    check_true(
+        "conditional_mfe_loss_cannot_rewrite_raw_safety_head_but_updates_shared_encoder",
+        safety_grad is None and shared_grad is not None,
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+
+
 def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_params):
     """Pin the profile-driven continuous-ranker boundary before adding new Daily MR variants."""
 

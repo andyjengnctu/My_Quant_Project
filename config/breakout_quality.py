@@ -56,13 +56,15 @@ from config.execution_policy import (
 # - MR-13N daily-universal full-horizon equal-rank MFE + low-adverse full-list ranker: "daily_universal_full_horizon_equal_rank_mfe_low_adverse_full_list_ndcg_pairwise"
 # - MR-13O daily-universal full-horizon Pareto-dominance pairwise ranker: "daily_universal_full_horizon_pareto_mfe_low_adverse_pairwise"
 # - MR-13P single-model conditional MFE–Safety full-list ranker: "daily_universal_conditional_mfe_safety_full_list_ndcg_pairwise"
+# - MR-13Q reverse-conditional MFE single-head ranker: "daily_universal_conditional_mfe_single_head_full_list_ndcg_pairwise"
+# - MR-13R reverse-conditional MFE duo-head ranker: "daily_universal_safety_conditional_mfe_duo_head_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_conditional_mfe_safety_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_conditional_mfe_single_head_full_list_ndcg_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = RESEARCH_SINGLE_SEED
@@ -307,6 +309,10 @@ BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_REFERENCE_ARM = "C17"
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_SUMMARY_PAIR = ("MR-12B", "MR-12A")
 # Forward-OOS top-prefix diagnostic. Values are descriptive only and never enter training.
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES = (1, 2, 3, 5, 10)
+BREAKOUT_QUALITY_CONDITIONAL_MFE_AB_MODEL_GATE_PROFILES = (
+    ("MR-13Q", "daily_universal_conditional_mfe_single_head_full_list_ndcg_pairwise"),
+    ("MR-13R", "daily_universal_safety_conditional_mfe_duo_head_full_list_ndcg_pairwise"),
+)
 
 # "auto" resolves from the selected experiment profile:
 # - binary classification -> hard-filter / canonical_runtime / original
@@ -369,6 +375,12 @@ DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE = (
 DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_conditional_mfe_safety_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_CONDITIONAL_MFE_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_conditional_mfe_single_head_full_list_ndcg_pairwise"
+)
+DAILY_UNIVERSAL_SAFETY_CONDITIONAL_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_safety_conditional_mfe_duo_head_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 
@@ -414,6 +426,8 @@ TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION = "daily_dual_component_r_r
 TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING = "daily_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING = "daily_pareto_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING = "daily_conditional_mfe_safety_pairwise_ranking"
+TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING = "daily_conditional_mfe_pairwise_ranking"
+TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING = "daily_safety_conditional_mfe_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING = "daily_listwise_ranking"
 CONTINUOUS_RANKER_TRAINING_OBJECTIVES = (
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
@@ -422,6 +436,8 @@ CONTINUOUS_RANKER_TRAINING_OBJECTIVES = (
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
 )
 SUPPORTED_BREAKOUT_QUALITY_TRAINING_OBJECTIVES = (
@@ -546,6 +562,8 @@ class BreakoutQualityExperimentProfile:
                     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING: "pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING: "pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
+                    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING: "pairwise_logistic",
+                    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: "listnet_top_one_cross_entropy",
                 }[self.training_objective]
                 if self.loss_name != expected_loss:
@@ -558,6 +576,8 @@ class BreakoutQualityExperimentProfile:
                     if self.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING
                     else "conditional_safety_mean_daily_spearman"
                     if self.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
+                    else "conditional_mfe_mean_daily_spearman"
+                    if self.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
                     else "mean_daily_spearman"
                 )
             if self.epoch_selection_metric != expected_epoch_metric:
@@ -1047,6 +1067,30 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_conditional_mfe_safety_v1",
     ),
+    DAILY_UNIVERSAL_CONDITIONAL_MFE_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_CONDITIONAL_MFE_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+    ),
+    DAILY_UNIVERSAL_SAFETY_CONDITIONAL_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SAFETY_CONDITIONAL_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_safety_conditional_mfe_v1",
+    ),
     DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_NO_TIME_R_HUBER_PROFILE,
         optimizer_name="adam",
@@ -1182,6 +1226,8 @@ class ContinuousRankerResearchSpec:
             TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
+            TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+            TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
         }:
             if self.pairwise_reduction not in SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS:
                 raise ValueError(
@@ -1196,6 +1242,8 @@ class ContinuousRankerResearchSpec:
                 profile.training_objective in {
                     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
                     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
+                    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+                    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
                 }
                 and self.pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE
             ):
@@ -1549,6 +1597,45 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         metric_scope="all_stock_days_dual_head",
         score_semantic_id="daily_conditional_mfe_safety_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
+    ),
+    DAILY_UNIVERSAL_CONDITIONAL_MFE_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_CONDITIONAL_MFE_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13Q",
+        experiment_name="MR-13Q Daily Universal Reverse-Conditional MFE Single-head Ranker",
+        phase="13Q",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="same_date_percentile_of_pure_mfe_residual_given_true_low_adverse_safety_percentile",
+        objective_description=(
+            "Single-head InceptionTime直接學J=U-E(U|S)：U為同日Pure-MFE percentile、S為同日low-adverse Safety percentile；"
+            "每日日內含intercept OLS後取MFE residual並再percentile化。只使用full-list Delta-NDCG RankNet，"
+            "不建立Safety head、不做scalar MFE/adverse composite、threshold或loss-weight sweep。"
+        ),
+        metric_scope="all_stock_days_reverse_conditional_mfe",
+        score_semantic_id="daily_reverse_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
+    ),
+    DAILY_UNIVERSAL_SAFETY_CONDITIONAL_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SAFETY_CONDITIONAL_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13R",
+        experiment_name="MR-13R Daily Universal Safety-conditioned MFE Duo-head Ranker",
+        phase="13R",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "condition=same_date_low_adverse_safety_percentile; "
+            "final=same_date_percentile_of_pure_mfe_residual_given_true_safety_percentile"
+        ),
+        objective_description=(
+            "單一shared InceptionTime encoder；Raw Safety auxiliary head先學S，Conditional-MFE final head接收shared latent與"
+            "stop-gradient Safety prediction並學同一J=U-E(U|S)。兩head均使用full-list Delta-NDCG RankNet、固定等尺度loss平均；"
+            "epoch selection與strategy score只看Conditional-MFE head，Safety head不直接進selector。"
+        ),
+        metric_scope="all_stock_days_safety_conditioned_mfe_dual_head",
+        score_semantic_id="daily_safety_conditioned_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         selection_pit_authorized=True,
         current_time_validation_authorized=True,
