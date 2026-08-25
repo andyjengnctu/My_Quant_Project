@@ -2,9 +2,11 @@
 
 - bug fix
     - remove |buy list|= k constrain 
+    - epoch performance inconsistat in [1][3]
 
 - trading
     - add a buy list to decide the stop prices using full roos base-fanlist-best
+    - frozen 2026/3/2 data for research purpose, latest for trading
 
 - restreucture
     - models/output cleaner

@@ -46,6 +46,9 @@ STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTI
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL = (
     'resource-aware-continuous-score-constrained-optimal'
 )
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_K_FLEX_R0_CONSTRAINED_OPTIMAL = (
+    'resource-aware-continuous-score-k-flex-r0-constrained-optimal'
+)
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL = (
     'resource-aware-continuous-score-safety-constrained-optimal'
 )
@@ -75,6 +78,7 @@ SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_K_FLEX_R0_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
@@ -970,6 +974,17 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                     raise ValueError(f"arm {key} Score constrained必須preserve_k_r0=True")
                 if options.get("constrained_solver") != "exact_branch_and_bound_v1":
                     raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
+            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_K_FLEX_R0_CONSTRAINED_OPTIMAL:
+                if options.get("count_constraint") != "baseline_k_to_physical_free_slots_v1":
+                    raise ValueError(
+                        f"arm {key} K-Flex count_constraint必須為baseline_k_to_physical_free_slots_v1"
+                    )
+                if options.get("preserve_r0") is not True:
+                    raise ValueError(f"arm {key} K-Flex必須preserve_r0=True")
+                if options.get("constrained_solver") != "exact_branch_and_bound_v1":
+                    raise ValueError(f"arm {key} K-Flex constrained_solver必須為exact_branch_and_bound_v1")
+                if options.get("selection_only") is not True:
+                    raise ValueError(f"arm {key} K-Flex必須selection_only=True")
             if arm.dl_runtime_mode in {
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,

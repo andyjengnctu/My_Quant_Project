@@ -14,6 +14,10 @@ from core.portfolio_entry_selection_common import (
 )
 
 
+class _NoFeasibleConstrainedBasket(RuntimeError):
+    """Internal exact-search signal used only by variable-count wrappers."""
+
+
 def _max_dl_score_order(rows, *, base_rank):
     """Rank candidate membership only by frozen DL score, then original deterministic rank."""
 
@@ -908,6 +912,8 @@ def _reorder_resource_aware_continuous_constrained_optimal(
     preserve_baseline_safety_floor=False,
     safety_score_mode='raw',
     safety_floor_contract=None,
+    target_count_override=None,
+    selector_suffix='constrained-optimal',
 ):
     """Exactly maximize one frozen DL objective under canonical K/cash feasibility.
 
@@ -925,7 +931,16 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         raise ValueError(f'constrained optimal不支援objective_mode={objective_mode!r}')
 
     candidates = list(rows or [])
-    target_count = int(baseline['selected_count'])
+    baseline_target_count = int(baseline['selected_count'])
+    target_count = (
+        int(baseline_target_count)
+        if target_count_override is None
+        else int(target_count_override)
+    )
+    if target_count < baseline_target_count:
+        raise ValueError('constrained solver target_count不得低於同參數baseline K')
+    if target_count > int(free_slots):
+        raise ValueError('constrained solver target_count不得高於physical free slots')
     reserve_floor_milli = (
         int(baseline['reserved_cost_milli']) if preserve_reserve_floor else 0
     )
@@ -962,22 +977,25 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         )
 
     base_rank = {id(row): idx for idx, row in enumerate(candidates)}
+    use_baseline_k_seed = bool(
+        preserve_reserve_floor and target_count == baseline_target_count
+    )
     seed_source = (
         'c35-feasible-ascent'
-        if preserve_reserve_floor and objective_mode == 'score'
+        if use_baseline_k_seed and objective_mode == 'score'
         else 'c39-feasible-ascent'
-        if preserve_reserve_floor and objective_mode == 'excess_alpha'
-        else 'objective-top-k-if-cash-feasible-else-baseline'
+        if use_baseline_k_seed and objective_mode == 'excess_alpha'
+        else 'objective-top-count-or-baseline-order'
     )
     selector_name = _objective_selector_name(
         objective_mode,
-        suffix='constrained-optimal',
+        suffix=str(selector_suffix),
         no_r0=not preserve_reserve_floor,
     )
 
     seed_order = None
     seed_diag = {}
-    if preserve_reserve_floor:
+    if use_baseline_k_seed:
         seed_order, seed_diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
             candidates,
             available_cash=available_cash,
@@ -1097,7 +1115,7 @@ def _reorder_resource_aware_continuous_constrained_optimal(
             standalone[idx]['safety_coverage_upper']
         )
 
-    if preserve_reserve_floor:
+    if use_baseline_k_seed:
         seed_basket = list(seed_order[:target_count])
     else:
         if objective_mode == 'score':
@@ -1113,35 +1131,74 @@ def _reorder_resource_aware_continuous_constrained_optimal(
             )
         seed_basket = list(seed_ranked[:target_count])
 
-    incumbent_order, incumbent_result = evaluate_basket(seed_basket)
-    if (
-        not _max_dl_basket_is_feasible(
-            incumbent_result,
-            target_count=target_count,
-            reserve_floor_milli=reserve_floor_milli,
+    incumbent_candidates = [list(seed_basket)]
+    if target_count == baseline_target_count:
+        incumbent_candidates.append(list(baseline.get('selected_rows') or []))
+    else:
+        # K-Flex may need a different membership simply to fit more physical slots.
+        # These are only deterministic incumbents; exact search still owns the result.
+        incumbent_candidates.extend(
+            (
+                list(candidates),
+                [
+                    candidates[pos]
+                    for pos in sorted(
+                        range(n),
+                        key=lambda idx: (
+                            int(standalone[idx]['reserve_upper_milli']),
+                            base_rank[id(candidates[idx])],
+                        ),
+                    )
+                ][:target_count],
+                [
+                    candidates[pos]
+                    for pos in sorted(
+                        range(n),
+                        key=lambda idx: (
+                            -int(standalone[idx]['reserve_upper_milli']),
+                            base_rank[id(candidates[idx])],
+                        ),
+                    )
+                ][:target_count],
+            )
         )
-        or not safety_floor_satisfied(incumbent_result)
-    ):
-        incumbent_order, incumbent_result = evaluate_basket(
-            list(baseline.get('selected_rows') or [])
+
+    best_basket = None
+    best_result = None
+    best_key = None
+    direct_score_order_feasible = False
+    for seed_idx, incumbent_basket in enumerate(incumbent_candidates):
+        incumbent_order, incumbent_result = evaluate_basket(incumbent_basket)
+        feasible = (
+            _max_dl_basket_is_feasible(
+                incumbent_result,
+                target_count=target_count,
+                reserve_floor_milli=reserve_floor_milli,
+            )
+            and safety_floor_satisfied(incumbent_result)
         )
-    if (
-        not _max_dl_basket_is_feasible(
-            incumbent_result,
-            target_count=target_count,
-            reserve_floor_milli=reserve_floor_milli,
-        )
-        or not safety_floor_satisfied(incumbent_result)
-    ):
-        raise RuntimeError('constrained solver無法取得符合K/R0/safety的可行incumbent')
-    best_basket = list(incumbent_order)
-    best_result = incumbent_result
-    best_key = basket_quality_key(best_result)
+        if seed_idx == 0:
+            direct_score_order_feasible = bool(feasible)
+        if not feasible:
+            continue
+        incumbent_key = basket_quality_key(incumbent_result)
+        if best_key is None or incumbent_key > best_key:
+            best_basket = list(incumbent_result.get('selected_rows') or [])
+            best_result = incumbent_result
+            best_key = incumbent_key
+
+    if not use_baseline_k_seed:
+        seed_diag = {
+            'direct_score_order_feasible': bool(direct_score_order_feasible),
+            '_selector_trace_baskets': {
+                'raw_top_n': list(seed_basket),
+            },
+        }
 
     search_states = 0
     pruned_states = 0
     safety_pruned_states = 0
-    feasible_baskets = 1
+    feasible_baskets = int(best_result is not None)
 
     def current_objective_summary(result):
         if objective_mode == 'score':
@@ -1245,9 +1302,9 @@ def _reorder_resource_aware_continuous_constrained_optimal(
                 return
             feasible_baskets += 1
             quality = basket_quality_key(result)
-            if quality > best_key:
+            if best_key is None or quality > best_key:
                 best_key = quality
-                best_basket = list(basket)
+                best_basket = list(result.get('selected_rows') or basket)
                 best_result = result
             return
 
@@ -1276,15 +1333,16 @@ def _reorder_resource_aware_continuous_constrained_optimal(
                 safety_pruned_states += 1
                 return
 
-        max_coverage = int(coverage) + min(int(need), int(suffix_coverage[idx]))
-        if max_coverage < int(best_key[0]):
-            pruned_states += 1
-            return
-        if max_coverage == int(best_key[0]):
-            objective_upper = optimistic_objective_upper(idx, need, objective_total)
-            if objective_upper < float(best_key[1]):
+        if best_key is not None:
+            max_coverage = int(coverage) + min(int(need), int(suffix_coverage[idx]))
+            if max_coverage < int(best_key[0]):
                 pruned_states += 1
                 return
+            if max_coverage == int(best_key[0]):
+                objective_upper = optimistic_objective_upper(idx, need, objective_total)
+                if objective_upper < float(best_key[1]):
+                    pruned_states += 1
+                    return
 
         row = candidates[idx]
 
@@ -1306,6 +1364,10 @@ def _reorder_resource_aware_continuous_constrained_optimal(
     empty_coverage, empty_total = current_objective_summary(empty_result)
     visit(0, [], empty_result, empty_coverage, empty_total)
 
+    if best_result is None:
+        raise _NoFeasibleConstrainedBasket(
+            f'constrained solver找不到target_count={target_count}的合法R0/cash basket'
+        )
     if (
         not _max_dl_basket_is_feasible(
             best_result,
@@ -1461,6 +1523,84 @@ def _reorder_resource_aware_continuous_score_constrained_optimal(
         default_diag=default_diag,
         objective_mode='score',
     )
+
+def _reorder_resource_aware_continuous_score_k_flex_r0_constrained_optimal(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    """Maximize feasible planned-order count, then the unchanged frozen score objective.
+
+    SR-C67 changes only the C59 count contract: baseline K becomes a minimum and
+    physical free slots become the upper bound.  The baseline R0 floor, canonical
+    sizing/cash reservation, candidate universe and raw score objective are unchanged.
+    Counts are tried from the physical cap downward; the first feasible count is then
+    solved exactly by the same branch-and-bound owner used by C59.
+    """
+
+    candidates = list(rows or [])
+    baseline_k = int(baseline['selected_count'])
+    physical_free_slots = max(0, int(free_slots))
+    if baseline_k < 0:
+        raise ValueError('K-Flex baseline K不得小於0')
+    if baseline_k > physical_free_slots:
+        raise RuntimeError('K-Flex baseline K高於physical free slots')
+    max_count = min(physical_free_slots, len(candidates))
+    if max_count < baseline_k:
+        raise RuntimeError('K-Flex候選數不足以維持baseline K')
+
+    attempted_counts = []
+    for target_count in range(max_count, baseline_k - 1, -1):
+        attempted_counts.append(int(target_count))
+        try:
+            order, diag = _reorder_resource_aware_continuous_constrained_optimal(
+                candidates,
+                available_cash=available_cash,
+                sizing_equity=sizing_equity,
+                free_slots=physical_free_slots,
+                params=params,
+                baseline=baseline,
+                default_diag=default_diag,
+                objective_mode='score',
+                preserve_reserve_floor=True,
+                target_count_override=target_count,
+                selector_suffix='k-flex-r0-constrained-optimal',
+            )
+        except _NoFeasibleConstrainedBasket:
+            continue
+
+        out = dict(diag)
+        selected_count = int(out.get('selected_count', 0) or 0)
+        reserved_milli = int(out.get('reserved_cost_milli', 0) or 0)
+        baseline_r0_milli = int(baseline['reserved_cost_milli'])
+        if selected_count != int(target_count):
+            raise RuntimeError('K-Flex exact solver輸出count與target_count不一致')
+        if not (baseline_k <= selected_count <= physical_free_slots):
+            raise RuntimeError('K-Flex輸出違反baseline K至physical free-slot範圍')
+        if reserved_milli < baseline_r0_milli:
+            raise RuntimeError('K-Flex輸出低於同參數baseline R0')
+
+        out.update({
+            'selector': 'continuous-score-k-flex-r0-constrained-optimal',
+            'count_constraint': 'baseline_k_to_physical_free_slots_v1',
+            'baseline_k': int(baseline_k),
+            'physical_free_slots': int(physical_free_slots),
+            'k_flex_max_count': int(max_count),
+            'k_flex_selected_count': int(selected_count),
+            'k_flex_extra_positions': int(selected_count - baseline_k),
+            'k_flex_target_counts_attempted': tuple(attempted_counts),
+            'k_flex_r0_preserved': True,
+            'pre_market_order_limit': int(selected_count),
+        })
+        return order, out
+
+    raise RuntimeError('K-Flex找不到任何可維持baseline K/R0的canonical cash-feasible basket')
+
 
 def _reorder_resource_aware_continuous_score_safety_constrained_optimal(
     rows,

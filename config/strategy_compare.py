@@ -47,7 +47,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 55
+STRATEGY_COMPARE_SCHEMA_VERSION = 56
 
 # =============================================================================
 # 1. 常用設定
@@ -148,6 +148,7 @@ STRATEGY_COMPARE_DISPLAY_MIN_ROOS = "Min ROOS"
 STRATEGY_COMPARE_DISPLAY_FULL_FINALISTS_AGREE = "Full Base-Finalists-Agree"
 STRATEGY_COMPARE_DISPLAY_MIN_FINALISTS_AGREE = "Min Base-Finalists-Agree"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED = "Min MR-13E Constrained"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13E_K_FLEX_R0 = "Min MR-13E K-Flex R0"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13K_SCORE_CONSTRAINED = "Min MR-13K Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_SAFETY_CONSTRAINED = "Min MR-13K + MR-13M Safety"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_RESIDUAL_SAFETY_CONSTRAINED = "Min MR-13K + MR-13M Residual Safety"
@@ -159,10 +160,11 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_DUO = "Min MR-13R Conditional
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
 STRATEGY_COMPARE_SUITES = {
     "extending_current": {
-        "arm_ids": ("C61", "C62", "C58", "C63", "C59", "C60", "C64", "C65", "C66"),
+        "arm_ids": ("C61", "C62", "C58", "C63", "C59", "C67", "C60", "C64", "C65", "C66"),
         "contrast_ids": (
             "C62-C61", "C63-C58", "C62-C63",
             "C61-C58", "C59-C58", "C59-C61",
+            "C67-C59", "C67-C58",
             "C60-C58", "C60-C61", "C60-C59",
             "C64-C58", "C64-C59", "C64-C60",
             "C65-C58", "C65-C59", "C65-C64",
@@ -174,6 +176,7 @@ STRATEGY_COMPARE_SUITES = {
             "C58": "Min Base-Finalist-Best",
             "C63": "Min Base-Finalists-Agree",
             "C59": "Min MR-13E Constrained",
+            "C67": "Min MR-13E K-Flex R0",
             "C60": "Min MR-13K + MR-13M Residual Safety",
             "C64": "Min MR-13P Conditional Safety",
             "C65": "Min MR-13Q Conditional-MFE Single",
@@ -230,6 +233,7 @@ STRATEGY_COMPARE_PROFILES = {
             "C58": "min_oos",
             "C63": "min_oos",
             "C59": "min_oos",
+            "C67": "min_oos",
             "C60": "min_oos",
             "C64": "min_oos",
             "C65": "min_oos",
@@ -639,6 +643,29 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C67": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_K_FLEX_R0,
+        "description": (
+            "SR-C67 K-Flex / R0-preserved controlled arm：完全沿用C59的MR-13E score、"
+            "Min base-finalist-best、all-off、canonical sizing/cash/orderability/execution與R0 floor；"
+            "唯一scientific change是planned-order count由exact C58 K放寬為"
+            "C58 K至當日physical free slots，先取最大canonical cash-feasible count，"
+            "再以同一exact branch-and-bound最大化原始MR-13E score objective。"
+        ),
+        "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-k-flex-r0-constrained-optimal",
+        "dl_runtime_options": {
+            "count_constraint": "baseline_k_to_physical_free_slots_v1",
+            "preserve_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
     "C60": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_RESIDUAL_SAFETY_CONSTRAINED,
         "description": (
@@ -736,6 +763,8 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C61-C58": {"left": "C61", "right": "C58", "description": "{left}相對{right}的完整策略體系差異；不是單一參數效果"},
     "C59-C58": {"left": "C59", "right": "C58", "description": "{left}相對{right}的增量策略效果"},
     "C59-C61": {"left": "C59", "right": "C61", "description": "{left}相對{right}的整體策略結果；不是單一DL效果"},
+    "C67-C59": {"left": "C67", "right": "C59", "description": "K-Flex / R0-preserved相對exact-K C59；唯一scientific change為C58 K由硬等號改為baseline K至physical free slots"},
+    "C67-C58": {"left": "C67", "right": "C58", "description": "K-Flex / R0-preserved MR-13E相對Min baseline的整體增量效果"},
     "C60-C58": {"left": "C60", "right": "C58", "description": "{left}相對{right}的增量策略效果"},
     "C60-C61": {"left": "C60", "right": "C61", "description": "{left}相對{right}的整體策略結果；不是單一DL效果"},
     "C60-C59": {"left": "C60", "right": "C59", "description": "{left}相對{right}的同政策比較"},

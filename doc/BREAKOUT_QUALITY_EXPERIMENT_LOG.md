@@ -10057,3 +10057,19 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 停止規則：取得OOS/Rolling stage attribution後即停止。只有MFE流失明顯發生於Raw→Planned且集中direct-infeasible days，才考慮controlled K/R0 ablation；若Raw Top-K本身已低MFE，才回model/target。
 - Decision：**IMPLEMENTED / RESULT_PENDING / READ_ONLY / MINIMUM_NECESSARY_EVIDENCE / NO_SCIENTIFIC_PARAMETER_CHANGE**。
 - GPT targeted regression：`validate_breakout_quality_audit_framework_contract_case`=`7/7 PASS`；Python compile/import與stale-runtime-reference scan均PASS。乾淨交付樹不含本機`outputs/`，故formal status正確為BLOCKED（缺Dataset summary與OOS/Rolling latest artifacts），未執行`apps/run_bundle.py`／`apps/test_suite.py`。
+
+### 2026-08-25 — AUD-selection-k-r0-attribution 結果完成；Raw DL ranking強、主要MFE流失發生於resource conversion
+
+- OOS Raw Top-K High-MFE：C59/C65/C66=`73.26/73.81/77.29%`；Planned=`35.69/38.41/39.17%`。Rolling Raw=`71.58/72.44/78.66%`；Planned=`37.28/41.94/43.91%`。Raw→Planned約流失`30–40pp` High-MFE，LM/HS同步增加約`33–36pp`。
+- Raw direct-infeasible days：OOS=`97.25/98.25/95.06%`，Rolling=`95.91/97.83/92.27%`；相反地，少數direct-feasible days的Raw→Planned High-MFE變化均為`0pp`且membership retention=`100%`。因此目前主瓶頸不支持「模型Raw ranking找不到High-MFE」，而支持現行resource feasibility contract大幅改寫basket。
+- K headroom：OOS約`60–71%`、Rolling約`65–72%`，median C58 K=`1`、median physical free slots=`3`；Final reserved==R0約`31–51%`，median final R0 slack約`0–0.75%`。但既有sidecar只能證明`K/R0/canonical cash`聯合direct-infeasible，不將失敗硬歸因為R0-only。
+- Decision：**AUDIT_RESULT_AVAILABLE / RESOURCE_CONVERSION_BOTTLENECK_SUPPORTED / AUDIT_CLOSED / ONE_SHOT_IMPLEMENTATION_RETIRED / NEXT=SR-C67_K_FLEX_R0_PRESERVED / NO_NEW_MODEL / ROBUSTNESS_DEFERRED**。
+
+### 2026-08-25 — SR-C67 K-Flex / R0-Preserved Exact 實作；只放寬K
+
+- C67完全沿用C59：`CONT13E_ROLL`、Min `base-finalist-best`、all-off、canonical sizing/cash/orderability/execution、C58 R0 floor與原始MR-13E score exact objective。
+- 唯一scientific change：`selected_count == C58 K`改為`C58 K <= selected_count <= physical free slots`。solver由physical cap向下找第一個可滿足canonical cash + R0的count，因此先取得**最大可行planned-order count**；固定該count後仍由同一deterministic exact branch-and-bound最大化score。
+- 不改R0、不做No-R0、不改模型／target／score／threshold，不新增Safety floor或資金權重。OOS仍使用`min_oos`，Rolling使用`min_rolling`，兩者共用current Compare Suite C67。
+- Targeted synthetic固定fixture：C58 baseline `K=1`、physical free slots=`3`、R0約`260k`；C59 fixed-K維持單一A，C67先嘗試count=3失敗後在count=2找到`C,D`、reserved約`280k>=R0`，證明可增加部位但沒有放寬R0或cash。
+- Decision：**IMPLEMENTED / RESULT_PENDING / SINGLE_SCIENTIFIC_CHANGE_K_ONLY / SINGLE_SEED_OOS_AND_ROLLING_FIRST / ROBUSTNESS_DEFERRED / NOT_PROMOTED**。
+

@@ -1349,6 +1349,7 @@ def _run_resource_aware_entry_selection_matrix_case(base_params):
         "resource-aware-continuous-excess-alpha-no-r0-feasible-ascent",
         "resource-aware-continuous-excess-alpha-constrained-optimal",
         "resource-aware-continuous-score-constrained-optimal",
+        "resource-aware-continuous-score-k-flex-r0-constrained-optimal",
         "resource-aware-continuous-score-safety-constrained-optimal",
         "resource-aware-continuous-score-residual-safety-constrained-optimal",
         "resource-aware-continuous-score-no-r0-constrained-optimal",
@@ -1373,6 +1374,50 @@ def _run_resource_aware_entry_selection_matrix_case(base_params):
         except Exception as exc:
             policy_failures.append(f"{policy}:{type(exc).__name__}")
     add_check(results, "portfolio_entry_selection", case_id, "all_reusable_policies_route_without_error", [], policy_failures)
+
+    # SR-C67 controlled contract: the C59 baseline can have K=1 while physical
+    # free slots=3.  Two high-score lower-notional rows together preserve the
+    # exact same R0; fixed-K C59 must stay at one order, while K-Flex must use
+    # the maximum canonically feasible count (2) and then maximize the same score.
+    k_flex_seed = (
+        ("A", 100.0, 2600, 0.10, 0.01, 0.10),
+        ("C", 100.0, 1400, 0.99, 0.45, 0.90),
+        ("D", 100.0, 1400, 0.98, 0.40, 0.80),
+        ("E", 100.0, 1200, 0.97, 0.35, 0.70),
+    )
+    controlled = {}
+    for policy in (
+        "resource-aware-continuous-score-constrained-optimal",
+        "resource-aware-continuous-score-k-flex-r0-constrained-optimal",
+    ):
+        rows = [
+            candidate(t, price, qty, score, policy, excess_r, safety)
+            for t, price, qty, score, excess_r, safety in k_flex_seed
+        ]
+        order, diag = reorder_candidates_for_resource_aware_quality(
+            rows,
+            available_cash=300_000.0,
+            sizing_equity=2_000_000.0,
+            pre_market_occupied=7,
+            max_positions=10,
+            params=params,
+        )
+        selected = select_resource_aware_action_candidates(order, diag)
+        controlled[policy] = {
+            "tickers": tuple(row["ticker"] for row in selected),
+            "baseline_k": int(diag.get("baseline_selected_count", -1)),
+            "baseline_r0": int(diag.get("baseline_reserved_cost_milli", -1)),
+            "selected_count": int(diag.get("selected_count", -1)),
+            "reserved": int(diag.get("reserved_cost_milli", -1)),
+            "extra": int(diag.get("k_flex_extra_positions", 0) or 0),
+            "attempted": tuple(diag.get("k_flex_target_counts_attempted") or ()),
+        }
+    fixed = controlled["resource-aware-continuous-score-constrained-optimal"]
+    flex = controlled["resource-aware-continuous-score-k-flex-r0-constrained-optimal"]
+    add_check(results, "portfolio_entry_selection", case_id, "k_flex_fixture_baseline_k", 1, fixed["baseline_k"] )
+    add_check(results, "portfolio_entry_selection", case_id, "fixed_k_c59_stays_at_baseline_k", (1, ("A",)), (fixed["selected_count"], fixed["tickers"]))
+    add_check(results, "portfolio_entry_selection", case_id, "k_flex_uses_max_feasible_count_and_score_optimum", (2, ("C", "D"), 1, (3, 2)), (flex["selected_count"], flex["tickers"], flex["extra"], flex["attempted"]))
+    add_check(results, "portfolio_entry_selection", case_id, "k_flex_preserves_exact_baseline_r0_floor", True, flex["reserved"] >= flex["baseline_r0"] == fixed["baseline_r0"])
 
     one_row = [candidate("X", 100.0, 100, 0.5, "resource-aware-continuous", 0.1, 0.2)]
     add_check(results, "portfolio_entry_selection", case_id, "action_limit_zero", 0, len(select_resource_aware_action_candidates(one_row, {"pre_market_order_limit": 0})))

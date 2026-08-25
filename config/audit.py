@@ -12,71 +12,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from config.breakout_quality import (
-    BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
-    BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
-    DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-)
-
-AUDIT_SCHEMA_VERSION = 10
+AUDIT_SCHEMA_VERSION = 11
 AUDIT_OUTPUT_ROOT = "outputs/audit"
 AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
 
 AUDIT_MODULES: dict[str, dict[str, Any]] = {
     "breakout_quality": {
         "enabled": True,
-        "audits": {
-            "AUD-selection-k-r0-attribution": {
-                "enabled": True,
-                "audit_type": "selection_resource_constraint_attribution",
-                "description": (
-                    "只讀拆解C58-derived K/R0 resource contract對DL Raw Top-K → Planned → Filled"
-                    "之MFE×Safety geometry的影響，並量化K headroom與聯合契約direct failure。"
-                ),
-                "source": {
-                    "evaluation_profile_ids": (
-                        "extending_window_oos",
-                        "extending_window_rolling",
-                    ),
-                    "strategy_arm_ids": ("C59", "C65", "C66"),
-                    "baseline_arm_id": "C58",
-                    "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
-                    "model_architecture": BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
-                    "truth_provider_profile_id": (
-                        DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
-                    ),
-                    "mfe_target_id": "daily_full_horizon_pure_mfe_r_v1",
-                    "safety_target_id": "daily_full_horizon_low_adverse_r_v1",
-                },
-                "dimensions": {
-                    "truth_join_keys": ("ticker", "date"),
-                    "same_day_percentile_cutoff": 0.50,
-                    "percentile_method": "average_zero_based",
-                    "stage_order": (
-                        "orderable",
-                        "raw_top_k",
-                        "planned",
-                        "filled",
-                    ),
-                },
-                "outcomes": {
-                    "decision_question": (
-                        "C58-derived exact K/R0 resource contract是否在Raw DL Top-K → Planned basket之間"
-                        "系統性壓低High-MFE，且K本身是否經常低於physical free-slot cap？"
-                    ),
-                    "critical_uncertainty": (
-                        "Raw Top-K本身是否已恢復較高MFE；MFE流失是否集中於direct-infeasible days；"
-                        "K headroom與Final=R0 binding各有多普遍。"
-                    ),
-                    "stopping_condition": (
-                        "取得OOS與Rolling之Orderable→Raw Top-K→Planned→Filled matched-stage geometry、"
-                        "direct-feasible/infeasible transition及K/R0 diagnostics後即停止；"
-                        "依結果才決定做受控K/R0 ablation或回到model/target研究，不追加同問題Audit。"
-                    ),
-                },
-                "output_subdir": "breakout_quality/selection_k_r0_attribution",
-            },
-        },
+        # Current one-shot Selection/Truth Geometry question is complete.  Keep the
+        # stable work-type shell but no disabled experiment-specific definitions.
+        "audits": {},
     },
 }
 
