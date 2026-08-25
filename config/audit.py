@@ -18,7 +18,7 @@ from config.breakout_quality import (
     DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
 )
 
-AUDIT_SCHEMA_VERSION = 9
+AUDIT_SCHEMA_VERSION = 10
 AUDIT_OUTPUT_ROOT = "outputs/audit"
 AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
 
@@ -26,27 +26,20 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
     "breakout_quality": {
         "enabled": True,
         "audits": {
-            "AUD-mfe-safety-target-geometry": {
+            "AUD-selection-k-r0-attribution": {
                 "enabled": True,
-                "audit_type": "continuous_truth_strategy_quadrants",
+                "audit_type": "selection_resource_constraint_attribution",
                 "description": (
-                    "只讀比較實際MFE×Safety母體、orderable candidate pool與目前策略arms，"
-                    "驗證conditional-MFE target geometry是否仍把選股推向High-MFE / Low-Safety。"
+                    "只讀拆解C58-derived K/R0 resource contract對DL Raw Top-K → Planned → Filled"
+                    "之MFE×Safety geometry的影響，並量化K headroom與聯合契約direct failure。"
                 ),
                 "source": {
-                    # Comparison objects live here; the Audit menu is method-oriented and
-                    # must not hard-code current arms / profiles / target identities.
                     "evaluation_profile_ids": (
                         "extending_window_oos",
                         "extending_window_rolling",
                     ),
-                    "strategy_arm_ids": ("C58", "C59", "C65", "C66"),
-                    "candidate_pool_arm_id": "C58",
-                    "focus_arm_id": "C66",
-                    # Daily-universal truth is owned by the canonical profile-aware sample
-                    # provider.  It intentionally has no second persisted continuous-target
-                    # bundle, so Audit consumes the same provider as Strategy Compare
-                    # diagnostics instead of inventing a physical truth artifact.
+                    "strategy_arm_ids": ("C59", "C65", "C66"),
+                    "baseline_arm_id": "C58",
                     "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
                     "model_architecture": BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
                     "truth_provider_profile_id": (
@@ -59,29 +52,29 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "truth_join_keys": ("ticker", "date"),
                     "same_day_percentile_cutoff": 0.50,
                     "percentile_method": "average_zero_based",
-                    "cohort_order": (
-                        "population",
-                        "candidate_pool",
-                        "C58",
-                        "C59",
-                        "C65",
-                        "C66",
+                    "stage_order": (
+                        "orderable",
+                        "raw_top_k",
+                        "planned",
+                        "filled",
                     ),
                 },
                 "outcomes": {
                     "decision_question": (
-                        "C66的實際選股是否仍大量落在High-MFE / Low-Safety，"
-                        "使J=U-E(U|S)雖可學但未對齊absolute high MFE under absolute high Safety？"
+                        "C58-derived exact K/R0 resource contract是否在Raw DL Top-K → Planned basket之間"
+                        "系統性壓低High-MFE，且K本身是否經常低於physical free-slot cap？"
                     ),
                     "critical_uncertainty": (
-                        "C66改善Conditional-MFE排序後，selection probability實際被推向哪個future-truth quadrant。"
+                        "Raw Top-K本身是否已恢復較高MFE；MFE流失是否集中於direct-infeasible days；"
+                        "K headroom與Final=R0 binding各有多普遍。"
                     ),
                     "stopping_condition": (
-                        "取得OOS與Rolling的母體、orderable pool、C58/C59/C65/C66四象限分布與相對母體enrichment後，"
-                        "證據即足以決定維持target或進下一個受控target experiment；不再追加同問題Audit。"
+                        "取得OOS與Rolling之Orderable→Raw Top-K→Planned→Filled matched-stage geometry、"
+                        "direct-feasible/infeasible transition及K/R0 diagnostics後即停止；"
+                        "依結果才決定做受控K/R0 ablation或回到model/target研究，不追加同問題Audit。"
                     ),
                 },
-                "output_subdir": "breakout_quality/mfe_safety_target_geometry",
+                "output_subdir": "breakout_quality/selection_k_r0_attribution",
             },
         },
     },

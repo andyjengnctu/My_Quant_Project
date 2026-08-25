@@ -97,7 +97,12 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     from services.audit.strategy_compare_source import (
         StrategyCompareAuditSource,
+        load_strategy_arm_pipeline_sidecars,
         load_strategy_arm_replay_sidecars,
+    )
+    from services.audit.selection_resource_constraints import (
+        build_transition_summary,
+        summarize_resource_contract,
     )
 
     with TemporaryDirectory() as temp_dir_text:
@@ -139,6 +144,42 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 index=False,
                 encoding="utf-8-sig",
             )
+            pd.DataFrame({
+                "Date": ["2025-01-02"],
+                "Pre_Market_Free_Slots": [2],
+                "Orderable_Candidates": [3],
+                "Resource_Aware_Pre_Market_Order_Limit": [1],
+                "Resource_Aware_Max_DL_Eligible": [True],
+                "Resource_Aware_Direct_Score_Order_Feasible": [False],
+                "Resource_Aware_Baseline_Reserved_Milli": [1000],
+                "Resource_Aware_Reserved_Milli": [1000],
+                "Resource_Aware_Selected": [1],
+            }).to_csv(
+                pair_dir / "score_ranking_daily_capacity.csv",
+                index=False, encoding="utf-8-sig",
+            )
+            pd.DataFrame({
+                "stage": ["raw_top_n"],
+                "stage_rank": [1],
+                "ticker": ["2330"],
+                "trade_date": ["2025-01-02"],
+                "signal_date": ["2025-01-02"],
+                "breakout_quality_score_date": ["2025-01-01"],
+                "pre_market_order_limit": [1],
+            }).to_csv(
+                pair_dir / "score_ranking_selector_trace.csv",
+                index=False, encoding="utf-8-sig",
+            )
+            pd.DataFrame({
+                "ticker": ["2330"],
+                "trade_date": ["2025-01-02"],
+                "signal_date": ["2025-01-02"],
+                "chosen_qty": [1],
+                "entry_filled": [True],
+            }).to_csv(
+                pair_dir / "score_ranking_execution.csv",
+                index=False, encoding="utf-8-sig",
+            )
             pair_execution[active_arm_id] = {
                 "current_pair_dir": str(pair_dir.relative_to(project_root))
             }
@@ -163,6 +204,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             source=audit_source,
             arm_id="C65",
         )
+        pipeline_evidence = load_strategy_arm_pipeline_sidecars(
+            project_root,
+            source=audit_source,
+            arm_id="C65",
+        )
         check_true(
             "formal_audit_resolves_shared_dl_off_baseline_via_canonical_execution_group_without_replay",
             bool(
@@ -173,8 +219,68 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 and len(baseline_evidence["selected"]) == 1
                 and active_evidence["prefix"] == "score_ranking"
                 and active_evidence["paired_baseline_resolved"] is False
+                and len(pipeline_evidence["daily_capacity"]) == 1
+                and len(pipeline_evidence["selector_trace"]) == 1
+                and len(pipeline_evidence["execution"]) == 1
             ),
         )
+
+    capacity = pd.DataFrame({
+        "Date": ["2025-01-02", "2025-01-03", "2025-01-04"],
+        "Pre_Market_Free_Slots": [4, 3, 4],
+        "Orderable_Candidates": [7, 5, 0],
+        "Resource_Aware_Pre_Market_Order_Limit": [3, 3, None],
+        "Resource_Aware_Max_DL_Eligible": [True, True, False],
+        "Resource_Aware_Direct_Score_Order_Feasible": [False, True, False],
+        "Resource_Aware_Baseline_Reserved_Milli": [1000, 1000, None],
+        "Resource_Aware_Reserved_Milli": [1000, 1100, None],
+        "Resource_Aware_Selected": [3, 3, 0],
+    })
+    resource = summarize_resource_contract(capacity)
+    check_true(
+        "selection_resource_audit_separates_k_headroom_direct_failure_and_r0_binding",
+        bool(
+            resource["eligible_days"] == 2
+            and resource["direct_infeasible_days"] == 1
+            and resource["k_headroom_days"] == 1
+            and resource["k_headroom_slot_days"] == 1
+            and resource["r0_exact_binding_days"] == 1
+            and resource["selected_count_equals_k_pct"] == 100.0
+        ),
+    )
+
+    truth = pd.DataFrame({
+        "ticker": ["A", "B", "C"],
+        "date": ["2025-01-01"] * 3,
+        "quadrant": [
+            "high_mfe_high_safety_pct",
+            "high_mfe_low_safety_pct",
+            "low_mfe_high_safety_pct",
+        ],
+    })
+    raw = pd.DataFrame({
+        "ticker": ["A", "B"],
+        "trade_date": ["2025-01-02", "2025-01-02"],
+        "score_event_date": ["2025-01-01", "2025-01-01"],
+    })
+    planned = pd.DataFrame({
+        "ticker": ["A", "C"],
+        "trade_date": ["2025-01-02", "2025-01-02"],
+        "score_event_date": ["2025-01-01", "2025-01-01"],
+    })
+    transition = build_transition_summary(
+        truth, raw=raw, planned=planned, trade_dates=["2025-01-02"]
+    )
+    check_true(
+        "selection_resource_audit_attributes_raw_to_planned_mfe_loss_without_oos_tuning",
+        bool(
+            transition["raw"]["high_mfe_total_pct"] == 100.0
+            and transition["planned"]["high_mfe_total_pct"] == 50.0
+            and transition["delta_high_mfe_pp"] == -50.0
+            and transition["delta_low_mfe_high_safety_pp"] == 50.0
+            and transition["mean_raw_membership_retained_pct"] == 50.0
+        ),
+    )
 
     summary["workflow"] = "config_driven_formal_audit_topology"
     return results, summary

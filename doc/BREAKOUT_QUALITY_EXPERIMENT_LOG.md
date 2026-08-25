@@ -10041,3 +10041,19 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - GPT獨立回歸：Audit framework 5/5 PASS；Strategy Compare config-driven application 57/57 PASS。未執行`apps/run_bundle.py`／`apps/test_suite.py`。
 - Decision：**COMPARISON_MODE_SSOT_FIX / SCIENCE_UNCHANGED / AUDIT_RESULT_PENDING**。不改target、threshold、cohort、selector、OOS／Rolling results或Research Queue順序。
 
+### 2026-08-25 — AUD-mfe-safety-target-geometry 結果完成；原C66 HM/LS enrichment假說不支持
+
+- 使用者由正式 `Selection／Truth Geometry` Audit 取得OOS與Rolling四象限結果。OOS母體 High-MFE=`50.05%`；C58 orderable pool=`58.75%`，但C58 final selection降至=`27.35%`，同時Low-MFE/High-Safety由pool `19.45%`升至C58 `49.24%`。C59/C65/C66 High-MFE只部分恢復為`33.22% / 36.45% / 35.99%`。
+- Rolling同方向：C58 orderable High-MFE=`58.17%`，C58 final=`25.63%`，C59/C65/C66=`33.33% / 38.08% / 40.14%`；C58 LM/HS=`49.37%`。
+- 原預註冊疑慮「C66因`J=U-E(U|S)`而相對母體大量富集High-MFE/Low-Safety」**不成立**：C66 HM/LS OOS=`16.56% (0.60×母體)`、Rolling=`20.07% (0.72×)`；不得事後改Gate把此Audit標成target-geometry成功。
+- 新的最小不確定性集中在`orderable pool → final selection`：C58本身造成最大MFE向LM/HS位移，而C59/C65/C66使用same-parameter C58-derived exact K/R0 resource envelope。由現有final-selection表無法分辨模型Raw Top-K本身不足，或K/R0/cash feasibility在Raw→Planned階段改寫basket。
+- Decision：**ORIGINAL_HM_LS_HYPOTHESIS_NOT_SUPPORTED / AUDIT_CLOSED / ONE_SHOT_IMPLEMENTATION_RETIRED / NEXT=K_R0_STAGE_ATTRIBUTION / NO_NEW_MODEL / ROBUSTNESS_STILL_DEFERRED**。
+
+### 2026-08-25 — AUD-selection-k-r0-attribution 實作；只讀拆解K/R0 resource conversion
+
+- 新formal Audit固定由`config/audit.py`配置C58 baseline reference與C59/C65/C66 preserve-K/R0 arms，OOS/Rolling分開，只讀既有`score_ranking_orderable_candidates.csv`、`score_ranking_selector_trace.csv`、`score_ranking_execution.csv`、`score_ranking_selected_buys.csv`、`score_ranking_daily_capacity.csv`及canonical Pure-MFE/Safety truth；不training、不建score、不strategy replay、不改selector。
+- Stage固定為`Orderable → Raw Top-K → Planned → Filled`，High/Low沿用既有同日cross-sectional percentile `0.50`。Raw Top-K直接讀selector trace的`stage=raw_top_n`，Planned讀persisted execution的`chosen_qty>0`，Filled再以`entry_filled`切分；stage geometry只在該arm既有Max-DL eligible trade dates上比較。
+- Resource diagnostics分開保存：`K headroom = K < physical free_slots AND orderable_candidates > K`、Raw direct-feasible/infeasible、Final reserved==R0 binding、final R0 slack、selected_count==K與Raw membership retention。證據邊界明訂：K headroom**不代表K+1已cash-feasible**；direct-infeasible只代表Raw Top-K沒通過現行`K/R0/canonical cash reservation`聯合契約；既有sidecar沒有raw deficit時不得硬拆R0-only/cash-only。
+- 停止規則：取得OOS/Rolling stage attribution後即停止。只有MFE流失明顯發生於Raw→Planned且集中direct-infeasible days，才考慮controlled K/R0 ablation；若Raw Top-K本身已低MFE，才回model/target。
+- Decision：**IMPLEMENTED / RESULT_PENDING / READ_ONLY / MINIMUM_NECESSARY_EVIDENCE / NO_SCIENTIFIC_PARAMETER_CHANGE**。
+- GPT targeted regression：`validate_breakout_quality_audit_framework_contract_case`=`7/7 PASS`；Python compile/import與stale-runtime-reference scan均PASS。乾淨交付樹不含本機`outputs/`，故formal status正確為BLOCKED（缺Dataset summary與OOS/Rolling latest artifacts），未執行`apps/run_bundle.py`／`apps/test_suite.py`。

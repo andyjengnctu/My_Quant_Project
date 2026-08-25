@@ -124,12 +124,15 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         read_only=True,
         cli_command="audit-point-in-time-scores",
     ),
-    "continuous_truth_strategy_quadrants": AuditCatalogEntry(
-        audit_type="continuous_truth_strategy_quadrants",
+    "selection_resource_constraint_attribution": AuditCatalogEntry(
+        audit_type="selection_resource_constraint_attribution",
         domain="breakout_quality",
-        module="services.audit.mfe_safety_quadrants",
+        module="services.audit.selection_resource_constraints",
         mode="formal",
-        description="只讀MFE × Safety truth與Strategy Compare row-level evidence的四象限Audit",
+        description=(
+            "只讀拆解Orderable → Raw Top-K → Planned → Filled與C58-derived K/R0 contract的"
+            "MFE×Safety selection attribution"
+        ),
         read_only=True,
         method_id="selection_truth_geometry",
         status_function="collect_status",

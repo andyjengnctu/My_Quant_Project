@@ -401,9 +401,54 @@ def load_strategy_arm_replay_sidecars(
     }
 
 
+def load_strategy_arm_pipeline_sidecars(
+    project_root: Path,
+    *,
+    source: StrategyCompareAuditSource,
+    arm_id: str,
+) -> dict[str, Any]:
+    """Load persisted score-ranking selector pipeline evidence for one DL-on arm.
+
+    This is read-only and intentionally refuses to replay or reconstruct missing
+    reservation diagnostics.  The pair directory is resolved through the same
+    canonical arm→execution mapping as ``load_strategy_arm_replay_sidecars``.
+    """
+
+    evidence = load_strategy_arm_replay_sidecars(
+        project_root, source=source, arm_id=arm_id
+    )
+    if evidence.get("prefix") != "score_ranking":
+        raise AuditSourceBlockedError(
+            f"{source.profile_id}/{arm_id} pipeline Audit只接受DL-on score-ranking arm"
+        )
+    pair_dir = Path(evidence["pair_dir"])
+    required_names = {
+        "daily_capacity": "score_ranking_daily_capacity.csv",
+        "selector_trace": "score_ranking_selector_trace.csv",
+        "execution": "score_ranking_execution.csv",
+    }
+    loaded: dict[str, Any] = dict(evidence)
+    for key, filename in required_names.items():
+        path = pair_dir / filename
+        if not path.is_file():
+            raise AuditSourceBlockedError(
+                f"{source.profile_id}/{arm_id} pair缺少既有pipeline sidecar: {filename}; "
+                "Audit不得重跑策略補資料"
+            )
+        try:
+            loaded[key] = pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise AuditSourceBlockedError(
+                f"{source.profile_id}/{arm_id} 無法讀取{filename}: {exc}"
+            ) from exc
+        loaded[f"{key}_path"] = path
+    return loaded
+
+
 __all__ = [
     "AuditSourceBlockedError",
     "StrategyCompareAuditSource",
+    "load_strategy_arm_pipeline_sidecars",
     "load_strategy_arm_replay_sidecars",
     "load_strategy_compare_source",
     "resolve_latest_strategy_result_dir",

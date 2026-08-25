@@ -242,22 +242,41 @@ MFE_SAFETY_QUADRANT_DISTRIBUTION_METRICS = (
     ReportMetricSpec("low_mfe_low_safety_pct", "Low-MFE / Low-Safety", "%", 2, "lower"),
 )
 
-MFE_SAFETY_QUADRANT_ENRICHMENT_METRICS = (
+# Selection-pipeline attribution metrics.  These remain descriptive Audit
+# evidence: stage geometry is evaluated on the same matched Max-DL-eligible
+# trade dates, while resource metrics describe the persisted K/R0 contract.
+MFE_SAFETY_STAGE_ATTRIBUTION_METRICS = (
+    ReportMetricSpec("high_mfe_total_pct", "High-MFE total", "%", 2, "higher"),
+    ReportMetricSpec("high_safety_total_pct", "High-Safety total", "%", 2, "neutral"),
+    ReportMetricSpec("delta_high_mfe_pp", "Δ High-MFE", " pp", 2, "higher"),
     ReportMetricSpec(
-        "high_mfe_high_safety_enrichment",
-        "High-MFE / High-Safety enrichment",
-        "×",
-        2,
-        "higher",
-    ),
-    ReportMetricSpec(
-        "high_mfe_low_safety_enrichment",
-        "High-MFE / Low-Safety enrichment",
-        "×",
+        "delta_low_mfe_high_safety_pp",
+        "Δ Low-MFE / High-Safety",
+        " pp",
         2,
         "lower",
     ),
+    ReportMetricSpec(
+        "mean_raw_membership_retained_pct",
+        "Raw membership retained",
+        "%",
+        2,
+        "neutral",
+    ),
 )
+
+RESOURCE_CONSTRAINT_ATTRIBUTION_METRICS = (
+    ReportMetricSpec("direct_infeasible_pct", "Direct infeasible", "%", 2, "lower"),
+    ReportMetricSpec("k_headroom_pct", "K headroom days", "%", 2, "attention"),
+    ReportMetricSpec("r0_exact_binding_pct", "Final=R0", "%", 2, "neutral"),
+    ReportMetricSpec(
+        "median_final_r0_slack_pct", "Median final R0 slack", "%", 2, "neutral"
+    ),
+    ReportMetricSpec(
+        "selected_count_equals_k_pct", "selected=K", "%", 2, "neutral"
+    ),
+)
+
 
 
 __all__ = [
@@ -282,5 +301,6 @@ __all__ = [
     "ROBUSTNESS_YEARLY_DELTA_METRICS",
     "ROBUSTNESS_YEARLY_DISTRIBUTION_METRICS",
     "MFE_SAFETY_QUADRANT_DISTRIBUTION_METRICS",
-    "MFE_SAFETY_QUADRANT_ENRICHMENT_METRICS",
+    "MFE_SAFETY_STAGE_ATTRIBUTION_METRICS",
+    "RESOURCE_CONSTRAINT_ATTRIBUTION_METRICS",
 ]

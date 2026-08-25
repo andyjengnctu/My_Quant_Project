@@ -224,7 +224,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 
 ## 正式入口
 
-- `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練、策略參數最佳化、策略組合比較與Audit維持獨立責任；Strategy Compare先經`services/research/strategy_compare_application.py`承接application dispatch，再透過`services/portfolio_replay.py`重用canonical replay，模型／PIT producer由`services/breakout_quality/`承接。Multiple-seed robustness可保存經驗證的compact attribution source供必要的read-only診斷，但已完成的一次性Audit implementation不得永久保留。`AUD-min-roos-planned-risk-40d-alignment`已取得GO結論並退役；目前active formal Audit為`AUD-mfe-safety-target-geometry`，掛在常駐`Selection／Truth Geometry`方法下，其比較對象與truth provider binding由`config/audit.py`設定。
+- `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練、策略參數最佳化、策略組合比較與Audit維持獨立責任；Strategy Compare先經`services/research/strategy_compare_application.py`承接application dispatch，再透過`services/portfolio_replay.py`重用canonical replay，模型／PIT producer由`services/breakout_quality/`承接。Multiple-seed robustness可保存經驗證的compact attribution source供必要的read-only診斷，但已完成的一次性Audit implementation不得永久保留。`AUD-min-roos-planned-risk-40d-alignment`與`AUD-mfe-safety-target-geometry`均已完成並退役；目前active formal Audit為`AUD-selection-k-r0-attribution`，掛在常駐`Selection／Truth Geometry`方法下，只讀既有selector trace／execution／daily-capacity sidecars與canonical MFE/Safety truth，其比較對象與source binding由`config/audit.py`設定。
 - `services/research/breakout_quality_application.py`：Breakout Quality正式model provider，承接model workflow、dataset、training、score export、易讀report與詳細evaluation；不是使用者直接入口。舊`tools/filters/breakout_quality/application.py`只作compatibility wrapper。
 - `apps/run_bundle.py`：日常本機 double check 與修改交付的單一使用者入口；固定順序為stage → commit current snapshot → package ZIP → formal test。formal test失敗時保留commit與ZIP，讓該失敗版本可被完整重現與交付。
 - `apps/test_suite.py`：`run_bundle.py`內部formal test runner；不作為一般日常使用者入口。

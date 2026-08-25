@@ -1,5 +1,8 @@
 ## Going
 
+- bug fix
+    - remove |buy list|= k constrain 
+
 - trading
     - add a buy list to decide the stop prices using full roos base-fanlist-best
 
