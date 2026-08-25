@@ -56,8 +56,7 @@ from filters.breakout_quality.strategy_compare_sources import (
     PARAM_POLICY_AUTO,
     SUPPORTED_OPTIONAL_ENTRY_FILTER_POLICIES,
     _build_controlled_param_source_pair,
-    apply_strategy_param_evaluation_view,
-    strategy_param_source_identity_sha256,
+    load_strategy_param_evaluation_view,
     _load_param_source,
     _resolve_params_path,
     _sha256_file,
@@ -398,15 +397,11 @@ def run_standalone_baseline(
     )
     if not resolved_params_path.is_file():
         raise FileNotFoundError(f"找不到策略比較參數檔: {resolved_params_path}")
-    param_source = _load_param_source(resolved_params_path)
-    param_source = apply_strategy_param_evaluation_view(
-        param_source,
+    param_source, param_identity_sha256 = load_strategy_param_evaluation_view(
+        resolved_params_path,
         evaluation_mode=param_evaluation_mode,
         start_date=start_date,
         end_date=end_date,
-    )
-    param_identity_sha256 = strategy_param_source_identity_sha256(
-        param_source, source_path=resolved_params_path
     )
     param_policy_contract = _validate_requested_param_policy(param_source, param_policy)
     (

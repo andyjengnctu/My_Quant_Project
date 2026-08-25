@@ -166,6 +166,21 @@ class ResolvedComparisonPlan:
             raise RuntimeError(
                 "Strategy Compare READY但缺少arm參數binding: " + ",".join(missing_params)
             )
+        resolved_arm_parameter_identities = self._status.get(
+            "resolved_arm_parameter_identities"
+        )
+        if not isinstance(resolved_arm_parameter_identities, Mapping):
+            raise RuntimeError("Strategy Compare READY但缺少arm evaluation parameter identities")
+        missing_param_identities = sorted(
+            arm.arm_id for arm in self.settings.enabled_arms
+            if not isinstance(resolved_arm_parameter_identities.get(arm.arm_id), Mapping)
+            or not str(resolved_arm_parameter_identities[arm.arm_id].get("sha256") or "").strip()
+        )
+        if missing_param_identities:
+            raise RuntimeError(
+                "Strategy Compare READY但缺少arm evaluation parameter identity: "
+                + ",".join(missing_param_identities)
+            )
 
         dl_rows = self._status.get("dl_sources")
         if not isinstance(dl_rows, Mapping):
@@ -179,6 +194,22 @@ class ResolvedComparisonPlan:
         cached_pairs = replay_cache.get("pairs")
         if not isinstance(cached_pairs, Mapping):
             cached_pairs = {}
+        arm_states = replay_cache.get("arm_states")
+        if not isinstance(arm_states, Mapping):
+            raise RuntimeError("Strategy Compare READY但缺少canonical arm result states")
+        missing_arm_states = sorted(
+            arm.arm_id
+            for arm in self.settings.enabled_arms
+            if not isinstance(arm_states.get(arm.arm_id), Mapping)
+            or str(arm_states[arm.arm_id].get("action") or "") not in {
+                "REUSE", "RUN", "REBUILD_CONTEXT"
+            }
+        )
+        if missing_arm_states:
+            raise RuntimeError(
+                "Strategy Compare READY但arm result state未解析: "
+                + ",".join(missing_arm_states)
+            )
 
         unresolved_dl: list[str] = []
         for arm in self.settings.enabled_arms:

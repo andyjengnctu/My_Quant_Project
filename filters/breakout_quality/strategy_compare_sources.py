@@ -348,6 +348,53 @@ def strategy_param_source_identity_sha256(source: dict[str, Any], *, source_path
     return _sha256_file(Path(source_path))
 
 
+def load_strategy_param_evaluation_view(
+    path: str | Path,
+    *,
+    evaluation_mode: str,
+    start_date: str,
+    end_date: str,
+) -> tuple[dict[str, Any], str]:
+    """Load one canonical parameter artifact through its evaluation-time view.
+
+    OOS and Rolling intentionally consume the same physical schedule artifact.  The
+    OOS identity therefore must be computed *after* the in-memory fixed-cutoff view is
+    applied; using the physical schedule hash for OOS cache/reuse decisions creates a
+    false OOS/Rolling state split.  Replay, planning, completed-result reuse and
+    robustness all call this owner instead of re-deriving that identity.
+    """
+
+    resolved = Path(path).resolve()
+    source = _load_param_source(resolved)
+    evaluated = apply_strategy_param_evaluation_view(
+        source,
+        evaluation_mode=str(evaluation_mode),
+        start_date=str(start_date),
+        end_date=str(end_date),
+    )
+    return evaluated, strategy_param_source_identity_sha256(
+        evaluated, source_path=resolved
+    )
+
+
+def resolve_strategy_param_evaluation_identity_sha256(
+    path: str | Path,
+    *,
+    evaluation_mode: str,
+    start_date: str,
+    end_date: str,
+) -> str:
+    """Return the canonical replay-scientific parameter identity for one evaluation."""
+
+    _source, identity = load_strategy_param_evaluation_view(
+        path,
+        evaluation_mode=evaluation_mode,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return identity
+
+
 def _load_param_source(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))

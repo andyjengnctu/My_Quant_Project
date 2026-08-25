@@ -36,6 +36,7 @@ from filters.breakout_quality.strategy_compare_contracts import (
     STRATEGY_COMPARE_SCHEMA_VERSION as STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
 )
 from filters.breakout_quality.strategy_compare_plan import ResolvedContinuousScoreBinding
+from filters.breakout_quality.strategy_result_state import resolve_strategy_result_state
 from filters.breakout_quality.strategy_compare_preparation import resolve_comparison_period
 from filters.breakout_quality.strategy_compare_runtime import (
     _arm_runtime_spec,
@@ -87,6 +88,7 @@ def _pair_cache_fingerprint_from_payload(
     off_arm_payload: dict[str, Any],
     on_arm_payload: dict[str, Any],
     engine_schema_version: int,
+    parameter_evaluation_sha256: str | None = None,
 ) -> str:
     param_source = str(on_arm_payload.get("param_source") or "")
     dl_id = str(on_arm_payload.get("dl_id") or "")
@@ -98,7 +100,8 @@ def _pair_cache_fingerprint_from_payload(
     arm_param_policy = str(
         on_arm_payload.get("param_policy") or settings_payload.get("param_policy") or ""
     ).strip()
-    artifact_keys = [strategy_comparison_param_artifact_key(param_source, arm_param_policy)]
+    param_artifact_key = strategy_comparison_param_artifact_key(param_source, arm_param_policy)
+    artifact_keys: list[str] = []
     trained_with = str(param_payload.get("trained_with_dl_id") or "")
     if trained_with:
         artifact_keys.extend(
@@ -150,6 +153,9 @@ def _pair_cache_fingerprint_from_payload(
         key: artifact_identities.get(key)
         for key in sorted(set(artifact_keys))
     }
+    evaluation_param_sha = str(parameter_evaluation_sha256 or "").strip().lower()
+    if not evaluation_param_sha:
+        evaluation_param_sha = _artifact_identity_sha(artifact_identities.get(param_artifact_key))
 
     payload = {
         "cache_schema_version": PAIR_CACHE_SCHEMA_VERSION,
@@ -164,6 +170,9 @@ def _pair_cache_fingerprint_from_payload(
             "path_template": param_payload.get("path_template"),
             "identity_manifest_path": param_payload.get("identity_manifest_path"),
             "trained_with_dl_id": param_payload.get("trained_with_dl_id"),
+            # Result reuse is bound to the replay-effective evaluation view.
+            # Physical publication lineage remains in preparation artifact identities.
+            "evaluation_sha256": evaluation_param_sha,
         },
         "dl_source": {
             "dl_id": dl_id,
@@ -197,6 +206,15 @@ def _pair_cache_fingerprint_from_payload(
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
 
+def _arm_parameter_evaluation_sha256(
+    status: dict[str, Any], arm_id: str
+) -> str:
+    identity = dict(
+        (status.get("resolved_arm_parameter_identities") or {}).get(str(arm_id)) or {}
+    )
+    return _artifact_identity_sha(identity)
+
+
 def _current_pair_cache_fingerprint(
     *,
     settings: StrategyComparisonSettings,
@@ -211,6 +229,9 @@ def _current_pair_cache_fingerprint(
         off_arm_payload=off_arm.as_dict(),
         on_arm_payload=on_arm.as_dict(),
         engine_schema_version=STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
+        parameter_evaluation_sha256=_arm_parameter_evaluation_sha256(
+            status, on_arm.arm_id
+        ),
     )
 
 def _pair_cache_required_files(
@@ -348,16 +369,7 @@ def _find_reusable_pair_with_archived_source(
     dl_status = dict((status.get("dl_sources") or {}).get(dl_id) or {})
     if bool(dl_status.get("ready")):
         return None
-    param_identity = dict(
-        (status.get("artifact_identities") or {}).get(
-            strategy_comparison_param_artifact_key(
-                on_arm.param_source,
-                resolve_strategy_comparison_arm_param_policy(settings, on_arm),
-            )
-        )
-        or {}
-    )
-    current_param_sha = _artifact_identity_sha(param_identity)
+    current_param_sha = _arm_parameter_evaluation_sha256(status, on_arm.arm_id)
     if not current_param_sha:
         return None
 
@@ -411,16 +423,6 @@ def _find_reusable_pair_with_archived_source(
             continue
 
         run_artifacts = dict(run_payload.get("artifact_identities") or {})
-        stored_param_sha = _artifact_identity_sha(
-            run_artifacts.get(
-                strategy_comparison_param_artifact_key(
-                    on_arm.param_source,
-                    resolve_strategy_comparison_arm_param_policy(settings, on_arm),
-                )
-            )
-        )
-        if stored_param_sha != current_param_sha:
-            continue
         if not _archived_pair_source_is_self_contained(
             run_artifact_identities=run_artifacts,
             dl_id=dl_id,
@@ -462,6 +464,9 @@ def _find_reusable_pair_with_archived_source(
         metadata = dict(pair_payload.get("metadata") or {})
         if int(metadata.get("schema_version") or 0) != int(STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION):
             continue
+        stored_param_sha = str(metadata.get("params_file_sha256") or "").strip().lower()
+        if stored_param_sha != current_param_sha:
+            continue
         pair_dir = run_dir / "pairs" / stored_group_id
         if not all(
             path.is_file()
@@ -476,6 +481,7 @@ def _find_reusable_pair_with_archived_source(
                 off_arm_payload=stored_off,
                 on_arm_payload=stored_on,
                 engine_schema_version=STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
+                parameter_evaluation_sha256=stored_param_sha,
             )
         except (TypeError, ValueError):
             continue
@@ -562,6 +568,9 @@ def _find_reusable_pair(
                     metadata.get("schema_version")
                     or STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION
                 ),
+                parameter_evaluation_sha256=str(
+                    metadata.get("params_file_sha256") or ""
+                ),
             )
         except (TypeError, ValueError):
             continue
@@ -626,9 +635,36 @@ def _collect_replay_cache_status(
                         "source_pair_dir": source_pair_dir,
                     },
                 )
+    arm_states: dict[str, Any] = {}
+    for arm in settings.enabled_arms:
+        if arm.dl_enabled:
+            evidence = pairs.get(arm.arm_id)
+            source_dir = (
+                evidence.get("source_pair_dir")
+                if isinstance(evidence, dict)
+                else None
+            )
+        else:
+            group_key = (
+                f"{arm.param_source}::"
+                f"{resolve_strategy_comparison_arm_param_policy(settings, arm)}::"
+                f"{arm.rule_policy}"
+            )
+            evidence = baseline_groups.get(group_key)
+            source_dir = (
+                evidence.get("source_pair_dir")
+                if isinstance(evidence, dict)
+                else None
+            )
+        arm_states[arm.arm_id] = resolve_strategy_result_state(
+            verified_evidence=evidence if isinstance(evidence, dict) else None,
+            source_dir=source_dir,
+            missing_reason=f"{arm.arm_id}尚無identity一致的completed result",
+        ).as_dict()
     return {
         "pairs": pairs,
         "baseline_groups": baseline_groups,
+        "arm_states": arm_states,
     }
 
 def _apply_completed_pair_dependency_waivers(
@@ -1294,16 +1330,7 @@ def _find_reusable_baseline_source(
     comparison_period = dict(status.get("comparison_period") or {})
     if not comparison_period:
         return None
-    param_identity = dict(
-        (status.get("artifact_identities") or {}).get(
-            strategy_comparison_param_artifact_key(
-                off_arm.param_source,
-                resolve_strategy_comparison_arm_param_policy(settings, off_arm),
-            )
-        )
-        or {}
-    )
-    expected_param_sha = _artifact_identity_sha(param_identity)
+    expected_param_sha = _arm_parameter_evaluation_sha256(status, off_arm.arm_id)
     if not expected_param_sha:
         return None
     all_off = off_arm.rule_policy == "all_off"

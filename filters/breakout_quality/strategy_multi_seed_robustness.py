@@ -123,6 +123,13 @@ from filters.breakout_quality.ranking_score_store import (
 from filters.breakout_quality.strategy_compare_sources import (
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+    resolve_strategy_param_evaluation_identity_sha256,
+)
+from filters.breakout_quality.strategy_result_state import (
+    RESULT_ACTION_REBUILD_CONTEXT,
+    RESULT_ACTION_REUSE,
+    RESULT_ACTION_RUN,
+    resolve_strategy_result_state,
 )
 from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_SCORE_RANKING
 from filters.breakout_quality.strategy_compare_replay import (
@@ -702,7 +709,8 @@ def _benchmark_parameter_plan_rows(
 
 
 def _prepare_benchmark_strategy_parameter_artifacts(
-    *, settings, robustness, benchmark_arms: tuple[StrategyComparisonArm, ...], comparison_end: str
+    *, settings, robustness, benchmark_arms: tuple[StrategyComparisonArm, ...],
+    comparison_start: str, comparison_end: str
 ) -> dict[tuple[str, int], dict[str, Any]]:
     if robustness.benchmark_id is None:
         return {}
@@ -745,13 +753,21 @@ def _prepare_benchmark_strategy_parameter_artifacts(
                     + f" seed={seed} {binding['family']}/{binding['evaluation_mode']} "
                     + f"{binding['param_policy']}"
                 )
+            result_path = Path(result["path"])
             bindings[(arm.arm_id, int(seed))] = {
                 **binding,
-                "path": Path(result["path"]),
+                "path": result_path,
                 "manifest_path": Path(result["manifest_path"]),
-                # ``sha256`` is the replay-scientific strategy-param identity.
-                # Byte-level publication integrity stays separately auditable.
+                # Full schedule identity remains the robustness scientific lineage.
                 "sha256": str(result["scientific_sha256"]),
+                # Replay/context reuse is evaluation-bound: OOS freezes in-memory,
+                # Rolling consumes the full effective-date schedule.
+                "evaluation_sha256": resolve_strategy_param_evaluation_identity_sha256(
+                    result_path,
+                    evaluation_mode=str(binding["evaluation_mode"]),
+                    start_date=str(comparison_start),
+                    end_date=str(comparison_end),
+                ),
                 "file_sha256": str(result["sha256"]),
                 "manifest_sha256": compute_file_sha256(Path(result["manifest_path"])),
             }
@@ -862,7 +878,7 @@ def _strategy_only_baseline_context_available(
             output_dir,
             comparison_mode=COMPARISON_MODE_SCORE_RANKING,
             expected_dataset=str(settings.dataset),
-            expected_params_sha256=str(binding["sha256"]),
+            expected_params_sha256=str(binding["evaluation_sha256"]),
             expected_param_policy=resolve_strategy_comparison_arm_param_policy(settings, arm),
             expected_param_evaluation_mode=str(binding["evaluation_mode"]),
             expected_optional_entry_filter_policy=(
@@ -899,11 +915,16 @@ def _strategy_only_baseline_action(
     rerun merely because normal retention cleanup removed that directory.
     """
 
-    if not scientific_result_exists:
-        return "RUN_SCIENTIFIC"
-    if baseline_context_required and not baseline_context_available:
-        return "REBUILD_CONTEXT"
-    return "REUSE"
+    state = resolve_strategy_result_state(
+        verified_evidence={} if scientific_result_exists else None,
+        context_required=baseline_context_required,
+        context_ready=baseline_context_available,
+    )
+    return {
+        RESULT_ACTION_RUN: "RUN_SCIENTIFIC",
+        RESULT_ACTION_REBUILD_CONTEXT: "REBUILD_CONTEXT",
+        RESULT_ACTION_REUSE: "REUSE",
+    }[state.action]
 
 
 def _run_strategy_only_benchmark_unit(
@@ -1119,6 +1140,52 @@ def _render_robustness_execution_plan(
     )
     overall = "BLOCKED" if blockers else "PREPARABLE" if pending_work else "READY"
     rows = [*upstream_rows, *param_rows, *benchmark_rows]
+    robustness_unit_states: dict[tuple[str, int], dict[str, Any]] = {}
+    robustness_contract: dict[str, Any] | None = None
+    if (
+        overall == "READY"
+        and cfg.benchmark_id is not None
+        and start is not None
+        and end is not None
+    ):
+        try:
+            resolved_bindings: dict[tuple[str, int], dict[str, Any]] = {}
+            for unit, item in benchmark_bindings.items():
+                path = Path(item["path"])
+                manifest_path = Path(item["manifest_path"])
+                if not path.is_file() or not manifest_path.is_file():
+                    raise FileNotFoundError(f"benchmark parameter artifact missing: {unit}")
+                resolved_bindings[unit] = {
+                    **item,
+                    "sha256": compute_strategy_param_scientific_sha256(path),
+                    "evaluation_sha256": resolve_strategy_param_evaluation_identity_sha256(
+                        path,
+                        evaluation_mode=str(item["evaluation_mode"]),
+                        start_date=str(start),
+                        end_date=str(end),
+                    ),
+                    "file_sha256": compute_file_sha256(path),
+                    "manifest_sha256": compute_file_sha256(manifest_path),
+                }
+            robustness_contract = build_multi_seed_robustness_contract(
+                robustness_id=cfg.robustness_id,
+                comparison_period={"start": start, "end": end},
+                artifact_identities=dict(status.get("artifact_identities") or {}),
+                benchmark_parameter_identities=_benchmark_identity_payload(resolved_bindings),
+            )
+            _existing, _existing_yearly, robustness_unit_states = (
+                _resolve_existing_scientific_unit_states(
+                    run_root=_run_root(robustness_contract),
+                    contract=robustness_contract,
+                    stochastic_arms=tuple(stochastic_arms),
+                    reuse_completed=bool(cfg.reuse_completed),
+                )
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+            blockers.append(f"既有Robustness result state無法驗證: {type(exc).__name__}: {exc}")
+            overall = "BLOCKED"
+            robustness_unit_states = {}
+            robustness_contract = None
     for arm in fixed_arms:
         rows.append((
             "RUN/REUSE",
@@ -1127,7 +1194,23 @@ def _render_robustness_execution_plan(
         ))
     model_ids = {arm.arm_id for arm in model_arms}
     for arm in stochastic_arms:
-        if arm.arm_id in model_ids:
+        arm_states = [
+            robustness_unit_states.get((arm.arm_id, int(seed)))
+            for seed in cfg.resolved_seeds
+        ]
+        reuse_count = sum(
+            1 for state in arm_states
+            if isinstance(state, dict) and state.get("action") == RESULT_ACTION_REUSE
+        )
+        if arm_states and reuse_count == len(arm_states):
+            action = "REUSE"
+            description = f"{reuse_count}/{len(arm_states)} seed scientific results identity一致"
+        elif reuse_count:
+            action = "RESUME"
+            description = (
+                f"{reuse_count}/{len(arm_states)} seed結果REUSE；只執行其餘缺失單元"
+            )
+        elif arm.arm_id in model_ids:
             description = (
                 f"{cfg.seed_count}個固定benchmark seeds；同seed strategy params + canonical DL trainer + replay"
             )
@@ -1225,6 +1308,8 @@ def _render_robustness_execution_plan(
         "blockers": blockers,
         "required_param_sources": required_sources,
         "benchmark_param_bindings": benchmark_bindings,
+        "robustness_unit_states": robustness_unit_states,
+        "robustness_contract": robustness_contract,
         "comparison_period": None if start is None else {"start": start, "end": end},
         "period_error": period_error,
         "model_upstream_prepare_required": bool(upstream_pending),
@@ -2370,6 +2455,66 @@ def _validate_completed_run(
         }
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
         return None
+
+
+def _resolve_existing_scientific_unit_states(
+    *,
+    run_root: Path,
+    contract: dict[str, Any],
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    reuse_completed: bool,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[tuple[str, int], dict[str, Any]]]:
+    """Resolve durable per-seed scientific result states through one owner.
+
+    Both the robustness execution plan and executor call this function.  A seed CSV row
+    alone is insufficient: exact current contract identities and the complete expected
+    yearly observation set are required before a unit becomes REUSE.
+    """
+
+    seeds = tuple(int(value) for value in contract["resolved_seeds"])
+    seed_path = run_root / SEED_RESULTS_FILENAME
+    yearly_path = run_root / SEED_YEARLY_RESULTS_FILENAME
+    existing = _load_seed_results(seed_path)
+    _validate_seed_results_frame(existing, stochastic_arms=stochastic_arms, seeds=seeds)
+    _validate_seed_result_scientific_identities(existing, contract=contract)
+    existing_yearly = _load_seed_yearly_results(yearly_path)
+    expected_years = _comparison_years(
+        str(contract["comparison_period"]["start"]),
+        str(contract["comparison_period"]["end"]),
+    )
+    _validate_seed_yearly_results_frame(
+        existing_yearly,
+        stochastic_arms=stochastic_arms,
+        seeds=seeds,
+        expected_years=expected_years,
+        require_complete_units=False,
+    )
+    completed_rows = (
+        {(str(row.arm_id), int(row.seed)) for row in existing.itertuples(index=False)}
+        if reuse_completed and not existing.empty
+        else set()
+    )
+    if completed_rows:
+        expected_year_set = set(expected_years)
+        yearly_by_unit: dict[tuple[str, int], set[int]] = {}
+        for row in existing_yearly.itertuples(index=False):
+            unit = (str(row.arm_id), int(row.seed))
+            yearly_by_unit.setdefault(unit, set()).add(int(row.year))
+        completed_rows &= {
+            unit for unit, years in yearly_by_unit.items()
+            if years == expected_year_set
+        }
+    unit_states: dict[tuple[str, int], dict[str, Any]] = {}
+    for arm in stochastic_arms:
+        for seed in seeds:
+            unit = (arm.arm_id, int(seed))
+            unit_states[unit] = resolve_strategy_result_state(
+                verified_evidence={"arm_id": arm.arm_id, "seed": int(seed)}
+                if unit in completed_rows
+                else None,
+                missing_reason=f"{arm.arm_id}/seed={seed}尚無完整identity一致結果",
+            ).as_dict()
+    return existing, existing_yearly, unit_states
 
 
 def _resolved_period(settings, status: dict[str, Any]) -> tuple[str, str]:
@@ -3836,6 +3981,12 @@ def show_multi_seed_robustness_status(*, robustness_id: str | None = None) -> No
         resolved_benchmark_bindings[unit] = {
             **item,
             "sha256": compute_strategy_param_scientific_sha256(path),
+            "evaluation_sha256": resolve_strategy_param_evaluation_identity_sha256(
+                path,
+                evaluation_mode=str(item["evaluation_mode"]),
+                start_date=str(plan["comparison_period"]["start"]),
+                end_date=str(plan["comparison_period"]["end"]),
+            ),
             "file_sha256": compute_file_sha256(path),
             "manifest_sha256": compute_file_sha256(manifest_path),
         }
@@ -3845,14 +3996,22 @@ def show_multi_seed_robustness_status(*, robustness_id: str | None = None) -> No
         benchmark_parameter_identities=_benchmark_identity_payload(resolved_benchmark_bindings),
     )
     run_root = _run_root(contract)
-    existing = _load_seed_results(run_root / SEED_RESULTS_FILENAME)
+    existing, _existing_yearly, unit_states = _resolve_existing_scientific_unit_states(
+        run_root=run_root,
+        contract=contract,
+        stochastic_arms=tuple(stochastic),
+        reuse_completed=bool(cfg.reuse_completed),
+    )
     seeds = tuple(int(value) for value in contract["resolved_seeds"])
-    _validate_seed_results_frame(existing, stochastic_arms=stochastic, seeds=seeds)
+    scientific_reuse_count = sum(
+        1 for state in unit_states.values()
+        if state.get("action") == RESULT_ACTION_REUSE
+    )
     print(f"Fingerprint       ：{contract['fingerprint']}")
     ready_attribution = _attribution_ready_units(
         run_root, stochastic_arms=tuple(model_arms), seeds=seeds, fingerprint=str(contract["fingerprint"])
     ) if cfg.keep_attribution_source else set()
-    print(f"已完成seed結果    ：{len(existing)}/{len(stochastic) * cfg.seed_count}")
+    print(f"已完成seed結果    ：{scientific_reuse_count}/{len(stochastic) * cfg.seed_count}")
     if cfg.keep_attribution_source:
         print(f"Attribution工件   ：{len(ready_attribution)}/{len(model_arms) * cfg.seed_count}")
     print("永久輸出：")
@@ -4084,7 +4243,7 @@ def run_multi_seed_robustness(
         )
     benchmark_bindings = _prepare_benchmark_strategy_parameter_artifacts(
         settings=settings, robustness=cfg, benchmark_arms=tuple(stochastic_arms),
-        comparison_end=str(comparison_end),
+        comparison_start=str(comparison_start), comparison_end=str(comparison_end),
     )
     status = dict(status)
     status["comparison_period"] = {"start": comparison_start, "end": comparison_end}
@@ -4150,14 +4309,13 @@ def run_multi_seed_robustness(
     started_total = time.perf_counter()
     seeds = tuple(int(value) for value in contract["resolved_seeds"])
     try:
-        existing = _load_seed_results(seed_results_path)
-        _validate_seed_results_frame(existing, stochastic_arms=stochastic_arms, seeds=seeds)
-        _validate_seed_result_scientific_identities(existing, contract=contract)
-        existing_yearly = _load_seed_yearly_results(seed_yearly_results_path)
-        expected_years = _comparison_years(comparison_start, comparison_end)
-        _validate_seed_yearly_results_frame(
-            existing_yearly, stochastic_arms=stochastic_arms, seeds=seeds,
-            expected_years=expected_years, require_complete_units=False,
+        existing, existing_yearly, scientific_unit_states = (
+            _resolve_existing_scientific_unit_states(
+                run_root=run_root,
+                contract=contract,
+                stochastic_arms=tuple(stochastic_arms),
+                reuse_completed=bool(cfg.reuse_completed),
+            )
         )
         fixed_results = _run_fixed_baselines(
             settings=settings, status=status, run_root=run_root, fixed_arms=fixed_arms
@@ -4179,21 +4337,10 @@ def run_multi_seed_robustness(
         )
         raise
     scientific_completed = {
-        (str(row.arm_id), int(row.seed))
-        for row in existing.itertuples(index=False)
-    } if not existing.empty and cfg.reuse_completed else set()
-    if scientific_completed:
-        expected_year_set = set(_comparison_years(comparison_start, comparison_end))
-        yearly_by_unit: dict[tuple[str, int], set[int]] = {}
-        if not existing_yearly.empty:
-            for row in existing_yearly.itertuples(index=False):
-                unit = (str(row.arm_id), int(row.seed))
-                yearly_by_unit.setdefault(unit, set()).add(int(row.year))
-        complete_yearly_units = {
-            unit for unit, years in yearly_by_unit.items()
-            if years == expected_year_set
-        }
-        scientific_completed &= complete_yearly_units
+        unit
+        for unit, state in scientific_unit_states.items()
+        if str(state.get("action") or "") == RESULT_ACTION_REUSE
+    }
     model_arm_ids = {arm.arm_id for arm in model_arms}
     strategy_only_completed = {unit for unit in scientific_completed if unit[0] not in model_arm_ids}
     attribution_ready = (

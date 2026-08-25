@@ -85,6 +85,7 @@ from filters.breakout_quality.strategy_compare_sources import (
     _load_param_source,
     _resolve_params_path,
     _validate_requested_param_policy,
+    resolve_strategy_param_evaluation_identity_sha256,
 )
 from filters.breakout_quality.strategy_param_training import (
     FULL_ROOS_SEARCH_FIELDS,
@@ -1057,6 +1058,49 @@ def _collect_parameter_artifact_status(
 
     return parameter_rows, resolved_parameter_paths, resolved_arm_parameter_paths
 
+def resolve_arm_parameter_evaluation_identities(
+    *,
+    project_root: Path,
+    settings: StrategyComparisonSettings,
+    resolved_arm_parameter_paths: Mapping[str, Path],
+    comparison_start: str | None,
+    comparison_end: str | None,
+) -> dict[str, dict[str, Any]]:
+    """Resolve per-arm replay-scientific parameter identities through one SSOT."""
+
+    if comparison_start is None or comparison_end is None:
+        return {}
+    root = Path(project_root).resolve()
+    resolved: dict[str, dict[str, Any]] = {}
+    for arm in settings.enabled_arms:
+        path = resolved_arm_parameter_paths.get(arm.arm_id)
+        if path is None or not Path(path).is_file():
+            continue
+        source = settings.parameter_sources[arm.param_source]
+        evaluation_mode = str(source.canonical_evaluation_mode or "rolling")
+        try:
+            replay_sha256 = resolve_strategy_param_evaluation_identity_sha256(
+                path,
+                evaluation_mode=evaluation_mode,
+                start_date=str(comparison_start),
+                end_date=str(comparison_end),
+            )
+        except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError, RuntimeError):
+            continue
+        resolved[arm.arm_id] = {
+            "sha256": replay_sha256,
+            "param_source": arm.param_source,
+            "param_policy": resolve_strategy_comparison_arm_param_policy(settings, arm),
+            "evaluation_mode": evaluation_mode,
+            "comparison_period": {
+                "start": str(comparison_start),
+                "end": str(comparison_end),
+            },
+            "path": project_relative_display_path(Path(path), project_root=root),
+        }
+    return resolved
+
+
 def collect_preparation_status(
     *,
     project_root: Path = PROJECT_ROOT,
@@ -1148,6 +1192,14 @@ def collect_preparation_status(
         actions=actions,
     )
 
+    resolved_arm_parameter_identities = resolve_arm_parameter_evaluation_identities(
+        project_root=root,
+        settings=settings,
+        resolved_arm_parameter_paths=resolved_arm_parameter_paths,
+        comparison_start=comparison_start,
+        comparison_end=comparison_end,
+    )
+
     plan = StrategyPreparationPlan.from_actions(actions)
     overall_status = plan.overall_status
     return {
@@ -1161,6 +1213,7 @@ def collect_preparation_status(
         "artifact_identities": artifact_identities,
         "resolved_parameter_paths": resolved_parameter_paths,
         "resolved_arm_parameter_paths": resolved_arm_parameter_paths,
+        "resolved_arm_parameter_identities": resolved_arm_parameter_identities,
         "comparison_period": (
             None
             if comparison_start is None or comparison_end is None
@@ -1175,6 +1228,7 @@ __all__ = [
     "model_upstream_prerequisite_blockers",
     "resolve_comparison_period",
     "resolve_planned_comparison_period_from_upstream",
+    "resolve_arm_parameter_evaluation_identities",
     "resolve_param_source_path",
     "resolve_required_param_policies_for_source",
 ]

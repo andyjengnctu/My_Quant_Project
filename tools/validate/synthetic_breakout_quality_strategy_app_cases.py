@@ -444,6 +444,60 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     from filters.breakout_quality import strategy_multi_seed_robustness as robustness_runtime
     from config.research import get_active_model_research_provider
 
+    resume_fixture_arm = settings.enabled_arms[0]
+    resume_fixture_contract = {
+        "resolved_seeds": [101, 202],
+        "comparison_period": {"start": "2021-01-01", "end": "2022-12-31"},
+        "benchmark_id": None,
+    }
+    with tempfile.TemporaryDirectory(prefix="robustness_partial_resume_") as temp_dir:
+        resume_root = Path(temp_dir)
+        resume_row = {
+            "arm_id": resume_fixture_arm.arm_id,
+            "seed": 101,
+            "arm_order": 1,
+            "seed_order": 1,
+        }
+        for _label, metric_key, _unit in robustness_runtime.MEAN_METRICS:
+            resume_row[metric_key] = 1.0
+        pd.DataFrame([resume_row]).to_csv(
+            resume_root / robustness_runtime.SEED_RESULTS_FILENAME,
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame([
+            {
+                "arm_id": resume_fixture_arm.arm_id,
+                "seed": 101,
+                "arm_order": 1,
+                "seed_order": 1,
+                "year": year,
+                "return_pct": 1.0,
+                "is_complete_year": True,
+            }
+            for year in (2021, 2022)
+        ]).to_csv(
+            resume_root / robustness_runtime.SEED_YEARLY_RESULTS_FILENAME,
+            index=False,
+            encoding="utf-8-sig",
+        )
+        _existing, _existing_yearly, resume_states = (
+            robustness_runtime._resolve_existing_scientific_unit_states(
+                run_root=resume_root,
+                contract=resume_fixture_contract,
+                stochastic_arms=(resume_fixture_arm,),
+                reuse_completed=True,
+            )
+        )
+    check(
+        "robustness_partial_seed_results_resume_only_missing_units",
+        ("REUSE", "RUN"),
+        (
+            str(resume_states[(resume_fixture_arm.arm_id, 101)]["action"]),
+            str(resume_states[(resume_fixture_arm.arm_id, 202)]["action"]),
+        ),
+    )
+
     application_source = read_source_text(
         project_root / "services" / "research" / "breakout_quality_application.py"
     )

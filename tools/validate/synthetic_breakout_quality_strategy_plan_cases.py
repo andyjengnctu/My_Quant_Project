@@ -214,6 +214,25 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
             )
             for arm in base.enabled_arms
         }
+        ready_status["resolved_arm_parameter_identities"] = {
+            arm.arm_id: {"sha256": f"eval-{arm.arm_id}"}
+            for arm in base.enabled_arms
+        }
+        ready_status["replay_cache"] = {
+            **dict(ready_status.get("replay_cache") or {}),
+            "arm_states": {
+                arm.arm_id: {
+                    "action": "RUN",
+                    "scientific_result_ready": False,
+                    "context_required": False,
+                    "context_ready": False,
+                    "source_dir": None,
+                    "reason": "synthetic cache miss",
+                    "evidence": None,
+                }
+                for arm in base.enabled_arms
+            },
+        }
         resolved = ResolvedComparisonPlan.from_status(
             settings=base,
             project_root=root,

@@ -290,6 +290,48 @@ def append_completed_pair_cache_contract_checks(
     """Validate completed-pair cache identity, output completeness, and matrix reuse."""
 
     from filters.breakout_quality import strategy_comparison as strategy_comparison_module
+    from filters.breakout_quality.strategy_compare_sources import (
+        resolve_strategy_param_evaluation_identity_sha256,
+    )
+
+    with tempfile.TemporaryDirectory() as identity_tmp:
+        identity_root = Path(identity_tmp)
+        base_payload = {
+            "schema_type": "active_param_ensemble",
+            "mode": "rolling",
+            "selector": "base-finalist-best",
+            "params_ensemble_by_effective_date": {
+                "2021-01-01": [{"member_index": 1, "params": {"risk_per_trade": 0.01, "high_length": 100}}],
+                "2022-01-01": [{"member_index": 1, "params": {"risk_per_trade": 0.02, "high_length": 120}}],
+            },
+            "summary": {"oos_end_date": "2022-12-31"},
+        }
+        changed_payload = json.loads(json.dumps(base_payload))
+        changed_payload["params_ensemble_by_effective_date"]["2022-01-01"][0]["params"]["high_length"] = 220
+        path_a = identity_root / "a.json"
+        path_b = identity_root / "b.json"
+        path_a.write_text(json.dumps(base_payload), encoding="utf-8")
+        path_b.write_text(json.dumps(changed_payload), encoding="utf-8")
+        oos_a = resolve_strategy_param_evaluation_identity_sha256(
+            path_a, evaluation_mode="oos", start_date="2021-01-01", end_date="2022-12-31"
+        )
+        oos_b = resolve_strategy_param_evaluation_identity_sha256(
+            path_b, evaluation_mode="oos", start_date="2021-01-01", end_date="2022-12-31"
+        )
+        rolling_a = resolve_strategy_param_evaluation_identity_sha256(
+            path_a, evaluation_mode="rolling", start_date="2021-01-01", end_date="2022-12-31"
+        )
+        rolling_b = resolve_strategy_param_evaluation_identity_sha256(
+            path_b, evaluation_mode="rolling", start_date="2021-01-01", end_date="2022-12-31"
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strategy_param_result_identity_is_evaluation_bound_not_physical_schedule_bound",
+        True,
+        oos_a == oos_b and rolling_a != rolling_b and oos_a != rolling_a,
+    )
 
     cache_off = settings.arms.get("C3")
     cache_on = settings.arms.get("C17")

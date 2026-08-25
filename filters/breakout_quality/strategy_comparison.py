@@ -91,6 +91,10 @@ from filters.breakout_quality.strategy_compare_execution import (
     run_strategy_compare_baseline_arm,
 )
 from filters.breakout_quality.strategy_compare_plan import ResolvedComparisonPlan
+from filters.breakout_quality.strategy_result_state import (
+    RESULT_ACTION_REUSE,
+    result_state_from_mapping,
+)
 from filters.breakout_quality.strategy_compare_runtime import (
     _arm_runtime_spec,
     _execution_pairs,
@@ -131,6 +135,9 @@ from filters.breakout_quality.strategy_rule_policies import (
 from filters.breakout_quality.strategy_compare_preparation import (
     collect_preparation_status,
     prepare_strategy_comparison_artifacts,
+)
+from filters.breakout_quality.strategy_compare_preparation_status import (
+    resolve_arm_parameter_evaluation_identities,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -191,6 +198,24 @@ def resolve_comparison_plan(
         settings=current,
         status=status,
         replay_cache=replay_cache,
+    )
+    # Frozen completed-pair provenance can restore a comparison period that was not
+    # available during the first preparation pass.  Resolve evaluation-bound parameter
+    # identities and result states once more from the finalized status so every UI /
+    # executor consumes the same canonical state.
+    period = dict(status.get("comparison_period") or {})
+    status["resolved_arm_parameter_identities"] = resolve_arm_parameter_evaluation_identities(
+        project_root=root,
+        settings=current,
+        resolved_arm_parameter_paths=dict(status.get("resolved_arm_parameter_paths") or {}),
+        comparison_start=str(period.get("start") or "") or None,
+        comparison_end=str(period.get("end") or "") or None,
+    )
+    replay_cache = _collect_replay_cache_status(
+        root=root, settings=current, status=status
+    )
+    status = _apply_completed_pair_dependency_waivers(
+        settings=current, status=status, replay_cache=replay_cache
     )
     return ResolvedComparisonPlan.from_status(
         settings=current,
@@ -488,30 +513,19 @@ def render_execution_plan(
 
     replay_cache = dict(status.get("replay_cache") or {})
     cached_pairs = dict(replay_cache.get("pairs") or {})
-    cached_baselines = dict(replay_cache.get("baseline_groups") or {})
+    arm_states = dict(replay_cache.get("arm_states") or {})
     for arm in settings.enabled_arms:
         if blocked:
             rows.append(("NOT_RUN", arm.arm_id, f"{arm.name}｜上游前置工件BLOCKED，本次不執行"))
             continue
-        if arm.dl_enabled:
-            action = "REUSE" if cached_pairs.get(arm.arm_id) is not None else "RUN"
+        state = result_state_from_mapping(dict(arm_states[arm.arm_id]))
+        action = state.action
+        if action == RESULT_ACTION_REUSE:
             description = (
-                f"{arm.name}｜重用已完成且identity一致的正式pair結果"
-                if action == "REUSE"
-                else arm.name
+                f"{arm.name}｜重用identity一致的completed scientific result"
             )
         else:
-            group_key = (
-                f"{arm.param_source}::"
-                f"{resolve_strategy_comparison_arm_param_policy(settings, arm)}::"
-                f"{arm.rule_policy}"
-            )
-            action = "REUSE" if cached_baselines.get(group_key) is not None else "RUN"
-            description = (
-                f"{arm.name}｜重用既有正式shared baseline"
-                if action == "REUSE"
-                else arm.name
-            )
+            description = arm.name
         rows.append((action, arm.arm_id, description))
     stale_diagnostic_arms = [
         arm.arm_id
@@ -1126,6 +1140,7 @@ def run_strategy_comparison(
     pair_execution: dict[str, dict[str, Any]] = {}
     cached_pairs = dict(replay_cache.get("pairs") or {})
     cached_baseline_groups = dict(replay_cache.get("baseline_groups") or {})
+    arm_states = dict(replay_cache.get("arm_states") or {})
     baseline_sources: dict[str, Path] = {
         str(group_key): Path(str(row["source_pair_dir"])).resolve()
         for group_key, row in cached_baseline_groups.items()
@@ -1137,13 +1152,15 @@ def run_strategy_comparison(
         group_key = f"{off_arm.param_source}::{off_param_policy}::{off_arm.rule_policy}"
         group_id = _standalone_baseline_group_id(settings, off_arm)
         pair_dir = run_dir / "pairs" / group_id
+        arm_state = result_state_from_mapping(dict(arm_states[off_arm.arm_id]))
         baseline_reuse_source = (
-            baseline_sources.get(group_key)
+            arm_state.source_dir
             if settings.preparation.reuse_shared_baseline
+            and arm_state.action == RESULT_ACTION_REUSE
             else None
         )
         arm_started = time.perf_counter()
-        baseline_action = "REUSE" if baseline_reuse_source is not None else "RUN"
+        baseline_action = arm_state.action
         if quiet and baseline_action == "RUN":
             print(
                 f"[RUN] {off_arm.arm_id} {off_arm.name} "
@@ -1214,10 +1231,15 @@ def run_strategy_comparison(
         on_param_policy = resolve_strategy_comparison_arm_param_policy(settings, on_arm)
         baseline_group_key = f"{param_source}::{on_param_policy}::{rule_policy}"
         cache_entry = cached_pairs.get(on_arm.arm_id)
+        arm_state = result_state_from_mapping(dict(arm_states[on_arm.arm_id]))
 
-        if isinstance(cache_entry, dict) and cache_entry.get("source_pair_dir"):
+        if arm_state.action == RESULT_ACTION_REUSE:
+            if not isinstance(cache_entry, dict) or not arm_state.source_dir:
+                raise RuntimeError(
+                    f"{on_arm.arm_id} canonical state=REUSE但缺少validated pair evidence"
+                )
             arm_started = time.perf_counter()
-            source_pair_dir = Path(str(cache_entry["source_pair_dir"])).resolve()
+            source_pair_dir = arm_state.source_dir
             if pair_dir.exists():
                 shutil.rmtree(pair_dir)
             shutil.copytree(source_pair_dir, pair_dir)
