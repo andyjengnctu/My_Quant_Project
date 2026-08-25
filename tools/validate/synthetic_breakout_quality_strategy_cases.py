@@ -1359,7 +1359,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and "核心策略結果" in render_report_source
                 and "R 預測／轉化" in render_report_source
                 and "資金／執行" in render_report_source
-                and "6. 執行摘要" in render_report_source
+                and "7. 執行摘要" in render_report_source
                 and "render_strategy_run_execution_table" in render_report_source
                 and "報表分工" not in render_report_source
                 and "render_strategy_r_analysis_table" in render_report_source
@@ -1401,7 +1401,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and 'f"[DONE] {on_arm.arm_id} {on_arm.name} "' in comparison_source
                 and 'elapsed={format_elapsed(' in comparison_source
                 and 'total={format_elapsed(' in comparison_source
-                and 'render_section("6. 執行摘要")' in comparison_source
+                and 'render_section("7. 執行摘要")' in comparison_source
                 and "render_strategy_run_execution_table" in comparison_source
                 and "_selector_timing_table(" not in render_report_source,
     )
@@ -2531,7 +2531,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "pair_upside_realization_refresh_required" in comparison_source
         and '"REFRESH"' in comparison_source
         and '"Diagnostics | Upside Realization"' in comparison_source
-        and 'render_section("3. Upside Survival / First-Passage")' in comparison_source
+        and 'render_section("4. Upside Survival / First-Passage")' in comparison_source
         and "render_upside_survival_summary_table" in comparison_source
         and "STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS" in strategy_compare_config_source,
     )

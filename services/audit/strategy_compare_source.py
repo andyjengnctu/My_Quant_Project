@@ -235,10 +235,13 @@ def resolve_strategy_result_dir_for_fingerprint(
             f"retained Audit Strategy Compare fingerprint格式無效: {fingerprint!r}"
         )
     candidates: list[Path] = []
+    latest_resolution_error: AuditSourceBlockedError | None = None
     try:
         candidates.append(resolve_latest_strategy_result_dir(root, output_root_text))
-    except AuditSourceBlockedError:
-        pass
+    except AuditSourceBlockedError as exc:
+        # Retained historical lookup may legitimately have no current/latest result.
+        # Keep the reason so a total lookup failure remains traceable.
+        latest_resolution_error = exc
     runs_dir = output_root / "runs"
     candidates.extend(
         sorted(
@@ -259,10 +262,15 @@ def resolve_strategy_result_dir_for_fingerprint(
         payload = _read_json(result_path)
         if isinstance(payload, Mapping) and _primary_strategy_fingerprints(payload) == {fingerprint}:
             return candidate
+    latest_detail = (
+        f", latest_resolution={latest_resolution_error}"
+        if latest_resolution_error is not None
+        else ""
+    )
     raise AuditSourceBlockedError(
         "缺少retained Audit指定的Strategy Compare completed run: "
         f"profile_output={project_relative_display_path(output_root, project_root=root)}, "
-        f"fingerprint={fingerprint}"
+        f"fingerprint={fingerprint}{latest_detail}"
     )
 
 

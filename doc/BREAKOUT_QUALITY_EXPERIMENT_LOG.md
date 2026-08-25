@@ -10129,3 +10129,10 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Retained Audit保護：`AUD-selection-k-r0-attribution`與`AUD-c69-marginal-position-attribution`明確pin pre-C70 completed Strategy Compare fingerprints（OOS=`fc215f2140d6`、Rolling=`94ec6685b7b0`），即使current suite改變仍只讀原正式run，不把新latest錯當舊證據。
 - Decision：**IMPLEMENTED / RESULT_PENDING / JOINT_K_R0_ABLATION / ROBUSTNESS_DEFERRED / NOT_PROMOTED**。
 
+### 2026-08-25 — Current-time authorization／report-contract formal closure
+
+- `extending_current`已於SR-C70收斂為C61/C58/C59/C64/C66/C70；同步移除已退出current suite之MR-13K、MR-13M、MR-13Q `current_time_validation_authorized`，保留既有historical/PIT evidence與identity，不改MR-13E/MR-13P/MR-13R current依賴。
+- Strategy Compare主報表新增`MFE × Safety 四象限（Filled buys）`後，synthetic readable-report contract同步更新後續章號（Upside=`4`、執行摘要=`7`）；只修validator對正式renderer的舊章號假設。
+- retained Audit pinned-fingerprint resolver移除pass-only specific exception handler，fallback語意不變，並在最終BLOCKED訊息保留latest解析失敗原因。
+- Decision：**ENGINEERING_GOVERNANCE_FIX_ONLY / SCIENTIFIC_SEMANTICS_UNCHANGED / NO_NEW_IDENTITY / NO_RETRAIN_REQUIRED**。
+
