@@ -125,6 +125,36 @@ def _average_rank_percentiles(values):
     return out
 
 
+def _decorate_same_day_rank_safety_scores(rows):
+    """Attach same-day average-rank Raw Safety percentiles for eligibility gating.
+
+    The transform uses only decision-time safety-head scores present on the current
+    orderable candidate cross-section. Missing safety scores remain unavailable and
+    are never imputed.
+    """
+
+    decorated = [dict(row) for row in list(rows or [])]
+    paired = []
+    safety = []
+    for idx, row in enumerate(decorated):
+        score = _candidate_continuous_safety_score(row)
+        if score is None:
+            row['breakout_quality_safety_score_percentile'] = None
+            continue
+        paired.append(idx)
+        safety.append(float(score))
+    percentiles = _average_rank_percentiles(safety)
+    for local_idx, row_idx in enumerate(paired):
+        decorated[row_idx]['breakout_quality_safety_score_percentile'] = float(
+            percentiles[local_idx]
+        )
+    return decorated, {
+        'raw_safety_gate_scored_count': int(len(paired)),
+        'raw_safety_gate_candidate_count': int(len(decorated)),
+        'raw_safety_gate_percentile_transform': 'same_day_orderable_average_zero_based_v1',
+    }
+
+
 def _decorate_same_day_rank_residual_safety_scores(rows):
     """Residualize frozen MR-13M safety against frozen MR-13K score cross-sectionally.
 

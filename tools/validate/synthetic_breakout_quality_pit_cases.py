@@ -185,6 +185,23 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         and not _fold_training_contract_is_compatible(changed_contract, expected_contract=expected_contract),
     )
 
+    score_output_only_change = {
+        **expected_contract,
+        "score_output_contract": {
+            "primary": "breakout_quality_score",
+            "conditional_mfe": "breakout_quality_score",
+            "raw_safety": "raw_safety_score",
+        },
+    }
+    check_true(
+        "pit_score_output_contract_change_reuses_same_fitting_identity_checkpoint",
+        _fold_training_contract_is_compatible(
+            score_output_only_change, expected_contract=expected_contract
+        )
+        and fold_training_identity(score_output_only_change)
+        == fold_training_identity(expected_contract),
+    )
+
     oos_2023 = {
         **expected_contract,
         "model_information_cutoff": "2022-12-31",
@@ -247,6 +264,51 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "conditional_safety_score" in dual_table.columns
         and abs(float(conditional_lookup["score"]) - 0.73) < 1e-12
         and bool(conditional_lookup["available"]),
+    )
+
+
+    with tempfile.TemporaryDirectory(prefix="mr13r_dual_head_pit_") as temp_dir:
+        score_path = Path(temp_dir) / "selection_point_in_time_scores.csv"
+        manifest_path = Path(temp_dir) / "selection_point_in_time_manifest.json"
+        pd.DataFrame([
+            {
+                "ticker": "2330",
+                "date": "2021-01-04",
+                "group_index": 1,
+                "breakout_quality_score": 0.91,
+                "raw_safety_score": 0.88,
+                "fold_id": "fold_20210101_20211231",
+                "model_information_cutoff": "2020-12-31",
+            }
+        ]).to_csv(score_path, index=False, encoding="utf-8-sig")
+        manifest_path.write_text(json.dumps({
+            "score_period": {"start": "2021-01-01", "end": "2021-12-31"},
+            "coverage": {"scored_group_count": 1},
+            "score_columns": {
+                "primary": "breakout_quality_score",
+                "conditional_mfe": "breakout_quality_score",
+                "raw_safety": "raw_safety_score",
+            },
+        }), encoding="utf-8")
+        reverse_dual_table = load_selection_point_in_time_score_table_from_path(
+            str(score_path), manifest_path=str(manifest_path)
+        )
+        raw_safety_lookup = lookup_selection_point_in_time_candidate_score(
+            project_root=str(Path(__file__).resolve().parents[2]),
+            ticker="2330",
+            signal_date="2021-01-04",
+            filter_id="breakout_quality_v1",
+            model_architecture="inception_time_safety_conditional_mfe_v1",
+            experiment_profile="daily_universal_safety_conditional_mfe_duo_head_full_list_ndcg_pairwise",
+            score_path_override=str(score_path),
+            manifest_path_override=str(manifest_path),
+            score_column="raw_safety_score",
+        )
+    check_true(
+        "mr13r_pit_retains_raw_safety_score_and_lookup_selects_same_source_aux_head",
+        "raw_safety_score" in reverse_dual_table.columns
+        and abs(float(raw_safety_lookup["score"]) - 0.88) < 1e-12
+        and bool(raw_safety_lookup["available"]),
     )
 
     summary.update({

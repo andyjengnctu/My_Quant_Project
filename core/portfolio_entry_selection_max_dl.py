@@ -1789,6 +1789,85 @@ def _reorder_resource_aware_continuous_score_no_k_no_r0(
     return score_order, diag
 
 
+def _reorder_resource_aware_continuous_score_no_k_no_r0_raw_safety_gate(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+    safety_percentile_cutoff,
+):
+    """SR-C71: C70 membership mechanics plus a Raw Safety percentile gate only.
+
+    K and R0 remain absent exactly as in C70.  Eligibility is restricted to
+    candidates with an available MR-13R Raw Safety head score whose same-day
+    orderable-candidate average-rank percentile is at least the configured cutoff.
+    Eligible names retain the unchanged Conditional-MFE model-score order and are
+    passed through the same canonical reservation simulator.
+    """
+
+    candidates = list(rows or [])
+    physical_free_slots = max(0, int(free_slots))
+    cutoff = float(safety_percentile_cutoff)
+    if not (0.0 <= cutoff <= 1.0):
+        raise ValueError('Raw Safety percentile cutoff必須介於0與1')
+    eligible = []
+    for row in candidates:
+        value = row.get('breakout_quality_safety_score_percentile')
+        try:
+            percentile = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(percentile) and percentile >= cutoff:
+            eligible.append(row)
+    base_rank = {id(row): idx for idx, row in enumerate(candidates)}
+    score_order = _max_dl_score_order(eligible, base_rank=base_rank)
+    selected = _simulate_reserved_candidate_order(
+        score_order,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=physical_free_slots,
+        params=params,
+    )
+    diag = _resource_aware_diag_from_result(
+        default_diag,
+        baseline,
+        selected,
+        changed=True,
+        promoted_pass_count=0,
+        selector='continuous-score-no-k-no-r0-raw-safety-gate',
+    )
+    selected_count = int(selected.get('selected_count', 0) or 0)
+    if not (0 <= selected_count <= physical_free_slots):
+        raise RuntimeError('No-K/No-R0 Raw Safety gate輸出超過physical free-slot contract')
+    # Keep ineligible rows after the eligible score order for full diagnostics while
+    # pre_market_order_limit prevents them from creating orders.
+    eligible_ids = {id(row) for row in score_order}
+    final_order = list(score_order) + [row for row in candidates if id(row) not in eligible_ids]
+    diag.update({
+        'mode': 'dl-selection',
+        'resource_preservation_required': False,
+        'count_constraint': 'zero_to_physical_free_slots_v1',
+        'baseline_k': int(baseline.get('selected_count', 0) or 0),
+        'physical_free_slots': int(physical_free_slots),
+        'no_k_no_r0': True,
+        'preserve_k': False,
+        'preserve_r0': False,
+        'raw_safety_gate_enabled': True,
+        'raw_safety_gate_percentile_cutoff': float(cutoff),
+        'raw_safety_gate_eligible_count': int(len(score_order)),
+        'pre_market_order_limit': int(selected_count),
+        'direct_score_order_feasible': True,
+        'basket_search_states': 1,
+        'basket_feasible_count': 1,
+        'constrained_solver_optimality_certified': False,
+    })
+    return final_order, diag
+
+
 def _reorder_resource_aware_continuous_score_no_r0_constrained_optimal(
     rows,
     *,

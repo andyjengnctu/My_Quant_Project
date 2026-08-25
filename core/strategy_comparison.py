@@ -67,6 +67,9 @@ STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIM
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0 = (
     'resource-aware-continuous-score-no-k-no-r0'
 )
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE = (
+    'resource-aware-continuous-score-no-k-no-r0-raw-safety-gate'
+)
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL = (
     'resource-aware-continuous-score-capital-no-r0-constrained-optimal'
 )
@@ -94,6 +97,7 @@ SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
 )
@@ -1076,6 +1080,34 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                         f"arm {key} Score No-K/No-R0必須綁Selection PIT score source: "
                         f"actual={settings.dl_sources[arm.dl_id].score_source!r}"
                     )
+            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE:
+                if options.get("preserve_k") is not False:
+                    raise ValueError(f"arm {key} Raw Safety gate必須preserve_k=False")
+                if options.get("preserve_r0") is not False:
+                    raise ValueError(f"arm {key} Raw Safety gate必須preserve_r0=False")
+                if options.get("selection_order") != "model_score_desc_then_canonical_tie_v1":
+                    raise ValueError(f"arm {key} Raw Safety gate selection_order不支援")
+                if options.get("safety_gate") != "same_day_orderable_percentile_gte_v1":
+                    raise ValueError(f"arm {key} Raw Safety gate contract不支援")
+                try:
+                    safety_cutoff = float(options.get("safety_percentile_cutoff"))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"arm {key} safety_percentile_cutoff必須為數值") from exc
+                if not 0.0 <= safety_cutoff <= 1.0:
+                    raise ValueError(f"arm {key} safety_percentile_cutoff必須介於0與1")
+                if options.get("selection_only") is not True:
+                    raise ValueError(f"arm {key} Raw Safety gate目前只允許Selection PIT score source")
+                safety_dl_id = str(options.get("safety_dl_id") or "").strip()
+                if not safety_dl_id or safety_dl_id not in settings.dl_sources:
+                    raise ValueError(f"arm {key} Raw Safety gate必須指定合法safety_dl_id")
+                if safety_dl_id != arm.dl_id:
+                    raise ValueError(f"arm {key} Raw Safety必須來自同一MR-13R PIT artifact")
+                if str(options.get("safety_score_column") or "").strip() != "raw_safety_score":
+                    raise ValueError(f"arm {key} Raw Safety gate必須使用raw_safety_score")
+                primary_source = settings.dl_sources[arm.dl_id]
+                safety_source = settings.dl_sources[safety_dl_id]
+                if primary_source.score_source != "selection_point_in_time" or safety_source.score_source != primary_source.score_source:
+                    raise ValueError(f"arm {key} Raw Safety primary/secondary必須使用同一Selection PIT source")
             if arm.dl_runtime_mode in {
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,

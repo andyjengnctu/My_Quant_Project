@@ -384,10 +384,45 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "c70_differs_from_c66_only_by_joint_k_r0_resource_ablation",
         bool(c66_c70_checks) and all(c66_c70_checks),
     )
+
+
+    c70_c71_checks = []
+    for current_settings in settings_by_mode.values():
+        c70 = current_settings.arms["C70"]
+        c71 = current_settings.arms["C71"]
+        c70_payload = c70.as_dict()
+        c71_payload = c71.as_dict()
+        for payload in (c70_payload, c71_payload):
+            for key in ("arm_id", "name", "description", "dl_runtime_mode", "dl_runtime_options"):
+                payload.pop(key, None)
+        c71_options = dict(c71.dl_runtime_options or {})
+        c70_c71_checks.append(
+            c70_payload == c71_payload
+            and c70.dl_id == c71.dl_id == "CONT13R_ROLL"
+            and resolve_arm_runtime_dl_source_ids(current_settings, c71) == ("CONT13R_ROLL",)
+            and c70.dl_runtime_mode == "resource-aware-continuous-score-no-k-no-r0"
+            and c71.dl_runtime_mode
+            == "resource-aware-continuous-score-no-k-no-r0-raw-safety-gate"
+            and c71_options == {
+                "preserve_k": False,
+                "preserve_r0": False,
+                "selection_order": "model_score_desc_then_canonical_tie_v1",
+                "safety_gate": "same_day_orderable_percentile_gte_v1",
+                "safety_percentile_cutoff": 0.50,
+                "safety_dl_id": "CONT13R_ROLL",
+                "safety_score_column": "raw_safety_score",
+                "selection_only": True,
+            }
+        )
     check_true(
-        "current_suite_contains_only_user_selected_c61_c58_c59_c64_c66_c70",
-        expected_arm_ids == ("C61", "C58", "C59", "C64", "C66", "C70")
+        "c71_differs_from_c70_only_by_same_source_raw_safety_eligibility_gate",
+        bool(c70_c71_checks) and all(c70_c71_checks),
+    )
+    check_true(
+        "current_suite_contains_focused_c61_c58_c59_c64_c66_c70_c71",
+        expected_arm_ids == ("C61", "C58", "C59", "C64", "C66", "C70", "C71")
         and "C70-C66" in expected_contrast_ids
+        and "C71-C70" in expected_contrast_ids
         and all(arm_id not in expected_arm_ids for arm_id in ("C62", "C63", "C68", "C69", "C60", "C65")),
     )
 

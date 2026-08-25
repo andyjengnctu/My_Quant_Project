@@ -1467,6 +1467,61 @@ def _run_resource_aware_entry_selection_matrix_case(base_params):
         ),
     )
 
+
+    # SR-C71 safety-only treatment: identical C70 No-K/No-R0 mechanics and
+    # Conditional-MFE primary score order, with only a same-day Raw Safety
+    # orderable-percentile >= 0.50 eligibility gate.  A/E are below the gate;
+    # C/D remain eligible and canonical cash/sizing may fill both without any
+    # baseline K or R0 floor.
+    c71_rows = [
+        candidate(
+            t, price, qty, score,
+            "resource-aware-continuous-score-no-k-no-r0-raw-safety-gate",
+            excess_r, safety,
+        )
+        for t, price, qty, score, excess_r, safety in (
+            ("A", 100.0, 2600, 0.10, 0.01, 0.10),
+            ("C", 100.0, 800, 0.99, 0.45, 0.90),
+            ("D", 100.0, 800, 0.98, 0.40, 0.80),
+            ("E", 100.0, 800, 0.97, 0.35, 0.20),
+        )
+    ]
+    for row in c71_rows:
+        row["breakout_quality_ranking_options"] = {
+            "safety_percentile_cutoff": 0.50,
+        }
+    c71_order, c71_diag = reorder_candidates_for_resource_aware_quality(
+        c71_rows,
+        available_cash=300_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=7,
+        max_positions=10,
+        params=params,
+    )
+    c71_selected = select_resource_aware_action_candidates(c71_order, c71_diag)
+    add_check(
+        results, "portfolio_entry_selection", case_id,
+        "c71_raw_safety_gate_is_only_new_membership_restriction_over_c70",
+        (1, 2, ("C", "D")),
+        (
+            int(c71_diag.get("baseline_selected_count", -1)),
+            int(c71_diag.get("selected_count", -1)),
+            tuple(row["ticker"] for row in c71_selected),
+        ),
+    )
+    add_check(
+        results, "portfolio_entry_selection", case_id,
+        "c71_raw_safety_gate_uses_same_day_orderable_percentile_and_keeps_no_k_no_r0",
+        (4, 2, 0.50, False, False),
+        (
+            int(c71_diag.get("raw_safety_gate_scored_count", -1)),
+            int(c71_diag.get("raw_safety_gate_eligible_count", -1)),
+            float(c71_diag.get("raw_safety_gate_percentile_cutoff", -1.0)),
+            bool(c71_diag.get("preserve_k")),
+            bool(c71_diag.get("preserve_r0")),
+        ),
+    )
+
     # Performance-contract fixture: physical slots can be much wider than the
     # cash-feasible count.  The exact scientific result is unchanged, but K-Flex
     # must use the admissible minimum-notional cash cap before branch-and-bound

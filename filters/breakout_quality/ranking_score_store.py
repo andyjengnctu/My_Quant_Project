@@ -103,6 +103,7 @@ PIT_REQUIRED_SCORE_COLUMNS = (
 PIT_OPTIONAL_SCORE_COLUMNS = (
     "primary_mfe_score",
     "conditional_safety_score",
+    "raw_safety_score",
 )
 
 
@@ -240,6 +241,21 @@ def _validate_score_eligibility_contract(
             raise ValueError(
                 "Conditional MFE-Safety PIT artifact缺少dual-head score contract；"
                 "請以目前producer重建PIT Scores與audit"
+            )
+    if (
+        str(profile.training_objective)
+        == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
+    ):
+        score_columns = dict(manifest.get("score_columns") or {})
+        expected_columns = {
+            "primary": "breakout_quality_score",
+            "conditional_mfe": "breakout_quality_score",
+            "raw_safety": "raw_safety_score",
+        }
+        if score_columns != expected_columns:
+            raise ValueError(
+                "Safety→Conditional-MFE PIT artifact缺少Raw Safety score contract；"
+                "請以既有MR-13R fold checkpoint重建PIT scores與audit（不需重訓）"
             )
 
 

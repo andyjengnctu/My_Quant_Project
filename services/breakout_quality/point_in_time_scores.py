@@ -42,6 +42,7 @@ from config.breakout_quality import (
 )
 from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_workflow_settings,
 )
@@ -81,6 +82,7 @@ from services.breakout_quality.continuous_ranker_pipeline import (
     fit_final,
     load_continuous_ranker_data,
     predict_conditional_mfe_safety_scores,
+    predict_safety_conditional_mfe_scores,
     predict_scores,
     resolve_ranker_execution_plan,
     select_epoch,
@@ -101,6 +103,7 @@ REQUIRED_SCORE_COLUMNS = (
 OPTIONAL_SCORE_COLUMNS = (
     "primary_mfe_score",
     "conditional_safety_score",
+    "raw_safety_score",
 )
 
 
@@ -708,6 +711,17 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
         == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
     ):
         payload["score_eligibility_contract"] = build_score_eligibility_contract(bundle.profile)
+    if (
+        str(bundle.profile.training_objective)
+        == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
+    ):
+        # Score-output-only identity.  Deliberately excluded from the fitting identity
+        # so existing MR-13R checkpoints can be reused and rescored without training.
+        payload["score_output_contract"] = {
+            "primary": "breakout_quality_score",
+            "conditional_mfe": "breakout_quality_score",
+            "raw_safety": "raw_safety_score",
+        }
     return payload
 
 
@@ -817,6 +831,7 @@ def _fold_contract_is_compatible(
         "training_settings",
         "source_contract",
         "lookahead_contract",
+        "score_output_contract",
     )
     if not all(manifest.get(field) == expected_contract.get(field) for field in comparable_fields):
         return False
@@ -1057,7 +1072,21 @@ def _rescore_fold_from_compatible_checkpoint(
         model.to(plan.device)
         model.eval()
         conditional_heads = None
+        reverse_conditional_heads = None
         if (
+            bundle.profile.training_objective
+            == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
+        ):
+            reverse_conditional_heads = predict_safety_conditional_mfe_scores(
+                torch_module,
+                model,
+                bundle,
+                ids["score_ids"],
+                batch_size=int(args.evaluation_batch_size),
+                plan=plan,
+            )
+            scores = reverse_conditional_heads["conditional_mfe"]
+        elif (
             bundle.profile.training_objective
             == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
         ):
@@ -1085,6 +1114,8 @@ def _rescore_fold_from_compatible_checkpoint(
             ["ticker", "date", "group_index"]
         ].copy()
         frame["breakout_quality_score"] = scores
+        if reverse_conditional_heads is not None:
+            frame["raw_safety_score"] = reverse_conditional_heads["raw_safety"]
         if conditional_heads is not None:
             frame["primary_mfe_score"] = conditional_heads["primary_mfe"]
             frame["conditional_safety_score"] = conditional_heads["conditional_safety"]
@@ -1389,7 +1420,21 @@ def _train_fold(
         plan=plan,
     )
     conditional_heads = None
+    reverse_conditional_heads = None
     if (
+        bundle.profile.training_objective
+        == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
+    ):
+        reverse_conditional_heads = predict_safety_conditional_mfe_scores(
+            torch,
+            model,
+            bundle,
+            ids["score_ids"],
+            batch_size=int(args.evaluation_batch_size),
+            plan=plan,
+        )
+        scores = reverse_conditional_heads["conditional_mfe"]
+    elif (
         bundle.profile.training_objective
         == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
     ):
@@ -1417,6 +1462,8 @@ def _train_fold(
         ["ticker", "date", "group_index"]
     ].copy()
     frame["breakout_quality_score"] = scores
+    if reverse_conditional_heads is not None:
+        frame["raw_safety_score"] = reverse_conditional_heads["raw_safety"]
     if conditional_heads is not None:
         frame["primary_mfe_score"] = conditional_heads["primary_mfe"]
         frame["conditional_safety_score"] = conditional_heads["conditional_safety"]
@@ -2048,6 +2095,13 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
         "score_column": "breakout_quality_score",
         "score_columns": (
             {
+                "primary": "breakout_quality_score",
+                "conditional_mfe": "breakout_quality_score",
+                "raw_safety": "raw_safety_score",
+            }
+            if bundle.profile.training_objective
+            == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
+            else {
                 "primary": "breakout_quality_score",
                 "primary_mfe": "primary_mfe_score",
                 "conditional_safety": "conditional_safety_score",

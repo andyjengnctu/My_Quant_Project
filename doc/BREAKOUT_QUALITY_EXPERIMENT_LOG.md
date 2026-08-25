@@ -10136,3 +10136,20 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - retained Audit pinned-fingerprint resolver移除pass-only specific exception handler，fallback語意不變，並在最終BLOCKED訊息保留latest解析失敗原因。
 - Decision：**ENGINEERING_GOVERNANCE_FIX_ONLY / SCIENTIFIC_SEMANTICS_UNCHANGED / NO_NEW_IDENTITY / NO_RETRAIN_REQUIRED**。
 
+
+### 2026-08-25 — SR-C70 OOS + Rolling結果；No-K/No-R0把upside主要移到Low-Safety
+
+- 使用者完成focused current suite C61/C58/C59/C64/C66/C70的OOS與Rolling。C70與C66完全相同MR-13R final Conditional-MFE ranking，只共同移除K/R0，因此`C70-C66`可直接解讀joint resource-restriction effect。
+- OOS C66→C70：Return=`131.41→74.18%`、MDD=`16.24→21.82%`、RoMD=`8.09→3.40`、EV=`0.73→0.25R`、平均曝險=`91.48→57.19%`、position gap=`2020→640`。Filled High-MFE=`35.99→62.09%`、HM/LS=`16.56→42.58%`、LM/HS=`39.17→15.93%`，但HM/HS幾乎不動=`19.43→19.51%`、High-Safety=`58.60→35.44%`。Full-MFE=`1.03→1.93R`、Adverse=`0.30→0.48R`、Realized EV=`0.75→0.24R`。
+- Rolling C66→C70：Return=`201.29→101.33%`、MDD=`16.24→33.21%`、RoMD=`12.40→3.05`、EV=`0.89→0.36R`、平均曝險=`93.00→59.56%`、position gap=`2514→604`。High-MFE=`40.13→60.26%`、HM/LS=`20.07→40.26%`、LM/HS=`41.12→16.88%`、HM/HS=`20.07→20.00%`、High-Safety=`61.18→36.88%`。Full-MFE=`1.13→1.97R`、Adverse=`0.28→0.51R`、Realized EV=`0.90→0.35R`。
+- Interpretation：Conditional-MFE ranking在沒有K/R0時確實成功取得更多upside，但增加的High-MFE幾乎全部來自Low-Safety，而非增加HM/HS；同時R0移除後即使position count更滿，資金曝險仍降到約58–60%，說明K不能補償R0的capital-deployment功能。
+- Decision：**C70_RESULT_AVAILABLE / PERFORMANCE_NOT_SUPPORTED / MECHANISM_EVIDENCE_SUPPORTS_ABSOLUTE_SAFETY_GATE / NO_ROBUSTNESS / NOT_PROMOTED / NEXT=SR-C71**。
+
+### 2026-08-25 — SR-C71實作；C70只新增MR-13R Raw Safety eligibility
+
+- 新arm `C71 = Min MR-13R Conditional-MFE Raw-Safety Gate No-K No-R0`。C71與C70共用`CONT13R_ROLL`、Min base-finalist-best、all-off、final Conditional-MFE primary score、No-K/No-R0、canonical sizing/cash/orderability/execution與max positions=10；唯一scientific change是Raw Safety eligibility。
+- Gate contract固定為：從同一MR-13R Selection PIT artifact讀`raw_safety_score`；在**當日orderable candidate cross-section**以average rank zero-based percentile形成Safety percentile；`>=0.50`才eligible，missing score fail-closed。eligible內仍按C70原final model_score descending + deterministic canonical tie，再交canonical cash simulator。沒有Conditional-MFE threshold、score fusion、capital weighting、K/R0或新model target。
+- 實作時確認MR-13R checkpoint本來就有Raw Safety auxiliary head，但既有Selection PIT producer只輸出final Conditional-MFE。現將MR-13R score-output contract擴充為`primary/conditional_mfe=breakout_quality_score`與`raw_safety=raw_safety_score`。該`score_output_contract`只進fold score/artifact compatibility，不進model-fitting identity；因此舊MR-13R fold checkpoint必須REUSE後重新推論score，而不是重訓。
+- Current Compare Suite擴為`C61/C58/C59/C64/C66/C70/C71`，schema=`59`。Primary contrast=`C71-C70`；C70保留joint K/R0 mechanism reference。Production C42/C44不變；C71先做single-seed OOS+Rolling，Multi-seed deferred。
+- GPT targeted synthetic：resource-aware selector=`30/30 PASS`；Strategy Compare config-driven=`61/61 PASS`；PIT builder=`12/12 PASS`，其中直接驗`score_output_contract`變更不改fitting identity且`raw_safety_score`可由同一PIT table lookup。
+- Decision：**IMPLEMENTED / RESULT_PENDING / RAW_SAFETY_ONLY_ELIGIBILITY_CHANGE / SAME_CHECKPOINT_SCORE_ONLY_RESCORE / NO_RETRAIN / SINGLE_SEED_FIRST / NOT_PROMOTED**。
