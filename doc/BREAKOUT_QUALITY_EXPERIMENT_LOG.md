@@ -10007,3 +10007,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 修正正式模型訓練選單把current experiment名稱直接寫成`Conditional-MFE Single／Duo Forward Model Gate`的錯誤；依`PROJECT_SETTINGS B13`，選單只顯示穩定工作類型`比較設定中的 Continuous Rankers`，current MR/profile集合仍完全由config驅動，進入後才顯示實際model/profile。
 - 同步補上原實作遺漏的`choice == "6"` dispatch；選入後委派設定中的兩個Forward Model Gate，不改MR-13Q/R target、architecture、loss、authorization、C65/C66或任何scientific semantics。
 - Decision：**MENU_GOVERNANCE_FIX_ONLY / SCIENTIFIC_SEMANTICS_UNCHANGED**。
+
+### 2026-08-25 — MR-13Q/R Forward Model Gate + C65/C66 single-seed conversion完成；轉入MFE × Safety target-geometry Audit
+
+- MR-13Q Forward Conditional-MFE：OOS Daily rho=`0.3181`、Global rho=`0.1980`、Pair=`60.86%`、breakout Daily rho=`0.2818`。MR-13R Raw Safety OOS Daily rho=`0.3612`；Conditional-MFE OOS Daily rho=`0.3509`、Global rho=`0.3233`、Pair=`62.07%`、breakout Conditional-MFE Daily rho=`0.3107`。因此顯式Safety-conditioned duo-head的J learnability明顯優於single-head，但這只通過model learnability層。
+- OOS conversion：C59 Return/MDD/RoMD/EV=`166.49%/15.92%/10.45/1.24R`；C65=`181.75%/14.23%/12.77/0.87R`；C66=`131.41%/16.24%/8.09/0.73R`。Full-MFE C59/C65/C66=`0.98/1.03/1.03R`，Adverse=`0.23/0.24/0.30R`，`+2R前初始Stop=8.82%/14.71%/9.09%`，Realized EV=`1.28/0.89/0.75R`。C65 OOS headline較佳但conversion quality沒有同步改善；C66雖模型最好學，Adverse反而最高。
+- Rolling conversion：C59 Return/RoMD/Full-MFE/Adverse/Realized EV=`201.10%/12.63/1.04R/0.27R/1.14R`；C65=`182.22%/11.67/1.02R/0.26R/0.79R`；C66=`201.29%/12.40/1.13R/0.28R/0.90R`，C66最差完整年度=`-1.94%`、Log R²=`0.9115`。C66 Rolling接近C59 headline，但仍沒有Realized-EV dominance。
+- Decision：Q/R都保留research value，MR-13R architecture的顯式Safety conditioning值得保留；但目前沒有candidate對C59形成OOS+Rolling乾淨dominance，故**不進Multi-seed robustness、不進Fixed-Window Stability**。最可能剩餘不確定性轉為target geometry：`J=U-E(U|S)`只表示「相對該Safety水準異常高MFE」，並不要求absolute Safety高。
+- 下一個最小必要evidence固定為`AUD-mfe-safety-target-geometry`：只讀canonical Pure-MFE/Safety future truth與既有OOS/Rolling Strategy Compare row-level evidence，使用同日cross-sectional percentile 0.50切High/Low，比較All eligible stock-days、C58 orderable pool、C58/C59/C65/C66四象限分布與相對母體enrichment。Audit不重訓、不改target、不改selector；結果尚未取得，因此本Log不預標GO/REJECT。
+

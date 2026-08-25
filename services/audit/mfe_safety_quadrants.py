@@ -1197,6 +1197,15 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
         ),
         encoding="utf-8",
     )
+
+    latest_dir = output_root / "latest"
+    latest_dir.mkdir(parents=True, exist_ok=True)
+    (latest_dir / "audit.md").write_text(report_path.read_text(encoding="utf-8"), encoding="utf-8")
+    (latest_dir / "audit.json").write_text(json_path.read_text(encoding="utf-8"), encoding="utf-8")
+    (latest_dir / "audit.csv").write_bytes(csv_path.read_bytes())
+    (latest_dir / "manifest.json").write_text(
+        manifest_path.read_text(encoding="utf-8"), encoding="utf-8"
+    )
     return result
 
 
@@ -1244,6 +1253,11 @@ def preflight(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
 
 def load_latest_result(definition: AuditDefinition, *, project_root: Path) -> dict[str, Any] | None:
     output_root = project_root / AUDIT_OUTPUT_ROOT / definition.output_subdir
+    canonical_latest_result = output_root / "latest" / "audit.json"
+    if canonical_latest_result.exists():
+        payload = _load_json(canonical_latest_result)
+        return dict(payload) if isinstance(payload, Mapping) else None
+
     latest_path = output_root / "latest.json"
     if not latest_path.exists():
         return None
@@ -1262,14 +1276,43 @@ def load_latest_result(definition: AuditDefinition, *, project_root: Path) -> di
     return dict(payload) if isinstance(payload, Mapping) else None
 
 
+def collect_status(definition: AuditDefinition, *, project_root: Path) -> dict[str, Any]:
+    state = preflight(definition, project_root=Path(project_root))
+    blockers = tuple(str(value) for value in state.get("blockers", ()))
+    source = {
+        "display": "Pure-MFE × Low-Adverse Safety truth + OOS/Rolling Strategy Compare",
+        "target_paths": list(state.get("target_paths", ())),
+        "strategy_paths": list(state.get("strategy_paths", ())),
+    }
+    return {
+        "status": str(state.get("status") or "BLOCKED"),
+        "reason": "；".join(blockers),
+        "source": source,
+    }
+
+
+def run_formal_audit(
+    definition: AuditDefinition,
+    *,
+    project_root: Path,
+    quiet: bool = False,
+) -> dict[str, Any]:
+    result = run_audit(definition, project_root=Path(project_root))
+    if not quiet:
+        print(render_result(result))
+    return result
+
+
 __all__ = [
     "AuditBlockedError",
     "SUPPORTED_AUDIT_TYPE",
     "build_truth_geometry",
+    "collect_status",
     "load_continuous_truth",
     "load_latest_result",
     "load_strategy_rows",
     "preflight",
     "render_result",
     "run_audit",
+    "run_formal_audit",
 ]

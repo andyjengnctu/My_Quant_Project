@@ -20,7 +20,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
     "breakout_quality": {
         "enabled": True,
         "audits": {
-            "mfe-safety-target-geometry": {
+            "AUD-mfe-safety-target-geometry": {
                 "enabled": True,
                 "audit_type": "continuous_truth_strategy_quadrants",
                 "description": (

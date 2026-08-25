@@ -77,6 +77,16 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         read_only=True,
         cli_command="audit-point-in-time-scores",
     ),
+    "continuous_truth_strategy_quadrants": AuditCatalogEntry(
+        audit_type="continuous_truth_strategy_quadrants",
+        domain="breakout_quality",
+        module="services.audit.mfe_safety_quadrants",
+        mode="formal",
+        description="只讀MFE × Safety truth與Strategy Compare row-level evidence的四象限Audit",
+        read_only=True,
+        status_function="collect_status",
+        run_function="run_formal_audit",
+    ),
 
 }
 

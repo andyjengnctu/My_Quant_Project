@@ -40,7 +40,7 @@ from services.research.strategy_compare_application import (
     show_strategy_comparison_profile_status,
     show_strategy_multi_seed_robustness_status,
 )
-from services.audit.configured_runner import (
+from services.audit.runner import (
     render_audit_status,
     render_latest_audit_summary,
     run_enabled_audits,
