@@ -49,6 +49,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         _build_fold_periods,
         _fold_training_contract_is_compatible,
         _publish_fold_checkpoint_to_cache,
+        _reload_fold_manifest_after_checkpoint_cache_sync,
         fold_training_identity,
         _resolve_training_universe_start,
         _stable_fold_id,
@@ -259,6 +260,62 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         ),
     )
 
+    # The publisher may rewrite the fold manifest during canonical cache repair.  The
+    # aggregate builder must reload that post-sync manifest instead of retaining the
+    # pre-repair in-memory SHA that triggered the 2026-08-26 Rolling PIT audit failure.
+    with tempfile.TemporaryDirectory(prefix="pit_post_cache_manifest_sync_") as temp_dir:
+        root = Path(temp_dir)
+        fold_dir = root / "fold"
+        cache_root = root / "cache"
+        fold_dir.mkdir(parents=True)
+        cache_entry = cache_root / fold_training_identity(expected_contract)
+        cache_entry.mkdir(parents=True)
+        cached_model = cache_entry / "model.pt"
+        local_model = fold_dir / "model.pt"
+        score_path = fold_dir / "scores.csv"
+        cached_model.write_bytes(b"canonical-fitting-checkpoint")
+        local_model.write_bytes(b"metadata-only-drifted-local-checkpoint")
+        score_path.write_text("ticker,date\n2330,2021-01-04\n", encoding="utf-8")
+        cached_checkpoint = build_file_manifest(cached_model)
+        stale_local_checkpoint = build_file_manifest(local_model)
+        cached_manifest = {
+            **expected_contract,
+            "artifacts": {"checkpoint": cached_checkpoint},
+        }
+        stale_in_memory_manifest = {
+            **score_output_only_change,
+            "migration": {
+                "kind": "expanded_daily_score_universe_checkpoint_reuse",
+                "training_contract_unchanged": True,
+            },
+            "artifacts": {
+                "checkpoint": stale_local_checkpoint,
+                "scores": build_file_manifest(score_path),
+            },
+        }
+        (cache_entry / "manifest.json").write_text(
+            json.dumps(cached_manifest), encoding="utf-8"
+        )
+        (fold_dir / "manifest.json").write_text(
+            json.dumps(stale_in_memory_manifest), encoding="utf-8"
+        )
+        _publish_fold_checkpoint_to_cache(
+            fold_dir=fold_dir, cache_root=cache_root, fold_contract=score_output_only_change
+        )
+        synced_manifest = _reload_fold_manifest_after_checkpoint_cache_sync(
+            fold_dir=fold_dir, fold_contract=score_output_only_change
+        )
+        aggregate_checkpoint_record = dict(synced_manifest["artifacts"]["checkpoint"])
+        actual_checkpoint_record = build_file_manifest(local_model)
+    check_true(
+        "pit_aggregate_reloads_post_cache_repair_fold_manifest_checkpoint_sha",
+        bool(
+            stale_in_memory_manifest["artifacts"]["checkpoint"] != actual_checkpoint_record
+            and aggregate_checkpoint_record == actual_checkpoint_record
+            and synced_manifest["migration"].get("canonical_checkpoint_cache_restore") is True
+        ),
+    )
+
     with tempfile.TemporaryDirectory(prefix="pit_true_checkpoint_conflict_") as temp_dir:
         root = Path(temp_dir)
         fold_dir = root / "fold"
@@ -301,6 +358,15 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "pit_score_only_rescore_does_not_rewrite_fitted_checkpoint_bytes",
         "torch_module.save(" not in rescore_source
         and "source_checkpoint_sha_preserved" in rescore_source,
+    )
+
+    loop_anchor = pit_source.index("for fold_index, (fold, ids) in enumerate")
+    publish_call = pit_source.index("_publish_fold_checkpoint_to_cache(", loop_anchor)
+    post_sync_reload = pit_source.index("_reload_fold_manifest_after_checkpoint_cache_sync(", publish_call)
+    aggregate_append = pit_source.index("fold_manifests.append(manifest)", post_sync_reload)
+    check_true(
+        "pit_cache_sync_reloads_fold_manifest_before_top_level_aggregate_append",
+        publish_call < post_sync_reload < aggregate_append,
     )
 
     oos_2023 = {

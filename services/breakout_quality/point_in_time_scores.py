@@ -1067,6 +1067,40 @@ def _publish_fold_checkpoint_to_cache(
     }
 
 
+def _reload_fold_manifest_after_checkpoint_cache_sync(
+    *, fold_dir: Path, fold_contract: dict[str, Any]
+) -> dict[str, Any]:
+    """Reload the canonical fold manifest after checkpoint-cache synchronization.
+
+    Cache synchronization may repair a score-only metadata rewrite by restoring the
+    canonical fitted checkpoint and rewriting the fold manifest.  The caller must
+    aggregate this post-sync manifest rather than an earlier in-memory snapshot.
+    """
+
+    fold_dir = Path(fold_dir).resolve()
+    manifest_path = fold_dir / FOLD_MANIFEST_FILENAME
+    model_path = fold_dir / DEFAULT_MODEL_FILENAME
+    score_path = fold_dir / FOLD_SCORE_FILENAME
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"PIT fold cache同步後manifest無法讀取: {fold_dir.name}"
+        ) from exc
+    if not isinstance(manifest, dict):
+        raise RuntimeError(f"PIT fold cache同步後manifest格式無效: {fold_dir.name}")
+    if not _fold_training_contract_is_compatible(
+        manifest, expected_contract=fold_contract
+    ):
+        raise RuntimeError(f"PIT fold cache同步後fitting identity不一致: {fold_dir.name}")
+    artifacts = dict(manifest.get("artifacts") or {})
+    if build_file_manifest(model_path) != artifacts.get("checkpoint"):
+        raise RuntimeError(f"PIT fold cache同步後checkpoint hash/size與manifest不一致: {fold_dir.name}")
+    if build_file_manifest(score_path) != artifacts.get("scores"):
+        raise RuntimeError(f"PIT fold cache同步後score hash/size與manifest不一致: {fold_dir.name}")
+    return manifest
+
+
 def _rescore_fold_from_compatible_checkpoint(
     *,
     fold_dir: Path,
@@ -1300,9 +1334,9 @@ def _rescore_fold_from_fitting_checkpoint(
         if rescored is None:
             return None
         frame, manifest = rescored
-        # The mode-local rescore helper refreshes checkpoint metadata for a score-only
-        # contract change.  Fitting-identity reuse is stricter: restore the exact source
-        # checkpoint bytes so OOS and Rolling share one identical fitted artifact SHA.
+        # The mode-local rescore helper preserves fitted checkpoint bytes.
+        # Fitting-identity reuse likewise restores the exact source checkpoint bytes so
+        # OOS and Rolling share one identical fitted artifact SHA.
         shutil.copy2(source_model_path, staging / DEFAULT_MODEL_FILENAME)
         manifest = {
             **manifest,
@@ -2088,6 +2122,13 @@ def _run_point_in_time_scores(args: argparse.Namespace) -> int:
             _publish_fold_checkpoint_to_cache(
                 fold_dir=fold_dir,
                 cache_root=Path(str(args.checkpoint_cache_root)),
+                fold_contract=fold_contract,
+            )
+            # Cache synchronization may repair model.pt + fold manifest in place.
+            # Reload the post-sync canonical manifest before top-level aggregation;
+            # otherwise the combined PIT manifest can retain a stale pre-repair SHA.
+            manifest = _reload_fold_manifest_after_checkpoint_cache_sync(
+                fold_dir=fold_dir,
                 fold_contract=fold_contract,
             )
         score_frames.append(frame)

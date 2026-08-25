@@ -10162,3 +10162,10 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Regression：PIT synthetic新增三個契約：score-output-only identity不改fitting identity、rescore helper不得呼叫`torch_module.save()`改checkpoint bytes、已污染local fold可由canonical cache自癒；另驗真正same-identity/different-checkpoint仍拒絕。
 - Decision：**ENGINEERING_FIX / NO_SCIENTIFIC_IDENTITY_CHANGE / NO_RETRAIN / C71_RESULT_PENDING**。使用者可直接再次執行原Strategy Compare OOS入口，canonical producer應RESUME/REUSE checkpoint並完成Raw Safety rescore。
 
+### 2026-08-26 — C71 PIT score-only cache restore後 aggregate checkpoint hash propagation 修正
+
+- 使用者重新執行C71 OOS前置時，上一輪canonical fitting-cache self-heal已不再拋出same-identity/different-checkpoint，但後續PIT Audit仍失敗：`Rolling PIT fold_20210101_20260302 checkpoint hash不一致`。
+- Root cause：`_publish_fold_checkpoint_to_cache`在受控score-only migration下會以canonical cache bytes還原local `model.pt`並同步改寫fold manifest；主PIT builder卻仍把cache同步**之前**的in-memory `manifest`放入`fold_manifests`，使top-level `selection_point_in_time_manifest.json`的`folds[].artifacts.checkpoint`殘留舊SHA。PIT Audit因此正確偵測到aggregate record與實際checkpoint不一致。
+- Fix：cache publish/sync完成後，builder必須由fold目錄重新載入canonical manifest並重新驗證fitting compatibility、checkpoint hash/size與fold score hash/size，再使用此post-sync manifest建立coverage與top-level fold records。真正checkpoint分叉的fail-closed規則完全不變。
+- Scientific impact：**ENGINEERING_ONLY / NO_MODEL_RETRAIN / NO_WEIGHT_CHANGE / NO_C71_IDENTITY_CHANGE**。C71仍是C70 + MR-13R Raw Safety gate；只修score-only RESUME artifact integrity propagation。
+
