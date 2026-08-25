@@ -10024,3 +10024,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 修正：Audit 直接消費 aggregate `pair_execution[arm_id].current_pair_dir` 的 canonical arm→pair mapping，再讀該 pair 已存在的 row sidecar；不重跑策略、不重建 score、不修改 selector。Strategy selection truth join 同步重用既有 Strategy Compare `breakout_quality_score_date → score_event_date` 契約，continuation／re-entry 不以較晚的 transaction signal date 取代模型資訊日。
 - Preflight 同步升級為驗證每個 configured arm 的 canonical pair sidecar 與 score-event mapping；不存在或不合法時直接顯示 BLOCKED，不再先顯示 READY 後才於執行階段失敗。
 - Decision：**ENGINEERING_SOURCE_RESOLUTION_FIXED / SCIENCE_UNCHANGED / AUDIT_RESULT_PENDING**。Audit 問題、四象限 threshold、cohort、OOS/Rolling stop rule與後續研究順序均不變。
+
+### 2026-08-25 — AUD-mfe-safety-target-geometry 第二次執行：shared baseline topology resolver 修正
+
+- 使用者套用第一次 row-evidence resolver 後，formal preflight 正確提前顯示 `BLOCKED`，但阻擋集中在 `extending_window_oos/C58` 與 `extending_window_rolling/C58`：`Strategy Compare缺少pair_execution evidence`。
+- 根因修正前一筆 Log 的不精確描述：`pair_execution[arm_id]` 並不是所有 displayed arms 都必然存在。Strategy Compare 的 execution-group contract 中，只有 DL-on arm 與沒有 DL-on partner 的 standalone DL-off baseline 持有 direct `pair_execution`；C58 是 C59/C60/C64/C65/C66 的 shared DL-off baseline，其 `no_filter_*` row evidence 內嵌在這些 paired artifacts，因此既有 aggregate 合法地可以沒有 direct `pair_execution[C58]`。
+- 修正：formal Audit resolver 改為直接重用 `filters/breakout_quality/strategy_compare_runtime.py` 的 canonical execution-group SSOT。若 requested arm 是 shared DL-off baseline且沒有 direct mapping，就依 execution order 解析與 aggregate `_scenario_payloads` 相同的首個 DL-on anchor `current_pair_dir`，讀取其中 `no_filter_orderable_candidates.csv`／`no_filter_selected_buys.csv`；不另外建立比 producer 更嚴格的跨pair byte-identity gate。DL-on arm仍直接使用自己的 `score_ranking_*` sidecar。
+- 這是既有 artifact topology 的 read-only解析修正；不重跑 OOS／Rolling、不重建 score、不改 target、selector、strategy semantics 或 comparison identity。Audit decision question、四象限 threshold、cohort與停止條件均不變。
+- Decision：**SHARED_BASELINE_RESOLVER_FIXED / SCIENCE_UNCHANGED / AUDIT_RESULT_PENDING**。

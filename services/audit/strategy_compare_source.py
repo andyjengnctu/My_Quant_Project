@@ -12,6 +12,9 @@ import pandas as pd
 from config.strategy_compare import get_strategy_comparison_settings
 from core.path_utils import project_relative_display_path
 from core.strategy_comparison import strategy_comparison_fingerprint
+from filters.breakout_quality.strategy_compare_runtime import (
+    strategy_comparison_execution_pairs,
+)
 
 
 class AuditSourceBlockedError(RuntimeError):
@@ -264,10 +267,11 @@ def load_strategy_arm_replay_sidecars(
 ) -> dict[str, Any]:
     """Load one arm's persisted Strategy Compare row evidence without replay.
 
-    The aggregate result stores the canonical arm -> current pair directory mapping
-    in ``pair_execution``.  Pair directories already persist the exact orderable and
-    selected-buy sidecars used by Strategy Compare diagnostics; Audit must consume
-    those files directly instead of guessing arm identity from pair-directory names.
+    DL-on arms and standalone DL-off baselines have a direct ``pair_execution``
+    entry.  A DL-off baseline that owns a shared execution group (for example C58)
+    is instead embedded in each paired DL-on artifact and therefore may have no
+    direct entry.  Resolve that topology through the canonical Strategy Compare
+    execution-group SSOT, never by guessing pair-directory names.
     """
 
     root = Path(project_root).resolve()
@@ -277,27 +281,71 @@ def load_strategy_arm_replay_sidecars(
         raise AuditSourceBlockedError(
             f"{source.profile_id} Strategy Compare缺少pair_execution contract"
         )
+
+    arm = next(
+        (item for item in source.settings.enabled_arms if item.arm_id == arm_key),
+        None,
+    )
+    if arm is None:
+        raise AuditSourceBlockedError(
+            f"{source.profile_id}/{arm_key} 不屬於目前Strategy Compare enabled arms"
+        )
+
     execution = pair_execution.get(arm_key)
+    execution_source_arm_id = arm_key
+    paired_baseline = False
     if not isinstance(execution, Mapping):
-        raise AuditSourceBlockedError(
-            f"{source.profile_id}/{arm_key} Strategy Compare缺少pair_execution evidence"
-        )
-    pair_dir_text = str(execution.get("current_pair_dir") or "").strip()
-    if not pair_dir_text:
-        raise AuditSourceBlockedError(
-            f"{source.profile_id}/{arm_key} pair_execution缺少current_pair_dir"
-        )
-    pair_dir = Path(pair_dir_text)
-    if not pair_dir.is_absolute():
-        pair_dir = root / pair_dir
-    pair_dir = pair_dir.resolve()
-    try:
-        pair_dir.relative_to(source.run_dir.resolve())
-    except ValueError as exc:
-        raise AuditSourceBlockedError(
-            f"{source.profile_id}/{arm_key} current_pair_dir不屬於manifest指定的canonical run: "
-            f"{project_relative_display_path(pair_dir, project_root=root)}"
-        ) from exc
+        if arm.dl_enabled:
+            raise AuditSourceBlockedError(
+                f"{source.profile_id}/{arm_key} Strategy Compare缺少pair_execution evidence"
+            )
+        paired_anchor: tuple[str, Mapping[str, Any] | None] | None = None
+        for _param_source, _rule_policy, off_arm, on_arm in (
+            strategy_comparison_execution_pairs(source.settings)
+        ):
+            if off_arm.arm_id != arm_key:
+                continue
+            candidate_execution = pair_execution.get(on_arm.arm_id)
+            paired_anchor = (
+                on_arm.arm_id,
+                candidate_execution if isinstance(candidate_execution, Mapping) else None,
+            )
+            break
+        if paired_anchor is None:
+            raise AuditSourceBlockedError(
+                f"{source.profile_id}/{arm_key} 不屬於任何canonical Strategy Compare execution group"
+            )
+        execution_source_arm_id, execution = paired_anchor
+        if not isinstance(execution, Mapping):
+            raise AuditSourceBlockedError(
+                f"{source.profile_id}/{arm_key} canonical shared-baseline anchor "
+                f"{execution_source_arm_id} 缺少pair_execution evidence"
+            )
+        paired_baseline = True
+
+    def _resolve_pair_dir(
+        mapping: Mapping[str, Any], *, mapping_arm_id: str
+    ) -> Path:
+        pair_dir_text = str(mapping.get("current_pair_dir") or "").strip()
+        if not pair_dir_text:
+            raise AuditSourceBlockedError(
+                f"{source.profile_id}/{mapping_arm_id} pair_execution缺少current_pair_dir"
+            )
+        candidate_dir = Path(pair_dir_text)
+        if not candidate_dir.is_absolute():
+            candidate_dir = root / candidate_dir
+        candidate_dir = candidate_dir.resolve()
+        try:
+            candidate_dir.relative_to(source.run_dir.resolve())
+        except ValueError as exc:
+            raise AuditSourceBlockedError(
+                f"{source.profile_id}/{mapping_arm_id} current_pair_dir不屬於manifest指定的canonical run: "
+                f"{project_relative_display_path(candidate_dir, project_root=root)}"
+            ) from exc
+        return candidate_dir
+
+    pair_dir = _resolve_pair_dir(execution, mapping_arm_id=execution_source_arm_id)
+
     pair_result_path = pair_dir / "strategy_comparison.json"
     if not pair_result_path.is_file():
         raise AuditSourceBlockedError(
@@ -311,8 +359,7 @@ def load_strategy_arm_replay_sidecars(
         )
     metadata = pair_payload.get("metadata")
     metadata = metadata if isinstance(metadata, Mapping) else {}
-    standalone = bool(execution.get("standalone_dl_off_baseline"))
-    if standalone:
+    if not arm.dl_enabled:
         prefix = "no_filter"
     else:
         comparison_mode = str(metadata.get("comparison_mode") or "").strip()
@@ -341,6 +388,8 @@ def load_strategy_arm_replay_sidecars(
         "arm_id": arm_key,
         "pair_dir": pair_dir,
         "prefix": prefix,
+        "pair_execution_source_arm_id": execution_source_arm_id,
+        "paired_baseline_resolved": paired_baseline,
         "orderable": orderable,
         "selected": selected,
         "orderable_path": orderable_path,
