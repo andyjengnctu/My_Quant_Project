@@ -1419,6 +1419,39 @@ def _run_resource_aware_entry_selection_matrix_case(base_params):
     add_check(results, "portfolio_entry_selection", case_id, "k_flex_uses_max_feasible_count_and_score_optimum", (2, ("C", "D"), 1, (3, 2)), (flex["selected_count"], flex["tickers"], flex["extra"], flex["attempted"]))
     add_check(results, "portfolio_entry_selection", case_id, "k_flex_preserves_exact_baseline_r0_floor", True, flex["reserved"] >= flex["baseline_r0"] == fixed["baseline_r0"])
 
+    # Performance-contract fixture: physical slots can be much wider than the
+    # cash-feasible count.  The exact scientific result is unchanged, but K-Flex
+    # must use the admissible minimum-notional cash cap before branch-and-bound
+    # and must certify a feasible raw score Top-K directly instead of traversing
+    # the combinatorial tree.  This guards the C67 replay from exponential stalls
+    # without any time-based/flaky assertion.
+    stress_rows = [
+        candidate(
+            "BASE", 100.0, 2600, 0.01,
+            "resource-aware-continuous-score-k-flex-r0-constrained-optimal",
+            0.01, 0.10,
+        )
+    ] + [
+        candidate(
+            f"KF{i:02d}", 100.0, 1200, 1.0 - (i / 1000.0),
+            "resource-aware-continuous-score-k-flex-r0-constrained-optimal",
+            0.40, 0.80,
+        )
+        for i in range(29)
+    ]
+    stress_order, stress_diag = reorder_candidates_for_resource_aware_quality(
+        stress_rows,
+        available_cash=300_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=0,
+        max_positions=10,
+        params=params,
+    )
+    stress_selected = select_resource_aware_action_candidates(stress_order, stress_diag)
+    add_check(results, "portfolio_entry_selection", case_id, "k_flex_cash_count_cap_is_admissible_before_exact_search", (10, 5), (int(stress_diag.get("physical_free_slots", -1)), int(stress_diag.get("k_flex_cash_count_cap", -1))))
+    add_check(results, "portfolio_entry_selection", case_id, "k_flex_skips_physically_impossible_high_counts", (5, 4, 3), tuple(stress_diag.get("k_flex_target_counts_attempted") or ()))
+    add_check(results, "portfolio_entry_selection", case_id, "k_flex_direct_raw_score_optimum_shortcuts_exact_tree", (True, 0, 3, ("KF00", "KF01", "KF02")), (bool(stress_diag.get("constrained_solver_direct_score_optimum_shortcut", False)), int(stress_diag.get("constrained_solver_search_states", -1)), len(stress_selected), tuple(row["ticker"] for row in stress_selected)))
+
     one_row = [candidate("X", 100.0, 100, 0.5, "resource-aware-continuous", 0.1, 0.2)]
     add_check(results, "portfolio_entry_selection", case_id, "action_limit_zero", 0, len(select_resource_aware_action_candidates(one_row, {"pre_market_order_limit": 0})))
     add_check(results, "portfolio_entry_selection", case_id, "action_limit_one", 1, len(select_resource_aware_action_candidates(one_row, {"pre_market_order_limit": 1})))

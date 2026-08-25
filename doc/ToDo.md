@@ -2,6 +2,7 @@
 
 - bug fix
     - remove |buy list|= k constrain 
+    - reuse inconsist in oos/rolling
     - epoch performance inconsistat in [1][3]
 
 - trading

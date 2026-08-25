@@ -10071,5 +10071,6 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 唯一scientific change：`selected_count == C58 K`改為`C58 K <= selected_count <= physical free slots`。solver由physical cap向下找第一個可滿足canonical cash + R0的count，因此先取得**最大可行planned-order count**；固定該count後仍由同一deterministic exact branch-and-bound最大化score。
 - 不改R0、不做No-R0、不改模型／target／score／threshold，不新增Safety floor或資金權重。OOS仍使用`min_oos`，Rolling使用`min_rolling`，兩者共用current Compare Suite C67。
 - Targeted synthetic固定fixture：C58 baseline `K=1`、physical free slots=`3`、R0約`260k`；C59 fixed-K維持單一A，C67先嘗試count=3失敗後在count=2找到`C,D`、reserved約`280k>=R0`，證明可增加部位但沒有放寬R0或cash。
-- Decision：**IMPLEMENTED / RESULT_PENDING / SINGLE_SCIENTIFIC_CHANGE_K_ONLY / SINGLE_SEED_OOS_AND_ROLLING_FIRST / ROBUSTNESS_DEFERRED / NOT_PROMOTED**。
+- 首次OOS replay實際執行時發現variable-count exact search在wide free-slot日產生組合爆炸。工程修正只改execution strategy：保持canonical execution-order DFS與完整exact semantics，新增suffix optimistic-bound cache、由canonical `min_entry_notional`導出的admissible count/cash pruning，以及Raw Top-K本身合法時直接certify pure-score global optimum。20組deterministic random fixtures、C59/C67共40個old-vs-new cases結果完全一致；wide-slot stress fixture舊版5秒仍未完成，修正版約0.04秒完成。此修正不形成新scientific identity，C67仍為RESULT_PENDING。
+- Decision：**IMPLEMENTED / RESULT_PENDING / SINGLE_SCIENTIFIC_CHANGE_K_ONLY / EXACT_SEMANTICS_PRESERVED_AFTER_PERFORMANCE_FIX / SINGLE_SEED_OOS_AND_ROLLING_FIRST / ROBUSTNESS_DEFERRED / NOT_PROMOTED**。
 

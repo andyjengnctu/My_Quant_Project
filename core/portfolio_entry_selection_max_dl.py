@@ -1,7 +1,11 @@
 from datetime import date, datetime
 import math
 
-from core.exact_accounting import calc_planned_initial_risk_from_prices_milli
+from core.exact_accounting import (
+    calc_planned_initial_risk_from_prices_milli,
+    coerce_money_like_to_milli,
+)
+from core.order_lot_policy import get_min_entry_notional_milli
 
 from core.portfolio_entry_selection_common import (
     _candidate_continuous_score,
@@ -944,6 +948,13 @@ def _reorder_resource_aware_continuous_constrained_optimal(
     reserve_floor_milli = (
         int(baseline['reserved_cost_milli']) if preserve_reserve_floor else 0
     )
+    min_entry_notional_milli = min(
+        (
+            int(get_min_entry_notional_milli(row.get('params_obj') or params))
+            for row in candidates
+        ),
+        default=int(get_min_entry_notional_milli(params)),
+    )
     if safety_score_mode not in {'raw', 'residual'}:
         raise ValueError(f'不支援的safety_score_mode={safety_score_mode!r}')
     safety_metric_fn = (
@@ -977,6 +988,10 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         )
 
     base_rank = {id(row): idx for idx, row in enumerate(candidates)}
+    # Exact search must traverse candidates in canonical execution order.  The
+    # recursive cash-reservation state is a prefix state, so reordering the search
+    # frontier by score would invalidate otherwise-admissible cash/reserve pruning.
+    search_candidates = list(candidates)
     use_baseline_k_seed = bool(
         preserve_reserve_floor and target_count == baseline_target_count
     )
@@ -1049,7 +1064,7 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         return _excess_alpha_basket_quality_key(result, base_rank=base_rank)
 
     standalone = []
-    for row in candidates:
+    for row in search_candidates:
         single_order, single_result = evaluate_basket([row])
         del single_order
         if int(single_result['selected_count']) != 1:
@@ -1100,20 +1115,48 @@ def _reorder_resource_aware_continuous_constrained_optimal(
             'safety_score_upper': (0.0 if safety_score is None else float(safety_score)),
         })
 
-    n = len(candidates)
+    n = len(search_candidates)
     suffix_orderable = [0] * (n + 1)
     suffix_coverage = [0] * (n + 1)
     suffix_safety_coverage = [0] * (n + 1)
+    # The old implementation sorted the entire remaining suffix at every search
+    # state to obtain top-N optimistic bounds.  K-Flex increases target_count,
+    # making that O(states * n log n) overhead dominant.  Cache the exact same
+    # top values once per suffix; lookup below is then O(K), with K<=free_slots.
+    suffix_reserve_tops = [()] * (n + 1)
+    suffix_objective_tops = [()] * (n + 1)
+    suffix_safety_tops = [()] * (n + 1)
+
+    def _prepend_top(previous, value):
+        values = list(previous)
+        values.append(value)
+        values.sort(reverse=True)
+        return tuple(values[:target_count])
+
     for idx in range(n - 1, -1, -1):
-        suffix_orderable[idx] = suffix_orderable[idx + 1] + int(
-            standalone[idx]['orderable']
+        item = standalone[idx]
+        suffix_orderable[idx] = suffix_orderable[idx + 1] + int(item['orderable'])
+        suffix_coverage[idx] = suffix_coverage[idx + 1] + int(item['coverage_upper'])
+        suffix_safety_coverage[idx] = (
+            suffix_safety_coverage[idx + 1] + int(item['safety_coverage_upper'])
         )
-        suffix_coverage[idx] = suffix_coverage[idx + 1] + int(
-            standalone[idx]['coverage_upper']
-        )
-        suffix_safety_coverage[idx] = suffix_safety_coverage[idx + 1] + int(
-            standalone[idx]['safety_coverage_upper']
-        )
+        if item['orderable']:
+            suffix_reserve_tops[idx] = _prepend_top(
+                suffix_reserve_tops[idx + 1],
+                int(item['reserve_upper_milli']),
+            )
+            suffix_objective_tops[idx] = _prepend_top(
+                suffix_objective_tops[idx + 1],
+                float(item['objective_upper']),
+            )
+            suffix_safety_tops[idx] = _prepend_top(
+                suffix_safety_tops[idx + 1],
+                float(item['safety_score_upper']),
+            )
+        else:
+            suffix_reserve_tops[idx] = suffix_reserve_tops[idx + 1]
+            suffix_objective_tops[idx] = suffix_objective_tops[idx + 1]
+            suffix_safety_tops[idx] = suffix_safety_tops[idx + 1]
 
     if use_baseline_k_seed:
         seed_basket = list(seed_order[:target_count])
@@ -1141,27 +1184,52 @@ def _reorder_resource_aware_continuous_constrained_optimal(
             (
                 list(candidates),
                 [
-                    candidates[pos]
+                    search_candidates[pos]
                     for pos in sorted(
                         range(n),
                         key=lambda idx: (
                             int(standalone[idx]['reserve_upper_milli']),
-                            base_rank[id(candidates[idx])],
+                            base_rank[id(search_candidates[idx])],
                         ),
                     )
                 ][:target_count],
                 [
-                    candidates[pos]
+                    search_candidates[pos]
                     for pos in sorted(
                         range(n),
                         key=lambda idx: (
                             -int(standalone[idx]['reserve_upper_milli']),
-                            base_rank[id(candidates[idx])],
+                            base_rank[id(search_candidates[idx])],
                         ),
                     )
                 ][:target_count],
             )
         )
+
+    if target_count > baseline_target_count:
+        baseline_rows = list(baseline.get('selected_rows') or [])
+        baseline_ids = {id(row) for row in baseline_rows}
+        extra_needed = max(0, int(target_count - len(baseline_rows)))
+        if extra_needed:
+            score_extras = [
+                row for row in _max_dl_score_order(candidates, base_rank=base_rank)
+                if id(row) not in baseline_ids
+            ][:extra_needed]
+            reserve_extras = [
+                search_candidates[pos]
+                for pos in sorted(
+                    range(n),
+                    key=lambda idx: (
+                        int(standalone[idx]['reserve_upper_milli']),
+                        base_rank[id(search_candidates[idx])],
+                    ),
+                )
+                if id(search_candidates[pos]) not in baseline_ids
+            ][:extra_needed]
+            incumbent_candidates.extend((
+                baseline_rows + score_extras,
+                baseline_rows + reserve_extras,
+            ))
 
     best_basket = None
     best_result = None
@@ -1241,41 +1309,17 @@ def _reorder_resource_aware_continuous_constrained_optimal(
     def optimistic_reserve_upper(idx, need, current_reserved):
         if need <= 0:
             return int(current_reserved)
-        values = sorted(
-            (
-                int(standalone[pos]['reserve_upper_milli'])
-                for pos in range(idx, n)
-                if standalone[pos]['orderable']
-            ),
-            reverse=True,
-        )
-        return int(current_reserved) + int(sum(values[:need]))
+        return int(current_reserved) + int(sum(suffix_reserve_tops[idx][:need]))
 
     def optimistic_objective_upper(idx, need, current_total):
         if need <= 0:
             return float(current_total)
-        values = sorted(
-            (
-                float(standalone[pos]['objective_upper'])
-                for pos in range(idx, n)
-                if standalone[pos]['orderable']
-            ),
-            reverse=True,
-        )
-        return float(current_total) + float(sum(values[:need]))
+        return float(current_total) + float(sum(suffix_objective_tops[idx][:need]))
 
     def optimistic_safety_upper(idx, need, current_total):
         if need <= 0:
             return float(current_total)
-        values = sorted(
-            (
-                float(standalone[pos]['safety_score_upper'])
-                for pos in range(idx, n)
-                if standalone[pos]['orderable']
-            ),
-            reverse=True,
-        )
-        return float(current_total) + float(sum(values[:need]))
+        return float(current_total) + float(sum(suffix_safety_tops[idx][:need]))
 
     empty_result = _simulate_reserved_candidate_order(
         [],
@@ -1311,6 +1355,17 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         if idx >= n or suffix_orderable[idx] < need:
             pruned_states += 1
             return
+        # Every additional canonical order must satisfy the shared minimum entry
+        # notional.  Reserved buy cost is never below notional, so this is an
+        # admissible cash-feasibility lower bound and can prove high-count states
+        # impossible without enumerating their membership combinations.
+        if (
+            min_entry_notional_milli > 0
+            and int(result['remaining_cash_milli'])
+            < int(need) * int(min_entry_notional_milli)
+        ):
+            pruned_states += 1
+            return
         if optimistic_reserve_upper(
             idx, need, result['reserved_cost_milli']
         ) < reserve_floor_milli:
@@ -1344,7 +1399,7 @@ def _reorder_resource_aware_continuous_constrained_optimal(
                     pruned_states += 1
                     return
 
-        row = candidates[idx]
+        row = search_candidates[idx]
 
         if standalone[idx]['orderable']:
             include_basket = list(basket) + [row]
@@ -1361,8 +1416,12 @@ def _reorder_resource_aware_continuous_constrained_optimal(
 
         visit(idx + 1, basket, result, coverage, objective_total)
 
-    empty_coverage, empty_total = current_objective_summary(empty_result)
-    visit(0, [], empty_result, empty_coverage, empty_total)
+    direct_score_optimum_shortcut = bool(
+        objective_mode == 'score' and direct_score_order_feasible
+    )
+    if not direct_score_optimum_shortcut:
+        empty_coverage, empty_total = current_objective_summary(empty_result)
+        visit(0, [], empty_result, empty_coverage, empty_total)
 
     if best_result is None:
         raise _NoFeasibleConstrainedBasket(
@@ -1439,6 +1498,9 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         'max_dl_feasible_ascent_local_optimum': False,
         'basket_objective': str(objective_mode),
         'constrained_solver_optimality_certified': True,
+        'constrained_solver_direct_score_optimum_shortcut': bool(
+            direct_score_optimum_shortcut
+        ),
         'constrained_solver_search_states': int(search_states),
         'constrained_solver_pruned_states': int(pruned_states),
         'constrained_solver_feasible_baskets': int(feasible_baskets),
@@ -1550,7 +1612,19 @@ def _reorder_resource_aware_continuous_score_k_flex_r0_constrained_optimal(
         raise ValueError('K-Flex baseline K不得小於0')
     if baseline_k > physical_free_slots:
         raise RuntimeError('K-Flex baseline K高於physical free slots')
-    max_count = min(physical_free_slots, len(candidates))
+    min_entry_notional_milli = min(
+        (
+            int(get_min_entry_notional_milli(row.get('params_obj') or params))
+            for row in candidates
+        ),
+        default=int(get_min_entry_notional_milli(params)),
+    )
+    cash_count_cap = (
+        int(coerce_money_like_to_milli(available_cash)) // min_entry_notional_milli
+        if min_entry_notional_milli > 0
+        else physical_free_slots
+    )
+    max_count = min(physical_free_slots, len(candidates), int(cash_count_cap))
     if max_count < baseline_k:
         raise RuntimeError('K-Flex候選數不足以維持baseline K')
 
@@ -1591,6 +1665,7 @@ def _reorder_resource_aware_continuous_score_k_flex_r0_constrained_optimal(
             'baseline_k': int(baseline_k),
             'physical_free_slots': int(physical_free_slots),
             'k_flex_max_count': int(max_count),
+            'k_flex_cash_count_cap': int(cash_count_cap),
             'k_flex_selected_count': int(selected_count),
             'k_flex_extra_positions': int(selected_count - baseline_k),
             'k_flex_target_counts_attempted': tuple(attempted_counts),
