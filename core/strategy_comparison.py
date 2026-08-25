@@ -28,6 +28,12 @@ STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL = (
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT = (
     'resource-aware-continuous-max-dl-feasible-ascent'
 )
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_MATCHED_FEASIBLE_ASCENT = (
+    'resource-aware-continuous-max-dl-matched-feasible-ascent'
+)
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_K_FLEX_R0_FEASIBLE_ASCENT = (
+    'resource-aware-continuous-max-dl-k-flex-r0-feasible-ascent'
+)
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD = (
     'resource-aware-continuous-max-dl-feasible-ascent-stale-score-guard'
 )
@@ -72,6 +78,8 @@ SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_MATCHED_FEASIBLE_ASCENT,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_K_FLEX_R0_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
@@ -909,6 +917,15 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                     raise ValueError(
                         f"arm {key} stale-score guard必須指定非負整數 stale_score_membership_guard_max_age_days"
                     )
+            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_K_FLEX_R0_FEASIBLE_ASCENT:
+                if options.get("count_constraint") != "baseline_k_to_physical_free_slots_local_v1":
+                    raise ValueError(f"arm {key} K-Flex local count_constraint contract不支援")
+                if options.get("preserve_r0") is not True:
+                    raise ValueError(f"arm {key} K-Flex local必須preserve_r0=True")
+                if options.get("local_search") != "deterministic_single_add_swap_v1":
+                    raise ValueError(f"arm {key} K-Flex local_search contract不支援")
+                if options.get("selection_only") is not True:
+                    raise ValueError(f"arm {key} K-Flex local必須selection_only=True")
             if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT:
                 fit_dl_id = str(options.get("expected_r_fit_dl_id") or "").strip()
                 if not fit_dl_id or fit_dl_id not in settings.dl_sources:

@@ -2205,18 +2205,26 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     objective_mode='score',
     preserve_reserve_floor=True,
     minimum_repair_enabled=True,
+    allow_count_growth=False,
+    matched_score_proposal=False,
 ):
-    """Strengthen one feasible seed with feasible best-improvement swaps, without exact combinatorial search.
+    """Strengthen one feasible seed with deterministic single-add/swap local search.
 
-    C17 first supplies a guaranteed-feasible K-basket.  If its Top-K repair had to
-    fall back to the same-parameter DL-off baseline, that basket is still a valid seed rather than a terminal
-    failure.  From the seed, every single membership swap is evaluated with canonical
-    exact reservation; the highest-DL-quality feasible improvement is accepted and the
-    process repeats until no improving single swap remains.  Capital never contributes
-    to the objective: it is only the K/R0 feasibility contract.
+    The default fixed-K mode preserves the historical feasible-ascent contract.
+    ``matched_score_proposal`` is opt-in and owned only by the SR-C68/C69 matched
+    research pair; historical feasible-ascent callers do not use it.  K-Flex mode
+    is the matched local-search treatment: it starts from the same fixed-K feasible
+    seed and may accept one additional canonical planned order at a time up to the
+    physical free-slot cap.  R0 remains a hard floor.  Count is lexicographically
+    primary only in K-Flex mode; within a count, the unchanged frozen score objective
+    owns membership quality.  This is deliberately a deterministic local optimum,
+    not an exact/global-optimum certificate.
     """
 
-    target_count = int(baseline['selected_count'])
+    baseline_k = int(baseline['selected_count'])
+    physical_free_slots = max(0, int(free_slots))
+    if baseline_k < 0 or baseline_k > physical_free_slots:
+        raise RuntimeError('feasible-ascent baseline K超出physical free-slot範圍')
     reserve_floor_milli = (
         int(baseline['reserved_cost_milli']) if preserve_reserve_floor else 0
     )
@@ -2250,7 +2258,11 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         out.update({
             'selector': (
                 'continuous-score-max-dl-feasible-ascent-stale-score-guard'
-                if guard_enabled and objective_mode == 'score'
+                if guard_enabled and objective_mode == 'score' and not allow_count_growth
+                else 'continuous-score-max-dl-matched-feasible-ascent'
+                if matched_score_proposal and objective_mode == 'score' and not allow_count_growth
+                else 'continuous-score-max-dl-k-flex-r0-feasible-ascent'
+                if allow_count_growth and objective_mode == 'score' and preserve_reserve_floor
                 else _objective_selector_name(
                     objective_mode,
                     suffix='feasible-ascent',
@@ -2266,29 +2278,45 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
             'max_dl_seed_fallback': bool(seed_diag.get('max_dl_fallback_to_baseline', False)),
             'max_dl_fallback_to_baseline': False,
             'max_dl_feasible_ascent_local_optimum': True,
+            'max_dl_feasible_ascent_additions': 0,
+            'k_flex_r0_preserved': bool(allow_count_growth and preserve_reserve_floor),
+            'baseline_k': int(baseline_k),
+            'physical_free_slots': int(physical_free_slots),
         })
         return seed_order, out
 
     def evaluate_basket(basket):
+        expected_count = len(basket) if allow_count_growth else baseline_k
         ordered = _max_dl_execution_order(basket, base_rank=base_rank)
         result = _simulate_reserved_candidate_order(
             ordered,
             available_cash=available_cash,
             sizing_equity=sizing_equity,
-            free_slots=target_count,
+            free_slots=expected_count,
             params=params,
         )
-        return ordered, result
+        return ordered, result, expected_count
+
+    def basket_is_feasible(result_, expected_count):
+        return _max_dl_basket_is_feasible(
+            result_,
+            target_count=expected_count,
+            reserve_floor_milli=reserve_floor_milli,
+        )
 
     def quality_key(rows_, result_):
         if objective_mode == 'expected_pnl':
-            return _expected_pnl_basket_quality_key(result_, base_rank=base_rank)
-        if objective_mode == 'excess_alpha':
-            return _excess_alpha_basket_quality_key(result_, base_rank=base_rank)
-        return _max_dl_basket_quality_key(rows_, base_rank=base_rank)
+            base_key = _expected_pnl_basket_quality_key(result_, base_rank=base_rank)
+        elif objective_mode == 'excess_alpha':
+            base_key = _excess_alpha_basket_quality_key(result_, base_rank=base_rank)
+        else:
+            base_key = _max_dl_basket_quality_key(rows_, base_rank=base_rank)
+        if allow_count_growth:
+            return (int(result_['selected_count']), *tuple(base_key))
+        return base_key
 
     baseline_ids = {id(row) for row in baseline['selected_rows']}
-    seed_basket = list(seed_order[:target_count])
+    seed_basket = list(seed_order[:baseline_k])
     seed_ids = {id(row) for row in seed_basket}
     seed_guard_blocked = bool(
         guard_enabled
@@ -2297,17 +2325,42 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     current_basket = (
         list(baseline['selected_rows']) if seed_guard_blocked else seed_basket
     )
-    current_order, current_result = evaluate_basket(current_basket)
-    if not _max_dl_basket_is_feasible(
-        current_result,
-        target_count=target_count,
-        reserve_floor_milli=reserve_floor_milli,
-    ):
+    current_order, current_result, current_expected_count = evaluate_basket(current_basket)
+    if not basket_is_feasible(current_result, current_expected_count):
         raise RuntimeError('max-DL feasible-ascent seed不符合同參數DL-off baseline資源契約')
     current_key = quality_key(current_order, current_result)
+
+    direct_proposal_feasible = False
+    if matched_score_proposal:
+        # Matched deterministic score-priority proposal.  Score order is used only to
+        # propose membership; accepted membership is always re-executed in canonical
+        # baseline order before feasibility/quality comparison.  C68/C69 therefore
+        # share the same proposal algorithm and differ only in the count cap.
+        proposal_cap = physical_free_slots if allow_count_growth else baseline_k
+        score_proposal_order = _max_dl_score_order(rows, base_rank=base_rank)
+        score_proposal_result = _simulate_reserved_candidate_order(
+            score_proposal_order,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=proposal_cap,
+            params=params,
+        )
+        proposed_membership = list(score_proposal_result.get('selected_rows') or [])
+        if len(proposed_membership) >= baseline_k:
+            proposal_order, proposal_result, proposal_expected_count = evaluate_basket(proposed_membership)
+            if basket_is_feasible(proposal_result, proposal_expected_count):
+                proposal_key = quality_key(proposal_order, proposal_result)
+                direct_proposal_feasible = True
+                if proposal_key > current_key:
+                    current_basket = list(proposed_membership)
+                    current_order = proposal_order
+                    current_result = proposal_result
+                    current_key = proposal_key
+
     evaluations = 0
     blocked_swaps = 0
     ascent_steps = 0
+    addition_steps = 0
     local_optimum = False
 
     while True:
@@ -2316,45 +2369,65 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         best = None
         best_key = current_key
         best_tie = None
-        for out_row in list(current_basket):
+
+        # K-Flex treatment: count is primary, so test every legal one-position
+        # expansion before same-count swaps.  Each proposal is re-executed in
+        # canonical baseline order; no score-order execution semantics leak in.
+        if allow_count_growth and len(current_basket) < physical_free_slots:
             for in_row in in_rows:
-                trial_basket = [
-                    row for row in current_basket if id(row) != id(out_row)
-                ] + [in_row]
-                trial_order, trial_result = evaluate_basket(trial_basket)
+                trial_basket = list(current_basket) + [in_row]
+                trial_order, trial_result, expected_count = evaluate_basket(trial_basket)
                 evaluations += 1
-                if not _max_dl_basket_is_feasible(
-                    trial_result,
-                    target_count=target_count,
-                    reserve_floor_milli=reserve_floor_milli,
-                ):
+                if not basket_is_feasible(trial_result, expected_count):
                     continue
                 quality_key_value = quality_key(trial_order, trial_result)
                 if quality_key_value <= current_key:
                     continue
-                if guard_enabled and (id(out_row) in stale_ids or id(in_row) in stale_ids):
-                    # 只計數C25本來會接受的hard-feasible score改善；
-                    # 單純存在stale候選不應被誤報成guard真正阻擋。
+                if guard_enabled and id(in_row) in stale_ids:
                     blocked_swaps += 1
                     continue
-                tie_key = (
-                    -base_rank[id(out_row)],
-                    -base_rank[id(in_row)],
-                )
+                tie_key = (1, -base_rank[id(in_row)], 0)
                 if (
                     best is None
                     or quality_key_value > best_key
                     or (quality_key_value == best_key and tie_key > best_tie)
                 ):
-                    best = (trial_basket, trial_order, trial_result)
+                    best = ('add', trial_basket, trial_order, trial_result)
+                    best_key = quality_key_value
+                    best_tie = tie_key
+
+        for out_row in list(current_basket):
+            for in_row in in_rows:
+                trial_basket = [
+                    row for row in current_basket if id(row) != id(out_row)
+                ] + [in_row]
+                trial_order, trial_result, expected_count = evaluate_basket(trial_basket)
+                evaluations += 1
+                if not basket_is_feasible(trial_result, expected_count):
+                    continue
+                quality_key_value = quality_key(trial_order, trial_result)
+                if quality_key_value <= current_key:
+                    continue
+                if guard_enabled and (id(out_row) in stale_ids or id(in_row) in stale_ids):
+                    blocked_swaps += 1
+                    continue
+                tie_key = (0, -base_rank[id(out_row)], -base_rank[id(in_row)])
+                if (
+                    best is None
+                    or quality_key_value > best_key
+                    or (quality_key_value == best_key and tie_key > best_tie)
+                ):
+                    best = ('swap', trial_basket, trial_order, trial_result)
                     best_key = quality_key_value
                     best_tie = tie_key
         if best is None:
             local_optimum = True
             break
-        current_basket, current_order, current_result = best
+        operation, current_basket, current_order, current_result = best
         current_key = best_key
         ascent_steps += 1
+        if operation == 'add':
+            addition_steps += 1
 
     baseline_selected_ids = {id(row) for row in baseline['selected_rows']}
     selected_ids = {id(row) for row in current_result['selected_rows']}
@@ -2366,38 +2439,45 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         1 for row in current_result['selected_rows']
         if id(row) not in baseline_selected_ids
     )
+    selector_name = (
+        'continuous-score-max-dl-feasible-ascent-stale-score-guard'
+        if guard_enabled and objective_mode == 'score' and not allow_count_growth
+        else 'continuous-score-max-dl-matched-feasible-ascent'
+        if matched_score_proposal and objective_mode == 'score' and not allow_count_growth
+        else 'continuous-score-max-dl-k-flex-r0-feasible-ascent'
+        if allow_count_growth and objective_mode == 'score' and preserve_reserve_floor
+        else _objective_selector_name(
+            objective_mode,
+            suffix='feasible-ascent',
+            no_r0=not preserve_reserve_floor,
+        )
+    )
     out = _resource_aware_diag_from_result(
         default_diag,
         baseline,
         current_result,
         changed=bool(selected_ids != baseline_selected_ids),
         promoted_pass_count=0,
-        selector=(
-            'continuous-score-max-dl-feasible-ascent-stale-score-guard'
-            if guard_enabled and objective_mode == 'score'
-            else _objective_selector_name(
-                objective_mode,
-                suffix='feasible-ascent',
-                no_r0=not preserve_reserve_floor,
-            )
-        ),
+        selector=selector_name,
     )
     seed_trace = dict(seed_diag.get('_selector_trace_baskets') or {})
+    final_count = int(current_result['selected_count'])
     out.update({
         'mode': 'dl-selection',
         'promoted_score_orders': int(promoted_count),
-        'direct_score_order_feasible': bool(seed_diag.get('direct_score_order_feasible', False)),
+        'direct_score_order_feasible': bool(direct_proposal_feasible or seed_diag.get('direct_score_order_feasible', False)),
         'basket_search_states': int(seed_diag.get('basket_search_states', 0) or 0) + int(evaluations),
         'basket_search_pruned': 0,
         'basket_feasible_count': int(seed_diag.get('basket_feasible_count', 0) or 0),
         'resource_preservation_required': bool(preserve_reserve_floor),
-        'pre_market_order_limit': int(target_count),
+        'pre_market_order_limit': int(final_count if allow_count_growth else baseline_k),
         'max_dl_eligible': True,
         'max_dl_repair_steps': int(seed_diag.get('max_dl_repair_steps', 0) or 0),
         'max_dl_repair_evaluations': int(seed_diag.get('max_dl_repair_evaluations', 0) or 0),
         'max_dl_seed_fallback': bool(seed_diag.get('max_dl_fallback_to_baseline', False)),
         'max_dl_fallback_to_baseline': False,
         'max_dl_feasible_ascent_steps': int(ascent_steps),
+        'max_dl_feasible_ascent_additions': int(addition_steps),
         'max_dl_feasible_ascent_evaluations': int(evaluations),
         'max_dl_feasible_ascent_local_optimum': bool(local_optimum),
         'basket_objective': str(objective_mode),
@@ -2407,6 +2487,16 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         'stale_score_guard_triggered': bool(seed_guard_blocked or blocked_swaps > 0),
         'stale_score_guard_seed_blocked': bool(seed_guard_blocked),
         'stale_score_guard_blocked_swaps': int(blocked_swaps),
+        'k_flex_r0_preserved': bool(allow_count_growth and preserve_reserve_floor),
+        'count_constraint': (
+            'baseline_k_to_physical_free_slots_local_v1'
+            if allow_count_growth
+            else 'baseline_k_exact_local_v1'
+        ),
+        'baseline_k': int(baseline_k),
+        'physical_free_slots': int(physical_free_slots),
+        'k_flex_extra_positions': int(max(0, final_count - baseline_k)),
+        'constrained_solver_optimality_certified': False,
         '_selector_trace_baskets': {
             'raw_top_n': list(seed_trace.get('raw_top_n') or []),
             'minimum_repair_seed': list(seed_trace.get('minimum_repair_seed') or seed_basket),
@@ -2414,10 +2504,11 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         },
         '_selector_repair_steps': list(seed_diag.get('_selector_repair_steps') or []),
     })
-    if int(current_result['selected_count']) != target_count:
+    if allow_count_growth:
+        if not (baseline_k <= final_count <= physical_free_slots):
+            raise RuntimeError('K-Flex feasible-ascent輸出違反baseline K至physical free-slot範圍')
+    elif final_count != baseline_k:
         raise RuntimeError('max-DL feasible-ascent輸出未維持同參數DL-off baseline預留單數')
     if preserve_reserve_floor and int(current_result['reserved_cost_milli']) < reserve_floor_milli:
         raise RuntimeError('max-DL feasible-ascent輸出低於同參數DL-off baseline reserved-capital floor')
     return final_order, out
-
-

@@ -10084,3 +10084,17 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - GPT targeted regression：evaluation identity fixture 證明只修改 2022 member 時 OOS 2021-freeze identity 不變而 Rolling identity 改變；synthetic standalone C61 baseline 在 physical schedule SHA 與 stored OOS evaluation SHA 不同時仍能正確 REUSE；Robustness partial-seed durable-result fixture 證明已完成 seed=`REUSE`、缺失 seed=`RUN`，可由同一 resolver 形成 `RESUME`；Strategy Compare config-driven application 60/60 PASS、strategy comparison contract 19/19 PASS、ResolvedComparisonPlan transition 5/5 PASS。未執行 `apps/run_bundle.py`／`apps/test_suite.py`。
 - Decision：**ENGINEERING_REUSE_STATE_SSOT_FIXED / OOS_ROLLING_IDENTITY_LAYER_SEPARATED / ROBUSTNESS_SHARED_STATE_RESOLVER / SCIENCE_UNCHANGED**。
 
+### 2026-08-25 — SR-C67 第二次實機計算阻塞；global exact K-Flex轉historical compute-blocked
+
+- 使用者套用第一輪safe performance optimization後重新執行C67 OOS；既有C61/C62/C63/C58/C59均快速REUSE，但C67單一replay仍停在`[RUN] C67`超過20分鐘未完成。
+- 重新分析確認瓶頸不是max-count loop本身，而是較大K下**global exact score optimum certification**：Raw高分basket常不符現行resource feasibility，admissible execution-only pruning仍可能需要枚舉大量替代membership才能證明最優。這與既有Audit direct-infeasible約92–98%及早期N=30/80 exact-global壓力證據一致。
+- 嘗試更 aggressive 的score-first traversal時，random differential顯示會破壞canonical prefix cash-state語意，因此該方案未保留；不得用heuristic結果冒充C67 exact。
+- Decision：`SR-C67`永久保留identity與contract，但改為 **COMPUTE_BLOCKED / NO_STRATEGY_RESULT / HISTORICAL_COMPATIBILITY / NOT_PROMOTED**。兩次timeout不是策略績效REJECT；C67退出current Compare Suite，production C42/C44不變。
+
+### 2026-08-25 — SR-C68/C69 matched feasible-ascent controlled pair實作
+
+- 為避免把K effect與solver effect混在同一contrast，新增兩個正式strategy identities：`C68`=MR-13E fixed-K dedicated matched feasible-ascent control；`C69`=與C68同一專用feasible-ascent family + K-Flex/R0-preserved treatment；歷史`resource-aware-continuous-max-dl-feasible-ascent` owner保持原行為。
+- `C68-C59`唯一解讀solver effect（global exact→deterministic local search）；`C69-C68`唯一核心treatment是count由`== C58 K`放寬成`C58 K <= count <= physical free slots`且R0保留；`C69-C59`只作practical net effect，不能解讀成純K。
+- C68/C69以專用matched policy共用score-priority membership proposal，但所有proposal都回到canonical baseline execution order做cash/R0/sizing feasibility；該proposal不掛到歷史feasible-ascent policy；之後使用相同deterministic best-improvement local ascent。C68只允許same-count swap；C69額外允許single-add，count lexicographically優先，再做同count score improvement。兩者都明確`optimality_certified=False`，不得宣稱global optimum。
+- Targeted fixture驗證高資金單一baseline basket可被C69用多個較小高分部位取代並維持同一R0，而C68仍固定K；Strategy Compare current suite改為`C61/C62/C58/C63/C59/C68/C69/C60/C64/C65/C66`，schema=57。C68/C69只授權single-seed OOS/Rolling，robustness/fixed-window仍deferred。
+- Decision：**C67_COMPUTE_BLOCKED / C68_C69_IMPLEMENTED_RESULT_PENDING / MATCHED_SOLVER_CONTROL_PLUS_K_TREATMENT / NO_NEW_MODEL / R0_PRESERVED / SINGLE_SEED_FIRST**。

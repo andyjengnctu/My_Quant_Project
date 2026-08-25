@@ -1632,6 +1632,39 @@ HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({'C53-C42': {'left': 'C53',
              'right': 'C55',
              'description': 'Plan B2相對C55 raw-safety hard floor：比較residualizing 13M是否能保留更多13K upside'}})
 
+# 2026-08-25 SR-C67 compute-blocked K-Flex exact experiment.  Identity is retained
+# for historical artifact interpretation only; current suite moved to the matched
+# C68/C69 deterministic feasible-ascent pair because large-K global exact
+# certification was operationally intractable.
+HISTORICAL_STRATEGY_COMPARE_ARMS.update({
+    "C67": {
+        "name": "Min MR-13E K-Flex R0 Exact (Compute-Blocked)",
+        "description": (
+            "SR-C67 historical compute-blocked arm：沿用C59 MR-13E/Min/all-off/R0，"
+            "將count放寬到baseline K至physical free slots後仍要求global exact score optimum；"
+            "兩次實際OOS執行均在C67 replay長時間無結果，因此未取得策略績效。"
+        ),
+        "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-k-flex-r0-constrained-optimal",
+        "dl_runtime_options": {
+            "count_constraint": "baseline_k_to_physical_free_slots_v1",
+            "preserve_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+})
+HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({
+    "C67-C59": {"left": "C67", "right": "C59", "description": "historical compute-blocked K-Flex exact contrast"},
+    "C67-C58": {"left": "C67", "right": "C58", "description": "historical compute-blocked K-Flex exact baseline contrast"},
+})
+
+
 __all__ = [
     "HISTORICAL_STRATEGY_PARAM_SOURCES",
     "HISTORICAL_STRATEGY_DL_SOURCES",

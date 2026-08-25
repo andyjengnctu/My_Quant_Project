@@ -1344,6 +1344,8 @@ def _run_resource_aware_entry_selection_matrix_case(base_params):
         "resource-aware-continuous-capital-preserving",
         "resource-aware-continuous-max-dl",
         "resource-aware-continuous-max-dl-feasible-ascent",
+        "resource-aware-continuous-max-dl-matched-feasible-ascent",
+        "resource-aware-continuous-max-dl-k-flex-r0-feasible-ascent",
         "resource-aware-continuous-expected-pnl-feasible-ascent",
         "resource-aware-continuous-excess-alpha-feasible-ascent",
         "resource-aware-continuous-excess-alpha-no-r0-feasible-ascent",
@@ -1451,6 +1453,50 @@ def _run_resource_aware_entry_selection_matrix_case(base_params):
     add_check(results, "portfolio_entry_selection", case_id, "k_flex_cash_count_cap_is_admissible_before_exact_search", (10, 5), (int(stress_diag.get("physical_free_slots", -1)), int(stress_diag.get("k_flex_cash_count_cap", -1))))
     add_check(results, "portfolio_entry_selection", case_id, "k_flex_skips_physically_impossible_high_counts", (5, 4, 3), tuple(stress_diag.get("k_flex_target_counts_attempted") or ()))
     add_check(results, "portfolio_entry_selection", case_id, "k_flex_direct_raw_score_optimum_shortcuts_exact_tree", (True, 0, 3, ("KF00", "KF01", "KF02")), (bool(stress_diag.get("constrained_solver_direct_score_optimum_shortcut", False)), int(stress_diag.get("constrained_solver_search_states", -1)), len(stress_selected), tuple(row["ticker"] for row in stress_selected)))
+
+    # SR-C68/C69 matched local-search contract: both use the same deterministic
+    # feasible-ascent family and same R0.  C68 remains fixed at baseline K; C69
+    # may add one canonical feasible position at a time up to physical free slots.
+    # The fixture makes one extra high-score position independently cash-feasible,
+    # so the K-only treatment must expand count without relaxing R0.
+    local_seed = (
+        ("A", 100.0, 2600, 0.10, 0.01, 0.10),
+        ("C", 100.0, 1400, 0.99, 0.45, 0.90),
+        ("D", 100.0, 1400, 0.98, 0.40, 0.80),
+        ("E", 100.0, 1200, 0.97, 0.35, 0.70),
+    )
+    local_control = {}
+    for policy in (
+        "resource-aware-continuous-max-dl-matched-feasible-ascent",
+        "resource-aware-continuous-max-dl-k-flex-r0-feasible-ascent",
+    ):
+        rows = [
+            candidate(t, price, qty, score, policy, excess_r, safety)
+            for t, price, qty, score, excess_r, safety in local_seed
+        ]
+        order, diag = reorder_candidates_for_resource_aware_quality(
+            rows,
+            available_cash=300_000.0,
+            sizing_equity=2_000_000.0,
+            pre_market_occupied=7,
+            max_positions=10,
+            params=params,
+        )
+        selected = select_resource_aware_action_candidates(order, diag)
+        local_control[policy] = {
+            "tickers": tuple(row["ticker"] for row in selected),
+            "baseline_k": int(diag.get("baseline_selected_count", -1)),
+            "baseline_r0": int(diag.get("baseline_reserved_cost_milli", -1)),
+            "selected_count": int(diag.get("selected_count", -1)),
+            "reserved": int(diag.get("reserved_cost_milli", -1)),
+            "extra": int(diag.get("k_flex_extra_positions", 0) or 0),
+            "certified": bool(diag.get("constrained_solver_optimality_certified", False)),
+        }
+    local_fixed = local_control["resource-aware-continuous-max-dl-matched-feasible-ascent"]
+    local_flex = local_control["resource-aware-continuous-max-dl-k-flex-r0-feasible-ascent"]
+    add_check(results, "portfolio_entry_selection", case_id, "c68_local_control_keeps_exact_baseline_k", 1, local_fixed["selected_count"])
+    add_check(results, "portfolio_entry_selection", case_id, "c69_local_k_flex_adds_position_without_relaxing_r0", True, local_flex["selected_count"] > local_fixed["selected_count"] and local_flex["reserved"] >= local_flex["baseline_r0"] == local_fixed["baseline_r0"])
+    add_check(results, "portfolio_entry_selection", case_id, "c69_local_k_flex_is_explicitly_not_global_exact", (False, 1), (local_flex["certified"], local_flex["extra"]))
 
     one_row = [candidate("X", 100.0, 100, 0.5, "resource-aware-continuous", 0.1, 0.2)]
     add_check(results, "portfolio_entry_selection", case_id, "action_limit_zero", 0, len(select_resource_aware_action_candidates(one_row, {"pre_market_order_limit": 0})))
