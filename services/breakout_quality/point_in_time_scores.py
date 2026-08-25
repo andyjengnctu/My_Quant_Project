@@ -936,6 +936,22 @@ def _checkpoint_cache_entry_dir(cache_root: Path, fold_contract: dict[str, Any])
     return Path(cache_root).resolve() / fold_training_identity(fold_contract)
 
 
+_SCORE_ONLY_CHECKPOINT_REUSE_MIGRATION_KINDS = frozenset({
+    "expanded_daily_score_universe_checkpoint_reuse",
+    "checkpoint_score_regeneration",
+    "fitting_identity_checkpoint_reuse",
+})
+
+
+def _is_score_only_checkpoint_reuse_manifest(manifest: dict[str, Any]) -> bool:
+    migration = manifest.get("migration")
+    return (
+        isinstance(migration, dict)
+        and migration.get("training_contract_unchanged") is True
+        and str(migration.get("kind") or "") in _SCORE_ONLY_CHECKPOINT_REUSE_MIGRATION_KINDS
+    )
+
+
 def _publish_fold_checkpoint_to_cache(
     *, fold_dir: Path, cache_root: Path | None, fold_contract: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -974,6 +990,48 @@ def _publish_fold_checkpoint_to_cache(
                 "reused_existing_cache": True,
             }
         if cached_identity == identity and cached_checkpoint != checkpoint_manifest:
+            if _is_score_only_checkpoint_reuse_manifest(manifest):
+                # A score-only rescore must never create a second fitted checkpoint.
+                # Older code rewrote model.pt only to refresh its embedded fold_contract,
+                # which changed the file SHA despite identical model weights.  Canonicalize
+                # such resumable folds back to the existing fitting-identity cache bytes.
+                restore_path = source_fold_dir / (
+                    f".{DEFAULT_MODEL_FILENAME}.cache_restore_{os.getpid()}_{time.time_ns()}"
+                )
+                try:
+                    shutil.copy2(cached_model_path, restore_path)
+                    restore_path.replace(model_path)
+                finally:
+                    if restore_path.exists():
+                        restore_path.unlink()
+                restored_checkpoint = build_file_manifest(model_path)
+                if restored_checkpoint != cached_checkpoint:
+                    raise RuntimeError(
+                        "fitting identity cache checkpoint還原後hash不一致；"
+                        f"identity={identity}, cached={cached_checkpoint.get('sha256')}, "
+                        f"restored={restored_checkpoint.get('sha256')}"
+                    )
+                migration = dict(manifest.get("migration") or {})
+                manifest = {
+                    **manifest,
+                    "migration": {
+                        **migration,
+                        "canonical_checkpoint_cache_restore": True,
+                        "source_checkpoint_sha_preserved": True,
+                        "superseded_local_checkpoint": checkpoint_manifest,
+                    },
+                    "artifacts": {
+                        **dict(manifest.get("artifacts") or {}),
+                        "checkpoint": restored_checkpoint,
+                    },
+                }
+                write_json(manifest_path, manifest)
+                return {
+                    "training_identity": identity,
+                    "cache_entry": str(entry_dir),
+                    "reused_existing_cache": True,
+                    "restored_source_fold_checkpoint": True,
+                }
             raise RuntimeError(
                 "同一fitting identity產生不同checkpoint；"
                 f"identity={identity}, cached={cached_checkpoint.get('sha256')}, "
@@ -1133,9 +1191,12 @@ def _rescore_fold_from_compatible_checkpoint(
     ):
         return None
 
-    migrated_checkpoint = {**checkpoint, "fold_contract": dict(fold_contract)}
+    # Score-output changes are not fitting changes.  Preserve model.pt byte-for-byte;
+    # only the score rows and fold manifest are refreshed.  The embedded checkpoint
+    # fold_contract may therefore be older in score-only fields, which is intentional
+    # because fitting compatibility excludes those fields.
+    source_checkpoint_manifest = build_file_manifest(model_path)
     score_path = fold_dir / FOLD_SCORE_FILENAME
-    torch_module.save(migrated_checkpoint, model_path)
     frame.to_csv(score_path, index=False, encoding="utf-8-sig")
     rescored_manifest = {
         **manifest,
@@ -1156,6 +1217,7 @@ def _rescore_fold_from_compatible_checkpoint(
                 else "checkpoint_score_regeneration"
             ),
             "training_contract_unchanged": True,
+            "source_checkpoint_sha_preserved": True,
             **(
                 {"future_target_required_for_score": False}
                 if str(bundle.profile.training_sample_scope)
@@ -1164,7 +1226,7 @@ def _rescore_fold_from_compatible_checkpoint(
             ),
         },
         "artifacts": {
-            "checkpoint": build_file_manifest(model_path),
+            "checkpoint": source_checkpoint_manifest,
             "scores": build_file_manifest(score_path),
         },
     }

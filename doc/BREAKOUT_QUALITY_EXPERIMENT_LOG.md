@@ -10153,3 +10153,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Current Compare Suite擴為`C61/C58/C59/C64/C66/C70/C71`，schema=`59`。Primary contrast=`C71-C70`；C70保留joint K/R0 mechanism reference。Production C42/C44不變；C71先做single-seed OOS+Rolling，Multi-seed deferred。
 - GPT targeted synthetic：resource-aware selector=`30/30 PASS`；Strategy Compare config-driven=`61/61 PASS`；PIT builder=`12/12 PASS`，其中直接驗`score_output_contract`變更不改fitting identity且`raw_safety_score`可由同一PIT table lookup。
 - Decision：**IMPLEMENTED / RESULT_PENDING / RAW_SAFETY_ONLY_ELIGIBILITY_CHANGE / SAME_CHECKPOINT_SCORE_ONLY_RESCORE / NO_RETRAIN / SINGLE_SEED_FIRST / NOT_PROMOTED**。
+
+### 2026-08-26 — SR-C71 PIT score-only rescore checkpoint-SHA blocker修正
+
+- 使用者首次執行C71 OOS前置時，`CONT13R_ROLL`正確判定舊Selection PIT缺`raw_safety_score`而進RESUME；producer亦成功載入既有MR-13R fold checkpoint並重新推論score universe，但在發布fitting-identity cache時失敗：同一training identity的cached checkpoint SHA=`99de…`、local current SHA=`adb…`。
+- Root cause：`_rescore_fold_from_compatible_checkpoint()`為刷新score-output contract，把新的`fold_contract`重新寫入`model.pt`。模型權重／fitting identity未變，但checkpoint bytes因metadata被改寫，因此canonical cache正確偵測為同identity不同SHA。這是engineering bug，不是模型需要重訓，也不是fitting identity應擴張。
+- Fix：score-only rescore現在**不再save或改寫model.pt**；只重算scores與fold manifest，checkpoint artifact保留原SHA。另為修復這次已被舊程式改寫的local fold，`_publish_fold_checkpoint_to_cache()`只在manifest明示`training_contract_unchanged=True`且migration kind屬受控score-only checkpoint reuse時，將local checkpoint byte-for-byte還原為既有fitting cache canonical checkpoint並更新manifest。真正沒有score-only migration證據的同identity不同checkpoint仍RuntimeError fail-closed。
+- Regression：PIT synthetic新增三個契約：score-output-only identity不改fitting identity、rescore helper不得呼叫`torch_module.save()`改checkpoint bytes、已污染local fold可由canonical cache自癒；另驗真正same-identity/different-checkpoint仍拒絕。
+- Decision：**ENGINEERING_FIX / NO_SCIENTIFIC_IDENTITY_CHANGE / NO_RETRAIN / C71_RESULT_PENDING**。使用者可直接再次執行原Strategy Compare OOS入口，canonical producer應RESUME/REUSE checkpoint並完成Raw Safety rescore。
+

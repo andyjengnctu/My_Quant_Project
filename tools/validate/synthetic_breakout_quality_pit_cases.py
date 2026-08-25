@@ -48,6 +48,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     from tools.filters.breakout_quality.build_point_in_time_scores import (
         _build_fold_periods,
         _fold_training_contract_is_compatible,
+        _publish_fold_checkpoint_to_cache,
         fold_training_identity,
         _resolve_training_universe_start,
         _stable_fold_id,
@@ -200,6 +201,106 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         )
         and fold_training_identity(score_output_only_change)
         == fold_training_identity(expected_contract),
+    )
+
+    # Reproduce the C71 score-only upgrade failure: legacy code refreshed the
+    # embedded fold_contract inside model.pt, changing its SHA while fitting identity
+    # stayed unchanged.  The fitting cache is canonical and must restore its exact
+    # checkpoint bytes instead of treating this resumable score-only migration as a
+    # second fitted model.
+    with tempfile.TemporaryDirectory(prefix="pit_score_only_cache_repair_") as temp_dir:
+        root = Path(temp_dir)
+        fold_dir = root / "fold"
+        cache_root = root / "cache"
+        fold_dir.mkdir(parents=True)
+        cache_entry = cache_root / fold_training_identity(expected_contract)
+        cache_entry.mkdir(parents=True)
+        cached_model = cache_entry / "model.pt"
+        local_model = fold_dir / "model.pt"
+        cached_model.write_bytes(b"canonical-fitting-checkpoint")
+        local_model.write_bytes(b"score-only-metadata-rewritten-checkpoint")
+        cached_checkpoint = build_file_manifest(cached_model)
+        local_checkpoint = build_file_manifest(local_model)
+        cached_manifest = {
+            **expected_contract,
+            "artifacts": {"checkpoint": cached_checkpoint},
+        }
+        local_manifest = {
+            **score_output_only_change,
+            "migration": {
+                "kind": "expanded_daily_score_universe_checkpoint_reuse",
+                "training_contract_unchanged": True,
+            },
+            "artifacts": {"checkpoint": local_checkpoint},
+        }
+        (cache_entry / "manifest.json").write_text(
+            json.dumps(cached_manifest), encoding="utf-8"
+        )
+        (fold_dir / "manifest.json").write_text(
+            json.dumps(local_manifest), encoding="utf-8"
+        )
+        publish_result = _publish_fold_checkpoint_to_cache(
+            fold_dir=fold_dir, cache_root=cache_root, fold_contract=score_output_only_change
+        )
+        repaired_manifest = json.loads(
+            (fold_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+        repaired_checkpoint = build_file_manifest(local_model)
+    check_true(
+        "pit_score_only_rescore_checkpoint_sha_conflict_restores_canonical_fitting_cache",
+        bool(
+            publish_result
+            and publish_result.get("reused_existing_cache") is True
+            and publish_result.get("restored_source_fold_checkpoint") is True
+            and repaired_checkpoint == cached_checkpoint
+            and repaired_manifest["artifacts"]["checkpoint"] == cached_checkpoint
+            and repaired_manifest["migration"].get("canonical_checkpoint_cache_restore") is True
+            and repaired_manifest["migration"].get("source_checkpoint_sha_preserved") is True
+        ),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="pit_true_checkpoint_conflict_") as temp_dir:
+        root = Path(temp_dir)
+        fold_dir = root / "fold"
+        cache_root = root / "cache"
+        fold_dir.mkdir(parents=True)
+        cache_entry = cache_root / fold_training_identity(expected_contract)
+        cache_entry.mkdir(parents=True)
+        cached_model = cache_entry / "model.pt"
+        local_model = fold_dir / "model.pt"
+        cached_model.write_bytes(b"canonical-fitting-checkpoint")
+        local_model.write_bytes(b"genuinely-different-fitting-checkpoint")
+        cached_manifest = {
+            **expected_contract,
+            "artifacts": {"checkpoint": build_file_manifest(cached_model)},
+        }
+        local_manifest = {
+            **expected_contract,
+            "artifacts": {"checkpoint": build_file_manifest(local_model)},
+        }
+        (cache_entry / "manifest.json").write_text(json.dumps(cached_manifest), encoding="utf-8")
+        (fold_dir / "manifest.json").write_text(json.dumps(local_manifest), encoding="utf-8")
+        try:
+            _publish_fold_checkpoint_to_cache(
+                fold_dir=fold_dir, cache_root=cache_root, fold_contract=expected_contract
+            )
+        except RuntimeError as exc:
+            true_conflict_rejected = "同一fitting identity產生不同checkpoint" in str(exc)
+        else:
+            true_conflict_rejected = False
+    check_true(
+        "pit_true_same_identity_different_checkpoint_still_fails_closed",
+        true_conflict_rejected,
+    )
+
+    pit_source = read_source_text("services/breakout_quality/point_in_time_scores.py")
+    rescore_start = pit_source.index("def _rescore_fold_from_compatible_checkpoint(")
+    rescore_end = pit_source.index("def _rescore_fold_from_fitting_checkpoint(", rescore_start)
+    rescore_source = pit_source[rescore_start:rescore_end]
+    check_true(
+        "pit_score_only_rescore_does_not_rewrite_fitted_checkpoint_bytes",
+        "torch_module.save(" not in rescore_source
+        and "source_checkpoint_sha_preserved" in rescore_source,
     )
 
     oos_2023 = {
