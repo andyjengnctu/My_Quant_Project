@@ -4,8 +4,8 @@
     - add a buy list to decide the stop prices using full roos base-fanlist-best
 
 - restreucture
-    - modulize audit in manu
     - models/output cleaner
+    - color template file to consist rule
 
 - imrove DL module
     - retrain min parameters

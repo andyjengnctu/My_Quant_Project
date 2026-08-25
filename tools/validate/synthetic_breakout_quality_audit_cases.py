@@ -92,6 +92,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
 
     from config.strategy_compare import get_strategy_comparison_settings
+    from filters.breakout_quality.strategy_compare_contracts import (
+        COMPARISON_MODE_SCORE_RANKING,
+    )
     from services.audit.strategy_compare_source import (
         StrategyCompareAuditSource,
         load_strategy_arm_replay_sidecars,
@@ -113,7 +116,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             pair_dir = run_dir / "pairs" / active_arm_id.lower()
             pair_dir.mkdir(parents=True)
             (pair_dir / "strategy_comparison.json").write_text(
-                json.dumps({"metadata": {"comparison_mode": "score_ranking"}}),
+                json.dumps({"metadata": {"comparison_mode": COMPARISON_MODE_SCORE_RANKING}}),
                 encoding="utf-8",
             )
             baseline_rows.to_csv(

@@ -12,6 +12,9 @@ import pandas as pd
 from config.strategy_compare import get_strategy_comparison_settings
 from core.path_utils import project_relative_display_path
 from core.strategy_comparison import strategy_comparison_fingerprint
+from filters.breakout_quality.strategy_compare_contracts import (
+    COMPARISON_MODE_SCORE_RANKING,
+)
 from filters.breakout_quality.strategy_compare_runtime import (
     strategy_comparison_execution_pairs,
 )
@@ -363,9 +366,10 @@ def load_strategy_arm_replay_sidecars(
         prefix = "no_filter"
     else:
         comparison_mode = str(metadata.get("comparison_mode") or "").strip()
-        if comparison_mode != "score_ranking":
+        if comparison_mode != COMPARISON_MODE_SCORE_RANKING:
             raise AuditSourceBlockedError(
-                f"{source.profile_id}/{arm_key} Audit目前只接受score-ranking row evidence；"
+                f"{source.profile_id}/{arm_key} Audit目前只接受"
+                f"{COMPARISON_MODE_SCORE_RANKING} row evidence；"
                 f"comparison_mode={comparison_mode!r}"
             )
         prefix = "score_ranking"

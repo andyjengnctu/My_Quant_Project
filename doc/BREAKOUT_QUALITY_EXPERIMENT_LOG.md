@@ -10032,3 +10032,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 修正：formal Audit resolver 改為直接重用 `filters/breakout_quality/strategy_compare_runtime.py` 的 canonical execution-group SSOT。若 requested arm 是 shared DL-off baseline且沒有 direct mapping，就依 execution order 解析與 aggregate `_scenario_payloads` 相同的首個 DL-on anchor `current_pair_dir`，讀取其中 `no_filter_orderable_candidates.csv`／`no_filter_selected_buys.csv`；不另外建立比 producer 更嚴格的跨pair byte-identity gate。DL-on arm仍直接使用自己的 `score_ranking_*` sidecar。
 - 這是既有 artifact topology 的 read-only解析修正；不重跑 OOS／Rolling、不重建 score、不改 target、selector、strategy semantics 或 comparison identity。Audit decision question、四象限 threshold、cohort與停止條件均不變。
 - Decision：**SHARED_BASELINE_RESOLVER_FIXED / SCIENCE_UNCHANGED / AUDIT_RESULT_PENDING**。
+
+### 2026-08-25 — AUD-mfe-safety-target-geometry 第三次執行：comparison-mode canonical contract 修正
+
+- 使用者套用shared-baseline resolver後，preflight已能越過C58 topology，但C59在OOS／Rolling均被阻擋為「Audit目前只接受score-ranking row evidence；comparison_mode='score-ranking'」。
+- 根因是Audit consumer把正式 Strategy Compare mode 常數誤寫成underscore字串`score_ranking`，而canonical producer／contract實際使用hyphen字串`score-ranking`；上一版dedicated synthetic fixture也複製了同一錯誤underscore literal，因此形成consumer與test互相驗證、卻與producer SSOT分叉的假PASS。
+- 修正：`services/audit/strategy_compare_source.py`直接引用`filters/breakout_quality/strategy_compare_contracts.py::COMPARISON_MODE_SCORE_RANKING`；synthetic fixture也引用同一canonical constant，不再持有第二份mode literal。row sidecar檔名前綴仍依正式output contract使用`score_ranking_*`，兩者語意不得混用。
+- GPT獨立回歸：Audit framework 5/5 PASS；Strategy Compare config-driven application 57/57 PASS。未執行`apps/run_bundle.py`／`apps/test_suite.py`。
+- Decision：**COMPARISON_MODE_SSOT_FIX / SCIENCE_UNCHANGED / AUDIT_RESULT_PENDING**。不改target、threshold、cohort、selector、OOS／Rolling results或Research Queue順序。
+
