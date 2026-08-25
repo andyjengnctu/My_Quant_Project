@@ -354,52 +354,43 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         bool(c64_checks) and all(c64_checks),
     )
 
-    c68_c69_checks = []
+    c66_c70_checks = []
     for current_settings in settings_by_mode.values():
-        c59 = current_settings.arms["C59"]
-        c68 = current_settings.arms["C68"]
-        c69 = current_settings.arms["C69"]
-        payloads = []
-        for arm in (c59, c68, c69):
-            payload = arm.as_dict()
+        c66 = current_settings.arms["C66"]
+        c70 = current_settings.arms["C70"]
+        c66_payload = c66.as_dict()
+        c70_payload = c70.as_dict()
+        for payload in (c66_payload, c70_payload):
             for key in ("arm_id", "name", "description", "dl_runtime_mode", "dl_runtime_options"):
                 payload.pop(key, None)
-            payloads.append(payload)
-        c69_options = dict(c69.dl_runtime_options or {})
-        c68_c69_checks.append(
-            payloads[0] == payloads[1] == payloads[2]
-            and c59.dl_id == c68.dl_id == c69.dl_id == "CONT13E_ROLL"
-            and c59.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
-            and c68.dl_runtime_mode == "resource-aware-continuous-max-dl-matched-feasible-ascent"
-            and c69.dl_runtime_mode == "resource-aware-continuous-max-dl-k-flex-r0-feasible-ascent"
-            and dict(c68.dl_runtime_options or {}) == {
+        c66_c70_checks.append(
+            c66_payload == c70_payload
+            and c66.dl_id == c70.dl_id == "CONT13R_ROLL"
+            and c66.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+            and dict(c66.dl_runtime_options or {}) == {
                 "preserve_k_r0": True,
-                "membership_proposal": "score_priority_then_canonical_execution_v1",
-                "local_search": "deterministic_single_swap_v1",
+                "constrained_solver": "exact_branch_and_bound_v1",
                 "selection_only": True,
             }
-            and c69_options == {
-                "count_constraint": "baseline_k_to_physical_free_slots_local_v1",
-                "preserve_r0": True,
-                "membership_proposal": "score_priority_then_canonical_execution_v1",
-                "local_search": "deterministic_single_add_swap_v1",
+            and c70.dl_runtime_mode == "resource-aware-continuous-score-no-k-no-r0"
+            and dict(c70.dl_runtime_options or {}) == {
+                "preserve_k": False,
+                "preserve_r0": False,
+                "selection_order": "model_score_desc_then_canonical_tie_v1",
                 "selection_only": True,
             }
         )
     check_true(
-        "c68_c69_form_matched_local_search_pair_with_k_as_treatment",
-        bool(c68_c69_checks) and all(c68_c69_checks),
+        "c70_differs_from_c66_only_by_joint_k_r0_resource_ablation",
+        bool(c66_c70_checks) and all(c66_c70_checks),
     )
     check_true(
-        "current_suite_retires_compute_blocked_c67_and_contains_c68_c69_contrasts",
-        "C67" not in expected_arm_ids
-        and "C68" in expected_arm_ids
-        and "C69" in expected_arm_ids
-        and "C68-C59" in expected_contrast_ids
-        and "C69-C68" in expected_contrast_ids
-        and "C69-C59" in expected_contrast_ids
-        and "C69-C58" in expected_contrast_ids,
+        "current_suite_contains_only_user_selected_c61_c58_c59_c64_c66_c70",
+        expected_arm_ids == ("C61", "C58", "C59", "C64", "C66", "C70")
+        and "C70-C66" in expected_contrast_ids
+        and all(arm_id not in expected_arm_ids for arm_id in ("C62", "C63", "C68", "C69", "C60", "C65")),
     )
+
 
     enabled_dl_profiles = {
         str(settings.dl_sources[arm.dl_id].experiment_profile)

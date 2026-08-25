@@ -64,6 +64,9 @@ STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRA
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL = (
     'resource-aware-continuous-score-no-r0-constrained-optimal'
 )
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0 = (
+    'resource-aware-continuous-score-no-k-no-r0'
+)
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL = (
     'resource-aware-continuous-score-capital-no-r0-constrained-optimal'
 )
@@ -90,6 +93,7 @@ SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
 )
@@ -1055,6 +1059,23 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                     )
                 ):
                     raise ValueError(f"arm {key} Score+Safety constrained不得依賴Expected-R/Excess-R calibration")
+            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0:
+                if options.get("preserve_k") is not False:
+                    raise ValueError(f"arm {key} Score No-K/No-R0必須preserve_k=False")
+                if options.get("preserve_r0") is not False:
+                    raise ValueError(f"arm {key} Score No-K/No-R0必須preserve_r0=False")
+                if options.get("selection_order") != "model_score_desc_then_canonical_tie_v1":
+                    raise ValueError(f"arm {key} Score No-K/No-R0 selection_order不支援")
+                if options.get("selection_only") is not True:
+                    raise ValueError(f"arm {key} Score No-K/No-R0目前只允許Selection PIT score source")
+                source_is_selection_pit = (
+                    settings.dl_sources[arm.dl_id].score_source == "selection_point_in_time"
+                )
+                if not source_is_selection_pit:
+                    raise ValueError(
+                        f"arm {key} Score No-K/No-R0必須綁Selection PIT score source: "
+                        f"actual={settings.dl_sources[arm.dl_id].score_source!r}"
+                    )
             if arm.dl_runtime_mode in {
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,

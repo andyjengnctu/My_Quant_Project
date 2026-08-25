@@ -1355,6 +1355,7 @@ def _run_resource_aware_entry_selection_matrix_case(base_params):
         "resource-aware-continuous-score-safety-constrained-optimal",
         "resource-aware-continuous-score-residual-safety-constrained-optimal",
         "resource-aware-continuous-score-no-r0-constrained-optimal",
+        "resource-aware-continuous-score-no-k-no-r0",
         "resource-aware-continuous-score-capital-no-r0-constrained-optimal",
         "resource-aware-continuous-score-capital-pareto-no-r0-constrained-optimal",
     )
@@ -1420,6 +1421,51 @@ def _run_resource_aware_entry_selection_matrix_case(base_params):
     add_check(results, "portfolio_entry_selection", case_id, "fixed_k_c59_stays_at_baseline_k", (1, ("A",)), (fixed["selected_count"], fixed["tickers"]))
     add_check(results, "portfolio_entry_selection", case_id, "k_flex_uses_max_feasible_count_and_score_optimum", (2, ("C", "D"), 1, (3, 2)), (flex["selected_count"], flex["tickers"], flex["extra"], flex["attempted"]))
     add_check(results, "portfolio_entry_selection", case_id, "k_flex_preserves_exact_baseline_r0_floor", True, flex["reserved"] >= flex["baseline_r0"] == fixed["baseline_r0"])
+
+    # SR-C70 joint K/R0 ablation: same frozen score order as C66, but baseline
+    # K and R0 no longer constrain membership.  The canonical cash simulator
+    # remains authoritative, so three high-score lower-notional rows may fill the
+    # three physical slots even though the DL-off baseline has K=1/R0≈260k.
+    c70_rows = [
+        candidate(t, price, qty, score, "resource-aware-continuous-score-no-k-no-r0", excess_r, safety)
+        for t, price, qty, score, excess_r, safety in (
+            ("A", 100.0, 2600, 0.10, 0.01, 0.10),
+            ("C", 100.0, 800, 0.99, 0.45, 0.90),
+            ("D", 100.0, 800, 0.98, 0.40, 0.80),
+            ("E", 100.0, 800, 0.97, 0.35, 0.70),
+        )
+    ]
+    c70_order, c70_diag = reorder_candidates_for_resource_aware_quality(
+        c70_rows,
+        available_cash=300_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=7,
+        max_positions=10,
+        params=params,
+    )
+    c70_selected = select_resource_aware_action_candidates(c70_order, c70_diag)
+    add_check(
+        results, "portfolio_entry_selection", case_id,
+        "c70_no_k_no_r0_uses_score_order_until_physical_slots_cash",
+        (1, 3, ("C", "D", "E")),
+        (
+            int(c70_diag.get("baseline_selected_count", -1)),
+            int(c70_diag.get("selected_count", -1)),
+            tuple(row["ticker"] for row in c70_selected),
+        ),
+    )
+    add_check(
+        results, "portfolio_entry_selection", case_id,
+        "c70_no_k_no_r0_does_not_preserve_baseline_resource_floor",
+        True,
+        bool(
+            c70_diag.get("preserve_k") is False
+            and c70_diag.get("preserve_r0") is False
+            and int(c70_diag.get("reserved_cost_milli", 0))
+            < int(c70_diag.get("baseline_reserved_cost_milli", 0))
+            and int(c70_diag.get("pre_market_order_limit", -1)) == 3
+        ),
+    )
 
     # Performance-contract fixture: physical slots can be much wider than the
     # cash-feasible count.  The exact scientific result is unchanged, but K-Flex

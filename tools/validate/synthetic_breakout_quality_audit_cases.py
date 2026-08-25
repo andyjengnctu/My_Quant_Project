@@ -99,6 +99,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         StrategyCompareAuditSource,
         load_strategy_arm_pipeline_sidecars,
         load_strategy_arm_replay_sidecars,
+        resolve_strategy_result_dir_for_fingerprint,
     )
     with TemporaryDirectory() as temp_dir_text:
         project_root = Path(temp_dir_text)
@@ -219,6 +220,30 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 and len(pipeline_evidence["execution"]) == 1
             ),
         )
+
+    with TemporaryDirectory() as retained_temp_text:
+        retained_root = Path(retained_temp_text)
+        output_root = retained_root / "outputs" / "strategy_compare" / "extending_window" / "oos_2021_forward"
+        old_run = output_root / "runs" / "20260825_old"
+        new_run = output_root / "runs" / "20260825_new"
+        old_run.mkdir(parents=True)
+        new_run.mkdir(parents=True)
+        (old_run / "strategy_comparison.json").write_text(
+            json.dumps({"config_fingerprint": "aaaaaaaaaaaa"}), encoding="utf-8"
+        )
+        (new_run / "strategy_comparison.json").write_text(
+            json.dumps({"config_fingerprint": "bbbbbbbbbbbb"}), encoding="utf-8"
+        )
+        pinned_run = resolve_strategy_result_dir_for_fingerprint(
+            retained_root,
+            "outputs/strategy_compare/extending_window/oos_2021_forward",
+            config_fingerprint="aaaaaaaaaaaa",
+        )
+        check_true(
+            "retained_audit_resolves_explicit_historical_strategy_fingerprint_instead_of_newer_current_run",
+            pinned_run == old_run.resolve(),
+        )
+
 
 
     from services.audit.c69_marginal_positions import (

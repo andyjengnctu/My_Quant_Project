@@ -47,7 +47,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 57
+STRATEGY_COMPARE_SCHEMA_VERSION = 58
 
 # =============================================================================
 # 1. 常用設定
@@ -167,36 +167,31 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_RESIDUAL_SAFETY_CONSTRAINED = "Min MR-1
 STRATEGY_COMPARE_DISPLAY_MIN_MR13P_CONDITIONAL_SAFETY_CONSTRAINED = "Min MR-13P Conditional Safety"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13Q_CONDITIONAL_MFE_SINGLE = "Min MR-13Q Conditional-MFE Single"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_DUO = "Min MR-13R Conditional-MFE Duo"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_NO_K_NO_R0 = "Min MR-13R Conditional-MFE No-K No-R0"
 
 # Current Compare Suite是「比較誰／比較哪些差」的唯一真理來源。
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
 STRATEGY_COMPARE_SUITES = {
     "extending_current": {
-        "arm_ids": ("C61", "C62", "C58", "C63", "C59", "C68", "C69", "C60", "C64", "C65", "C66"),
+        "arm_ids": ("C61", "C58", "C59", "C64", "C66", "C70"),
         "contrast_ids": (
-            "C62-C61", "C63-C58", "C62-C63",
-            "C61-C58", "C59-C58", "C59-C61",
-            "C68-C59", "C69-C68", "C69-C59", "C69-C58",
-            "C60-C58", "C60-C61", "C60-C59",
-            "C64-C58", "C64-C59", "C64-C60",
-            "C65-C58", "C65-C59", "C65-C64",
-            "C66-C58", "C66-C59", "C66-C64", "C66-C65",
+            "C61-C58",
+            "C59-C58", "C59-C61",
+            "C64-C58", "C64-C59",
+            "C66-C58", "C66-C59", "C66-C64",
+            "C70-C66", "C70-C59", "C70-C58", "C70-C64",
         ),
         "display_name_bases": {
             "C61": "Full Base-Finalist-Best",
-            "C62": "Full Base-Finalists-Agree",
             "C58": "Min Base-Finalist-Best",
-            "C63": "Min Base-Finalists-Agree",
             "C59": "Min MR-13E Constrained",
-            "C68": "Min MR-13E Fixed-K Feasible-Ascent",
-            "C69": "Min MR-13E K-Flex R0 Feasible-Ascent",
-            "C60": "Min MR-13K + MR-13M Residual Safety",
             "C64": "Min MR-13P Conditional Safety",
-            "C65": "Min MR-13Q Conditional-MFE Single",
             "C66": "Min MR-13R Conditional-MFE Duo",
+            "C70": "Min MR-13R Conditional-MFE No-K No-R0",
         },
     },
 }
+
 
 # Strategy Compare以研究階段profile隔離設定與輸出；App只顯示泛化階段名稱，
 # arms／contrasts／period／output namespace全部由本檔驅動。
@@ -252,6 +247,7 @@ STRATEGY_COMPARE_PROFILES = {
             "C64": "min_oos",
             "C65": "min_oos",
             "C66": "min_oos",
+            "C70": "min_oos",
         },
     },
     "extending_window_rolling": {
@@ -602,39 +598,11 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": None,
         "robustness_role": "off",
     },
-    "C62": {
-        "name": STRATEGY_COMPARE_DISPLAY_FULL_FINALISTS_AGREE,
-        "description": (
-            "Extending-Window Full DL-off parameter-policy reference；與C61完全相同formal rules／execution，"
-            "唯一差異為canonical parameter policy使用base-finalists-agree。"
-        ),
-        "param_source": "full_rolling",
-        "param_policy": "base-finalists-agree",
-        "rule_policy": "formal",
-        "dl_enabled": False,
-        "dl_id": None,
-        "dl_runtime_mode": None,
-        "robustness_role": "off",
-    },
     "C58": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_ROOS,
         "description": "Extending-Window Min baseline；人讀名稱由evaluation mode渲染為Min OOS／Min Rolling；參數來源由mode綁定：OOS固定2020 cutoff，Rolling使用Optimizer-owned canonical schedule；rules全關；DL-off",
         "param_source": "min_rolling",
         "param_policy": "base-finalist-best",
-        "rule_policy": "all_off",
-        "dl_enabled": False,
-        "dl_id": None,
-        "dl_runtime_mode": None,
-        "robustness_role": "off",
-    },
-    "C63": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_FINALISTS_AGREE,
-        "description": (
-            "Extending-Window Min DL-off parameter-policy reference；與C58完全相同all-off rules／execution，"
-            "唯一差異為canonical parameter policy使用base-finalists-agree。"
-        ),
-        "param_source": "min_rolling",
-        "param_policy": "base-finalists-agree",
         "rule_policy": "all_off",
         "dl_enabled": False,
         "dl_id": None,
@@ -654,72 +622,6 @@ STRATEGY_COMPARE_ARMS = {
             "preserve_k_r0": True,
             "constrained_solver": "exact_branch_and_bound_v1",
             "selection_only": True,
-        },
-        "robustness_role": "off",
-    },
-    "C68": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_FEASIBLE_ASCENT_CONTROL,
-        "description": (
-            "SR-C68 fixed-K local-search control：與C59使用相同MR-13E score、Min base-finalist-best、"
-            "all-off、baseline K/R0與canonical sizing/cash/orderability/execution；唯一差異為"
-            "global exact solver改為既有deterministic best-improvement feasible-ascent。"
-        ),
-        "param_source": "min_rolling",
-        "param_policy": "base-finalist-best",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13E_ROLL",
-        "dl_runtime_mode": "resource-aware-continuous-max-dl-matched-feasible-ascent",
-        "dl_runtime_options": {
-            "preserve_k_r0": True,
-            "membership_proposal": "score_priority_then_canonical_execution_v1",
-            "local_search": "deterministic_single_swap_v1",
-            "selection_only": True,
-        },
-        "robustness_role": "off",
-    },
-    "C69": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_K_FLEX_R0_FEASIBLE_ASCENT,
-        "description": (
-            "SR-C69 matched K-Flex local-search treatment：與C68完全相同MR-13E source與"
-            "deterministic feasible-ascent family，R0仍為hard floor；唯一scientific change是"
-            "允許single-add把planned-order count由baseline K擴到physical free slots，"
-            "count lexicographically優先，count內仍最大化原始MR-13E score。"
-        ),
-        "param_source": "min_rolling",
-        "param_policy": "base-finalist-best",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13E_ROLL",
-        "dl_runtime_mode": "resource-aware-continuous-max-dl-k-flex-r0-feasible-ascent",
-        "dl_runtime_options": {
-            "count_constraint": "baseline_k_to_physical_free_slots_local_v1",
-            "preserve_r0": True,
-            "membership_proposal": "score_priority_then_canonical_execution_v1",
-            "local_search": "deterministic_single_add_swap_v1",
-            "selection_only": True,
-        },
-        "robustness_role": "off",
-    },
-    "C60": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13K_MR13M_RESIDUAL_SAFETY_CONSTRAINED,
-        "description": (
-            "Extending-Window B2：MR-13K primary + MR-13M same-day rank OLS residual-safety floor；"
-            "兩個score必須來自同一evaluation mode／同一information-cutoff namespace。"
-        ),
-        "param_source": "min_rolling",
-        "param_policy": "base-finalist-best",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13K_ROLL",
-        "dl_runtime_mode": "resource-aware-continuous-score-residual-safety-constrained-optimal",
-        "dl_runtime_options": {
-            "preserve_k_r0": True,
-            "constrained_solver": "exact_branch_and_bound_v1",
-            "selection_only": True,
-            "safety_dl_id": "CONT13M_ROLL",
-            "safety_constraint": "baseline_residual_coverage_and_score_sum_floor_v1",
-            "safety_residualization": "same_day_rank_ols_v1",
         },
         "robustness_role": "off",
     },
@@ -746,25 +648,6 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
-    "C65": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13Q_CONDITIONAL_MFE_SINGLE,
-        "description": (
-            "MR-13Q Single-head reverse-Conditional-MFE conversion arm；與C58共用Min base-finalist-best、"
-            "all-off、K/R0與canonical execution，唯一model change是直接最大化J=U-E(U|S) prediction。"
-        ),
-        "param_source": "min_rolling",
-        "param_policy": "base-finalist-best",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13Q_ROLL",
-        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
-        "dl_runtime_options": {
-            "preserve_k_r0": True,
-            "constrained_solver": "exact_branch_and_bound_v1",
-            "selection_only": True,
-        },
-        "robustness_role": "off",
-    },
     "C66": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_DUO,
         "description": (
@@ -784,6 +667,27 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C70": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_NO_K_NO_R0,
+        "description": (
+            "SR-C70 joint resource-ablation：與C66使用完全相同MR-13R CONT13R_ROLL final "
+            "Conditional-MFE model_score、Min base-finalist-best、all-off、canonical sizing/cash/"
+            "orderability/execution；唯一scientific change是移除C58-derived K與R0。"
+        ),
+        "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13R_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False,
+            "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
 }
 
 # =============================================================================
@@ -792,29 +696,18 @@ STRATEGY_COMPARE_ARMS = {
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
-    "C62-C61": {"left": "C62", "right": "C61", "description": "{left}相對{right}的Full parameter-policy單變量差異"},
-    "C63-C58": {"left": "C63", "right": "C58", "description": "{left}相對{right}的Min parameter-policy單變量差異"},
-    "C62-C63": {"left": "C62", "right": "C63", "description": "base-finalists-agree政策下Full相對Min的完整策略體系差異"},
     "C61-C58": {"left": "C61", "right": "C58", "description": "{left}相對{right}的完整策略體系差異；不是單一參數效果"},
     "C59-C58": {"left": "C59", "right": "C58", "description": "{left}相對{right}的增量策略效果"},
     "C59-C61": {"left": "C59", "right": "C61", "description": "{left}相對{right}的整體策略結果；不是單一DL效果"},
-    "C68-C59": {"left": "C68", "right": "C59", "description": "dedicated matched fixed-K feasible-ascent相對exact C59；隔離global exact→matched deterministic local-search solver effect"},
-    "C69-C68": {"left": "C69", "right": "C68", "description": "同一feasible-ascent family下K-Flex相對fixed-K；唯一scientific change為baseline K可擴到physical free slots，R0保留"},
-    "C69-C59": {"left": "C69", "right": "C59", "description": "practical K-Flex local treatment相對current exact-K C59的淨策略效果"},
-    "C69-C58": {"left": "C69", "right": "C58", "description": "K-Flex / R0-preserved feasible-ascent MR-13E相對Min baseline整體效果"},
-    "C60-C58": {"left": "C60", "right": "C58", "description": "{left}相對{right}的增量策略效果"},
-    "C60-C61": {"left": "C60", "right": "C61", "description": "{left}相對{right}的整體策略結果；不是單一DL效果"},
-    "C60-C59": {"left": "C60", "right": "C59", "description": "{left}相對{right}的同政策比較"},
     "C64-C58": {"left": "C64", "right": "C58", "description": "MR-13P conditional conversion相對Min baseline的增量策略效果"},
     "C64-C59": {"left": "C64", "right": "C59", "description": "MR-13P conditional conversion相對目前C59 MR-13E conversion reference"},
-    "C64-C60": {"left": "C64", "right": "C60", "description": "model-level conditional safety相對C60 runtime post-hoc residual safety"},
-    "C65-C58": {"left": "C65", "right": "C58", "description": "Single-head Conditional-MFE相對Min baseline的增量策略效果"},
-    "C65-C59": {"left": "C65", "right": "C59", "description": "Single-head Conditional-MFE相對C59 conversion reference"},
-    "C65-C64": {"left": "C65", "right": "C64", "description": "直接maximize Conditional-MFE相對MR-13P safety hard-floor formulation"},
     "C66-C58": {"left": "C66", "right": "C58", "description": "Duo-head Conditional-MFE相對Min baseline的增量策略效果"},
     "C66-C59": {"left": "C66", "right": "C59", "description": "Duo-head Conditional-MFE相對C59 conversion reference"},
     "C66-C64": {"left": "C66", "right": "C64", "description": "Duo-head Conditional-MFE相對MR-13P safety hard-floor formulation"},
-    "C66-C65": {"left": "C66", "right": "C65", "description": "顯式Safety condition head相對Single-head的architecture controlled contrast"},
+    "C70-C66": {"left": "C70", "right": "C66", "description": "MR-13R完全相同model/ranking下移除C58-derived K與R0的joint resource-ablation；primary contrast"},
+    "C70-C59": {"left": "C70", "right": "C59", "description": "No-K/No-R0 MR-13R相對current MR-13E constrained reference的淨策略效果"},
+    "C70-C58": {"left": "C70", "right": "C58", "description": "No-K/No-R0 MR-13R相對Min DL-off baseline的完整增量效果"},
+    "C70-C64": {"left": "C70", "right": "C64", "description": "No-K/No-R0 MR-13R相對MR-13P Conditional Safety的策略效果"},
 }
 
 def _merge_compatibility_catalog(

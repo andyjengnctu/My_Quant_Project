@@ -213,17 +213,78 @@ def _resolve_canonical_run_dir(
     return run_dir
 
 
+def resolve_strategy_result_dir_for_fingerprint(
+    project_root: Path,
+    output_root_text: str,
+    *,
+    config_fingerprint: str,
+) -> Path:
+    """Resolve a completed Strategy Compare run by pinned scientific fingerprint.
+
+    Retained read-only Audits may intentionally consume an older completed matrix
+    after the current Compare Suite has moved on.  The pin is explicit in
+    ``config/audit.py``; we never guess a historical run or relax fingerprint
+    validation.
+    """
+
+    root = Path(project_root).resolve()
+    output_root = root / str(output_root_text)
+    fingerprint = str(config_fingerprint or "").strip()
+    if len(fingerprint) != 12:
+        raise AuditSourceBlockedError(
+            f"retained Audit Strategy Compare fingerprint格式無效: {fingerprint!r}"
+        )
+    candidates: list[Path] = []
+    try:
+        candidates.append(resolve_latest_strategy_result_dir(root, output_root_text))
+    except AuditSourceBlockedError:
+        pass
+    runs_dir = output_root / "runs"
+    candidates.extend(
+        sorted(
+            (path.resolve() for path in runs_dir.glob("*") if path.is_dir()),
+            key=lambda path: path.name,
+            reverse=True,
+        )
+    )
+    seen: set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        result_path = candidate / "strategy_comparison.json"
+        if not result_path.is_file():
+            continue
+        payload = _read_json(result_path)
+        if isinstance(payload, Mapping) and _primary_strategy_fingerprints(payload) == {fingerprint}:
+            return candidate
+    raise AuditSourceBlockedError(
+        "缺少retained Audit指定的Strategy Compare completed run: "
+        f"profile_output={project_relative_display_path(output_root, project_root=root)}, "
+        f"fingerprint={fingerprint}"
+    )
+
+
 def load_strategy_compare_source(
     project_root: Path,
     *,
     profile_id: str,
+    pinned_config_fingerprint: str | None = None,
 ) -> StrategyCompareAuditSource:
     root = Path(project_root).resolve()
     profile_key = str(profile_id).strip()
     if not profile_key:
         raise ValueError("Strategy Compare profile_id不可空白")
     settings = get_strategy_comparison_settings(profile_key)
-    result_dir = resolve_latest_strategy_result_dir(root, settings.output_root)
+    pinned = str(pinned_config_fingerprint or "").strip()
+    result_dir = (
+        resolve_strategy_result_dir_for_fingerprint(
+            root, settings.output_root, config_fingerprint=pinned
+        )
+        if pinned
+        else resolve_latest_strategy_result_dir(root, settings.output_root)
+    )
     result_path = result_dir / "strategy_comparison.json"
     if not result_path.is_file():
         raise AuditSourceBlockedError(
@@ -238,12 +299,23 @@ def load_strategy_compare_source(
     if manifest_raw is not None and not isinstance(manifest_raw, Mapping):
         raise AuditSourceBlockedError("Strategy Compare manifest.json格式無效")
     payloads = [result, *( [manifest_raw] if manifest_raw is not None else [] )]
-    fingerprint = validate_strategy_result_identity(
-        settings=settings,
-        payloads=payloads,
-        result_dir=result_dir,
-        project_root=root,
-    )
+    if pinned:
+        stored_fingerprints: set[str] = set()
+        for payload in payloads:
+            stored_fingerprints.update(_primary_strategy_fingerprints(payload))
+        if stored_fingerprints != {pinned}:
+            raise AuditSourceBlockedError(
+                "retained Audit pinned Strategy Compare identity不一致；"
+                f"pinned={pinned}, stored={sorted(stored_fingerprints)}"
+            )
+        fingerprint = pinned
+    else:
+        fingerprint = validate_strategy_result_identity(
+            settings=settings,
+            payloads=payloads,
+            result_dir=result_dir,
+            project_root=root,
+        )
     run_dir = _resolve_canonical_run_dir(
         project_root=root,
         result_dir=result_dir,
@@ -285,13 +357,10 @@ def load_strategy_arm_replay_sidecars(
             f"{source.profile_id} Strategy Compare缺少pair_execution contract"
         )
 
-    arm = next(
-        (item for item in source.settings.enabled_arms if item.arm_id == arm_key),
-        None,
-    )
+    arm = source.settings.arms.get(arm_key)
     if arm is None:
         raise AuditSourceBlockedError(
-            f"{source.profile_id}/{arm_key} 不屬於目前Strategy Compare enabled arms"
+            f"{source.profile_id}/{arm_key} 不存在於Strategy Compare current/history arm catalog"
         )
 
     execution = pair_execution.get(arm_key)
@@ -492,6 +561,7 @@ __all__ = [
     "load_strategy_arm_pipeline_sidecars",
     "load_strategy_arm_replay_sidecars",
     "load_strategy_compare_source",
+    "resolve_strategy_result_dir_for_fingerprint",
     "resolve_latest_strategy_result_dir",
     "validate_strategy_result_identity",
 ]

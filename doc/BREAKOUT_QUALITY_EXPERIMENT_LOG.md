@@ -10115,3 +10115,17 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Strategy Compare current Extending OOS/Rolling主報表新增`MFE × Safety 四象限（Filled buys）`，列All-eligible truth母體與所有arms HM/HS、HM/LS、LM/HS、LM/LS、High-MFE、High-Safety；Raw/Planned/K/R0詳細拆解仍留在Audit，不把selection/execution stage混成主表。
 - Decision：**IMPLEMENTED / RESULT_PENDING / READ_ONLY / OLD_K_R0_AUDIT_RETAINED / MAIN_REPORT_GEOMETRY_AVAILABLE / NO_SCIENTIFIC_REPLAY_IDENTITY_CHANGE**。
 
+### 2026-08-25 — C69 marginal Audit結果；轉向MR-13R joint K/R0 ablation
+
+- C69 K-relative extras提供足夠方向證據：OOS `K+1+` High-MFE=`72.41%`、HM/LS=`55.17%`、Full-MFE=`2.29R`、Adverse=`0.57R`、Realized EV=`-0.04R`；Rolling=`57.14%/40.00%/1.30R/0.53R/-0.05R`。放寬K確實增加upside候選，但MR-13E marginal positions大量落在Low-Safety且conversion差；因此C69不promotion。strict matched candidate-state只有OOS/Rolling各4日，僅作補充而不宣稱完整因果反事實。
+- 使用者提出交互作用假說：歷史No-R0失敗可能被fixed K限制資金投入混淆；下一輪不再用MR-13E，而用目前conditional learnability較強的MR-13R/C66，先只共同移除K與R0，其餘全部不動。
+- Decision：**NEXT=SR-C70 / SAME_MR13R_SCORE / NO_K / NO_R0 / NO_NEW_SAFETY_GATE / SINGLE_SEED_OOS_PLUS_ROLLING_FIRST**。
+
+### 2026-08-25 — SR-C70實作；Current Compare Suite聚焦六個arms
+
+- 新arm `C70 = Min MR-13R Conditional-MFE No-K No-R0`。C70與C66共用`CONT13R_ROLL`、Min base-finalist-best、all-off、final model_score、canonical sizing/cash/orderability/execution與max positions=10。唯一scientific change：不使用C58-derived baseline K作selected-count target/min，也不使用R0作reserved-capital floor。
+- Selector不建立新objective或threshold：沿C66既有frozen `model_score` descending，原canonical rank作deterministic tie；candidate逐一交給canonical reservation simulator，count自然為`0..physical free slots`且仍受真實cash/sizing/orderability限制。Raw Safety auxiliary head仍不直接gate。
+- Current `extending_current` suite依使用者指定只保留`C61/C58/C59/C64/C66/C70`；C62/C63/C60/C65/C68/C69/C67移到historical compatibility，不刪除identity/result。Primary contrast=`C70-C66`。Schema=`58`。Production C42/C44完全不變。
+- Retained Audit保護：`AUD-selection-k-r0-attribution`與`AUD-c69-marginal-position-attribution`明確pin pre-C70 completed Strategy Compare fingerprints（OOS=`fc215f2140d6`、Rolling=`94ec6685b7b0`），即使current suite改變仍只讀原正式run，不把新latest錯當舊證據。
+- Decision：**IMPLEMENTED / RESULT_PENDING / JOINT_K_R0_ABLATION / ROBUSTNESS_DEFERRED / NOT_PROMOTED**。
+

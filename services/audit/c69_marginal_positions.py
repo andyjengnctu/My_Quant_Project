@@ -638,10 +638,10 @@ def _period_from_source(source: Any) -> tuple[str, str]:
 
 
 def _validate_arm_contracts(source: Any, *, control_arm_id: str, treatment_arm_id: str) -> None:
-    arms = {arm.arm_id: arm for arm in source.settings.enabled_arms}
+    arms = dict(source.settings.arms)
     if control_arm_id not in arms or treatment_arm_id not in arms:
         raise AuditBlockedError(
-            f"{source.profile_id} current suite缺少{control_arm_id}/{treatment_arm_id}"
+            f"{source.profile_id} current/history catalog缺少{control_arm_id}/{treatment_arm_id}"
         )
     left = arms[control_arm_id]
     right = arms[treatment_arm_id]
@@ -875,7 +875,12 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
     source_refs: dict[str, Any] = {"truth": truth_source, "strategy": {}}
     detail_frames: list[pd.DataFrame] = []
     for profile_id in evaluation_order:
-        strategy_source = load_strategy_compare_source(root, profile_id=profile_id)
+        pinned = str(
+            dict(source_cfg.get("strategy_result_fingerprints") or {}).get(profile_id) or ""
+        ).strip()
+        strategy_source = load_strategy_compare_source(
+            root, profile_id=profile_id, pinned_config_fingerprint=pinned or None
+        )
         _validate_arm_contracts(
             strategy_source,
             control_arm_id=control_arm_id,
@@ -1088,7 +1093,12 @@ def preflight(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
     )
     for profile_id in tuple(str(v) for v in source_cfg.get("evaluation_profile_ids", ())):
         try:
-            source = load_strategy_compare_source(root, profile_id=profile_id)
+            pinned = str(
+                dict(source_cfg.get("strategy_result_fingerprints") or {}).get(profile_id) or ""
+            ).strip()
+            source = load_strategy_compare_source(
+                root, profile_id=profile_id, pinned_config_fingerprint=pinned or None
+            )
             _validate_arm_contracts(
                 source, control_arm_id=control_arm_id, treatment_arm_id=treatment_arm_id
             )

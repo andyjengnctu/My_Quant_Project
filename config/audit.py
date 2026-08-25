@@ -45,6 +45,10 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "mfe_target_id": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
                     "safety_target_id": DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
                     "evaluation_profile_ids": ("extending_window_oos", "extending_window_rolling"),
+                    "strategy_result_fingerprints": {
+                        "extending_window_oos": "fc215f2140d6",
+                        "extending_window_rolling": "94ec6685b7b0",
+                    },
                     "strategy_arm_ids": ("C59", "C65", "C66"),
                     "baseline_arm_id": "C58",
                 },
@@ -73,6 +77,10 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "mfe_target_id": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
                     "safety_target_id": DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
                     "evaluation_profile_ids": ("extending_window_oos", "extending_window_rolling"),
+                    "strategy_result_fingerprints": {
+                        "extending_window_oos": "fc215f2140d6",
+                        "extending_window_rolling": "94ec6685b7b0",
+                    },
                     "control_arm_id": "C68",
                     "treatment_arm_id": "C69",
                 },

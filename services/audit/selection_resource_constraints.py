@@ -760,7 +760,12 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
     source_refs: dict[str, Any] = {"truth": truth_source, "strategy": {}}
 
     for profile_id in evaluation_order:
-        strategy_source = load_strategy_compare_source(root, profile_id=profile_id)
+        pinned = str(
+            dict(source_cfg.get("strategy_result_fingerprints") or {}).get(profile_id) or ""
+        ).strip()
+        strategy_source = load_strategy_compare_source(
+            root, profile_id=profile_id, pinned_config_fingerprint=pinned or None
+        )
         period = _period_from_source(strategy_source)
         period_truth = filter_period(truth, period[0], period[1])
         baseline = load_strategy_arm_replay_sidecars(
@@ -781,12 +786,9 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
         arm_sources: dict[str, Any] = {}
 
         for arm_id in arm_order:
-            arm_setting = next(
-                (item for item in strategy_source.settings.enabled_arms if item.arm_id == arm_id),
-                None,
-            )
+            arm_setting = strategy_source.settings.arms.get(arm_id)
             if arm_setting is None or not arm_setting.dl_enabled:
-                raise AuditBlockedError(f"{profile_id}/{arm_id}不是目前enabled DL-on arm")
+                raise AuditBlockedError(f"{profile_id}/{arm_id}不是合法current/history DL-on arm")
             options = dict(arm_setting.dl_runtime_options or {})
             if options.get("preserve_k_r0") is not True:
                 raise AuditBlockedError(f"{profile_id}/{arm_id}目前不是preserve_k_r0 arm")
@@ -972,7 +974,12 @@ def preflight(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
     baseline_arm_id = str(source_cfg.get("baseline_arm_id") or "").strip()
     for profile_id in tuple(str(v) for v in source_cfg.get("evaluation_profile_ids", ())):
         try:
-            strategy_source = load_strategy_compare_source(root, profile_id=profile_id)
+            pinned = str(
+                dict(source_cfg.get("strategy_result_fingerprints") or {}).get(profile_id) or ""
+            ).strip()
+            strategy_source = load_strategy_compare_source(
+                root, profile_id=profile_id, pinned_config_fingerprint=pinned or None
+            )
             _period_from_source(strategy_source)
             strategy_paths.append(_relative(strategy_source.run_dir, root))
             baseline = load_strategy_arm_replay_sidecars(
@@ -981,12 +988,9 @@ def preflight(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
             if pd.DataFrame(baseline["orderable"]).empty or pd.DataFrame(baseline["selected"]).empty:
                 raise AuditBlockedError(f"{profile_id}/{baseline_arm_id} baseline row sidecar為空")
             for arm_id in arm_order:
-                arm_setting = next(
-                    (item for item in strategy_source.settings.enabled_arms if item.arm_id == arm_id),
-                    None,
-                )
+                arm_setting = strategy_source.settings.arms.get(arm_id)
                 if arm_setting is None or not arm_setting.dl_enabled:
-                    raise AuditBlockedError(f"{profile_id}/{arm_id}不是目前enabled DL-on arm")
+                    raise AuditBlockedError(f"{profile_id}/{arm_id}不是合法current/history DL-on arm")
                 if dict(arm_setting.dl_runtime_options or {}).get("preserve_k_r0") is not True:
                     raise AuditBlockedError(f"{profile_id}/{arm_id}不是preserve_k_r0 arm")
                 evidence = load_strategy_arm_pipeline_sidecars(

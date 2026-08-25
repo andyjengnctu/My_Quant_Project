@@ -1729,6 +1729,66 @@ def _reorder_resource_aware_continuous_score_residual_safety_constrained_optimal
     diag['selector'] = 'continuous-score-residual-safety-constrained-optimal'
     return order, diag
 
+def _reorder_resource_aware_continuous_score_no_k_no_r0(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    """SR-C70: keep the C66 score order, remove only C58-derived K and R0.
+
+    Membership is proposed by the unchanged frozen ``model_score`` descending
+    order with the original deterministic candidate rank as the tie-break.  The
+    canonical reservation simulator remains the sole sizing/cash/orderability
+    feasibility owner and may select any count from zero through physical free
+    slots.  There is no baseline-K minimum/target and no baseline reserved-capital
+    floor or repair path.
+    """
+
+    candidates = list(rows or [])
+    physical_free_slots = max(0, int(free_slots))
+    base_rank = {id(row): idx for idx, row in enumerate(candidates)}
+    score_order = _max_dl_score_order(candidates, base_rank=base_rank)
+    selected = _simulate_reserved_candidate_order(
+        score_order,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=physical_free_slots,
+        params=params,
+    )
+    diag = _resource_aware_diag_from_result(
+        default_diag,
+        baseline,
+        selected,
+        changed=bool([id(row) for row in score_order] != [id(row) for row in candidates]),
+        promoted_pass_count=0,
+        selector='continuous-score-no-k-no-r0',
+    )
+    selected_count = int(selected.get('selected_count', 0) or 0)
+    if not (0 <= selected_count <= physical_free_slots):
+        raise RuntimeError('No-K/No-R0 selector輸出超過physical free-slot contract')
+    diag.update({
+        'mode': 'dl-selection',
+        'resource_preservation_required': False,
+        'count_constraint': 'zero_to_physical_free_slots_v1',
+        'baseline_k': int(baseline.get('selected_count', 0) or 0),
+        'physical_free_slots': int(physical_free_slots),
+        'no_k_no_r0': True,
+        'preserve_k': False,
+        'preserve_r0': False,
+        'pre_market_order_limit': int(selected_count),
+        'direct_score_order_feasible': True,
+        'basket_search_states': 1,
+        'basket_feasible_count': 1,
+        'constrained_solver_optimality_certified': False,
+    })
+    return score_order, diag
+
+
 def _reorder_resource_aware_continuous_score_no_r0_constrained_optimal(
     rows,
     *,

@@ -18,6 +18,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
 )
@@ -56,6 +57,7 @@ from core.portfolio_entry_selection_max_dl import (
     _reorder_resource_aware_continuous_score_safety_constrained_optimal,
     _reorder_resource_aware_continuous_score_residual_safety_constrained_optimal,
     _reorder_resource_aware_continuous_score_no_r0_constrained_optimal,
+    _reorder_resource_aware_continuous_score_no_k_no_r0,
     _reorder_resource_aware_continuous_score_capital_no_r0_constrained_optimal,
     _reorder_resource_aware_continuous_score_capital_pareto_no_r0_constrained_optimal,
 )
@@ -126,6 +128,8 @@ def reorder_candidates_for_resource_aware_quality(
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL
         else 'continuous-score-no-r0-constrained-optimal'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL
+        else 'continuous-score-no-k-no-r0'
+        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0
         else 'continuous-score-capital-no-r0-constrained-optimal'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL
         else 'continuous-score-capital-pareto-no-r0-constrained-optimal'
@@ -262,6 +266,17 @@ def reorder_candidates_for_resource_aware_quality(
         return finish(order, diag)
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL:
         order, diag = _reorder_resource_aware_continuous_score_residual_safety_constrained_optimal(
+            rows,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=free_slots,
+            params=params,
+            baseline=baseline,
+            default_diag=default_diag,
+        )
+        return finish(order, diag)
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0:
+        order, diag = _reorder_resource_aware_continuous_score_no_k_no_r0(
             rows,
             available_cash=available_cash,
             sizing_equity=sizing_equity,
