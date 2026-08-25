@@ -68,17 +68,22 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
 
     import apps.research as research_app
 
+    import services.audit.runner as audit_runner
+
     audit_menu_console = io.StringIO()
-    with patch.object(research_app, "get_enabled_audit_definitions", return_value=()), patch(
+    with patch.object(audit_runner, "get_audit_definitions", return_value=()), patch(
         "builtins.input", return_value="0"
     ), redirect_stdout(audit_menu_console):
         audit_menu_rc = research_app._audit_menu()
     audit_menu_text = audit_menu_console.getvalue()
     check_true(
-        "research_audit_menu_hides_non_executable_run_action_when_no_formal_audit_is_enabled",
+        "research_audit_menu_keeps_stable_methods_but_no_run_action_without_config",
         audit_menu_rc == 0
-        and "目前沒有啟用的正式 Audit" in audit_menu_text
-        and "執行目前 Audit 設定" not in audit_menu_text,
+        and "策略 Pair／Portfolio Attribution  [未設定]" in audit_menu_text
+        and "Trade Path／Upside Survival  [未設定]" in audit_menu_text
+        and "Selection／Truth Geometry  [未設定]" in audit_menu_text
+        and "跨期／跨 Seed Stability Attribution  [未設定]" in audit_menu_text
+        and "執行目前參數設定" not in audit_menu_text,
     )
 
     summary["workflow"] = "config_driven_formal_audit_topology"
