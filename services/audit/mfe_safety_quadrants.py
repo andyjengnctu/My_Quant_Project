@@ -24,7 +24,11 @@ from filters.breakout_quality.paths import resolve_filter_output_dir
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from services.audit.strategy_compare_source import (
     AuditSourceBlockedError,
+    load_strategy_arm_replay_sidecars,
     load_strategy_compare_source,
+)
+from filters.breakout_quality.strategy_compare_diagnostics import (
+    strategy_replay_score_event_frames,
 )
 from core.report_metrics import (
     MFE_SAFETY_QUADRANT_DISTRIBUTION_METRICS,
@@ -44,38 +48,7 @@ _QUADRANT_ENRICHMENT_KEYS = (
     "high_mfe_low_safety_enrichment",
 )
 
-_TICKER_KEYS = ("ticker", "symbol", "stock_id", "stock", "code")
-_DATE_KEYS = (
-    "date",
-    "candidate_date",
-    "breakout_quality_score_date",
-    "score_date",
-    "signal_date",
-    "trade_date",
-    "entry_date",
-    "buy_date",
-)
-_ROW_COLLECTION_KEYS = {
-    "candidate_rows": "candidate",
-    "orderable_rows": "orderable",
-    "selected_rows": "selected",
-    "selection_rows": "selected",
-    "trade_rows": "trade",
-    "closed_trade_rows": "closed_trade",
-}
-_SELECTION_PRIORITY = ("selected", "trade", "closed_trade")
-
-
 AuditBlockedError = AuditSourceBlockedError
-
-
-def _first_present(mapping: Mapping[str, Any], keys: Sequence[str]) -> Any:
-    for key in keys:
-        if key in mapping:
-            value = mapping.get(key)
-            if value not in (None, ""):
-                return value
-    return None
 
 
 def _normalize_ticker(value: Any) -> str:
@@ -138,180 +111,11 @@ def _ensure_daily_percentile(
     return table, "derived from canonical raw truth via same-day average zero-based rank / (N-1)"
 
 
-def _extract_date_range(payload: Any) -> tuple[str | None, str | None]:
-    starts: list[str] = []
-    ends: list[str] = []
-
-    def visit(value: Any) -> None:
-        if isinstance(value, Mapping):
-            for key, child in value.items():
-                lowered = str(key).strip().lower()
-                if lowered in {"start", "start_date", "period_start", "evaluation_start"}:
-                    date_text = _normalize_date(child)
-                    if date_text:
-                        starts.append(date_text)
-                elif lowered in {"end", "end_date", "period_end", "evaluation_end"}:
-                    date_text = _normalize_date(child)
-                    if date_text:
-                        ends.append(date_text)
-                elif isinstance(child, (Mapping, list, tuple)):
-                    visit(child)
-        elif isinstance(value, (list, tuple)):
-            for child in value:
-                if isinstance(child, (Mapping, list, tuple)):
-                    visit(child)
-
-    visit(payload)
-    return (min(starts) if starts else None, max(ends) if ends else None)
-
-
 def _load_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise AuditBlockedError(f"無法讀取正式JSON工件: {path.name} | {exc}") from exc
-
-
-def _referenced_artifact_paths(project_root: Path, result_dir: Path, payloads: Sequence[Any]) -> set[Path]:
-    paths: set[Path] = set()
-
-    def visit(value: Any) -> None:
-        if isinstance(value, Mapping):
-            for child in value.values():
-                visit(child)
-        elif isinstance(value, (list, tuple)):
-            for child in value:
-                visit(child)
-        elif isinstance(value, str):
-            text = value.strip()
-            if not text or len(text) > 500:
-                return
-            if not any(text.lower().endswith(suffix) for suffix in (".json", ".csv", ".parquet", ".pq")):
-                return
-            raw_path = Path(text)
-            candidates = (
-                (raw_path,) if raw_path.is_absolute() else (project_root / raw_path, result_dir / raw_path)
-            )
-            for candidate in candidates:
-                try:
-                    if candidate.is_file():
-                        paths.add(candidate.resolve())
-                except OSError:
-                    continue
-
-    for payload in payloads:
-        visit(payload)
-    return paths
-
-
-def _record_row_collection(
-    target: dict[str, dict[str, list[dict[str, Any]]]],
-    *,
-    arm_id: str,
-    row_kind: str,
-    rows: Any,
-) -> None:
-    if not isinstance(rows, list):
-        return
-    valid_rows = [dict(row) for row in rows if isinstance(row, Mapping)]
-    if not valid_rows:
-        return
-    target.setdefault(arm_id, {}).setdefault(row_kind, []).extend(valid_rows)
-
-
-def _collect_embedded_arm_rows(
-    payload: Any,
-    arm_ids: Sequence[str],
-) -> dict[str, dict[str, list[dict[str, Any]]]]:
-    collected: dict[str, dict[str, list[dict[str, Any]]]] = {}
-    arm_set = set(arm_ids)
-
-    def visit(value: Any, active_arm: str | None = None) -> None:
-        if isinstance(value, Mapping):
-            explicit_arm = str(
-                value.get("arm_id")
-                or value.get("comparison_id")
-                or value.get("strategy_id")
-                or ""
-            ).strip()
-            current_arm = explicit_arm if explicit_arm in arm_set else active_arm
-            for key, child in value.items():
-                key_text = str(key).strip()
-                child_arm = key_text if key_text in arm_set else current_arm
-                row_kind = _ROW_COLLECTION_KEYS.get(key_text.lower())
-                if row_kind and child_arm:
-                    _record_row_collection(
-                        collected,
-                        arm_id=child_arm,
-                        row_kind=row_kind,
-                        rows=child,
-                    )
-                if isinstance(child, (Mapping, list, tuple)):
-                    visit(child, child_arm)
-        elif isinstance(value, (list, tuple)):
-            for child in value:
-                if isinstance(child, (Mapping, list, tuple)):
-                    visit(child, active_arm)
-
-    visit(payload)
-    return collected
-
-
-def _merge_row_collections(
-    target: dict[str, dict[str, list[dict[str, Any]]]],
-    source: Mapping[str, Mapping[str, Sequence[Mapping[str, Any]]]],
-) -> None:
-    for arm_id, kinds in source.items():
-        for row_kind, rows in kinds.items():
-            _record_row_collection(target, arm_id=arm_id, row_kind=row_kind, rows=list(rows))
-
-
-def _infer_arm_from_path(path: Path, arm_ids: Sequence[str]) -> str | None:
-    for part in reversed(path.parts):
-        tokens = str(part).replace("-", "_").replace(".", "_").upper()
-        matches = [arm_id for arm_id in arm_ids if arm_id.upper() in tokens]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            return None
-    return None
-
-
-def _infer_row_kind_from_path(path: Path) -> str | None:
-    lower = path.name.lower()
-    for token, kind in (
-        ("orderable", "orderable"),
-        ("selected", "selected"),
-        ("selection", "selected"),
-        ("candidate", "candidate"),
-        ("closed_trade", "closed_trade"),
-        ("trades", "trade"),
-        ("trade", "trade"),
-    ):
-        if token in lower:
-            return kind
-    return None
-
-
-def _load_generic_rows_file(path: Path) -> list[dict[str, Any]]:
-    suffix = path.suffix.lower()
-    try:
-        if suffix == ".csv":
-            return pd.read_csv(path, low_memory=False).to_dict(orient="records")
-        if suffix in {".parquet", ".pq"}:
-            return pd.read_parquet(path).to_dict(orient="records")
-        if suffix == ".json":
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(payload, list):
-                return [dict(row) for row in payload if isinstance(row, Mapping)]
-            if isinstance(payload, Mapping):
-                for key in ("rows", "records", "data"):
-                    rows = payload.get(key)
-                    if isinstance(rows, list):
-                        return [dict(row) for row in rows if isinstance(row, Mapping)]
-    except (OSError, ValueError, TypeError, json.JSONDecodeError, ImportError):
-        return []
-    return []
 
 
 def load_strategy_rows(
@@ -320,7 +124,7 @@ def load_strategy_rows(
     profile_id: str,
     arm_ids: Sequence[str],
 ) -> tuple[
-    dict[str, dict[str, list[dict[str, Any]]]],
+    dict[str, dict[str, Any]],
     Path,
     tuple[str | None, str | None],
     str,
@@ -329,61 +133,60 @@ def load_strategy_rows(
         project_root, profile_id=profile_id
     )
     settings = strategy_source.settings
-    result_dir = strategy_source.result_dir
-    payloads: list[Any] = [strategy_source.result]
-    if strategy_source.manifest is not None:
-        payloads.append(strategy_source.manifest)
-    source_fingerprint = strategy_source.config_fingerprint
-    collected: dict[str, dict[str, list[dict[str, Any]]]] = {}
-    for payload in payloads:
-        _merge_row_collections(collected, _collect_embedded_arm_rows(payload, arm_ids))
+    rows_by_arm: dict[str, dict[str, Any]] = {}
+    for arm_id in arm_ids:
+        rows_by_arm[str(arm_id)] = load_strategy_arm_replay_sidecars(
+            project_root, source=strategy_source, arm_id=str(arm_id)
+        )
 
-    artifact_paths = _referenced_artifact_paths(project_root, result_dir, payloads)
-    for path in result_dir.rglob("*"):
-        if path.is_file() and path.suffix.lower() in {".json", ".csv", ".parquet", ".pq"}:
-            artifact_paths.add(path.resolve())
-    for path in sorted(artifact_paths, key=lambda item: item.as_posix()):
-        arm_id = _infer_arm_from_path(path, arm_ids)
-        row_kind = _infer_row_kind_from_path(path)
-        if arm_id is not None and row_kind is not None:
-            rows = _load_generic_rows_file(path)
-            _record_row_collection(collected, arm_id=arm_id, row_kind=row_kind, rows=rows)
-        if path.suffix.lower() == ".json":
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            _merge_row_collections(collected, _collect_embedded_arm_rows(payload, arm_ids))
+    period_payload = strategy_source.result.get("comparison_period")
+    if not isinstance(period_payload, Mapping):
+        raise AuditBlockedError(
+            f"{profile_id} Strategy Compare缺少canonical comparison_period"
+        )
+    period_start = _normalize_date(period_payload.get("start"))
+    period_end = _normalize_date(period_payload.get("end"))
+    if not period_start or not period_end:
+        raise AuditBlockedError(
+            f"{profile_id} Strategy Compare comparison_period格式無效"
+        )
+    if settings.start_date and period_start != str(settings.start_date):
+        raise AuditBlockedError(
+            f"{profile_id} Strategy Compare start_date與目前config不一致: "
+            f"artifact={period_start}, config={settings.start_date}"
+        )
+    if settings.end_date and period_end != str(settings.end_date):
+        raise AuditBlockedError(
+            f"{profile_id} Strategy Compare end_date與目前config不一致: "
+            f"artifact={period_end}, config={settings.end_date}"
+        )
+    return (
+        rows_by_arm,
+        strategy_source.run_dir,
+        (period_start, period_end),
+        strategy_source.config_fingerprint,
+    )
 
-    period_start, period_end = _extract_date_range(payloads)
-    if settings.start_date:
-        period_start = str(settings.start_date)
-    if settings.end_date:
-        period_end = str(settings.end_date)
-    return collected, result_dir, (period_start, period_end), source_fingerprint
 
-
-def _cohort_keys_from_rows(rows: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
-    records: list[tuple[str, str]] = []
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        ticker = _normalize_ticker(_first_present(row, _TICKER_KEYS))
-        date_text = _normalize_date(_first_present(row, _DATE_KEYS))
-        if ticker and date_text:
-            records.append((ticker, date_text))
-    if not records:
+def _score_event_keys(
+    orderable: pd.DataFrame,
+    selected: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    orderable_events, selected_events = strategy_replay_score_event_frames(
+        orderable, selected
+    )
+    frame = orderable_events if selected_events is None else selected_events
+    if frame.empty:
         return pd.DataFrame(columns=["ticker", "date"])
-    frame = pd.DataFrame(records, columns=["ticker", "date"])
-    return frame.drop_duplicates(["ticker", "date"]).sort_values(["date", "ticker"], kind="stable")
-
-
-def _pick_arm_selection_rows(kinds: Mapping[str, Sequence[Mapping[str, Any]]]) -> tuple[list[dict[str, Any]], str]:
-    for kind in _SELECTION_PRIORITY:
-        rows = kinds.get(kind)
-        if rows:
-            return [dict(row) for row in rows], kind
-    return [], "missing"
+    tickers = frame.get("ticker", pd.Series("", index=frame.index)).map(_normalize_ticker)
+    dates = frame.get(
+        "score_event_date", pd.Series("", index=frame.index)
+    ).map(_normalize_date)
+    keys = pd.DataFrame({"ticker": tickers, "date": dates})
+    keys = keys.loc[keys["ticker"].ne("") & keys["date"].ne("")]
+    return keys.drop_duplicates(["ticker", "date"]).sort_values(
+        ["date", "ticker"], kind="stable"
+    )
 
 
 def _filter_period(frame: pd.DataFrame, start_date: str | None, end_date: str | None) -> pd.DataFrame:
@@ -845,13 +648,16 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
                 f"{profile_id} Strategy Compare工件缺少row-level arm evidence: {missing_arms}; "
                 "Audit不得重跑策略補資料"
             )
-        pool_rows = rows_by_arm.get(candidate_pool_arm_id, {}).get("orderable", [])
-        if not pool_rows:
+        pool_evidence = rows_by_arm[candidate_pool_arm_id]
+        pool_orderable = pd.DataFrame(pool_evidence.get("orderable")).copy()
+        if pool_orderable.empty:
             raise AuditBlockedError(
-                f"{profile_id}/{candidate_pool_arm_id} 缺少orderable_rows；"
+                f"{profile_id}/{candidate_pool_arm_id} 缺少orderable candidate rows；"
                 "無法建立Breakout/orderable candidate pool，Audit不得以trade rows替代"
             )
-        pool_keys = _filter_period(_cohort_keys_from_rows(pool_rows), period[0], period[1])
+        pool_keys = _filter_period(
+            _score_event_keys(pool_orderable), period[0], period[1]
+        )
         population = _distribution_for_keys(period_truth, None)
         cohort_results: dict[str, Any] = {
             "population": {
@@ -865,25 +671,34 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
             }
         }
         pool_distribution = _distribution_for_keys(period_truth, pool_keys)
+        pool_row_source = (
+            f"{candidate_pool_arm_id}."
+            f"{pool_evidence['orderable_path'].name}"
+        )
         cohort_results["candidate_pool"] = {
             "display_name": "Breakout / orderable candidate pool",
-            "row_source": f"{candidate_pool_arm_id}.orderable_rows",
+            "row_source": pool_row_source,
             **pool_distribution,
             "enrichment_vs_population": _enrichment(pool_distribution, population),
         }
         arm_row_sources: dict[str, str] = {}
         for arm_id in arm_ids:
-            selected_rows, row_source = _pick_arm_selection_rows(rows_by_arm[arm_id])
-            if not selected_rows:
+            evidence = rows_by_arm[arm_id]
+            orderable = pd.DataFrame(evidence.get("orderable")).copy()
+            selected = pd.DataFrame(evidence.get("selected")).copy()
+            if orderable.empty or selected.empty:
                 raise AuditBlockedError(
-                    f"{profile_id}/{arm_id} 缺少selected_rows/trade_rows/closed_trade_rows；"
-                    "無法建立實際策略選股cohort"
+                    f"{profile_id}/{arm_id} 缺少既有orderable/selected-buy sidecar；"
+                    "無法建立實際策略選股cohort，Audit不得以trade rows替代"
                 )
-            arm_keys = _filter_period(_cohort_keys_from_rows(selected_rows), period[0], period[1])
+            arm_keys = _filter_period(
+                _score_event_keys(orderable, selected), period[0], period[1]
+            )
             distribution = _distribution_for_keys(period_truth, arm_keys)
+            row_source = f"{arm_id}.{evidence['selected_path'].name}"
             cohort_results[arm_id] = {
                 "display_name": arm_id,
-                "row_source": f"{arm_id}.{row_source}",
+                "row_source": row_source,
                 **distribution,
                 "enrichment_vs_population": _enrichment(distribution, population),
             }
@@ -905,7 +720,7 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
             "result_dir": _relative_artifact_path(result_dir, project_root),
             "period": period,
             "strategy_config_fingerprint": source_fingerprint,
-            "candidate_pool_row_source": f"{candidate_pool_arm_id}.orderable_rows",
+            "candidate_pool_row_source": pool_row_source,
             "arm_row_sources": arm_row_sources,
         }
 
@@ -1013,17 +828,34 @@ def preflight(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
         blockers.append(str(exc))
 
     strategy_paths: list[str] = []
+    arm_ids = tuple(str(value) for value in source.get("strategy_arm_ids") or ())
+    candidate_pool_arm_id = str(source.get("candidate_pool_arm_id") or "").strip()
     for profile_id in tuple(source.get("evaluation_profile_ids") or ()):
         try:
-            strategy_source = load_strategy_compare_source(
-                project_root, profile_id=str(profile_id)
+            rows_by_arm, result_dir, _period, _fingerprint = load_strategy_rows(
+                project_root, profile_id=str(profile_id), arm_ids=arm_ids
             )
             strategy_paths.append(
-                project_relative_display_path(
-                    strategy_source.result_dir, project_root=project_root
-                )
+                project_relative_display_path(result_dir, project_root=project_root)
             )
-        except (ValueError, AuditBlockedError, OSError, json.JSONDecodeError) as exc:
+            for arm_id in arm_ids:
+                evidence = rows_by_arm[arm_id]
+                orderable = pd.DataFrame(evidence.get("orderable")).copy()
+                selected = pd.DataFrame(evidence.get("selected")).copy()
+                if orderable.empty:
+                    raise AuditBlockedError(
+                        f"{profile_id}/{arm_id} row sidecar沒有orderable candidate rows"
+                    )
+                if selected.empty:
+                    raise AuditBlockedError(
+                        f"{profile_id}/{arm_id} row sidecar沒有selected buy rows"
+                    )
+                _score_event_keys(orderable, selected)
+            if candidate_pool_arm_id:
+                _score_event_keys(
+                    pd.DataFrame(rows_by_arm[candidate_pool_arm_id]["orderable"])
+                )
+        except (ValueError, KeyError, AuditBlockedError, OSError, json.JSONDecodeError) as exc:
             blockers.append(str(exc))
     return {
         "status": "READY" if not blockers else "BLOCKED",

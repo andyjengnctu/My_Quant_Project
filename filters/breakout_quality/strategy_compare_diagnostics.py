@@ -810,26 +810,30 @@ def _load_isolated_selection_pit_contract(
         },
     )
 
-def _strategy_selection_diagnostics(
-    *, orderable: pd.DataFrame, selected: pd.DataFrame, lookup: pd.DataFrame,
-) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
-    orderable_work = pd.DataFrame(orderable).copy()
-    selected_work = pd.DataFrame(selected).copy()
-    lookup_work = pd.DataFrame(lookup).copy()
+def strategy_replay_score_event_frames(
+    orderable: pd.DataFrame,
+    selected: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+    """Resolve replay rows to the canonical model score-event date.
 
-    for frame, columns in (
-        (orderable_work, ("trade_date", "signal_date")),
-        (selected_work, ("trade_date", "signal_date")),
-        (lookup_work, ("signal_date",)),
-    ):
+    Continuation/re-entry rows may have a transaction signal date later than the
+    model information date.  Strategy diagnostics therefore use the persisted
+    ``breakout_quality_score_date`` when present and fall back to ``signal_date``
+    only for legacy/direct breakout rows.  Audits must reuse the same mapping.
+    """
+
+    orderable_work = pd.DataFrame(orderable).copy()
+    selected_work = None if selected is None else pd.DataFrame(selected).copy()
+    frames_and_columns = [(orderable_work, ("trade_date", "signal_date"))]
+    if selected_work is not None:
+        frames_and_columns.append((selected_work, ("trade_date", "signal_date")))
+    for frame, columns in frames_and_columns:
         for column in columns:
             if column in frame.columns:
                 frame[column] = pd.to_datetime(
                     frame[column], errors="coerce"
                 ).dt.strftime("%Y-%m-%d").fillna("")
 
-    # Continuation／re-entry 的交易 signal_date 可以晚於目前模型資訊日；
-    # runtime Score 與 Future Target 都必須以replay保存的 score_date 對回 PIT 工件。
     raw_score_dates = orderable_work.get(
         "breakout_quality_score_date",
         pd.Series("", index=orderable_work.index, dtype="object"),
@@ -848,6 +852,65 @@ def _strategy_selection_diagnostics(
     orderable_work["score_event_date"] = normalized_score_dates.where(
         normalized_score_dates.ne(""), orderable_work.get("signal_date", "")
     )
+
+    occurrence_keys = ["ticker", "trade_date", "signal_date"]
+    missing_occurrence = [key for key in occurrence_keys if key not in orderable_work.columns]
+    if missing_occurrence:
+        raise ValueError(
+            "策略replay orderable sidecar缺少occurrence欄位: "
+            + ", ".join(missing_occurrence)
+        )
+    occurrence_score_event_counts = orderable_work.groupby(
+        occurrence_keys, dropna=False
+    )["score_event_date"].nunique(dropna=False)
+    if bool((occurrence_score_event_counts > 1).any()):
+        bad_key = occurrence_score_event_counts[occurrence_score_event_counts > 1].index[0]
+        raise ValueError(
+            "同一策略候選發生多個Breakout Quality score event date: "
+            f"ticker={bad_key[0]}, trade_date={bad_key[1]}, signal_date={bad_key[2]}"
+        )
+
+    if selected_work is None:
+        return orderable_work, None
+    missing_selected = [key for key in occurrence_keys if key not in selected_work.columns]
+    if missing_selected:
+        raise ValueError(
+            "策略replay selected sidecar缺少occurrence欄位: "
+            + ", ".join(missing_selected)
+        )
+    occurrence_lookup = orderable_work[
+        [*occurrence_keys, "score_event_date"]
+    ].drop_duplicates(occurrence_keys, keep="first")
+    selected_joined = selected_work.merge(
+        occurrence_lookup,
+        on=occurrence_keys,
+        how="left",
+        validate="many_to_one",
+    )
+    unresolved = selected_joined["score_event_date"].fillna("").astype(str).str.strip().eq("")
+    if bool(unresolved.any()):
+        bad = selected_joined.loc[unresolved].iloc[0]
+        raise ValueError(
+            "策略selected row無法對回orderable score event: "
+            f"ticker={bad.get('ticker')}, trade_date={bad.get('trade_date')}, "
+            f"signal_date={bad.get('signal_date')}"
+        )
+    return orderable_work, selected_joined
+
+
+def _strategy_selection_diagnostics(
+    *, orderable: pd.DataFrame, selected: pd.DataFrame, lookup: pd.DataFrame,
+) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
+    orderable_work, selected_events = strategy_replay_score_event_frames(
+        orderable, selected
+    )
+    if selected_events is None:
+        raise ValueError("strategy selection diagnostics缺少selected replay rows")
+    lookup_work = pd.DataFrame(lookup).copy()
+    if "signal_date" in lookup_work.columns:
+        lookup_work["signal_date"] = pd.to_datetime(
+            lookup_work["signal_date"], errors="coerce"
+        ).dt.strftime("%Y-%m-%d").fillna("")
 
     lookup_work = lookup_work.rename(columns={
         "signal_date": "score_event_date",
@@ -909,30 +972,9 @@ def _strategy_selection_diagnostics(
     target_available = orderable_joined.get(
         "target_available", pd.Series(False, index=orderable_joined.index)
     ).fillna(False).astype(bool)
-
-    occurrence_keys = ["ticker", "trade_date", "signal_date"]
-    occurrence_columns = [
-        *occurrence_keys,
-        "score_event_date",
-        "target_raw_r",
-        "target_available",
-        "pit_breakout_quality_score",
-    ]
-    occurrence_score_event_counts = orderable_joined.groupby(
-        occurrence_keys, dropna=False
-    )["score_event_date"].nunique(dropna=False)
-    if bool((occurrence_score_event_counts > 1).any()):
-        bad_key = occurrence_score_event_counts[occurrence_score_event_counts > 1].index[0]
-        raise ValueError(
-            "同一策略候選發生多個Breakout Quality score event date: "
-            f"ticker={bad_key[0]}, trade_date={bad_key[1]}, signal_date={bad_key[2]}"
-        )
-    occurrence_lookup = orderable_joined[occurrence_columns].drop_duplicates(
-        occurrence_keys, keep="first"
-    )
-    selected_joined = selected_work.merge(
-        occurrence_lookup,
-        on=occurrence_keys,
+    selected_joined = selected_events.merge(
+        lookup_work,
+        on=["ticker", "score_event_date"],
         how="left",
         validate="many_to_one",
     )

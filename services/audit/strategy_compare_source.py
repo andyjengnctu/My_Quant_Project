@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import pandas as pd
+
 from config.strategy_compare import get_strategy_comparison_settings
 from core.path_utils import project_relative_display_path
 from core.strategy_comparison import strategy_comparison_fingerprint
@@ -21,6 +23,7 @@ class StrategyCompareAuditSource:
     profile_id: str
     settings: Any
     result_dir: Path
+    run_dir: Path
     result: Mapping[str, Any]
     manifest: Mapping[str, Any] | None
     config_fingerprint: str
@@ -154,6 +157,56 @@ def validate_strategy_result_identity(
     return stored
 
 
+def _resolve_canonical_run_dir(
+    *,
+    project_root: Path,
+    result_dir: Path,
+    result: Mapping[str, Any],
+    manifest: Mapping[str, Any] | None,
+    config_fingerprint: str,
+) -> Path:
+    root = Path(project_root).resolve()
+    run_dir_text = str((manifest or {}).get("run_dir") or "").strip()
+    if not run_dir_text:
+        if result_dir.name != "latest":
+            return result_dir.resolve()
+        raise AuditSourceBlockedError(
+            "Strategy Compare latest manifest缺少canonical run_dir；"
+            "無法安全解析pair row evidence"
+        )
+    run_dir = Path(run_dir_text)
+    if not run_dir.is_absolute():
+        run_dir = root / run_dir
+    run_dir = run_dir.resolve()
+    if not run_dir.is_dir():
+        raise AuditSourceBlockedError(
+            "Strategy Compare canonical run_dir不存在: "
+            f"{project_relative_display_path(run_dir, project_root=root)}"
+        )
+    run_result_path = run_dir / "strategy_comparison.json"
+    if not run_result_path.is_file():
+        raise AuditSourceBlockedError(
+            "Strategy Compare canonical run缺少strategy_comparison.json: "
+            f"{project_relative_display_path(run_dir, project_root=root)}"
+        )
+    run_result = _read_json(run_result_path)
+    if not isinstance(run_result, Mapping):
+        raise AuditSourceBlockedError("Strategy Compare canonical run JSON格式無效")
+    run_fingerprints = _primary_strategy_fingerprints(run_result)
+    if run_fingerprints != {str(config_fingerprint)}:
+        raise AuditSourceBlockedError(
+            "Strategy Compare latest與canonical run fingerprint不一致；"
+            f"latest={config_fingerprint}, run={sorted(run_fingerprints)}"
+        )
+    latest_pair_execution = result.get("pair_execution")
+    run_pair_execution = run_result.get("pair_execution")
+    if latest_pair_execution != run_pair_execution:
+        raise AuditSourceBlockedError(
+            "Strategy Compare latest與canonical run的pair_execution不一致"
+        )
+    return run_dir
+
+
 def load_strategy_compare_source(
     project_root: Path,
     *,
@@ -185,19 +238,120 @@ def load_strategy_compare_source(
         result_dir=result_dir,
         project_root=root,
     )
+    run_dir = _resolve_canonical_run_dir(
+        project_root=root,
+        result_dir=result_dir,
+        result=result,
+        manifest=manifest_raw,
+        config_fingerprint=fingerprint,
+    )
     return StrategyCompareAuditSource(
         profile_id=profile_key,
         settings=settings,
         result_dir=result_dir,
+        run_dir=run_dir,
         result=result,
         manifest=manifest_raw,
         config_fingerprint=fingerprint,
     )
 
 
+def load_strategy_arm_replay_sidecars(
+    project_root: Path,
+    *,
+    source: StrategyCompareAuditSource,
+    arm_id: str,
+) -> dict[str, Any]:
+    """Load one arm's persisted Strategy Compare row evidence without replay.
+
+    The aggregate result stores the canonical arm -> current pair directory mapping
+    in ``pair_execution``.  Pair directories already persist the exact orderable and
+    selected-buy sidecars used by Strategy Compare diagnostics; Audit must consume
+    those files directly instead of guessing arm identity from pair-directory names.
+    """
+
+    root = Path(project_root).resolve()
+    arm_key = str(arm_id).strip()
+    pair_execution = source.result.get("pair_execution")
+    if not isinstance(pair_execution, Mapping):
+        raise AuditSourceBlockedError(
+            f"{source.profile_id} Strategy Compare缺少pair_execution contract"
+        )
+    execution = pair_execution.get(arm_key)
+    if not isinstance(execution, Mapping):
+        raise AuditSourceBlockedError(
+            f"{source.profile_id}/{arm_key} Strategy Compare缺少pair_execution evidence"
+        )
+    pair_dir_text = str(execution.get("current_pair_dir") or "").strip()
+    if not pair_dir_text:
+        raise AuditSourceBlockedError(
+            f"{source.profile_id}/{arm_key} pair_execution缺少current_pair_dir"
+        )
+    pair_dir = Path(pair_dir_text)
+    if not pair_dir.is_absolute():
+        pair_dir = root / pair_dir
+    pair_dir = pair_dir.resolve()
+    try:
+        pair_dir.relative_to(source.run_dir.resolve())
+    except ValueError as exc:
+        raise AuditSourceBlockedError(
+            f"{source.profile_id}/{arm_key} current_pair_dir不屬於manifest指定的canonical run: "
+            f"{project_relative_display_path(pair_dir, project_root=root)}"
+        ) from exc
+    pair_result_path = pair_dir / "strategy_comparison.json"
+    if not pair_result_path.is_file():
+        raise AuditSourceBlockedError(
+            f"{source.profile_id}/{arm_key} pair缺少strategy_comparison.json: "
+            f"{project_relative_display_path(pair_dir, project_root=root)}"
+        )
+    pair_payload = _read_json(pair_result_path)
+    if not isinstance(pair_payload, Mapping):
+        raise AuditSourceBlockedError(
+            f"{source.profile_id}/{arm_key} pair strategy_comparison.json格式無效"
+        )
+    metadata = pair_payload.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    standalone = bool(execution.get("standalone_dl_off_baseline"))
+    if standalone:
+        prefix = "no_filter"
+    else:
+        comparison_mode = str(metadata.get("comparison_mode") or "").strip()
+        if comparison_mode != "score_ranking":
+            raise AuditSourceBlockedError(
+                f"{source.profile_id}/{arm_key} Audit目前只接受score-ranking row evidence；"
+                f"comparison_mode={comparison_mode!r}"
+            )
+        prefix = "score_ranking"
+    orderable_path = pair_dir / f"{prefix}_orderable_candidates.csv"
+    selected_path = pair_dir / f"{prefix}_selected_buys.csv"
+    missing = [path.name for path in (orderable_path, selected_path) if not path.is_file()]
+    if missing:
+        raise AuditSourceBlockedError(
+            f"{source.profile_id}/{arm_key} pair缺少既有row sidecar: {missing}; "
+            "Audit不得重跑策略補資料"
+        )
+    try:
+        orderable = pd.read_csv(orderable_path, encoding="utf-8-sig", low_memory=False)
+        selected = pd.read_csv(selected_path, encoding="utf-8-sig", low_memory=False)
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise AuditSourceBlockedError(
+            f"{source.profile_id}/{arm_key} 無法讀取Strategy Compare row sidecar: {exc}"
+        ) from exc
+    return {
+        "arm_id": arm_key,
+        "pair_dir": pair_dir,
+        "prefix": prefix,
+        "orderable": orderable,
+        "selected": selected,
+        "orderable_path": orderable_path,
+        "selected_path": selected_path,
+    }
+
+
 __all__ = [
     "AuditSourceBlockedError",
     "StrategyCompareAuditSource",
+    "load_strategy_arm_replay_sidecars",
     "load_strategy_compare_source",
     "resolve_latest_strategy_result_dir",
     "validate_strategy_result_identity",

@@ -10016,3 +10016,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Decision：Q/R都保留research value，MR-13R architecture的顯式Safety conditioning值得保留；但目前沒有candidate對C59形成OOS+Rolling乾淨dominance，故**不進Multi-seed robustness、不進Fixed-Window Stability**。最可能剩餘不確定性轉為target geometry：`J=U-E(U|S)`只表示「相對該Safety水準異常高MFE」，並不要求absolute Safety高。
 - 下一個最小必要evidence固定為`AUD-mfe-safety-target-geometry`：只讀canonical Pure-MFE/Safety future truth與既有OOS/Rolling Strategy Compare row-level evidence，使用同日cross-sectional percentile 0.50切High/Low，比較All eligible stock-days、C58 orderable pool、C58/C59/C65/C66四象限分布與相對母體enrichment。Audit不重訓、不改target、不改selector；結果尚未取得，因此本Log不預標GO/REJECT。
 
+
+### 2026-08-25 — AUD-mfe-safety-target-geometry 首次執行 row-evidence resolver 修正
+
+- 使用者首次由 `apps/research.py → Audit／診斷 → Selection／Truth Geometry` 執行時，preflight 顯示 READY，但 runtime 以 `Strategy Compare工件缺少row-level arm evidence: ['C58', 'C59', 'C65', 'C66']` 阻擋。
+- 根因不是 Strategy Compare 未保存資料；current pair 本來已持久化 `no_filter_orderable_candidates.csv`／`no_filter_selected_buys.csv` 與 `score_ranking_orderable_candidates.csv`／`score_ranking_selected_buys.csv`。Audit 舊 resolver 錯誤地從 aggregate JSON／pair path 名稱推測 arm，因此無法把 `pairs/<group-id>/...` 精確對回 C58/C59/C65/C66。
+- 修正：Audit 直接消費 aggregate `pair_execution[arm_id].current_pair_dir` 的 canonical arm→pair mapping，再讀該 pair 已存在的 row sidecar；不重跑策略、不重建 score、不修改 selector。Strategy selection truth join 同步重用既有 Strategy Compare `breakout_quality_score_date → score_event_date` 契約，continuation／re-entry 不以較晚的 transaction signal date 取代模型資訊日。
+- Preflight 同步升級為驗證每個 configured arm 的 canonical pair sidecar 與 score-event mapping；不存在或不合法時直接顯示 BLOCKED，不再先顯示 READY 後才於執行階段失敗。
+- Decision：**ENGINEERING_SOURCE_RESOLUTION_FIXED / SCIENCE_UNCHANGED / AUDIT_RESULT_PENDING**。Audit 問題、四象限 threshold、cohort、OOS/Rolling stop rule與後續研究順序均不變。
