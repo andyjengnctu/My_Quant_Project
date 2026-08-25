@@ -232,6 +232,34 @@ ROBUSTNESS_YEARLY_DISTRIBUTION_METRICS = (
 )
 
 
+# MFE × Safety target-geometry Audit. These are descriptive evidence metrics:
+# quadrant shares are percentages of truth-covered cohort rows; enrichment is
+# the cohort share divided by the all-eligible stock-day population share.
+MFE_SAFETY_QUADRANT_DISTRIBUTION_METRICS = (
+    ReportMetricSpec("high_mfe_high_safety_pct", "High-MFE / High-Safety", "%", 2, "higher"),
+    ReportMetricSpec("high_mfe_low_safety_pct", "High-MFE / Low-Safety", "%", 2, "lower"),
+    ReportMetricSpec("low_mfe_high_safety_pct", "Low-MFE / High-Safety", "%", 2, "neutral"),
+    ReportMetricSpec("low_mfe_low_safety_pct", "Low-MFE / Low-Safety", "%", 2, "lower"),
+)
+
+MFE_SAFETY_QUADRANT_ENRICHMENT_METRICS = (
+    ReportMetricSpec(
+        "high_mfe_high_safety_enrichment",
+        "High-MFE / High-Safety enrichment",
+        "×",
+        2,
+        "higher",
+    ),
+    ReportMetricSpec(
+        "high_mfe_low_safety_enrichment",
+        "High-MFE / Low-Safety enrichment",
+        "×",
+        2,
+        "lower",
+    ),
+)
+
+
 __all__ = [
     "ReportMetricSpec",
     "RAnalysisMetricSpec",
@@ -253,4 +281,6 @@ __all__ = [
     "ROBUSTNESS_SEED_DELTA_METRICS",
     "ROBUSTNESS_YEARLY_DELTA_METRICS",
     "ROBUSTNESS_YEARLY_DISTRIBUTION_METRICS",
+    "MFE_SAFETY_QUADRANT_DISTRIBUTION_METRICS",
+    "MFE_SAFETY_QUADRANT_ENRICHMENT_METRICS",
 ]

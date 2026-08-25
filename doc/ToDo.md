@@ -1,11 +1,10 @@
 ## Going
-- improve test effiency and restreucture
+- restreucture
+    - modulize audit in manu
     - models/output cleaner
-    - retrain min parameters
-    - multi-seed parameters resut
 
 - imrove DL module
-    - use dual models (MFA, MEA ) in strategy
+    - retrain min parameters
     - simply label
         - the 40t day's R
         - self learn the label days and input days

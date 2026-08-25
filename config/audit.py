@@ -12,14 +12,61 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-AUDIT_SCHEMA_VERSION = 7
+AUDIT_SCHEMA_VERSION = 8
 AUDIT_OUTPUT_ROOT = "outputs/audit"
 AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
 
 AUDIT_MODULES: dict[str, dict[str, Any]] = {
     "breakout_quality": {
         "enabled": True,
-        "audits": {},
+        "audits": {
+            "mfe-safety-target-geometry": {
+                "enabled": True,
+                "audit_type": "continuous_truth_strategy_quadrants",
+                "description": (
+                    "只讀比較實際MFE×Safety母體、orderable candidate pool與目前策略arms，"
+                    "驗證conditional-MFE target geometry是否仍把選股推向High-MFE / Low-Safety。"
+                ),
+                "source": {
+                    "evaluation_profile_ids": (
+                        "extending_window_oos",
+                        "extending_window_rolling",
+                    ),
+                    "strategy_arm_ids": ("C58", "C59", "C65", "C66"),
+                    "candidate_pool_arm_id": "C58",
+                    "focus_arm_id": "C66",
+                    "mfe_target_id": "daily_full_horizon_pure_mfe_r_v1",
+                    "safety_target_id": "daily_full_horizon_low_adverse_r_v1",
+                },
+                "dimensions": {
+                    "truth_join_keys": ("ticker", "date"),
+                    "same_day_percentile_cutoff": 0.50,
+                    "percentile_method": "average_zero_based",
+                    "cohort_order": (
+                        "population",
+                        "candidate_pool",
+                        "C58",
+                        "C59",
+                        "C65",
+                        "C66",
+                    ),
+                },
+                "outcomes": {
+                    "decision_question": (
+                        "C66的實際選股是否仍大量落在High-MFE / Low-Safety，"
+                        "使J=U-E(U|S)雖可學但未對齊absolute high MFE under absolute high Safety？"
+                    ),
+                    "critical_uncertainty": (
+                        "C66改善Conditional-MFE排序後，selection probability實際被推向哪個future-truth quadrant。"
+                    ),
+                    "stopping_condition": (
+                        "取得OOS與Rolling的母體、orderable pool、C58/C59/C65/C66四象限分布與相對母體enrichment後，"
+                        "證據即足以決定維持target或進下一個受控target experiment；不再追加同問題Audit。"
+                    ),
+                },
+                "output_subdir": "breakout_quality/mfe_safety_target_geometry",
+            },
+        },
     },
 }
 
