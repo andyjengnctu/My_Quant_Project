@@ -20,6 +20,7 @@ class AuditCatalogEntry:
     mode: str
     description: str
     read_only: bool
+    method_id: str | None = None
     status_function: str | None = None
     run_function: str | None = None
     cli_command: str | None = None
@@ -56,6 +57,52 @@ class AuditCatalogEntry:
         return handler
 
 
+@dataclass(frozen=True)
+class AuditMethodEntry:
+    method_id: str
+    menu_label: str
+    description: str
+    order: int
+
+
+AUDIT_METHOD_CATALOG: dict[str, AuditMethodEntry] = {
+    "strategy_pair_attribution": AuditMethodEntry(
+        method_id="strategy_pair_attribution",
+        menu_label="策略 Pair／Portfolio Attribution",
+        description="比較策略pair的交易、PnL、R、capital與portfolio差異來源",
+        order=10,
+    ),
+    "trade_path_upside_survival": AuditMethodEntry(
+        method_id="trade_path_upside_survival",
+        menu_label="Trade Path／Upside Survival",
+        description="檢查MFE、adverse、first-passage與upside survival路徑",
+        order=20,
+    ),
+    "selection_truth_geometry": AuditMethodEntry(
+        method_id="selection_truth_geometry",
+        menu_label="Selection／Truth Geometry",
+        description="比較母體、candidate與selection在future truth空間的分布與enrichment",
+        order=30,
+    ),
+    "stability_attribution": AuditMethodEntry(
+        method_id="stability_attribution",
+        menu_label="跨期／跨 Seed Stability Attribution",
+        description="分解evaluation period／seed／year的方向與穩定性來源",
+        order=40,
+    ),
+}
+
+def get_audit_methods() -> tuple[AuditMethodEntry, ...]:
+    return tuple(sorted(AUDIT_METHOD_CATALOG.values(), key=lambda item: item.order))
+
+def get_audit_method(method_id: str) -> AuditMethodEntry:
+    key = str(method_id).strip()
+    method = AUDIT_METHOD_CATALOG.get(key)
+    if method is None:
+        raise ValueError(f"Audit method未註冊: {method_id}")
+    return method
+
+
 AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
     # Only genuinely supported diagnostic commands belong here.  Canonical
     # Dataset/Target/PIT builders live in services/ and are not research Audits.
@@ -84,6 +131,7 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         mode="formal",
         description="只讀MFE × Safety truth與Strategy Compare row-level evidence的四象限Audit",
         read_only=True,
+        method_id="selection_truth_geometry",
         status_function="collect_status",
         run_function="run_formal_audit",
     ),
@@ -113,6 +161,13 @@ def get_audit_handler(definition: AuditDefinition) -> AuditCatalogEntry:
     return entry
 
 
+def get_definition_method_id(definition: AuditDefinition) -> str:
+    entry = get_audit_handler(definition)
+    if not entry.method_id:
+        raise ValueError(f"Formal Audit缺少method_id: {definition.audit_id}")
+    return str(entry.method_id)
+
+
 def get_domain_cli_commands(domain: str) -> dict[str, AuditCatalogEntry]:
     domain_key = str(domain).strip()
     entries = {
@@ -139,6 +194,10 @@ def validate_audit_catalog(definitions: tuple[AuditDefinition, ...] = ()) -> Non
             raise ValueError(f"Audit catalog欄位不可空白: {key}")
         if entry.formal and (not entry.status_function or not entry.run_function or not entry.read_only):
             raise ValueError(f"Formal Audit catalog contract不完整: {key}")
+        if entry.formal:
+            if not entry.method_id:
+                raise ValueError(f"Formal Audit必須綁定method_id: {key}")
+            get_audit_method(entry.method_id)
         identity = (entry.domain, entry.module)
         if identity in seen_modules:
             raise ValueError(f"Audit module重複登記: {entry.module}")
@@ -160,9 +219,14 @@ validate_audit_catalog()
 
 __all__ = [
     "AUDIT_CATALOG",
+    "AUDIT_METHOD_CATALOG",
     "AuditCatalogEntry",
+    "AuditMethodEntry",
     "get_audit_entry",
     "get_audit_handler",
+    "get_audit_method",
+    "get_audit_methods",
+    "get_definition_method_id",
     "get_domain_cli_commands",
     "validate_audit_catalog",
 ]

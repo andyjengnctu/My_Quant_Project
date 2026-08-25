@@ -12,7 +12,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-AUDIT_SCHEMA_VERSION = 8
+from config.breakout_quality import (
+    BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
+    BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
+    DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+)
+
+AUDIT_SCHEMA_VERSION = 9
 AUDIT_OUTPUT_ROOT = "outputs/audit"
 AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
 
@@ -28,6 +34,8 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "驗證conditional-MFE target geometry是否仍把選股推向High-MFE / Low-Safety。"
                 ),
                 "source": {
+                    # Comparison objects live here; the Audit menu is method-oriented and
+                    # must not hard-code current arms / profiles / target identities.
                     "evaluation_profile_ids": (
                         "extending_window_oos",
                         "extending_window_rolling",
@@ -35,6 +43,15 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "strategy_arm_ids": ("C58", "C59", "C65", "C66"),
                     "candidate_pool_arm_id": "C58",
                     "focus_arm_id": "C66",
+                    # Daily-universal truth is owned by the canonical profile-aware sample
+                    # provider.  It intentionally has no second persisted continuous-target
+                    # bundle, so Audit consumes the same provider as Strategy Compare
+                    # diagnostics instead of inventing a physical truth artifact.
+                    "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
+                    "model_architecture": BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
+                    "truth_provider_profile_id": (
+                        DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+                    ),
                     "mfe_target_id": "daily_full_horizon_pure_mfe_r_v1",
                     "safety_target_id": "daily_full_horizon_low_adverse_r_v1",
                 },

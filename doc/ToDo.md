@@ -1,4 +1,8 @@
 ## Going
+
+- trading
+    - add a buy list to decide the stop prices using full roos base-fanlist-best
+
 - restreucture
     - modulize audit in manu
     - models/output cleaner

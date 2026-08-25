@@ -8,15 +8,24 @@ import hashlib
 import json
 import math
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
 
 from config.audit import AUDIT_OUTPUT_ROOT, AuditDefinition
-from config.strategy_compare import get_strategy_comparison_settings
+from config.breakout_quality import get_breakout_quality_experiment_profile
 from core.path_utils import project_relative_display_path
-from core.strategy_comparison import strategy_comparison_fingerprint
+from filters.breakout_quality.continuous_target import (
+    DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+)
+from filters.breakout_quality.dataset_store import resolve_dataset_paths
+from filters.breakout_quality.paths import resolve_filter_output_dir
+from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
+from services.audit.strategy_compare_source import (
+    AuditSourceBlockedError,
+    load_strategy_compare_source,
+)
 from core.report_metrics import (
     MFE_SAFETY_QUADRANT_DISTRIBUTION_METRICS,
     MFE_SAFETY_QUADRANT_ENRICHMENT_METRICS,
@@ -46,22 +55,6 @@ _DATE_KEYS = (
     "entry_date",
     "buy_date",
 )
-_TARGET_VALUE_KEYS = (
-    "target",
-    "target_r",
-    "target_value",
-    "continuous_target",
-    "continuous_target_value",
-    "value",
-    "y",
-)
-_PERCENTILE_KEYS = (
-    "same_day_percentile",
-    "daily_percentile",
-    "target_percentile",
-    "daily_target_percentile",
-    "cross_sectional_percentile",
-)
 _ROW_COLLECTION_KEYS = {
     "candidate_rows": "candidate",
     "orderable_rows": "orderable",
@@ -73,8 +66,7 @@ _ROW_COLLECTION_KEYS = {
 _SELECTION_PRIORITY = ("selected", "trade", "closed_trade")
 
 
-class AuditBlockedError(RuntimeError):
-    """Raised when required read-only upstream evidence is unavailable."""
+AuditBlockedError = AuditSourceBlockedError
 
 
 def _first_present(mapping: Mapping[str, Any], keys: Sequence[str]) -> Any:
@@ -111,213 +103,6 @@ def _finite_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
-
-
-def _table_from_rows(rows: Iterable[Mapping[str, Any]]) -> pd.DataFrame | None:
-    normalized: list[dict[str, Any]] = []
-    for raw in rows:
-        if not isinstance(raw, Mapping):
-            continue
-        ticker = _normalize_ticker(_first_present(raw, _TICKER_KEYS))
-        date_text = _normalize_date(_first_present(raw, _DATE_KEYS))
-        value = _finite_float(_first_present(raw, _TARGET_VALUE_KEYS))
-        if not ticker or not date_text or value is None:
-            continue
-        item: dict[str, Any] = {"ticker": ticker, "date": date_text, "value": value}
-        percentile = _finite_float(_first_present(raw, _PERCENTILE_KEYS))
-        if percentile is not None:
-            item["percentile"] = percentile
-        normalized.append(item)
-    if not normalized:
-        return None
-    return pd.DataFrame.from_records(normalized)
-
-
-def _table_from_dataframe(frame: pd.DataFrame) -> pd.DataFrame | None:
-    if frame.empty:
-        return None
-    lower_to_original = {str(column).strip().lower(): column for column in frame.columns}
-
-    def column_for(keys: Sequence[str]) -> Any | None:
-        for key in keys:
-            if key in lower_to_original:
-                return lower_to_original[key]
-        return None
-
-    ticker_col = column_for(_TICKER_KEYS)
-    date_col = column_for(_DATE_KEYS)
-    value_col = column_for(_TARGET_VALUE_KEYS)
-    if ticker_col is None or date_col is None or value_col is None:
-        return None
-    output = pd.DataFrame(
-        {
-            "ticker": frame[ticker_col].map(_normalize_ticker),
-            "date": frame[date_col].map(_normalize_date),
-            "value": pd.to_numeric(frame[value_col], errors="coerce"),
-        }
-    )
-    percentile_col = column_for(_PERCENTILE_KEYS)
-    if percentile_col is not None:
-        output["percentile"] = pd.to_numeric(frame[percentile_col], errors="coerce")
-    output = output.loc[
-        output["ticker"].ne("")
-        & output["date"].ne("")
-        & np.isfinite(output["value"].to_numpy(dtype=float, na_value=np.nan))
-    ].copy()
-    return None if output.empty else output
-
-
-def _np_payload_to_frame(payload: Mapping[str, Any]) -> pd.DataFrame | None:
-    lowered = {str(key).strip().lower(): key for key in payload}
-
-    def array_for(keys: Sequence[str]) -> Any | None:
-        for key in keys:
-            if key in lowered:
-                return payload[lowered[key]]
-        return None
-
-    ticker_values = array_for((*_TICKER_KEYS, "tickers", "symbols", "group_tickers"))
-    date_values = array_for((*_DATE_KEYS, "dates", "group_dates", "score_dates"))
-    target_values = array_for(
-        (*_TARGET_VALUE_KEYS, "targets", "target_values", "group_targets", "group_target_r")
-    )
-    if ticker_values is None or date_values is None or target_values is None:
-        return None
-    ticker_array = np.asarray(ticker_values).reshape(-1)
-    date_array = np.asarray(date_values).reshape(-1)
-    target_array = np.asarray(target_values).reshape(-1)
-    if not (len(ticker_array) == len(date_array) == len(target_array)):
-        return None
-    frame = pd.DataFrame(
-        {"ticker": ticker_array, "date": date_array, "value": target_array}
-    )
-    percentile_values = array_for((*_PERCENTILE_KEYS, "percentiles"))
-    if percentile_values is not None:
-        percentile_array = np.asarray(percentile_values).reshape(-1)
-        if len(percentile_array) == len(frame):
-            frame["percentile"] = percentile_array
-    return _table_from_dataframe(frame)
-
-
-def _read_target_candidate(path: Path) -> pd.DataFrame | None:
-    suffix = path.suffix.lower()
-    try:
-        if suffix == ".csv":
-            return _table_from_dataframe(pd.read_csv(path, low_memory=False))
-        if suffix in {".parquet", ".pq"}:
-            return _table_from_dataframe(pd.read_parquet(path))
-        if suffix == ".json":
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(payload, list):
-                return _table_from_rows(payload)
-            if isinstance(payload, Mapping):
-                for key in ("rows", "records", "data", "targets"):
-                    rows = payload.get(key)
-                    if isinstance(rows, list):
-                        table = _table_from_rows(rows)
-                        if table is not None:
-                            return table
-                return _np_payload_to_frame(payload)
-            return None
-        if suffix == ".npz":
-            with np.load(path, allow_pickle=False) as payload:
-                return _np_payload_to_frame({key: payload[key] for key in payload.files})
-        if suffix == ".npy":
-            array = np.load(path, allow_pickle=False)
-            if array.dtype.names:
-                return _table_from_dataframe(pd.DataFrame.from_records(array))
-    except (OSError, ValueError, TypeError, json.JSONDecodeError, ImportError):
-        return None
-    return None
-
-
-def _target_candidate_score(path: Path, target_id: str) -> tuple[int, str]:
-    lower = path.name.lower()
-    parts_lower = {part.lower() for part in path.parts}
-    score = 0
-    if target_id.lower() in lower:
-        score += 12
-    if any(token in lower for token in ("target", "truth", "daily")):
-        score += 6
-    if any(token in lower for token in ("dataset", "value", "group")):
-        score += 2
-    if any(token in lower for token in ("score", "checkpoint", "manifest", "report", "audit")):
-        score -= 20
-    if any("audit" in part or "report" in part for part in parts_lower):
-        score -= 20
-    return (-score, path.as_posix())
-
-
-def _canonical_target_root(project_root: Path, target_id: str) -> Path:
-    return (
-        project_root
-        / "outputs"
-        / "filters"
-        / "breakout_quality"
-        / "breakout_quality_v1"
-        / "continuous_targets"
-        / target_id
-    )
-
-
-def _dedupe_truth_table(frame: pd.DataFrame, *, source_path: Path) -> pd.DataFrame:
-    columns = ["ticker", "date", "value"] + (["percentile"] if "percentile" in frame else [])
-    table = frame[columns].copy()
-    table["value"] = pd.to_numeric(table["value"], errors="coerce")
-    table = table.dropna(subset=["value"])
-    if "percentile" in table:
-        table["percentile"] = pd.to_numeric(table["percentile"], errors="coerce")
-    duplicate_mask = table.duplicated(["ticker", "date"], keep=False)
-    if duplicate_mask.any():
-        duplicates = table.loc[duplicate_mask].copy()
-        grouped = duplicates.groupby(["ticker", "date"], sort=False, dropna=False)
-        conflicts: list[str] = []
-        for (ticker, date_text), group in grouped:
-            values = group["value"].dropna().astype(float).unique()
-            percentile_values = (
-                group["percentile"].dropna().astype(float).unique()
-                if "percentile" in group
-                else np.array([], dtype=float)
-            )
-            if len(values) > 1 or len(percentile_values) > 1:
-                conflicts.append(f"{ticker}/{date_text}")
-                if len(conflicts) >= 5:
-                    break
-        if conflicts:
-            raise AuditBlockedError(
-                "canonical continuous truth存在同ticker/date衝突值: "
-                f"{source_path.as_posix()} | examples={conflicts}"
-            )
-        table = table.drop_duplicates(["ticker", "date"], keep="first")
-    return table.sort_values(["date", "ticker"], kind="stable").reset_index(drop=True)
-
-
-def load_continuous_truth(project_root: Path, target_id: str) -> tuple[pd.DataFrame, Path]:
-    root = _canonical_target_root(project_root, target_id)
-    if not root.exists():
-        raise AuditBlockedError(
-            "缺少canonical continuous target truth root: "
-            f"{project_relative_display_path(root, project_root=project_root)}"
-        )
-    candidates = [
-        path
-        for path in root.rglob("*")
-        if path.is_file() and path.suffix.lower() in {".csv", ".parquet", ".pq", ".json", ".npz", ".npy"}
-    ]
-    candidates.sort(key=lambda path: _target_candidate_score(path, target_id))
-    usable: list[tuple[Path, pd.DataFrame]] = []
-    for path in candidates:
-        table = _read_target_candidate(path)
-        if table is None or table.empty:
-            continue
-        usable.append((path, _dedupe_truth_table(table, source_path=path)))
-    if not usable:
-        raise AuditBlockedError(
-            "canonical continuous target root內找不到可辨識的ticker/date/target truth: "
-            f"{project_relative_display_path(root, project_root=project_root)}"
-        )
-    best_path, best_table = usable[0]
-    return best_table, best_path
 
 
 def _ensure_daily_percentile(
@@ -380,52 +165,11 @@ def _extract_date_range(payload: Any) -> tuple[str | None, str | None]:
     return (min(starts) if starts else None, max(ends) if ends else None)
 
 
-def _resolve_latest_result_dir(project_root: Path, output_root_text: str) -> Path:
-    output_root = project_root / output_root_text
-    latest = output_root / "latest"
-    if latest.is_dir():
-        return latest.resolve()
-    if latest.is_symlink():
-        return latest.resolve()
-    for pointer_name in ("latest.json", "latest.txt"):
-        pointer = output_root / pointer_name
-        if not pointer.exists():
-            continue
-        try:
-            if pointer.suffix == ".json":
-                payload = json.loads(pointer.read_text(encoding="utf-8"))
-                candidate_text = (
-                    payload.get("run_dir")
-                    or payload.get("path")
-                    or payload.get("latest")
-                    if isinstance(payload, Mapping)
-                    else None
-                )
-            else:
-                candidate_text = pointer.read_text(encoding="utf-8").strip()
-        except (OSError, json.JSONDecodeError):
-            candidate_text = None
-        if candidate_text:
-            candidate = Path(str(candidate_text))
-            if not candidate.is_absolute():
-                candidate = project_root / candidate
-            if candidate.is_dir():
-                return candidate.resolve()
-    runs_dir = output_root / "runs"
-    runs = sorted((path for path in runs_dir.glob("*") if path.is_dir()), key=lambda path: path.name)
-    if runs:
-        return runs[-1].resolve()
-    raise AuditBlockedError(
-        "缺少Strategy Compare latest/runs結果: "
-        f"{project_relative_display_path(output_root, project_root=project_root)}"
-    )
-
-
 def _load_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise AuditBlockedError(f"無法讀取正式JSON工件: {path.as_posix()} | {exc}") from exc
+        raise AuditBlockedError(f"無法讀取正式JSON工件: {path.name} | {exc}") from exc
 
 
 def _referenced_artifact_paths(project_root: Path, result_dir: Path, payloads: Sequence[Any]) -> set[Path]:
@@ -570,79 +314,6 @@ def _load_generic_rows_file(path: Path) -> list[dict[str, Any]]:
     return []
 
 
-def _collect_named_mappings(payload: Any, key_name: str) -> list[Mapping[str, Any]]:
-    found: list[Mapping[str, Any]] = []
-    if isinstance(payload, Mapping):
-        for key, value in payload.items():
-            if str(key) == key_name and isinstance(value, Mapping):
-                found.append(value)
-            found.extend(_collect_named_mappings(value, key_name))
-    elif isinstance(payload, list):
-        for value in payload:
-            found.extend(_collect_named_mappings(value, key_name))
-    return found
-
-
-def _primary_strategy_fingerprints(payload: Any) -> set[str]:
-    if not isinstance(payload, Mapping):
-        return set()
-    containers: list[Mapping[str, Any]] = [payload]
-    for key in ("metadata", "run", "summary", "strategy_comparison"):
-        child = payload.get(key)
-        if isinstance(child, Mapping):
-            containers.append(child)
-    found: set[str] = set()
-    for container in containers:
-        for key in ("config_fingerprint", "strategy_comparison_fingerprint"):
-            value = container.get(key)
-            if isinstance(value, (str, int, float)):
-                text = str(value).strip()
-                if len(text) == 12:
-                    found.add(text)
-    return found
-
-
-def _validate_strategy_result_identity(
-    *,
-    settings: Any,
-    payloads: Sequence[Any],
-    result_dir: Path,
-    project_root: Path,
-) -> str:
-    stored_fingerprints: set[str] = set()
-    for payload in payloads:
-        stored_fingerprints.update(_primary_strategy_fingerprints(payload))
-    if not stored_fingerprints:
-        raise AuditBlockedError(
-            "Strategy Compare latest缺少canonical config fingerprint，無法驗證artifact reuse identity: "
-            f"{project_relative_display_path(result_dir, project_root=project_root)}"
-        )
-    if len(stored_fingerprints) != 1:
-        raise AuditBlockedError(
-            f"Strategy Compare latest fingerprint互相衝突: {sorted(stored_fingerprints)}"
-        )
-    stored = next(iter(stored_fingerprints))
-
-    expected_fingerprints = {strategy_comparison_fingerprint(settings)}
-    artifact_identity_payloads: list[Mapping[str, Any]] = []
-    for payload in payloads:
-        artifact_identity_payloads.extend(_collect_named_mappings(payload, "artifact_identities"))
-        artifact_identity_payloads.extend(
-            _collect_named_mappings(payload, "resolved_artifact_identities")
-        )
-    for identities in artifact_identity_payloads:
-        expected_fingerprints.add(
-            strategy_comparison_fingerprint(settings, artifact_identities=identities)
-        )
-    if stored not in expected_fingerprints:
-        raise AuditBlockedError(
-            "Strategy Compare latest與目前config canonical identity不相容；"
-            f"stored={stored} expected={sorted(expected_fingerprints)}。"
-            "Audit不得把stale result當成目前策略證據"
-        )
-    return stored
-
-
 def load_strategy_rows(
     project_root: Path,
     *,
@@ -654,24 +325,15 @@ def load_strategy_rows(
     tuple[str | None, str | None],
     str,
 ]:
-    settings = get_strategy_comparison_settings(profile_id)
-    result_dir = _resolve_latest_result_dir(project_root, settings.output_root)
-    payloads: list[Any] = []
-    for filename in ("strategy_comparison.json", "manifest.json"):
-        path = result_dir / filename
-        if path.exists():
-            payloads.append(_load_json(path))
-    if not payloads:
-        raise AuditBlockedError(
-            "Strategy Compare latest缺少strategy_comparison.json/manifest.json: "
-            f"{project_relative_display_path(result_dir, project_root=project_root)}"
-        )
-    source_fingerprint = _validate_strategy_result_identity(
-        settings=settings,
-        payloads=payloads,
-        result_dir=result_dir,
-        project_root=project_root,
+    strategy_source = load_strategy_compare_source(
+        project_root, profile_id=profile_id
     )
+    settings = strategy_source.settings
+    result_dir = strategy_source.result_dir
+    payloads: list[Any] = [strategy_source.result]
+    if strategy_source.manifest is not None:
+        payloads.append(strategy_source.manifest)
+    source_fingerprint = strategy_source.config_fingerprint
     collected: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for payload in payloads:
         _merge_row_collections(collected, _collect_embedded_arm_rows(payload, arm_ids))
@@ -733,31 +395,143 @@ def _filter_period(frame: pd.DataFrame, start_date: str | None, end_date: str | 
     return result.copy()
 
 
+def _resolve_truth_provider_contract(
+    definition: AuditDefinition,
+) -> tuple[str, str, str, str, str]:
+    source = definition.source
+    filter_id = str(source.get("filter_id") or "").strip()
+    model_architecture = str(source.get("model_architecture") or "").strip()
+    provider_profile_id = str(source.get("truth_provider_profile_id") or "").strip()
+    mfe_target_id = str(source.get("mfe_target_id") or "").strip()
+    safety_target_id = str(source.get("safety_target_id") or "").strip()
+    missing = [
+        name
+        for name, value in (
+            ("filter_id", filter_id),
+            ("model_architecture", model_architecture),
+            ("truth_provider_profile_id", provider_profile_id),
+            ("mfe_target_id", mfe_target_id),
+            ("safety_target_id", safety_target_id),
+        )
+        if not value
+    ]
+    if missing:
+        raise ValueError(
+            f"{definition.audit_id} truth provider設定不完整: {', '.join(missing)}"
+        )
+    profile = get_breakout_quality_experiment_profile(provider_profile_id)
+    if str(profile.continuous_target_id or "") != mfe_target_id:
+        raise ValueError(
+            f"{definition.audit_id} truth provider profile target不一致: "
+            f"profile={provider_profile_id}, target={profile.continuous_target_id!r}, "
+            f"expected={mfe_target_id!r}"
+        )
+    if safety_target_id != DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID:
+        raise ValueError(
+            f"{definition.audit_id} safety target目前必須使用canonical "
+            f"{DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID!r}"
+        )
+    return filter_id, model_architecture, provider_profile_id, mfe_target_id, safety_target_id
+
+
 def build_truth_geometry(
+    definition: AuditDefinition,
     project_root: Path,
     *,
-    mfe_target_id: str,
-    safety_target_id: str,
     percentile_method: str,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    mfe, mfe_path = load_continuous_truth(project_root, mfe_target_id)
-    safety, safety_path = load_continuous_truth(project_root, safety_target_id)
+    """Load the canonical daily-universal truth geometry without a duplicate artifact.
+
+    Daily-universal targets are generated by the profile-aware sample provider and do
+    not own the older event-style ``continuous_targets/<target_id>`` physical bundle.
+    Pure-MFE already carries the same selected-peak adverse component, so Low-Adverse
+    Safety is the canonical ``-target_adverse_r`` component from that same provider.
+    This is the same ownership contract used by Strategy Compare path diagnostics.
+    """
+
+    (
+        filter_id,
+        model_architecture,
+        provider_profile_id,
+        mfe_target_id,
+        safety_target_id,
+    ) = _resolve_truth_provider_contract(definition)
+    bundle = load_profile_continuous_ranker_data(
+        filter_id=filter_id,
+        model_architecture=model_architecture,
+        experiment_profile=provider_profile_id,
+        preload_feature_bank=False,
+        allow_stale_source=False,
+        project_root=project_root,
+    )
+    groups = bundle.group_table.copy()
+    required = {"ticker", "date", "target_adverse_r"}
+    missing = sorted(required - set(groups.columns))
+    if missing:
+        raise AuditBlockedError(
+            f"canonical daily truth provider缺少欄位: {missing}"
+        )
+    if len(groups) != len(bundle.raw_target) or len(groups) != len(bundle.target_valid):
+        raise AuditBlockedError("canonical daily truth provider group/target長度不一致")
+    target_contract = dict(dict(bundle.target_manifest or {}).get("target_contract") or {})
+    if str(target_contract.get("target_id") or "") != mfe_target_id:
+        raise AuditBlockedError("canonical daily truth provider target identity不一致")
+
+    valid = np.asarray(bundle.target_valid, dtype=bool)
+    mfe_value = pd.to_numeric(pd.Series(bundle.raw_target, index=groups.index), errors="coerce")
+    adverse_value = pd.to_numeric(groups["target_adverse_r"], errors="coerce")
+    valid &= np.isfinite(mfe_value.to_numpy(dtype=float))
+    valid &= np.isfinite(adverse_value.to_numpy(dtype=float))
+    if not bool(valid.any()):
+        raise AuditBlockedError("canonical daily truth provider沒有有效MFE/Safety rows")
+
+    base = pd.DataFrame(
+        {
+            "ticker": groups.loc[valid, "ticker"].astype(str).str.strip().to_numpy(),
+            "date": pd.to_datetime(groups.loc[valid, "date"], errors="raise")
+            .dt.strftime("%Y-%m-%d")
+            .to_numpy(),
+            "mfe_value": mfe_value.loc[valid].to_numpy(dtype=float),
+            # Low-Adverse Safety target is exactly negative adverse-to-peak R.
+            "safety_value": (-adverse_value.loc[valid]).to_numpy(dtype=float),
+        }
+    )
+    if bool(base.duplicated(["ticker", "date"]).any()):
+        raise AuditBlockedError("canonical daily truth provider存在重複ticker/date")
+
+    mfe = base[["ticker", "date", "mfe_value"]].rename(columns={"mfe_value": "value"})
+    safety = base[["ticker", "date", "safety_value"]].rename(
+        columns={"safety_value": "value"}
+    )
     mfe, mfe_percentile_source = _ensure_daily_percentile(mfe, method=percentile_method)
-    safety, safety_percentile_source = _ensure_daily_percentile(safety, method=percentile_method)
-    joined = mfe[["ticker", "date", "percentile"]].rename(columns={"percentile": "mfe_percentile"}).merge(
-        safety[["ticker", "date", "percentile"]].rename(columns={"percentile": "safety_percentile"}),
+    safety, safety_percentile_source = _ensure_daily_percentile(
+        safety, method=percentile_method
+    )
+    joined = mfe[["ticker", "date", "percentile"]].rename(
+        columns={"percentile": "mfe_percentile"}
+    ).merge(
+        safety[["ticker", "date", "percentile"]].rename(
+            columns={"percentile": "safety_percentile"}
+        ),
         on=["ticker", "date"],
         how="inner",
         validate="one_to_one",
     )
     if joined.empty:
         raise AuditBlockedError("Pure-MFE與Low-Adverse Safety canonical truth沒有共同ticker/date")
+
+    dataset_root = resolve_filter_output_dir(project_root, filter_id=filter_id)
     source = {
+        "provider": "canonical profile-aware daily sample provider",
+        "filter_id": filter_id,
+        "model_architecture": model_architecture,
+        "provider_profile_id": provider_profile_id,
+        "dataset_root": project_relative_display_path(dataset_root, project_root=project_root),
         "mfe_target_id": mfe_target_id,
-        "mfe_truth_path": project_relative_display_path(mfe_path, project_root=project_root),
+        "mfe_truth_source": "bundle.raw_target",
         "mfe_percentile_source": mfe_percentile_source,
         "safety_target_id": safety_target_id,
-        "safety_truth_path": project_relative_display_path(safety_path, project_root=project_root),
+        "safety_truth_source": "-bundle.group_table.target_adverse_r",
         "safety_percentile_source": safety_percentile_source,
         "joined_truth_rows": int(len(joined)),
     }
@@ -1048,9 +822,8 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
         )
 
     truth, truth_source = build_truth_geometry(
+        definition,
         project_root,
-        mfe_target_id=mfe_target_id,
-        safety_target_id=safety_target_id,
         percentile_method=percentile_method,
     )
     truth = _quadrant_columns(truth, cutoff=cutoff)
@@ -1115,9 +888,11 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
                 "enrichment_vs_population": _enrichment(distribution, population),
             }
             arm_row_sources[arm_id] = row_source
-        settings = get_strategy_comparison_settings(profile_id)
+        strategy_settings = load_strategy_compare_source(
+            project_root, profile_id=profile_id
+        ).settings
         strategy_payloads[profile_id] = {
-            "display_name": settings.profile_label,
+            "display_name": strategy_settings.profile_label,
             "period": {"start": period[0], "end": period[1]},
             "strategy_result_dir": _relative_artifact_path(result_dir, project_root),
             "candidate_pool_arm_id": candidate_pool_arm_id,
@@ -1212,41 +987,48 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
 def preflight(definition: AuditDefinition, *, project_root: Path) -> dict[str, Any]:
     blockers: list[str] = []
     source = definition.source
-    target_paths: list[str] = []
-    for key in ("mfe_target_id", "safety_target_id"):
-        target_id = str(source.get(key) or "").strip()
-        root = _canonical_target_root(project_root, target_id)
-        target_paths.append(project_relative_display_path(root, project_root=project_root))
-        if not target_id or not root.exists():
-            blockers.append(f"缺少canonical truth: {target_paths[-1]}")
+    truth_sources: list[str] = []
+    try:
+        (
+            filter_id,
+            _model_architecture,
+            provider_profile_id,
+            mfe_target_id,
+            safety_target_id,
+        ) = _resolve_truth_provider_contract(definition)
+        dataset_dir = resolve_filter_output_dir(project_root, filter_id=filter_id)
+        dataset = resolve_dataset_paths(dataset_dir)
+        truth_sources.append(
+            project_relative_display_path(dataset.summary, project_root=project_root)
+        )
+        if not dataset.summary.is_file():
+            blockers.append(
+                "缺少canonical Dataset summary: "
+                + project_relative_display_path(dataset.summary, project_root=project_root)
+            )
+        truth_sources.append(
+            f"profile:{provider_profile_id} / target:{mfe_target_id} / safety:{safety_target_id}"
+        )
+    except (ValueError, OSError) as exc:
+        blockers.append(str(exc))
+
     strategy_paths: list[str] = []
     for profile_id in tuple(source.get("evaluation_profile_ids") or ()):
         try:
-            settings = get_strategy_comparison_settings(str(profile_id))
-            result_dir = _resolve_latest_result_dir(project_root, settings.output_root)
-            strategy_paths.append(project_relative_display_path(result_dir, project_root=project_root))
-            payloads: list[Any] = []
-            for filename in ("strategy_comparison.json", "manifest.json"):
-                path = result_dir / filename
-                if path.exists():
-                    payloads.append(_load_json(path))
-            if not payloads:
-                raise AuditBlockedError(
-                    "Strategy Compare latest缺少strategy_comparison.json/manifest.json: "
-                    f"{project_relative_display_path(result_dir, project_root=project_root)}"
+            strategy_source = load_strategy_compare_source(
+                project_root, profile_id=str(profile_id)
+            )
+            strategy_paths.append(
+                project_relative_display_path(
+                    strategy_source.result_dir, project_root=project_root
                 )
-            _validate_strategy_result_identity(
-                settings=settings,
-                payloads=payloads,
-                result_dir=result_dir,
-                project_root=project_root,
             )
         except (ValueError, AuditBlockedError, OSError, json.JSONDecodeError) as exc:
             blockers.append(str(exc))
     return {
         "status": "READY" if not blockers else "BLOCKED",
         "blockers": blockers,
-        "target_paths": target_paths,
+        "target_paths": truth_sources,
         "strategy_paths": strategy_paths,
     }
 
@@ -1280,7 +1062,7 @@ def collect_status(definition: AuditDefinition, *, project_root: Path) -> dict[s
     state = preflight(definition, project_root=Path(project_root))
     blockers = tuple(str(value) for value in state.get("blockers", ()))
     source = {
-        "display": "Pure-MFE × Low-Adverse Safety truth + OOS/Rolling Strategy Compare",
+        "display": "Daily-universal MFE × Safety truth provider + OOS/Rolling Strategy Compare",
         "target_paths": list(state.get("target_paths", ())),
         "strategy_paths": list(state.get("strategy_paths", ())),
     }
@@ -1308,7 +1090,6 @@ __all__ = [
     "SUPPORTED_AUDIT_TYPE",
     "build_truth_geometry",
     "collect_status",
-    "load_continuous_truth",
     "load_latest_result",
     "load_strategy_rows",
     "preflight",

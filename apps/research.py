@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.audit import get_active_audit_module_id, get_enabled_audit_definitions
+from config.audit import get_active_audit_module_id
 from config.research import get_active_model_research_provider
 from config.strategy_compare import (
     STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL,
@@ -40,7 +40,9 @@ from services.research.strategy_compare_application import (
     show_strategy_comparison_profile_status,
     show_strategy_multi_seed_robustness_status,
 )
+from services.audit.catalog import get_audit_methods
 from services.audit.runner import (
+    collect_audit_status,
     render_audit_status,
     render_latest_audit_summary,
     run_enabled_audits,
@@ -398,20 +400,22 @@ def _strategy_compare_menu() -> int:
             print(f"選項無效，請按 Enter 或輸入 0～{status_choice}。")
 
 
-def _audit_menu() -> int:
-    module_id = get_active_audit_module_id()
+def _audit_method_menu(module_id: str, method_id: str) -> int:
+    method = next(item for item in get_audit_methods() if item.method_id == method_id)
     while True:
-        enabled_audits = get_enabled_audit_definitions(module_id)
-        print("\n=== Audit／診斷 ===")
-        print(f"Active module：{module_id}")
-        if enabled_audits:
-            print(render_menu_item(1, "執行目前 Audit 設定", default=True))
-            print(render_menu_item(2, "查看 Audit 設定、工件與預計動作"))
-            print(render_menu_item(3, "查看最近 Audit 結果"))
+        status = collect_audit_status(
+            module_id, project_root=PROJECT_ROOT, method_id=method_id
+        )
+        enabled = [row for row in status["rows"] if row["enabled"]]
+        print(f"\n=== {method.menu_label} ===")
+        if not enabled:
+            print("config/audit.py目前沒有啟用此方法的比較設定。")
+            print(render_menu_item(1, "查看此方法設定狀態", default=True))
+            print(render_menu_item(2, "查看最近結果"))
         else:
-            print("目前沒有啟用的正式 Audit；只提供設定／歷史結果檢視。")
-            print(render_menu_item(1, "查看 Audit 設定、工件與預計動作", default=True))
-            print(render_menu_item(2, "查看最近 Audit 結果"))
+            print(render_menu_item(1, "執行目前參數設定", default=True))
+            print(render_menu_item(2, "查看設定、工件與預計動作"))
+            print(render_menu_item(3, "查看最近結果"))
         print(render_menu_item(0, "返回"))
         try:
             raw = input("👉 請選擇：").strip().lower()
@@ -420,16 +424,31 @@ def _audit_menu() -> int:
         choice = "1" if raw == "" else raw
         if choice in {"0", "q", "quit", "exit"}:
             return 0
-        if not enabled_audits:
+        if not enabled:
             if choice == "1":
-                print("\n" + render_audit_status(module_id, project_root=PROJECT_ROOT))
+                print(
+                    "\n"
+                    + render_audit_status(
+                        module_id, project_root=PROJECT_ROOT, method_id=method_id
+                    )
+                )
             elif choice == "2":
-                print("\n" + render_latest_audit_summary(module_id, project_root=PROJECT_ROOT))
+                print(
+                    "\n"
+                    + render_latest_audit_summary(
+                        module_id, project_root=PROJECT_ROOT, method_id=method_id
+                    )
+                )
             else:
                 print("無效選項，請按 Enter 或輸入 0～2。")
             continue
         if choice == "1":
-            print("\n" + render_audit_status(module_id, project_root=PROJECT_ROOT))
+            print(
+                "\n"
+                + render_audit_status(
+                    module_id, project_root=PROJECT_ROOT, method_id=method_id
+                )
+            )
             try:
                 confirm = input("👉 按 Enter 執行；輸入 0 返回：").strip().lower()
             except EOFError:
@@ -439,14 +458,88 @@ def _audit_menu() -> int:
             if confirm not in {"", "1"}:
                 print("輸入無效，本次不執行。")
                 continue
-            run_enabled_audits(module_id, project_root=PROJECT_ROOT)
-            print("\n" + render_latest_audit_summary(module_id, project_root=PROJECT_ROOT))
+            run_enabled_audits(
+                module_id, project_root=PROJECT_ROOT, method_id=method_id
+            )
+            print(
+                "\n"
+                + render_latest_audit_summary(
+                    module_id, project_root=PROJECT_ROOT, method_id=method_id
+                )
+            )
         elif choice == "2":
-            print("\n" + render_audit_status(module_id, project_root=PROJECT_ROOT))
+            print(
+                "\n"
+                + render_audit_status(
+                    module_id, project_root=PROJECT_ROOT, method_id=method_id
+                )
+            )
         elif choice == "3":
-            print("\n" + render_latest_audit_summary(module_id, project_root=PROJECT_ROOT))
+            print(
+                "\n"
+                + render_latest_audit_summary(
+                    module_id, project_root=PROJECT_ROOT, method_id=method_id
+                )
+            )
         else:
             print("無效選項，請按 Enter 或輸入 0～3。")
+
+
+def _audit_menu() -> int:
+    module_id = get_active_audit_module_id()
+    methods = get_audit_methods()
+    while True:
+        print("\n=== Audit／診斷 ===")
+        print(f"Active module：{module_id}")
+        method_statuses = []
+        for method in methods:
+            status = collect_audit_status(
+                module_id, project_root=PROJECT_ROOT, method_id=method.method_id
+            )
+            enabled_count = sum(1 for row in status["rows"] if row["enabled"])
+            method_statuses.append((method, status, enabled_count))
+        default_index = next(
+            (index for index, (_method, _status, count) in enumerate(method_statuses, start=1) if count),
+            1,
+        )
+        for index, (method, status, enabled_count) in enumerate(method_statuses, start=1):
+            suffix = (
+                f"  [{status['overall_status']}]"
+                if enabled_count
+                else "  [未設定]"
+            )
+            print(
+                render_menu_item(
+                    index,
+                    method.menu_label + suffix,
+                    default=index == default_index,
+                )
+            )
+        status_choice = len(methods) + 1
+        latest_choice = status_choice + 1
+        print(render_menu_item(status_choice, "查看全部 Audit 設定與工件狀態"))
+        print(render_menu_item(latest_choice, "查看全部最近 Audit 結果"))
+        print(render_menu_item(0, "返回"))
+        try:
+            raw = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            return 0
+        choice = str(default_index) if raw == "" else raw
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        try:
+            numeric = int(choice)
+        except ValueError:
+            print("選項無效。")
+            continue
+        if 1 <= numeric <= len(methods):
+            _audit_method_menu(module_id, methods[numeric - 1].method_id)
+        elif numeric == status_choice:
+            print("\n" + render_audit_status(module_id, project_root=PROJECT_ROOT))
+        elif numeric == latest_choice:
+            print("\n" + render_latest_audit_summary(module_id, project_root=PROJECT_ROOT))
+        else:
+            print(f"無效選項，請輸入 0～{latest_choice}。")
 
 
 def _show_research_status() -> int:
