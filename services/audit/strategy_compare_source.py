@@ -445,9 +445,50 @@ def load_strategy_arm_pipeline_sidecars(
     return loaded
 
 
+def load_strategy_arm_path_sidecars(
+    project_root: Path,
+    *,
+    source: StrategyCompareAuditSource,
+    arm_id: str,
+) -> dict[str, Any]:
+    """Load persisted post-replay path diagnostics for one DL-on arm.
+
+    The formal Audit is read-only: these files must already exist from the
+    canonical Strategy Compare producer.  Missing path diagnostics are a
+    BLOCKED dependency, never an invitation to backfill or replay here.
+    """
+
+    evidence = load_strategy_arm_pipeline_sidecars(
+        project_root, source=source, arm_id=arm_id
+    )
+    pair_dir = Path(evidence["pair_dir"])
+    required_names = {
+        "upside_realization": "score_ranking_upside_realization_trades.csv",
+        "active_trades": "score_ranking_trades.csv",
+        "selected_target": "score_ranking_selected_target_diagnostics.csv",
+    }
+    loaded: dict[str, Any] = dict(evidence)
+    for key, filename in required_names.items():
+        path = pair_dir / filename
+        if not path.is_file():
+            raise AuditSourceBlockedError(
+                f"{source.profile_id}/{arm_id} pair缺少既有path sidecar: {filename}; "
+                "Audit不得backfill或重跑策略補資料"
+            )
+        try:
+            loaded[key] = pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise AuditSourceBlockedError(
+                f"{source.profile_id}/{arm_id} 無法讀取{filename}: {exc}"
+            ) from exc
+        loaded[f"{key}_path"] = path
+    return loaded
+
+
 __all__ = [
     "AuditSourceBlockedError",
     "StrategyCompareAuditSource",
+    "load_strategy_arm_path_sidecars",
     "load_strategy_arm_pipeline_sidecars",
     "load_strategy_arm_replay_sidecars",
     "load_strategy_compare_source",

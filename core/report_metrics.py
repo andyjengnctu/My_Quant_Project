@@ -97,6 +97,24 @@ UPSIDE_SURVIVAL_BASE_METRICS = (
 )
 
 
+# C68/C69 matched marginal-position Audit.  Cohort counts and fill/coverage are
+# descriptive; MFE/Adverse/Realized EV reuse the same canonical labels and
+# directions as Strategy Compare Upside Survival.
+MARGINAL_POSITION_ATTRIBUTION_METRICS = (
+    ReportMetricSpec("planned_count", "Planned N", "", 0, "neutral"),
+    ReportMetricSpec("filled_count", "Filled N", "", 0, "neutral"),
+    ReportMetricSpec("fill_rate_pct", "Fill", "%", 2, "higher"),
+    ReportMetricSpec("truth_coverage_pct", "Truth coverage", "%", 2, "higher"),
+    ReportMetricSpec("high_mfe_total_pct", "High-MFE total", "%", 2, "higher"),
+    ReportMetricSpec("score_percentile_mean", "Score %ile", "", 3, "higher"),
+    ReportMetricSpec("path_target_coverage_pct", "Path coverage", "%", 2, "higher"),
+    *UPSIDE_SURVIVAL_BASE_METRICS,
+    upside_survival_initial_stop_metric(1.0),
+    upside_survival_initial_stop_metric(2.0),
+    upside_survival_initial_stop_metric(3.0),
+)
+
+
 R_ACTUAL_TRADE_METRICS = (
     RAnalysisMetricSpec(
         "portfolio_avg_r", "平均R", "實際完成交易 realized R 的平均值", "越高越好",
@@ -242,6 +260,21 @@ MFE_SAFETY_QUADRANT_DISTRIBUTION_METRICS = (
     ReportMetricSpec("low_mfe_low_safety_pct", "Low-MFE / Low-Safety", "%", 2, "lower"),
 )
 
+# Strategy Compare main-report surface.  This is deliberately compact: the full
+# Raw/Planned/K/R0 decomposition stays in formal Audits, while the main report
+# compares the actual filled selection geometry of every arm against the same
+# all-eligible truth population.
+MFE_SAFETY_COMPARE_RESULT_METRICS = (
+    ReportMetricSpec("raw_rows", "N", "", 0, "neutral"),
+    ReportMetricSpec("truth_coverage_pct", "Truth", "%", 2, "higher"),
+    ReportMetricSpec("high_mfe_high_safety_pct", "HM/HS", "%", 2, "higher"),
+    ReportMetricSpec("high_mfe_low_safety_pct", "HM/LS", "%", 2, "lower"),
+    ReportMetricSpec("low_mfe_high_safety_pct", "LM/HS", "%", 2, "neutral"),
+    ReportMetricSpec("low_mfe_low_safety_pct", "LM/LS", "%", 2, "lower"),
+    ReportMetricSpec("high_mfe_total_pct", "High-MFE", "%", 2, "higher"),
+    ReportMetricSpec("high_safety_total_pct", "High-Safety", "%", 2, "neutral"),
+)
+
 # Selection-pipeline attribution metrics.  These remain descriptive Audit
 # evidence: stage geometry is evaluated on the same matched Max-DL-eligible
 # trade dates, while resource metrics describe the persisted K/R0 contract.
@@ -289,6 +322,7 @@ __all__ = [
     "EXECUTION_STRATEGY_RESULT_METRICS",
     "upside_survival_initial_stop_metric",
     "UPSIDE_SURVIVAL_BASE_METRICS",
+    "MARGINAL_POSITION_ATTRIBUTION_METRICS",
     "PAIR_MAIN_METRICS",
     "R_ACTUAL_TRADE_METRICS",
     "R_MODEL_PREDICTION_METRICS",
@@ -301,6 +335,7 @@ __all__ = [
     "ROBUSTNESS_YEARLY_DELTA_METRICS",
     "ROBUSTNESS_YEARLY_DISTRIBUTION_METRICS",
     "MFE_SAFETY_QUADRANT_DISTRIBUTION_METRICS",
+    "MFE_SAFETY_COMPARE_RESULT_METRICS",
     "MFE_SAFETY_STAGE_ATTRIBUTION_METRICS",
     "RESOURCE_CONSTRAINT_ATTRIBUTION_METRICS",
 ]

@@ -13,8 +13,17 @@ from typing import Any
 
 import pandas as pd
 
-from config.breakout_quality import get_breakout_quality_experiment_profile
+from config.breakout_quality import (
+    BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
+    BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
+    get_breakout_quality_experiment_profile,
+)
 from config.strategy_compare import (
+    STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_ENABLED,
+    STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PERCENTILE_CUTOFF,
+    STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PERCENTILE_METHOD,
+    STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PROFILE,
+    STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PROFILE_IDS,
     STRATEGY_COMPARE_UPSIDE_REALIZATION_ADVERSE_BUCKET_EDGES_R,
     STRATEGY_COMPARE_UPSIDE_REALIZATION_PATH_PROFILE,
     STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS,
@@ -26,6 +35,7 @@ from core.report_metrics import (
     R_ANALYSIS_MERGED_METRICS,
     R_MODEL_PREDICTION_METRICS,
     R_SELECTION_TRANSLATION_METRICS,
+    MFE_SAFETY_COMPARE_RESULT_METRICS,
     UPSIDE_SURVIVAL_BASE_METRICS,
     upside_survival_initial_stop_metric,
     RAnalysisMetricSpec,
@@ -42,9 +52,18 @@ from core.price_utils import calc_position_size
 
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.continuous_target import (
+    DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
 )
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
+from filters.breakout_quality.mfe_safety_geometry import (
+    attach_quadrants as attach_mfe_safety_quadrants,
+    build_truth_geometry as build_mfe_safety_truth_geometry,
+    distribution_for_keys as mfe_safety_distribution_for_keys,
+    filter_period as filter_mfe_safety_period,
+    normalize_date as normalize_geometry_date,
+    normalize_ticker as normalize_geometry_ticker,
+)
 from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
@@ -1772,6 +1791,149 @@ def _r_analysis_rows(
     return rows
 
 
+
+def _mfe_safety_pair_dir(payload: dict[str, Any], *, project_root: Path) -> Path:
+    metadata = dict(payload.get("metadata") or {})
+    raw = str(metadata.get("output_dir") or "").strip()
+    if not raw:
+        raise ValueError("Strategy Compare pair metadata缺少output_dir，無法建立MFE/Safety主報表")
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path(project_root) / path
+    return path.resolve()
+
+
+def _filled_selection_geometry_keys(
+    *,
+    pair_dir: Path,
+    prefix: str,
+) -> pd.DataFrame:
+    orderable_path = Path(pair_dir) / f"{prefix}_orderable_candidates.csv"
+    selected_path = Path(pair_dir) / f"{prefix}_selected_buys.csv"
+    if not orderable_path.is_file() or not selected_path.is_file():
+        raise ValueError(
+            "Strategy Compare MFE/Safety主報表缺少既有selection sidecar: "
+            f"{orderable_path.name} / {selected_path.name}"
+        )
+    orderable = pd.read_csv(orderable_path, encoding="utf-8-sig", low_memory=False)
+    selected = pd.read_csv(selected_path, encoding="utf-8-sig", low_memory=False)
+    _orderable_events, selected_events = strategy_replay_score_event_frames(orderable, selected)
+    if selected_events is None or selected_events.empty:
+        return pd.DataFrame(columns=["ticker", "date"])
+    keys = pd.DataFrame({
+        "ticker": selected_events.get("ticker", pd.Series("", index=selected_events.index)).map(
+            normalize_geometry_ticker
+        ),
+        "date": selected_events.get(
+            "score_event_date", pd.Series("", index=selected_events.index)
+        ).map(normalize_geometry_date),
+    })
+    keys = keys.loc[keys["ticker"].ne("") & keys["date"].ne("")]
+    return keys.drop_duplicates(["ticker", "date"]).sort_values(
+        ["date", "ticker"], kind="stable"
+    ).reset_index(drop=True)
+
+
+def _build_mfe_safety_main_report_geometry(
+    *,
+    project_root: Path,
+    settings: StrategyComparisonSettings,
+    pair_payloads: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    if not STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_ENABLED:
+        return {"status": "DISABLED"}
+    root = Path(project_root).resolve()
+    if settings.profile_id not in set(STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PROFILE_IDS):
+        return {"status": "NOT_APPLICABLE", "profile_id": settings.profile_id}
+
+    arm_keys: dict[str, pd.DataFrame] = {}
+    periods: set[tuple[str, str]] = set()
+    enabled_arm_ids = {item.arm_id for item in settings.enabled_arms}
+
+    for pair in pair_payloads.values():
+        _param_source, _rule_policy, off_arm, on_arm = pair["arm_contract"]
+        payload = dict(pair["payload"])
+        metadata = dict(payload.get("metadata") or {})
+        period = dict(metadata.get("comparison_period") or {})
+        start = normalize_geometry_date(period.get("start"))
+        end = normalize_geometry_date(period.get("end"))
+        if not start or not end:
+            raise ValueError("Strategy Compare pair metadata缺少MFE/Safety comparison period")
+        periods.add((start, end))
+        pair_dir = _mfe_safety_pair_dir(payload, project_root=root)
+        for arm, prefix in ((off_arm, "no_filter"), (on_arm, "score_ranking")):
+            if arm is None or arm.arm_id not in enabled_arm_ids:
+                continue
+            keys = _filled_selection_geometry_keys(pair_dir=pair_dir, prefix=prefix)
+            existing = arm_keys.get(arm.arm_id)
+            if existing is None:
+                arm_keys[arm.arm_id] = keys
+            else:
+                left = set(map(tuple, existing[["ticker", "date"]].to_numpy()))
+                right = set(map(tuple, keys[["ticker", "date"]].to_numpy()))
+                if left != right:
+                    raise ValueError(
+                        f"Strategy Compare重複baseline arm的Filled selection不一致: {arm.arm_id}"
+                    )
+
+    if len(periods) != 1:
+        raise ValueError(
+            "Strategy Compare MFE/Safety geometry period不一致: " + repr(sorted(periods))
+        )
+    missing_arms = [arm.arm_id for arm in settings.enabled_arms if arm.arm_id not in arm_keys]
+    if missing_arms:
+        raise ValueError(f"Strategy Compare MFE/Safety geometry缺少arm Filled selection: {missing_arms}")
+
+    filter_id = BREAKOUT_QUALITY_WORKFLOW_FILTER_ID
+    architecture = BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE
+    start, end = next(iter(periods))
+    truth, source = build_mfe_safety_truth_geometry(
+        project_root=root,
+        filter_id=filter_id,
+        model_architecture=architecture,
+        provider_profile_id=STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PROFILE,
+        mfe_target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        safety_target_id=DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+        percentile_method=STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PERCENTILE_METHOD,
+    )
+    truth = attach_mfe_safety_quadrants(
+        filter_mfe_safety_period(truth, start, end),
+        cutoff=STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PERCENTILE_CUTOFF,
+    )
+    if truth.empty:
+        raise ValueError("Strategy Compare period內沒有MFE/Safety canonical truth")
+    return {
+        "schema_version": 1,
+        "status": "AVAILABLE",
+        "cohort": "filled_buys",
+        "comparison_period": {"start": start, "end": end},
+        "percentile_cutoff": float(STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PERCENTILE_CUTOFF),
+        "percentile_method": STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PERCENTILE_METHOD,
+        "truth_source": source,
+        "population": {
+            "arm_id": "POP",
+            "name": "All eligible truth",
+            **mfe_safety_distribution_for_keys(truth, None),
+        },
+        "arms": {
+            arm.arm_id: {
+                "arm_id": arm.arm_id,
+                "name": arm.name,
+                **mfe_safety_distribution_for_keys(
+                    truth, arm_keys[arm.arm_id], allow_empty=True
+                ),
+            }
+            for arm in settings.enabled_arms
+        },
+        "contract": {
+            "high_definition": "same-day percentile >= cutoff",
+            "safety_definition": "same-day percentile of canonical -target_adverse_r",
+            "cohort_definition": "canonical filled selected_buys resolved to model score_event_date",
+            "future_truth_used_for_runtime_sort": False,
+        },
+    }
+
+
 def build_strategy_diagnostics(
     *,
     project_root: Path,
@@ -1793,6 +1955,18 @@ def build_strategy_diagnostics(
         upside_realization_joint,
         upside_realization_unavailable,
     ) = _upside_realization_rows(settings=settings, pair_payloads=pair_payloads)
+    try:
+        mfe_safety_geometry = _build_mfe_safety_main_report_geometry(
+            project_root=root,
+            settings=settings,
+            pair_payloads=pair_payloads,
+        )
+    except (ValueError, OSError, UnicodeError) as exc:
+        mfe_safety_geometry = {
+            "status": "UNAVAILABLE",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "future_truth_used_for_runtime_sort": False,
+        }
     return {
         "diagnostics_schema_version": STRATEGY_DIAGNOSTICS_SCHEMA_VERSION,
         "diagnostics_contract_fingerprint": _upside_realization_contract_fingerprint(),
@@ -1810,6 +1984,7 @@ def build_strategy_diagnostics(
         "upside_realization_joint": upside_realization_joint,
         "upside_realization_unavailable": upside_realization_unavailable,
         "upside_realization_contract": _upside_realization_contract(),
+        "mfe_safety_geometry": mfe_safety_geometry,
         "contract": {
             "model_metrics_source": "validated existing PIT audit / continuous ranker report",
             "strategy_metrics_source": "canonical Strategy Compare pair payloads",
@@ -1869,6 +2044,59 @@ def _render_grouped_table(headers_top: list[str], headers_bottom: list[str], row
         )
     separator = "  ".join("-" * width for width in widths)
     return "\n".join([join_line(headers_top, centers=set(range(column_count))), join_line(headers_bottom, centers=set(range(1, column_count))), separator, *[join_line(row) for row in rows]])
+
+
+def render_mfe_safety_geometry_table(diagnostics: dict[str, Any], *, target: str = "plain") -> str:
+    """Render filled-buy MFE×Safety geometry for the Strategy Compare main report."""
+
+    geometry = dict(diagnostics.get("mfe_safety_geometry") or {})
+    status = str(geometry.get("status") or "UNAVAILABLE")
+    if status == "NOT_APPLICABLE":
+        return "此 evaluation profile 不顯示 MFE×Safety 四象限。"
+    if status != "AVAILABLE":
+        reason = str(geometry.get("reason") or "canonical truth/selection sidecar unavailable")
+        return "MFE×Safety 四象限暫不可用：" + reason
+    rows = [dict(geometry.get("population") or {})]
+    arms = dict(geometry.get("arms") or {})
+    rows.extend(dict(value) for value in arms.values())
+    if not rows:
+        return "沒有可用的 MFE×Safety 四象限資料。"
+
+    metrics = MFE_SAFETY_COMPARE_RESULT_METRICS
+    top_headers = ["", ""] + ["Filled buys truth geometry" if i == 0 else "" for i, _ in enumerate(metrics)]
+    bottom_headers = ["編號", "比較對象"] + [metric.label for metric in metrics]
+    signals_by_metric: dict[str, dict[str, str]] = {}
+    strategy_rows = [row for row in rows if str(row.get("arm_id")) != "POP"]
+    for metric in metrics:
+        if metric.preference == "neutral":
+            signals_by_metric[metric.key] = {}
+        else:
+            signals_by_metric[metric.key] = best_worst_signals(
+                {str(row.get("arm_id") or "-"): row.get(metric.key) for row in strategy_rows},
+                preference=metric.preference,
+            )
+    body: list[list[str]] = []
+    for row in rows:
+        arm_id = str(row.get("arm_id") or "-")
+        values = [arm_id, str(row.get("name") or "-")]
+        for metric in metrics:
+            value = row.get(metric.key)
+            if metric.digits == 0 and metric.unit == "":
+                numeric = finite_number(value)
+                text = "-" if numeric is None else str(int(round(numeric)))
+            else:
+                text = _fmt(value, digits=metric.digits, unit=metric.unit)
+            signal = signals_by_metric.get(metric.key, {}).get(arm_id)
+            values.append(_value_with_signal(text, signal, target=target))
+        body.append(values)
+    table = _render_grouped_table(top_headers, bottom_headers, body)
+    cutoff = finite_number(geometry.get("percentile_cutoff"))
+    cutoff_text = "-" if cutoff is None else f"{cutoff:.2f}"
+    note = (
+        f"Cohort=實際 Filled buys；High 定義為 same-day percentile >= {cutoff_text}；"
+        "Safety=canonical Low-Adverse (-target_adverse_r) percentile。"
+    )
+    return table + "\n" + note
 
 
 def render_strategy_r_analysis_table(diagnostics: dict[str, Any], *, target: str = "plain") -> str:
@@ -2373,6 +2601,9 @@ def render_strategy_diagnostics_markdown(diagnostics: dict[str, Any]) -> str:
 
     sections = [
         "# Strategy Compare 間接指標\n",
+        "## MFE × Safety 四象限（Filled buys）",
+        render_mfe_safety_geometry_table(diagnostics, target="markdown").rstrip(),
+        "",
         render_strategy_r_analysis_table(diagnostics, target="markdown").rstrip(),
         "",
         render_upside_realization_markdown(diagnostics).rstrip(),

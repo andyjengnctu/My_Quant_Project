@@ -10098,3 +10098,20 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - C68/C69以專用matched policy共用score-priority membership proposal，但所有proposal都回到canonical baseline execution order做cash/R0/sizing feasibility；該proposal不掛到歷史feasible-ascent policy；之後使用相同deterministic best-improvement local ascent。C68只允許same-count swap；C69額外允許single-add，count lexicographically優先，再做同count score improvement。兩者都明確`optimality_certified=False`，不得宣稱global optimum。
 - Targeted fixture驗證高資金單一baseline basket可被C69用多個較小高分部位取代並維持同一R0，而C68仍固定K；Strategy Compare current suite改為`C61/C62/C58/C63/C59/C68/C69/C60/C64/C65/C66`，schema=57。C68/C69只授權single-seed OOS/Rolling，robustness/fixed-window仍deferred。
 - Decision：**C67_COMPUTE_BLOCKED / C68_C69_IMPLEMENTED_RESULT_PENDING / MATCHED_SOLVER_CONTROL_PLUS_K_TREATMENT / NO_NEW_MODEL / R0_PRESERVED / SINGLE_SEED_FIRST**。
+
+### 2026-08-25 — SR-C68/C69 single-seed OOS + Rolling 結果；K-Flex增加capacity但conversion惡化
+
+- OOS：C68 Return/MDD/RoMD/EV=`164.04%/14.60%/11.23/0.81R`；C69=`142.80%/17.38%/8.22/0.71R`。C68→C69 Full-MFE=`1.00→1.14R`、Adverse=`0.25→0.32R`、交易數=`326→349`、position-gap slot-days=`2403→1644`。
+- Rolling：C68 Return/MDD/RoMD/EV=`178.98%/16.92%/10.58/0.98R`；C69=`74.35%/22.99%/3.23/0.49R`。Full-MFE=`1.04→1.09R`、Adverse=`0.24→0.31R`、交易數=`307→368`、position-gap=`2686→1329`。
+- Interpretation：K-Flex確實解除部分C58-derived count restriction並增加實際position utilization，故不是「沒有真正增加投資」；但新增capacity沒有轉成更好經濟結果，特別Rolling大幅惡化。Portfolio average顯示upside略升、adverse同步升，但不能只由aggregate推定marginal positions本身的truth/path品質。
+- Decision：**C68_SOLVER_CONTROL_COMPLETE / C69_PERFORMANCE_NOT_SUPPORTED / NO_ROBUSTNESS / NEXT=AUD-c69-marginal-position-attribution / KEEP_AUD-selection-k-r0-attribution_ACTIVE**。不訓練新模型、不移植K-Flex到C65/C66。
+
+### 2026-08-25 — AUD-c69-marginal-position-attribution + Strategy Compare MFE×Safety主報表實作
+
+- 新Audit identity=`AUD-c69-marginal-position-attribution`，與既有`AUD-selection-k-r0-attribution`並列`Selection／Truth Geometry`；使用者明確要求在R0/K影響真正解決前舊K/R0 Audit保留可正式重跑，故不依one-shot lifecycle提前刪除。
+- 新Audit只讀C68/C69 completed OOS/Rolling `orderable / selector_trace / execution / daily_capacity / upside_realization` sidecars。輸出三層證據：C68/C69 Planned/Filled四象限、C69 `1..K / K+1 / K+2 / K+3+` ordinal cohorts、以及候選集合/K/free slots/R0/盤前持股完全一致之strict matched-state `common / C68-only / C69-only`。
+- Cohort metrics包含planned/filled/fill、score percentile、MFE×Safety四象限/High-MFE、Full-MFE、Adverse、Realized R、+1/+2/+3R前initial stop；Future truth只作post-replay attribution，不進runtime。
+- MFE×Safety truth geometry提升為`filters/breakout_quality/mfe_safety_geometry.py` canonical diagnostic owner，Audit adapter與Strategy Compare共用同一percentile/quadrant contract，避免兩套公式。
+- Strategy Compare current Extending OOS/Rolling主報表新增`MFE × Safety 四象限（Filled buys）`，列All-eligible truth母體與所有arms HM/HS、HM/LS、LM/HS、LM/LS、High-MFE、High-Safety；Raw/Planned/K/R0詳細拆解仍留在Audit，不把selection/execution stage混成主表。
+- Decision：**IMPLEMENTED / RESULT_PENDING / READ_ONLY / OLD_K_R0_AUDIT_RETAINED / MAIN_REPORT_GEOMETRY_AVAILABLE / NO_SCIENTIFIC_REPLAY_IDENTITY_CHANGE**。
+

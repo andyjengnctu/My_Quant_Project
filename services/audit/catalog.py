@@ -124,6 +124,28 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         read_only=True,
         cli_command="audit-point-in-time-scores",
     ),
+    "selection_resource_constraint_attribution": AuditCatalogEntry(
+        audit_type="selection_resource_constraint_attribution",
+        domain="breakout_quality",
+        module="services.audit.selection_resource_constraints",
+        mode="formal",
+        description="只讀C58-derived K/R0 resource conversion與MFE/Safety stage attribution",
+        read_only=True,
+        method_id="selection_truth_geometry",
+        status_function="collect_status",
+        run_function="run_formal_audit",
+    ),
+    "c69_marginal_position_attribution": AuditCatalogEntry(
+        audit_type="c69_marginal_position_attribution",
+        domain="breakout_quality",
+        module="services.audit.c69_marginal_positions",
+        mode="formal",
+        description="只讀C68/C69 matched marginal positions、truth geometry與path conversion attribution",
+        read_only=True,
+        method_id="selection_truth_geometry",
+        status_function="collect_status",
+        run_function="run_formal_audit",
+    ),
 }
 
 

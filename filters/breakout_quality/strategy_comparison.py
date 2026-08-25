@@ -79,6 +79,7 @@ from filters.breakout_quality.strategy_compare_diagnostics import (
     build_strategy_diagnostics,
     pair_upside_realization_refresh_required,
     render_strategy_diagnostics_markdown,
+    render_mfe_safety_geometry_table,
     render_strategy_r_analysis_table,
     render_upside_survival_summary_table,
 )
@@ -999,15 +1000,17 @@ def render_strategy_aggregate_report(
         render_strategy_core_result_table(
             scenarios, settings=settings, target=target
         ),
-        render_section("2. R 預測／轉化"),
+        render_section("2. MFE × Safety 四象限（Filled buys）"),
+        render_mfe_safety_geometry_table(diagnostics, target=target),
+        render_section("3. R 預測／轉化"),
         render_strategy_r_analysis_table(diagnostics, target=target),
-        render_section("3. Upside Survival / First-Passage"),
+        render_section("4. Upside Survival / First-Passage"),
         render_upside_survival_summary_table(diagnostics, target=target),
-        render_section("4. 資金／執行"),
+        render_section("5. 資金／執行"),
         render_strategy_execution_table(
             scenarios, settings=settings, target=target
         ),
-        render_section("5. 年度結果"),
+        render_section("6. 年度結果"),
         render_strategy_yearly_values_table(
             yearly_by_id, settings=settings, target=target
         ),
@@ -1015,7 +1018,7 @@ def render_strategy_aggregate_report(
     if execution_summary is not None:
         sections.extend(
             (
-                render_section("6. 執行摘要"),
+                render_section("7. 執行摘要"),
                 render_strategy_run_execution_table(
                     execution_summary, settings=settings, target=target
                 ),

@@ -120,6 +120,16 @@ STRATEGY_COMPARE_UPSIDE_REALIZATION_PATH_PROFILE = (
     DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
 )
 
+# Read-only main-report MFE × Safety geometry.  This is post-replay diagnostic
+# truth only and must not participate in replay/cache scientific identity.
+STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_ENABLED = True
+STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PROFILE_IDS = ("extending_window_oos", "extending_window_rolling")
+STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PROFILE = (
+    DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+)
+STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PERCENTILE_CUTOFF = 0.50
+STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PERCENTILE_METHOD = "average_zero_based"
+
 # Runtime promotion只讀取已存在的正式Strategy Compare / robustness工件；
 # Gate本身不訓練模型、不重跑策略，也不自動切換runtime default。
 STRATEGY_RUNTIME_INTEGRATION = {

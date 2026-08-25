@@ -1,5 +1,7 @@
 ## Going
 
+C69證明不好的股票放更滿(>K)也不會更好，而且之前把R0拿掉結果不好可能是因為限制 = K造成資金投入過小。因此，如果將R0拿掉，K的限制也拿掉，讓selector由大到小去選最符合high mfe under high safety的股票，是否值得嘗試? 就算總報酬不好，至少作為高品質優先選股的baseline. 
+
 - bug fix
     - remove |buy list|= k constrain 
     - reuse inconsist in oos/rolling

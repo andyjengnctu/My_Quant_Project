@@ -220,5 +220,245 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             ),
         )
 
+
+    from services.audit.c69_marginal_positions import (
+        build_ordinal_cohorts,
+        build_planned_membership,
+        strict_matched_trade_dates,
+    )
+    from services.audit.selection_resource_constraints import summarize_resource_contract
+    from filters.breakout_quality.strategy_compare_diagnostics import (
+        render_mfe_safety_geometry_table,
+    )
+
+    retained_capacity = pd.DataFrame({
+        "Date": ["2025-01-02", "2025-01-03"],
+        "Pre_Market_Positions": [7, 8],
+        "Pre_Market_Free_Slots": [3, 2],
+        "Orderable_Candidates": [4, 2],
+        "Resource_Aware_Max_DL_Eligible": [True, True],
+        "Resource_Aware_Pre_Market_Order_Limit": [1, 2],
+        "Resource_Aware_Baseline_Reserved_Milli": [100000, 150000],
+        "Resource_Aware_Selected": [1, 2],
+        "Resource_Aware_Reserved_Milli": [100000, 160000],
+        "Resource_Aware_Direct_Score_Order_Feasible": [False, True],
+    })
+    retained_summary = summarize_resource_contract(retained_capacity)
+    check_true(
+        "retained_k_r0_audit_resource_contract_survives_shared_truth_refactor",
+        bool(
+            retained_summary["eligible_days"] == 2
+            and retained_summary["direct_infeasible_days"] == 1
+            and retained_summary["k_headroom_days"] == 1
+            and retained_summary["median_k"] == 1.5
+            and retained_summary["r0_exact_binding_days"] == 1
+        ),
+    )
+
+    # C68/C69 marginal-position attribution primitives: same candidate state/R0,
+    # fixed-K control versus K-Flex treatment with K-relative ordinal cohorts.
+    trace_columns = {
+        "stage": ["feasible_ascent_final"],
+        "stage_rank": [1],
+        "ticker": ["A"],
+        "trade_date": ["2025-01-02"],
+        "signal_date": ["2025-01-01"],
+        "breakout_quality_score_date": ["2025-01-01"],
+        "breakout_quality_score": [0.80],
+        "breakout_quality_daily_score_percentile": [0.80],
+    }
+    c68_trace = pd.DataFrame(trace_columns)
+    c69_trace = pd.DataFrame({
+        "stage": ["feasible_ascent_final"] * 3,
+        "stage_rank": [1, 2, 3],
+        "ticker": ["A", "B", "C"],
+        "trade_date": ["2025-01-02"] * 3,
+        "signal_date": ["2025-01-01"] * 3,
+        "breakout_quality_score_date": ["2025-01-01"] * 3,
+        "breakout_quality_score": [0.80, 0.95, 0.90],
+        "breakout_quality_daily_score_percentile": [0.80, 0.95, 0.90],
+    })
+    def capacity(selected, extra):
+        return pd.DataFrame({
+            "Date": ["2025-01-02"],
+            "Pre_Market_Positions": [7],
+            "Pre_Market_Free_Slots": [3],
+            "Orderable_Candidates": [3],
+            "Resource_Aware_Max_DL_Eligible": [True],
+            "Resource_Aware_Baseline_K": [1],
+            "Resource_Aware_Physical_Free_Slots": [3],
+            "Resource_Aware_Baseline_Reserved_Milli": [100000],
+            "Resource_Aware_Selected": [selected],
+            "Resource_Aware_K_Flex_Extra_Positions": [extra],
+        })
+    def execution(tickers):
+        return pd.DataFrame({
+            "execution_order": list(range(1, len(tickers) + 1)),
+            "ticker": tickers,
+            "trade_date": ["2025-01-02"] * len(tickers),
+            "signal_date": ["2025-01-01"] * len(tickers),
+            "chosen_qty": [1] * len(tickers),
+            "entry_filled": [True] * len(tickers),
+        })
+    c68_planned = build_planned_membership(
+        selector_trace=c68_trace, execution=execution(["A"]), daily_capacity=capacity(1, 0)
+    )
+    c69_planned = build_planned_membership(
+        selector_trace=c69_trace, execution=execution(["A", "B", "C"]), daily_capacity=capacity(3, 2)
+    )
+    orderable = pd.DataFrame({
+        "ticker": ["A", "B", "C"],
+        "trade_date": ["2025-01-02"] * 3,
+        "signal_date": ["2025-01-01"] * 3,
+        "breakout_quality_score_date": ["2025-01-01"] * 3,
+    })
+    matched = strict_matched_trade_dates(
+        c68_orderable=orderable, c69_orderable=orderable,
+        c68_capacity=capacity(1, 0), c69_capacity=capacity(3, 2),
+    )
+    truth = pd.DataFrame({
+        "ticker": ["A", "B", "C"],
+        "date": ["2025-01-01"] * 3,
+        "mfe_percentile": [0.20, 0.90, 0.80],
+        "safety_percentile": [0.90, 0.20, 0.80],
+        "quadrant": [
+            "low_mfe_high_safety_pct",
+            "high_mfe_low_safety_pct",
+            "high_mfe_high_safety_pct",
+        ],
+    })
+    path = pd.DataFrame({
+        "event_key": ["A|2025-01-02|2025-01-01", "B|2025-01-02|2025-01-01", "C|2025-01-02|2025-01-01"],
+        "ticker": ["A", "B", "C"],
+        "path_target_available_bool": [True, True, True],
+        "full_horizon_mfe_r": [0.4, 1.8, 1.5],
+        "full_horizon_adverse_to_peak_r": [0.1, 0.5, 0.2],
+        "realized_r": [0.3, -0.4, 0.8],
+        "actual_initial_stop_out_bool": [False, True, False],
+        "exit_date": ["2025-01-06", "2025-01-03", "2025-01-10"],
+        "full_horizon_first_upside_1r_date": [None, "2025-01-04", "2025-01-04"],
+        "full_horizon_first_upside_1r_bar": [None, 3, 3],
+        "full_horizon_first_upside_2r_date": [None, None, None],
+        "full_horizon_first_upside_2r_bar": [None, None, None],
+        "full_horizon_first_upside_3r_date": [None, None, None],
+        "full_horizon_first_upside_3r_bar": [None, None, None],
+    })
+    ordinal = build_ordinal_cohorts(
+        c69_planned, truth=truth, path=path, thresholds=(1.0, 2.0, 3.0)
+    )
+    check_true(
+        "c69_marginal_audit_builds_k_relative_extra_cohorts_on_strict_matched_state",
+        bool(
+            matched["strict_matched_days"] == 1
+            and ordinal["baseline_1_to_k"]["planned_count"] == 1
+            and ordinal["k_plus_1"]["planned_count"] == 1
+            and ordinal["k_plus_2"]["planned_count"] == 1
+            and ordinal["all_extra"]["planned_count"] == 2
+            and ordinal["all_extra"]["high_mfe_total_pct"] == 100.0
+            and ordinal["all_extra"]["filled_count"] == 2
+        ),
+    )
+
+    from types import SimpleNamespace
+    import filters.breakout_quality.strategy_compare_diagnostics as strategy_diag
+    with TemporaryDirectory() as geometry_temp_text:
+        geometry_root = Path(geometry_temp_text)
+        pair_dir = geometry_root / "outputs" / "strategy_compare" / "pair"
+        pair_dir.mkdir(parents=True)
+        sidecar_orderable = pd.DataFrame({
+            "ticker": ["A", "B", "C"],
+            "signal_date": ["2025-01-01"] * 3,
+            "trade_date": ["2025-01-02"] * 3,
+            "breakout_quality_score_date": ["2025-01-01"] * 3,
+        })
+        sidecar_selected_c68 = sidecar_orderable.iloc[[0]].copy()
+        sidecar_selected_c69 = sidecar_orderable.copy()
+        sidecar_orderable.to_csv(pair_dir / "no_filter_orderable_candidates.csv", index=False, encoding="utf-8-sig")
+        sidecar_selected_c68.to_csv(pair_dir / "no_filter_selected_buys.csv", index=False, encoding="utf-8-sig")
+        sidecar_orderable.to_csv(pair_dir / "score_ranking_orderable_candidates.csv", index=False, encoding="utf-8-sig")
+        sidecar_selected_c69.to_csv(pair_dir / "score_ranking_selected_buys.csv", index=False, encoding="utf-8-sig")
+        c68_arm = SimpleNamespace(arm_id="C68", name="Control")
+        c69_arm = SimpleNamespace(arm_id="C69", name="Treatment")
+        geometry_settings = SimpleNamespace(
+            profile_id="extending_window_oos", enabled_arms=(c68_arm, c69_arm)
+        )
+        pair_payloads = {
+            "pair": {
+                "arm_contract": ("min_oos", "all_off", c68_arm, c69_arm),
+                "payload": {
+                    "metadata": {
+                        "output_dir": str(pair_dir.relative_to(geometry_root)),
+                        "comparison_period": {"start": "2025-01-01", "end": "2025-01-31"},
+                    }
+                },
+            }
+        }
+        canonical_truth = pd.DataFrame({
+            "ticker": ["A", "B", "C"],
+            "date": ["2025-01-01"] * 3,
+            "mfe_percentile": [0.20, 0.90, 0.80],
+            "safety_percentile": [0.90, 0.20, 0.80],
+        })
+        with patch.object(
+            strategy_diag,
+            "build_mfe_safety_truth_geometry",
+            return_value=(canonical_truth, {"provider": "synthetic"}),
+        ):
+            geometry_payload = strategy_diag._build_mfe_safety_main_report_geometry(
+                project_root=geometry_root,
+                settings=geometry_settings,
+                pair_payloads=pair_payloads,
+            )
+        check_true(
+            "strategy_compare_main_geometry_uses_filled_buys_and_all_eligible_canonical_truth",
+            bool(
+                geometry_payload["status"] == "AVAILABLE"
+                and geometry_payload["cohort"] == "filled_buys"
+                and geometry_payload["population"]["raw_rows"] == 3
+                and geometry_payload["arms"]["C68"]["raw_rows"] == 1
+                and geometry_payload["arms"]["C69"]["raw_rows"] == 3
+                and geometry_payload["arms"]["C69"]["high_mfe_total_pct"] > geometry_payload["arms"]["C68"]["high_mfe_total_pct"]
+            ),
+        )
+
+    geometry_text = render_mfe_safety_geometry_table({
+        "mfe_safety_geometry": {
+            "status": "AVAILABLE",
+            "percentile_cutoff": 0.50,
+            "population": {
+                "arm_id": "POP", "name": "All eligible truth", "raw_rows": 3,
+                "truth_coverage_pct": 100.0, "high_mfe_high_safety_pct": 33.33,
+                "high_mfe_low_safety_pct": 33.33, "low_mfe_high_safety_pct": 33.34,
+                "low_mfe_low_safety_pct": 0.0, "high_mfe_total_pct": 66.66,
+                "high_safety_total_pct": 66.67,
+            },
+            "arms": {
+                "C68": {
+                    "arm_id": "C68", "name": "Control", "raw_rows": 1,
+                    "truth_coverage_pct": 100.0, "high_mfe_high_safety_pct": 0.0,
+                    "high_mfe_low_safety_pct": 0.0, "low_mfe_high_safety_pct": 100.0,
+                    "low_mfe_low_safety_pct": 0.0, "high_mfe_total_pct": 0.0,
+                    "high_safety_total_pct": 100.0,
+                },
+                "C69": {
+                    "arm_id": "C69", "name": "Treatment", "raw_rows": 3,
+                    "truth_coverage_pct": 100.0, "high_mfe_high_safety_pct": 33.33,
+                    "high_mfe_low_safety_pct": 33.33, "low_mfe_high_safety_pct": 33.34,
+                    "low_mfe_low_safety_pct": 0.0, "high_mfe_total_pct": 66.66,
+                    "high_safety_total_pct": 66.67,
+                },
+            },
+        }
+    })
+    check_true(
+        "strategy_compare_main_report_geometry_renderer_contains_population_and_arm_quadrants",
+        "All eligible truth" in geometry_text
+        and "C68" in geometry_text
+        and "C69" in geometry_text
+        and "HM/HS" in geometry_text
+        and "High-MFE" in geometry_text
+        and "Filled buys" in geometry_text,
+    )
+
     summary["workflow"] = "config_driven_formal_audit_topology"
     return results, summary

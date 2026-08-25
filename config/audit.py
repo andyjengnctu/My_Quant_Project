@@ -1,27 +1,95 @@
 """Project-wide Audit policy.
 
-Only currently decision-relevant formal Audits belong in this config. Completed
-or rejected research Audits must be removed from the runtime catalog/config and
-kept as results in the experiment registry/log instead of remaining disabled
-forever.
+Only currently decision-relevant formal Audits belong in this config. A prior
+result may remain active when its evidence is still required by an unresolved
+decision question (for example K/R0 attribution); only genuinely closed or
+superseded research Audits should be retired from runtime config/catalog.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from config.breakout_quality import (
+    BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
+    BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
+    DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+)
+from filters.breakout_quality.continuous_target import (
+    DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+)
 from pathlib import Path
 from typing import Any, Mapping
 
-AUDIT_SCHEMA_VERSION = 11
+AUDIT_SCHEMA_VERSION = 12
 AUDIT_OUTPUT_ROOT = "outputs/audit"
 AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
 
 AUDIT_MODULES: dict[str, dict[str, Any]] = {
     "breakout_quality": {
         "enabled": True,
-        # Current one-shot Selection/Truth Geometry question is complete.  Keep the
-        # stable work-type shell but no disabled experiment-specific definitions.
-        "audits": {},
+        "audits": {
+            # Retained while the K/R0 mechanism remains an active research question.
+            "AUD-selection-k-r0-attribution": {
+                "enabled": True,
+                "audit_type": "selection_resource_constraint_attribution",
+                "description": (
+                    "保留C58-derived K/R0 resource conversion evidence；拆解C59/C65/C66 "
+                    "Orderable→Raw Top-K→Planned→Filled與K headroom/R0 binding。"
+                ),
+                "source": {
+                    "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
+                    "model_architecture": BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
+                    "truth_provider_profile_id": DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                    "mfe_target_id": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                    "safety_target_id": DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+                    "evaluation_profile_ids": ("extending_window_oos", "extending_window_rolling"),
+                    "strategy_arm_ids": ("C59", "C65", "C66"),
+                    "baseline_arm_id": "C58",
+                },
+                "dimensions": {
+                    "same_day_percentile_cutoff": 0.50,
+                    "percentile_method": "average_zero_based",
+                },
+                "outcomes": {
+                    "decision_question": "C58-derived K/R0/cash contract在何處改寫Raw DL selection？",
+                    "critical_uncertainty": "K、R0與canonical cash feasibility對Raw→Planned MFE/Safety geometry的共同影響。",
+                    "stopping_condition": "K/R0 treatment已取得足以GO/REJECT/NEXT EXPERIMENT的跨OOS/Rolling evidence後才退役此Audit。",
+                },
+                "output_subdir": "breakout_quality/selection_k_r0_attribution",
+            },
+            "AUD-c69-marginal-position-attribution": {
+                "enabled": True,
+                "audit_type": "c69_marginal_position_attribution",
+                "description": (
+                    "C68/C69 matched marginal-position attribution：直接檢查K-Flex多出的K+1/K+2/K+3+ "
+                    "positions是否帶回High-MFE、同時惡化Safety/path conversion。"
+                ),
+                "source": {
+                    "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
+                    "model_architecture": BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
+                    "truth_provider_profile_id": DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                    "mfe_target_id": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                    "safety_target_id": DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+                    "evaluation_profile_ids": ("extending_window_oos", "extending_window_rolling"),
+                    "control_arm_id": "C68",
+                    "treatment_arm_id": "C69",
+                },
+                "dimensions": {
+                    "same_day_percentile_cutoff": 0.50,
+                    "percentile_method": "average_zero_based",
+                    "final_selector_stage": "feasible_ascent_final",
+                    "first_passage_thresholds_r": (1.0, 2.0, 3.0),
+                },
+                "outcomes": {
+                    "decision_question": "C69 extra positions是高MFE但低Safety/path conversion，還是單純較弱score tail？",
+                    "critical_uncertainty": "C69相對matched C68新增positions的MFE/Safety、Adverse、Realized R與first-passage品質。",
+                    "stopping_condition": "能決定unrestricted K-Flex REJECT，或有足夠證據轉向absolute MFE×Safety formulation後停止。",
+                },
+                "output_subdir": "breakout_quality/c69_marginal_position_attribution",
+            },
+        },
     },
 }
 
