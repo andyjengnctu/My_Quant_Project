@@ -209,6 +209,19 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and set(reusable_planned["stage"]) == {"planned_execution"},
     )
 
+    opportunity_source = (
+        Path(__file__).resolve().parents[2]
+        / "services"
+        / "audit"
+        / "opportunity_selection.py"
+    ).read_text(encoding="utf-8")
+    check_true(
+        "reusable_opportunity_preflight_uses_selector_agnostic_planned_sidecars",
+        "load_strategy_arm_planned_sidecars(project_root, source=source, arm_id=str(arm_id))"
+        in opportunity_source
+        and "load_strategy_arm_pipeline_sidecars" not in opportunity_source,
+    )
+
     from config.strategy_compare import get_strategy_comparison_settings
     from filters.breakout_quality.strategy_compare_contracts import (
         COMPARISON_MODE_SCORE_RANKING,

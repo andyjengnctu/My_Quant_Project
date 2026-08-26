@@ -342,7 +342,7 @@ def preflight(definition, *, project_root: Path) -> dict[str, Any]:
                 pinned_config_fingerprint=str(dict(definition.source.get("strategy_result_fingerprints") or {}).get(str(profile_id)) or "") or None,
             )
             for arm_id in (definition.source["control_arm_id"], definition.source["treatment_arm_id"]):
-                load_strategy_arm_pipeline_sidecars(project_root, source=source, arm_id=str(arm_id))
+                load_strategy_arm_planned_sidecars(project_root, source=source, arm_id=str(arm_id))
         return {"status": "READY", "reason": "", "source": {"display": "canonical Strategy Compare + daily truth"}}
     except (AuditSourceBlockedError, FileNotFoundError, ValueError, OSError) as exc:
         return {"status": "BLOCKED", "reason": str(exc), "source": {"display": "canonical Strategy Compare + daily truth"}}
