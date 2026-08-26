@@ -59,8 +59,11 @@ from core.strategy_comparison import validate_strategy_compare_gpu_train_workers
 from core.training_scheduler import pop_next_seed_diverse_unit
 from core.report_style import (
     SIGNAL_NEGATIVE,
+    SIGNAL_NEUTRAL,
     SIGNAL_POSITIVE,
     SIGNAL_WARNING,
+    markdown_tone,
+    signal_for_delta,
     styled_signal,
     styled_workflow_status,
 )
@@ -427,10 +430,44 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
     if not metrics:
         return ""
 
+    color = console_color_enabled()
+
+    def section(title: str) -> str:
+        return render_section(paint(title, "cyan", enabled=color, bold=True))
+
+    def scope_text(value: str) -> str:
+        key = str(value)
+        tone = "gray" if key.lower() == "validation" else "cyan"
+        return paint(key, tone, enabled=color, bold=key.lower() != "validation")
+
+    def delta_cell(left, right, *, percent: bool = False) -> str:
+        if left is None or right is None:
+            return styled_signal("-", SIGNAL_NEUTRAL, target="console", enabled=color)
+        value = float(right) - float(left)
+        text = f"{value * 100:+.2f}pp" if percent else f"{value:+.4f}"
+        return styled_signal(
+            text,
+            signal_for_delta(value, preference="higher"),
+            target="console",
+            enabled=color,
+            bold=True,
+        )
+
+    def evidence_status(status: str) -> str:
+        normalized = str(status).strip().upper()
+        signal = {
+            "AVAILABLE": SIGNAL_POSITIVE,
+            "READY": SIGNAL_POSITIVE,
+            "PARTIAL": SIGNAL_WARNING,
+            "BLOCKED": SIGNAL_NEGATIVE,
+            "MISSING": SIGNAL_NEGATIVE,
+        }.get(normalized, SIGNAL_NEUTRAL)
+        return styled_signal(status, signal, target="console", enabled=color, bold=True)
+
     def split_row(name: str) -> tuple[str, ...]:
         row = dict(metrics.get(name) or {})
         return (
-            name,
+            scope_text(name),
             f"{int(row.get('group_count', 0) or 0):,}",
             _fmt_simple_metric(row.get("mean_daily_spearman")),
             _fmt_simple_metric(row.get("global_spearman_vs_raw_target")),
@@ -439,12 +476,6 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             _fmt_simple_metric(row.get("bottom_score_decile_raw_target_mean")),
         )
 
-    def delta_text(left, right, *, percent: bool = False) -> str:
-        if left is None or right is None:
-            return "-"
-        value = float(right) - float(left)
-        return f"{value * 100:+.2f}pp" if percent else f"{value:+.4f}"
-
     daily_universal = bool(metrics.get("breakout_candidate_oos"))
     split_names = (
         ["validation", "oos", "breakout_candidate_oos"]
@@ -452,7 +483,7 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
         else ["validation", "selection", "oos"]
     )
     lines = [
-        render_section("標準模型 SOP｜1. Learnability"),
+        section("標準模型 SOP｜1. Learnability"),
         render_table(
             ("Split", "Groups", "Daily rho", "Global rho", "Pair", "Top 10% Target", "Bottom 10% Target"),
             [split_row(name) for name in split_names],
@@ -465,9 +496,9 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
         oos = dict(metrics.get("oos") or {})
         generalization_rows = [(
             "Primary score",
-            delta_text(val.get("mean_daily_spearman"), oos.get("mean_daily_spearman")),
-            delta_text(val.get("pairwise_concordance"), oos.get("pairwise_concordance"), percent=True),
-            delta_text(
+            delta_cell(val.get("mean_daily_spearman"), oos.get("mean_daily_spearman")),
+            delta_cell(val.get("pairwise_concordance"), oos.get("pairwise_concordance"), percent=True),
+            delta_cell(
                 None if val.get("top_score_decile_raw_target_mean") is None or val.get("bottom_score_decile_raw_target_mean") is None else float(val["top_score_decile_raw_target_mean"]) - float(val["bottom_score_decile_raw_target_mean"]),
                 None if oos.get("top_score_decile_raw_target_mean") is None or oos.get("bottom_score_decile_raw_target_mean") is None else float(oos["top_score_decile_raw_target_mean"]) - float(oos["bottom_score_decile_raw_target_mean"]),
             ),
@@ -476,15 +507,15 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             breakout = dict(metrics.get("breakout_candidate_oos") or {})
             generalization_rows.append((
                 "OOS → Breakout slice",
-                delta_text(oos.get("mean_daily_spearman"), breakout.get("mean_daily_spearman")),
-                delta_text(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance"), percent=True),
-                delta_text(
+                delta_cell(oos.get("mean_daily_spearman"), breakout.get("mean_daily_spearman")),
+                delta_cell(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance"), percent=True),
+                delta_cell(
                     None if oos.get("top_score_decile_raw_target_mean") is None or oos.get("bottom_score_decile_raw_target_mean") is None else float(oos["top_score_decile_raw_target_mean"]) - float(oos["bottom_score_decile_raw_target_mean"]),
                     None if breakout.get("top_score_decile_raw_target_mean") is None or breakout.get("bottom_score_decile_raw_target_mean") is None else float(breakout["top_score_decile_raw_target_mean"]) - float(breakout["bottom_score_decile_raw_target_mean"]),
                 ),
             ))
         lines.extend([
-            render_section("標準模型 SOP｜2. Generalization"),
+            section("標準模型 SOP｜2. Generalization"),
             render_table(
                 ("Comparison", "Δ Daily rho", "Δ Pair", "Δ Top-Bottom"),
                 generalization_rows,
@@ -501,7 +532,7 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
                 if not row:
                     continue
                 rows.append((
-                    scope_label,
+                    scope_text(scope_label),
                     head_label,
                     _fmt_simple_metric(row.get("mean_daily_spearman")),
                     _fmt_simple_metric(row.get("global_spearman_vs_raw_target")),
@@ -509,7 +540,7 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
                 ))
         if rows:
             lines.extend([
-                render_section(title),
+                section(title),
                 render_table(
                     ("Split", "Head", "Daily rho", "Global rho", "Pair"),
                     rows,
@@ -559,13 +590,25 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             actual = dict(gate.get("actual_truth_geometry") or {})
             upper = dict(gate.get("upper_right_s5_m5") or {})
             lines.extend([
-                render_section(f"標準模型 SOP｜4. Truth / Prediction Geometry｜{scope_label}"),
+                section(f"標準模型 SOP｜4. Truth / Prediction Geometry｜{scope_label}"),
                 render_key_values((
                     ("Actual Safety↔MFE Daily rho", _fmt_simple_metric(actual.get("safety_to_mfe_mean_daily_spearman"))),
                     ("Pred Safety↔Raw-MFE Daily rho", _fmt_simple_metric(gate.get("predicted_safety_to_raw_mfe_mean_daily_spearman"))),
                     ("Actual S5×M5", truth_cell(dict(actual.get("s5_m5") or {}))),
                     ("Actual S4+×M4+", truth_cell(dict(actual.get("s4plus_m4plus") or {}))),
-                    ("Pred S5×M5 N", f"{int(upper.get('n', 0) or 0):,}"),
+                    (
+                        "Pred S5×M5 N",
+                        styled_signal(
+                            f"{int(upper.get('n', 0) or 0):,}",
+                            SIGNAL_NEGATIVE
+                            if int(dict(actual.get("s5_m5") or {}).get("n", 0) or 0) > 0
+                            and int(upper.get("n", 0) or 0) == 0
+                            else SIGNAL_NEUTRAL,
+                            target="console",
+                            enabled=color,
+                            bold=True,
+                        ),
+                    ),
                     ("Joint product→actual HM/HS Daily rho", _fmt_simple_metric(gate.get("joint_product_to_actual_hmhs_mean_daily_spearman"))),
                 )),
             ])
@@ -629,7 +672,7 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             )
 
         lines.extend([
-            render_section(f"標準模型 SOP｜5. Ranking / Boundary（K={top_k}，boundary={boundary_width}；{competition_scope}）"),
+            section(f"標準模型 SOP｜5. Ranking / Boundary（K={top_k}，boundary={boundary_width}；{competition_scope}）"),
             render_table(
                 ("Split", "NDCG@K", "Top-K Target", "Lift", "Oracle overlap", "Boundary", "Boundary gap", "競爭日"),
                 [top_k_row(name) for name in split_names],
@@ -638,14 +681,14 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
         ])
 
     evidence = [
-        ("Learnability", "AVAILABLE" if metrics.get("oos") else "N/A"),
-        ("Generalization", "AVAILABLE" if metrics.get("validation") and metrics.get("oos") else "N/A"),
-        ("Truth / Prediction Geometry", "AVAILABLE" if raw_eval else "N/A"),
-        ("Breakout application slice", "AVAILABLE" if metrics.get("breakout_candidate_oos") else "N/A"),
-        ("Ranking / Boundary", "AVAILABLE" if sample else "N/A"),
+        ("Learnability", evidence_status("AVAILABLE" if metrics.get("oos") else "N/A")),
+        ("Generalization", evidence_status("AVAILABLE" if metrics.get("validation") and metrics.get("oos") else "N/A")),
+        ("Truth / Prediction Geometry", evidence_status("AVAILABLE" if raw_eval else "N/A")),
+        ("Breakout application slice", evidence_status("AVAILABLE" if metrics.get("breakout_candidate_oos") else "N/A")),
+        ("Ranking / Boundary", evidence_status("AVAILABLE" if sample else "N/A")),
     ]
     lines.extend([
-        render_section("標準模型 SOP｜6. Evidence Coverage"),
+        section("標準模型 SOP｜6. Evidence Coverage"),
         render_table(("Evidence", "Status"), evidence, alignments=("left", "left")),
     ])
     return "\n".join(line for line in lines if line)
@@ -654,10 +697,18 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
     metrics = dict(payload.get("split_metrics") or {})
     if not metrics:
         return []
+
+    def section(title: str, *, level: int = 2) -> str:
+        return f"{'#' * int(level)} {markdown_tone(title, 'blue', bold=True)}"
+
+    def scope_text(value: str) -> str:
+        tone = "gray" if str(value).lower() == "validation" else "blue"
+        return markdown_tone(value, tone, bold=str(value).lower() != "validation")
+
     daily_universal = bool(metrics.get("breakout_candidate_oos"))
     lines = [
         "",
-        "## 標準模型 SOP｜1. Learnability",
+        section("標準模型 SOP｜1. Learnability"),
         "",
         "| Split | Groups | Daily rho | Global rho | Pair | Top 10% Target | Bottom 10% Target |",
         "|---|---:|---:|---:|---:|---:|---:|",
@@ -670,7 +721,7 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
     for name in split_names:
         row = dict(metrics.get(name) or {})
         lines.append(
-            f"| {name} | {int(row.get('group_count', 0) or 0):,} "
+            f"| {scope_text(name)} | {int(row.get('group_count', 0) or 0):,} "
             f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
             f"| {_fmt_simple_metric(row.get('global_spearman_vs_raw_target'))} "
             f"| {_fmt_simple_metric(row.get('pairwise_concordance'), percent=True)} "
@@ -697,14 +748,14 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         if conditional_rows:
             lines.extend([
                 "",
-                "## 標準模型 SOP｜3. Multi-head Learnability｜Conditional MFE-Safety",
+                section("標準模型 SOP｜3. Multi-head Learnability｜Conditional MFE-Safety"),
                 "",
                 "| Split | Head | Daily rho | Global rho | Pair |",
                 "|---|---|---:|---:|---:|",
             ])
             for scope_label, head_label, row in conditional_rows:
                 lines.append(
-                    f"| {scope_label} | {head_label} "
+                    f"| {scope_text(scope_label)} | {head_label} "
                     f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
                     f"| {_fmt_simple_metric(row.get('global_spearman_vs_raw_target'))} "
                     f"| {_fmt_simple_metric(row.get('pairwise_concordance'), percent=True)} |"
@@ -722,14 +773,14 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         if reverse_rows:
             lines.extend([
                 "",
-                "## 標準模型 SOP｜3. Multi-head Learnability｜Reverse-Conditional MFE",
+                section("標準模型 SOP｜3. Multi-head Learnability｜Reverse-Conditional MFE"),
                 "",
                 "| Split | Head | Daily rho | Global rho | Pair |",
                 "|---|---|---:|---:|---:|",
             ])
             for scope_label, head_label, row in reverse_rows:
                 lines.append(
-                    f"| {scope_label} | {head_label} "
+                    f"| {scope_text(scope_label)} | {head_label} "
                     f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
                     f"| {_fmt_simple_metric(row.get('global_spearman_vs_raw_target'))} "
                     f"| {_fmt_simple_metric(row.get('pairwise_concordance'), percent=True)} |"
@@ -742,7 +793,7 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         competition_scope = "只看同日樣本數>K" if daily_universal else "只看候選數>K"
         lines.extend([
             "",
-            f"## 標準模型 SOP｜4. Ranking / Boundary Quality（K={top_k}，邊界寬度={boundary_width}；{competition_scope}）",
+            section(f"標準模型 SOP｜4. Ranking / Boundary Quality（K={top_k}，邊界寬度={boundary_width}；{competition_scope}）"),
             "",
             "| Split | NDCG@K | Top-K Target | Lift | Oracle overlap | Boundary | Boundary gap | 競爭日 |",
             "|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -750,7 +801,7 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         for name in split_names:
             quality = dict((metrics.get(name) or {}).get("top_k_quality") or {})
             lines.append(
-                f"| {name} | {_fmt_simple_metric(quality.get('ndcg_at_k'))} "
+                f"| {scope_text(name)} | {_fmt_simple_metric(quality.get('ndcg_at_k'))} "
                 f"| {_fmt_simple_metric(quality.get('top_k_raw_target_mean'))} "
                 f"| {_fmt_simple_metric(quality.get('top_k_raw_target_lift'))} "
                 f"| {_fmt_simple_metric(quality.get('oracle_top_k_overlap'), percent=True)} "
@@ -1264,8 +1315,21 @@ def _emit_breakout_quality_simple_report(
     if detail_report is not None:
         rows.append(("詳細報表", project_relative_display_path(detail_report, project_root=PROJECT_ROOT)))
 
-    print("\n" + render_title("Breakout Quality 簡易報表"))
-    print(render_key_values(rows))
+    color = console_color_enabled()
+    console_rows: list[tuple[str, object]] = []
+    for label, value in rows:
+        if label == "狀態":
+            value = styled_workflow_status(value, target="console", bold=True)
+        elif label in {"Forward OOS rho", "Breakout slice OOS rho", "重訓後 Selection rho"}:
+            value = paint(value, "cyan", enabled=color, bold=True)
+        console_rows.append((label, value))
+    print(
+        "\n"
+        + render_title(
+            paint("Breakout Quality 簡易報表", "cyan", enabled=color, bold=True)
+        )
+    )
+    print(render_key_values(console_rows))
     ranker_payload: dict = {}
     if command == "train-continuous-ranker":
         ranker_payload = _continuous_ranker_simple_report_payload(
@@ -1282,12 +1346,17 @@ def _emit_breakout_quality_simple_report(
     safe_command = command.replace("/", "_").replace("\\", "_")
     report_path = report_dir / f"{safe_command}.md"
     markdown_lines = [
-        "# Breakout Quality 簡易報表",
+        f"# {markdown_tone('Breakout Quality 簡易報表', 'blue', bold=True)}",
         "",
         f"- Generated at UTC：`{datetime.now(timezone.utc).isoformat()}`",
     ]
     for label, value in rows:
-        markdown_lines.append(f"- **{label}**：{value}")
+        rendered = value
+        if label == "狀態":
+            rendered = styled_workflow_status(value, target="markdown", bold=True)
+        elif label in {"Forward OOS rho", "Breakout slice OOS rho", "重訓後 Selection rho"}:
+            rendered = markdown_tone(value, "blue", bold=True)
+        markdown_lines.append(f"- **{label}**：{rendered}")
     if ranker_payload:
         markdown_lines.extend(_render_continuous_ranker_simple_markdown(ranker_payload))
     report_path.write_text("\n".join(markdown_lines) + "\n", encoding="utf-8")

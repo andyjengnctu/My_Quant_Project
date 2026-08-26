@@ -476,7 +476,9 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
         )
         check_true(
             "breakout_quality_app_persistent_markdown_simple_report",
-            report_path.is_file() and "# Breakout Quality 簡易報表" in markdown,
+            report_path.is_file()
+            and "Breakout Quality 簡易報表" in markdown
+            and "#42A5F5" in markdown,
         )
         check_true(
             "breakout_quality_app_simple_report_paths_are_project_relative",
@@ -699,11 +701,28 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             and "Conditional Safety" in conditional_console
             and "0.2876" in conditional_console
             and "59.88%" in conditional_console
-            and "## 標準模型 SOP｜1. Learnability" in conditional_markdown
-            and "## 標準模型 SOP｜3. Multi-head Learnability｜Conditional MFE-Safety" in conditional_markdown
+            and "標準模型 SOP｜1. Learnability" in conditional_markdown
+            and "標準模型 SOP｜3. Multi-head Learnability｜Conditional MFE-Safety" in conditional_markdown
             and "0.2876" in conditional_markdown
             and "59.88%" in conditional_markdown
             and "Actual Round-trip R" not in conditional_markdown,
+        )
+        with patch.object(app_breakout_quality, "console_color_enabled", return_value=True):
+            colored_model_console = app_breakout_quality._render_continuous_ranker_simple_console(
+                conditional_payload
+            )
+        check_true(
+            "breakout_quality_model_sop_uses_shared_color_palette_for_sections_generalization_and_evidence",
+            "\x1b[96m" in colored_model_console
+            and "\x1b[91m" in colored_model_console
+            and "\x1b[92m" in colored_model_console
+            and "標準模型 SOP｜1. Learnability" in colored_model_console
+            and "標準模型 SOP｜2. Generalization" in colored_model_console,
+        )
+        check_true(
+            "breakout_quality_model_sop_markdown_uses_shared_blue_and_semantic_colors",
+            "#42A5F5" in conditional_markdown
+            and "標準模型 SOP｜1. Learnability" in conditional_markdown,
         )
 
         compare_dir = (

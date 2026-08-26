@@ -10312,3 +10312,10 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - `Opportunity／Selection Attribution`與`Trade Outcome／Path Attribution`改用selector-agnostic planned sidecar loader；`load_strategy_arm_pipeline_sidecars`仍保留給`AUD-selection-k-r0-attribution`等真的需要daily capacity／selector trace的one-time resource Audit。Scientific arms、K/R0、cash、sizing、Strategy replay、existing artifacts與研究結論皆未修改。
 - Decision：**ENGINEERING_BUG_FIX / PLANNED_MEMBERSHIP_EXECUTION_SSOT / NO_SCIENTIFIC_CHANGE**。
 
+### 2026-08-27 — Standard Model SOP 易讀性：共用章節／semantic color（無scientific change）
+
+- `[1] 模型訓練／驗證`的一鍵Model SOP terminal與persistent Markdown改用既有`core/report_style.py`／`core/console_report.py` palette：主標題／section用cyan/blue，scope label以gray/cyan分區；Generalization的`ΔDailyρ / ΔPair / ΔTop-Bottom`因higher-is-better契約明確，使用shared delta signal顯示改善／惡化；Evidence availability/status使用shared semantic colors。
+- Raw rho、Global rho、Pair absolute value、NDCG、Top-K、5×5 cell等絕對值不依數值正負自行上色，避免把UI色彩變成第二套Model Gate。唯一額外evidence highlight是actual S5×M5 support存在而predicted S5×M5=`0`時，把該support-collapse cell標為negative。
+- Console維持TTY/`NO_COLOR` opt-in；redirect/plain output數值與文字contract不變。詳細`continuous_ranker_report.md`主SOP section與Generalization delta同步使用相同Markdown palette。
+- Decision：**ENGINEERING_PRESENTATION_ONLY / NO_MODEL_RETRAIN / NO_METRIC_CHANGE / NO_RESEARCH_IDENTITY_CHANGE**。
+

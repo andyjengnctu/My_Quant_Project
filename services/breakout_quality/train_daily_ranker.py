@@ -48,6 +48,7 @@ from filters.breakout_quality.paths import resolve_filter_model_output_dir
 from filters.breakout_quality.ranking_score_store import DAILY_RANKER_OOS_SCORE_FILENAME
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from core.console_report import print_artifact_paths
+from core.report_style import markdown_tone, signal_for_delta, styled_signal
 
 from services.breakout_quality import ranker_training as ranker_api
 from services.breakout_quality.continuous_ranker_pipeline import resolve_ranker_execution_plan
@@ -393,8 +394,23 @@ def _render_markdown(payload: dict) -> str:
     safety_raw_mfe_duo = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING
     source_dataset = dict(payload.get("source_dataset") or {})
     target_manifest = dict(payload.get("target_manifest") or {})
+    def section(title: str, *, level: int = 2) -> str:
+        return f"{'#' * int(level)} {markdown_tone(title, 'blue', bold=True)}"
+
+    def delta(left, right, *, percent=False):
+        if left is None or right is None:
+            return "-"
+        value = float(right) - float(left)
+        text = f"{value * 100:+.2f}pp" if percent else f"{value:+.4f}"
+        return styled_signal(
+            text,
+            signal_for_delta(value, preference="higher"),
+            target="markdown",
+            bold=True,
+        )
+
     lines = [
-        "# Standard Model SOP Report",
+        f"# {markdown_tone('Standard Model SOP Report', 'blue', bold=True)}",
         "",
         f"- Experiment：`{payload['experiment']}`",
         f"- Profile：`{payload['experiment_profile']}`",
@@ -410,7 +426,7 @@ def _render_markdown(payload: dict) -> str:
     ]
     lines.extend([
         "",
-        "## 1. Learnability",
+        section("1. Learnability"),
         "",
         "| Scope | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target |",
         "|---|---:|---:|---:|---:|---:|---:|",
@@ -436,15 +452,9 @@ def _render_markdown(payload: dict) -> str:
     validation = dict((payload.get("split_metrics") or {}).get("validation") or {})
     oos = dict((payload.get("split_metrics") or {}).get("oos") or {})
     breakout = dict((payload.get("split_metrics") or {}).get("breakout_candidate_oos") or {})
-    def delta(left, right, *, percent=False):
-        if left is None or right is None:
-            return "-"
-        value = float(right) - float(left)
-        return f"{value * 100:+.2f}pp" if percent else f"{value:+.4f}"
-
     lines.extend([
         "",
-        "## 2. Generalization",
+        section("2. Generalization"),
         "",
         "| Comparison | Δ Daily rho | Δ Pair |",
         "|---|---:|---:|",
@@ -467,7 +477,7 @@ def _render_markdown(payload: dict) -> str:
         lines.extend([
             f"- Direct-R objective：two-logit margin直接解讀為Predicted R；loss=`{loss_name}`（{loss_detail}）。",
             "",
-            "## Direct-R Regression",
+            section("Direct-R Regression"),
             "",
             "| Scope | Groups | MSE | Huber | MAE | RMSE | Bias | Pred R Mean | Target R Mean |",
             "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -485,7 +495,7 @@ def _render_markdown(payload: dict) -> str:
             "- Dual-component objective：兩個既有輸出分別為Predicted adverse-to-peak R與Predicted MFE R；"
             "正式score固定為MFE R−adverse R；兩分量MSE採同一mean reduction，無auxiliary loss／lambda。",
             "",
-            "## Dual Component Regression",
+            section("Dual Component Regression"),
             "",
             "| Scope | Component | Groups | RMSE | MAE | Bias | Global rho | Daily rho |",
             "|---|---|---:|---:|---:|---:|---:|---:|",
@@ -513,7 +523,7 @@ def _render_markdown(payload: dict) -> str:
             "Conditional head學在相同true-MFE percentile下異常低adverse的residual rank；"
             "conditional context使用stop-gradient primary prediction，無future feature、無loss-weight sweep。",
             "",
-            "## Conditional MFE-Safety Model Gate",
+            section("Conditional MFE-Safety Model Gate"),
             "",
             "| Scope | Head | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target |",
             "|---|---|---:|---:|---:|---:|---:|---:|",
@@ -544,7 +554,7 @@ def _render_markdown(payload: dict) -> str:
                 else "Single-head直接由歷史features學同一J，不建立顯式Safety head。"
             ),
             "",
-            "## Reverse-Conditional MFE Model Gate",
+            section("Reverse-Conditional MFE Model Gate"),
             "",
             "| Scope | Head | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target |",
             "|---|---|---:|---:|---:|---:|---:|---:|",
@@ -568,7 +578,7 @@ def _render_markdown(payload: dict) -> str:
             "stop-gradient Safety context；唯一scientific變更是final head由J改學absolute Pure-MFE percentile U；"
             "兩head固定等權full-list Delta-NDCG，無lambda／threshold／calibration。",
             "",
-            "## 3. Multi-head Learnability / Truth / Prediction Geometry",
+            section("3. Multi-head Learnability / Truth / Prediction Geometry"),
             "",
             "| Scope | Head | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target |",
             "|---|---|---:|---:|---:|---:|---:|---:|",
@@ -604,7 +614,7 @@ def _render_markdown(payload: dict) -> str:
 
             lines.extend([
                 "",
-                f"### {scope_label} Truth / Prediction Geometry",
+                section(f"{scope_label} Truth / Prediction Geometry", level=3),
                 "",
                 f"- Actual Safety↔MFE Dailyρ：`{fmt(actual.get('safety_to_mfe_mean_daily_spearman'), 4)}`",
                 f"- Pred Safety↔Raw-MFE Dailyρ：`{fmt(gate.get('predicted_safety_to_raw_mfe_mean_daily_spearman'), 4)}`",
@@ -657,7 +667,7 @@ def _render_markdown(payload: dict) -> str:
     if pareto_eval:
         lines.extend([
             "",
-            "## Pareto Supervision Diagnostics",
+            section("Pareto Supervision Diagnostics"),
             "",
             "| Scope | Groups | Comparable pairs | Comparable rate | Daily Pareto | Global Pareto |",
             "|---|---:|---:|---:|---:|---:|",

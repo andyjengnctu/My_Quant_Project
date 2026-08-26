@@ -2820,10 +2820,11 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
     ).read_text(encoding="utf-8")
     check_true(
         "mr13s_joint_geometry_is_integrated_into_standard_model_sop_without_new_audit",
-        "## 3. Multi-head Learnability / Truth / Prediction Geometry" in report_source
+        'section("3. Multi-head Learnability / Truth / Prediction Geometry")' in report_source
         and "Truth / Prediction Geometry" in report_source
         and "predicted_joint_geometry" in report_source
-        and "safety_cohorts" in report_source,
+        and "safety_cohorts" in report_source
+        and "markdown_tone" in report_source,
     )
     app_source = (
         project_root / "services" / "research" / "breakout_quality_application.py"
