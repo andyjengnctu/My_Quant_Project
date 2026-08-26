@@ -549,11 +549,12 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "mr13r_joint_signal_report_exposes_upper_right_n_full_5x5_and_safety_cohorts",
         bool(
-            "Predicted S5×M5 upper-right：N=1" in joint_report_text
+            "Predicted S5×M5 upper-right N" in joint_report_text
             and "cell = N / actual HM/HS%" in joint_report_text
             and "Pred Safety \\ Cond-MFE" in joint_report_text
             and "Safety cohort conditional-MFE conversion" in joint_report_text
-            and "Joint product→actual HM/HS dailyρ" in joint_report_text
+            and "Joint product → actual HM/HS Daily ρ" in joint_report_text
+            and not any(line.lstrip().startswith("|") for line in joint_report_text.splitlines())
         ),
     )
 
@@ -729,6 +730,36 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 and len(contributions) == 3
             ),
         )
+
+    from core.display import _display_width
+
+    readable_report_text = render_mr13r_joint_audit_result({
+        "audit_id": "AUD-mr13r-joint-capital-drawdown",
+        "status": "RESULT_AVAILABLE_PENDING_REVIEW",
+        "evaluations": {
+            "forward_oos": {
+                "joint_signal": {key: value for key, value in joint_signal.items() if key != "detail"},
+                "arms": {
+                    "C71": {
+                        "capital_conversion": capital,
+                        "drawdown": drawdown,
+                    }
+                },
+            }
+        },
+    })
+    readable_widths = [_display_width(line) for line in readable_report_text.splitlines()]
+    check_true(
+        "mr13r_human_report_uses_aligned_bounded_text_tables_instead_of_markdown_pipes",
+        bool(
+            max(readable_widths, default=0) <= 100
+            and not any(line.lstrip().startswith("|") for line in readable_report_text.splitlines())
+            and "Capital conversion｜曝險與持倉" in readable_report_text
+            and "Capital conversion｜Safety 關聯" in readable_report_text
+            and "Max drawdown｜持倉生命週期" in readable_report_text
+            and "Max drawdown｜四象限 MTM contribution" in readable_report_text
+        ),
+    )
 
 
     summary["workflow"] = "config_driven_formal_audit_topology"

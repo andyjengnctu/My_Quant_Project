@@ -902,21 +902,9 @@ def _fmt_money(value: Any, digits: int = 2) -> str:
     return "-" if number is None else f"{number:,.{digits}f}"
 
 
-def _fmt_mtm_cell(row: Mapping[str, Any], prefix: str) -> str:
-    count = int(row.get(f"{prefix}_count") or 0)
-    amount = _fmt_money(row.get(f"{prefix}_mtm_contribution"))
-    pct = _fmt(row.get(f"{prefix}_mtm_contribution_pct_peak_equity"), 2, "%")
-    return f"N={count} / {amount} ({pct})"
-
-
-def _markdown_table(headers: tuple[str, ...], rows: list[tuple[Any, ...]]) -> str:
-    head = "| " + " | ".join(headers) + " |"
-    sep = "| " + " | ".join("---" for _ in headers) + " |"
-    body = ["| " + " | ".join(str(value) for value in row) + " |" for row in rows]
-    return "\n".join([head, sep, *body])
-
-
 def _render_joint_geometry(joint: Mapping[str, Any]) -> str:
+    from core.console_report import render_table
+
     cells = [dict(row) for row in list(joint.get("cells") or [])]
     max_bin = max(
         [int(row.get("predicted_safety_bin", 0)) for row in cells]
@@ -939,38 +927,64 @@ def _render_joint_geometry(joint: Mapping[str, Any]) -> str:
             else:
                 values.append(f"{int(row.get('rows') or 0)} / {_fmt(row.get('actual_hmhs_pct'), 2, '%')}")
         rows.append((f"S{safety_bin + 1}", *values))
-    return _markdown_table(headers, rows)
+    return render_table(
+        headers,
+        rows,
+        alignments=("left",) + ("right",) * bin_count,
+    )
+
+
+def _quadrant_mtm_rows(arm_id: str, row: Mapping[str, Any]) -> list[tuple[Any, ...]]:
+    quadrant_specs = (
+        ("HM/HS", "hmhs"),
+        ("HM/LS", "hmls"),
+        ("LM/HS", "lmhs"),
+        ("LM/LS", "lmls"),
+    )
+    rows: list[tuple[Any, ...]] = []
+    for label, prefix in quadrant_specs:
+        rows.append((
+            arm_id,
+            label,
+            int(row.get(f"{prefix}_count") or 0),
+            _fmt_money(row.get(f"{prefix}_mtm_contribution")),
+            _fmt(row.get(f"{prefix}_mtm_contribution_pct_peak_equity"), 2, "%"),
+        ))
+    rows.append((
+        arm_id,
+        "Unclassified",
+        int(row.get("unclassified_count") or 0),
+        _fmt_money(row.get("unclassified_mtm_contribution")),
+        "-",
+    ))
+    return rows
 
 
 def render_result(result: Mapping[str, Any]) -> str:
-    lines = [
-        "MR-13R Joint Signal / Capital / Drawdown Audit",
-        "=" * 72,
-        f"Audit：{result.get('audit_id')}",
-        f"狀態：{result.get('status')}",
-        "",
-    ]
+    from core.console_report import render_key_values, render_section, render_table, render_title
+
+    lines = [render_title("MR-13R Joint Signal / Capital / Drawdown Audit")]
+    lines.append(render_key_values([
+        ("Audit", result.get("audit_id")),
+        ("狀態", result.get("status")),
+    ]))
+
     for profile_id, payload in dict(result.get("evaluations") or {}).items():
-        lines.extend([f"[{profile_id}]", "-"])
+        lines.append(render_section(str(profile_id)))
         joint = dict(payload.get("joint_signal") or {})
-        lines.append(
-            "Joint signal：Conditional-MFE→actual MFE dailyρ="
-            + _fmt(joint.get("primary_to_actual_mfe_mean_daily_spearman"), 3)
-            + "；Raw Safety→actual Safety dailyρ="
-            + _fmt(joint.get("safety_to_actual_safety_mean_daily_spearman"), 3)
-            + "；Joint product→actual HM/HS dailyρ="
-            + _fmt(joint.get("joint_product_to_hmhs_mean_daily_spearman"), 3)
-        )
-        lines.append(
-            "Predicted S5×M5 upper-right：N="
-            + str(int(joint.get("upper_right_rows") or 0))
-            + "；actual HM/HS="
-            + _fmt(joint.get("upper_right_hmhs_pct"), 2, "%")
-            + "；population="
-            + _fmt(joint.get("population_hmhs_pct"), 2, "%")
-        )
-        lines.append("Predicted joint geometry（cell = N / actual HM/HS%）：")
+        lines.append("Joint signal 摘要")
+        lines.append(render_key_values([
+            ("Conditional-MFE → actual MFE Daily ρ", _fmt(joint.get("primary_to_actual_mfe_mean_daily_spearman"), 3)),
+            ("Raw Safety → actual Safety Daily ρ", _fmt(joint.get("safety_to_actual_safety_mean_daily_spearman"), 3)),
+            ("Joint product → actual HM/HS Daily ρ", _fmt(joint.get("joint_product_to_hmhs_mean_daily_spearman"), 3)),
+            ("Predicted S5×M5 upper-right N", int(joint.get("upper_right_rows") or 0)),
+            ("S5×M5 actual HM/HS", _fmt(joint.get("upper_right_hmhs_pct"), 2, "%")),
+            ("Population HM/HS", _fmt(joint.get("population_hmhs_pct"), 2, "%")),
+        ]))
+        lines.append("Predicted joint geometry（cell = N / actual HM/HS%）")
+        lines.append("S1→S5 = predicted Safety low→high；M1→M5 = Conditional-MFE low→high")
         lines.append(_render_joint_geometry(joint))
+
         cohort_rows = []
         for row in list(joint.get("safety_cohorts") or []):
             item = dict(row)
@@ -983,72 +997,89 @@ def render_result(result: Mapping[str, Any]) -> str:
                 _fmt(item.get("actual_hmhs_pct"), 2, "%"),
             ))
         if cohort_rows:
-            lines.append("Safety cohort conditional-MFE conversion：")
-            lines.append(_markdown_table(
-                ("Pred Safety quintile", "N", "Cond-MFE→MFE Dailyρ", "Valid days", "High-MFE", "HM/HS"),
+            lines.append("Safety cohort conditional-MFE conversion")
+            lines.append(render_table(
+                ("Safety Q", "N", "Cond-MFE→MFE ρ", "Valid days", "High-MFE", "HM/HS"),
                 cohort_rows,
+                alignments=("left", "right", "right", "right", "right", "right"),
             ))
 
-        capital_rows = []
+        capital_summary_rows = []
+        capital_relation_rows = []
         for arm_id, arm in dict(payload.get("arms") or {}).items():
             cap = dict(arm.get("capital_conversion") or {})
-            capital_rows.append((
+            capital_summary_rows.append((
                 arm_id,
                 _fmt(cap.get("average_exposure_pct"), 2, "%"),
                 _fmt(cap.get("median_stop_distance_pct"), 2, "%"),
                 _fmt(cap.get("median_reserved_fraction_pct"), 2, "%"),
                 _fmt(cap.get("mean_holding_calendar_days"), 1, "d"),
+            ))
+            capital_relation_rows.append((
+                arm_id,
                 _fmt(cap.get("raw_safety_to_projected_capital_fraction_daily_spearman"), 3),
                 _fmt(cap.get("selected_raw_safety_to_stop_distance_daily_spearman"), 3),
                 _fmt(cap.get("selected_raw_safety_to_reserved_fraction_daily_spearman"), 3),
             ))
-        if capital_rows:
-            lines.append("Capital conversion：")
-            lines.append(_markdown_table(
-                ("Arm", "Avg Exposure", "Median stop dist", "Median reserved/equity", "Mean holding", "Safety→Projected capital ρ", "Safety→Stop dist ρ", "Safety→Reserved ρ"),
-                capital_rows,
+        if capital_summary_rows:
+            lines.append("Capital conversion｜曝險與持倉")
+            lines.append(render_table(
+                ("Arm", "Avg Exposure", "Median stop dist", "Median reserved/equity", "Mean holding"),
+                capital_summary_rows,
+                alignments=("left", "right", "right", "right", "right"),
+            ))
+            lines.append("Capital conversion｜Safety 關聯")
+            lines.append(render_table(
+                ("Arm", "Safety→Projected capital ρ", "Safety→Stop dist ρ", "Safety→Reserved ρ"),
+                capital_relation_rows,
+                alignments=("left", "right", "right", "right"),
             ))
 
-        dd_rows = []
-        quadrant_rows = []
+        dd_summary_rows = []
+        dd_lifecycle_rows = []
+        quadrant_rows: list[tuple[Any, ...]] = []
         for arm_id, arm in dict(payload.get("arms") or {}).items():
             dd = dict(arm.get("drawdown") or {})
             top = list(dd.get("top_episodes") or [])
             first = dict(top[0]) if top else {}
-            dd_rows.append((
+            dd_summary_rows.append((
                 arm_id,
                 _fmt(dd.get("max_drawdown_pct"), 2, "%"),
                 f"{first.get('peak_date', '-')}→{first.get('trough_date', '-')}",
                 _fmt(first.get("position_mtm_contribution_pct_peak_equity"), 2, "%"),
                 _fmt_money(first.get("reconciliation_delta"), 3),
+            ))
+            dd_lifecycle_rows.append((
+                arm_id,
                 first.get("peak_held_count", "-"),
                 first.get("entered_during_drawdown_count", "-"),
                 first.get("exited_during_drawdown_count", "-"),
                 first.get("trough_held_count", "-"),
                 first.get("max_same_day_entries", "-"),
             ))
-            quadrant_rows.append((
-                arm_id,
-                _fmt_mtm_cell(first, "hmhs"),
-                _fmt_mtm_cell(first, "hmls"),
-                _fmt_mtm_cell(first, "lmhs"),
-                _fmt_mtm_cell(first, "lmls"),
-                f"N={int(first.get('unclassified_count') or 0)} / {_fmt_money(first.get('unclassified_mtm_contribution'))}",
+            quadrant_rows.extend(_quadrant_mtm_rows(arm_id, first))
+        if dd_summary_rows:
+            lines.append("Max drawdown｜Peak→Trough true MTM")
+            lines.append(render_table(
+                ("Arm", "Max DD", "Peak→Trough", "ΣMTM / Peak", "Reconcile Δ"),
+                dd_summary_rows,
+                alignments=("left", "right", "left", "right", "right"),
             ))
-        if dd_rows:
-            lines.append("Max drawdown peak→trough true MTM attribution：")
-            lines.append(_markdown_table(
-                ("Arm", "Max DD", "Peak→Trough", "ΣMTM / Peak", "Reconcile Δ", "Peak-held", "Entered", "Exited", "Trough-held", "Max same-day entries"),
-                dd_rows,
+            lines.append("Max drawdown｜持倉生命週期")
+            lines.append(render_table(
+                ("Arm", "Peak-held", "Entered", "Exited", "Trough-held", "Max same-day entries"),
+                dd_lifecycle_rows,
+                alignments=("left", "right", "right", "right", "right", "right"),
             ))
-            lines.append("Max drawdown quadrant MTM contribution（N / ΔPnL / %Peak）：")
-            lines.append(_markdown_table(
-                ("Arm", "HM/HS", "HM/LS", "LM/HS", "LM/LS", "Unclassified"),
+            lines.append("Max drawdown｜四象限 MTM contribution")
+            lines.append("每列 = N / ΔPnL / %Peak；Unclassified 無合法 quadrant %Peak 時顯示 -")
+            lines.append(render_table(
+                ("Arm", "Quadrant", "N", "ΔPnL", "%Peak"),
                 quadrant_rows,
+                alignments=("left", "left", "right", "right", "right"),
             ))
         lines.append("")
     return "\n".join(lines).rstrip()
-
 
 def _render_markdown(result: Mapping[str, Any]) -> str:
     return "# MR-13R Joint Signal / Capital / Drawdown Audit\n\n```text\n" + render_result(result) + "\n```\n\n" \
