@@ -16,6 +16,7 @@ C69證明不好的股票放更滿(>K)也不會更好，而且之前把R0拿掉�
     - color template file to consist rule
 
 - imrove DL module
+    - hihger weight for high mfe or high safety   
     - retrain min parameters
     - simply label
         - the 40t day's R

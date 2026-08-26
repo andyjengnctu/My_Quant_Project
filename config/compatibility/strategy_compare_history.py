@@ -1802,6 +1802,46 @@ HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({
 })
 
 
+
+# 2026-08-26 SR-C70 left the current suite after C71 Safety-gate mechanism evidence.
+# Keep its exact runtime identity/results interpretable as historical evidence.
+HISTORICAL_STRATEGY_COMPARE_ARMS.update({
+    "C70": {
+        "name": "Min MR-13R Conditional-MFE No-K No-R0",
+        "description": (
+            "SR-C70 joint resource-ablation：與C66使用完全相同MR-13R CONT13R_ROLL final "
+            "Conditional-MFE model_score、Min base-finalist-best、all-off、canonical sizing/cash/"
+            "orderability/execution；唯一scientific change是移除C58-derived K與R0。"
+        ),
+        "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13R_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False,
+            "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+})
+
+HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({
+    "C70-C66": {"left": "C70", "right": "C66", "description": "MR-13R完全相同model/ranking下移除C58-derived K與R0的joint resource-ablation；primary contrast"},
+    "C70-C59": {"left": "C70", "right": "C59", "description": "No-K/No-R0 MR-13R相對current MR-13E constrained reference的淨策略效果"},
+    "C70-C58": {"left": "C70", "right": "C58", "description": "No-K/No-R0 MR-13R相對Min DL-off baseline的完整增量效果"},
+    "C70-C64": {"left": "C70", "right": "C64", "description": "No-K/No-R0 MR-13R相對MR-13P Conditional Safety的策略效果"},
+    "C71-C70": {"left": "C71", "right": "C70", "description": "完全相同MR-13R No-K/No-R0下只新增Raw Safety同日orderable percentile>=0.50 eligibility gate；primary contrast"},
+})
+
+HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({
+    "C71-C59": {"left": "C71", "right": "C59", "description": "Raw-Safety gated No-K/No-R0 MR-13R相對MR-13E constrained reference"},
+    "C71-C58": {"left": "C71", "right": "C58", "description": "Raw-Safety gated No-K/No-R0 MR-13R相對Min DL-off baseline"},
+})
+
 __all__ = [
     "HISTORICAL_STRATEGY_PARAM_SOURCES",
     "HISTORICAL_STRATEGY_DL_SOURCES",

@@ -185,11 +185,13 @@ def _execution_pairs(
         if any(
             existing.dl_id == arm.dl_id
             and existing.dl_runtime_mode == arm.dl_runtime_mode
+            and dict(existing.dl_runtime_options or {}) == dict(arm.dl_runtime_options or {})
             for existing in on_arms
         ):
             raise ValueError(
-                "啟用比較群組重複定義相同DL source/runtime mode: "
-                f"{arm.param_source}/{param_policy}/{arm.rule_policy}/{arm.dl_id}/{arm.dl_runtime_mode}"
+                "啟用比較群組重複定義相同DL source/runtime contract: "
+                f"{arm.param_source}/{param_policy}/{arm.rule_policy}/{arm.dl_id}/{arm.dl_runtime_mode}/"
+                f"{dict(arm.dl_runtime_options or {})!r}"
             )
         on_arms.append(arm)
 

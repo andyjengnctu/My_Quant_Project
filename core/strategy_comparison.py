@@ -1181,7 +1181,7 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
 
     groups: dict[
         tuple[str, str, str],
-        dict[str, StrategyComparisonArm | dict[tuple[str, str], StrategyComparisonArm] | None],
+        dict[str, StrategyComparisonArm | dict[tuple[str, str, str], StrategyComparisonArm] | None],
     ] = {}
     for arm in settings.arms.values():
         arm_param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
@@ -1202,11 +1202,18 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
             raise TypeError("strategy comparison group on-arm contract錯誤")
         dl_id = str(arm.dl_id or "")
         runtime_mode = str(arm.dl_runtime_mode or "")
-        runtime_key = (dl_id, runtime_mode)
+        runtime_options_key = json.dumps(
+            dict(arm.dl_runtime_options or {}),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        runtime_key = (dl_id, runtime_mode, runtime_options_key)
         if runtime_key in on_arms:
             raise ValueError(
-                "同一param_source／param_policy／rule_policy不得重複定義相同DL source/runtime mode: "
-                f"{arm.param_source}/{arm_param_policy}/{arm.rule_policy}/{dl_id}/{runtime_mode}"
+                "同一param_source／param_policy／rule_policy不得重複定義相同DL source/runtime contract: "
+                f"{arm.param_source}/{arm_param_policy}/{arm.rule_policy}/{dl_id}/{runtime_mode}/"
+                f"{runtime_options_key}"
             )
         on_arms[runtime_key] = arm
 

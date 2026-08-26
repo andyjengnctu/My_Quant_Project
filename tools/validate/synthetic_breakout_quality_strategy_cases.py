@@ -1357,9 +1357,11 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "strategy_compare_main_report_surfaces_core_r_conversion_and_compact_execution",
         '"strategy_diagnostics.md"' in comparison_source
                 and "核心策略結果" in render_report_source
+                and "Raw Safety Gate Sensitivity" in render_report_source
+                and "render_safety_gate_sensitivity_table" in render_report_source
                 and "R 預測／轉化" in render_report_source
                 and "資金／執行" in render_report_source
-                and "7. 執行摘要" in render_report_source
+                and "8. 執行摘要" in render_report_source
                 and "render_strategy_run_execution_table" in render_report_source
                 and "報表分工" not in render_report_source
                 and "render_strategy_r_analysis_table" in render_report_source
@@ -1401,7 +1403,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and 'f"[DONE] {on_arm.arm_id} {on_arm.name} "' in comparison_source
                 and 'elapsed={format_elapsed(' in comparison_source
                 and 'total={format_elapsed(' in comparison_source
-                and 'render_section("7. 執行摘要")' in comparison_source
+                and 'render_section("8. 執行摘要")' in comparison_source
                 and "render_strategy_run_execution_table" in comparison_source
                 and "_selector_timing_table(" not in render_report_source,
     )
@@ -2531,7 +2533,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "pair_upside_realization_refresh_required" in comparison_source
         and '"REFRESH"' in comparison_source
         and '"Diagnostics | Upside Realization"' in comparison_source
-        and 'render_section("4. Upside Survival / First-Passage")' in comparison_source
+        and 'render_section("5. Upside Survival / First-Passage")' in comparison_source
         and "render_upside_survival_summary_table" in comparison_source
         and "STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS" in strategy_compare_config_source,
     )
@@ -2635,6 +2637,45 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and "future_first_passage" in diagnostics_source
                 and "load_validated_continuous_target_component_arrays" not in diagnostics_source
                 and "selection_diagnostics" in diagnostics_source,
+    )
+
+    from config.strategy_compare import get_strategy_comparison_settings
+    from filters.breakout_quality.strategy_comparison import render_safety_gate_sensitivity_table
+    sensitivity_settings = get_strategy_comparison_settings("extending_window_oos")
+    sensitivity_scenarios = {
+        arm_id: {"avg_exposure_pct": exposure, "return_over_max_drawdown": romd}
+        for arm_id, exposure, romd in (("C71", 62.0, 6.0), ("C72", 64.0, 7.0), ("C73", 61.0, 6.5))
+    }
+    sensitivity_diagnostics = {
+        "mfe_safety_geometry": {
+            "status": "AVAILABLE",
+            "arms": {
+                arm_id: {
+                    "high_mfe_high_safety_pct": hmhs,
+                    "high_mfe_low_safety_pct": hmls,
+                    "high_mfe_total_pct": hm,
+                    "high_safety_total_pct": hs,
+                }
+                for arm_id, hmhs, hmls, hm, hs in (
+                    ("C71", 25.0, 25.0, 50.0, 49.0),
+                    ("C72", 28.0, 20.0, 48.0, 56.0),
+                    ("C73", 29.0, 15.0, 44.0, 63.0),
+                )
+            },
+        },
+        "upside_realization": [
+            {"arm_id": arm_id, "full_horizon_mfe_mean_r": mfe, "full_horizon_adverse_to_peak_mean_r": adverse, "realized_mean_r": ev}
+            for arm_id, mfe, adverse, ev in (("C71", 1.4, 0.34, 0.54), ("C72", 1.3, 0.28, 0.62), ("C73", 1.1, 0.24, 0.58))
+        ],
+    }
+    sensitivity_text = render_safety_gate_sensitivity_table(
+        sensitivity_scenarios, sensitivity_diagnostics, settings=sensitivity_settings
+    )
+    check_true(
+        "raw_safety_gate_sensitivity_table_renders_only_p50_p60_p70_curve_and_key_metrics",
+        all(token in sensitivity_text for token in ("C71", "C72", "C73", ">=0.50", ">=0.60", ">=0.70", "HM/HS", "HM/LS", "Full-MFE", "Adverse", "Realized EV", "平均曝險", "RoMD"))
+        and "C70" not in sensitivity_text
+        and "C64/C66" in sensitivity_text,
     )
 
     summary["strategy_output_contracts"] = [row[0] for row in contract_rows]

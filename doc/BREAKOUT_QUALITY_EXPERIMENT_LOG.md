@@ -10177,3 +10177,18 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Regression：C66/C70在whole-file SHA、manifest/audit SHA與Raw Safety projection改變但primary projection不變時fingerprint保持不變；primary projection改變時兩者失效；C71 Raw Safety projection改變時失效。另以legacy C66 fixture驗aux-column migration可REUSE、primary值改變必須MISS。
 - Decision：**ENGINEERING_FIX / NO_SCIENTIFIC_IDENTITY_CHANGE / C66_C70_REUSE_EXPECTED_AFTER_C71_SCORE_ONLY_RESCORE / C71_STILL_RUN**。不重算舊arm只是reuse correction；C71 scientific experiment與PIT model contract不變。
 
+
+### 2026-08-26 — SR-C71 OOS + Rolling結果；Raw Safety gate有效，下一步改測P50/P60/P70 sensitivity
+
+- C71與C70完全相同MR-13R final Conditional-MFE ranking、No-K/No-R0與canonical execution，只新增Raw Safety same-day orderable percentile>=0.50 eligibility。
+- OOS C70→C71：Return=`74.18→128.62%`、MDD=`21.82→19.30%`、RoMD=`3.40→6.66`、EV=`0.25→0.53R`、平均曝險=`57.19→62.77%`；HM/HS=`19.51→24.87%`、HM/LS=`42.58→25.40%`、High-MFE=`62.09→50.27%`、High-Safety=`35.44→49.20%`；Full-MFE=`1.93→1.43R`、Adverse=`0.48→0.34R`、Realized EV=`0.24→0.54R`。
+- Rolling C70→C71：Return=`101.33→123.57%`、MDD=`33.21→17.57%`、RoMD=`3.05→7.03`、EV=`0.36→0.50R`、平均曝險=`59.56→63.97%`；HM/HS=`20.00→21.75%`、HM/LS=`40.26→29.38%`、High-MFE=`60.26→51.13%`、High-Safety=`36.88→47.46%`；Full-MFE=`1.97→1.30R`、Adverse=`0.51→0.36R`、Realized EV=`0.35→0.50R`。
+- Decision：**C71_MECHANISM_GO / PERFORMANCE_NOT_PROMOTED / DO_NOT_PRIORITIZE_R0_REINTRODUCTION / NEXT=SAFETY_GATE_SENSITIVITY**。Raw Safety不只改善path與geometry，也在兩mode提高平均曝險，因此No-R0低曝險不能單獨歸因為缺R0。
+
+### 2026-08-26 — SR-C72/C73實作；C70退出current suite，新增Raw Safety sensitivity主報表
+
+- 新arm `C72`/`C73`沿用C71全部MR-13R/No-K/No-R0/runtime semantics，唯一scientific change分別為Raw Safety same-day orderable percentile cutoff=`0.60/0.70`；C71=`0.50`作curve anchor。
+- `extending_current` current arms改為`C61/C58/C59/C64/C66/C71/C72/C73`。C70移入`config/compatibility/strategy_compare_history.py`保留歷史identity/result，不再出current OOS/Rolling主表。
+- Primary sensitivity contrasts=`C72-C71`與`C73-C72`；C64/C66保留作成熟reference。主`strategy_comparison.md`新增`Raw Safety Gate Sensitivity`小表，集中顯示Gate、Exposure、HM/HS、HM/LS、High-MFE、High-Safety、Full-MFE、Adverse、Realized EV、RoMD。
+- Strategy Compare arm uniqueness修正為`DL source + runtime mode + canonical dl_runtime_options`，因此同一runtime mode可合法存在不同cutoff arms；完全相同options仍拒絕重複定義。
+- Decision：**IMPLEMENTED / RESULT_PENDING / SINGLE_SEED_OOS_PLUS_ROLLING_FIRST / NO_MULTI_SEED_YET / NO_R0_CHANGE**。
