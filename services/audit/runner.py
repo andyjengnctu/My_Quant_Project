@@ -49,6 +49,37 @@ def _definitions_for_method(module_id: str, method_id: str | None):
     )
 
 
+def collect_audit_menu_state(
+    module_id: str,
+    *,
+    method_id: str | None = None,
+) -> dict[str, Any]:
+    """Return config/catalog-only state for interactive menu rendering.
+
+    Menu navigation must stay lightweight.  Full status handlers intentionally run
+    deep read-only preflight checks over Audit artifacts, so invoking them merely to
+    draw a menu causes large repeated I/O and DataFrame work.
+    """
+
+    definitions = _definitions_for_method(module_id, method_id)
+    rows = [
+        {
+            "enabled": bool(definition.enabled),
+            "audit_id": definition.audit_id,
+            "method_id": get_definition_method_id(definition),
+        }
+        for definition in definitions
+    ]
+    enabled_count = sum(1 for row in rows if row["enabled"])
+    return {
+        "module_id": module_id,
+        "method_id": method_id,
+        "configured": bool(enabled_count),
+        "enabled_count": enabled_count,
+        "rows": rows,
+    }
+
+
 def collect_audit_status(
     module_id: str,
     *,
@@ -98,6 +129,7 @@ def collect_audit_preparation_plan(
     *,
     project_root: Path = PROJECT_ROOT,
     method_id: str | None = None,
+    status_snapshot: dict[str, Any] | None = None,
 ) -> ResearchArtifactPlan:
     """Map enabled read-only Audit sources to the shared Research dependency contract.
 
@@ -107,13 +139,23 @@ def collect_audit_preparation_plan(
     """
 
     root = Path(project_root).resolve()
-    status = collect_audit_status(module_id, project_root=root, method_id=method_id)
+    status = (
+        collect_audit_status(module_id, project_root=root, method_id=method_id)
+        if status_snapshot is None
+        else status_snapshot
+    )
+    if (
+        str(status.get("module_id") or "") != str(module_id)
+        or status.get("method_id") != method_id
+    ):
+        raise ValueError("Audit status snapshot與requested module/method不一致")
     definitions = {
         item.audit_id: item
         for item in _definitions_for_method(module_id, method_id)
         if item.enabled
     }
     actions: list[ResearchArtifactAction] = []
+    policy = get_research_artifact_preparation_policy()
     for row in status["rows"]:
         if not row["enabled"]:
             continue
@@ -121,7 +163,6 @@ def collect_audit_preparation_plan(
         spec = get_audit_handler(definition)
         ready = str(row.get("status") or "").upper() == "READY"
         has_preparer = bool(spec.preparation_function)
-        policy = get_research_artifact_preparation_policy()
         source = dict(row.get("source") or {})
         raw_path = source.get("path")
         source_path = None if raw_path in (None, "") else Path(str(raw_path))
@@ -171,7 +212,10 @@ def render_audit_status(
 ) -> str:
     status = collect_audit_status(module_id, project_root=project_root, method_id=method_id)
     preparation_plan = collect_audit_preparation_plan(
-        module_id, project_root=project_root, method_id=method_id
+        module_id,
+        project_root=project_root,
+        method_id=method_id,
+        status_snapshot=status,
     )
     action_by_audit_id = {
         item.artifact_key.split(":", 1)[1]: item
@@ -330,6 +374,7 @@ def collect_project_audit_status(*, project_root: Path = PROJECT_ROOT) -> dict[s
 
 
 __all__ = [
+    "collect_audit_menu_state",
     "collect_audit_preparation_plan",
     "collect_audit_status",
     "collect_project_audit_status",

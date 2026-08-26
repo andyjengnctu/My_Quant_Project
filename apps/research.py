@@ -42,7 +42,7 @@ from services.research.strategy_compare_application import (
 )
 from services.audit.catalog import get_audit_methods
 from services.audit.runner import (
-    collect_audit_status,
+    collect_audit_menu_state,
     render_audit_status,
     render_latest_audit_summary,
     run_enabled_audits,
@@ -403,10 +403,8 @@ def _strategy_compare_menu() -> int:
 def _audit_method_menu(module_id: str, method_id: str) -> int:
     method = next(item for item in get_audit_methods() if item.method_id == method_id)
     while True:
-        status = collect_audit_status(
-            module_id, project_root=PROJECT_ROOT, method_id=method_id
-        )
-        enabled = [row for row in status["rows"] if row["enabled"]]
+        menu_state = collect_audit_menu_state(module_id, method_id=method_id)
+        enabled = bool(menu_state["configured"])
         print(f"\n=== {method.menu_label} ===")
         if not enabled:
             print("config/audit.py目前沒有啟用此方法的比較設定。")
@@ -491,23 +489,26 @@ def _audit_menu() -> int:
     while True:
         print("\n=== Audit／診斷 ===")
         print(f"Active module：{module_id}")
-        method_statuses = []
-        for method in methods:
-            status = collect_audit_status(
-                module_id, project_root=PROJECT_ROOT, method_id=method.method_id
+        menu_state = collect_audit_menu_state(module_id)
+        enabled_counts = {
+            method.method_id: sum(
+                1
+                for row in menu_state["rows"]
+                if row["enabled"] and row["method_id"] == method.method_id
             )
-            enabled_count = sum(1 for row in status["rows"] if row["enabled"])
-            method_statuses.append((method, status, enabled_count))
+            for method in methods
+        }
         default_index = next(
-            (index for index, (_method, _status, count) in enumerate(method_statuses, start=1) if count),
+            (
+                index
+                for index, method in enumerate(methods, start=1)
+                if enabled_counts.get(method.method_id, 0)
+            ),
             1,
         )
-        for index, (method, status, enabled_count) in enumerate(method_statuses, start=1):
-            suffix = (
-                f"  [{status['overall_status']}]"
-                if enabled_count
-                else "  [未設定]"
-            )
+        for index, method in enumerate(methods, start=1):
+            enabled_count = enabled_counts.get(method.method_id, 0)
+            suffix = "  [已設定]" if enabled_count else "  [未設定]"
             print(
                 render_menu_item(
                     index,
