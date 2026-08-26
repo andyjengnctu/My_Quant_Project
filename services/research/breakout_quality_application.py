@@ -419,6 +419,121 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
                 ),
             ])
 
+    raw_eval = dict(payload.get("safety_raw_mfe_evaluation") or {})
+    raw_rows: list[tuple[str, ...]] = []
+    if raw_eval:
+        for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
+            scope = dict(raw_eval.get(scope_key) or {})
+            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")):
+                row = dict(scope.get(head_key) or {})
+                if not row:
+                    continue
+                raw_rows.append((
+                    scope_label, head_label,
+                    _fmt_simple_metric(row.get("mean_daily_spearman")),
+                    _fmt_simple_metric(row.get("global_spearman_vs_raw_target")),
+                    _fmt_simple_metric(row.get("pairwise_concordance"), percent=True),
+                ))
+        if raw_rows:
+            lines.extend([
+                render_section("MR-13S Safety→Raw-MFE Model Gate"),
+                render_table(
+                    ("Split", "Head", "Daily rho", "Global rho", "Pair"),
+                    raw_rows, alignments=("left", "left", "right", "right", "right"),
+                ),
+            ])
+        gate = dict((raw_eval.get("oos") or {}).get("model_gate") or {})
+        if gate:
+            upper = dict(gate.get("upper_right_s5_m5") or {})
+            pct = upper.get("actual_hmhs_pct")
+            population = gate.get("population_hmhs_pct")
+            lines.extend([
+                f"Joint product→actual HM/HS daily rho={_fmt_simple_metric(gate.get('joint_product_to_actual_hmhs_mean_daily_spearman'))}",
+                f"S5×M5 N={int(upper.get('n', 0) or 0):,}; actual HM/HS={_fmt_simple_metric(None if pct is None else float(pct)/100.0, percent=True)}; population={_fmt_simple_metric(None if population is None else float(population)/100.0, percent=True)}",
+                "Predicted joint geometry（cell = N / actual HM/HS%）：",
+            ])
+            geometry_rows = []
+            for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
+                cells = []
+                for cell in row:
+                    cell = dict(cell or {})
+                    cpct = cell.get("actual_hmhs_pct")
+                    cells.append(f"{int(cell.get('n', 0) or 0):,} / {'-' if cpct is None else f'{float(cpct):.2f}%'}")
+                geometry_rows.append((f"S{s_idx}", *cells))
+            if geometry_rows:
+                lines.append(render_table(
+                    ("Pred Safety \\ Raw-MFE", "M1", "M2", "M3", "M4", "M5"),
+                    geometry_rows, alignments=("left", "right", "right", "right", "right", "right"),
+                ))
+            cohort_rows = []
+            for cohort in list(gate.get("safety_cohorts") or []):
+                cohort = dict(cohort or {})
+                cohort_rows.append((
+                    f"S{int(cohort.get('predicted_safety_quintile', 0) or 0)}",
+                    f"{int(cohort.get('n', 0) or 0):,}",
+                    _fmt_simple_metric(cohort.get("raw_mfe_to_actual_mfe_mean_daily_spearman")),
+                    f"{int(cohort.get('valid_days', 0) or 0):,}",
+                    _fmt_simple_metric(None if cohort.get("high_mfe_pct") is None else float(cohort["high_mfe_pct"])/100.0, percent=True),
+                    _fmt_simple_metric(None if cohort.get("hmhs_pct") is None else float(cohort["hmhs_pct"])/100.0, percent=True),
+                ))
+            if cohort_rows:
+                lines.append(render_table(
+                    ("Pred Safety", "N", "Raw-MFE→MFE rho", "Valid days", "High-MFE", "HM/HS"),
+                    cohort_rows, alignments=("left", "right", "right", "right", "right", "right"),
+                ))
+
+    raw_eval = dict(payload.get("safety_raw_mfe_evaluation") or {})
+    raw_rows: list[tuple[str, str, dict]] = []
+    if raw_eval:
+        for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
+            scope = dict(raw_eval.get(scope_key) or {})
+            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")):
+                row = dict(scope.get(head_key) or {})
+                if row:
+                    raw_rows.append((scope_label, head_label, row))
+        if raw_rows:
+            lines.extend([
+                "", "## MR-13S Safety→Raw-MFE Model Gate", "",
+                "| Split | Head | Daily rho | Global rho | Pair |",
+                "|---|---|---:|---:|---:|",
+            ])
+            for scope_label, head_label, row in raw_rows:
+                lines.append(
+                    f"| {scope_label} | {head_label} "
+                    f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
+                    f"| {_fmt_simple_metric(row.get('global_spearman_vs_raw_target'))} "
+                    f"| {_fmt_simple_metric(row.get('pairwise_concordance'), percent=True)} |"
+                )
+        gate = dict((raw_eval.get("oos") or {}).get("model_gate") or {})
+        if gate:
+            upper = dict(gate.get("upper_right_s5_m5") or {})
+            lines.extend([
+                "", "### Forward-OOS Joint Geometry", "",
+                f"- Joint product→actual HM/HS Daily rho：`{_fmt_simple_metric(gate.get('joint_product_to_actual_hmhs_mean_daily_spearman'))}`",
+                f"- S5×M5：N=`{int(upper.get('n', 0) or 0):,}` / actual HM/HS=`{'-' if upper.get('actual_hmhs_pct') is None else f"{float(upper['actual_hmhs_pct']):.2f}%"}`",
+                "", "| Pred Safety \\ Raw-MFE | M1 | M2 | M3 | M4 | M5 |",
+                "|---|---|---|---|---|---|",
+            ])
+            for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
+                cells=[]
+                for cell in row:
+                    cell=dict(cell or {})
+                    pct=cell.get("actual_hmhs_pct")
+                    cells.append(f"{int(cell.get('n',0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'}")
+                lines.append(f"| S{s_idx} | " + " | ".join(cells) + " |")
+            lines.extend([
+                "", "| Pred Safety | N | Raw-MFE→MFE rho | Valid days | High-MFE | HM/HS |",
+                "|---|---:|---:|---:|---:|---:|",
+            ])
+            for cohort in list(gate.get("safety_cohorts") or []):
+                cohort=dict(cohort or {})
+                hp=cohort.get("high_mfe_pct"); jp=cohort.get("hmhs_pct")
+                lines.append(
+                    f"| S{int(cohort.get('predicted_safety_quintile',0) or 0)} | {int(cohort.get('n',0) or 0):,} "
+                    f"| {_fmt_simple_metric(cohort.get('raw_mfe_to_actual_mfe_mean_daily_spearman'))} | {int(cohort.get('valid_days',0) or 0):,} "
+                    f"| {'-' if hp is None else f'{float(hp):.2f}%'} | {'-' if jp is None else f'{float(jp):.2f}%'} |"
+                )
+
     sample = dict((metrics.get("oos") or {}).get("top_k_quality") or {})
     if sample:
         top_k = int(sample.get("top_k", 0) or 0)

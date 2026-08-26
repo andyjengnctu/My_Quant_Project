@@ -2630,6 +2630,161 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
     return results, summary
 
 
+def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
+    """Protect MR-13S as the single-target controlled contrast to MR-13R."""
+
+    case_id = "BREAKOUT_QUALITY_SAFETY_RAW_MFE_DUO"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        DAILY_UNIVERSAL_SAFETY_CONDITIONAL_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_execution_recipe,
+        get_continuous_ranker_research_spec,
+    )
+    from filters.breakout_quality.conditional_mfe_opportunity import (
+        build_conditional_mfe_opportunity_targets,
+    )
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality.ranker_training import safety_raw_mfe_metrics
+
+    old_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SAFETY_CONDITIONAL_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    spec = get_continuous_ranker_research_spec(profile.name)
+    check(
+        "mr13s_identity_is_active_model_only_controlled_contrast",
+        (
+            DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            "MR-13S",
+            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+            "inception_time_safety_conditional_mfe_v1",
+            False,
+            False,
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            spec.model_research_id,
+            profile.training_objective,
+            profile.model_architecture,
+            spec.selection_pit_authorized,
+            spec.current_time_validation_authorized,
+        ),
+    )
+    check(
+        "mr13s_changes_target_not_architecture_or_pairwise_reduction",
+        (
+            old_profile.model_architecture,
+            get_continuous_ranker_execution_recipe(old_profile.name).pairwise_reduction,
+        ),
+        (
+            profile.model_architecture,
+            get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction,
+        ),
+    )
+    sem = dict(training_semantics(profile).get("safety_raw_mfe_duo_head_contract") or {})
+    check(
+        "mr13s_contract_is_raw_safety_plus_absolute_mfe_with_stop_gradient_context",
+        (
+            "same_date_low_adverse_safety_percentile",
+            "same_date_pure_mfe_percentile",
+            "stop_gradient_raw_safety_probability",
+            False,
+            "fixed_equal_mean_no_lambda_sweep",
+            "raw_mfe_mean_daily_spearman",
+            "model_gate_only_no_pit_no_strategy_conversion",
+        ),
+        (
+            sem.get("safety_target"),
+            sem.get("raw_mfe_target"),
+            sem.get("conditional_context"),
+            sem.get("safety_head_gradient_from_mfe_loss"),
+            sem.get("head_weighting"),
+            sem.get("epoch_selection"),
+            sem.get("runtime_status"),
+        ),
+    )
+
+    frame = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-01-02"] * 10 + ["2026-01-05"] * 10),
+            "target_favorable_r": list(range(1, 11)) * 2,
+            "target_adverse_r": [0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 1.0, 0.5, 0.6, 0.1] * 2,
+            "label": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1] * 2,
+        }
+    )
+    targets = build_conditional_mfe_opportunity_targets(
+        frame, np.ones(len(frame), dtype=bool)
+    )
+    new_target = targets.safety_raw_mfe_training_target
+    old_target = targets.duo_head_training_target
+    check("mr13s_training_target_shape", (20, 2), new_target.shape)
+    check_true(
+        "mr13s_safety_target_is_byte_identical_to_mr13r_safety_target",
+        bool(np.array_equal(new_target[:, 0], old_target[:, 0])),
+    )
+    check_true(
+        "mr13s_final_target_is_absolute_u_not_residual_j",
+        bool(
+            np.array_equal(new_target[:, 1], targets.primary_mfe_percentile)
+            and not np.array_equal(new_target[:, 1], old_target[:, 1])
+        ),
+    )
+
+    # Controlled perfect marginal scores must create supported upper-right geometry.
+    scores = {
+        "raw_safety": targets.low_adverse_safety_percentile.astype(np.float32),
+        "raw_mfe": targets.primary_mfe_percentile.astype(np.float32),
+    }
+    metrics = safety_raw_mfe_metrics(
+        np.arange(len(frame), dtype=np.int64), frame, targets, scores
+    )
+    gate = dict(metrics.get("model_gate") or {})
+    upper = dict(gate.get("upper_right_s5_m5") or {})
+    geometry = list(gate.get("predicted_joint_geometry") or [])
+    cohorts = list(gate.get("safety_cohorts") or [])
+    check_true(
+        "mr13s_model_gate_has_full_5x5_geometry_and_supported_upper_right",
+        len(geometry) == 5
+        and all(len(row) == 5 for row in geometry)
+        and int(upper.get("n", 0) or 0) > 0
+        and float(upper.get("actual_hmhs_pct") or 0.0) == 100.0,
+    )
+    check_true(
+        "mr13s_model_gate_reports_all_safety_cohorts_and_joint_rank",
+        len(cohorts) == 5
+        and all("raw_mfe_to_actual_mfe_mean_daily_spearman" in row for row in cohorts)
+        and gate.get("joint_product_to_actual_hmhs_mean_daily_spearman") is not None,
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
+    check_true(
+        "mr13s_model_only_delivery_does_not_create_c75_strategy_arm",
+        '"C75"' not in strategy_source and "'C75'" not in strategy_source,
+    )
+    report_source = (
+        project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
+    ).read_text(encoding="utf-8")
+    check_true(
+        "mr13s_forward_report_contains_joint_geometry_without_new_audit",
+        "MR-13S Safety→Raw-MFE Model Gate" in report_source
+        and "predicted_joint_geometry" in report_source
+        and "safety_cohorts" in report_source,
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+
+
 def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_params):
     """Pin the profile-driven continuous-ranker boundary before adding new Daily MR variants."""
 

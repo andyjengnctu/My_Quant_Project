@@ -1,17 +1,21 @@
 ## Going
 
+在開始接下來的改善前，我想先整理目前的research 報表架構:  
+- [3] 裡面現在也混了績效面與分析面不同層級的報表
+- [4] aduit對發現問題很有幫助，但每次都要重新開發，比較面向也不一樣，無法每次都用一致的SOP來系統性的評估對像與分析原因，但有些aduit又是one-time use
+如何重構整理?
+
+分析這陣子以來的aduit報表，規劃常駐的adui報表
 
 - bug fix
     - remove |buy list|= k constrain 
     - epoch performance inconsistat in [1][3]
-    - aduit選單每層開啟都要等很久
 
 - trading
     - add a buy list to decide the stop prices using full roos base-fanlist-best
     - frozen 2026/3/2 data for research purpose, latest for trading
 
 - restreucture
-    - models/output cleaner
     - color template file to consist rule
 
 - imrove DL module

@@ -10250,3 +10250,20 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Diagnostic boundary仍為**READ_ONLY / NO_STRATEGY_REPLAY / NO_FUTURE_TRUTH_RUNTIME_USE / NO_THRESHOLD_FIT / NO_MODEL_TRAINING**；正式實機schema-v2結果仍待使用者重跑同一Audit後審閱，再依既定Case 1/2/3決策。
 - Status：**ACTIVE / IMPLEMENTED_SCHEMA_V2 / RESULT_PENDING / OLD_OVERLAP_SUM_R_INVALIDATED**。
 
+
+### 2026-08-26 — AUD-mr13r-joint-capital-drawdown schema-v2結果；MR-13R marginal signal存在但joint geometry collapse
+
+- 同一read-only Audit已完成OOS fingerprint=`b12582a9de23`與Rolling=`3bca1e932f2e`。Joint model evidence：Conditional-MFE→actual MFE Dailyρ=`0.342/0.376`、Raw Safety→actual Safety Dailyρ=`0.339/0.364`（OOS/Rolling），故兩個head marginal learnability均存在。
+- 但joint-product→actual HM/HS Dailyρ只有=`0.035/0.058`，且predicted S5×M5 upper-right兩mode皆只有`N=1`。5×5分佈近乎反對角；高Safety S5 cohort內Conditional-MFE→actual MFE rho仍=`0.151/0.169`，因此不能解讀成高Safety區MFE head完全失效，而是residual J沒有形成可供portfolio使用的absolute Safety×MFE joint coordinate。
+- Capital mechanism維持前一輪結論：Safety提高時selected stop-distance通常縮窄，fixed-risk sizing下projected capital／reserved-notional與Exposure提高；holding days沒有同方向單調增加，故Exposure增加主要是sizing geometry而非holding-duration effect。
+- Schema-v2 exact peak→trough MTM attribution全部硬性reconcile canonical Equity Δ=`0.000`。最大回撤損失主要落在Low-MFE quadrants；例如OOS C74 LM/HS+LM/LS=`-16.67%Peak`對總DD=`-20.16%`，Rolling C73=`-14.84%Peak`對總DD=`-16.11%`。這不支持把entry clustering／portfolio concentration列為current primary blocker。
+- Decision：**AUDIT_RESULT_AVAILABLE / DECISION_COMPLETE / MARGINAL_SIGNAL_PRESENT / JOINT_GEOMETRY_COLLAPSED / STOP_SELECTOR_ARITHMETIC / DO_NOT_PRIORITIZE_PORTFOLIO_CONSTRUCTION / NEXT=MR-13S_MODEL_ONLY**。Audit identity/result保留read-only；不新增Audit、不恢復K/R0、不做threshold sweep／Multi-seed／Fixed-window。
+
+### 2026-08-26 — MR-13S實作：Safety→Raw-MFE Duo-head model-only controlled contrast
+
+- 新scientific identity=`MR-13S`，profile=`daily_universal_safety_raw_mfe_duo_head_full_list_ndcg_pairwise`。不新增architecture：沿用MR-13R `inception_time_safety_conditional_mfe_v1` shared encoder、Raw Safety auxiliary head與Safety-conditioned final head。
+- Controlled variable只有final supervision：Raw Safety head仍學同日Low-Adverse Safety percentile `S`；final head由MR-13R residual `J=U-E(U|S)`改學absolute同日Pure-MFE percentile `U`。final head仍接收`stop-gradient(raw safety probability)`；MFE loss不得更新Safety classifier，shared encoder仍接受兩head梯度。
+- 兩head都沿用full-list Delta-NDCG weighted pairwise logistic，固定`0.5/0.5`平均，無lambda／threshold／calibration；epoch selection只看Validation Raw-MFE mean Daily Spearman。OOS只在checkpoint完成後做frozen evaluation，不參與gradient／epoch selection。
+- Forward model report直接新增model-only joint Gate：Raw Safety/Raw-MFE marginal rho、predicted Safety×Raw-MFE 5×5 `N / actual HM/HS%`、S5×M5 N/HMHS、Safety quintile內Raw-MFE→actual-MFE Dailyρ/High-MFE/HMHS，以及joint-product→HM/HS Dailyρ。這些OOS cells只作GO/STOP diagnostic，禁止回頭fit weight／threshold／calibration。
+- Authorization：`selection_pit_authorized=False`、`current_time_validation_authorized=False`；本輪不建立DL source、PIT或`SR-C75`。只有MR-13S Forward Model Gate先證明absolute Safety×Raw-MFE joint upper-right具有實質support/enrichment，才授權下一個唯一strategy conversion。
+- Decision：**IMPLEMENTED / MODEL_GATE_RESULT_PENDING / NO_PIT / NO_STRATEGY_ARM / NOT_PROMOTED**。

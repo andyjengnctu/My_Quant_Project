@@ -42,6 +42,14 @@ class ConditionalMfeOpportunityTargets:
             [self.low_adverse_safety_percentile, self.conditional_mfe_percentile]
         ).astype(np.float32, copy=False)
 
+    @property
+    def safety_raw_mfe_training_target(self) -> np.ndarray:
+        # MR-13S controlled contrast keeps the identical Safety head/context but
+        # replaces residual J with the absolute same-date Pure-MFE percentile U.
+        return np.column_stack(
+            [self.low_adverse_safety_percentile, self.primary_mfe_percentile]
+        ).astype(np.float32, copy=False)
+
 
 def build_conditional_mfe_opportunity_targets(
     group_table: pd.DataFrame,
