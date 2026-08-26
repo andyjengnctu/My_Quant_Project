@@ -10239,3 +10239,14 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - GPT synthetic Audit framework=`14/14 PASS`，含joint upper-right enrichment、Safety→stop-distance/reserved-notional、portfolio drawdown overlap-clustering primitives。正式實機Audit尚待使用者執行。
 - Status：**ACTIVE / IMPLEMENTED / RESULT_PENDING**。
 
+### 2026-08-26 — AUD-mr13r-joint-capital-drawdown schema-v2修正；作廢Overlap ΣR drawdown語意
+
+- 初版正式Audit已證實MR-13R兩head本身仍有signal、Safety→較窄stop→較高capital/exposure conversion也存在；但terminal沒有把程式已有的5×5 cells、Safety cohorts與upper-right N完整顯示，無法直接判讀joint enrichment gradient。
+- 更重要的是初版drawdown `Overlap ΣR`只把「與peak→trough期間有重疊的trade」之**最終完整 realized R**加總；OOS C72 Max DD=`17.19%`卻可得`+8.29R`、Rolling C73 Max DD=`16.11%`卻可得`+43.07R`，因此該欄位明確**不是**peak→trough portfolio drawdown contribution，後續研究推論不得再引用。
+- 同一formal Audit identity維持`AUD-mr13r-joint-capital-drawdown`，不新增Audit、不新增C75。output schema升為v2；Joint terminal/report新增S5×M5 upper-right `N`、完整5×5 `N / actual HM/HS%`、Safety quintile `N / Conditional-MFE→actual-MFE Dailyρ / High-MFE / HM/HS`及joint-product→HM/HS Dailyρ。
+- Drawdown改用canonical Equity peak EOD→trough EOD的**true position MTM Δ**：由既有`score_ranking_trades.csv`實際買賣cashflow、pair `strategy_comparison.json`封存fee/tax contract、canonical cleaned OHLCV Close與核心long-sell tick/accounting規則重建每筆trade account value；交易在trough後的final realized R/PnL完全不參與contribution。
+- 每個episode硬性要求`Σ position MTM Δ == Equity(trough)-Equity(peak)`（毫級容許誤差，失配即BLOCK），並分別標記peak-held、drawdown期間entry、期間exit、trough-held，再按HM/HS、HM/LS、LM/HS、LM/LS彙總MTM contribution；future truth只在MTM完成後作post-replay分組。詳細逐position輸出新增`drawdown_position_contributions.csv`。
+- Synthetic新增反例：三筆trade最終`realized_r`合計=`+2R`，但portfolio peak=`1000`→trough=`950`；修正版得到`ΣMTM=-50`、Equity Δ=`-50`、reconcile Δ=`0`，HM/HS/HM/LS/LM/HS contribution=`-20/-20/-10`，證明已封住舊語意。Audit framework targeted synthetic=`15/15 PASS`。
+- Diagnostic boundary仍為**READ_ONLY / NO_STRATEGY_REPLAY / NO_FUTURE_TRUTH_RUNTIME_USE / NO_THRESHOLD_FIT / NO_MODEL_TRAINING**；正式實機schema-v2結果仍待使用者重跑同一Audit後審閱，再依既定Case 1/2/3決策。
+- Status：**ACTIVE / IMPLEMENTED_SCHEMA_V2 / RESULT_PENDING / OLD_OVERLAP_SUM_R_INVALIDATED**。
+

@@ -504,6 +504,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         build_capital_conversion_analysis,
         build_drawdown_analysis,
         build_joint_signal_analysis,
+        render_result as render_mr13r_joint_audit_result,
     )
 
     joint_orderable = pd.DataFrame({
@@ -533,6 +534,26 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and joint_signal["upper_right_hmhs_pct"] > joint_signal["population_hmhs_pct"]
             and joint_signal["primary_to_actual_mfe_mean_daily_spearman"] > 0.99
             and joint_signal["safety_to_actual_safety_mean_daily_spearman"] > 0.99
+        ),
+    )
+    joint_report_text = render_mr13r_joint_audit_result({
+        "audit_id": "AUD-mr13r-joint-capital-drawdown",
+        "status": "RESULT_AVAILABLE_PENDING_REVIEW",
+        "evaluations": {
+            "forward_oos": {
+                "joint_signal": {key: value for key, value in joint_signal.items() if key != "detail"},
+                "arms": {},
+            }
+        },
+    })
+    check_true(
+        "mr13r_joint_signal_report_exposes_upper_right_n_full_5x5_and_safety_cohorts",
+        bool(
+            "Predicted S5×M5 upper-right：N=1" in joint_report_text
+            and "cell = N / actual HM/HS%" in joint_report_text
+            and "Pred Safety \\ Cond-MFE" in joint_report_text
+            and "Safety cohort conditional-MFE conversion" in joint_report_text
+            and "Joint product→actual HM/HS dailyρ" in joint_report_text
         ),
     )
 
@@ -599,36 +620,116 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             ),
         )
 
+    with TemporaryDirectory() as drawdown_temp_text:
+        drawdown_root = Path(drawdown_temp_text)
+        drawdown_pair_dir = drawdown_root / "pair"
+        market_dir = drawdown_root / "market"
+        drawdown_pair_dir.mkdir(parents=True)
+        market_dir.mkdir(parents=True)
+        pd.DataFrame({
+            "Date": ["2025-01-01", "2025-01-02", "2025-01-03", "2025-01-04", "2025-01-05"],
+            "Equity": [1000.0, 970.0, 950.0, 1010.0, 1020.0],
+            "Exposure_Pct": [20.0, 20.0, 20.0, 10.0, 0.0],
+        }).to_csv(drawdown_pair_dir / "score_ranking_equity.csv", index=False, encoding="utf-8-sig")
+        drawdown_history = pd.DataFrame({
+            "Date": ["2025-01-01", "2025-01-01", "2025-01-02", "2025-01-02", "2025-01-04", "2025-01-05"],
+            "Ticker": ["A", "C", "C", "B", "A", "B"],
+            "Type": ["買進 (突破)", "買進 (突破)", "全倉結算", "買進 (突破)", "全倉結算", "全倉結算"],
+            "進場類型": ["normal", "normal", "", "normal", "", ""],
+            "買訊日": ["2025-01-01", "2025-01-01", "", "2025-01-01", "", ""],
+            "候選日": ["2025-01-01", "2025-01-01", "", "2025-01-01", "", ""],
+            "成交價": [100.0, 100.0, 90.0, 100.0, 120.0, 110.0],
+            "停損價": [90.0, 90.0, 90.0, 90.0, 90.0, 90.0],
+            "股數": [1, 1, 1, 1, 1, 1],
+            "投入總金額": [100.0, 100.0, 0.0, 100.0, 0.0, 0.0],
+            "該筆總損益": [0.0, 0.0, -10.0, 0.0, 20.0, 10.0],
+            "R_Multiple": [0.0, 0.0, -1.0, 0.0, 2.0, 1.0],
+        })
+        drawdown_history.to_csv(
+            drawdown_pair_dir / "score_ranking_trades.csv", index=False, encoding="utf-8-sig"
+        )
+        (drawdown_pair_dir / "strategy_comparison.json").write_text(
+            json.dumps({
+                "metadata": {
+                    "score_ranking_params": {
+                        "buy_fee": 0.0,
+                        "sell_fee": 0.0,
+                        "tax_rate": 0.0,
+                        "min_fee": 0.0,
+                        "fixed_risk": 0.01,
+                    }
+                }
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        market_closes = {
+            "A": [100.0, 90.0, 80.0, 120.0, 120.0],
+            "B": [100.0, 90.0, 80.0, 100.0, 110.0],
+            "C": [100.0, 90.0, 90.0, 90.0, 90.0],
+        }
+        market_dates = ["2025-01-01", "2025-01-02", "2025-01-03", "2025-01-04", "2025-01-05"]
+        for ticker, closes in market_closes.items():
+            pd.DataFrame({
+                "Date": market_dates,
+                "Open": closes,
+                "High": closes,
+                "Low": closes,
+                "Close": closes,
+                "Volume": [1000.0] * len(closes),
+            }).to_csv(market_dir / f"{ticker}.csv", index=False)
+
         drawdown_path = pd.DataFrame({
-            "ticker": ["A", "B"],
-            "score_event_date": ["2025-01-01", "2025-01-01"],
-            "entry_date": ["2025-01-02", "2025-01-02"],
-            "exit_date": ["2025-01-04", "2025-01-06"],
-            "realized_r": [0.5, -0.5],
+            "match_key": ["A|2025-01-01|normal|1", "B|2025-01-02|normal|1", "C|2025-01-01|normal|1"],
+            "ticker": ["A", "B", "C"],
+            "score_event_date": ["2025-01-01"] * 3,
+            "entry_date": ["2025-01-01", "2025-01-02", "2025-01-01"],
+            "exit_date": ["2025-01-04", "2025-01-05", "2025-01-02"],
+            # Deliberately positive in aggregate: this proves final realized R cannot
+            # stand in for peak→trough drawdown contribution.
+            "realized_r": [2.0, 1.0, -1.0],
         })
         drawdown_truth = pd.DataFrame({
-            "ticker": ["A", "B"],
-            "date": ["2025-01-01", "2025-01-01"],
-            "mfe_percentile": [0.9, 0.8],
-            "safety_percentile": [0.9, 0.2],
+            "ticker": ["A", "B", "C"],
+            "date": ["2025-01-01"] * 3,
+            "mfe_percentile": [0.9, 0.9, 0.2],
+            "safety_percentile": [0.9, 0.2, 0.9],
         })
         drawdown = build_drawdown_analysis(
-            {**mechanism_evidence, "upside_realization": drawdown_path},
-            drawdown_truth, cutoff=0.50, top_n=2,
+            {
+                "pair_dir": drawdown_pair_dir,
+                "active_trades": drawdown_history,
+                "upside_realization": drawdown_path,
+            },
+            drawdown_truth,
+            cutoff=0.50,
+            top_n=2,
+            market_data_dir=market_dir,
         )
         first_dd = drawdown["top_episodes"][0]
+        contributions = pd.DataFrame(drawdown["position_contributions"])
         check_true(
-            "mr13r_drawdown_audit_uses_portfolio_peak_to_trough_and_overlapping_trade_clustering",
+            "mr13r_drawdown_audit_reconciles_true_peak_to_trough_mtm_instead_of_final_realized_r",
             bool(
-                abs(drawdown["max_drawdown_pct"] - 10.0) < 1e-9
+                abs(drawdown["max_drawdown_pct"] - 5.0) < 1e-9
                 and first_dd["peak_date"] == "2025-01-01"
                 and first_dd["trough_date"] == "2025-01-03"
-                and first_dd["overlapping_trade_count"] == 2
-                and first_dd["overlap_losing_trade_count"] == 1
-                and first_dd["hmls_count"] == 1
-                and first_dd["hmhs_count"] == 1
+                and abs(first_dd["equity_change"] + 50.0) < 1e-9
+                and abs(first_dd["position_mtm_contribution_sum"] + 50.0) < 1e-9
+                and abs(first_dd["reconciliation_delta"]) < 1e-9
+                and first_dd["peak_held_count"] == 2
+                and first_dd["entered_during_drawdown_count"] == 1
+                and first_dd["exited_during_drawdown_count"] == 1
+                and first_dd["trough_held_count"] == 2
+                and first_dd["negative_contributor_count"] == 3
+                and abs(first_dd["hmhs_mtm_contribution"] + 20.0) < 1e-9
+                and abs(first_dd["hmls_mtm_contribution"] + 20.0) < 1e-9
+                and abs(first_dd["lmhs_mtm_contribution"] + 10.0) < 1e-9
+                and abs(first_dd["lmls_mtm_contribution"]) < 1e-9
+                and abs(float(drawdown_path["realized_r"].sum()) - 2.0) < 1e-9
+                and len(contributions) == 3
             ),
         )
+
 
     summary["workflow"] = "config_driven_formal_audit_topology"
     return results, summary

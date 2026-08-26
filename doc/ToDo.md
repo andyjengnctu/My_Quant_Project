@@ -4,6 +4,7 @@
 - bug fix
     - remove |buy list|= k constrain 
     - epoch performance inconsistat in [1][3]
+    - aduit選單每層開啟都要等很久
 
 - trading
     - add a buy list to decide the stop prices using full roos base-fanlist-best

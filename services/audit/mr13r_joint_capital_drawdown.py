@@ -12,12 +12,22 @@ import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
 
 from config.audit import AUDIT_OUTPUT_ROOT, AuditDefinition
+from core.data_utils import discover_unique_csv_map, sanitize_ohlcv_dataframe
+from core.dataset_profiles import get_dataset_dir
+from core.exact_accounting import (
+    build_buy_ledger_from_price,
+    build_sell_ledger_from_price,
+    coerce_money_like_to_milli,
+    milli_to_money,
+)
+from core.price_utils import adjust_long_sell_fill_price
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 from services.audit.mfe_safety_truth import (
     AuditBlockedError,
@@ -407,21 +417,292 @@ def _drawdown_episodes(equity: pd.DataFrame) -> list[dict[str, Any]]:
     return sorted(episodes, key=lambda row: row["max_drawdown_pct"], reverse=True)
 
 
+_ACCOUNTING_FIELDS = ("buy_fee", "sell_fee", "tax_rate", "min_fee")
+_QUADRANT_FIELDS = {
+    "high_mfe_high_safety_pct": "hmhs",
+    "high_mfe_low_safety_pct": "hmls",
+    "low_mfe_high_safety_pct": "lmhs",
+    "low_mfe_low_safety_pct": "lmls",
+}
+
+
+def _read_pair_accounting_params(pair_dir: Path) -> SimpleNamespace:
+    path = Path(pair_dir) / "strategy_comparison.json"
+    if not path.is_file():
+        raise AuditBlockedError(f"缺少既有Strategy Compare pair metadata: {path.name}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AuditBlockedError(f"無法讀取pair accounting metadata: {exc}") from exc
+    metadata = dict(payload.get("metadata") or {}) if isinstance(payload, Mapping) else {}
+    active = metadata.get("score_ranking_params")
+    if not isinstance(active, Mapping):
+        raise AuditBlockedError("Strategy Compare pair metadata缺少score_ranking_params")
+
+    candidates: list[Mapping[str, Any]] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, Mapping):
+            if all(field in node for field in _ACCOUNTING_FIELDS):
+                candidates.append(node)
+            for child in node.values():
+                visit(child)
+        elif isinstance(node, (list, tuple)):
+            for child in node:
+                visit(child)
+
+    visit(active)
+    if not candidates:
+        raise AuditBlockedError("score_ranking_params找不到封存fee/tax accounting contract")
+    policies: dict[tuple[float, float, float, float], Mapping[str, Any]] = {}
+    for candidate in candidates:
+        try:
+            key = tuple(float(candidate[field]) for field in _ACCOUNTING_FIELDS)
+        except (TypeError, ValueError) as exc:
+            raise AuditBlockedError("score_ranking_params fee/tax contract格式無效") from exc
+        policies.setdefault(key, candidate)
+    if len(policies) != 1:
+        raise AuditBlockedError(
+            "Strategy Compare pair存在多組fee/tax accounting contract，無法做唯一MTM reconciliation"
+        )
+    (buy_fee, sell_fee, tax_rate, min_fee), sample = next(iter(policies.items()))
+    return SimpleNamespace(
+        buy_fee=buy_fee,
+        sell_fee=sell_fee,
+        tax_rate=tax_rate,
+        min_fee=min_fee,
+        fixed_risk=float(sample.get("fixed_risk", 0.01)),
+    )
+
+
+def _positive_int(value: Any, *, label: str) -> int:
+    number = _finite(value)
+    if number is None or number <= 0 or abs(number - round(number)) > 1e-9:
+        raise AuditBlockedError(f"trade sidecar {label}不是正整數: {value}")
+    return int(round(number))
+
+
+def _build_trade_accounts(
+    history: pd.DataFrame,
+    *,
+    pair_dir: Path,
+) -> tuple[list[dict[str, Any]], pd.DataFrame]:
+    frame = pd.DataFrame(history).copy().reset_index(drop=True)
+    round_trips = reconstruct_round_trips(frame, scenario="score_ranking")
+    if round_trips.empty:
+        return [], round_trips
+    required = {"Date", "Ticker", "Type", "成交價", "股數"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise AuditBlockedError(f"trade sidecar缺少MTM accounting欄位: {missing}")
+    params = _read_pair_accounting_params(pair_dir)
+    round_trip_by_key = {
+        str(row["match_key"]): row
+        for row in round_trips.to_dict("records")
+    }
+    occurrence: dict[tuple[str, str, str], int] = {}
+    open_accounts: dict[str, dict[str, Any]] = {}
+    accounts: list[dict[str, Any]] = []
+
+    for row_index, row in frame.iterrows():
+        ticker = normalize_ticker(row.get("Ticker"))
+        type_text = str(row.get("Type") or "").strip()
+        trade_date = normalize_date(row.get("Date"))
+        if not ticker or not type_text or not trade_date:
+            continue
+        if type_text.startswith("買進 ("):
+            if ticker in open_accounts:
+                raise AuditBlockedError(
+                    f"trade sidecar同ticker未結算即再買進: ticker={ticker}, row={row_index}"
+                )
+            entry_type = str(row.get("進場類型") or "normal").strip() or "normal"
+            key_base = (ticker, trade_date, entry_type)
+            match_occurrence = occurrence.get(key_base, 0) + 1
+            occurrence[key_base] = match_occurrence
+            match_key = f"{ticker}|{trade_date}|{entry_type}|{match_occurrence}"
+            round_trip = round_trip_by_key.get(match_key)
+            if round_trip is None:
+                raise AuditBlockedError(f"trade sidecar無法對上canonical match_key: {match_key}")
+            qty = _positive_int(row.get("股數"), label="買進股數")
+            entry_price = _finite(row.get("成交價"))
+            if entry_price is None or entry_price <= 0:
+                raise AuditBlockedError(f"trade sidecar買進成交價無效: {match_key}")
+            buy_ledger = build_buy_ledger_from_price(entry_price, qty, params)
+            computed_cost_milli = int(buy_ledger["net_buy_total_milli"])
+            sidecar_cost = _finite(row.get("投入總金額")) if "投入總金額" in frame.columns else None
+            if sidecar_cost is not None and sidecar_cost > 0:
+                sidecar_cost_milli = coerce_money_like_to_milli(sidecar_cost)
+                if abs(sidecar_cost_milli - computed_cost_milli) > 1:
+                    raise AuditBlockedError(
+                        "trade sidecar投入總金額與封存accounting contract不一致: "
+                        f"{match_key} sidecar={milli_to_money(sidecar_cost_milli):.3f} "
+                        f"recomputed={milli_to_money(computed_cost_milli):.3f}"
+                    )
+                entry_cost_milli = sidecar_cost_milli
+            else:
+                entry_cost_milli = computed_cost_milli
+            account = {
+                "match_key": match_key,
+                "ticker": ticker,
+                "entry_date": trade_date,
+                "exit_date": normalize_date(round_trip.get("exit_date")),
+                "initial_qty": qty,
+                "entry_cost_milli": int(entry_cost_milli),
+                "sell_events": [],
+                "expected_pnl": _finite(round_trip.get("pnl")),
+            }
+            accounts.append(account)
+            open_accounts[ticker] = account
+            continue
+
+        account = open_accounts.get(ticker)
+        if account is None:
+            continue
+        exec_price = _finite(row.get("成交價"))
+        qty_value = _finite(row.get("股數"))
+        if exec_price is None or exec_price <= 0 or qty_value is None or qty_value <= 0:
+            continue
+        sell_qty = _positive_int(qty_value, label="賣出股數")
+        sell_ledger = build_sell_ledger_from_price(
+            exec_price,
+            sell_qty,
+            params,
+            ticker=ticker,
+            trade_date=trade_date,
+        )
+        account["sell_events"].append({
+            "date": trade_date,
+            "qty": sell_qty,
+            "net_sell_total_milli": int(sell_ledger["net_sell_total_milli"]),
+        })
+        sold_qty = sum(int(event["qty"]) for event in account["sell_events"])
+        if sold_qty > int(account["initial_qty"]):
+            raise AuditBlockedError(f"trade sidecar賣出股數超過持倉: {account['match_key']}")
+        if sold_qty == int(account["initial_qty"]):
+            if trade_date != str(account["exit_date"]):
+                raise AuditBlockedError(
+                    f"trade sidecar cashflow結算日與canonical round-trip不一致: {account['match_key']}"
+                )
+            final_pnl_milli = -int(account["entry_cost_milli"]) + sum(
+                int(event["net_sell_total_milli"]) for event in account["sell_events"]
+            )
+            expected_pnl = account.get("expected_pnl")
+            if expected_pnl is not None:
+                expected_milli = coerce_money_like_to_milli(expected_pnl)
+                if abs(final_pnl_milli - expected_milli) > 11:
+                    raise AuditBlockedError(
+                        "trade sidecar final PnL與exact cashflow無法reconcile: "
+                        f"{account['match_key']} sidecar={expected_pnl:.2f} "
+                        f"cashflow={milli_to_money(final_pnl_milli):.3f}"
+                    )
+            del open_accounts[ticker]
+
+    if open_accounts:
+        raise AuditBlockedError(
+            "trade sidecar結束後仍有未reconcile持倉: " + ", ".join(sorted(open_accounts)[:5])
+        )
+    return accounts, round_trips
+
+
+def _load_close_series(
+    ticker: str,
+    *,
+    market_csv_map: Mapping[str, str],
+    market_close_cache: dict[str, pd.Series],
+) -> pd.Series:
+    if ticker in market_close_cache:
+        return market_close_cache[ticker]
+    csv_path = market_csv_map.get(ticker)
+    if not csv_path:
+        raise AuditBlockedError(f"canonical market data找不到ticker={ticker}")
+    try:
+        raw = pd.read_csv(csv_path, low_memory=False)
+        cleaned, _stats = sanitize_ohlcv_dataframe(raw, ticker, min_rows=1)
+    except (OSError, KeyError, ValueError) as exc:
+        raise AuditBlockedError(f"canonical market data無法載入ticker={ticker}: {exc}") from exc
+    close = pd.to_numeric(cleaned["Close"], errors="coerce").dropna().sort_index()
+    if close.empty:
+        raise AuditBlockedError(f"canonical market data沒有有效Close: ticker={ticker}")
+    market_close_cache[ticker] = close
+    return close
+
+
+def _close_on_or_before(series: pd.Series, date_text: str, *, ticker: str) -> float:
+    ts = pd.Timestamp(date_text)
+    position = int(series.index.searchsorted(ts, side="right") - 1)
+    if position < 0:
+        raise AuditBlockedError(f"canonical market data在{date_text}以前沒有Close: ticker={ticker}")
+    value = _finite(series.iloc[position])
+    if value is None or value <= 0:
+        raise AuditBlockedError(f"canonical market data Close無效: ticker={ticker}, date={date_text}")
+    return value
+
+
+def _trade_account_value_at(
+    account: Mapping[str, Any],
+    date_text: str,
+    *,
+    params: SimpleNamespace,
+    market_csv_map: Mapping[str, str],
+    market_close_cache: dict[str, pd.Series],
+) -> dict[str, Any]:
+    entry_date = str(account["entry_date"])
+    if date_text < entry_date:
+        return {"value_milli": 0, "remaining_qty": 0, "mark_price": None}
+    value_milli = -int(account["entry_cost_milli"])
+    remaining_qty = int(account["initial_qty"])
+    for event in account["sell_events"]:
+        if str(event["date"]) <= date_text:
+            value_milli += int(event["net_sell_total_milli"])
+            remaining_qty -= int(event["qty"])
+    if remaining_qty < 0:
+        raise AuditBlockedError(f"trade account remaining qty < 0: {account['match_key']}")
+    mark_price = None
+    if remaining_qty > 0:
+        ticker = str(account["ticker"])
+        close_series = _load_close_series(
+            ticker,
+            market_csv_map=market_csv_map,
+            market_close_cache=market_close_cache,
+        )
+        close_price = _close_on_or_before(close_series, date_text, ticker=ticker)
+        mark_price = adjust_long_sell_fill_price(close_price, ticker=ticker)
+        liquidation = build_sell_ledger_from_price(
+            mark_price,
+            remaining_qty,
+            params,
+            ticker=ticker,
+            trade_date=date_text,
+        )
+        value_milli += int(liquidation["net_sell_total_milli"])
+    return {
+        "value_milli": int(value_milli),
+        "remaining_qty": int(remaining_qty),
+        "mark_price": mark_price,
+    }
+
+
 def build_drawdown_analysis(
     evidence: Mapping[str, Any],
     truth: pd.DataFrame,
     *,
     cutoff: float,
     top_n: int,
+    market_data_dir: Path,
+    market_csv_map: Mapping[str, str] | None = None,
+    market_close_cache: dict[str, pd.Series] | None = None,
 ) -> dict[str, Any]:
     pair_dir = Path(evidence["pair_dir"])
     equity, _ = _load_equity(pair_dir)
-    round_trips, _ = _load_round_trips(pair_dir)
+    history = pd.DataFrame(evidence["active_trades"]).copy()
+    accounts, round_trips = _build_trade_accounts(history, pair_dir=pair_dir)
     path = pd.DataFrame(evidence["upside_realization"]).copy()
     if path.empty:
         raise AuditBlockedError("upside_realization sidecar為空")
-    if "score_event_date" not in path.columns or "ticker" not in path.columns:
-        raise AuditBlockedError("upside_realization缺少ticker/score_event_date")
+    required_path = {"match_key", "score_event_date", "ticker"}
+    missing_path = sorted(required_path - set(path.columns))
+    if missing_path:
+        raise AuditBlockedError(f"upside_realization缺少MTM attribution key: {missing_path}")
     path["ticker"] = path["ticker"].map(normalize_ticker)
     path["score_event_date"] = path["score_event_date"].map(normalize_date)
     truth_q = attach_quadrants(pd.DataFrame(truth), cutoff=cutoff)
@@ -432,47 +713,165 @@ def build_drawdown_analysis(
         how="left",
         validate="many_to_one",
     )
-    for column in ("entry_date", "exit_date"):
-        if column in path.columns:
-            path[column] = path[column].map(normalize_date)
-    episodes = _drawdown_episodes(equity)[: int(top_n)]
+    if bool(path["match_key"].duplicated(keep=False).any()):
+        raise AuditBlockedError("upside_realization match_key不是唯一值")
+    quadrant_by_key = {
+        str(row["match_key"]): str(row.get("quadrant") or "unclassified")
+        for row in path.to_dict("records")
+    }
+
+    market_data_dir = Path(market_data_dir)
+    if market_csv_map is None:
+        try:
+            discovered, _issues = discover_unique_csv_map(str(market_data_dir))
+        except (OSError, ValueError) as exc:
+            raise AuditBlockedError(f"canonical market data inventory失敗: {exc}") from exc
+        market_csv_map = {normalize_ticker(key): value for key, value in discovered.items()}
+    if market_close_cache is None:
+        market_close_cache = {}
+    params = _read_pair_accounting_params(pair_dir)
+
+    all_episodes = _drawdown_episodes(equity)
+    episodes = all_episodes[: int(top_n)]
     rows: list[dict[str, Any]] = []
+    detail_rows: list[dict[str, Any]] = []
     for rank, episode in enumerate(episodes, start=1):
         peak = str(episode["peak_date"])
         trough = str(episode["trough_date"])
-        overlap = path.loc[
-            path.get("entry_date", pd.Series("", index=path.index)).le(trough)
-            & path.get("exit_date", pd.Series("", index=path.index)).ge(peak)
-        ].copy()
-        entered = path.loc[
-            path.get("entry_date", pd.Series("", index=path.index)).between(peak, trough)
-        ].copy()
-        q_counts = overlap.get("quadrant", pd.Series(dtype=str)).value_counts().to_dict()
-        realized = pd.to_numeric(overlap.get("realized_r"), errors="coerce")
-        losing = realized < 0.0
-        entry_counts = entered.get("entry_date", pd.Series(dtype=str)).value_counts()
+        peak_equity_milli = coerce_money_like_to_milli(episode["peak_equity"])
+        trough_equity_milli = coerce_money_like_to_milli(episode["trough_equity"])
+        equity_change_milli = trough_equity_milli - peak_equity_milli
+        entry_dates: list[str] = []
+        episode_details: list[dict[str, Any]] = []
+        total_contribution_milli = 0
+
+        for account in accounts:
+            peak_state = _trade_account_value_at(
+                account,
+                peak,
+                params=params,
+                market_csv_map=market_csv_map,
+                market_close_cache=market_close_cache,
+            )
+            trough_state = _trade_account_value_at(
+                account,
+                trough,
+                params=params,
+                market_csv_map=market_csv_map,
+                market_close_cache=market_close_cache,
+            )
+            contribution_milli = int(trough_state["value_milli"]) - int(peak_state["value_milli"])
+            total_contribution_milli += contribution_milli
+            entry_date = str(account["entry_date"])
+            exit_date = str(account["exit_date"])
+            held_at_peak = entry_date <= peak and exit_date > peak
+            entered_during = peak < entry_date <= trough
+            exited_during = peak < exit_date <= trough
+            held_at_trough = entry_date <= trough and exit_date > trough
+            relevant = held_at_peak or entered_during or exited_during or held_at_trough
+            if not relevant:
+                continue
+            if entered_during:
+                entry_dates.append(entry_date)
+            quadrant = quadrant_by_key.get(str(account["match_key"]), "unclassified")
+            row = {
+                "episode_rank": rank,
+                "peak_date": peak,
+                "trough_date": trough,
+                "match_key": str(account["match_key"]),
+                "ticker": str(account["ticker"]),
+                "entry_date": entry_date,
+                "exit_date": exit_date,
+                "quadrant": quadrant,
+                "held_at_peak": bool(held_at_peak),
+                "entered_during_drawdown": bool(entered_during),
+                "exited_during_drawdown": bool(exited_during),
+                "held_at_trough": bool(held_at_trough),
+                "peak_remaining_qty": int(peak_state["remaining_qty"]),
+                "trough_remaining_qty": int(trough_state["remaining_qty"]),
+                "peak_mark_price": peak_state["mark_price"],
+                "trough_mark_price": trough_state["mark_price"],
+                "peak_account_value": milli_to_money(int(peak_state["value_milli"])),
+                "trough_account_value": milli_to_money(int(trough_state["value_milli"])),
+                "mtm_contribution": milli_to_money(contribution_milli),
+                "mtm_contribution_pct_peak_equity": (
+                    float(contribution_milli / peak_equity_milli * 100.0)
+                    if peak_equity_milli else None
+                ),
+                "negative_contributor": bool(contribution_milli < 0),
+            }
+            episode_details.append(row)
+            detail_rows.append(row)
+
+        reconciliation_delta_milli = total_contribution_milli - equity_change_milli
+        tolerance_milli = max(10, len(episode_details) * 2)
+        if abs(reconciliation_delta_milli) > tolerance_milli:
+            raise AuditBlockedError(
+                "peak→trough position MTM無法與canonical equity reconcile: "
+                f"peak={peak}, trough={trough}, "
+                f"positions={milli_to_money(total_contribution_milli):.3f}, "
+                f"equity={milli_to_money(equity_change_milli):.3f}, "
+                f"delta={milli_to_money(reconciliation_delta_milli):.3f}"
+            )
+
+        detail_frame = pd.DataFrame(episode_details)
+        entry_counts = pd.Series(entry_dates, dtype=str).value_counts()
         duration_days = int((pd.Timestamp(trough) - pd.Timestamp(peak)).days)
-        rows.append({
+        summary: dict[str, Any] = {
             "episode_rank": rank,
             **{key: value for key, value in episode.items() if not key.endswith("_idx")},
-            "overlapping_trade_count": int(len(overlap)),
-            "entered_during_drawdown_count": int(len(entered)),
-            "max_same_day_entries": int(entry_counts.max()) if len(entry_counts) else 0,
             "drawdown_to_trough_calendar_days": duration_days,
-            "overlap_realized_mean_r": _finite(realized.mean()),
-            "overlap_realized_sum_r": _finite(realized.sum()),
-            "overlap_losing_trade_count": int(losing.sum()),
-            "overlap_losing_sum_r": _finite(realized.loc[losing].sum()),
-            "hmhs_count": int(q_counts.get("high_mfe_high_safety_pct", 0)),
-            "hmls_count": int(q_counts.get("high_mfe_low_safety_pct", 0)),
-            "lmhs_count": int(q_counts.get("low_mfe_high_safety_pct", 0)),
-            "lmls_count": int(q_counts.get("low_mfe_low_safety_pct", 0)),
-        })
+            "relevant_trade_count": int(len(detail_frame)),
+            "peak_held_count": int(detail_frame.get("held_at_peak", pd.Series(dtype=bool)).sum()),
+            "entered_during_drawdown_count": int(detail_frame.get("entered_during_drawdown", pd.Series(dtype=bool)).sum()),
+            "exited_during_drawdown_count": int(detail_frame.get("exited_during_drawdown", pd.Series(dtype=bool)).sum()),
+            "trough_held_count": int(detail_frame.get("held_at_trough", pd.Series(dtype=bool)).sum()),
+            "max_same_day_entries": int(entry_counts.max()) if len(entry_counts) else 0,
+            "negative_contributor_count": int(detail_frame.get("negative_contributor", pd.Series(dtype=bool)).sum()),
+            "equity_change": milli_to_money(equity_change_milli),
+            "position_mtm_contribution_sum": milli_to_money(total_contribution_milli),
+            "position_mtm_contribution_pct_peak_equity": (
+                float(total_contribution_milli / peak_equity_milli * 100.0)
+                if peak_equity_milli else None
+            ),
+            "reconciliation_delta": milli_to_money(reconciliation_delta_milli),
+        }
+        for quadrant, prefix in _QUADRANT_FIELDS.items():
+            if detail_frame.empty:
+                group = detail_frame
+            else:
+                group = detail_frame.loc[detail_frame["quadrant"] == quadrant]
+            contribution = (
+                float(pd.to_numeric(group["mtm_contribution"], errors="coerce").sum())
+                if "mtm_contribution" in group.columns else 0.0
+            )
+            summary[f"{prefix}_count"] = int(len(group))
+            summary[f"{prefix}_mtm_contribution"] = float(contribution)
+            summary[f"{prefix}_mtm_contribution_pct_peak_equity"] = (
+                float(contribution / float(episode["peak_equity"]) * 100.0)
+                if float(episode["peak_equity"]) else None
+            )
+        unclassified = (
+            detail_frame.loc[~detail_frame["quadrant"].isin(_QUADRANT_FIELDS)]
+            if not detail_frame.empty else detail_frame
+        )
+        unclassified_contribution = (
+            float(pd.to_numeric(unclassified["mtm_contribution"], errors="coerce").sum())
+            if "mtm_contribution" in unclassified.columns else 0.0
+        )
+        summary["unclassified_count"] = int(len(unclassified))
+        summary["unclassified_mtm_contribution"] = float(unclassified_contribution)
+        rows.append(summary)
+
     return {
         "max_drawdown_pct": (None if not episodes else float(episodes[0]["max_drawdown_pct"])),
-        "episode_count": int(len(_drawdown_episodes(equity))),
+        "episode_count": int(len(all_episodes)),
         "top_episodes": rows,
+        "position_contributions": detail_rows,
         "round_trip_count": int(len(round_trips)),
+        "market_data_dir": str(market_data_dir),
+        "accounting_basis": "exact trade cashflows + EOD hypothetical net liquidation at canonical Close",
+        "reconciliation_required": True,
     }
 
 
@@ -488,7 +887,7 @@ def _validate_arm_contracts(source: Any, arm_ids: tuple[str, ...]) -> None:
 
 
 def _fingerprint(definition: AuditDefinition, source_refs: Mapping[str, Any]) -> str:
-    payload = {"schema": 1, "definition": definition.as_dict(), "sources": source_refs}
+    payload = {"schema": 2, "definition": definition.as_dict(), "sources": source_refs}
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
 
@@ -498,11 +897,49 @@ def _fmt(value: Any, digits: int = 2, suffix: str = "") -> str:
     return "-" if number is None else f"{number:.{digits}f}{suffix}"
 
 
+def _fmt_money(value: Any, digits: int = 2) -> str:
+    number = _finite(value)
+    return "-" if number is None else f"{number:,.{digits}f}"
+
+
+def _fmt_mtm_cell(row: Mapping[str, Any], prefix: str) -> str:
+    count = int(row.get(f"{prefix}_count") or 0)
+    amount = _fmt_money(row.get(f"{prefix}_mtm_contribution"))
+    pct = _fmt(row.get(f"{prefix}_mtm_contribution_pct_peak_equity"), 2, "%")
+    return f"N={count} / {amount} ({pct})"
+
+
 def _markdown_table(headers: tuple[str, ...], rows: list[tuple[Any, ...]]) -> str:
     head = "| " + " | ".join(headers) + " |"
     sep = "| " + " | ".join("---" for _ in headers) + " |"
     body = ["| " + " | ".join(str(value) for value in row) + " |" for row in rows]
     return "\n".join([head, sep, *body])
+
+
+def _render_joint_geometry(joint: Mapping[str, Any]) -> str:
+    cells = [dict(row) for row in list(joint.get("cells") or [])]
+    max_bin = max(
+        [int(row.get("predicted_safety_bin", 0)) for row in cells]
+        + [int(row.get("predicted_mfe_bin", 0)) for row in cells]
+        + [4]
+    )
+    bin_count = max_bin + 1
+    lookup = {
+        (int(row["predicted_safety_bin"]), int(row["predicted_mfe_bin"])): row
+        for row in cells
+    }
+    headers = ("Pred Safety \\ Cond-MFE",) + tuple(f"M{index + 1}" for index in range(bin_count))
+    rows: list[tuple[Any, ...]] = []
+    for safety_bin in range(bin_count):
+        values: list[str] = []
+        for mfe_bin in range(bin_count):
+            row = lookup.get((safety_bin, mfe_bin))
+            if row is None:
+                values.append("0 / -")
+            else:
+                values.append(f"{int(row.get('rows') or 0)} / {_fmt(row.get('actual_hmhs_pct'), 2, '%')}")
+        rows.append((f"S{safety_bin + 1}", *values))
+    return _markdown_table(headers, rows)
 
 
 def render_result(result: Mapping[str, Any]) -> str:
@@ -517,15 +954,41 @@ def render_result(result: Mapping[str, Any]) -> str:
         lines.extend([f"[{profile_id}]", "-"])
         joint = dict(payload.get("joint_signal") or {})
         lines.append(
-            "Joint signal：Primary→MFE dailyρ="
+            "Joint signal：Conditional-MFE→actual MFE dailyρ="
             + _fmt(joint.get("primary_to_actual_mfe_mean_daily_spearman"), 3)
-            + "；Safety→Safety dailyρ="
+            + "；Raw Safety→actual Safety dailyρ="
             + _fmt(joint.get("safety_to_actual_safety_mean_daily_spearman"), 3)
-            + "；Predicted upper-right HM/HS="
+            + "；Joint product→actual HM/HS dailyρ="
+            + _fmt(joint.get("joint_product_to_hmhs_mean_daily_spearman"), 3)
+        )
+        lines.append(
+            "Predicted S5×M5 upper-right：N="
+            + str(int(joint.get("upper_right_rows") or 0))
+            + "；actual HM/HS="
             + _fmt(joint.get("upper_right_hmhs_pct"), 2, "%")
             + "；population="
             + _fmt(joint.get("population_hmhs_pct"), 2, "%")
         )
+        lines.append("Predicted joint geometry（cell = N / actual HM/HS%）：")
+        lines.append(_render_joint_geometry(joint))
+        cohort_rows = []
+        for row in list(joint.get("safety_cohorts") or []):
+            item = dict(row)
+            cohort_rows.append((
+                f"S{int(item.get('predicted_safety_bin') or 0) + 1}",
+                int(item.get("rows") or 0),
+                _fmt(item.get("mean_daily_conditional_mfe_to_actual_mfe_spearman"), 3),
+                int(item.get("valid_days") or 0),
+                _fmt(item.get("actual_high_mfe_pct"), 2, "%"),
+                _fmt(item.get("actual_hmhs_pct"), 2, "%"),
+            ))
+        if cohort_rows:
+            lines.append("Safety cohort conditional-MFE conversion：")
+            lines.append(_markdown_table(
+                ("Pred Safety quintile", "N", "Cond-MFE→MFE Dailyρ", "Valid days", "High-MFE", "HM/HS"),
+                cohort_rows,
+            ))
+
         capital_rows = []
         for arm_id, arm in dict(payload.get("arms") or {}).items():
             cap = dict(arm.get("capital_conversion") or {})
@@ -540,29 +1003,48 @@ def render_result(result: Mapping[str, Any]) -> str:
                 _fmt(cap.get("selected_raw_safety_to_reserved_fraction_daily_spearman"), 3),
             ))
         if capital_rows:
+            lines.append("Capital conversion：")
             lines.append(_markdown_table(
                 ("Arm", "Avg Exposure", "Median stop dist", "Median reserved/equity", "Mean holding", "Safety→Projected capital ρ", "Safety→Stop dist ρ", "Safety→Reserved ρ"),
                 capital_rows,
             ))
+
         dd_rows = []
+        quadrant_rows = []
         for arm_id, arm in dict(payload.get("arms") or {}).items():
             dd = dict(arm.get("drawdown") or {})
             top = list(dd.get("top_episodes") or [])
-            first = top[0] if top else {}
+            first = dict(top[0]) if top else {}
             dd_rows.append((
                 arm_id,
                 _fmt(dd.get("max_drawdown_pct"), 2, "%"),
-                first.get("peak_date", "-"),
-                first.get("trough_date", "-"),
-                first.get("overlapping_trade_count", "-"),
+                f"{first.get('peak_date', '-')}→{first.get('trough_date', '-')}",
+                _fmt(first.get("position_mtm_contribution_pct_peak_equity"), 2, "%"),
+                _fmt_money(first.get("reconciliation_delta"), 3),
+                first.get("peak_held_count", "-"),
+                first.get("entered_during_drawdown_count", "-"),
+                first.get("exited_during_drawdown_count", "-"),
+                first.get("trough_held_count", "-"),
                 first.get("max_same_day_entries", "-"),
-                first.get("overlap_losing_trade_count", "-"),
-                _fmt(first.get("overlap_realized_sum_r"), 2, "R"),
+            ))
+            quadrant_rows.append((
+                arm_id,
+                _fmt_mtm_cell(first, "hmhs"),
+                _fmt_mtm_cell(first, "hmls"),
+                _fmt_mtm_cell(first, "lmhs"),
+                _fmt_mtm_cell(first, "lmls"),
+                f"N={int(first.get('unclassified_count') or 0)} / {_fmt_money(first.get('unclassified_mtm_contribution'))}",
             ))
         if dd_rows:
+            lines.append("Max drawdown peak→trough true MTM attribution：")
             lines.append(_markdown_table(
-                ("Arm", "Max DD", "Peak", "Trough", "Overlap trades", "Max same-day entries", "Losing trades", "Overlap ΣR"),
+                ("Arm", "Max DD", "Peak→Trough", "ΣMTM / Peak", "Reconcile Δ", "Peak-held", "Entered", "Exited", "Trough-held", "Max same-day entries"),
                 dd_rows,
+            ))
+            lines.append("Max drawdown quadrant MTM contribution（N / ΔPnL / %Peak）：")
+            lines.append(_markdown_table(
+                ("Arm", "HM/HS", "HM/LS", "LM/HS", "LM/LS", "Unclassified"),
+                quadrant_rows,
             ))
         lines.append("")
     return "\n".join(lines).rstrip()
@@ -573,7 +1055,8 @@ def _render_markdown(result: Mapping[str, Any]) -> str:
         "## 判讀邊界\n\n" \
         "- Joint signal 使用完成 replay 後才 join 的 canonical future truth，僅供診斷，不參與任何選股。\n" \
         "- Capital conversion 是描述性 mechanism attribution；Safety 與 sizing/holding 的相關不等於單一因果證明。\n" \
-        "- Drawdown attribution 以 canonical equity/trade sidecars 的 peak→trough episode 為準；不把單股 adverse 直接當成 portfolio MDD proxy。\n"
+        "- Drawdown contribution 是 canonical equity peak EOD→trough EOD 的真實 position MTM Δ：既有實際買賣 cashflow + 當日 canonical Close 假設淨清算，並硬性 reconcile 至 portfolio Equity Δ。\n" \
+        "- 交易在 trough 後的最終 realized R/PnL 不作 drawdown contribution；future truth quadrant 只在 contribution 計算完成後做 post-replay 分組。\n"
 
 
 def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, Any]:
@@ -599,12 +1082,26 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
     cohort_frames: list[pd.DataFrame] = []
     capital_rows: list[dict[str, Any]] = []
     dd_rows: list[dict[str, Any]] = []
+    dd_detail_rows: list[dict[str, Any]] = []
     for profile_id in profiles:
         pinned = str(dict(source_cfg.get("strategy_result_fingerprints") or {}).get(profile_id) or "").strip()
         source = load_strategy_compare_source(root, profile_id=profile_id, pinned_config_fingerprint=pinned or None)
         _validate_arm_contracts(source, arm_ids)
         start, end = _period_from_source(source)
         period_truth = filter_period(truth, start, end)
+        market_data_dir = Path(get_dataset_dir(str(root), str(source.settings.dataset))).resolve()
+        if not market_data_dir.is_dir():
+            raise AuditBlockedError(
+                f"canonical market data目錄不存在: {_relative(market_data_dir, root)}"
+            )
+        try:
+            discovered_csv_map, _duplicate_issues = discover_unique_csv_map(str(market_data_dir))
+        except (OSError, ValueError) as exc:
+            raise AuditBlockedError(f"canonical market data inventory失敗: {exc}") from exc
+        market_csv_map = {
+            normalize_ticker(ticker): path for ticker, path in discovered_csv_map.items()
+        }
+        market_close_cache: dict[str, pd.Series] = {}
         evidences = {
             arm_id: load_strategy_arm_path_sidecars(root, source=source, arm_id=arm_id)
             for arm_id in arm_ids
@@ -629,11 +1126,23 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
             capital = build_capital_conversion_analysis(evidence)
             capital["equity_path"] = _relative(Path(capital["equity_path"]), root)
             capital["trades_path"] = _relative(Path(capital["trades_path"]), root)
-            drawdown = build_drawdown_analysis(evidence, period_truth, cutoff=cutoff, top_n=top_n)
+            drawdown = build_drawdown_analysis(
+                evidence,
+                period_truth,
+                cutoff=cutoff,
+                top_n=top_n,
+                market_data_dir=market_data_dir,
+                market_csv_map=market_csv_map,
+                market_close_cache=market_close_cache,
+            )
+            contribution_detail = list(drawdown.pop("position_contributions", ()))
+            drawdown["market_data_dir"] = _relative(Path(drawdown["market_data_dir"]), root)
             arm_payloads[arm_id] = {"capital_conversion": capital, "drawdown": drawdown}
             capital_rows.append({"profile_id": profile_id, "arm_id": arm_id, **capital})
             for row in drawdown["top_episodes"]:
                 dd_rows.append({"profile_id": profile_id, "arm_id": arm_id, **row})
+            for row in contribution_detail:
+                dd_detail_rows.append({"profile_id": profile_id, "arm_id": arm_id, **row})
             arm_sources[arm_id] = {
                 "pair_dir": _relative(Path(evidence["pair_dir"]), root),
                 "orderable": _relative(Path(evidence["orderable_path"]), root),
@@ -652,6 +1161,7 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
         source_refs["strategy"][profile_id] = {
             "run_dir": _relative(source.run_dir, root),
             "config_fingerprint": source.config_fingerprint,
+            "market_data_dir": _relative(market_data_dir, root),
             "arms": arm_sources,
         }
 
@@ -667,9 +1177,10 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
     cohort_path = run_dir / "safety_cohort_mfe_rho.csv"
     capital_path = run_dir / "capital_conversion.csv"
     dd_path = run_dir / "drawdown_episodes.csv"
+    dd_detail_path = run_dir / "drawdown_position_contributions.csv"
 
     result: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "RESULT_AVAILABLE_PENDING_REVIEW",
         "module_id": definition.module_id,
         "audit_id": definition.audit_id,
@@ -690,7 +1201,11 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
             "model_training": False,
             "joint_signal_interpretation": "upper-right HM/HS enrichment + conditional MFE rho within predicted Safety cohorts",
             "capital_interpretation": "descriptive sizing/holding conversion; correlation is not causal proof",
-            "drawdown_interpretation": "portfolio peak-to-trough episode attribution, not single-stock adverse proxy",
+            "drawdown_interpretation": (
+                "canonical peak-EOD to trough-EOD exact position MTM contribution; "
+                "actual transaction cashflows + hypothetical net liquidation at canonical Close; "
+                "must reconcile to portfolio Equity delta; final realized R is not drawdown contribution"
+            ),
         },
         "artifacts": {
             "Markdown": _relative(report_path, root),
@@ -699,6 +1214,7 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
             "Safety cohort rho CSV": _relative(cohort_path, root),
             "Capital CSV": _relative(capital_path, root),
             "Drawdown CSV": _relative(dd_path, root),
+            "Drawdown position contributions CSV": _relative(dd_detail_path, root),
             "Manifest": _relative(manifest_path, root),
         },
     }
@@ -708,8 +1224,9 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
     pd.concat(cohort_frames, ignore_index=True).to_csv(cohort_path, index=False, encoding="utf-8-sig") if cohort_frames else pd.DataFrame().to_csv(cohort_path, index=False, encoding="utf-8-sig")
     pd.DataFrame(capital_rows).to_csv(capital_path, index=False, encoding="utf-8-sig")
     pd.DataFrame(dd_rows).to_csv(dd_path, index=False, encoding="utf-8-sig")
+    pd.DataFrame(dd_detail_rows).to_csv(dd_detail_path, index=False, encoding="utf-8-sig")
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "audit_definition": definition.as_dict(),
         "config_fingerprint": fingerprint,
         "source_refs": source_refs,
@@ -727,7 +1244,7 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
     latest.mkdir(parents=True, exist_ok=True)
     (latest / "audit.md").write_text(report_path.read_text(encoding="utf-8"), encoding="utf-8")
     (latest / "audit.json").write_text(json_path.read_text(encoding="utf-8"), encoding="utf-8")
-    for path in (cell_path, cohort_path, capital_path, dd_path, manifest_path):
+    for path in (cell_path, cohort_path, capital_path, dd_path, dd_detail_path, manifest_path):
         (latest / path.name).write_bytes(path.read_bytes())
     return result
 
@@ -756,6 +1273,12 @@ def preflight(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
             source = load_strategy_compare_source(root, profile_id=profile_id, pinned_config_fingerprint=pinned or None)
             _validate_arm_contracts(source, arm_ids)
             _period_from_source(source)
+            market_data_dir = Path(get_dataset_dir(str(root), str(source.settings.dataset))).resolve()
+            if not market_data_dir.is_dir():
+                raise AuditBlockedError(
+                    f"canonical market data目錄不存在: {_relative(market_data_dir, root)}"
+                )
+            target_paths.append(_relative(market_data_dir, root))
             strategy_paths.append(_relative(source.run_dir, root))
             for arm_id in arm_ids:
                 evidence = load_strategy_arm_path_sidecars(root, source=source, arm_id=arm_id)
@@ -767,6 +1290,7 @@ def preflight(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
                     raise AuditBlockedError(f"{profile_id}/{arm_id} path sidecar為空")
                 _load_equity(Path(evidence["pair_dir"]))
                 _load_round_trips(Path(evidence["pair_dir"]))
+                _read_pair_accounting_params(Path(evidence["pair_dir"]))
         except (ValueError, KeyError, OSError, AuditSourceBlockedError, AuditBlockedError) as exc:
             blockers.append(str(exc))
     return {
