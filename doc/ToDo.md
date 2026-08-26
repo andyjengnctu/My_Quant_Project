@@ -4,7 +4,7 @@ C69證明不好的股票放更滿(>K)也不會更好，而且之前把R0拿掉�
 
 - bug fix
     - remove |buy list|= k constrain 
-    - reuse inconsist in oos/rolling
+    - boulde testing time to long
     - epoch performance inconsistat in [1][3]
 
 - trading

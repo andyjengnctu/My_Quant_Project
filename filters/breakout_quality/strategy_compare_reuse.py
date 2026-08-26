@@ -9,6 +9,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import pandas as pd
+
 from core.console_report import project_relative_display_path
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
@@ -31,12 +34,17 @@ from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     load_continuous_ranker_oos_score_table_from_path,
+    load_selection_point_in_time_score_table_from_path,
 )
 from filters.breakout_quality.strategy_compare_contracts import (
     COMPARISON_MODE_SCORE_RANKING,
     STRATEGY_COMPARE_SCHEMA_VERSION as STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
 )
 from filters.breakout_quality.strategy_compare_plan import ResolvedContinuousScoreBinding
+from filters.breakout_quality.strategy_score_projection import (
+    primary_score_column_for_source,
+    runtime_score_projection_requirements,
+)
 from filters.breakout_quality.strategy_result_state import resolve_strategy_result_state
 from filters.breakout_quality.strategy_compare_preparation import resolve_comparison_period
 from filters.breakout_quality.strategy_compare_runtime import (
@@ -51,7 +59,8 @@ from filters.breakout_quality.strategy_compare_sources import (
 )
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
 
-PAIR_CACHE_SCHEMA_VERSION = 1
+PAIR_CACHE_LEGACY_SCHEMA_VERSION = 1
+PAIR_CACHE_SCHEMA_VERSION = 2
 
 def _pair_group_id(
     *,
@@ -80,6 +89,52 @@ def _replay_arm_contract(raw: dict[str, Any]) -> dict[str, Any]:
         # 只有真正新增的runtime option才進入cache identity。
         contract["dl_runtime_options"] = runtime_options
     return contract
+
+def _selection_pit_projection_artifacts(
+    *,
+    settings_payload: dict[str, Any],
+    artifact_identities: dict[str, Any],
+    on_arm_payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    requirements = runtime_score_projection_requirements(
+        settings_payload=settings_payload,
+        on_arm_payload=on_arm_payload,
+    )
+    if not requirements:
+        return None
+    dl_sources = dict(settings_payload.get("dl_sources") or {})
+    projected: dict[str, Any] = {}
+    for source_id, columns in requirements.items():
+        source = dict(dl_sources.get(source_id) or {})
+        if str(source.get("score_source") or "") != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            return None
+        identity = dict(artifact_identities.get(f"dl:{source_id}:forward_scores") or {})
+        projection_map = dict(identity.get("score_projection_sha256") or {})
+        if not all(str(projection_map.get(column) or "").strip() for column in columns):
+            return None
+        projected[f"dl:{source_id}:forward_scores_projection"] = {
+            "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+            "columns": {
+                column: str(projection_map[column]).strip().lower()
+                for column in columns
+            },
+        }
+    return projected
+
+
+def _selection_pit_runtime_source_ids(
+    *, settings_payload: dict[str, Any], on_arm_payload: dict[str, Any]
+) -> set[str]:
+    dl_sources = dict(settings_payload.get("dl_sources") or {})
+    return {
+        source_id
+        for source_id in runtime_score_projection_requirements(
+            settings_payload=settings_payload, on_arm_payload=on_arm_payload
+        )
+        if str(dict(dl_sources.get(source_id) or {}).get("score_source") or "")
+        == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+    }
+
 
 def _pair_cache_fingerprint_from_payload(
     *,
@@ -151,16 +206,41 @@ def _pair_cache_fingerprint_from_payload(
             artifact_keys.extend(
                 f"dl:{safety_dl_id}:{name}" for name in safety_artifact_names
             )
-    selected_artifacts = {
-        key: artifact_identities.get(key)
-        for key in sorted(set(artifact_keys))
-    }
+    projected_score_artifacts = _selection_pit_projection_artifacts(
+        settings_payload=settings_payload,
+        artifact_identities=artifact_identities,
+        on_arm_payload=on_arm_payload,
+    )
+    if projected_score_artifacts is None:
+        cache_schema_version = PAIR_CACHE_LEGACY_SCHEMA_VERSION
+        selected_artifacts = {
+            key: artifact_identities.get(key)
+            for key in sorted(set(artifact_keys))
+        }
+    else:
+        cache_schema_version = PAIR_CACHE_SCHEMA_VERSION
+        runtime_selection_pit_ids = _selection_pit_runtime_source_ids(
+            settings_payload=settings_payload, on_arm_payload=on_arm_payload
+        )
+        selected_artifacts = {
+            key: artifact_identities.get(key)
+            for key in sorted(set(artifact_keys))
+            if not any(
+                key in {
+                    f"dl:{source_id}:manifest",
+                    f"dl:{source_id}:audit",
+                    f"dl:{source_id}:forward_scores",
+                }
+                for source_id in runtime_selection_pit_ids
+            )
+        }
+        selected_artifacts.update(projected_score_artifacts)
     evaluation_param_sha = str(parameter_evaluation_sha256 or "").strip().lower()
     if not evaluation_param_sha:
         evaluation_param_sha = _artifact_identity_sha(artifact_identities.get(param_artifact_key))
 
     payload = {
-        "cache_schema_version": PAIR_CACHE_SCHEMA_VERSION,
+        "cache_schema_version": cache_schema_version,
         "engine_schema_version": int(engine_schema_version),
         "dataset": settings_payload.get("dataset"),
         "comparison_period": dict(comparison_period or {}),
@@ -498,6 +578,180 @@ def _find_reusable_pair_with_archived_source(
         }
     return None
 
+def _bool_values(series: pd.Series, *, fallback_non_null: pd.Series) -> np.ndarray:
+    if series.dtype == bool:
+        return series.to_numpy(dtype=bool, copy=False)
+    normalized = series.fillna("").astype(str).str.strip().str.lower()
+    known = normalized.isin({"true", "false", "1", "0"})
+    parsed = normalized.isin({"true", "1"})
+    return np.where(known.to_numpy(), parsed.to_numpy(), fallback_non_null.to_numpy())
+
+
+def _legacy_pair_score_projection_matches_current(
+    *,
+    root: Path,
+    settings: StrategyComparisonSettings,
+    status: dict[str, Any],
+    run_payload: dict[str, Any],
+    pair_dir: Path,
+    off_arm: StrategyComparisonArm,
+    on_arm: StrategyComparisonArm,
+    stored_settings: dict[str, Any],
+    stored_off: dict[str, Any],
+    stored_on: dict[str, Any],
+    pair_metadata: dict[str, Any],
+) -> bool:
+    """Migrate a legacy whole-file PIT cache only after replay-consumed scores match.
+
+    Old completed pairs predate per-column projection hashes.  A newly added auxiliary
+    PIT column may therefore change manifest/audit/file SHA while leaving an existing
+    arm's actual inputs untouched.  Reuse is permitted only when the immutable replay
+    contract still matches and every score/availability value recorded in the pair's
+    active orderable sidecar is identical to the current PIT source for the columns the
+    arm consumes.
+    """
+
+    if not _settings_core_matches_archived_pair(
+        settings=settings, stored_settings=stored_settings, on_arm=on_arm
+    ):
+        return False
+    if dict(run_payload.get("comparison_period") or {}) != dict(
+        status.get("comparison_period") or {}
+    ):
+        return False
+    if _replay_arm_contract(stored_off) != _replay_arm_contract(off_arm.as_dict()):
+        return False
+    if _replay_arm_contract(stored_on) != _replay_arm_contract(on_arm.as_dict()):
+        return False
+    current_param_sha = _arm_parameter_evaluation_sha256(status, on_arm.arm_id)
+    stored_param_sha = str(pair_metadata.get("params_file_sha256") or "").strip().lower()
+    if not current_param_sha or stored_param_sha != current_param_sha:
+        return False
+
+    requirements = runtime_score_projection_requirements(
+        settings_payload=settings.as_dict(), on_arm_payload=on_arm.as_dict()
+    )
+    if not requirements:
+        return False
+    current_dl_sources = settings.dl_sources
+    stored_dl_sources = dict(stored_settings.get("dl_sources") or {})
+    source_fields = (
+        "filter_id",
+        "model_architecture",
+        "experiment_profile",
+        "threshold",
+        "score_source",
+    )
+    for source_id in requirements:
+        current_source = current_dl_sources.get(source_id)
+        stored_source = dict(stored_dl_sources.get(source_id) or {})
+        if current_source is None or not stored_source:
+            return False
+        current_source_payload = current_source.as_dict()
+        if any(
+            stored_source.get(field) != current_source_payload.get(field)
+            for field in source_fields
+        ):
+            return False
+        if current_source.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            return False
+
+    sidecar_path = pair_dir / "score_ranking_orderable_candidates.csv"
+    if not sidecar_path.is_file():
+        return False
+    try:
+        sidecar = pd.read_csv(sidecar_path, encoding="utf-8-sig")
+    except (OSError, ValueError, pd.errors.ParserError):
+        return False
+    if sidecar.empty or "ticker" not in sidecar.columns:
+        return False
+    sidecar = sidecar.copy()
+    sidecar["ticker"] = sidecar["ticker"].fillna("").astype(str).str.strip()
+    if bool((sidecar["ticker"] == "").any()):
+        return False
+
+    current_artifacts = dict(status.get("artifact_identities") or {})
+    primary_dl_id = str(on_arm.dl_id or "").strip()
+    for source_id, columns in requirements.items():
+        artifact_identity = dict(
+            current_artifacts.get(f"dl:{source_id}:forward_scores") or {}
+        )
+        raw_path = str(artifact_identity.get("path") or "").strip()
+        if not raw_path:
+            return False
+        try:
+            score_path = _resolve_relative_path(root, raw_path)
+            table = load_selection_point_in_time_score_table_from_path(str(score_path))
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+
+        source_payload = current_dl_sources[source_id].as_dict()
+        primary_column = primary_score_column_for_source(
+            str(source_payload.get("score_source") or "")
+        )
+        current_frame = table.reset_index()
+        for score_column in columns:
+            if score_column not in current_frame.columns:
+                return False
+            if source_id == primary_dl_id and score_column == primary_column:
+                side_score_column = "breakout_quality_score"
+                side_date_column = "breakout_quality_score_date"
+                side_available_column = "breakout_quality_score_available"
+            else:
+                side_score_column = "breakout_quality_safety_score"
+                side_date_column = "breakout_quality_safety_score_date"
+                side_available_column = "breakout_quality_safety_score_available"
+            if side_score_column not in sidecar.columns:
+                return False
+            date_values = (
+                sidecar[side_date_column].fillna("").astype(str).str.strip()
+                if side_date_column in sidecar.columns
+                else pd.Series("", index=sidecar.index, dtype=object)
+            )
+            if "signal_date" in sidecar.columns:
+                fallback_dates = sidecar["signal_date"].fillna("").astype(str).str.strip()
+                date_values = date_values.mask(date_values == "", fallback_dates)
+            if bool((date_values == "").any()):
+                return False
+
+            stored_scores = pd.to_numeric(sidecar[side_score_column], errors="coerce")
+            stored_non_null = stored_scores.notna()
+            if side_available_column in sidecar.columns:
+                stored_available = _bool_values(
+                    sidecar[side_available_column], fallback_non_null=stored_non_null
+                )
+            else:
+                stored_available = stored_non_null.to_numpy(dtype=bool, copy=False)
+
+            left = pd.DataFrame(
+                {
+                    "_row_id": np.arange(len(sidecar), dtype=np.int64),
+                    "ticker": sidecar["ticker"].to_numpy(),
+                    "date": date_values.to_numpy(),
+                    "_stored_score": stored_scores.to_numpy(dtype=np.float64, copy=False),
+                    "_stored_available": stored_available,
+                }
+            )
+            right = current_frame[["ticker", "date", score_column]].rename(
+                columns={score_column: "_current_score"}
+            )
+            merged = left.merge(
+                right, on=["ticker", "date"], how="left", validate="many_to_one"
+            ).sort_values("_row_id", kind="mergesort")
+            current_available = merged["_current_score"].notna().to_numpy(dtype=bool)
+            if not np.array_equal(
+                merged["_stored_available"].to_numpy(dtype=bool), current_available
+            ):
+                return False
+            mask = merged["_stored_available"].to_numpy(dtype=bool)
+            if bool(mask.any()):
+                stored_values = merged.loc[mask, "_stored_score"].to_numpy(dtype=np.float64)
+                current_values = merged.loc[mask, "_current_score"].to_numpy(dtype=np.float64)
+                if not np.array_equal(stored_values, current_values):
+                    return False
+    return True
+
+
 def _find_reusable_pair(
     *,
     root: Path,
@@ -559,6 +813,12 @@ def _find_reusable_pair(
         if not isinstance(pair_payload, dict):
             continue
         metadata = dict(pair_payload.get("metadata") or {})
+        pair_dir = run_dir / "pairs" / stored_group_id
+        if not all(
+            path.is_file()
+            for path in _pair_cache_required_files(pair_dir, on_arm=on_arm)
+        ):
+            continue
         try:
             actual = _pair_cache_fingerprint_from_payload(
                 settings_payload=stored_settings,
@@ -576,20 +836,30 @@ def _find_reusable_pair(
             )
         except (TypeError, ValueError):
             continue
+        source_artifact_mode = "projection_identity"
         if actual != expected:
-            continue
-        pair_dir = run_dir / "pairs" / stored_group_id
-        if not all(
-            path.is_file()
-            for path in _pair_cache_required_files(pair_dir, on_arm=on_arm)
-        ):
-            continue
+            if not _legacy_pair_score_projection_matches_current(
+                root=root,
+                settings=settings,
+                status=status,
+                run_payload=run_payload,
+                pair_dir=pair_dir,
+                off_arm=off_arm,
+                on_arm=on_arm,
+                stored_settings=stored_settings,
+                stored_off=stored_off,
+                stored_on=stored_on,
+                pair_metadata=metadata,
+            ):
+                continue
+            source_artifact_mode = "legacy_pair_runtime_score_projection_verified"
         return {
             "fingerprint": expected,
             "source_run_dir": run_dir,
             "source_pair_dir": pair_dir,
             "source_group_id": stored_group_id,
             "current_group_id": current_group_id,
+            "source_artifact_mode": source_artifact_mode,
         }
     return _find_reusable_pair_with_archived_source(
         root=root,

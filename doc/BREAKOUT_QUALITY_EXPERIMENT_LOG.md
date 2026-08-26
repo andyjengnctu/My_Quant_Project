@@ -10169,3 +10169,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Fix：cache publish/sync完成後，builder必須由fold目錄重新載入canonical manifest並重新驗證fitting compatibility、checkpoint hash/size與fold score hash/size，再使用此post-sync manifest建立coverage與top-level fold records。真正checkpoint分叉的fail-closed規則完全不變。
 - Scientific impact：**ENGINEERING_ONLY / NO_MODEL_RETRAIN / NO_WEIGHT_CHANGE / NO_C71_IDENTITY_CHANGE**。C71仍是C70 + MR-13R Raw Safety gate；只修score-only RESUME artifact integrity propagation。
 
+### 2026-08-26 — Strategy Compare Selection-PIT pair reuse改為runtime score projection identity
+
+- 使用者在C71前置rescore後觀察到C66/C70被planner標成RUN。根因不是scientific input改變，而是舊pair cache把Selection PIT整份`forward_scores`、manifest、audit physical SHA納入identity；C71只新增`raw_safety_score`就使整份CSV與伴隨工件SHA改變，連只消費原`breakout_quality_score`的C66/C70也被誤判stale。
+- 修正：新增`filters/breakout_quality/strategy_score_projection.py`作runtime-consumed score projection identity owner。Selection PIT forward-score artifact會依current enabled arms只計算必要欄位projection；每個column hash同時包含ticker/date membership與float value。pair-cache schema v2依arm需求挑projection：C66/C70=`breakout_quality_score`；C71=`breakout_quality_score + raw_safety_score`；C64同理包含其`conditional_safety_score`。Selection PIT manifest/audit的physical SHA不再作既有pair replay identity，因其不直接參與portfolio replay，source/profile/period/runtime contract仍由正式設定與其他gate驗證。
+- Legacy migration：既有schema-v1 completed pair沒有projection hash，第一次遇到v2 expected identity時不得直接放行。只有stored/current replay contract、period、parameter evaluation SHA、DL semantic identity完全一致，且pair正式`score_ranking_orderable_candidates.csv`中每個runtime-consumed score的availability/value逐列與目前Selection PIT table完全相同，才可標記`legacy_pair_runtime_score_projection_verified`並REUSE；primary score任何一列改變即cache miss。
+- Regression：C66/C70在whole-file SHA、manifest/audit SHA與Raw Safety projection改變但primary projection不變時fingerprint保持不變；primary projection改變時兩者失效；C71 Raw Safety projection改變時失效。另以legacy C66 fixture驗aux-column migration可REUSE、primary值改變必須MISS。
+- Decision：**ENGINEERING_FIX / NO_SCIENTIFIC_IDENTITY_CHANGE / C66_C70_REUSE_EXPECTED_AFTER_C71_SCORE_ONLY_RESCORE / C71_STILL_RUN**。不重算舊arm只是reuse correction；C71 scientific experiment與PIT model contract不變。
+

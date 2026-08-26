@@ -46,6 +46,10 @@ from filters.breakout_quality.strategy_compare_pit_contract import (
     load_validated_selection_pit_strategy_compare_contract,
     resolve_strategy_compare_selection_pit_bundle_dir,
 )
+from filters.breakout_quality.strategy_score_projection import (
+    compute_score_projection_sha256s,
+    required_score_columns_for_dl,
+)
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
@@ -377,10 +381,31 @@ def _collect_selection_pit_source_status(
     file_rows: dict[str, Any] = {}
     for key, path in files.items():
         sha256 = compute_file_sha256(path) if path.is_file() else None
-        artifact_identities[f"dl:{dl_id}:{key}"] = {
+        artifact_identity = {
             "path": project_relative_display_path(path, project_root=root),
             "sha256": sha256,
         }
+        if key == "forward_scores" and path.is_file():
+            required_projection_columns = required_score_columns_for_dl(
+                settings_payload=settings.as_dict(),
+                arm_payloads=(arm.as_dict() for arm in settings.enabled_arms),
+                dl_id=dl_id,
+            )
+            try:
+                projections = compute_score_projection_sha256s(
+                    score_path=path,
+                    score_source=source.score_source,
+                    columns=required_projection_columns,
+                )
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                artifact_identity["score_projection_status"] = (
+                    f"INVALID ({type(exc).__name__}: {exc})"
+                )
+            else:
+                if projections:
+                    artifact_identity["score_projection_sha256"] = projections
+                    artifact_identity["score_projection_status"] = "READY"
+        artifact_identities[f"dl:{dl_id}:{key}"] = artifact_identity
         any_pit_artifact_exists = any(candidate.exists() for candidate in files.values())
         action = _resolve_action(
             settings,

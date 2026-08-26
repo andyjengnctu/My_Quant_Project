@@ -279,6 +279,225 @@ def append_completed_pair_score_reuse_contract_checks(
     )
 
 
+    # Selection-PIT cache identity must track only score columns consumed by each arm.
+    selection_settings = strategy_config.get_strategy_comparison_settings(
+        "extending_window_oos"
+    )
+    selection_period = {"start": "2021-01-01", "end": "2026-03-02"}
+    projection_artifacts = {
+        "dl:CONT13R_ROLL:manifest": {"sha256": "manifest-v1"},
+        "dl:CONT13R_ROLL:audit": {"sha256": "audit-v1"},
+        "dl:CONT13R_ROLL:forward_scores": {
+            "sha256": "whole-file-v1",
+            "score_projection_sha256": {
+                "breakout_quality_score": "primary-v1",
+                "raw_safety_score": "safety-v1",
+            },
+        },
+    }
+    auxiliary_changed = json.loads(json.dumps(projection_artifacts))
+    auxiliary_changed["dl:CONT13R_ROLL:manifest"]["sha256"] = "manifest-v2"
+    auxiliary_changed["dl:CONT13R_ROLL:audit"]["sha256"] = "audit-v2"
+    auxiliary_changed["dl:CONT13R_ROLL:forward_scores"]["sha256"] = "whole-file-v2"
+    auxiliary_changed["dl:CONT13R_ROLL:forward_scores"]["score_projection_sha256"][
+        "raw_safety_score"
+    ] = "safety-v2"
+    primary_changed = json.loads(json.dumps(auxiliary_changed))
+    primary_changed["dl:CONT13R_ROLL:forward_scores"]["score_projection_sha256"][
+        "breakout_quality_score"
+    ] = "primary-v2"
+
+    def projected_fp(arm_id, artifacts):
+        return score_reuse_module._pair_cache_fingerprint_from_payload(
+            settings_payload=selection_settings.as_dict(),
+            artifact_identities=artifacts,
+            comparison_period=selection_period,
+            off_arm_payload=selection_settings.arms["C58"].as_dict(),
+            on_arm_payload=selection_settings.arms[arm_id].as_dict(),
+            engine_schema_version=score_reuse_module.STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
+            parameter_evaluation_sha256="param-sha",
+        )
+
+    c66_base = projected_fp("C66", projection_artifacts)
+    c66_aux = projected_fp("C66", auxiliary_changed)
+    c66_primary = projected_fp("C66", primary_changed)
+    c70_base = projected_fp("C70", projection_artifacts)
+    c70_aux = projected_fp("C70", auxiliary_changed)
+    c70_primary = projected_fp("C70", primary_changed)
+    c71_base = projected_fp("C71", projection_artifacts)
+    c71_aux = projected_fp("C71", auxiliary_changed)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_pit_pair_identity_ignores_unconsumed_auxiliary_score_but_tracks_consumed_columns",
+        True,
+        c66_base == c66_aux
+        and c70_base == c70_aux
+        and c66_base != c66_primary
+        and c70_base != c70_primary
+        and c71_base != c71_aux,
+    )
+
+    from filters.breakout_quality.strategy_score_projection import (
+        compute_score_projection_sha256s,
+    )
+    with tempfile.TemporaryDirectory() as projection_tmp:
+        projection_root = Path(projection_tmp).resolve()
+        score_path = projection_root / "models" / "cont13r_scores.csv"
+        score_path.parent.mkdir(parents=True, exist_ok=True)
+        score_frame = pd.DataFrame(
+            [
+                {
+                    "ticker": "2330",
+                    "date": "2021-01-04",
+                    "group_index": 1,
+                    "breakout_quality_score": 0.90,
+                    "raw_safety_score": 0.80,
+                    "fold_id": "fold_20210101_20260302",
+                    "model_information_cutoff": "2020-12-31",
+                },
+                {
+                    "ticker": "2317",
+                    "date": "2021-01-05",
+                    "group_index": 2,
+                    "breakout_quality_score": 0.70,
+                    "raw_safety_score": 0.60,
+                    "fold_id": "fold_20210101_20260302",
+                    "model_information_cutoff": "2020-12-31",
+                },
+            ]
+        )
+        score_frame.to_csv(score_path, index=False, encoding="utf-8-sig")
+        projection_map = compute_score_projection_sha256s(
+            score_path=score_path,
+            score_source="selection_point_in_time",
+            columns=("breakout_quality_score", "raw_safety_score"),
+        )
+        on_arm = selection_settings.arms["C66"]
+        off_arm = selection_settings.arms["C58"]
+        group_id = score_reuse_module._pair_group_id(
+            param_source=on_arm.param_source,
+            rule_policy=on_arm.rule_policy,
+            dl_id=str(on_arm.dl_id or ""),
+            dl_runtime_mode=str(on_arm.dl_runtime_mode or ""),
+        )
+        run_dir = (
+            projection_root
+            / selection_settings.output_root
+            / "runs"
+            / "20260826_000000_legacy_c66"
+        )
+        pair_dir = run_dir / "pairs" / group_id
+        pair_dir.mkdir(parents=True, exist_ok=True)
+        required_paths = score_reuse_module._pair_cache_required_files(
+            pair_dir, on_arm=on_arm
+        )
+        for required_path in required_paths:
+            required_path.parent.mkdir(parents=True, exist_ok=True)
+            if required_path.name == "score_ranking_orderable_candidates.csv":
+                pd.DataFrame(
+                    [
+                        {
+                            "ticker": "2330",
+                            "signal_date": "2021-01-04",
+                            "breakout_quality_score": 0.90,
+                            "breakout_quality_score_date": "2021-01-04",
+                            "breakout_quality_score_available": True,
+                        },
+                        {
+                            "ticker": "2317",
+                            "signal_date": "2021-01-05",
+                            "breakout_quality_score": 0.70,
+                            "breakout_quality_score_date": "2021-01-05",
+                            "breakout_quality_score_available": True,
+                        },
+                    ]
+                ).to_csv(required_path, index=False, encoding="utf-8-sig")
+            elif required_path.suffix == ".json":
+                required_path.write_text("{}\n", encoding="utf-8")
+            else:
+                required_path.write_text("x\n", encoding="utf-8")
+        legacy_artifacts = {
+            "dl:CONT13R_ROLL:manifest": {"path": "models/old_manifest.json", "sha256": "old-manifest"},
+            "dl:CONT13R_ROLL:audit": {"path": "models/old_audit.json", "sha256": "old-audit"},
+            "dl:CONT13R_ROLL:forward_scores": {"path": "models/cont13r_scores.csv", "sha256": "old-whole-file"},
+        }
+        pair_payload = {
+            "metadata": {
+                "schema_version": score_reuse_module.STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
+                "params_file_sha256": "param-sha",
+                "comparison_period": selection_period,
+            }
+        }
+        (run_dir / "strategy_comparison.json").write_text(
+            json.dumps(
+                {
+                    "status": "COMPLETED",
+                    "settings": selection_settings.as_dict(),
+                    "artifact_identities": legacy_artifacts,
+                    "comparison_period": selection_period,
+                    "pairs": {group_id: pair_payload},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        current_artifacts = {
+            "dl:CONT13R_ROLL:manifest": {"path": "models/new_manifest.json", "sha256": "new-manifest"},
+            "dl:CONT13R_ROLL:audit": {"path": "models/new_audit.json", "sha256": "new-audit"},
+            "dl:CONT13R_ROLL:forward_scores": {
+                "path": "models/cont13r_scores.csv",
+                "sha256": "new-whole-file",
+                "score_projection_sha256": projection_map,
+            },
+        }
+        status = {
+            "artifact_identities": current_artifacts,
+            "comparison_period": selection_period,
+            "resolved_arm_parameter_identities": {"C66": {"sha256": "param-sha"}},
+        }
+        migrated_hit = score_reuse_module._find_reusable_pair(
+            root=projection_root,
+            settings=selection_settings,
+            status=status,
+            off_arm=off_arm,
+            on_arm=on_arm,
+        )
+        score_frame.loc[0, "breakout_quality_score"] = 0.91
+        score_frame.to_csv(score_path, index=False, encoding="utf-8-sig")
+        changed_projection_map = compute_score_projection_sha256s(
+            score_path=score_path,
+            score_source="selection_point_in_time",
+            columns=("breakout_quality_score", "raw_safety_score"),
+        )
+        changed_current_artifacts = json.loads(json.dumps(current_artifacts))
+        changed_current_artifacts["dl:CONT13R_ROLL:forward_scores"][
+            "score_projection_sha256"
+        ] = changed_projection_map
+        migrated_miss = score_reuse_module._find_reusable_pair(
+            root=projection_root,
+            settings=selection_settings,
+            status={
+                **status,
+                "artifact_identities": changed_current_artifacts,
+            },
+            off_arm=off_arm,
+            on_arm=on_arm,
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "legacy_selection_pit_pair_reuses_after_auxiliary_column_migration_only_when_recorded_primary_scores_match",
+        True,
+        isinstance(migrated_hit, dict)
+        and migrated_hit.get("source_artifact_mode")
+        == "legacy_pair_runtime_score_projection_verified"
+        and migrated_miss is None,
+    )
+
+
 def append_completed_pair_cache_contract_checks(
     *,
     results,
