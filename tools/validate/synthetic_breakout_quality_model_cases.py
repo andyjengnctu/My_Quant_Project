@@ -609,6 +609,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         filter_id="synthetic_quality",
         model_architecture="synthetic_arch",
         experiment_profile="synthetic_model_gate_profile",
+        training_objective=TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
         seed=42,
     )
     ready_plan = SimpleNamespace(blocked=False, actions=(), overall_status="READY")
