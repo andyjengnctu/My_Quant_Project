@@ -39,6 +39,17 @@ def normalize_orderable_membership(frame: pd.DataFrame) -> pd.DataFrame:
     table["signal_date"] = table["signal_date"].map(normalize_date)
     score_date = table.get("breakout_quality_score_date", pd.Series("", index=table.index)).map(normalize_date)
     table["score_event_date"] = score_date.where(score_date.ne(""), table["signal_date"])
+    table["score"] = pd.to_numeric(
+        table.get("breakout_quality_score", pd.Series(index=table.index, dtype=float)),
+        errors="coerce",
+    )
+    table["score_percentile"] = pd.to_numeric(
+        table.get(
+            "breakout_quality_daily_score_percentile",
+            pd.Series(index=table.index, dtype=float),
+        ),
+        errors="coerce",
+    )
     table = table.loc[
         table["ticker"].ne("")
         & table["trade_date"].ne("")
@@ -103,25 +114,100 @@ def normalize_planned_execution(frame: pd.DataFrame) -> pd.DataFrame:
 
 def build_planned_membership(
     *,
-    selector_trace: pd.DataFrame,
+    orderable: pd.DataFrame | None = None,
     execution: pd.DataFrame,
-    final_stage: str,
+    selector_trace: pd.DataFrame | None = None,
+    final_stage: str | None = None,
 ) -> pd.DataFrame:
-    final = normalize_final_selector_trace(selector_trace, final_stage=final_stage)
+    """Return canonical pre-market planned membership from execution evidence.
+
+    ``score_ranking_execution.csv`` is the selector-agnostic canonical evidence of
+    orders that survived ranking, resource selection and cash-capped entry planning.
+    It therefore owns reusable ``Planned`` membership.  Selector-stage trace is an
+    implementation-specific observability sidecar (for example Max-DL repair/ascent)
+    and must not be required by generic reports; No-K/No-R0 selectors legitimately
+    have no ``feasible_ascent_final`` rows.
+
+    ``selector_trace``/``final_stage`` remain optional only as a compatibility
+    cross-check when a caller explicitly supplies them.  Absence of that stage is
+    never a blocker for reusable planned-membership reports.
+    """
+
     planned = normalize_planned_execution(execution)
-    final_keys = set(final["event_key"])
-    planned_keys = set(planned["event_key"])
-    if final_keys != planned_keys:
-        raise AuditBlockedError(
-            "final selector membership與planned execution不一致: "
-            f"missing_execution={len(final_keys-planned_keys)}, extra_execution={len(planned_keys-final_keys)}"
+    if orderable is None:
+        if selector_trace is None or not str(final_stage or "").strip():
+            raise AuditBlockedError(
+                "planned membership需要orderable sidecar；selector trace只可作相容性fallback"
+            )
+        # Legacy fallback for callers that still own a selector-stage scientific
+        # contract.  New reusable reports must pass ``orderable`` instead.
+        final = normalize_final_selector_trace(
+            selector_trace, final_stage=str(final_stage)
         )
-    return final.merge(
-        planned[["event_key", "execution_order", "entry_filled_bool"]],
+        final_keys = set(final["event_key"])
+        planned_keys = set(planned["event_key"])
+        if final_keys != planned_keys:
+            raise AuditBlockedError(
+                "final selector membership與planned execution不一致: "
+                f"missing_execution={len(final_keys-planned_keys)}, "
+                f"extra_execution={len(planned_keys-final_keys)}"
+            )
+        return final.merge(
+            planned[["event_key", "execution_order", "entry_filled_bool"]],
+            on="event_key",
+            how="left",
+            validate="one_to_one",
+        ).sort_values(
+            ["trade_date", "stage_rank", "ticker"], kind="stable"
+        ).reset_index(drop=True)
+
+    orderable_table = normalize_orderable_membership(orderable)
+    orderable_keys = set(orderable_table["event_key"])
+    planned_keys = set(planned["event_key"])
+    missing_orderable = planned_keys - orderable_keys
+    if missing_orderable:
+        raise AuditBlockedError(
+            "planned execution存在不在orderable sidecar的event: "
+            f"count={len(missing_orderable)}"
+        )
+    score_columns = [
+        "event_key",
+        "score_event_date",
+        "score",
+        "score_percentile",
+    ]
+    merged = planned.merge(
+        orderable_table[score_columns],
         on="event_key",
         how="left",
         validate="one_to_one",
-    ).sort_values(["trade_date", "stage_rank", "ticker"], kind="stable").reset_index(drop=True)
+    )
+    merged["stage"] = "planned_execution"
+    merged = merged.sort_values(
+        ["trade_date", "execution_order", "ticker"], kind="stable"
+    ).reset_index(drop=True)
+    merged["stage_rank"] = (
+        merged.groupby("trade_date", sort=False).cumcount() + 1
+    ).astype(int)
+
+    # If a compatible final-stage trace is present, validate it.  A missing stage
+    # is expected for selector families that do not use Max-DL repair/ascent.
+    if selector_trace is not None and str(final_stage or "").strip():
+        trace_table = pd.DataFrame(selector_trace)
+        if "stage" in trace_table.columns and bool(
+            trace_table["stage"].fillna("").astype(str).eq(str(final_stage)).any()
+        ):
+            final = normalize_final_selector_trace(
+                trace_table, final_stage=str(final_stage)
+            )
+            final_keys = set(final["event_key"])
+            if final_keys != planned_keys:
+                raise AuditBlockedError(
+                    "selector final stage與planned execution不一致: "
+                    f"missing_execution={len(final_keys-planned_keys)}, "
+                    f"extra_execution={len(planned_keys-final_keys)}"
+                )
+    return merged
 
 
 def truth_keys(frame: pd.DataFrame, *, date_column: str = "score_event_date") -> pd.DataFrame:

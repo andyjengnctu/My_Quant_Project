@@ -171,7 +171,6 @@ def _mode_result(definition, *, project_root: Path, profile_id: str) -> dict[str
     source = load_strategy_compare_source(project_root, profile_id=profile_id, pinned_config_fingerprint=fingerprint or None)
     control = str(source_cfg["control_arm_id"]); treatment = str(source_cfg["treatment_arm_id"])
     thresholds = tuple(float(v) for v in definition.dimensions.get("first_passage_thresholds_r", (1.0, 2.0, 3.0)))
-    final_stage = str(definition.dimensions.get("final_selector_stage") or "feasible_ascent_final")
     start, end = _period(source)
     truth, truth_source = build_truth_geometry(
         project_root=project_root,
@@ -189,9 +188,8 @@ def _mode_result(definition, *, project_root: Path, profile_id: str) -> dict[str
     for arm_id in (control, treatment):
         evidence = load_strategy_arm_path_sidecars(project_root, source=source, arm_id=arm_id)
         planned = build_planned_membership(
-            selector_trace=pd.DataFrame(evidence["selector_trace"]),
+            orderable=pd.DataFrame(evidence["orderable"]),
             execution=pd.DataFrame(evidence["execution"]),
-            final_stage=final_stage,
         )
         path = normalize_path(pd.DataFrame(evidence["upside_realization"]), thresholds=thresholds)
         planned_frames[arm_id] = planned

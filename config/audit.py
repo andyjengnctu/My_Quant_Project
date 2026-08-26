@@ -92,7 +92,6 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                 "truth_high_cutoff": 0.50,
                 "percentile_method": "average_zero_based",
                 "truth_geometry_bins": 5,
-                "final_selector_stage": "feasible_ascent_final",
                 "breakdown": "overall",
             },
             "output_subdir": "breakout_quality/reusable/opportunity_selection",
@@ -121,7 +120,6 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
             "dimensions": {
                 "truth_high_cutoff": 0.50,
                 "percentile_method": "average_zero_based",
-                "final_selector_stage": "feasible_ascent_final",
                 "first_passage_thresholds_r": (1.0, 2.0, 3.0),
                 "breakdown": "overall",
             },

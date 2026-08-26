@@ -10304,3 +10304,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Lifecycle：`AUD-mr13r-joint-capital-drawdown`與`AUD-c69-marginal-position-attribution`保留scientific evidence但formal one-time config停用；可泛化logic已搬至三個Reusable producers。`AUD-selection-k-r0-attribution`依既有使用者決策維持ACTIVE_RETAINED one-time。舊`services/audit/configured_runner.py`與只被其引用的`services/audit/mfe_safety_quadrants.py`無正式consumer且已有替代路徑，依C13退役。
 - Decision：**ENGINEERING_REPORT_ARCH_V2 / THREE_PURPOSE_REUSABLE_AUDIT / SHARED_COLOR_STYLE / NO_SCIENTIFIC_CHANGE / NO_MODEL_RETRAIN / NO_STRATEGY_SEMANTIC_CHANGE**。
 
+### 2026-08-27 — Reusable Audit Planned-membership selector-stage coupling修正
+
+- 正式執行`Opportunity／Selection Attribution`在C71/C74 No-K/No-R0 arms誤BLOCK：`selector trace沒有feasible_ascent_final stage rows`。根因是generic reusable report把Max-DL repair/ascent專屬`feasible_ascent_final` trace錯當所有selector的Final Planned membership SSOT。
+- C71/C74 canonical selector semantics本來就不走K/R0 repair/ascent；其`pre_market_order_limit`由No-K/No-R0 reservation simulation直接決定，因此沒有`feasible_ascent_final`是合法行為，不代表Strategy artifact缺失。
+- 修正後Reusable Planned membership直接由canonical `score_ranking_execution.csv`中`chosen_qty>0` rows持有，並join `score_ranking_orderable_candidates.csv`取得decision-time score/percentile；execution order在每個trade date轉為planned rank。Selector trace只在caller明確提供且該final stage實際存在時做membership cross-check，stage不存在不再BLOCK。
+- `Opportunity／Selection Attribution`與`Trade Outcome／Path Attribution`改用selector-agnostic planned sidecar loader；`load_strategy_arm_pipeline_sidecars`仍保留給`AUD-selection-k-r0-attribution`等真的需要daily capacity／selector trace的one-time resource Audit。Scientific arms、K/R0、cash、sizing、Strategy replay、existing artifacts與研究結論皆未修改。
+- Decision：**ENGINEERING_BUG_FIX / PLANNED_MEMBERSHIP_EXECUTION_SSOT / NO_SCIENTIFIC_CHANGE**。
+

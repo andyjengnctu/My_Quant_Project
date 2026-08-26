@@ -522,6 +522,48 @@ def load_strategy_arm_pipeline_sidecars(
     return loaded
 
 
+def load_strategy_arm_planned_sidecars(
+    project_root: Path,
+    *,
+    source: StrategyCompareAuditSource,
+    arm_id: str,
+) -> dict[str, Any]:
+    """Load selector-agnostic evidence required for reusable Planned reports.
+
+    Reusable Opportunity/Trade/Portfolio reports depend on the canonical
+    ``score_ranking_execution.csv`` planned-order evidence plus the already
+    persisted orderable rows.  They deliberately do *not* require
+    ``score_ranking_selector_trace.csv`` or daily resource-capacity diagnostics;
+    those are implementation-specific evidence owned by targeted resource/repair
+    Audits and are absent for legitimate selector families such as No-K/No-R0.
+    """
+
+    evidence = load_strategy_arm_replay_sidecars(
+        project_root, source=source, arm_id=arm_id
+    )
+    if evidence.get("prefix") != "score_ranking":
+        raise AuditSourceBlockedError(
+            f"{source.profile_id}/{arm_id} planned Audit只接受DL-on score-ranking arm"
+        )
+    pair_dir = Path(evidence["pair_dir"])
+    path = pair_dir / "score_ranking_execution.csv"
+    if not path.is_file():
+        raise AuditSourceBlockedError(
+            f"{source.profile_id}/{arm_id} pair缺少既有planned sidecar: "
+            "score_ranking_execution.csv; Audit不得重跑策略補資料"
+        )
+    try:
+        execution = pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise AuditSourceBlockedError(
+            f"{source.profile_id}/{arm_id} 無法讀取score_ranking_execution.csv: {exc}"
+        ) from exc
+    loaded = dict(evidence)
+    loaded["execution"] = execution
+    loaded["execution_path"] = path
+    return loaded
+
+
 def load_strategy_arm_path_sidecars(
     project_root: Path,
     *,
@@ -535,7 +577,7 @@ def load_strategy_arm_path_sidecars(
     BLOCKED dependency, never an invitation to backfill or replay here.
     """
 
-    evidence = load_strategy_arm_pipeline_sidecars(
+    evidence = load_strategy_arm_planned_sidecars(
         project_root, source=source, arm_id=arm_id
     )
     pair_dir = Path(evidence["pair_dir"])
@@ -567,6 +609,7 @@ __all__ = [
     "StrategyCompareAuditSource",
     "load_strategy_arm_path_sidecars",
     "load_strategy_arm_pipeline_sidecars",
+    "load_strategy_arm_planned_sidecars",
     "load_strategy_arm_replay_sidecars",
     "load_strategy_compare_source",
     "resolve_strategy_result_dir_for_fingerprint",

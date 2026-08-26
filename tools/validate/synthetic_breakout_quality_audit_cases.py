@@ -166,12 +166,56 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "PRESENT" in markdown_evidence,
     )
 
+    from services.audit.selection_membership import build_planned_membership as build_reusable_planned
+    no_k_orderable = pd.DataFrame({
+        "ticker": ["A", "B"],
+        "trade_date": ["2025-01-02", "2025-01-02"],
+        "signal_date": ["2025-01-01", "2025-01-01"],
+        "breakout_quality_score_date": ["2025-01-01", "2025-01-01"],
+        "breakout_quality_score": [0.8, 0.7],
+        "breakout_quality_daily_score_percentile": [0.9, 0.6],
+    })
+    no_k_execution = pd.DataFrame({
+        "execution_order": [10, 11],
+        "ticker": ["A", "B"],
+        "trade_date": ["2025-01-02", "2025-01-02"],
+        "signal_date": ["2025-01-01", "2025-01-01"],
+        "chosen_qty": [1, 1],
+        "entry_filled": [True, False],
+    })
+    no_k_trace = pd.DataFrame({
+        "stage": ["raw_top_n"],
+        "stage_rank": [1],
+        "ticker": ["A"],
+        "trade_date": ["2025-01-02"],
+        "signal_date": ["2025-01-01"],
+        "breakout_quality_score_date": ["2025-01-01"],
+        "breakout_quality_score": [0.8],
+        "breakout_quality_daily_score_percentile": [0.9],
+    })
+    reusable_planned = build_reusable_planned(
+        orderable=no_k_orderable,
+        execution=no_k_execution,
+        selector_trace=no_k_trace,
+        final_stage="feasible_ascent_final",
+    )
+    check_true(
+        "reusable_planned_membership_uses_canonical_execution_and_does_not_require_max_dl_final_stage",
+        len(reusable_planned) == 2
+        and list(reusable_planned["ticker"]) == ["A", "B"]
+        and list(reusable_planned["stage_rank"]) == [1, 2]
+        and list(reusable_planned["score_percentile"]) == [0.9, 0.6]
+        and list(reusable_planned["entry_filled_bool"]) == [True, False]
+        and set(reusable_planned["stage"]) == {"planned_execution"},
+    )
+
     from config.strategy_compare import get_strategy_comparison_settings
     from filters.breakout_quality.strategy_compare_contracts import (
         COMPARISON_MODE_SCORE_RANKING,
     )
     from services.audit.strategy_compare_source import (
         StrategyCompareAuditSource,
+        load_strategy_arm_planned_sidecars,
         load_strategy_arm_pipeline_sidecars,
         load_strategy_arm_replay_sidecars,
         resolve_strategy_result_dir_for_fingerprint,
@@ -280,6 +324,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             source=audit_source,
             arm_id="C65",
         )
+        planned_evidence = load_strategy_arm_planned_sidecars(
+            project_root,
+            source=audit_source,
+            arm_id="C65",
+        )
         check_true(
             "formal_audit_resolves_shared_dl_off_baseline_via_canonical_execution_group_without_replay",
             bool(
@@ -293,6 +342,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 and len(pipeline_evidence["daily_capacity"]) == 1
                 and len(pipeline_evidence["selector_trace"]) == 1
                 and len(pipeline_evidence["execution"]) == 1
+                and "selector_trace" not in planned_evidence
+                and "daily_capacity" not in planned_evidence
+                and len(planned_evidence["execution"]) == 1
             ),
         )
 

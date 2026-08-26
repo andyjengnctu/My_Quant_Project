@@ -44,7 +44,7 @@ from services.audit.selection_membership import (
 )
 from services.audit.strategy_compare_source import (
     AuditSourceBlockedError,
-    load_strategy_arm_pipeline_sidecars,
+    load_strategy_arm_planned_sidecars,
     load_strategy_compare_source,
 )
 
@@ -115,7 +115,6 @@ def _mode_result(definition, *, project_root: Path, profile_id: str) -> dict[str
     )
     control_id = str(source_cfg["control_arm_id"])
     treatment_id = str(source_cfg["treatment_arm_id"])
-    final_stage = str(definition.dimensions.get("final_selector_stage") or "feasible_ascent_final")
     cutoff = float(definition.dimensions.get("truth_high_cutoff", 0.5))
     start, end = _period(source)
     truth, truth_source = build_truth_geometry(
@@ -144,12 +143,11 @@ def _mode_result(definition, *, project_root: Path, profile_id: str) -> dict[str
 
     arm_payloads: dict[str, Any] = {}
     for arm_id in (control_id, treatment_id):
-        evidence = load_strategy_arm_pipeline_sidecars(project_root, source=source, arm_id=arm_id)
+        evidence = load_strategy_arm_planned_sidecars(project_root, source=source, arm_id=arm_id)
         orderable = normalize_orderable_membership(pd.DataFrame(evidence["orderable"]))
         planned = build_planned_membership(
-            selector_trace=pd.DataFrame(evidence["selector_trace"]),
+            orderable=pd.DataFrame(evidence["orderable"]),
             execution=pd.DataFrame(evidence["execution"]),
-            final_stage=final_stage,
         )
         orderable_keys = truth_keys(orderable)
         planned_keys = truth_keys(planned)
