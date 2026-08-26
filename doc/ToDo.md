@@ -1,13 +1,8 @@
-## Going
+常駐aduit 報表也要有文字顏色增加可讀性
 
-在開始接下來的改善前，我想先整理目前的research 報表架構: 
-- [1] 裡面現在混了可學習性與分析面不同層級的報表 
-- [3] 裡面現在也混了績效面與分析面不同層級的報表
-- [4] aduit對發現問題很有幫助，但每次都要重新開發，比較面向也不一樣，無法每次都用一致的SOP來系統性的評估對像與分析原因，但有些aduit又是one-time use
-如何重構整理?
+表格間要空一行增加可讀性
 
-分析這陣子以來的aduit報表，規劃常駐的adui報表
-
+表單選項文字固字但可以透過變數顯示已設定的對像，例如 [1]  Strategy Pair／Portfolio Attribution  [已設定: MR-13R ]  (Enter)
 - bug fix
     - remove |buy list|= k constrain 
     - epoch performance inconsistat in [1][3]

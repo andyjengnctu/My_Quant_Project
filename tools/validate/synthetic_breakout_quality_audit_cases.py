@@ -20,6 +20,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         get_audit_definitions,
         get_audit_module_ids,
         get_enabled_audit_definitions,
+        get_reusable_audit_definitions,
         validate_audit_config,
     )
     from services.audit.catalog import (
@@ -71,7 +72,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         bool("regime-audit" in commands and "audit-point-in-time-scores" in commands),
     )
     from services.audit.catalog import get_audit_entry
-    joint_defs = [item for item in enabled if item.audit_id == "AUD-mr13r-joint-capital-drawdown"]
+    joint_defs = [item for item in definitions if item.audit_id == "AUD-mr13r-joint-capital-drawdown"]
     joint_entry = get_audit_entry("mr13r_joint_capital_drawdown")
     check_true(
         "mr13r_joint_capital_drawdown_audit_is_formal_read_only_and_strategy_pair_scoped",
@@ -79,7 +80,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             len(joint_defs) == 1
             and joint_entry.formal
             and joint_entry.read_only
-            and joint_entry.method_id == "strategy_pair_attribution"
+            and joint_entry.method_id == "portfolio_drawdown_attribution"
+            and not joint_defs[0].enabled
             and tuple(joint_defs[0].source.get("strategy_arm_ids", ())) == ("C71", "C72", "C73", "C74")
             and joint_defs[0].source.get("strategy_result_fingerprints", {}).get("extending_window_oos") == "b12582a9de23"
             and joint_defs[0].source.get("strategy_result_fingerprints", {}).get("extending_window_rolling") == "3bca1e932f2e"
@@ -99,7 +101,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "research_audit_menu_separates_reusable_one_time_and_history_without_settings_submenu",
         audit_menu_rc == 0
-        and "可重複使用的診斷模組" in audit_menu_text
+        and "可重複使用的原因分析" in audit_menu_text
         and "一次性專題 Audit" in audit_menu_text
         and "最近結果／歷史 Evidence" in audit_menu_text
         and "查看全部 Audit 設定與工件狀態" not in audit_menu_text,
@@ -112,11 +114,56 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         research_app._audit_menu()
     reusable_text = reusable_console.getvalue()
     check_true(
-        "reusable_audit_menu_keeps_four_stable_method_families_visible",
-        "Strategy Pair／Portfolio Attribution  [未設定]" in reusable_text
-        and "Selection Pipeline／Truth Geometry  [未設定]" in reusable_text
-        and "Trade Path／Upside Survival  [未設定]" in reusable_text
-        and "Regime／Stability Attribution  [未設定]" in reusable_text,
+        "reusable_audit_menu_keeps_three_purpose_driven_reports_visible",
+        "Opportunity／Selection Attribution  [已設定]" in reusable_text
+        and "Trade Outcome／Path Attribution  [已設定]" in reusable_text
+        and "Portfolio／Drawdown Attribution  [已設定]" in reusable_text
+        and "Regime／Stability Attribution" not in reusable_text,
+    )
+    reusable_defs = get_reusable_audit_definitions("breakout_quality")
+    check_true(
+        "reusable_audit_reports_are_config_driven_and_not_scientific_aud_ids",
+        len(reusable_defs) == 3
+        and {item.report_id for item in reusable_defs}
+        == {"opportunity_selection", "trade_outcome_path", "portfolio_drawdown"}
+        and all(not item.report_id.startswith("AUD-") for item in reusable_defs),
+    )
+
+    from filters.breakout_quality.mfe_safety_geometry import truth_geometry_5x5
+    truth_fixture = pd.DataFrame(
+        {
+            "ticker": [f"T{i:02d}" for i in range(10)],
+            "date": ["2025-01-02"] * 5 + ["2025-01-03"] * 5,
+            "safety_percentile": [0.02, 0.22, 0.42, 0.62, 0.82] * 2,
+            "mfe_percentile": [0.82, 0.62, 0.42, 0.22, 0.02, 0.02, 0.22, 0.42, 0.62, 0.82],
+        }
+    )
+    subset_keys = truth_fixture.iloc[[0, 4, 5, 9]][["ticker", "date"]].copy()
+    subset_geometry = truth_geometry_5x5(truth_fixture, subset_keys)
+    subset_cells = subset_geometry.get("cells") or []
+    check_true(
+        "canonical_truth_5x5_filters_membership_without_subset_rerank",
+        subset_geometry.get("percentile_policy")
+        == "canonical_daily_universal_percentiles_no_subset_rerank"
+        and int(subset_geometry.get("truth_covered_rows", 0) or 0) == 4
+        and int(subset_cells[0][4].get("n", 0) or 0) == 1
+        and int(subset_cells[4][0].get("n", 0) or 0) == 1
+        and int(subset_cells[0][0].get("n", 0) or 0) == 1
+        and int(subset_cells[4][4].get("n", 0) or 0) == 1,
+    )
+
+    from services.audit.reusable_report import audit_section, render_evidence_rows
+    markdown_section = audit_section("Key Evidence", 7, target="markdown")
+    markdown_evidence = render_evidence_rows(
+        (("Actual joint support", "PRESENT", "Daily/Breakout truth support exists"),),
+        target="markdown",
+    )
+    check_true(
+        "reusable_audit_reports_use_shared_colored_sections_and_semantic_evidence_style",
+        "#42A5F5" in markdown_section
+        and "7. Key Evidence" in markdown_section
+        and "#188038" in markdown_evidence
+        and "PRESENT" in markdown_evidence,
     )
 
     from config.strategy_compare import get_strategy_comparison_settings
@@ -456,6 +503,10 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             strategy_diag,
             "build_mfe_safety_truth_geometry",
             return_value=(canonical_truth, {"provider": "synthetic"}),
+        ), patch.object(
+            strategy_diag,
+            "load_official_breakout_candidate_keys",
+            return_value={("B", pd.Timestamp("2025-01-01")), ("C", pd.Timestamp("2025-01-01"))},
         ):
             geometry_payload = strategy_diag._build_mfe_safety_main_report_geometry(
                 project_root=geometry_root,
@@ -463,11 +514,12 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 pair_payloads=pair_payloads,
             )
         check_true(
-            "strategy_compare_main_geometry_uses_filled_buys_and_all_eligible_canonical_truth",
+            "strategy_compare_main_geometry_uses_breakout_truth_baseline_and_filled_buys",
             bool(
                 geometry_payload["status"] == "AVAILABLE"
                 and geometry_payload["cohort"] == "filled_buys"
-                and geometry_payload["population"]["raw_rows"] == 3
+                and geometry_payload["population"]["raw_rows"] == 2
+                and geometry_payload["population"]["name"] == "Breakout candidate truth"
                 and geometry_payload["arms"]["C68"]["raw_rows"] == 1
                 and geometry_payload["arms"]["C69"]["raw_rows"] == 3
                 and geometry_payload["arms"]["C69"]["high_mfe_total_pct"] > geometry_payload["arms"]["C68"]["high_mfe_total_pct"]

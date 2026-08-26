@@ -28,6 +28,8 @@ QUADRANT_KEYS = (
     "low_mfe_low_safety_pct",
 )
 
+TRUTH_GEOMETRY_QUINTILES = 5
+
 
 def normalize_ticker(value: Any) -> str:
     text = str(value or "").strip()
@@ -252,6 +254,154 @@ def distribution_for_keys(
     return result
 
 
+def fixed_quintiles_from_percentiles(
+    values: pd.Series | np.ndarray,
+    *,
+    bins: int = TRUTH_GEOMETRY_QUINTILES,
+) -> np.ndarray:
+    """Map canonical [0,1] percentiles into fixed 1..bins buckets.
+
+    This helper never re-ranks a subset.  Callers must pass the canonical
+    daily-universal percentile values already owned by this domain.
+    """
+
+    numeric = np.asarray(values, dtype=float)
+    if numeric.ndim != 1 or not bool(np.isfinite(numeric).all()):
+        raise ValueError("MFE/Safety percentile必須為finite 1D")
+    if bool(np.any((numeric < 0.0) | (numeric > 1.0))):
+        raise ValueError("MFE/Safety percentile必須位於[0,1]")
+    count = int(bins)
+    if count <= 1:
+        raise ValueError("MFE/Safety quintile bins必須>1")
+    return np.minimum(count - 1, np.floor(numeric * count).astype(np.int64)) + 1
+
+
+def truth_geometry_5x5(
+    truth: pd.DataFrame,
+    keys: pd.DataFrame | None = None,
+    *,
+    bins: int = TRUTH_GEOMETRY_QUINTILES,
+) -> dict[str, Any]:
+    """Summarize canonical actual Safety×MFE joint support.
+
+    ``keys`` only filters membership; percentile values are always inherited from
+    ``truth``.  Therefore breakout/orderable/planned cohorts can be compared to the
+    daily-universal geometry without silently re-ranking inside the subset.
+    """
+
+    table = pd.DataFrame(truth).copy()
+    required = {"ticker", "date", "mfe_percentile", "safety_percentile"}
+    missing = sorted(required - set(table.columns))
+    if missing:
+        raise ValueError(f"MFE/Safety truth geometry缺少欄位: {missing}")
+    table["ticker"] = table["ticker"].map(normalize_ticker)
+    table["date"] = table["date"].map(normalize_date)
+    if keys is not None:
+        key_frame = pd.DataFrame(keys).copy()
+        if not {"ticker", "date"}.issubset(key_frame.columns):
+            raise ValueError("MFE/Safety geometry keys必須包含ticker/date")
+        key_frame["ticker"] = key_frame["ticker"].map(normalize_ticker)
+        key_frame["date"] = key_frame["date"].map(normalize_date)
+        key_frame = key_frame.loc[
+            key_frame["ticker"].ne("") & key_frame["date"].ne("")
+        ].drop_duplicates(["ticker", "date"])
+        raw_rows = int(len(key_frame))
+        table = key_frame.merge(
+            table,
+            on=["ticker", "date"],
+            how="inner",
+            validate="one_to_one",
+        )
+    else:
+        raw_rows = int(len(table))
+    if table.empty:
+        return {
+            "raw_rows": raw_rows,
+            "truth_covered_rows": 0,
+            "truth_coverage_pct": 0.0,
+            "safety_to_mfe_spearman": None,
+            "cells": [[{"n": 0, "population_pct": None, "expected_n_independent": None, "independence_enrichment": None} for _ in range(int(bins))] for _ in range(int(bins))],
+            "s5_m5": {"n": 0, "population_pct": None, "expected_n_independent": None, "independence_enrichment": None},
+            "s4plus_m4plus": {"n": 0, "population_pct": None, "expected_n_independent": None, "independence_enrichment": None},
+            "percentile_policy": "canonical_daily_universal_percentiles_no_subset_rerank",
+        }
+
+    safety = pd.to_numeric(table["safety_percentile"], errors="coerce").to_numpy(dtype=float)
+    mfe = pd.to_numeric(table["mfe_percentile"], errors="coerce").to_numpy(dtype=float)
+    valid = np.isfinite(safety) & np.isfinite(mfe)
+    table = table.loc[valid].copy()
+    safety = safety[valid]
+    mfe = mfe[valid]
+    if table.empty:
+        raise ValueError("MFE/Safety geometry cohort沒有finite percentile")
+    safety_q = fixed_quintiles_from_percentiles(safety, bins=bins)
+    mfe_q = fixed_quintiles_from_percentiles(mfe, bins=bins)
+    population = int(len(table))
+    row_counts = np.asarray([(safety_q == level).sum() for level in range(1, int(bins) + 1)], dtype=np.int64)
+    col_counts = np.asarray([(mfe_q == level).sum() for level in range(1, int(bins) + 1)], dtype=np.int64)
+
+    def summarize(mask: np.ndarray, expected_n: float) -> dict[str, Any]:
+        n = int(mask.sum())
+        return {
+            "n": n,
+            "population_pct": float(n / population * 100.0),
+            "expected_n_independent": float(expected_n),
+            "independence_enrichment": None if expected_n <= 0.0 else float(n / expected_n),
+        }
+
+    cells: list[list[dict[str, Any]]] = []
+    for safety_level in range(1, int(bins) + 1):
+        row: list[dict[str, Any]] = []
+        for mfe_level in range(1, int(bins) + 1):
+            expected = float(
+                row_counts[safety_level - 1]
+                * col_counts[mfe_level - 1]
+                / population
+            )
+            row.append(summarize((safety_q == safety_level) & (mfe_q == mfe_level), expected))
+        cells.append(row)
+
+    highest = int(bins)
+    upper_start = max(1, highest - 1)
+    s5_expected = float(row_counts[-1] * col_counts[-1] / population)
+    upper_rows = int(row_counts[upper_start - 1 :].sum())
+    upper_cols = int(col_counts[upper_start - 1 :].sum())
+    upper_expected = float(upper_rows * upper_cols / population)
+    daily_rhos: list[float] = []
+    relation_frame = pd.DataFrame({
+        "date": table["date"].to_numpy(),
+        "safety": safety,
+        "mfe": mfe,
+    })
+    for _date, day in relation_frame.groupby("date", sort=False):
+        if len(day) < 2 or day["safety"].nunique() < 2 or day["mfe"].nunique() < 2:
+            continue
+        rho = day["safety"].corr(day["mfe"], method="spearman")
+        finite = finite_float(rho)
+        if finite is not None:
+            daily_rhos.append(finite)
+    return {
+        "raw_rows": raw_rows,
+        "truth_covered_rows": population,
+        "truth_coverage_pct": float(population / raw_rows * 100.0) if raw_rows else 100.0,
+        "safety_to_mfe_spearman": finite_float(
+            pd.Series(safety).corr(pd.Series(mfe), method="spearman")
+        ),
+        "safety_to_mfe_mean_daily_spearman": (
+            None if not daily_rhos else float(np.mean(daily_rhos))
+        ),
+        "valid_days": int(len(daily_rhos)),
+        "cells": cells,
+        "s5_m5": summarize((safety_q == highest) & (mfe_q == highest), s5_expected),
+        "s4plus_m4plus": summarize(
+            (safety_q >= upper_start) & (mfe_q >= upper_start),
+            upper_expected,
+        ),
+        "percentile_policy": "canonical_daily_universal_percentiles_no_subset_rerank",
+        "independence_expected_method": "scope_marginals_n_times_p_s_times_p_m",
+    }
+
+
 def filter_period(frame: pd.DataFrame, start_date: str | None, end_date: str | None) -> pd.DataFrame:
     result = pd.DataFrame(frame)
     if start_date:
@@ -263,13 +413,16 @@ def filter_period(frame: pd.DataFrame, start_date: str | None, end_date: str | N
 
 __all__ = [
     "QUADRANT_KEYS",
+    "TRUTH_GEOMETRY_QUINTILES",
     "attach_quadrants",
     "build_truth_geometry",
     "distribution_for_keys",
     "ensure_daily_percentile",
     "filter_period",
     "finite_float",
+    "fixed_quintiles_from_percentiles",
     "normalize_date",
     "normalize_ticker",
+    "truth_geometry_5x5",
     "validate_truth_provider_contract",
 ]

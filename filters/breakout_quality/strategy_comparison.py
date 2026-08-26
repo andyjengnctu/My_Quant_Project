@@ -80,7 +80,7 @@ from filters.breakout_quality.strategy_compare_diagnostics import (
     pair_upside_realization_refresh_required,
     render_strategy_diagnostics_markdown,
     render_mfe_safety_geometry_table,
-    render_strategy_r_analysis_table,
+    render_strategy_selection_quality_table,
     render_upside_survival_summary_table,
 )
 from filters.breakout_quality.strategy_compare_reporting import (
@@ -1055,8 +1055,8 @@ def render_strategy_aggregate_report(
         ),
         render_section("2. Trade Quality / MFE × Safety（Filled buys）"),
         render_mfe_safety_geometry_table(diagnostics, target=target),
-        render_section("3. Selection / Conversion"),
-        render_strategy_r_analysis_table(diagnostics, target=target),
+        render_section("3. Selection Quality"),
+        render_strategy_selection_quality_table(diagnostics, target=target),
         render_section("4. Upside Survival / First-Passage"),
         render_upside_survival_summary_table(diagnostics, target=target),
         render_section("5. Capital / Execution"),

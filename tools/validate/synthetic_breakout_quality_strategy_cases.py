@@ -1369,14 +1369,14 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         '"strategy_diagnostics.md"' in comparison_source
                 and "1. Core Performance" in render_report_source
                 and "2. Trade Quality / MFE × Safety" in render_report_source
-                and "3. Selection / Conversion" in render_report_source
+                and "3. Selection Quality" in render_report_source
                 and "5. Capital / Execution" in render_report_source
                 and "7. Execution Summary" in render_report_source
                 and "Raw Safety Gate Sensitivity" not in render_report_source
                 and "render_safety_gate_sensitivity_table" not in render_report_source
                 and "render_strategy_run_execution_table" in render_report_source
                 and "報表分工" not in render_report_source
-                and "render_strategy_r_analysis_table" in render_report_source
+                and "render_strategy_selection_quality_table" in render_report_source
                 and "metrics=CORE_STRATEGY_RESULT_METRICS" in comparison_source
                 and "_contrast_table(" not in render_report_source
                 and "_resource_aware_table(" not in render_report_source

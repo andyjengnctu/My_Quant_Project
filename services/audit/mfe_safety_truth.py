@@ -18,6 +18,7 @@ from filters.breakout_quality.mfe_safety_geometry import (
     finite_float,
     normalize_date,
     normalize_ticker,
+    truth_geometry_5x5,
     validate_truth_provider_contract,
 )
 from filters.breakout_quality.strategy_compare_diagnostics import strategy_replay_score_event_frames
@@ -104,6 +105,7 @@ __all__ = [
     "finite_float",
     "normalize_date",
     "normalize_ticker",
+    "truth_geometry_5x5",
     "resolve_truth_provider_contract",
     "score_event_keys",
 ]

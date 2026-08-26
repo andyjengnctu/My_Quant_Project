@@ -10293,3 +10293,14 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Audit：不新增第二套framework；沿用`services/audit/catalog.py`＋`runner.py`。Reusable固定四family=`Strategy Pair／Portfolio Attribution`、`Selection Pipeline／Truth Geometry`、`Trade Path／Upside Survival`、`Regime／Stability Attribution`；One-time直接列具體AUD ID並支援exact-ID scope；設定／工件／plan在執行前直接顯示，不另設menu。
 - Decision：**ENGINEERING_REFACTOR_ONLY / NO_MODEL_RETRAIN / NO_STRATEGY_REPLAY_SEMANTIC_CHANGE / NO_NEW_SCIENTIFIC_IDENTITY**。
 
+### 2026-08-27 — Research report architecture v2：三個purpose-driven Reusable Audit（無scientific change）
+
+- 使用者要求常駐Audit依原因分析目的重新收斂，並要求報表以章節與顏色提升易讀性。正式Reusable只保留三份：`Opportunity／Selection Attribution`、`Trade Outcome／Path Attribution`、`Portfolio／Drawdown Attribution`；Pair、OOS/Rolling、year、regime、seed均視為比較lens，不再形成第四report family。
+- `Opportunity／Selection`固定以Daily actual 5×5與Breakout actual 5×5作truth baseline，再比較Breakout→Orderable→Control/Treatment Planned、兩arm Planned完整5×5與population-share Δpp、Common/Control-only/Treatment-only，以及Target mean/%ile/Top-K/Opp gap/RCE。Breakout沿用daily-universal same-day percentile，只filter membership、禁止subset rerank。K/R0/cash/slot binding明確排除，只有resource semantics本身被改動或planned geometry需要額外解釋時才跑retained one-time `AUD-selection-k-r0-attribution`。
+- `Trade Outcome／Path`固定處理Planned→Filled→Realized：fill conversion、Avg/Median R、Full-MFE、Adverse、+1/+2/+3R first-passage、initial-stop-before-threshold、pair cohorts與truth-quadrant outcome，不重印selection 5×5。
+- `Portfolio／Drawdown`固定處理Realized→Portfolio：Exposure/stop distance/reserved fraction/risk utilization/holding days、exact max-DD peak→trough MTM、position lifecycle與HM/HS四象限drawdown contribution；K/R0/cash/slot binding不進本報表。MR-13R schema-v2 exact MTM已抽成`services/audit/portfolio_mtm.py`正式SSOT，歷史MR-13R Audit改用同一implementation。
+- Actual MFE×Safety 5×5 computation由`filters/breakout_quality/mfe_safety_geometry.py`正式單一持有；Model training只保留compatibility wrapper，Model SOP與Reusable Selection report共用同一truth computation。Strategy SOP Filled Trade Quality population baseline改為canonical Breakout candidate truth，而不是All eligible Daily truth；Selection主表只保留Target mean/%ile/Top-K/Opp gap，RCE detailed attribution留Reusable Selection。
+- Audit易讀性統一使用`core/report_style.py`：terminal章節標題cyan；Markdown章節使用共用blue/cyan tone；Evidence status透過positive/warning/negative/neutral semantic palette著色，不以數值正負自行判斷，也不新增traffic-light emoji。
+- Lifecycle：`AUD-mr13r-joint-capital-drawdown`與`AUD-c69-marginal-position-attribution`保留scientific evidence但formal one-time config停用；可泛化logic已搬至三個Reusable producers。`AUD-selection-k-r0-attribution`依既有使用者決策維持ACTIVE_RETAINED one-time。舊`services/audit/configured_runner.py`與只被其引用的`services/audit/mfe_safety_quadrants.py`無正式consumer且已有替代路徑，依C13退役。
+- Decision：**ENGINEERING_REPORT_ARCH_V2 / THREE_PURPOSE_REUSABLE_AUDIT / SHARED_COLOR_STYLE / NO_SCIENTIFIC_CHANGE / NO_MODEL_RETRAIN / NO_STRATEGY_SEMANTIC_CHANGE**。
+

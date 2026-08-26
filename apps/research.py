@@ -493,13 +493,12 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
 def _audit_reusable_menu(module_id: str) -> int:
     methods = get_audit_methods()
     while True:
-        print("\n=== 可重複使用的診斷模組 ===")
-        menu_state = collect_audit_menu_state(module_id)
+        print("\n=== 可重複使用的原因分析 ===")
         enabled_counts = {
-            method.method_id: sum(
-                1
-                for row in menu_state["rows"]
-                if row["enabled"] and row["method_id"] == method.method_id
+            method.method_id: int(
+                collect_audit_menu_state(
+                    module_id, method_id=method.method_id
+                )["enabled_count"]
             )
             for method in methods
         }
@@ -587,7 +586,7 @@ def _audit_menu() -> int:
     while True:
         print("\n=== Audit／診斷 ===")
         print(f"Active module：{module_id}")
-        print(render_menu_item(1, "可重複使用的診斷模組", default=True))
+        print(render_menu_item(1, "可重複使用的原因分析", default=True))
         print(render_menu_item(2, "一次性專題 Audit"))
         print(render_menu_item(3, "最近結果／歷史 Evidence"))
         print(render_menu_item(0, "返回"))

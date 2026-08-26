@@ -9,6 +9,7 @@ from config.audit import (
     AUDIT_OUTPUT_ROOT,
     get_audit_definitions,
     get_audit_module_ids,
+    get_reusable_audit_definitions,
 )
 from config.research import get_research_artifact_preparation_policy
 from core.research_orchestration import (
@@ -42,14 +43,15 @@ def _definitions_for_method(
     method_id: str | None,
     audit_id: str | None = None,
 ):
-    definitions = get_audit_definitions(module_id)
-    if method_id is not None:
+    if method_id is not None and audit_id is None:
         method_key = get_audit_method(method_id).method_id
         definitions = tuple(
             definition
-            for definition in definitions
+            for definition in get_reusable_audit_definitions(module_id)
             if get_definition_method_id(definition) == method_key
         )
+    else:
+        definitions = get_audit_definitions(module_id)
     if audit_id is not None:
         audit_key = str(audit_id).strip()
         definitions = tuple(
@@ -102,7 +104,9 @@ def collect_audit_status(
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     definitions = _definitions_for_method(module_id, method_id, audit_id)
-    validate_audit_catalog(get_audit_definitions(module_id))
+    validate_audit_catalog(
+        (*get_audit_definitions(module_id), *get_reusable_audit_definitions(module_id))
+    )
     rows: list[dict[str, Any]] = []
     statuses: dict[str, dict[str, Any]] = {}
     for definition in definitions:
@@ -325,7 +329,9 @@ def run_enabled_audits(
     )
     if not definitions:
         raise RuntimeError(f"config/audit.py沒有啟用任何{module_id} Audit")
-    validate_audit_catalog(get_audit_definitions(module_id))
+    validate_audit_catalog(
+        (*get_audit_definitions(module_id), *get_reusable_audit_definitions(module_id))
+    )
     status = collect_audit_status(
         module_id,
         project_root=root,

@@ -22,9 +22,142 @@ from filters.breakout_quality.continuous_target import (
 from pathlib import Path
 from typing import Any, Mapping
 
-AUDIT_SCHEMA_VERSION = 13
+AUDIT_SCHEMA_VERSION = 14
 AUDIT_OUTPUT_ROOT = "outputs/audit"
 AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
+
+
+@dataclass(frozen=True)
+class ReusableAuditDefinition:
+    module_id: str
+    report_id: str
+    enabled: bool
+    report_type: str
+    description: str
+    source: Mapping[str, Any]
+    dimensions: Mapping[str, Any]
+    output_subdir: str
+
+    @property
+    def audit_id(self) -> str:
+        """Compatibility alias used by the shared read-only runner."""
+
+        return self.report_id
+
+    @property
+    def audit_type(self) -> str:
+        return self.report_type
+
+    @property
+    def outcomes(self) -> Mapping[str, Any]:
+        return {}
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "module_id": self.module_id,
+            "report_id": self.report_id,
+            "enabled": bool(self.enabled),
+            "report_type": self.report_type,
+            "description": self.description,
+            "source": dict(self.source),
+            "dimensions": dict(self.dimensions),
+            "output_subdir": self.output_subdir,
+        }
+
+
+AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
+    "breakout_quality": {
+        "opportunity_selection": {
+            "enabled": True,
+            "report_type": "opportunity_selection_attribution",
+            "description": (
+                "Daily→Breakout→Orderable→Planned opportunity/selection attribution；"
+                "固定比較actual MFE×Safety geometry，不含K/R0/cash/slot binding decomposition。"
+            ),
+            "source": {
+                "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
+                "model_architecture": BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
+                "truth_provider_profile_id": DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                "mfe_target_id": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                "safety_target_id": DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+                "evaluation_profile_ids": ("extending_window_oos", "extending_window_rolling"),
+                "strategy_result_fingerprints": {
+                    "extending_window_oos": "b12582a9de23",
+                    "extending_window_rolling": "3bca1e932f2e",
+                },
+                "control_arm_id": "C71",
+                "treatment_arm_id": "C74",
+            },
+            "dimensions": {
+                "truth_high_cutoff": 0.50,
+                "percentile_method": "average_zero_based",
+                "truth_geometry_bins": 5,
+                "final_selector_stage": "feasible_ascent_final",
+                "breakdown": "overall",
+            },
+            "output_subdir": "breakout_quality/reusable/opportunity_selection",
+        },
+        "trade_outcome_path": {
+            "enabled": True,
+            "report_type": "trade_outcome_path_attribution",
+            "description": (
+                "Planned→Filled→Realized trade outcome/path attribution；"
+                "比較first-passage、MFE/adverse與common/control-only/treatment-only cohorts。"
+            ),
+            "source": {
+                "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
+                "model_architecture": BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
+                "truth_provider_profile_id": DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                "mfe_target_id": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                "safety_target_id": DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+                "evaluation_profile_ids": ("extending_window_oos", "extending_window_rolling"),
+                "strategy_result_fingerprints": {
+                    "extending_window_oos": "b12582a9de23",
+                    "extending_window_rolling": "3bca1e932f2e",
+                },
+                "control_arm_id": "C71",
+                "treatment_arm_id": "C74",
+            },
+            "dimensions": {
+                "truth_high_cutoff": 0.50,
+                "percentile_method": "average_zero_based",
+                "final_selector_stage": "feasible_ascent_final",
+                "first_passage_thresholds_r": (1.0, 2.0, 3.0),
+                "breakdown": "overall",
+            },
+            "output_subdir": "breakout_quality/reusable/trade_outcome_path",
+        },
+        "portfolio_drawdown": {
+            "enabled": True,
+            "report_type": "portfolio_drawdown_attribution",
+            "description": (
+                "Realized trades→portfolio capital/drawdown attribution；"
+                "固定使用exact peak→trough MTM reconcile與truth quadrant contribution。"
+            ),
+            "source": {
+                "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
+                "model_architecture": BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
+                "truth_provider_profile_id": DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                "mfe_target_id": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                "safety_target_id": DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+                "evaluation_profile_ids": ("extending_window_oos", "extending_window_rolling"),
+                "strategy_result_fingerprints": {
+                    "extending_window_oos": "b12582a9de23",
+                    "extending_window_rolling": "3bca1e932f2e",
+                },
+                "control_arm_id": "C71",
+                "treatment_arm_id": "C74",
+            },
+            "dimensions": {
+                "truth_high_cutoff": 0.50,
+                "percentile_method": "average_zero_based",
+                "drawdown_top_n": 1,
+                "breakdown": "overall",
+            },
+            "output_subdir": "breakout_quality/reusable/portfolio_drawdown",
+        },
+    }
+}
 
 AUDIT_MODULES: dict[str, dict[str, Any]] = {
     "breakout_quality": {
@@ -64,7 +197,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 "output_subdir": "breakout_quality/selection_k_r0_attribution",
             },
             "AUD-mr13r-joint-capital-drawdown": {
-                "enabled": True,
+                "enabled": False,
                 "audit_type": "mr13r_joint_capital_drawdown",
                 "description": (
                     "只讀C71-C74 completed OOS/Rolling sidecars與canonical MFE×Safety truth；"
@@ -109,7 +242,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 "output_subdir": "breakout_quality/mr13r_joint_capital_drawdown",
             },
             "AUD-c69-marginal-position-attribution": {
-                "enabled": True,
+                "enabled": False,
                 "audit_type": "c69_marginal_position_attribution",
                 "description": (
                     "C68/C69 matched marginal-position attribution：直接檢查K-Flex多出的K+1/K+2/K+3+ "
@@ -210,6 +343,35 @@ def get_active_audit_module_id() -> str:
     return module_id
 
 
+def get_reusable_audit_definitions(
+    module_id: str,
+    *,
+    enabled_only: bool = False,
+) -> tuple[ReusableAuditDefinition, ...]:
+    raw_module = AUDIT_REUSABLE_REPORTS.get(str(module_id), {})
+    definitions: list[ReusableAuditDefinition] = []
+    for report_id, raw in raw_module.items():
+        definition = ReusableAuditDefinition(
+            module_id=str(module_id),
+            report_id=str(report_id),
+            enabled=bool(raw.get("enabled", False)),
+            report_type=str(raw.get("report_type") or "").strip(),
+            description=str(raw.get("description") or "").strip(),
+            source=dict(raw.get("source") or {}),
+            dimensions=dict(raw.get("dimensions") or {}),
+            output_subdir=str(raw.get("output_subdir") or "").strip(),
+        )
+        if not definition.report_type or not definition.output_subdir:
+            raise ValueError(f"Reusable Audit report contract不完整: {module_id}/{report_id}")
+        _validate_relative_path(
+            definition.output_subdir,
+            field_name=f"{module_id}/{report_id}.output_subdir",
+        )
+        if not enabled_only or definition.enabled:
+            definitions.append(definition)
+    return tuple(definitions)
+
+
 def get_audit_module_ids(*, enabled_only: bool = True) -> tuple[str, ...]:
     module_ids: list[str] = []
     for module_id, raw in AUDIT_MODULES.items():
@@ -265,6 +427,7 @@ def validate_audit_config() -> None:
         raise ValueError("AUDIT_MODULES必須是非空mapping")
     for module_id in AUDIT_MODULES:
         get_audit_definitions(str(module_id))
+        get_reusable_audit_definitions(str(module_id))
 
 
 validate_audit_config()
@@ -273,11 +436,14 @@ __all__ = [
     "AUDIT_ACTIVE_MODULE_ID",
     "AUDIT_MODULES",
     "AUDIT_OUTPUT_ROOT",
+    "AUDIT_REUSABLE_REPORTS",
     "AUDIT_SCHEMA_VERSION",
     "AuditDefinition",
+    "ReusableAuditDefinition",
     "get_active_audit_module_id",
     "get_audit_definitions",
     "get_audit_module_ids",
     "get_enabled_audit_definitions",
+    "get_reusable_audit_definitions",
     "validate_audit_config",
 ]

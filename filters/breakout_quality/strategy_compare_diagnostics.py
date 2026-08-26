@@ -55,6 +55,7 @@ from filters.breakout_quality.continuous_target import (
     DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
 )
+from filters.breakout_quality.daily_ranker_data import load_official_breakout_candidate_keys
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from filters.breakout_quality.mfe_safety_geometry import (
     attach_quadrants as attach_mfe_safety_quadrants,
@@ -1902,6 +1903,22 @@ def _build_mfe_safety_main_report_geometry(
     )
     if truth.empty:
         raise ValueError("Strategy Compare period內沒有MFE/Safety canonical truth")
+    breakout_keys_raw = load_official_breakout_candidate_keys(
+        filter_id,
+        allow_stale_source=False,
+    )
+    breakout_keys = pd.DataFrame(
+        [
+            (normalize_geometry_ticker(ticker), normalize_geometry_date(date))
+            for ticker, date in breakout_keys_raw
+        ],
+        columns=["ticker", "date"],
+    )
+    breakout_keys = breakout_keys.loc[
+        breakout_keys["ticker"].ne("")
+        & breakout_keys["date"].ge(start)
+        & breakout_keys["date"].le(end)
+    ].drop_duplicates(["ticker", "date"])
     return {
         "schema_version": 1,
         "status": "AVAILABLE",
@@ -1912,8 +1929,8 @@ def _build_mfe_safety_main_report_geometry(
         "truth_source": source,
         "population": {
             "arm_id": "POP",
-            "name": "All eligible truth",
-            **mfe_safety_distribution_for_keys(truth, None),
+            "name": "Breakout candidate truth",
+            **mfe_safety_distribution_for_keys(truth, breakout_keys, allow_empty=True),
         },
         "arms": {
             arm.arm_id: {
@@ -1929,6 +1946,10 @@ def _build_mfe_safety_main_report_geometry(
             "high_definition": "same-day percentile >= cutoff",
             "safety_definition": "same-day percentile of canonical -target_adverse_r",
             "cohort_definition": "canonical filled selected_buys resolved to model score_event_date",
+            "population_definition": (
+                "canonical breakout candidate ticker/date filtered from daily-universal truth; "
+                "percentiles are not re-ranked inside breakout subset"
+            ),
             "future_truth_used_for_runtime_sort": False,
         },
     }
@@ -2150,6 +2171,48 @@ def render_strategy_r_analysis_table(diagnostics: dict[str, Any], *, target: str
             values.append(_value_with_signal(text, signal, target=target))
         body.append(values)
     return _render_grouped_table(top_headers, bottom_headers, body)
+
+
+def render_strategy_selection_quality_table(
+    diagnostics: dict[str, Any],
+    *,
+    target: str = "plain",
+) -> str:
+    """Render the compact Strategy-SOP selection scorecard.
+
+    Model learnability and RCE attribution intentionally stay outside this table:
+    learnability belongs to Model SOP, while RCE belongs to reusable Selection
+    Attribution when a conversion mechanism needs explanation.
+    """
+
+    rows = list(diagnostics.get("selection_translation") or [])
+    if not rows:
+        return "沒有可用的Selection Quality診斷。"
+    metric_by_key = {metric.key: metric for metric in R_SELECTION_TRANSLATION_METRICS}
+    metric_keys = (
+        "selected_target_mean_r",
+        "selected_target_percentile",
+        "target_top_k_retention",
+        "target_opportunity_gap_r",
+    )
+    signals: dict[str, dict[str, str]] = {}
+    for key in metric_keys:
+        metric = metric_by_key[key]
+        signals[key] = best_worst_signals(
+            {str(row.get("arm_id") or "-"): row.get(key) for row in rows},
+            preference=metric.preference,
+        )
+    body: list[list[str]] = []
+    for row in rows:
+        arm_id = str(row.get("arm_id") or "-")
+        values = [arm_id, str(row.get("name") or "-")]
+        for key in metric_keys:
+            metric = metric_by_key[key]
+            text = _format_r_analysis_value(row.get(key), metric)
+            values.append(_value_with_signal(text, signals[key].get(arm_id), target=target))
+        body.append(values)
+    headers = ["編號", "比較對象"] + [metric_by_key[key].label for key in metric_keys]
+    return _render_grouped_table(["", "", "Selection Quality", "", "", ""], headers, body)
 
 
 def _markdown_escape(value: Any) -> str:
