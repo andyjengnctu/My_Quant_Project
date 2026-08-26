@@ -664,25 +664,16 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and pit_gate.call_count == 0,
     )
 
-    with (
-        patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
-        patch.object(
-            research_app,
-            "get_continuous_ranker_research_spec",
-            return_value=SimpleNamespace(reference_profile_name=None),
-        ),
-        patch("builtins.input", side_effect=["3", "0"]),
-        patch.object(research_app, "_print_workflow_status"),
-        patch.object(
-            research_app,
-            "_print_existing_continuous_ranker_report",
-            return_value=True,
-        ) as existing_report,
-    ):
-        status_menu_rc = research_app._interactive_model_research("apps/research.py model")
+    app_source = (project_root / "services" / "research" / "breakout_quality_application.py").read_text(encoding="utf-8")
     check_true(
-        "continuous_model_status_menu_renders_existing_model_report_without_retraining",
-        status_menu_rc == 0 and existing_report.call_count == 1,
+        "continuous_model_menu_uses_fixed_sop_without_independent_status_or_truth_geometry_option",
+        'render_menu_item(1, "訓練目前模型 → Forward-OOS 標準模型 SOP 報表", default=True)' in app_source
+        and 'render_menu_item(2, "Extending-Window Rolling")' in app_source
+        and 'render_menu_item(3, "Fixed-Window Rolling")' in app_source
+        and 'render_menu_item(4, "Target／模型比較")' in app_source
+        and 'render_menu_item(5, "Timing Mode｜Rolling 訓練前後比較  [工程]")' in app_source
+        and "查看目前Workflow、工件與模型報表" not in app_source
+        and "Actual MFE×Safety Truth Geometry（只讀）" not in app_source,
     )
 
     from filters.breakout_quality.contract import RUNTIME_SCOPE_WORKFLOW
@@ -2556,9 +2547,10 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         project_root / "services" / "research" / "breakout_quality_application.py"
     ).read_text(encoding="utf-8")
     check_true(
-        "model_research_menu_uses_stable_work_type_and_config_driven_ab_dispatch",
-        'render_menu_item(6, BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL)' in app_source
-        and 'if choice == "6":' in app_source
+        "model_research_menu_uses_stable_target_model_submenu_and_config_driven_comparison_dispatch",
+        'render_menu_item(4, "Target／模型比較")' in app_source
+        and 'render_menu_item(2, BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL)' in app_source
+        and 'if choice == "2":' in app_source
         and '_run_configured_continuous_ranker_model_gates(program_name)' in app_source
         and 'Conditional-MFE Single／Duo Forward Model Gate' not in app_source,
     )
@@ -2827,8 +2819,9 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
         project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
     ).read_text(encoding="utf-8")
     check_true(
-        "mr13s_forward_report_contains_joint_geometry_without_new_audit",
-        "MR-13S Safety→Raw-MFE Model Gate" in report_source
+        "mr13s_joint_geometry_is_integrated_into_standard_model_sop_without_new_audit",
+        "## 3. Multi-head Learnability / Truth / Prediction Geometry" in report_source
+        and "Truth / Prediction Geometry" in report_source
         and "predicted_joint_geometry" in report_source
         and "safety_cohorts" in report_source,
     )
@@ -2836,9 +2829,10 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
         project_root / "services" / "research" / "breakout_quality_application.py"
     ).read_text(encoding="utf-8")
     check_true(
-        "mr13s_truth_geometry_has_read_only_formal_menu_entry_without_retraining",
-        "Actual MFE×Safety Truth Geometry（只讀）" in app_source
-        and "build_mr13s_truth_geometry_control" in app_source,
+        "mr13s_truth_geometry_is_promoted_into_standard_model_sop_without_dedicated_menu",
+        "標準模型 SOP｜4. Truth / Prediction Geometry" in app_source
+        and "Actual MFE×Safety Truth Geometry（只讀）" not in app_source
+        and "Pred Safety↔Raw-MFE Daily rho" in app_source,
     )
 
     summary["training_performed"] = False

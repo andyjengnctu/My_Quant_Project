@@ -1049,23 +1049,21 @@ def render_strategy_aggregate_report(
     sections = [
         render_title(title),
         render_key_values(metadata_rows),
-        render_section("1. 核心策略結果"),
+        render_section("1. Core Performance"),
         render_strategy_core_result_table(
             scenarios, settings=settings, target=target
         ),
-        render_section("2. MFE × Safety 四象限（Filled buys）"),
+        render_section("2. Trade Quality / MFE × Safety（Filled buys）"),
         render_mfe_safety_geometry_table(diagnostics, target=target),
-        render_section("3. Raw Safety Gate Sensitivity"),
-        render_safety_gate_sensitivity_table(scenarios, diagnostics, settings=settings),
-        render_section("4. R 預測／轉化"),
+        render_section("3. Selection / Conversion"),
         render_strategy_r_analysis_table(diagnostics, target=target),
-        render_section("5. Upside Survival / First-Passage"),
+        render_section("4. Upside Survival / First-Passage"),
         render_upside_survival_summary_table(diagnostics, target=target),
-        render_section("6. 資金／執行"),
+        render_section("5. Capital / Execution"),
         render_strategy_execution_table(
             scenarios, settings=settings, target=target
         ),
-        render_section("7. 年度結果"),
+        render_section("6. Yearly Results"),
         render_strategy_yearly_values_table(
             yearly_by_id, settings=settings, target=target
         ),
@@ -1073,7 +1071,7 @@ def render_strategy_aggregate_report(
     if execution_summary is not None:
         sections.extend(
             (
-                render_section("8. 執行摘要"),
+                render_section("7. Execution Summary"),
                 render_strategy_run_execution_table(
                     execution_summary, settings=settings, target=target
                 ),

@@ -10276,3 +10276,20 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 本輪實作同一MR-13S identity的read-only Truth Geometry Control，不新增Audit或scientific identity：直接讀frozen `daily_ranker_oos_scores.csv.gz`已保存的daily-universal `target_low_adverse_safety_percentile` / `target_pure_mfe_percentile`；Breakout只依canonical event ticker/date membership filter，**不得在breakout subset內重算percentile**。
 - 報表固定輸出Daily universal OOS與Breakout candidate OOS actual 5×5，每格=`N / population% / independence enrichment×`，另列actual Safety↔MFE Dailyρ、predicted Safety↔Raw-MFE Dailyρ、S5×M5與S4+×M4+ support。Independence expected=`N × P(S-bin) × P(M-bin)`，Breakout使用該subset實際marginals。
 - Decision：**MR13S_MODEL_GATE_FAIL_JOINT_COLLAPSE / NO_STRATEGY_CONVERSION / ACTUAL_TRUTH_GEOMETRY_CONTROL_IMPLEMENTED_RESULT_PENDING**。取得Daily/Breakout actual geometry後，才決定下一步是representation-level controlled experiment、breakout-universe structural trade-off，或兩者並存。
+
+### 2026-08-26 — MR-13S Actual Truth Geometry結果；真實upper-right存在，breakout structural trade-off排除
+
+- Read-only Truth Geometry已完成且Breakout沒有subset rerank。Daily universal OOS `N=608,204`：actual Safety↔Pure-MFE Dailyρ=`-0.1261`；S5×M5=`23,242 / 3.82% / 0.92× independence`；S4+×M4+=`85,047 / 13.98% / 0.87×`。
+- Breakout candidate OOS `N=17,346`：actual Safety↔Pure-MFE Dailyρ=`-0.0547`；S5×M5=`986 / 5.68% / 1.09×`；S4+×M4+=`2,725 / 15.71% / 0.93×`。Breakout upper-right並未被candidate qualification抽空，S5×M5甚至略高於依該slice marginals計算的independence expected。
+- 同一frozen MR-13S predicted Safety↔Raw-MFE Dailyρ為Daily=`-0.9373`、Breakout=`-0.9029`，而predicted S5×M5=`0`；兩個marginal heads仍有OOS edge（Safety/MFE Dailyρ=`0.3556/0.3948`），因此主要缺口不是target truth absence、breakout structural trade-off或marginal learnability，而是模型能穩定抽出的predictable components被壓成近鏡像axis。
+- Decision：**ACTUAL_JOINT_SUPPORT_CONFIRMED / BREAKOUT_STRUCTURAL_TRADEOFF_REJECTED / PREDICTED_COMPONENT_COLLAPSE_CONFIRMED / MR13S_STOP_NO_CONVERSION**。不建立C75、不做threshold/weight/calibration/K/R0/portfolio repair；下一個scientific問題可進只改input representation的controlled experiment，但不預占新MR。
+
+### 2026-08-26 — Research UI／Standard SOP engineering refactor（無scientific change）
+
+- 使用者要求主架構維持現有習慣、不隱藏選單、主要報表一鍵完成，並把Audit明確分為Reusable與One-time。正式主選單維持`[1]模型訓練／驗證 [2]策略參數最佳化 [3]策略組合比較 [4]Audit／診斷 [5]研究狀態與工件`。
+- Model：`[1]`訓練目前模型後直接輸出固定Standard Model SOP；Learnability、Validation→OOS Generalization、適用multi-head的Actual Truth vs Prediction Geometry、Ranking/Boundary與Breakout application slice同報表呈現。MR-13S Truth Geometry不再是獨立必要menu；舊artifact builder保留歷史相容。Extending/Fixed Rolling、Target/Model comparison、Timing engineering仍獨立且選單固定顯示；未授權時BLOCKED而非隱藏。
+- Strategy：Extending OOS與Rolling維持分開且同層，新增`OOS + Rolling 一鍵／Consistency`只做兩個canonical mode的sequential orchestration；兩者仍各自產生原Strategy SOP，額外Consistency只讀相同Compare Suite、arms與configured contrasts，固定列Return/MDD/RoMD/EV/Exposure/HMHS/High-MFE之left-minus-right OOS Δ vs Rolling Δ與SAME/DIVERGED，不形成第三種scientific mode或promotion decision。Multi-seed同樣維持OOS/Rolling分開並提供一鍵順序執行。
+- Strategy Standard SOP主報表固定收斂為Core Performance、Trade Quality/MFE×Safety、Selection/Conversion、Upside Survival、Capital/Execution、Yearly Results、Execution Summary；C71-C73 Raw Safety Gate Sensitivity屬hypothesis-specific diagnostic，從main SOP移除但renderer/歷史evidence保留。
+- Audit：不新增第二套framework；沿用`services/audit/catalog.py`＋`runner.py`。Reusable固定四family=`Strategy Pair／Portfolio Attribution`、`Selection Pipeline／Truth Geometry`、`Trade Path／Upside Survival`、`Regime／Stability Attribution`；One-time直接列具體AUD ID並支援exact-ID scope；設定／工件／plan在執行前直接顯示，不另設menu。
+- Decision：**ENGINEERING_REFACTOR_ONLY / NO_MODEL_RETRAIN / NO_STRATEGY_REPLAY_SEMANTIC_CHANGE / NO_NEW_SCIENTIFIC_IDENTITY**。
+

@@ -37,22 +37,34 @@ def _module_title(module_id: str) -> str:
     return str(module_id).replace("_", " ").title()
 
 
-def _definitions_for_method(module_id: str, method_id: str | None):
+def _definitions_for_method(
+    module_id: str,
+    method_id: str | None,
+    audit_id: str | None = None,
+):
     definitions = get_audit_definitions(module_id)
-    if method_id is None:
-        return definitions
-    method_key = get_audit_method(method_id).method_id
-    return tuple(
-        definition
-        for definition in definitions
-        if get_definition_method_id(definition) == method_key
-    )
+    if method_id is not None:
+        method_key = get_audit_method(method_id).method_id
+        definitions = tuple(
+            definition
+            for definition in definitions
+            if get_definition_method_id(definition) == method_key
+        )
+    if audit_id is not None:
+        audit_key = str(audit_id).strip()
+        definitions = tuple(
+            definition for definition in definitions if definition.audit_id == audit_key
+        )
+        if not definitions:
+            raise ValueError(f"Audit ID不存在於目前scope: {module_id}/{audit_key}")
+    return definitions
 
 
 def collect_audit_menu_state(
     module_id: str,
     *,
     method_id: str | None = None,
+    audit_id: str | None = None,
 ) -> dict[str, Any]:
     """Return config/catalog-only state for interactive menu rendering.
 
@@ -61,7 +73,7 @@ def collect_audit_menu_state(
     draw a menu causes large repeated I/O and DataFrame work.
     """
 
-    definitions = _definitions_for_method(module_id, method_id)
+    definitions = _definitions_for_method(module_id, method_id, audit_id)
     rows = [
         {
             "enabled": bool(definition.enabled),
@@ -74,6 +86,7 @@ def collect_audit_menu_state(
     return {
         "module_id": module_id,
         "method_id": method_id,
+        "audit_id": audit_id,
         "configured": bool(enabled_count),
         "enabled_count": enabled_count,
         "rows": rows,
@@ -85,9 +98,10 @@ def collect_audit_status(
     *,
     project_root: Path = PROJECT_ROOT,
     method_id: str | None = None,
+    audit_id: str | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
-    definitions = _definitions_for_method(module_id, method_id)
+    definitions = _definitions_for_method(module_id, method_id, audit_id)
     validate_audit_catalog(get_audit_definitions(module_id))
     rows: list[dict[str, Any]] = []
     statuses: dict[str, dict[str, Any]] = {}
@@ -118,6 +132,7 @@ def collect_audit_status(
     return {
         "module_id": module_id,
         "method_id": method_id,
+        "audit_id": audit_id,
         "overall_status": overall,
         "rows": rows,
         "statuses": statuses,
@@ -129,6 +144,7 @@ def collect_audit_preparation_plan(
     *,
     project_root: Path = PROJECT_ROOT,
     method_id: str | None = None,
+    audit_id: str | None = None,
     status_snapshot: dict[str, Any] | None = None,
 ) -> ResearchArtifactPlan:
     """Map enabled read-only Audit sources to the shared Research dependency contract.
@@ -140,18 +156,24 @@ def collect_audit_preparation_plan(
 
     root = Path(project_root).resolve()
     status = (
-        collect_audit_status(module_id, project_root=root, method_id=method_id)
+        collect_audit_status(
+            module_id,
+            project_root=root,
+            method_id=method_id,
+            audit_id=audit_id,
+        )
         if status_snapshot is None
         else status_snapshot
     )
     if (
         str(status.get("module_id") or "") != str(module_id)
         or status.get("method_id") != method_id
+        or status.get("audit_id") != audit_id
     ):
         raise ValueError("Audit status snapshot與requested module/method不一致")
     definitions = {
         item.audit_id: item
-        for item in _definitions_for_method(module_id, method_id)
+        for item in _definitions_for_method(module_id, method_id, audit_id)
         if item.enabled
     }
     actions: list[ResearchArtifactAction] = []
@@ -209,12 +231,19 @@ def render_audit_status(
     *,
     project_root: Path = PROJECT_ROOT,
     method_id: str | None = None,
+    audit_id: str | None = None,
 ) -> str:
-    status = collect_audit_status(module_id, project_root=project_root, method_id=method_id)
+    status = collect_audit_status(
+        module_id,
+        project_root=project_root,
+        method_id=method_id,
+        audit_id=audit_id,
+    )
     preparation_plan = collect_audit_preparation_plan(
         module_id,
         project_root=project_root,
         method_id=method_id,
+        audit_id=audit_id,
         status_snapshot=status,
     )
     action_by_audit_id = {
@@ -256,7 +285,9 @@ def render_audit_status(
     return "\n\n".join(
         (
             render_title(
-                f"{_module_title(module_id)} Audit 設定與工件狀態"
+                f"{audit_id} 設定與工件狀態"
+                if audit_id is not None
+                else f"{_module_title(module_id)} Audit 設定與工件狀態"
                 if method_id is None
                 else f"{get_audit_method(method_id).menu_label} 設定與工件狀態"
             ),
@@ -284,15 +315,23 @@ def run_enabled_audits(
     project_root: Path = PROJECT_ROOT,
     quiet: bool = False,
     method_id: str | None = None,
+    audit_id: str | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     definitions = tuple(
-        item for item in _definitions_for_method(module_id, method_id) if item.enabled
+        item
+        for item in _definitions_for_method(module_id, method_id, audit_id)
+        if item.enabled
     )
     if not definitions:
         raise RuntimeError(f"config/audit.py沒有啟用任何{module_id} Audit")
     validate_audit_catalog(get_audit_definitions(module_id))
-    status = collect_audit_status(module_id, project_root=root, method_id=method_id)
+    status = collect_audit_status(
+        module_id,
+        project_root=root,
+        method_id=method_id,
+        audit_id=audit_id,
+    )
     if status["overall_status"] != "READY":
         policy = get_research_artifact_preparation_policy()
         if not policy.auto_prepare:
@@ -301,7 +340,10 @@ def run_enabled_audits(
 
         def _refresh_plan() -> ResearchArtifactPlan:
             return collect_audit_preparation_plan(
-                module_id, project_root=root, method_id=method_id
+                module_id,
+                project_root=root,
+                method_id=method_id,
+                audit_id=audit_id,
             )
 
         def _execute(action: ResearchArtifactAction) -> None:
@@ -317,7 +359,12 @@ def run_enabled_audits(
             action_executor=_execute,
             failure_prefix="Audit前置",
         )
-        status = collect_audit_status(module_id, project_root=root, method_id=method_id)
+        status = collect_audit_status(
+            module_id,
+            project_root=root,
+            method_id=method_id,
+            audit_id=audit_id,
+        )
         if status["overall_status"] != "READY":
             raise RuntimeError("Audit canonical source preparer完成後狀態仍非READY")
     outputs: dict[str, Any] = {}
@@ -336,10 +383,11 @@ def render_latest_audit_summary(
     *,
     project_root: Path = PROJECT_ROOT,
     method_id: str | None = None,
+    audit_id: str | None = None,
 ) -> str:
     root = Path(project_root).resolve()
     rows = []
-    for definition in _definitions_for_method(module_id, method_id):
+    for definition in _definitions_for_method(module_id, method_id, audit_id):
         latest = (
             root
             / Path(AUDIT_OUTPUT_ROOT)
@@ -357,7 +405,9 @@ def render_latest_audit_summary(
     return "\n\n".join(
         (
             render_title(
-                f"{_module_title(module_id)} 最近 Audit 結果"
+                f"{audit_id} 最近結果"
+                if audit_id is not None
+                else f"{_module_title(module_id)} 最近 Audit 結果"
                 if method_id is None
                 else f"{get_audit_method(method_id).menu_label} 最近結果"
             ),

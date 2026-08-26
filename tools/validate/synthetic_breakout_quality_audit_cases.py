@@ -97,13 +97,26 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         audit_menu_rc = research_app._audit_menu()
     audit_menu_text = audit_menu_console.getvalue()
     check_true(
-        "research_audit_menu_keeps_stable_methods_but_no_run_action_without_config",
+        "research_audit_menu_separates_reusable_one_time_and_history_without_settings_submenu",
         audit_menu_rc == 0
-        and "策略 Pair／Portfolio Attribution  [未設定]" in audit_menu_text
-        and "Trade Path／Upside Survival  [未設定]" in audit_menu_text
-        and "Selection／Truth Geometry  [未設定]" in audit_menu_text
-        and "跨期／跨 Seed Stability Attribution  [未設定]" in audit_menu_text
-        and "執行目前參數設定" not in audit_menu_text,
+        and "可重複使用的診斷模組" in audit_menu_text
+        and "一次性專題 Audit" in audit_menu_text
+        and "最近結果／歷史 Evidence" in audit_menu_text
+        and "查看全部 Audit 設定與工件狀態" not in audit_menu_text,
+    )
+
+    reusable_console = io.StringIO()
+    with patch.object(audit_runner, "get_audit_definitions", return_value=()), patch(
+        "builtins.input", side_effect=["1", "0", "0"]
+    ), redirect_stdout(reusable_console):
+        research_app._audit_menu()
+    reusable_text = reusable_console.getvalue()
+    check_true(
+        "reusable_audit_menu_keeps_four_stable_method_families_visible",
+        "Strategy Pair／Portfolio Attribution  [未設定]" in reusable_text
+        and "Selection Pipeline／Truth Geometry  [未設定]" in reusable_text
+        and "Trade Path／Upside Survival  [未設定]" in reusable_text
+        and "Regime／Stability Attribution  [未設定]" in reusable_text,
     )
 
     from config.strategy_compare import get_strategy_comparison_settings

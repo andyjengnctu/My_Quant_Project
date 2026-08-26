@@ -394,7 +394,7 @@ def _render_markdown(payload: dict) -> str:
     source_dataset = dict(payload.get("source_dataset") or {})
     target_manifest = dict(payload.get("target_manifest") or {})
     lines = [
-        "# Daily Universal Continuous Model Report",
+        "# Standard Model SOP Report",
         "",
         f"- Experiment：`{payload['experiment']}`",
         f"- Profile：`{payload['experiment_profile']}`",
@@ -408,6 +408,54 @@ def _render_markdown(payload: dict) -> str:
         "- Feature storage：`lazy canonical OHLCV windows`；未建立 expanded daily 300×10 feature bank。",
         "- OOS 在 checkpoint 寫入後才推論，不參與 loss／gradient／epoch selection。",
     ]
+    lines.extend([
+        "",
+        "## 1. Learnability",
+        "",
+        "| Scope | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ])
+    for label, key in (
+        ("Validation", "validation"),
+        ("Forward OOS", "oos"),
+        ("Breakout candidate slice", "breakout_candidate_oos"),
+    ):
+        row = dict((payload.get("split_metrics") or {}).get(key) or {})
+        if not row:
+            continue
+        pair = row.get("pairwise_concordance")
+        lines.append(
+            f"| {label} | {int(row.get('group_count', 0) or 0):,} "
+            f"| {fmt(row.get('mean_daily_spearman'))} "
+            f"| {fmt(row.get('global_spearman_vs_raw_target'))} "
+            f"| {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
+            f"| {fmt(row.get('top_score_decile_raw_target_mean'))} "
+            f"| {fmt(row.get('bottom_score_decile_raw_target_mean'))} |"
+        )
+
+    validation = dict((payload.get("split_metrics") or {}).get("validation") or {})
+    oos = dict((payload.get("split_metrics") or {}).get("oos") or {})
+    breakout = dict((payload.get("split_metrics") or {}).get("breakout_candidate_oos") or {})
+    def delta(left, right, *, percent=False):
+        if left is None or right is None:
+            return "-"
+        value = float(right) - float(left)
+        return f"{value * 100:+.2f}pp" if percent else f"{value:+.4f}"
+
+    lines.extend([
+        "",
+        "## 2. Generalization",
+        "",
+        "| Comparison | Δ Daily rho | Δ Pair |",
+        "|---|---:|---:|",
+        f"| Validation → Forward OOS | {delta(validation.get('mean_daily_spearman'), oos.get('mean_daily_spearman'))} "
+        f"| {delta(validation.get('pairwise_concordance'), oos.get('pairwise_concordance'), percent=True)} |",
+    ])
+    if breakout:
+        lines.append(
+            f"| Forward OOS → Breakout slice | {delta(oos.get('mean_daily_spearman'), breakout.get('mean_daily_spearman'))} "
+            f"| {delta(oos.get('pairwise_concordance'), breakout.get('pairwise_concordance'), percent=True)} |"
+        )
     if direct_r:
         regression_contract = dict(payload["training"].get("raw_r_regression_contract") or {})
         loss_name = str(regression_contract.get("loss") or payload["training"].get("loss") or "")
@@ -520,7 +568,7 @@ def _render_markdown(payload: dict) -> str:
             "stop-gradient Safety context；唯一scientific變更是final head由J改學absolute Pure-MFE percentile U；"
             "兩head固定等權full-list Delta-NDCG，無lambda／threshold／calibration。",
             "",
-            "## MR-13S Safety→Raw-MFE Model Gate",
+            "## 3. Multi-head Learnability / Truth / Prediction Geometry",
             "",
             "| Scope | Head | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target |",
             "|---|---|---:|---:|---:|---:|---:|---:|",
@@ -537,40 +585,70 @@ def _render_markdown(payload: dict) -> str:
                     f"| {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
                     f"| {fmt(row.get('top_score_decile_raw_target_mean'))} | {fmt(row.get('bottom_score_decile_raw_target_mean'))} |"
                 )
-        gate = dict((raw_eval.get("oos") or {}).get("model_gate") or {})
-        if gate:
+        for scope_label, scope_key in (("Daily universal OOS", "oos"), ("Breakout candidate OOS", "breakout_candidate_oos")):
+            gate = dict((raw_eval.get(scope_key) or {}).get("model_gate") or {})
+            if not gate:
+                continue
             upper = dict(gate.get("upper_right_s5_m5") or {})
+            actual = dict(gate.get("actual_truth_geometry") or {})
+
+            def truth_cell(cell):
+                cell = dict(cell or {})
+                pct = cell.get("population_pct")
+                enrich = cell.get("independence_enrichment")
+                return (
+                    f"{int(cell.get('n', 0) or 0):,} / "
+                    f"{'-' if pct is None else f'{float(pct):.2f}%'} / "
+                    f"{'-' if enrich is None else f'{float(enrich):.2f}×'}"
+                )
+
             lines.extend([
                 "",
-                "### Forward-OOS Joint Geometry",
+                f"### {scope_label} Truth / Prediction Geometry",
                 "",
-                f"- Joint product→actual HM/HS Dailyρ：`{fmt(gate.get('joint_product_to_actual_hmhs_mean_daily_spearman'), 3)}`",
-                f"- Predicted S5×M5 upper-right：`N={int(upper.get('n', 0) or 0):,}`；actual HM/HS=`{'-' if upper.get('actual_hmhs_pct') is None else f"{float(upper['actual_hmhs_pct']):.2f}%"}`；population=`{'-' if gate.get('population_hmhs_pct') is None else f"{float(gate['population_hmhs_pct']):.2f}%"}`",
-                "- 下列geometry只作model Gate診斷；不得用OOS cell結果fit weight／threshold／calibration。",
+                f"- Actual Safety↔MFE Dailyρ：`{fmt(actual.get('safety_to_mfe_mean_daily_spearman'), 4)}`",
+                f"- Pred Safety↔Raw-MFE Dailyρ：`{fmt(gate.get('predicted_safety_to_raw_mfe_mean_daily_spearman'), 4)}`",
+                f"- Actual S5×M5：`{truth_cell(actual.get('s5_m5'))}`（N / population / independence enrichment）",
+                f"- Actual S4+×M4+：`{truth_cell(actual.get('s4plus_m4plus'))}`",
+                f"- Predicted S5×M5：`N={int(upper.get('n', 0) or 0):,}`",
+                f"- Joint product→actual HM/HS Dailyρ：`{fmt(gate.get('joint_product_to_actual_hmhs_mean_daily_spearman'), 4)}`",
+                "- Geometry只作frozen model evaluation；不得用OOS cell結果fit weight／threshold／calibration。",
+                "",
+                "| Actual Safety \\ Pure-MFE | M1 | M2 | M3 | M4 | M5 |",
+                "|---|---|---|---|---|---|",
+            ])
+            for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1):
+                lines.append(
+                    f"| S{s_idx} | "
+                    + " | ".join(truth_cell(cell) for cell in row)
+                    + " |"
+                )
+            lines.extend([
                 "",
                 "| Pred Safety \\ Raw-MFE | M1 | M2 | M3 | M4 | M5 |",
                 "|---|---|---|---|---|---|",
             ])
-            geometry = list(gate.get("predicted_joint_geometry") or [])
-            for s_idx, row in enumerate(geometry, start=1):
+            for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
                 cells = []
                 for cell in row:
                     cell = dict(cell or {})
-                    n = int(cell.get("n", 0) or 0)
                     pct = cell.get("actual_hmhs_pct")
-                    cells.append(f"{n:,} / {'-' if pct is None else f'{float(pct):.2f}%'}")
+                    cells.append(
+                        f"{int(cell.get('n', 0) or 0):,} / "
+                        f"{'-' if pct is None else f'{float(pct):.2f}%'}"
+                    )
                 lines.append(f"| S{s_idx} | " + " | ".join(cells) + " |")
             lines.extend([
                 "",
-                "| Pred Safety quintile | N | Raw-MFE→actual MFE Dailyρ | Valid days | High-MFE | HM/HS |",
-                "|---|---:|---:|---:|---:|---:|",
+                "| Pred Safety quintile | N | Raw-MFE→actual MFE Dailyρ | High-MFE | HM/HS |",
+                "|---|---:|---:|---:|---:|",
             ])
             for cohort in list(gate.get("safety_cohorts") or []):
                 cohort = dict(cohort or {})
                 lines.append(
-                    f"| S{int(cohort.get('predicted_safety_quintile', 0) or 0)} | {int(cohort.get('n', 0) or 0):,} "
+                    f"| S{int(cohort.get('predicted_safety_quintile', 0) or 0)} "
+                    f"| {int(cohort.get('n', 0) or 0):,} "
                     f"| {fmt(cohort.get('raw_mfe_to_actual_mfe_mean_daily_spearman'), 3)} "
-                    f"| {int(cohort.get('valid_days', 0) or 0):,} "
                     f"| {'-' if cohort.get('high_mfe_pct') is None else f"{float(cohort['high_mfe_pct']):.2f}%"} "
                     f"| {'-' if cohort.get('hmhs_pct') is None else f"{float(cohort['hmhs_pct']):.2f}%"} |"
                 )
@@ -598,21 +676,6 @@ def _render_markdown(payload: dict) -> str:
                 f"| {fmt(row.get('mean_daily_pareto_pair_concordance'))} "
                 f"| {fmt(row.get('global_pareto_pair_concordance'))} |"
             )
-    lines.extend([
-        "",
-        "## Ranking Diagnostics",
-        "",
-        "| Scope | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target |",
-        "|---|---:|---:|---:|---:|---:|---:|",
-    ])
-    for label, key in (("All eligible stock-days", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
-        row = payload["split_metrics"].get(key) or {}
-        pair = row.get("pairwise_concordance")
-        lines.append(
-            f"| {label} | {int(row.get('group_count', 0) or 0):,} | {fmt(row.get('mean_daily_spearman'))} "
-            f"| {fmt(row.get('global_spearman_vs_raw_target'))} | {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
-            f"| {fmt(row.get('top_score_decile_raw_target_mean'))} | {fmt(row.get('bottom_score_decile_raw_target_mean'))} |"
-        )
     reference_eval = dict(payload.get("reference_target_evaluation") or {})
     if reference_eval.get("available"):
         lines.extend([

@@ -68,25 +68,25 @@ class AuditMethodEntry:
 AUDIT_METHOD_CATALOG: dict[str, AuditMethodEntry] = {
     "strategy_pair_attribution": AuditMethodEntry(
         method_id="strategy_pair_attribution",
-        menu_label="策略 Pair／Portfolio Attribution",
+        menu_label="Strategy Pair／Portfolio Attribution",
         description="比較策略pair的交易、PnL、R、capital與portfolio差異來源",
         order=10,
+    ),
+    "selection_truth_geometry": AuditMethodEntry(
+        method_id="selection_truth_geometry",
+        menu_label="Selection Pipeline／Truth Geometry",
+        description="比較母體、candidate與selection在future truth空間的分布與enrichment",
+        order=20,
     ),
     "trade_path_upside_survival": AuditMethodEntry(
         method_id="trade_path_upside_survival",
         menu_label="Trade Path／Upside Survival",
         description="檢查MFE、adverse、first-passage與upside survival路徑",
-        order=20,
-    ),
-    "selection_truth_geometry": AuditMethodEntry(
-        method_id="selection_truth_geometry",
-        menu_label="Selection／Truth Geometry",
-        description="比較母體、candidate與selection在future truth空間的分布與enrichment",
         order=30,
     ),
     "stability_attribution": AuditMethodEntry(
         method_id="stability_attribution",
-        menu_label="跨期／跨 Seed Stability Attribution",
+        menu_label="Regime／Stability Attribution",
         description="分解evaluation period／seed／year的方向與穩定性來源",
         order=40,
     ),

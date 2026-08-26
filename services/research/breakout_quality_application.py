@@ -321,17 +321,6 @@ def _print_existing_continuous_ranker_report(settings) -> bool:
             project_root=PROJECT_ROOT,
         )
     )
-    truth_json = detail_report.with_name("mr13s_truth_geometry_control.json")
-    truth_payload = load_json_object_or_none(truth_json) or {}
-    if truth_payload:
-        print("\n" + _render_mr13s_truth_geometry_console(truth_payload))
-        truth_md = truth_json.with_name("mr13s_truth_geometry_control.md")
-        print(
-            render_status_paths(
-                (("Truth Geometry", truth_md, truth_md.is_file()),),
-                project_root=PROJECT_ROOT,
-            )
-        )
     return True
 
 
@@ -426,6 +415,14 @@ def _run_mr13s_truth_geometry_control(settings) -> bool:
 
 
 def _render_continuous_ranker_simple_console(payload: dict) -> str:
+    """Render the one-click Standard Model SOP surface.
+
+    This report stays model-side: learnability, generalization, truth/prediction
+    geometry, ranking/boundary quality and application slices.  Strategy PnL and
+    round-trip attribution belong to Strategy Compare / Audit and are intentionally
+    excluded from this surface.
+    """
+
     metrics = dict(payload.get("split_metrics") or {})
     if not metrics:
         return ""
@@ -442,6 +439,12 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             _fmt_simple_metric(row.get("bottom_score_decile_raw_target_mean")),
         )
 
+    def delta_text(left, right, *, percent: bool = False) -> str:
+        if left is None or right is None:
+            return "-"
+        value = float(right) - float(left)
+        return f"{value * 100:+.2f}pp" if percent else f"{value:+.4f}"
+
     daily_universal = bool(metrics.get("breakout_candidate_oos"))
     split_names = (
         ["validation", "oos", "breakout_candidate_oos"]
@@ -449,11 +452,7 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
         else ["validation", "selection", "oos"]
     )
     lines = [
-        render_section(
-            "Daily Universal Forward-OOS 排序品質"
-            if daily_universal
-            else "完整 Selection 重訓後排序品質"
-        ),
+        render_section("標準模型 SOP｜1. Learnability"),
         render_table(
             ("Split", "Groups", "Daily rho", "Global rho", "Pair", "Top 10% Target", "Bottom 10% Target"),
             [split_row(name) for name in split_names],
@@ -461,111 +460,137 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
         ),
     ]
 
-    conditional_eval = dict(payload.get("conditional_mfe_safety_evaluation") or {})
-    conditional_rows: list[tuple[str, ...]] = []
-    if conditional_eval:
-        for scope_label, scope_key in (
-            ("Validation", "validation"),
-            ("Forward OOS", "oos"),
-            ("Breakout slice", "breakout_candidate_oos"),
-        ):
-            scope = dict(conditional_eval.get(scope_key) or {})
-            for head_label, head_key in (
-                ("Primary MFE", "primary_mfe"),
-                ("Conditional Safety", "conditional_safety"),
-            ):
-                row = dict(scope.get(head_key) or {})
-                if not row:
-                    continue
-                conditional_rows.append(
-                    (
-                        scope_label,
-                        head_label,
-                        _fmt_simple_metric(row.get("mean_daily_spearman")),
-                        _fmt_simple_metric(row.get("global_spearman_vs_raw_target")),
-                        _fmt_simple_metric(row.get("pairwise_concordance"), percent=True),
-                    )
-                )
-        if conditional_rows:
-            lines.extend([
-                render_section("Conditional MFE-Safety Model Gate"),
-                render_table(
-                    ("Split", "Head", "Daily rho", "Global rho", "Pair"),
-                    conditional_rows,
-                    alignments=("left", "left", "right", "right", "right"),
+    if "validation" in metrics and "oos" in metrics:
+        val = dict(metrics.get("validation") or {})
+        oos = dict(metrics.get("oos") or {})
+        generalization_rows = [(
+            "Primary score",
+            delta_text(val.get("mean_daily_spearman"), oos.get("mean_daily_spearman")),
+            delta_text(val.get("pairwise_concordance"), oos.get("pairwise_concordance"), percent=True),
+            delta_text(
+                None if val.get("top_score_decile_raw_target_mean") is None or val.get("bottom_score_decile_raw_target_mean") is None else float(val["top_score_decile_raw_target_mean"]) - float(val["bottom_score_decile_raw_target_mean"]),
+                None if oos.get("top_score_decile_raw_target_mean") is None or oos.get("bottom_score_decile_raw_target_mean") is None else float(oos["top_score_decile_raw_target_mean"]) - float(oos["bottom_score_decile_raw_target_mean"]),
+            ),
+        )]
+        if daily_universal and metrics.get("breakout_candidate_oos"):
+            breakout = dict(metrics.get("breakout_candidate_oos") or {})
+            generalization_rows.append((
+                "OOS → Breakout slice",
+                delta_text(oos.get("mean_daily_spearman"), breakout.get("mean_daily_spearman")),
+                delta_text(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance"), percent=True),
+                delta_text(
+                    None if oos.get("top_score_decile_raw_target_mean") is None or oos.get("bottom_score_decile_raw_target_mean") is None else float(oos["top_score_decile_raw_target_mean"]) - float(oos["bottom_score_decile_raw_target_mean"]),
+                    None if breakout.get("top_score_decile_raw_target_mean") is None or breakout.get("bottom_score_decile_raw_target_mean") is None else float(breakout["top_score_decile_raw_target_mean"]) - float(breakout["bottom_score_decile_raw_target_mean"]),
                 ),
-            ])
+            ))
+        lines.extend([
+            render_section("標準模型 SOP｜2. Generalization"),
+            render_table(
+                ("Comparison", "Δ Daily rho", "Δ Pair", "Δ Top-Bottom"),
+                generalization_rows,
+                alignments=("left", "right", "right", "right"),
+            ),
+        ])
 
-    reverse_eval = dict(payload.get("reverse_conditional_mfe_evaluation") or {})
-    reverse_rows: list[tuple[str, ...]] = []
-    if reverse_eval:
+    def add_head_gate(title: str, evaluation: dict, heads: tuple[tuple[str, str], ...]) -> None:
+        rows = []
         for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
-            scope = dict(reverse_eval.get(scope_key) or {})
-            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Conditional MFE", "conditional_mfe")):
+            scope = dict(evaluation.get(scope_key) or {})
+            for head_label, head_key in heads:
                 row = dict(scope.get(head_key) or {})
                 if not row:
                     continue
-                reverse_rows.append((
-                    scope_label, head_label,
+                rows.append((
+                    scope_label,
+                    head_label,
                     _fmt_simple_metric(row.get("mean_daily_spearman")),
                     _fmt_simple_metric(row.get("global_spearman_vs_raw_target")),
                     _fmt_simple_metric(row.get("pairwise_concordance"), percent=True),
                 ))
-        if reverse_rows:
+        if rows:
             lines.extend([
-                render_section("Reverse-Conditional MFE Model Gate"),
+                render_section(title),
                 render_table(
                     ("Split", "Head", "Daily rho", "Global rho", "Pair"),
-                    reverse_rows,
+                    rows,
                     alignments=("left", "left", "right", "right", "right"),
                 ),
             ])
+
+    conditional_eval = dict(payload.get("conditional_mfe_safety_evaluation") or {})
+    if conditional_eval:
+        add_head_gate(
+            "標準模型 SOP｜3. Multi-head Learnability",
+            conditional_eval,
+            (("Primary MFE", "primary_mfe"), ("Conditional Safety", "conditional_safety")),
+        )
+    reverse_eval = dict(payload.get("reverse_conditional_mfe_evaluation") or {})
+    if reverse_eval:
+        add_head_gate(
+            "標準模型 SOP｜3. Multi-head Learnability",
+            reverse_eval,
+            (("Raw Safety", "raw_safety"), ("Conditional MFE", "conditional_mfe")),
+        )
 
     raw_eval = dict(payload.get("safety_raw_mfe_evaluation") or {})
-    raw_rows: list[tuple[str, ...]] = []
     if raw_eval:
-        for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
+        add_head_gate(
+            "標準模型 SOP｜3. Multi-head Learnability",
+            raw_eval,
+            (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")),
+        )
+
+        def truth_cell(cell: dict) -> str:
+            if not cell:
+                return "0 / - / -"
+            pct = cell.get("population_pct")
+            enrich = cell.get("independence_enrichment")
+            return (
+                f"{int(cell.get('n', 0) or 0):,} / "
+                f"{'-' if pct is None else f'{float(pct):.2f}%'} / "
+                f"{'-' if enrich is None else f'{float(enrich):.2f}×'}"
+            )
+
+        for scope_label, scope_key in (("Daily universal OOS", "oos"), ("Breakout candidate OOS", "breakout_candidate_oos")):
             scope = dict(raw_eval.get(scope_key) or {})
-            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")):
-                row = dict(scope.get(head_key) or {})
-                if not row:
-                    continue
-                raw_rows.append((
-                    scope_label, head_label,
-                    _fmt_simple_metric(row.get("mean_daily_spearman")),
-                    _fmt_simple_metric(row.get("global_spearman_vs_raw_target")),
-                    _fmt_simple_metric(row.get("pairwise_concordance"), percent=True),
-                ))
-        if raw_rows:
-            lines.extend([
-                render_section("MR-13S Safety→Raw-MFE Model Gate"),
-                render_table(
-                    ("Split", "Head", "Daily rho", "Global rho", "Pair"),
-                    raw_rows, alignments=("left", "left", "right", "right", "right"),
-                ),
-            ])
-        gate = dict((raw_eval.get("oos") or {}).get("model_gate") or {})
-        if gate:
+            gate = dict(scope.get("model_gate") or {})
+            if not gate:
+                continue
+            actual = dict(gate.get("actual_truth_geometry") or {})
             upper = dict(gate.get("upper_right_s5_m5") or {})
-            pct = upper.get("actual_hmhs_pct")
-            population = gate.get("population_hmhs_pct")
             lines.extend([
-                f"Joint product→actual HM/HS daily rho={_fmt_simple_metric(gate.get('joint_product_to_actual_hmhs_mean_daily_spearman'))}",
-                f"S5×M5 N={int(upper.get('n', 0) or 0):,}; actual HM/HS={_fmt_simple_metric(None if pct is None else float(pct)/100.0, percent=True)}; population={_fmt_simple_metric(None if population is None else float(population)/100.0, percent=True)}",
-                "Predicted joint geometry（cell = N / actual HM/HS%）：",
+                render_section(f"標準模型 SOP｜4. Truth / Prediction Geometry｜{scope_label}"),
+                render_key_values((
+                    ("Actual Safety↔MFE Daily rho", _fmt_simple_metric(actual.get("safety_to_mfe_mean_daily_spearman"))),
+                    ("Pred Safety↔Raw-MFE Daily rho", _fmt_simple_metric(gate.get("predicted_safety_to_raw_mfe_mean_daily_spearman"))),
+                    ("Actual S5×M5", truth_cell(dict(actual.get("s5_m5") or {}))),
+                    ("Actual S4+×M4+", truth_cell(dict(actual.get("s4plus_m4plus") or {}))),
+                    ("Pred S5×M5 N", f"{int(upper.get('n', 0) or 0):,}"),
+                    ("Joint product→actual HM/HS Daily rho", _fmt_simple_metric(gate.get("joint_product_to_actual_hmhs_mean_daily_spearman"))),
+                )),
             ])
-            geometry_rows = []
+            actual_rows = []
+            for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1):
+                actual_rows.append((f"S{s_idx}", *(truth_cell(dict(cell or {})) for cell in row)))
+            if actual_rows:
+                lines.append(render_table(
+                    ("Actual Safety \\ Pure-MFE", "M1", "M2", "M3", "M4", "M5"),
+                    actual_rows,
+                    alignments=("left", "right", "right", "right", "right", "right"),
+                ))
+            predicted_rows = []
             for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
                 cells = []
                 for cell in row:
                     cell = dict(cell or {})
-                    cpct = cell.get("actual_hmhs_pct")
-                    cells.append(f"{int(cell.get('n', 0) or 0):,} / {'-' if cpct is None else f'{float(cpct):.2f}%'}")
-                geometry_rows.append((f"S{s_idx}", *cells))
-            if geometry_rows:
+                    pct = cell.get("actual_hmhs_pct")
+                    cells.append(f"{int(cell.get('n', 0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'}")
+                predicted_rows.append((f"S{s_idx}", *cells))
+            if predicted_rows:
                 lines.append(render_table(
                     ("Pred Safety \\ Raw-MFE", "M1", "M2", "M3", "M4", "M5"),
-                    geometry_rows, alignments=("left", "right", "right", "right", "right", "right"),
+                    predicted_rows,
+                    alignments=("left", "right", "right", "right", "right", "right"),
                 ))
             cohort_rows = []
             for cohort in list(gate.get("safety_cohorts") or []):
@@ -574,67 +599,15 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
                     f"S{int(cohort.get('predicted_safety_quintile', 0) or 0)}",
                     f"{int(cohort.get('n', 0) or 0):,}",
                     _fmt_simple_metric(cohort.get("raw_mfe_to_actual_mfe_mean_daily_spearman")),
-                    f"{int(cohort.get('valid_days', 0) or 0):,}",
-                    _fmt_simple_metric(None if cohort.get("high_mfe_pct") is None else float(cohort["high_mfe_pct"])/100.0, percent=True),
-                    _fmt_simple_metric(None if cohort.get("hmhs_pct") is None else float(cohort["hmhs_pct"])/100.0, percent=True),
+                    _fmt_simple_metric(None if cohort.get("high_mfe_pct") is None else float(cohort["high_mfe_pct"]) / 100.0, percent=True),
+                    _fmt_simple_metric(None if cohort.get("hmhs_pct") is None else float(cohort["hmhs_pct"]) / 100.0, percent=True),
                 ))
             if cohort_rows:
                 lines.append(render_table(
-                    ("Pred Safety", "N", "Raw-MFE→MFE rho", "Valid days", "High-MFE", "HM/HS"),
-                    cohort_rows, alignments=("left", "right", "right", "right", "right", "right"),
+                    ("Pred Safety", "N", "Raw-MFE→MFE rho", "High-MFE", "HM/HS"),
+                    cohort_rows,
+                    alignments=("left", "right", "right", "right", "right"),
                 ))
-
-    raw_eval = dict(payload.get("safety_raw_mfe_evaluation") or {})
-    raw_rows: list[tuple[str, str, dict]] = []
-    if raw_eval:
-        for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
-            scope = dict(raw_eval.get(scope_key) or {})
-            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")):
-                row = dict(scope.get(head_key) or {})
-                if row:
-                    raw_rows.append((scope_label, head_label, row))
-        if raw_rows:
-            lines.extend([
-                "", "## MR-13S Safety→Raw-MFE Model Gate", "",
-                "| Split | Head | Daily rho | Global rho | Pair |",
-                "|---|---|---:|---:|---:|",
-            ])
-            for scope_label, head_label, row in raw_rows:
-                lines.append(
-                    f"| {scope_label} | {head_label} "
-                    f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
-                    f"| {_fmt_simple_metric(row.get('global_spearman_vs_raw_target'))} "
-                    f"| {_fmt_simple_metric(row.get('pairwise_concordance'), percent=True)} |"
-                )
-        gate = dict((raw_eval.get("oos") or {}).get("model_gate") or {})
-        if gate:
-            upper = dict(gate.get("upper_right_s5_m5") or {})
-            lines.extend([
-                "", "### Forward-OOS Joint Geometry", "",
-                f"- Joint product→actual HM/HS Daily rho：`{_fmt_simple_metric(gate.get('joint_product_to_actual_hmhs_mean_daily_spearman'))}`",
-                f"- S5×M5：N=`{int(upper.get('n', 0) or 0):,}` / actual HM/HS=`{'-' if upper.get('actual_hmhs_pct') is None else f"{float(upper['actual_hmhs_pct']):.2f}%"}`",
-                "", "| Pred Safety \\ Raw-MFE | M1 | M2 | M3 | M4 | M5 |",
-                "|---|---|---|---|---|---|",
-            ])
-            for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
-                cells=[]
-                for cell in row:
-                    cell=dict(cell or {})
-                    pct=cell.get("actual_hmhs_pct")
-                    cells.append(f"{int(cell.get('n',0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'}")
-                lines.append(f"| S{s_idx} | " + " | ".join(cells) + " |")
-            lines.extend([
-                "", "| Pred Safety | N | Raw-MFE→MFE rho | Valid days | High-MFE | HM/HS |",
-                "|---|---:|---:|---:|---:|---:|",
-            ])
-            for cohort in list(gate.get("safety_cohorts") or []):
-                cohort=dict(cohort or {})
-                hp=cohort.get("high_mfe_pct"); jp=cohort.get("hmhs_pct")
-                lines.append(
-                    f"| S{int(cohort.get('predicted_safety_quintile',0) or 0)} | {int(cohort.get('n',0) or 0):,} "
-                    f"| {_fmt_simple_metric(cohort.get('raw_mfe_to_actual_mfe_mean_daily_spearman'))} | {int(cohort.get('valid_days',0) or 0):,} "
-                    f"| {'-' if hp is None else f'{float(hp):.2f}%'} | {'-' if jp is None else f'{float(jp):.2f}%'} |"
-                )
 
     sample = dict((metrics.get("oos") or {}).get("top_k_quality") or {})
     if sample:
@@ -656,7 +629,7 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             )
 
         lines.extend([
-            render_section(f"Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}；{competition_scope}）"),
+            render_section(f"標準模型 SOP｜5. Ranking / Boundary（K={top_k}，boundary={boundary_width}；{competition_scope}）"),
             render_table(
                 ("Split", "NDCG@K", "Top-K Target", "Lift", "Oracle overlap", "Boundary", "Boundary gap", "競爭日"),
                 [top_k_row(name) for name in split_names],
@@ -664,22 +637,18 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             ),
         ])
 
-    trade = dict(payload.get("trade_alignment") or {})
-    if trade.get("available"):
-        pass_trade = dict((trade.get("label_conditional") or {}).get("PASS") or {})
-        coverage = trade.get("coverage_rate")
-        lines.extend([
-            render_section("Actual Round-trip R"),
-            render_key_values((
-                ("Matched trades", f"{int(trade.get('matched_trade_count', 0) or 0):,} / {int(trade.get('trade_count', 0) or 0):,}"),
-                ("Coverage", _fmt_simple_metric(coverage, percent=True)),
-                ("Overall Score↔R", _fmt_simple_metric(trade.get("spearman_model_score_vs_r_multiple"))),
-                ("PASS Score↔R", _fmt_simple_metric(pass_trade.get("spearman_model_score_vs_r_multiple"))),
-                ("Score Top/Bottom 10% R", f"{_fmt_simple_metric(trade.get('top_model_score_decile_average_r'))} / {_fmt_simple_metric(trade.get('bottom_model_score_decile_average_r'))}"),
-            )),
-        ])
+    evidence = [
+        ("Learnability", "AVAILABLE" if metrics.get("oos") else "N/A"),
+        ("Generalization", "AVAILABLE" if metrics.get("validation") and metrics.get("oos") else "N/A"),
+        ("Truth / Prediction Geometry", "AVAILABLE" if raw_eval else "N/A"),
+        ("Breakout application slice", "AVAILABLE" if metrics.get("breakout_candidate_oos") else "N/A"),
+        ("Ranking / Boundary", "AVAILABLE" if sample else "N/A"),
+    ]
+    lines.extend([
+        render_section("標準模型 SOP｜6. Evidence Coverage"),
+        render_table(("Evidence", "Status"), evidence, alignments=("left", "left")),
+    ])
     return "\n".join(line for line in lines if line)
-
 
 def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
     metrics = dict(payload.get("split_metrics") or {})
@@ -688,11 +657,7 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
     daily_universal = bool(metrics.get("breakout_candidate_oos"))
     lines = [
         "",
-        (
-            "## Daily Universal Forward-OOS 排序品質"
-            if daily_universal
-            else "## 完整 Selection 重訓後排序品質"
-        ),
+        "## 標準模型 SOP｜1. Learnability",
         "",
         "| Split | Groups | Daily rho | Global rho | Pair | Top 10% Target | Bottom 10% Target |",
         "|---|---:|---:|---:|---:|---:|---:|",
@@ -732,7 +697,7 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         if conditional_rows:
             lines.extend([
                 "",
-                "## Conditional MFE-Safety Model Gate",
+                "## 標準模型 SOP｜3. Multi-head Learnability｜Conditional MFE-Safety",
                 "",
                 "| Split | Head | Daily rho | Global rho | Pair |",
                 "|---|---|---:|---:|---:|",
@@ -757,7 +722,7 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         if reverse_rows:
             lines.extend([
                 "",
-                "## Reverse-Conditional MFE Model Gate",
+                "## 標準模型 SOP｜3. Multi-head Learnability｜Reverse-Conditional MFE",
                 "",
                 "| Split | Head | Daily rho | Global rho | Pair |",
                 "|---|---|---:|---:|---:|",
@@ -777,7 +742,7 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         competition_scope = "只看同日樣本數>K" if daily_universal else "只看候選數>K"
         lines.extend([
             "",
-            f"## Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}；{competition_scope}）",
+            f"## 標準模型 SOP｜4. Ranking / Boundary Quality（K={top_k}，邊界寬度={boundary_width}；{competition_scope}）",
             "",
             "| Split | NDCG@K | Top-K Target | Lift | Oracle overlap | Boundary | Boundary gap | 競爭日 |",
             "|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -793,18 +758,6 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
                 f"| {_fmt_simple_metric(quality.get('boundary_raw_target_gap'))} "
                 f"| {int(quality.get('competition_date_count', quality.get('top_k_date_count', 0)) or 0):,} |"
             )
-    trade = dict(payload.get("trade_alignment") or {})
-    if trade.get("available"):
-        pass_trade = dict((trade.get("label_conditional") or {}).get("PASS") or {})
-        lines.extend([
-            "",
-            "## Actual Round-trip R",
-            "",
-            f"- Matched trades：`{int(trade.get('matched_trade_count', 0) or 0):,} / {int(trade.get('trade_count', 0) or 0):,}`",
-            f"- Coverage：`{_fmt_simple_metric(trade.get('coverage_rate'), percent=True)}`",
-            f"- Overall Score↔R：`{_fmt_simple_metric(trade.get('spearman_model_score_vs_r_multiple'))}`",
-            f"- PASS Score↔R：`{_fmt_simple_metric(pass_trade.get('spearman_model_score_vs_r_multiple'))}`",
-        ])
     return lines
 
 
@@ -2818,6 +2771,111 @@ def _interactive_continuous_stability_validation(program_name: str, settings) ->
     )
 
 
+def _run_continuous_rolling_mode_direct(
+    program_name: str,
+    settings,
+    *,
+    fixed_window: bool,
+) -> int:
+    """Run the canonical 12M Rolling mode without an extra mode-selection menu."""
+
+    mode = get_breakout_quality_rolling_test_mode("rolling")
+    title = "Fixed-Window Rolling" if fixed_window else "Extending-Window Rolling"
+    print(f"\n=== {title} ===")
+    if not settings.rolling_authorized:
+        print("目前Active Profile未授權Rolling PIT；選單固定保留，本次BLOCKED。")
+        return 0
+    _print_workflow_status(settings)
+    print(
+        render_key_values(
+            (
+                ("Mode", mode.label),
+                ("Score/refit", f"{int(mode.fold_months)} months"),
+                (
+                    "Score period",
+                    f"{mode.score_start_date} ～ "
+                    f"{('最新' if str(mode.score_end_date).strip().lower() == 'auto' else mode.score_end_date)}",
+                ),
+                (
+                    "用途",
+                    "固定120M calendar train history的歷史learnability／stability診斷"
+                    if fixed_window
+                    else "expanding history＋12M annual refit的PIT Rolling evidence",
+                ),
+            )
+        )
+    )
+    upstream_plan = _collect_continuous_research_input_plan(settings)
+    _render_continuous_research_input_plan(settings, upstream_plan)
+    if upstream_plan.blocked:
+        print("目前存在不可由canonical producer確定性補建的前置工件；本次不執行。")
+        return 0
+    if not _prompt_bool(f"確認執行{title}（含必要自動前置）", True):
+        return 0
+    spec = get_continuous_ranker_research_spec(settings.experiment_profile)
+    return _run_continuous_pit_profile(
+        program_name,
+        model_id=spec.model_research_id,
+        profile_name=settings.experiment_profile,
+        mode=mode,
+        fixed_window=fixed_window,
+    )
+
+
+def _interactive_target_model_comparison(program_name: str, settings) -> int:
+    research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
+    while True:
+        print("\n=== Target／模型比較 ===")
+        print(render_menu_item(1, "比較目前 Target 與 Reference Target", default=True))
+        print(render_menu_item(2, BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL))
+        print(render_menu_item(0, "返回"))
+        try:
+            raw_choice = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            return 0
+        choice = "1" if raw_choice == "" else raw_choice
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        if choice == "1":
+            if not research_spec.reference_profile_name:
+                print("目前Active Profile未設定reference Target；此項BLOCKED。")
+                continue
+            reference_settings = get_breakout_quality_workflow_settings(
+                experiment_profile=str(research_spec.reference_profile_name)
+            )
+            target_compare_plans = []
+            for required_settings in (settings, reference_settings):
+                plan = _collect_continuous_research_input_plan(required_settings)
+                _render_continuous_research_input_plan(required_settings, plan)
+                target_compare_plans.append(plan)
+            if any(plan.blocked for plan in target_compare_plans):
+                print("Target比較存在不可由canonical producer確定性補建的前置工件；本次不執行。")
+                continue
+            if not _prompt_bool("確認執行Target比較（含必要自動前置）", True):
+                continue
+            for required_settings in (settings, reference_settings):
+                code = _prepare_continuous_research_inputs(
+                    program_name, required_settings
+                )
+                if code != 0:
+                    return int(code)
+            return int(
+                _run_command(
+                    "compare-daily-targets",
+                    [
+                        "--filter-id", settings.filter_id,
+                        "--model-architecture", settings.model_architecture,
+                        "--experiment-profile", settings.experiment_profile,
+                        "--reference-experiment-profile", research_spec.reference_profile_name,
+                    ],
+                    program_name=program_name,
+                )
+            )
+        if choice == "2":
+            return int(_run_configured_continuous_ranker_model_gates(program_name))
+        print("無效選項，請重新輸入。")
+
+
 
 
 
@@ -3461,22 +3519,13 @@ def _interactive_model_research(program_name: str) -> int:
         )
 
     while True:
-        research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
-        primary_label = (
-            "Extending-Window Test"
-            if settings.rolling_authorized
-            else "訓練目前模型 → Forward-OOS模型報表"
-        )
-        print(render_menu_item(1, primary_label, default=True))
-        print(render_menu_item(2, "Fixed-Window Stability Test"))
-        print(render_menu_item(3, "查看目前Workflow、工件與模型報表"))
-        print(render_menu_item(4, "比較目前 Target 與 reference Target"))
-        print(render_menu_item(5, "Timing Mode｜Rolling 訓練前後比較"))
-        print(render_menu_item(6, BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL))
-        if settings.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
-            print(render_menu_item(7, "Actual MFE×Safety Truth Geometry（只讀）"))
+        print(render_menu_item(1, "訓練目前模型 → Forward-OOS 標準模型 SOP 報表", default=True))
+        print(render_menu_item(2, "Extending-Window Rolling"))
+        print(render_menu_item(3, "Fixed-Window Rolling"))
+        print(render_menu_item(4, "Target／模型比較"))
+        print(render_menu_item(5, "Timing Mode｜Rolling 訓練前後比較  [工程]"))
         print(render_menu_item(0, "返回"))
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
@@ -3487,68 +3536,26 @@ def _interactive_model_research(program_name: str) -> int:
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         if choice == "1":
-            if settings.rolling_authorized:
-                return _interactive_continuous_pit_validation(program_name, settings)
             return _run_continuous_forward_model_gate(program_name, settings)
         if choice == "2":
-            return _interactive_continuous_stability_validation(program_name, settings)
+            _run_continuous_rolling_mode_direct(
+                program_name, settings, fixed_window=False
+            )
+            continue
         if choice == "3":
-            _print_workflow_status(settings)
-            if not _print_existing_continuous_ranker_report(settings):
-                print("目前尚無可用的continuous model報表。")
+            _run_continuous_rolling_mode_direct(
+                program_name, settings, fixed_window=True
+            )
             continue
         if choice == "4":
-            if not research_spec.reference_profile_name:
-                print("目前Active Profile未設定reference Target；此項不可執行。")
-                continue
-            reference_settings = get_breakout_quality_workflow_settings(
-                experiment_profile=str(research_spec.reference_profile_name)
-            )
-            target_compare_plans = []
-            for required_settings in (settings, reference_settings):
-                plan = _collect_continuous_research_input_plan(required_settings)
-                _render_continuous_research_input_plan(required_settings, plan)
-                target_compare_plans.append(plan)
-            if any(plan.blocked for plan in target_compare_plans):
-                print("Target比較存在不可由canonical producer確定性補建的前置工件；本次不執行。")
-                continue
-            if not _prompt_bool("確認執行Target比較（含必要自動前置）", True):
-                continue
-            for required_settings in (settings, reference_settings):
-                code = _prepare_continuous_research_inputs(
-                    program_name, required_settings
-                )
-                if code != 0:
-                    return int(code)
-            return int(
-                _run_command(
-                    "compare-daily-targets",
-                    [
-                        "--filter-id", settings.filter_id,
-                        "--model-architecture", settings.model_architecture,
-                        "--experiment-profile", settings.experiment_profile,
-                        "--reference-experiment-profile", research_spec.reference_profile_name,
-                    ],
-                    program_name=program_name,
-                )
-            )
+            _interactive_target_model_comparison(program_name, settings)
+            continue
         if choice == "5":
             timing = get_breakout_quality_rolling_timing_settings()
             timing_settings = get_breakout_quality_workflow_settings(
                 experiment_profile=str(timing.experiment_profile)
             )
             return int(_interactive_rolling_timing_mode(program_name, timing_settings))
-        if choice == "6":
-            return int(_run_configured_continuous_ranker_model_gates(program_name))
-        if choice == "7":
-            if settings.training_objective != TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
-                print("目前Active Profile不支援Actual MFE×Safety Truth Geometry。")
-                continue
-            try:
-                _run_mr13s_truth_geometry_control(settings)
-            except (FileNotFoundError, ValueError) as exc:
-                print(f"Truth Geometry BLOCKED：{exc}")
-            continue
         print("無效選項，請重新輸入。")
 
 def run_model_training_menu(program_name: str = "apps/research.py model") -> int:

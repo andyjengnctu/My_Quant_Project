@@ -246,6 +246,69 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and 'profile_ids = {item["profile_id"] for item in get_strategy_comparison_profiles()}'
         not in research_shell_source,
     )
+    check_true(
+        "research_strategy_menu_exposes_oos_rolling_and_one_click_consistency_at_same_level_without_status_submenu",
+        '"Extending-Window OOS"' in research_shell_source
+        and '"Extending-Window Rolling"' in research_shell_source
+        and '"OOS + Rolling 一鍵／Consistency"' in research_shell_source
+        and '"查看目前Framework設定與工件狀態"' not in research_shell_source
+        and "materialize_strategy_oos_rolling_consistency" in research_shell_source,
+    )
+
+    from services.research.strategy_compare_application import (
+        build_strategy_oos_rolling_consistency,
+    )
+
+    oos_settings = settings_by_mode["extending_window_oos"]
+    rolling_settings = settings_by_mode["extending_window_rolling"]
+    arm_ids = [arm.arm_id for arm in oos_settings.enabled_arms]
+    contrasts = {
+        item.contrast_id: {
+            "left": item.left,
+            "right": item.right,
+            "description": item.description,
+        }
+        for item in oos_settings.enabled_contrasts
+    }
+    def fake_payload(settings, *, rolling: bool):
+        scenarios = {}
+        geometry_arms = {}
+        for idx, arm_id in enumerate(arm_ids, start=1):
+            sign = -1.0 if rolling and idx == 1 else 1.0
+            scenarios[arm_id] = {
+                "total_return_pct": sign * idx,
+                "max_drawdown_pct": 10.0 + idx,
+                "return_over_max_drawdown": sign * idx / 10.0,
+                "expected_value_r": sign * idx / 100.0,
+                "avg_exposure_pct": 50.0 + idx,
+            }
+            geometry_arms[arm_id] = {
+                "high_mfe_high_safety_pct": 20.0 + sign * idx,
+                "high_mfe_total_pct": 40.0 + sign * idx,
+            }
+        return {
+            "config_fingerprint": "rolling" if rolling else "oos",
+            "settings": settings.as_dict(),
+            "comparison_period": {"start": "2021-01-01", "end": "2026-01-01"},
+            "scenarios": scenarios,
+            "diagnostics": {
+                "mfe_safety_geometry": {"status": "AVAILABLE", "arms": geometry_arms}
+            },
+            "contrasts": contrasts,
+        }
+
+    consistency = build_strategy_oos_rolling_consistency(
+        fake_payload(oos_settings, rolling=False),
+        fake_payload(rolling_settings, rolling=True),
+    )
+    check_true(
+        "oos_rolling_consistency_reuses_same_suite_and_configured_contrasts",
+        consistency.get("suite_id") == oos_settings.suite_id
+        and len(consistency.get("contrast_rows") or [])
+        == len(oos_settings.enabled_contrasts) * 7
+        and {row.get("direction") for row in consistency.get("contrast_rows") or []}
+        .issubset({"SAME", "DIVERGED", "FLAT", "N/A"}),
+    )
 
     current_param_sources = {
         source.source_id: source

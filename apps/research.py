@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.audit import get_active_audit_module_id
+from config.audit import get_active_audit_module_id, get_audit_definitions
 from config.research import get_active_model_research_provider
 from config.strategy_compare import (
     STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL,
@@ -32,6 +32,7 @@ from core.runtime_utils import is_interactive_console, run_cli_entrypoint
 from services.research.strategy_compare_application import (
     dispatch_runtime_integration_action,
     execute_strategy_comparison,
+    materialize_strategy_oos_rolling_consistency,
     resolve_strategy_comparison_execution,
     run_strategy_multi_seed_robustness,
     runtime_integration_allowed_actions,
@@ -193,30 +194,13 @@ def _run_current_comparison(*, profile_id: str, confirm: bool) -> dict:
 
 
 def _strategy_compare_profile_menu(profile_id: str) -> int:
-    settings = get_strategy_comparison_settings(profile_id)
-    while True:
-        print(f"\n=== {settings.profile_label} ===")
-        print(render_menu_item(1, "執行目前比較設定", default=True))
-        print(render_menu_item(2, "查看設定、工件與預計動作"))
-        print(render_menu_item(0, "返回"))
-        try:
-            raw = input("👉 請選擇：").strip().lower()
-        except EOFError:
-            return 0
-        choice = "1" if raw == "" else raw
-        if choice in {"0", "q", "quit", "exit"}:
-            return 0
-        try:
-            if choice == "1":
-                _run_current_comparison(profile_id=profile_id, confirm=True)
-            elif choice == "2":
-                show_strategy_comparison_profile_status(profile_id=profile_id)
-            else:
-                print("選項無效，請按 Enter 或輸入 0～2。")
-        except (FileNotFoundError, RuntimeError, ValueError) as exc:
-            print(f"[錯誤] {type(exc).__name__}: {exc}")
-        except KeyboardInterrupt:
-            print(f"\n目前操作已中止，返回{settings.profile_label}選單。")
+    try:
+        _run_current_comparison(profile_id=profile_id, confirm=True)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"[錯誤] {type(exc).__name__}: {exc}")
+    except KeyboardInterrupt:
+        print("\n目前操作已中止，返回策略組合比較選單。")
+    return 0
 
 
 def _run_current_robustness(*, robustness_id: str, confirm: bool) -> dict:
@@ -231,12 +215,70 @@ def _run_current_robustness(*, robustness_id: str, confirm: bool) -> dict:
 
 
 def _strategy_multi_seed_robustness_menu(robustness_id: str) -> int:
-    robustness = get_strategy_multi_seed_robustness_settings(robustness_id)
+    try:
+        _run_current_robustness(robustness_id=robustness_id, confirm=True)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"[錯誤] {type(exc).__name__}: {exc}")
+    except KeyboardInterrupt:
+        print("\n目前操作已中止，返回Multi-seed Robustness選單。")
+    return 0
+
+
+def _current_strategy_mode_rows() -> tuple[dict, dict]:
+    modes = tuple(get_strategy_rolling_test_modes())
+    oos = next((dict(item) for item in modes if bool(item.get("single_score_block"))), None)
+    rolling = next((dict(item) for item in modes if not bool(item.get("single_score_block"))), None)
+    if oos is None or rolling is None:
+        raise ValueError("current Strategy Compare必須同時定義OOS與Rolling mode")
+    return oos, rolling
+
+
+def _run_strategy_oos_rolling_one_click() -> int:
+    oos_mode, rolling_mode = _current_strategy_mode_rows()
+    plans = []
+    for label, mode in (("OOS", oos_mode), ("Rolling", rolling_mode)):
+        settings, resolved_plan, rendered_plan = resolve_strategy_comparison_execution(
+            str(mode["profile_id"])
+        )
+        print(f"\n--- {label} ---\n{rendered_plan}")
+        if resolved_plan.preparation_plan.blocked:
+            print(f"{label}目前BLOCKED；OOS + Rolling一鍵流程不執行。")
+            return 0
+        plans.append((settings, resolved_plan))
+    try:
+        confirm = input("👉 按 Enter 依序執行 OOS + Rolling 並產生 Consistency；輸入 0 返回：").strip().lower()
+    except EOFError:
+        return 0
+    if confirm in {"0", "q", "quit", "exit"}:
+        return 0
+    if confirm not in {"", "1"}:
+        print("輸入無效，本次不執行。")
+        return 0
+    payloads = []
+    for mode, (settings, resolved_plan) in zip((oos_mode, rolling_mode), plans):
+        payloads.append(
+            execute_strategy_comparison(
+                resolved_plan=resolved_plan,
+                settings=settings,
+                producer_handlers={
+                    "model_training": lambda action, profile_id=str(mode["profile_id"]): _prepare_strategy_model_artifacts(
+                        profile_id=profile_id,
+                        scope=_strategy_model_artifact_scope(action),
+                    )
+                },
+            )
+        )
+    materialize_strategy_oos_rolling_consistency(payloads[0], payloads[1])
+    return 0
+
+
+def _strategy_robustness_menu() -> int:
+    oos_mode, rolling_mode = _current_strategy_mode_rows()
     while True:
-        print(f"\n=== {robustness.label} ===")
-        print(render_menu_item(1, "執行", default=True))
-        print(render_menu_item(2, "查看設定與預計動作"))
-        print(render_menu_item(3, "查看最新報表"))
+        print("\n=== Multi-seed Robustness ===")
+        print(render_menu_item(1, "OOS Multi-seed", default=True))
+        print(render_menu_item(2, "Rolling Multi-seed"))
+        print(render_menu_item(3, "OOS + Rolling Multi-seed 一鍵"))
         print(render_menu_item(0, "返回"))
         try:
             raw = input("👉 請選擇：").strip().lower()
@@ -245,19 +287,36 @@ def _strategy_multi_seed_robustness_menu(robustness_id: str) -> int:
         choice = "1" if raw == "" else raw
         if choice in {"0", "q", "quit", "exit"}:
             return 0
-        try:
-            if choice == "1":
-                _run_current_robustness(robustness_id=robustness_id, confirm=True)
-            elif choice == "2":
-                show_strategy_multi_seed_robustness_status(robustness_id=robustness_id)
-            elif choice == "3":
-                show_latest_strategy_multi_seed_robustness_report(robustness_id=robustness_id)
-            else:
-                print("選項無效，請按 Enter 或輸入 0～3。")
-        except (FileNotFoundError, RuntimeError, ValueError) as exc:
-            print(f"[錯誤] {type(exc).__name__}: {exc}")
-        except KeyboardInterrupt:
-            print(f"\n目前操作已中止，返回{robustness.label}選單。")
+        if choice == "1":
+            _strategy_multi_seed_robustness_menu(str(oos_mode["robustness_id"]))
+            continue
+        if choice == "2":
+            _strategy_multi_seed_robustness_menu(str(rolling_mode["robustness_id"]))
+            continue
+        if choice == "3":
+            for label, mode in (("OOS", oos_mode), ("Rolling", rolling_mode)):
+                print(f"\n--- {label} Multi-seed preflight ---")
+                show_strategy_multi_seed_robustness_status(
+                    robustness_id=str(mode["robustness_id"])
+                )
+            try:
+                confirm = input("👉 按 Enter 依序執行 OOS + Rolling Multi-seed；輸入 0 返回：").strip().lower()
+            except EOFError:
+                return 0
+            if confirm in {"0", "q", "quit", "exit"}:
+                continue
+            if confirm not in {"", "1"}:
+                print("輸入無效，本次不執行。")
+                continue
+            _run_current_robustness(
+                robustness_id=str(oos_mode["robustness_id"]), confirm=False
+            )
+            _run_current_robustness(
+                robustness_id=str(rolling_mode["robustness_id"]), confirm=False
+            )
+            print("OOS + Rolling Multi-seed完成；兩個canonical robustness報表維持分開保存。")
+            continue
+        print("無效選項，請輸入 0～3。")
 
 
 def _strategy_runtime_integration_menu() -> int:
@@ -364,17 +423,17 @@ def _strategy_rolling_mode_menu(*, robustness: bool) -> int:
 
 def _strategy_compare_menu() -> int:
     while True:
+        oos_mode, rolling_mode = _current_strategy_mode_rows()
         print("\n=== 策略組合比較 ===")
-        print(render_menu_item(1, STRATEGY_COMPARE_ROLLING_TEST_MENU_LABEL, default=True))
-        print(render_menu_item(2, STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL))
+        print(render_menu_item(1, "Extending-Window OOS", default=True))
+        print(render_menu_item(2, "Extending-Window Rolling"))
+        print(render_menu_item(3, "OOS + Rolling 一鍵／Consistency"))
+        print(render_menu_item(4, "Multi-seed Robustness"))
         integration_cfg = get_strategy_runtime_integration_settings()
-        integration_choice = 3 if runtime_integration_execution_enabled() else None
-        if integration_choice is not None:
-            print(render_menu_item(integration_choice, integration_cfg.label))
-            status_choice = 4
-        else:
-            status_choice = 3
-        print(render_menu_item(status_choice, "查看目前Framework設定與工件狀態"))
+        integration_label = integration_cfg.label
+        if not runtime_integration_execution_enabled():
+            integration_label += "  [歷史／唯讀]"
+        print(render_menu_item(5, integration_label))
         print(render_menu_item(0, "返回"))
         try:
             raw = input("👉 請選擇：").strip().lower()
@@ -389,106 +448,52 @@ def _strategy_compare_menu() -> int:
             print("選項無效。")
             continue
         if numeric == 1:
-            _strategy_rolling_mode_menu(robustness=False)
+            _strategy_compare_profile_menu(str(oos_mode["profile_id"]))
         elif numeric == 2:
-            _strategy_rolling_mode_menu(robustness=True)
-        elif integration_choice is not None and numeric == integration_choice:
+            _strategy_compare_profile_menu(str(rolling_mode["profile_id"]))
+        elif numeric == 3:
+            _run_strategy_oos_rolling_one_click()
+        elif numeric == 4:
+            _strategy_robustness_menu()
+        elif numeric == 5:
             _strategy_runtime_integration_menu()
-        elif numeric == status_choice:
-            _show_all_strategy_comparison_status()
         else:
-            print(f"選項無效，請按 Enter 或輸入 0～{status_choice}。")
+            print("選項無效，請按 Enter 或輸入 0～5。")
 
 
-def _audit_method_menu(module_id: str, method_id: str) -> int:
+def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
     method = next(item for item in get_audit_methods() if item.method_id == method_id)
-    while True:
-        menu_state = collect_audit_menu_state(module_id, method_id=method_id)
-        enabled = bool(menu_state["configured"])
-        print(f"\n=== {method.menu_label} ===")
-        if not enabled:
-            print("config/audit.py目前沒有啟用此方法的比較設定。")
-            print(render_menu_item(1, "查看此方法設定狀態", default=True))
-            print(render_menu_item(2, "查看最近結果"))
-        else:
-            print(render_menu_item(1, "執行目前參數設定", default=True))
-            print(render_menu_item(2, "查看設定、工件與預計動作"))
-            print(render_menu_item(3, "查看最近結果"))
-        print(render_menu_item(0, "返回"))
-        try:
-            raw = input("👉 請選擇：").strip().lower()
-        except EOFError:
-            return 0
-        choice = "1" if raw == "" else raw
-        if choice in {"0", "q", "quit", "exit"}:
-            return 0
-        if not enabled:
-            if choice == "1":
-                print(
-                    "\n"
-                    + render_audit_status(
-                        module_id, project_root=PROJECT_ROOT, method_id=method_id
-                    )
-                )
-            elif choice == "2":
-                print(
-                    "\n"
-                    + render_latest_audit_summary(
-                        module_id, project_root=PROJECT_ROOT, method_id=method_id
-                    )
-                )
-            else:
-                print("無效選項，請按 Enter 或輸入 0～2。")
-            continue
-        if choice == "1":
-            print(
-                "\n"
-                + render_audit_status(
-                    module_id, project_root=PROJECT_ROOT, method_id=method_id
-                )
-            )
-            try:
-                confirm = input("👉 按 Enter 執行；輸入 0 返回：").strip().lower()
-            except EOFError:
-                return 0
-            if confirm in {"0", "q", "quit", "exit"}:
-                continue
-            if confirm not in {"", "1"}:
-                print("輸入無效，本次不執行。")
-                continue
-            run_enabled_audits(
-                module_id, project_root=PROJECT_ROOT, method_id=method_id
-            )
-            print(
-                "\n"
-                + render_latest_audit_summary(
-                    module_id, project_root=PROJECT_ROOT, method_id=method_id
-                )
-            )
-        elif choice == "2":
-            print(
-                "\n"
-                + render_audit_status(
-                    module_id, project_root=PROJECT_ROOT, method_id=method_id
-                )
-            )
-        elif choice == "3":
-            print(
-                "\n"
-                + render_latest_audit_summary(
-                    module_id, project_root=PROJECT_ROOT, method_id=method_id
-                )
-            )
-        else:
-            print("無效選項，請按 Enter 或輸入 0～3。")
+    menu_state = collect_audit_menu_state(module_id, method_id=method_id)
+    enabled = bool(menu_state["configured"])
+    print(f"\n=== {method.menu_label} ===")
+    print("\n" + render_audit_status(
+        module_id, project_root=PROJECT_ROOT, method_id=method_id
+    ))
+    if not enabled:
+        print("目前沒有啟用此Reusable module的參數設定；保留固定選單但本次不執行。")
+        return 0
+    try:
+        confirm = input("👉 按 Enter 執行；輸入 0 返回：").strip().lower()
+    except EOFError:
+        return 0
+    if confirm in {"0", "q", "quit", "exit"}:
+        return 0
+    if confirm not in {"", "1"}:
+        print("輸入無效，本次不執行。")
+        return 0
+    run_enabled_audits(
+        module_id, project_root=PROJECT_ROOT, method_id=method_id
+    )
+    print("\n" + render_latest_audit_summary(
+        module_id, project_root=PROJECT_ROOT, method_id=method_id
+    ))
+    return 0
 
 
-def _audit_menu() -> int:
-    module_id = get_active_audit_module_id()
+def _audit_reusable_menu(module_id: str) -> int:
     methods = get_audit_methods()
     while True:
-        print("\n=== Audit／診斷 ===")
-        print(f"Active module：{module_id}")
+        print("\n=== 可重複使用的診斷模組 ===")
         menu_state = collect_audit_menu_state(module_id)
         enabled_counts = {
             method.method_id: sum(
@@ -498,34 +503,15 @@ def _audit_menu() -> int:
             )
             for method in methods
         }
-        default_index = next(
-            (
-                index
-                for index, method in enumerate(methods, start=1)
-                if enabled_counts.get(method.method_id, 0)
-            ),
-            1,
-        )
         for index, method in enumerate(methods, start=1):
-            enabled_count = enabled_counts.get(method.method_id, 0)
-            suffix = "  [已設定]" if enabled_count else "  [未設定]"
-            print(
-                render_menu_item(
-                    index,
-                    method.menu_label + suffix,
-                    default=index == default_index,
-                )
-            )
-        status_choice = len(methods) + 1
-        latest_choice = status_choice + 1
-        print(render_menu_item(status_choice, "查看全部 Audit 設定與工件狀態"))
-        print(render_menu_item(latest_choice, "查看全部最近 Audit 結果"))
+            suffix = "  [已設定]" if enabled_counts.get(method.method_id, 0) else "  [未設定]"
+            print(render_menu_item(index, method.menu_label + suffix, default=index == 1))
         print(render_menu_item(0, "返回"))
         try:
             raw = input("👉 請選擇：").strip().lower()
         except EOFError:
             return 0
-        choice = str(default_index) if raw == "" else raw
+        choice = "1" if raw == "" else raw
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         try:
@@ -534,21 +520,100 @@ def _audit_menu() -> int:
             print("選項無效。")
             continue
         if 1 <= numeric <= len(methods):
-            _audit_method_menu(module_id, methods[numeric - 1].method_id)
-        elif numeric == status_choice:
-            print("\n" + render_audit_status(module_id, project_root=PROJECT_ROOT))
-        elif numeric == latest_choice:
+            _run_reusable_audit_method(module_id, methods[numeric - 1].method_id)
+            continue
+        print(f"無效選項，請輸入 0～{len(methods)}。")
+
+
+def _run_one_time_audit(module_id: str, audit_id: str) -> int:
+    state = collect_audit_menu_state(module_id, audit_id=audit_id)
+    print("\n" + render_audit_status(
+        module_id, project_root=PROJECT_ROOT, audit_id=audit_id
+    ))
+    if not bool(state["configured"]):
+        print("此一次性 Audit 目前未啟用；只保留歷史／設定證據。")
+        print("\n" + render_latest_audit_summary(
+            module_id, project_root=PROJECT_ROOT, audit_id=audit_id
+        ))
+        return 0
+    try:
+        confirm = input("👉 按 Enter 執行此一次性 Audit；輸入 0 返回：").strip().lower()
+    except EOFError:
+        return 0
+    if confirm in {"0", "q", "quit", "exit"}:
+        return 0
+    if confirm not in {"", "1"}:
+        print("輸入無效，本次不執行。")
+        return 0
+    run_enabled_audits(
+        module_id, project_root=PROJECT_ROOT, audit_id=audit_id
+    )
+    print("\n" + render_latest_audit_summary(
+        module_id, project_root=PROJECT_ROOT, audit_id=audit_id
+    ))
+    return 0
+
+
+def _audit_one_time_menu(module_id: str) -> int:
+    definitions = get_audit_definitions(module_id)
+    while True:
+        print("\n=== 一次性專題 Audit ===")
+        if not definitions:
+            print("目前沒有一次性 Audit 設定。")
+        for index, definition in enumerate(definitions, start=1):
+            suffix = "  [可執行]" if definition.enabled else "  [歷史／停用]"
+            print(render_menu_item(index, definition.audit_id + suffix, default=index == 1))
+        print(render_menu_item(0, "返回"))
+        try:
+            raw = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            return 0
+        choice = "1" if raw == "" and definitions else raw
+        if choice in {"0", "q", "quit", "exit", ""}:
+            return 0
+        try:
+            numeric = int(choice)
+        except ValueError:
+            print("選項無效。")
+            continue
+        if 1 <= numeric <= len(definitions):
+            _run_one_time_audit(module_id, definitions[numeric - 1].audit_id)
+            continue
+        print(f"無效選項，請輸入 0～{len(definitions)}。")
+
+
+def _audit_menu() -> int:
+    module_id = get_active_audit_module_id()
+    while True:
+        print("\n=== Audit／診斷 ===")
+        print(f"Active module：{module_id}")
+        print(render_menu_item(1, "可重複使用的診斷模組", default=True))
+        print(render_menu_item(2, "一次性專題 Audit"))
+        print(render_menu_item(3, "最近結果／歷史 Evidence"))
+        print(render_menu_item(0, "返回"))
+        try:
+            raw = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            return 0
+        choice = "1" if raw == "" else raw
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        if choice == "1":
+            _audit_reusable_menu(module_id)
+        elif choice == "2":
+            _audit_one_time_menu(module_id)
+        elif choice == "3":
             print("\n" + render_latest_audit_summary(module_id, project_root=PROJECT_ROOT))
         else:
-            print(f"無效選項，請輸入 0～{latest_choice}。")
+            print("無效選項，請輸入 0～3。")
 
 
 def _show_research_status() -> int:
     print("\n====================================================================================================")
-    print(" Research Status")
+    print(" Current Research State / Artifacts")
     print("====================================================================================================")
     sections = (
-        ("模型訓練", _show_model_status),
+        ("模型訓練／驗證", _show_model_status),
         ("策略組合比較", _show_all_strategy_comparison_status),
         (
             "Audit／診斷",
@@ -574,11 +639,11 @@ def _print_main_menu() -> None:
     print("\n====================================================================================================")
     print(" Research")
     print("====================================================================================================")
-    print(render_menu_item(1, "模型訓練", default=True))
+    print(render_menu_item(1, "模型訓練／驗證", default=True))
     print(render_menu_item(2, "策略參數最佳化"))
     print(render_menu_item(3, "策略組合比較"))
     print(render_menu_item(4, "Audit／診斷"))
-    print(render_menu_item(5, "查看目前設定與工件狀態"))
+    print(render_menu_item(5, "查看目前研究狀態與工件"))
     print(render_menu_item(0, "離開"))
 
 
