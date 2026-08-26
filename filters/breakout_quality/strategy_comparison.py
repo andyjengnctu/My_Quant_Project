@@ -1284,6 +1284,7 @@ def run_strategy_comparison(
             rule_policy=rule_policy,
             dl_id=on_arm.dl_id,
             dl_runtime_mode=str(on_arm.dl_runtime_mode or ""),
+            arm_id=on_arm.arm_id,
         )
         pair_dir = run_dir / "pairs" / group_id
         on_param_policy = resolve_strategy_comparison_arm_param_policy(settings, on_arm)

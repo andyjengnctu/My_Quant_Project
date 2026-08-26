@@ -10192,3 +10192,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Primary sensitivity contrasts=`C72-C71`與`C73-C72`；C64/C66保留作成熟reference。主`strategy_comparison.md`新增`Raw Safety Gate Sensitivity`小表，集中顯示Gate、Exposure、HM/HS、HM/LS、High-MFE、High-Safety、Full-MFE、Adverse、Realized EV、RoMD。
 - Strategy Compare arm uniqueness修正為`DL source + runtime mode + canonical dl_runtime_options`，因此同一runtime mode可合法存在不同cutoff arms；完全相同options仍拒絕重複定義。
 - Decision：**IMPLEMENTED / RESULT_PENDING / SINGLE_SEED_OOS_PLUS_ROLLING_FIRST / NO_MULTI_SEED_YET / NO_R0_CHANGE**。
+
+### 2026-08-26 — C72/C73 replay完成後 aggregate diagnostics KeyError；pair storage identity 補齊 arm-id 隔離
+
+- 使用者執行 Raw Safety sensitivity OOS：C71正常REUSE、C72/C73各自完整RUN完成，但aggregate report在`strategy_compare_diagnostics._execution_rows()`以`KeyError: C71`中止。這是post-replay reporting failure，不是C72/C73策略計算失敗。
+- 根因：B266已把execution duplicate legality升級成`DL source + runtime mode + canonical runtime options`，但`_pair_group_id()`仍只使用`param_source/rule_policy/dl_id/runtime_mode`。C71/C72/C73共用同一source/mode，因此本輪`pair_dir`、`pair_payloads`與`direct_r` key互相覆蓋；最後scenario materialization缺少較早arms，diagnostics才在C71 lookup fail。
+- 工程修正：current pair storage/group key新增canonical `arm_id`，使C71/P50、C72/P60、C73/P70各自擁有獨立pair目錄與aggregate key；pair scientific/cache fingerprint仍由完整runtime contract（含options）決定，不以arm-id取代scientific stale protection。completed-run reader同時嘗試新版arm-specific key與舊版legacy key，因此既有completed C61/C58/C59/C64/C66/C71可安全REUSE。
+- 不採用在diagnostics以`scenarios.get()`靜默補空值，因那會掩蓋pair evidence遺失；正確修正在pair storage identity owner。
+- GPT targeted regression：Strategy Compare contract=`19/19`、readable report=`50/50`（含C71/C72/C73三個pair key唯一且scenario materialization三arm皆存在）、config/reuse=`63/63`、Daily PIT=`10/10`、runtime integration=`13/13`、retained Audit=`10/10`。未執行`apps/run_bundle.py`／`apps/test_suite.py`。
+- Decision：**ENGINEERING_PAIR_STORAGE_IDENTITY_FIXED / C72_C73_SCIENTIFIC_SEMANTICS_UNCHANGED / LEGACY_PAIR_KEY_REUSE_PRESERVED / REPORT_RETRY_REQUIRED**。
+

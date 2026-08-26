@@ -68,11 +68,59 @@ def _pair_group_id(
     rule_policy: str,
     dl_id: str,
     dl_runtime_mode: str,
+    arm_id: str | None = None,
 ) -> str:
-    return (
+    base = (
         f"{param_source}__{rule_policy}__{dl_id}__"
         f"{str(dl_runtime_mode).replace('-', '_')}"
     )
+    canonical_arm_id = str(arm_id or "").strip()
+    return base if not canonical_arm_id else f"{base}__{canonical_arm_id}"
+
+
+def _pair_group_id_candidates(
+    *,
+    param_source: str,
+    rule_policy: str,
+    dl_id: str,
+    dl_runtime_mode: str,
+    arm_id: str,
+) -> tuple[str, ...]:
+    current = _pair_group_id(
+        param_source=param_source,
+        rule_policy=rule_policy,
+        dl_id=dl_id,
+        dl_runtime_mode=dl_runtime_mode,
+        arm_id=arm_id,
+    )
+    legacy = _pair_group_id(
+        param_source=param_source,
+        rule_policy=rule_policy,
+        dl_id=dl_id,
+        dl_runtime_mode=dl_runtime_mode,
+    )
+    return (current, legacy) if current != legacy else (current,)
+
+
+def _stored_pair_group_id(
+    *,
+    pairs: dict[str, Any],
+    param_source: str,
+    rule_policy: str,
+    dl_id: str,
+    dl_runtime_mode: str,
+    arm_id: str,
+) -> str | None:
+    for candidate in _pair_group_id_candidates(
+        param_source=param_source,
+        rule_policy=rule_policy,
+        dl_id=dl_id,
+        dl_runtime_mode=dl_runtime_mode,
+        arm_id=arm_id,
+    ):
+        if isinstance(pairs.get(candidate), dict):
+            return candidate
+    return None
 
 def _replay_arm_contract(raw: dict[str, Any]) -> dict[str, Any]:
     contract = {
@@ -469,6 +517,7 @@ def _find_reusable_pair_with_archived_source(
         rule_policy=on_arm.rule_policy,
         dl_id=dl_id,
         dl_runtime_mode=str(on_arm.dl_runtime_mode or ""),
+        arm_id=on_arm.arm_id,
     )
     expected_off = _replay_arm_contract(off_arm.as_dict())
     expected_on = _replay_arm_contract(on_arm.as_dict())
@@ -533,13 +582,17 @@ def _find_reusable_pair_with_archived_source(
         if current_identity_conflict:
             continue
 
-        stored_group_id = _pair_group_id(
+        pairs = dict(run_payload.get("pairs") or {})
+        stored_group_id = _stored_pair_group_id(
+            pairs=pairs,
             param_source=str(stored_on.get("param_source") or ""),
             rule_policy=str(stored_on.get("rule_policy") or ""),
             dl_id=str(stored_on.get("dl_id") or ""),
             dl_runtime_mode=str(stored_on.get("dl_runtime_mode") or ""),
+            arm_id=on_arm.arm_id,
         )
-        pairs = dict(run_payload.get("pairs") or {})
+        if stored_group_id is None:
+            continue
         pair_payload = pairs.get(stored_group_id)
         if not isinstance(pair_payload, dict):
             continue
@@ -779,6 +832,7 @@ def _find_reusable_pair(
         rule_policy=on_arm.rule_policy,
         dl_id=str(on_arm.dl_id or ""),
         dl_runtime_mode=str(on_arm.dl_runtime_mode or ""),
+        arm_id=on_arm.arm_id,
     )
     run_dirs = sorted(
         (
@@ -802,13 +856,17 @@ def _find_reusable_pair(
         stored_on = dict(stored_arms.get(on_arm.arm_id) or {})
         if not stored_off or not stored_on:
             continue
-        stored_group_id = _pair_group_id(
+        pairs = dict(run_payload.get("pairs") or {})
+        stored_group_id = _stored_pair_group_id(
+            pairs=pairs,
             param_source=str(stored_on.get("param_source") or ""),
             rule_policy=str(stored_on.get("rule_policy") or ""),
             dl_id=str(stored_on.get("dl_id") or ""),
             dl_runtime_mode=str(stored_on.get("dl_runtime_mode") or ""),
+            arm_id=on_arm.arm_id,
         )
-        pairs = dict(run_payload.get("pairs") or {})
+        if stored_group_id is None:
+            continue
         pair_payload = pairs.get(stored_group_id)
         if not isinstance(pair_payload, dict):
             continue
@@ -1100,12 +1158,16 @@ def _historical_continuous_score_provenance_entries(
             arm = dict(raw_arm or {})
             if not bool(arm.get("dl_enabled")) or str(arm.get("dl_id") or "") != str(dl_id):
                 continue
-            source_group_id = _pair_group_id(
+            source_group_id = _stored_pair_group_id(
+                pairs=pairs,
                 param_source=str(arm.get("param_source") or ""),
                 rule_policy=str(arm.get("rule_policy") or ""),
                 dl_id=str(dl_id),
                 dl_runtime_mode=str(arm.get("dl_runtime_mode") or ""),
+                arm_id=str(arm_id),
             )
+            if source_group_id is None:
+                continue
             pair_payload = pairs.get(source_group_id)
             if not isinstance(pair_payload, dict):
                 continue

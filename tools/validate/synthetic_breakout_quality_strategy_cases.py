@@ -2689,5 +2689,57 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "C64/C66" in sensitivity_text,
     )
 
+    from filters.breakout_quality.strategy_compare_reuse import _pair_group_id
+    from filters.breakout_quality.strategy_compare_runtime import _execution_pairs, _arm_runtime_spec
+    from filters.breakout_quality.strategy_comparison import _scenario_payloads
+
+    sensitivity_pairs = [
+        row for row in _execution_pairs(sensitivity_settings)
+        if row[3].arm_id in {"C71", "C72", "C73"}
+    ]
+    sensitivity_group_ids = {
+        on_arm.arm_id: _pair_group_id(
+            param_source=param_source,
+            rule_policy=rule_policy,
+            dl_id=str(on_arm.dl_id or ""),
+            dl_runtime_mode=str(on_arm.dl_runtime_mode or ""),
+            arm_id=on_arm.arm_id,
+        )
+        for param_source, rule_policy, _off_arm, on_arm in sensitivity_pairs
+    }
+    check_true(
+        "raw_safety_gate_sensitivity_pair_storage_keys_are_arm_unique",
+        set(sensitivity_group_ids) == {"C71", "C72", "C73"}
+        and len(set(sensitivity_group_ids.values())) == 3
+        and all(arm_id in group_id for arm_id, group_id in sensitivity_group_ids.items()),
+    )
+
+    synthetic_pair_payloads = {}
+    synthetic_direct_r = {}
+    for param_source, rule_policy, off_arm, on_arm in sensitivity_pairs:
+        group_id = sensitivity_group_ids[on_arm.arm_id]
+        active_key = _arm_runtime_spec(on_arm)["active_key"]
+        synthetic_pair_payloads[group_id] = {
+            "arm_contract": (param_source, rule_policy, off_arm, on_arm),
+            "payload": {
+                "no_filter": {"total_return_pct": 1.0},
+                active_key: {
+                    "total_return_pct": float({"C71": 1, "C72": 2, "C73": 3}[on_arm.arm_id]),
+                    "avg_exposure_pct": 60.0,
+                },
+            },
+        }
+        synthetic_direct_r[group_id] = 0.0
+    synthetic_scenarios = _scenario_payloads(
+        synthetic_pair_payloads, synthetic_direct_r, settings=sensitivity_settings
+    )
+    check_true(
+        "raw_safety_gate_sensitivity_scenario_materialization_keeps_all_three_arms",
+        all(arm_id in synthetic_scenarios for arm_id in ("C71", "C72", "C73"))
+        and synthetic_scenarios["C71"]["total_return_pct"] == 1.0
+        and synthetic_scenarios["C72"]["total_return_pct"] == 2.0
+        and synthetic_scenarios["C73"]["total_return_pct"] == 3.0,
+    )
+
     summary["strategy_output_contracts"] = [row[0] for row in contract_rows]
     return results, summary
