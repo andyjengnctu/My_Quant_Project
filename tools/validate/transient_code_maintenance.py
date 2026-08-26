@@ -15,6 +15,8 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
 
+from tools.validate.source_index import read_source_ast, read_source_text
+
 TRANSIENT_MODULE_PREFIXES = (
     "tools.audit",
     "config.compatibility",
@@ -71,14 +73,22 @@ def _resolve_import_from(current_module: str, current_path: Path, module: str | 
     return ".".join([*package_parts, *suffix])
 
 
-def _import_edges(project_root: Path, index: dict[str, Path]) -> dict[str, set[str]]:
+def _analyze_static_python_tree(
+    project_root: Path,
+    index: dict[str, Path],
+) -> tuple[dict[str, set[str]], list[dict[str, Any]]]:
+    """Build import reachability and execution-identity findings in one AST walk."""
+
     names = set(index)
     graph: dict[str, set[str]] = {name: set() for name in names}
+    experiment_branches: list[dict[str, Any]] = []
+
     for module, path in index.items():
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            tree = read_source_ast(path)
         except (OSError, UnicodeDecodeError, SyntaxError):
             continue
+        scan_experiment_branches = module.startswith(("core.", "filters.", "services."))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -96,8 +106,33 @@ def _import_edges(project_root: Path, index: dict[str, Path]) -> dict[str, set[s
                         graph[module].add(full)
                     elif base in names:
                         graph[module].add(base)
-    return graph
 
+            if not scan_experiment_branches:
+                continue
+            if isinstance(node, ast.Match):
+                literals = [
+                    value
+                    for case in node.cases
+                    for value in _literal_strings(case.pattern)
+                ]
+            elif isinstance(node, (ast.If, ast.IfExp, ast.While)):
+                literals = _literal_strings(node.test)
+            else:
+                continue
+            hits = sorted({
+                hit
+                for value in literals
+                for hit in EXPERIMENT_ID_PATTERN.findall(value)
+            })
+            if hits:
+                experiment_branches.append({
+                    "path": path.relative_to(project_root).as_posix(),
+                    "line": int(node.lineno),
+                    "identities": hits,
+                    "reason": "experiment_identity_literal_controls_execution_branch",
+                })
+
+    return graph, experiment_branches
 
 def _active_dynamic_audit_modules() -> set[str]:
     from config.audit import get_audit_module_ids, get_enabled_audit_definitions
@@ -160,7 +195,7 @@ def _retired_dedicated_test_candidates(
     checklist = project_root / "doc" / "TEST_SUITE_CHECKLIST.md"
     if not checklist.is_file():
         return []
-    text = checklist.read_text(encoding="utf-8", errors="ignore")
+    text = read_source_text(checklist)
     lines = text.splitlines()
 
     active_validators: set[str] = set()
@@ -196,7 +231,7 @@ def _retired_dedicated_test_candidates(
         if not module.startswith("tools.validate"):
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            tree = read_source_ast(path)
         except (OSError, UnicodeDecodeError, SyntaxError):
             continue
         for node in tree.body:
@@ -244,15 +279,18 @@ def _private_zero_caller_candidates(project_root: Path) -> list[dict[str, Any]]:
     counts: Counter[str] = Counter()
     sources: dict[Path, str] = {}
     for path in paths:
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        try:
+            text = read_source_text(path)
+        except (OSError, UnicodeDecodeError):
+            continue
         sources[path] = text
         counts.update(token_re.findall(text))
 
     candidates: list[dict[str, Any]] = []
     for path, text in sources.items():
         try:
-            tree = ast.parse(text, filename=str(path))
-        except SyntaxError:
+            tree = read_source_ast(path)
+        except (OSError, UnicodeDecodeError, SyntaxError):
             continue
         for node in tree.body:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -278,62 +316,18 @@ def _literal_strings(node: ast.AST) -> list[str]:
     return values
 
 
-def _experiment_execution_branch_candidates(project_root: Path) -> list[dict[str, Any]]:
-    """Find MR/SR/Cxx identity literals that directly control executable branches."""
-
-    candidates: list[dict[str, Any]] = []
-    for root_name in ("core", "filters", "services"):
-        root = project_root / root_name
-        if not root.is_dir():
-            continue
-        for path in sorted(root.rglob("*.py")):
-            try:
-                tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"), filename=str(path))
-            except SyntaxError:
-                continue
-            for node in ast.walk(tree):
-                condition: ast.AST | None = None
-                if isinstance(node, (ast.If, ast.IfExp, ast.While)):
-                    condition = node.test
-                elif isinstance(node, ast.Match):
-                    condition = node.subject
-                    match_literals = []
-                    for case in node.cases:
-                        match_literals.extend(_literal_strings(case.pattern))
-                    literals = match_literals
-                    hits = sorted({hit for value in literals for hit in EXPERIMENT_ID_PATTERN.findall(value)})
-                    if hits:
-                        candidates.append({
-                            "path": path.relative_to(project_root).as_posix(),
-                            "line": int(node.lineno),
-                            "identities": hits,
-                            "reason": "experiment_identity_literal_controls_execution_branch",
-                        })
-                    continue
-                if condition is None:
-                    continue
-                hits = sorted({hit for value in _literal_strings(condition) for hit in EXPERIMENT_ID_PATTERN.findall(value)})
-                if hits:
-                    candidates.append({
-                        "path": path.relative_to(project_root).as_posix(),
-                        "line": int(node.lineno),
-                        "identities": hits,
-                        "reason": "experiment_identity_literal_controls_execution_branch",
-                    })
-    return candidates
-
 
 def _source_shape_validator_inventory(project_root: Path) -> dict[str, Any]:
     functions: dict[str, dict[str, Any]] = {}
     total_loc = 0
     validate_root = project_root / "tools" / "validate"
     for path in sorted(validate_root.glob("synthetic*_cases.py")):
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        lines = text.splitlines()
         try:
-            tree = ast.parse(text, filename=str(path))
-        except SyntaxError:
+            text = read_source_text(path)
+            tree = read_source_ast(path)
+        except (OSError, UnicodeDecodeError, SyntaxError):
             continue
+        lines = text.splitlines()
         for node in tree.body:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("validate_"):
                 continue
@@ -440,12 +434,12 @@ def _git_growth_summary(project_root: Path, current_source_shape: dict[str, Any]
         path = project_root / rel_path
         if not path.is_file():
             continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        lines = text.splitlines()
         try:
-            tree = ast.parse(text)
-        except SyntaxError:
+            text = read_source_text(path)
+            tree = read_source_ast(path)
+        except (OSError, UnicodeDecodeError, SyntaxError):
             continue
+        lines = text.splitlines()
         for node in tree.body:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("validate_"):
                 continue
@@ -477,7 +471,7 @@ def _git_growth_summary(project_root: Path, current_source_shape: dict[str, Any]
 def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     index = _module_index(root)
-    graph = _import_edges(root, index)
+    graph, experiment_execution_branches = _analyze_static_python_tree(root, index)
     dynamic_roots = _active_dynamic_audit_modules()
     reachable = _reachable_from_production(graph, dynamic_roots)
     catalog_modes = _catalog_modes_by_module()
@@ -495,7 +489,7 @@ def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
             {
                 "module": module,
                 "path": rel,
-                "line_count": len(path.read_text(encoding="utf-8", errors="ignore").splitlines()),
+                "line_count": len(read_source_text(path).splitlines()),
                 "catalog_modes": catalog_modes.get(module, []),
                 "reason": "not_reachable_from_current_runtime_or_active_formal_audit",
             }
@@ -523,7 +517,7 @@ def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
     validate_root = root / "tools" / "validate"
     if validate_root.is_dir():
         for path in sorted(validate_root.glob("synthetic_*audit*_cases.py")):
-            line_count = len(path.read_text(encoding="utf-8", errors="ignore").splitlines())
+            line_count = len(read_source_text(path).splitlines())
             if line_count > TRANSIENT_TEST_LINE_THRESHOLD:
                 oversized_transient_tests.append(
                     {
@@ -535,7 +529,6 @@ def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
 
     retired_dedicated_tests = _retired_dedicated_test_candidates(root, index)
     private_zero_callers = _private_zero_caller_candidates(root)
-    experiment_execution_branches = _experiment_execution_branch_candidates(root)
     source_shape_inventory = _source_shape_validator_inventory(root)
     growth = _git_growth_summary(root, source_shape_inventory)
     growth_reviews = [

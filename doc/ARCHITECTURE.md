@@ -174,7 +174,7 @@ Current Strategy Compare與Multi-seed robustness共用`config/strategy_compare.p
 
 ### `tools/validate/`
 
-Breakout Quality synthetic validators依測試責任拆成policy、artifact、model、audit、PIT、strategy與strategy-app七個case modules；`synthetic_breakout_quality_support.py`只提供共享fixture imports／helpers。舊`synthetic_breakout_quality_cases.py` compatibility façade已因無current consumer而移除；正式synthetic registry `synthetic_cases.py`直接import各domain owner，meta registry contract驗證每個Breakout Quality validator只有一個domain owner、retired façade不得復活，並將support與所有domain implementation modules納入key coverage targets。 Source-level contracts透過`tools/validate/source_index.py`共用process-local source text／AST cache；cache以檔案mtime_ns＋size失效，僅消除同一輪synthetic suite重複I/O／parse，不快取validator結果、不跳過contract，也不跨process持久化。
+Breakout Quality synthetic validators依測試責任拆成policy、artifact、model、audit、PIT、strategy與strategy-app七個case modules；`synthetic_breakout_quality_support.py`只提供共享fixture imports／helpers。舊`synthetic_breakout_quality_cases.py` compatibility façade已因無current consumer而移除；正式synthetic registry `synthetic_cases.py`直接import各domain owner，meta registry contract驗證每個Breakout Quality validator只有一個domain owner、retired façade不得復活。Formal coverage只instrument宣告的production/runtime與formal-runner targets；synthetic support／case implementation仍完整執行correctness contracts，但本身不列入key coverage targets，避免測試框架自我coverage造成逐行tracing成本。Source-level contracts與meta-quality maintenance scan透過`tools/validate/source_index.py`共用process-local source text／AST cache；cache以檔案mtime_ns＋size失效，僅消除同一process重複I/O／parse，不快取validator結果、不跳過contract，也不跨process持久化。
 
 ### Continuous Target canonical build service
 

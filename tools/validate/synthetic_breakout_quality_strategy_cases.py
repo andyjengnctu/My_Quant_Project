@@ -1191,7 +1191,18 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
 
     from tools.validate.transient_code_maintenance import summarize_transient_code_maintenance
 
-    maintenance = summarize_transient_code_maintenance(project_root)
+    # The full repository maintenance scan is already executed once by meta quality.
+    # Here we only exercise its output contract on a tiny isolated tree so the
+    # consistency step does not duplicate the whole-project AST/source scan.
+    with tempfile.TemporaryDirectory(prefix="maintenance_contract_fixture_") as temp_dir:
+        fixture_root = Path(temp_dir)
+        (fixture_root / "doc").mkdir(parents=True, exist_ok=True)
+        (fixture_root / "tools" / "validate").mkdir(parents=True, exist_ok=True)
+        (fixture_root / "doc" / "TEST_SUITE_CHECKLIST.md").write_text(
+            "# fixture\n",
+            encoding="utf-8",
+        )
+        maintenance = summarize_transient_code_maintenance(fixture_root)
     maintenance_candidate_count = maintenance.get("candidate_count")
     maintenance_count_valid = (
         type(maintenance_candidate_count) is int
@@ -1247,7 +1258,7 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
     summary["retired_paths"] = list(retired_paths)
     summary["current_replacements"] = list(current_paths)
     summary["compatibility_preserved"] = list(compatibility_paths)
-    summary["maintenance"] = maintenance
+    summary["maintenance_contract_fixture"] = maintenance
     return results, summary
 
 def validate_breakout_quality_strategy_readable_report_contract_case(_base_params):

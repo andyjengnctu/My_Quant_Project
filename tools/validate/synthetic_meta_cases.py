@@ -41,7 +41,6 @@ from tools.local_regression.formal_pipeline import FORMAL_STEP_SPECS
 from tools.local_regression.meta_quality_coverage import build_coverage_summary
 from tools.local_regression.meta_quality_targets import (
     CORE_TRADING_COVERAGE_TARGETS,
-    BREAKOUT_QUALITY_IMPLEMENTATION_COVERAGE_TARGETS,
     COVERAGE_BRANCH_MIN_FLOOR,
     COVERAGE_LINE_MIN_FLOOR,
     COVERAGE_MAX_LINE_BRANCH_GAP,
@@ -1005,12 +1004,18 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
         for module_name in breakout_quality_case_modules
         if f"from .{module_name} import (" not in synthetic_cases_source
     )
-    breakout_quality_implementation_coverage_targets = set(
-        BREAKOUT_QUALITY_IMPLEMENTATION_COVERAGE_TARGETS
-    )
     declared_coverage_targets = set(COVERAGE_TARGETS)
-    missing_breakout_quality_implementation_coverage_targets = sorted(
-        breakout_quality_implementation_coverage_targets - declared_coverage_targets
+    breakout_quality_validator_paths = {
+        "tools/validate/synthetic_breakout_quality_support.py",
+        *(f"tools/validate/{module_name}.py" for module_name in breakout_quality_case_modules),
+    }
+    unexpected_breakout_quality_validator_coverage_targets = sorted(
+        breakout_quality_validator_paths & declared_coverage_targets
+    )
+    unexpected_synthetic_implementation_coverage_targets = sorted(
+        rel_path
+        for rel_path in declared_coverage_targets
+        if rel_path.startswith("tools/validate/synthetic")
     )
     breakout_quality_facade_coverage_target = (
         "tools/validate/synthetic_breakout_quality_cases.py" in declared_coverage_targets
@@ -1060,9 +1065,17 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
         results,
         "meta_registry",
         case_id,
-        "breakout_quality_implementation_modules_are_coverage_targets",
+        "breakout_quality_validator_implementations_are_not_key_coverage_targets",
         [],
-        missing_breakout_quality_implementation_coverage_targets,
+        unexpected_breakout_quality_validator_coverage_targets,
+    )
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "synthetic_validator_implementations_are_not_key_coverage_targets",
+        [],
+        unexpected_synthetic_implementation_coverage_targets,
     )
     add_check(
         results,

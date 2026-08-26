@@ -21,6 +21,7 @@ from tools.local_regression.meta_quality_targets import (
     CRITICAL_COVERAGE_BRANCH_MIN_FLOOR,
     CRITICAL_COVERAGE_LINE_MIN_FLOOR,
     CRITICAL_COVERAGE_TARGETS,
+    build_coverage_include_paths,
 )
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 
@@ -487,7 +488,7 @@ def build_coverage_summary(
             cov = coverage.Coverage(
                 data_file=str(data_file),
                 branch=True,
-                source=[str(PROJECT_ROOT)],
+                include=build_coverage_include_paths(PROJECT_ROOT),
                 omit=HEADLESS_COVERAGE_OMIT_PATTERNS,
             )
             try:

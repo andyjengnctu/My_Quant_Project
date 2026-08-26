@@ -26,6 +26,7 @@ from core.portfolio_param_runtime import load_portfolio_primary_params_from_json
 from core.runtime_utils import PeakTracedMemoryTracker, run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, resolve_cli_program_name, safe_prompt, validate_cli_args
 from core.output_paths import build_output_dir
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json
+from tools.local_regression.meta_quality_targets import build_coverage_include_paths
 
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "validate_consistency")
 DATA_DIR = get_dataset_dir(PROJECT_ROOT, DEFAULT_VALIDATE_DATASET_PROFILE)
@@ -156,7 +157,7 @@ def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_
     cov = coverage.Coverage(
         data_file=data_file,
         branch=True,
-        source=[PROJECT_ROOT],
+        include=build_coverage_include_paths(PROJECT_ROOT),
         omit=HEADLESS_COVERAGE_OMIT_PATTERNS,
     )
     results = []

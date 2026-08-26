@@ -65,39 +65,13 @@ FORMAL_STEP_ENTRY_COVERAGE_TARGETS = [
 FORMAL_STEP_IMPLEMENTATION_COVERAGE_TARGETS = [
     "tools/validate/main.py",
 ]
-BREAKOUT_QUALITY_IMPLEMENTATION_COVERAGE_TARGETS = [
-    "tools/validate/synthetic_breakout_quality_support.py",
-    "tools/validate/synthetic_breakout_quality_policy_cases.py",
-    "tools/validate/synthetic_breakout_quality_artifact_cases.py",
-    "tools/validate/synthetic_breakout_quality_model_cases.py",
-    "tools/validate/synthetic_breakout_quality_audit_cases.py",
-    "tools/validate/synthetic_breakout_quality_pit_cases.py",
-    "tools/validate/synthetic_breakout_quality_strategy_cases.py",
-    "tools/validate/synthetic_breakout_quality_strategy_app_cases.py",
-    "tools/validate/synthetic_breakout_quality_strategy_plan_cases.py",
-    "tools/validate/synthetic_breakout_quality_strategy_preparation_cases.py",
-    "tools/validate/synthetic_breakout_quality_strategy_reuse_cases.py",
-]
+# Formal coverage measures production/runtime and formal-runner code exercised by
+# synthetic cases.  The validator implementations themselves are correctness
+# drivers, not coverage subjects; tracing them adds substantial line-event cost
+# without improving production-risk coverage.
 COVERAGE_TARGETS = list(dict.fromkeys([
-    "tools/validate/synthetic_cases.py",
-    "tools/validate/source_index.py",
-    "tools/validate/synthetic_meta_cases.py",
-    "tools/validate/synthetic_unit_cases.py",
-    "tools/validate/synthetic_history_cases.py",
-    "tools/validate/synthetic_flow_cases.py",
-    "tools/validate/synthetic_take_profit_cases.py",
-    "tools/validate/synthetic_contract_cases.py",
-    *BREAKOUT_QUALITY_IMPLEMENTATION_COVERAGE_TARGETS,
-    "tools/validate/synthetic_guardrail_cases.py",
-    "tools/validate/synthetic_display_cases.py",
-    "tools/validate/synthetic_reporting_cases.py",
     "core/research_orchestration.py",
     "services/research/artifact_orchestrator.py",
-    "tools/validate/synthetic_error_cases.py",
-    "tools/validate/synthetic_data_quality_cases.py",
-    "tools/validate/synthetic_cli_cases.py",
-    "tools/validate/synthetic_strategy_cases.py",
-    "tools/validate/synthetic_regression_cases.py",
     "tools/local_regression/run_chain_checks.py",
     "tools/local_regression/run_ml_smoke.py",
     *FORMAL_STEP_ENTRY_COVERAGE_TARGETS,
@@ -120,6 +94,16 @@ CRITICAL_COVERAGE_LINE_MIN_FLOOR = 30.0
 CRITICAL_COVERAGE_BRANCH_MIN_FLOOR = 25.0
 COVERAGE_MAX_LINE_BRANCH_GAP = 5.0
 
+
+def build_coverage_include_paths(project_root) -> list[str]:
+    """Return exact absolute files instrumented by the formal coverage run."""
+
+    from pathlib import Path
+
+    root = Path(project_root).resolve()
+    return [str((root / rel_path).resolve()) for rel_path in COVERAGE_TARGETS]
+
+
 __all__ = [
     "CORE_TRADING_COVERAGE_TARGETS",
     "ENTRY_PATH_CRITICAL_COVERAGE_TARGETS",
@@ -128,11 +112,11 @@ __all__ = [
     "POLICY_CONTRACT_COVERAGE_TARGETS",
     "FORMAL_STEP_ENTRY_COVERAGE_TARGETS",
     "FORMAL_STEP_IMPLEMENTATION_COVERAGE_TARGETS",
-    "BREAKOUT_QUALITY_IMPLEMENTATION_COVERAGE_TARGETS",
     "COVERAGE_TARGETS",
     "COVERAGE_LINE_MIN_FLOOR",
     "COVERAGE_BRANCH_MIN_FLOOR",
     "CRITICAL_COVERAGE_LINE_MIN_FLOOR",
     "CRITICAL_COVERAGE_BRANCH_MIN_FLOOR",
     "COVERAGE_MAX_LINE_BRANCH_GAP",
+    "build_coverage_include_paths",
 ]
