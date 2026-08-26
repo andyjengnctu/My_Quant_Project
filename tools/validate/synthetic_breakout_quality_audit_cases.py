@@ -70,6 +70,21 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "research_audit_utilities_remain_catalogued_alongside_formal_gate",
         bool("regime-audit" in commands and "audit-point-in-time-scores" in commands),
     )
+    from services.audit.catalog import get_audit_entry
+    joint_defs = [item for item in enabled if item.audit_id == "AUD-mr13r-joint-capital-drawdown"]
+    joint_entry = get_audit_entry("mr13r_joint_capital_drawdown")
+    check_true(
+        "mr13r_joint_capital_drawdown_audit_is_formal_read_only_and_strategy_pair_scoped",
+        bool(
+            len(joint_defs) == 1
+            and joint_entry.formal
+            and joint_entry.read_only
+            and joint_entry.method_id == "strategy_pair_attribution"
+            and tuple(joint_defs[0].source.get("strategy_arm_ids", ())) == ("C71", "C72", "C73", "C74")
+            and joint_defs[0].source.get("strategy_result_fingerprints", {}).get("extending_window_oos") == "b12582a9de23"
+            and joint_defs[0].source.get("strategy_result_fingerprints", {}).get("extending_window_rolling") == "3bca1e932f2e"
+        ),
+    )
 
     import apps.research as research_app
 
@@ -484,6 +499,136 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "High-MFE" in geometry_text
         and "Filled buys" in geometry_text,
     )
+
+    from services.audit.mr13r_joint_capital_drawdown import (
+        build_capital_conversion_analysis,
+        build_drawdown_analysis,
+        build_joint_signal_analysis,
+    )
+
+    joint_orderable = pd.DataFrame({
+        "ticker": ["A", "B", "C", "D", "E"],
+        "trade_date": ["2025-01-02"] * 5,
+        "signal_date": ["2025-01-01"] * 5,
+        "breakout_quality_score_date": ["2025-01-01"] * 5,
+        "breakout_quality_score": [0.1, 0.2, 0.3, 0.4, 0.9],
+        "breakout_quality_safety_score": [0.1, 0.2, 0.3, 0.4, 0.9],
+        "breakout_quality_safety_score_available": [True] * 5,
+    })
+    joint_truth = pd.DataFrame({
+        "ticker": ["A", "B", "C", "D", "E"],
+        "date": ["2025-01-01"] * 5,
+        "mfe_percentile": [0.0, 0.25, 0.50, 0.75, 1.0],
+        "safety_percentile": [0.0, 0.25, 0.50, 0.75, 1.0],
+    })
+    joint_signal = build_joint_signal_analysis(
+        joint_orderable, joint_truth, cutoff=0.50, bins=5
+    )
+    check_true(
+        "mr13r_joint_signal_audit_detects_upper_right_hmhs_enrichment_without_runtime_truth_use",
+        bool(
+            joint_signal["rows"] == 5
+            and joint_signal["upper_right_rows"] == 1
+            and joint_signal["upper_right_hmhs_pct"] == 100.0
+            and joint_signal["upper_right_hmhs_pct"] > joint_signal["population_hmhs_pct"]
+            and joint_signal["primary_to_actual_mfe_mean_daily_spearman"] > 0.99
+            and joint_signal["safety_to_actual_safety_mean_daily_spearman"] > 0.99
+        ),
+    )
+
+    with TemporaryDirectory() as mechanism_temp_text:
+        mechanism_root = Path(mechanism_temp_text)
+        pair_dir = mechanism_root / "pair"
+        pair_dir.mkdir(parents=True)
+        pd.DataFrame({
+            "Date": ["2025-01-01", "2025-01-02", "2025-01-03", "2025-01-04", "2025-01-05", "2025-01-06", "2025-01-07"],
+            "Equity": [100.0, 95.0, 90.0, 100.0, 110.0, 99.0, 110.0],
+            "Exposure_Pct": [50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0],
+        }).to_csv(pair_dir / "score_ranking_equity.csv", index=False, encoding="utf-8-sig")
+        pd.DataFrame({
+            "Date": ["2025-01-02", "2025-01-04", "2025-01-02", "2025-01-06"],
+            "Ticker": ["A", "A", "B", "B"],
+            "Type": ["買進 (突破)", "全倉結算", "買進 (突破)", "全倉結算"],
+            "進場類型": ["normal", "", "normal", ""],
+            "買訊日": ["2025-01-01", "", "2025-01-01", ""],
+            "候選日": ["2025-01-01", "", "2025-01-01", ""],
+            "成交價": [100.0, 105.0, 100.0, 95.0],
+            "停損價": [90.0, 90.0, 98.0, 98.0],
+            "該筆總損益": [0.0, 5.0, 0.0, -5.0],
+            "R_Multiple": [0.0, 0.5, 0.0, -0.5],
+        }).to_csv(pair_dir / "score_ranking_trades.csv", index=False, encoding="utf-8-sig")
+        mechanism_orderable = pd.DataFrame({
+            "ticker": ["A", "B"],
+            "trade_date": ["2025-01-02", "2025-01-02"],
+            "signal_date": ["2025-01-01", "2025-01-01"],
+            "breakout_quality_score_date": ["2025-01-01", "2025-01-01"],
+            "breakout_quality_score": [0.7, 0.8],
+            "breakout_quality_safety_score": [0.1, 0.9],
+            "breakout_quality_safety_score_available": [True, True],
+            "projected_capital_fraction": [0.10, 0.30],
+            "projected_capital_deployment_rate": [0.20, 0.50],
+            "entry_atr": [10.0, 2.0],
+            "orig_limit": [100.0, 100.0],
+        })
+        mechanism_execution = pd.DataFrame({
+            "ticker": ["A", "B"],
+            "trade_date": ["2025-01-02", "2025-01-02"],
+            "signal_date": ["2025-01-01", "2025-01-01"],
+            "chosen_qty": [1, 1],
+            "limit_px": [100.0, 100.0],
+            "init_sl": [90.0, 98.0],
+            "sizing_equity": [1000.0, 1000.0],
+            "reserved_cost": [100.0, 300.0],
+            "chosen_risk_utilization": [0.60, 0.90],
+            "binding_signature": ["RISK_CAP", "POSITION_CAP"],
+        })
+        mechanism_evidence = {
+            "pair_dir": pair_dir,
+            "orderable": mechanism_orderable,
+            "execution": mechanism_execution,
+        }
+        capital = build_capital_conversion_analysis(mechanism_evidence)
+        check_true(
+            "mr13r_capital_conversion_audit_attributes_safety_to_stop_distance_and_reserved_notional",
+            bool(
+                abs(capital["average_exposure_pct"] - 65.0) < 1e-9
+                and capital["raw_safety_to_projected_capital_fraction_daily_spearman"] > 0.99
+                and capital["selected_raw_safety_to_stop_distance_daily_spearman"] < -0.99
+                and capital["selected_raw_safety_to_reserved_fraction_daily_spearman"] > 0.99
+                and capital["mean_holding_calendar_days"] == 3.0
+            ),
+        )
+
+        drawdown_path = pd.DataFrame({
+            "ticker": ["A", "B"],
+            "score_event_date": ["2025-01-01", "2025-01-01"],
+            "entry_date": ["2025-01-02", "2025-01-02"],
+            "exit_date": ["2025-01-04", "2025-01-06"],
+            "realized_r": [0.5, -0.5],
+        })
+        drawdown_truth = pd.DataFrame({
+            "ticker": ["A", "B"],
+            "date": ["2025-01-01", "2025-01-01"],
+            "mfe_percentile": [0.9, 0.8],
+            "safety_percentile": [0.9, 0.2],
+        })
+        drawdown = build_drawdown_analysis(
+            {**mechanism_evidence, "upside_realization": drawdown_path},
+            drawdown_truth, cutoff=0.50, top_n=2,
+        )
+        first_dd = drawdown["top_episodes"][0]
+        check_true(
+            "mr13r_drawdown_audit_uses_portfolio_peak_to_trough_and_overlapping_trade_clustering",
+            bool(
+                abs(drawdown["max_drawdown_pct"] - 10.0) < 1e-9
+                and first_dd["peak_date"] == "2025-01-01"
+                and first_dd["trough_date"] == "2025-01-03"
+                and first_dd["overlapping_trade_count"] == 2
+                and first_dd["overlap_losing_trade_count"] == 1
+                and first_dd["hmls_count"] == 1
+                and first_dd["hmhs_count"] == 1
+            ),
+        )
 
     summary["workflow"] = "config_driven_formal_audit_topology"
     return results, summary

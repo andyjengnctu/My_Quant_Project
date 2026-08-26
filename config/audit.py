@@ -22,7 +22,7 @@ from filters.breakout_quality.continuous_target import (
 from pathlib import Path
 from typing import Any, Mapping
 
-AUDIT_SCHEMA_VERSION = 12
+AUDIT_SCHEMA_VERSION = 13
 AUDIT_OUTPUT_ROOT = "outputs/audit"
 AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
 
@@ -62,6 +62,51 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "stopping_condition": "K/R0 treatment已取得足以GO/REJECT/NEXT EXPERIMENT的跨OOS/Rolling evidence後才退役此Audit。",
                 },
                 "output_subdir": "breakout_quality/selection_k_r0_attribution",
+            },
+            "AUD-mr13r-joint-capital-drawdown": {
+                "enabled": True,
+                "audit_type": "mr13r_joint_capital_drawdown",
+                "description": (
+                    "只讀C71-C74 completed OOS/Rolling sidecars與canonical MFE×Safety truth；"
+                    "判斷MR-13R兩head是否已含HM/HS joint signal、Safety如何轉成capital exposure，"
+                    "以及single-stock adverse改善未轉成portfolio RoMD的drawdown機制。"
+                ),
+                "source": {
+                    "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
+                    "model_architecture": BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
+                    "truth_provider_profile_id": DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                    "mfe_target_id": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                    "safety_target_id": DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+                    "evaluation_profile_ids": ("extending_window_oos", "extending_window_rolling"),
+                    "strategy_result_fingerprints": {
+                        "extending_window_oos": "b12582a9de23",
+                        "extending_window_rolling": "3bca1e932f2e",
+                    },
+                    "strategy_arm_ids": ("C71", "C72", "C73", "C74"),
+                    "joint_signal_anchor_arm_id": "C71",
+                },
+                "dimensions": {
+                    "truth_high_cutoff": 0.50,
+                    "percentile_method": "average_zero_based",
+                    "joint_signal_bins": 5,
+                    "drawdown_top_n": 5,
+                },
+                "outcomes": {
+                    "decision_question": (
+                        "MR-13R現有Raw Safety＋Conditional-MFE是否已含可利用HM/HS joint signal；"
+                        "Safety→Exposure與single-stock adverse→portfolio MDD之間各由何種mechanism主導？"
+                    ),
+                    "critical_uncertainty": (
+                        "joint signal是selector conversion缺口或model objective缺口；"
+                        "capital exposure是stop-distance/notional/holding conversion；"
+                        "RoMD缺口是否主要來自drawdown期的同期交易共振。"
+                    ),
+                    "stopping_condition": (
+                        "只補足能決定NEXT=selector mechanism、new joint model target或portfolio construction的最小證據；"
+                        "不做threshold/weight scan、不重跑strategy、不訓練模型。"
+                    ),
+                },
+                "output_subdir": "breakout_quality/mr13r_joint_capital_drawdown",
             },
             "AUD-c69-marginal-position-attribution": {
                 "enabled": True,

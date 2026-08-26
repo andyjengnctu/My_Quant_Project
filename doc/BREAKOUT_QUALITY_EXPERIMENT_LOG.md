@@ -10220,3 +10220,22 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Current Compare Suite擴為`C61/C58/C59/C64/C66/C71/C72/C73/C74`，schema=`61`。Primary contrast=`C74-C71`；另保留`C74-C72/C74-C73/C74-C66/C74-C64` reference。C71-C73 Raw Safety sensitivity仍保留已完成evidence，不再做threshold tuning。
 - Decision Gate：先跑single-seed OOS + Rolling；主要看C74是否相對C71-C73**提高HM/HS**、維持較低HM/LS，同時保留High-MFE/Full-MFE並改善或至少不惡化RoMD/Exposure。若只是落在C71-C73既有trade-off內，停止selector arithmetic並進Joint-Signal/Capital/Drawdown Audit；不先做Multi-seed。
 - Status：**IMPLEMENTED / RESULT_PENDING / PARAMETER_FREE_JOINT_SELECTOR / NO_THRESHOLD_SWEEP / ROBUSTNESS_DEFERRED / NOT_PROMOTED**。
+
+### 2026-08-26 — SR-C74 OOS + Rolling結果；parameter-free joint product未突破既有trade-off
+
+- C74沿用MR-13R兩head、No-K/No-R0與canonical execution，不設Safety gate；唯一ranking=`same-day Raw Safety percentile × Conditional-MFE percentile`。
+- OOS：Return=`61.71%`、MDD=`20.16%`、RoMD=`3.06`、EV=`0.42R`、Exposure=`72.08%`；HM/HS=`21.84%`、HM/LS=`21.58%`、High-MFE=`43.42%`、High-Safety=`54.21%`、Full-MFE=`1.15R`、Adverse=`0.29R`。
+- Rolling：Return=`108.52%`、MDD=`15.03%`、RoMD=`7.22`、EV=`0.62R`、Exposure=`67.13%`；HM/HS=`22.85%`、HM/LS=`26.71%`、High-MFE=`49.55%`、High-Safety=`48.96%`、Full-MFE=`1.25R`、Adverse=`0.33R`。
+- Interpretation：joint product沒有把actual HM/HS明顯推高，也沒有同時改善High-Safety與High-MFE；Rolling RoMD雖略高於C71，但仍遠低於C64/C66，且geometry落回C71附近。故「直接對兩個predicted percentile做乘法」不支持作下一個selector base。
+- Decision：**C74_RESULT_AVAILABLE / JOINT_PRODUCT_NOT_SUPPORTED / NO_ROBUSTNESS / STOP_SELECTOR_ARITHMETIC / NEXT=AUD-mr13r-joint-capital-drawdown**。
+
+### 2026-08-26 — AUD-mr13r-joint-capital-drawdown實作；只讀三層mechanism evidence
+
+- 新formal Audit identity=`AUD-mr13r-joint-capital-drawdown`，method=`策略 Pair／Portfolio Attribution`；固定讀C71/C72/C73/C74 completed OOS fingerprint=`b12582a9de23`與Rolling fingerprint=`3bca1e932f2e`。
+- Joint-signal層：以C71同一MR-13R orderable cross-section重建Raw Safety／Conditional-MFE same-day percentile，做5×5 predicted joint cells；每格只在post-replay join canonical MFE×Safety truth後計算actual HM/HS/High-MFE/High-Safety。另按predicted Safety quintile計算Conditional-MFE→actual MFE mean Daily Spearman，直接判斷高Safety cohort內upside rankability是否仍存在。
+- Capital-conversion層：只讀orderable/execution/equity/trades sidecars，報Safety→projected capital、ATR/limit、selected stop-distance、reserved/equity與risk-utilization Daily Spearman，以及arm-level Exposure、stop-distance、reserved fraction、holding days與binding signature；相關只作mechanism attribution，不宣稱單一因果。
+- Drawdown層：從canonical equity找peak→trough episodes，對每個episode統計overlapping/entered trades、same-day entry clustering、losing trade count/ΣR與MFE×Safety quadrants；明確區分single-stock adverse與portfolio MDD。
+- Diagnostic boundary：**READ_ONLY / NO_STRATEGY_REPLAY / NO_FUTURE_TRUTH_RUNTIME_USE / NO_THRESHOLD_FIT / NO_MODEL_TRAINING**。取得能決定NEXT=`selector mechanism`、`new joint model target`或`portfolio construction`的最小證據即停止。
+- GPT synthetic Audit framework=`14/14 PASS`，含joint upper-right enrichment、Safety→stop-distance/reserved-notional、portfolio drawdown overlap-clustering primitives。正式實機Audit尚待使用者執行。
+- Status：**ACTIVE / IMPLEMENTED / RESULT_PENDING**。
+

@@ -135,6 +135,17 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         status_function="collect_status",
         run_function="run_formal_audit",
     ),
+    "mr13r_joint_capital_drawdown": AuditCatalogEntry(
+        audit_type="mr13r_joint_capital_drawdown",
+        domain="breakout_quality",
+        module="services.audit.mr13r_joint_capital_drawdown",
+        mode="formal",
+        description="只讀MR-13R joint signal、Safety→capital conversion與portfolio drawdown attribution",
+        read_only=True,
+        method_id="strategy_pair_attribution",
+        status_function="collect_status",
+        run_function="run_formal_audit",
+    ),
     "c69_marginal_position_attribution": AuditCatalogEntry(
         audit_type="c69_marginal_position_attribution",
         domain="breakout_quality",
