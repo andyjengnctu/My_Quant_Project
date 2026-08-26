@@ -21,6 +21,8 @@ from filters.breakout_quality.continuous_ranker_data import (
     build_same_date_percentile_targets,
 )
 
+HMHS_HIGH_PERCENTILE_CUTOFF = 0.50
+
 
 @dataclass(frozen=True)
 class ConditionalMfeOpportunityTargets:
@@ -48,6 +50,26 @@ class ConditionalMfeOpportunityTargets:
         # replaces residual J with the absolute same-date Pure-MFE percentile U.
         return np.column_stack(
             [self.low_adverse_safety_percentile, self.primary_mfe_percentile]
+        ).astype(np.float32, copy=False)
+
+    @property
+    def direct_hmhs_target(self) -> np.ndarray:
+        return (
+            (self.low_adverse_safety_percentile >= HMHS_HIGH_PERCENTILE_CUTOFF)
+            & (self.primary_mfe_percentile >= HMHS_HIGH_PERCENTILE_CUTOFF)
+        ).astype(np.float32)
+
+    @property
+    def safety_raw_mfe_hmhs_training_target(self) -> np.ndarray:
+        # MR-13T keeps MR-13S's two marginal targets intact and adds one direct
+        # upper-right intersection target.  The joint head receives no score
+        # arithmetic or strategy state; future S/U truth is supervision only.
+        return np.column_stack(
+            [
+                self.low_adverse_safety_percentile,
+                self.primary_mfe_percentile,
+                self.direct_hmhs_target,
+            ]
         ).astype(np.float32, copy=False)
 
 
@@ -137,5 +159,6 @@ def build_conditional_mfe_opportunity_targets(
 
 __all__ = [
     "ConditionalMfeOpportunityTargets",
+    "HMHS_HIGH_PERCENTILE_CUTOFF",
     "build_conditional_mfe_opportunity_targets",
 ]

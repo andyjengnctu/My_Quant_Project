@@ -563,13 +563,56 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             (("Raw Safety", "raw_safety"), ("Conditional MFE", "conditional_mfe")),
         )
 
-    raw_eval = dict(payload.get("safety_raw_mfe_evaluation") or {})
+    raw_eval = dict(
+        payload.get("safety_raw_mfe_hmhs_evaluation")
+        or payload.get("safety_raw_mfe_evaluation")
+        or {}
+    )
     if raw_eval:
         add_head_gate(
             "標準模型 SOP｜3. Multi-head Learnability",
             raw_eval,
             (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")),
         )
+
+        joint_rows = []
+        for scope_label, scope_key in (
+            ("Validation", "validation"),
+            ("Forward OOS", "oos"),
+            ("Breakout slice", "breakout_candidate_oos"),
+        ):
+            scope = dict(raw_eval.get(scope_key) or {})
+            joint = dict(scope.get("joint_hmhs") or {})
+            product = dict(scope.get("joint_product_control") or {})
+            if not joint:
+                continue
+            top10 = dict(joint.get("top_10pct") or {})
+            product10 = dict(product.get("top_10pct") or {})
+            joint_rows.append((
+                scope_text(scope_label),
+                _fmt_simple_metric(None if joint.get("population_hmhs_pct") is None else float(joint["population_hmhs_pct"]) / 100.0, percent=True),
+                _fmt_simple_metric(joint.get("pairwise_concordance"), percent=True),
+                _fmt_simple_metric(product.get("pairwise_concordance"), percent=True),
+                _fmt_simple_metric(joint.get("global_average_precision")),
+                _fmt_simple_metric(product.get("global_average_precision")),
+                _fmt_simple_metric(None if top10.get("hmhs_pct") is None else float(top10["hmhs_pct"]) / 100.0, percent=True),
+                _fmt_simple_metric(top10.get("hmhs_enrichment")),
+                _fmt_simple_metric(None if product10.get("hmhs_pct") is None else float(product10["hmhs_pct"]) / 100.0, percent=True),
+                _fmt_simple_metric(product10.get("hmhs_enrichment")),
+            ))
+        if joint_rows:
+            lines.extend([
+                section("標準模型 SOP｜3. Direct HM/HS Joint Retrieval"),
+                render_table(
+                    (
+                        "Split", "HM/HS Pop", "Direct Pair", "Product Pair",
+                        "Direct PR-AUC", "Product PR-AUC",
+                        "Direct Top10", "Direct ×", "Product Top10", "Product ×",
+                    ),
+                    joint_rows,
+                    alignments=("left", "right", "right", "right", "right", "right", "right", "right", "right", "right"),
+                ),
+            ])
 
         def truth_cell(cell: dict) -> str:
             if not cell:
@@ -684,6 +727,14 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
         ("Learnability", evidence_status("AVAILABLE" if metrics.get("oos") else "N/A")),
         ("Generalization", evidence_status("AVAILABLE" if metrics.get("validation") and metrics.get("oos") else "N/A")),
         ("Truth / Prediction Geometry", evidence_status("AVAILABLE" if raw_eval else "N/A")),
+        (
+            "Direct HM/HS Joint Retrieval",
+            evidence_status(
+                "AVAILABLE"
+                if any(dict(raw_eval.get(key) or {}).get("joint_hmhs") for key in ("validation", "oos", "breakout_candidate_oos"))
+                else "N/A"
+            ),
+        ),
         ("Breakout application slice", evidence_status("AVAILABLE" if metrics.get("breakout_candidate_oos") else "N/A")),
         ("Ranking / Boundary", evidence_status("AVAILABLE" if sample else "N/A")),
     ]
@@ -784,6 +835,75 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
                     f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
                     f"| {_fmt_simple_metric(row.get('global_spearman_vs_raw_target'))} "
                     f"| {_fmt_simple_metric(row.get('pairwise_concordance'), percent=True)} |"
+                )
+
+    raw_eval = dict(
+        payload.get("safety_raw_mfe_hmhs_evaluation")
+        or payload.get("safety_raw_mfe_evaluation")
+        or {}
+    )
+    raw_rows: list[tuple[str, str, dict]] = []
+    if raw_eval:
+        for scope_label, scope_key in (
+            ("Validation", "validation"),
+            ("Forward OOS", "oos"),
+            ("Breakout slice", "breakout_candidate_oos"),
+        ):
+            scope = dict(raw_eval.get(scope_key) or {})
+            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")):
+                row = dict(scope.get(head_key) or {})
+                if row:
+                    raw_rows.append((scope_label, head_label, row))
+        if raw_rows:
+            lines.extend([
+                "",
+                section("標準模型 SOP｜3. Multi-head Learnability｜Safety / Raw-MFE"),
+                "",
+                "| Split | Head | Daily rho | Global rho | Pair |",
+                "|---|---|---:|---:|---:|",
+            ])
+            for scope_label, head_label, row in raw_rows:
+                lines.append(
+                    f"| {scope_text(scope_label)} | {head_label} "
+                    f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
+                    f"| {_fmt_simple_metric(row.get('global_spearman_vs_raw_target'))} "
+                    f"| {_fmt_simple_metric(row.get('pairwise_concordance'), percent=True)} |"
+                )
+        joint_rows = []
+        for scope_label, scope_key in (
+            ("Validation", "validation"),
+            ("Forward OOS", "oos"),
+            ("Breakout slice", "breakout_candidate_oos"),
+        ):
+            scope = dict(raw_eval.get(scope_key) or {})
+            joint = dict(scope.get("joint_hmhs") or {})
+            product = dict(scope.get("joint_product_control") or {})
+            if not joint:
+                continue
+            top10 = dict(joint.get("top_10pct") or {})
+            product10 = dict(product.get("top_10pct") or {})
+            joint_rows.append((scope_label, joint, product, top10, product10))
+        if joint_rows:
+            lines.extend([
+                "",
+                section("標準模型 SOP｜3. Direct HM/HS Joint Retrieval"),
+                "",
+                "| Split | HM/HS Pop | Direct Pair | Product Pair | Direct PR-AUC | Product PR-AUC | Direct Top10 / × | Product Top10 / × |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|",
+            ])
+            for scope_label, joint, product, top10, product10 in joint_rows:
+                pop = joint.get("population_hmhs_pct")
+                direct_top = top10.get("hmhs_pct")
+                product_top = product10.get("hmhs_pct")
+                lines.append(
+                    f"| {scope_text(scope_label)} "
+                    f"| {'-' if pop is None else f'{float(pop):.2f}%'} "
+                    f"| {_fmt_simple_metric(joint.get('pairwise_concordance'), percent=True)} "
+                    f"| {_fmt_simple_metric(product.get('pairwise_concordance'), percent=True)} "
+                    f"| {_fmt_simple_metric(joint.get('global_average_precision'))} "
+                    f"| {_fmt_simple_metric(product.get('global_average_precision'))} "
+                    f"| {'-' if direct_top is None else f'{float(direct_top):.2f}%'} / {_fmt_simple_metric(top10.get('hmhs_enrichment'))}× "
+                    f"| {'-' if product_top is None else f'{float(product_top):.2f}%'} / {_fmt_simple_metric(product10.get('hmhs_enrichment'))}× |"
                 )
 
     sample = dict((metrics.get("oos") or {}).get("top_k_quality") or {})

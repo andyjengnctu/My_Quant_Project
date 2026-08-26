@@ -24,6 +24,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
     get_continuous_ranker_execution_recipe,
     get_continuous_ranker_research_spec,
 )
@@ -392,6 +393,7 @@ def _render_markdown(payload: dict) -> str:
     conditional_mfe_single = objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING
     safety_conditional_mfe_duo = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
     safety_raw_mfe_duo = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING
+    safety_raw_mfe_hmhs_tri = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING
     source_dataset = dict(payload.get("source_dataset") or {})
     target_manifest = dict(payload.get("target_manifest") or {})
     def section(title: str, *, level: int = 2) -> str:
@@ -572,18 +574,24 @@ def _render_markdown(payload: dict) -> str:
                     f"| {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
                     f"| {fmt(row.get('top_score_decile_raw_target_mean'))} | {fmt(row.get('bottom_score_decile_raw_target_mean'))} |"
                 )
-    if safety_raw_mfe_duo:
+    if safety_raw_mfe_duo or safety_raw_mfe_hmhs_tri:
         lines.extend([
-            "- Safety→Raw-MFE objective：與MR-13R共用相同shared encoder／Raw Safety auxiliary head／"
-            "stop-gradient Safety context；唯一scientific變更是final head由J改學absolute Pure-MFE percentile U；"
-            "兩head固定等權full-list Delta-NDCG，無lambda／threshold／calibration。",
+            (
+                "- Safety→Raw-MFE→Direct-HM/HS objective：MR-13S raw 300×10與兩個marginal heads全部保留；"
+                "新增shared-latent Direct HM/HS head，target=1[Safety percentile>=0.5 and Pure-MFE percentile>=0.5]；"
+                "三head固定等權full-list Delta-NDCG，epoch selection仍依Raw-MFE Validation Dailyρ。"
+                if safety_raw_mfe_hmhs_tri
+                else "- Safety→Raw-MFE objective：與MR-13R共用相同shared encoder／Raw Safety auxiliary head／"
+                "stop-gradient Safety context；唯一scientific變更是final head由J改學absolute Pure-MFE percentile U；"
+                "兩head固定等權full-list Delta-NDCG，無lambda／threshold／calibration。"
+            ),
             "",
             section("3. Multi-head Learnability / Truth / Prediction Geometry"),
             "",
             "| Scope | Head | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target |",
             "|---|---|---:|---:|---:|---:|---:|---:|",
         ])
-        raw_eval = dict(payload.get("safety_raw_mfe_evaluation") or {})
+        raw_eval = dict(payload.get("safety_raw_mfe_hmhs_evaluation") or payload.get("safety_raw_mfe_evaluation") or {})
         for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
             scope = dict(raw_eval.get(scope_key) or {})
             for head_label, head_key in (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")):
@@ -595,6 +603,29 @@ def _render_markdown(payload: dict) -> str:
                     f"| {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
                     f"| {fmt(row.get('top_score_decile_raw_target_mean'))} | {fmt(row.get('bottom_score_decile_raw_target_mean'))} |"
                 )
+            joint = dict(scope.get("joint_hmhs") or {})
+            product = dict(scope.get("joint_product_control") or {})
+            if joint:
+                def pct(value):
+                    return "-" if value is None else f"{float(value)*100:.2f}%"
+                def pct100(value):
+                    return "-" if value is None else f"{float(value):.2f}%"
+                top10 = dict(joint.get("top_10pct") or {})
+                top20 = dict(joint.get("top_20pct") or {})
+                prod10 = dict(product.get("top_10pct") or {})
+                lines.extend([
+                    "",
+                    f"### Direct HM/HS Joint Head｜{scope_label}",
+                    "",
+                    "| Metric | Direct Joint Head | Marginal Product Control |",
+                    "|---|---:|---:|",
+                    f"| Pair concordance | {pct(joint.get('pairwise_concordance'))} | {pct(product.get('pairwise_concordance'))} |",
+                    f"| Global PR-AUC | {fmt(joint.get('global_average_precision'))} | {fmt(product.get('global_average_precision'))} |",
+                    f"| Mean Daily PR-AUC | {fmt(joint.get('mean_daily_average_precision'))} | {fmt(product.get('mean_daily_average_precision'))} |",
+                    f"| Top 10% HM/HS | {pct100(top10.get('hmhs_pct'))} / {fmt(top10.get('hmhs_enrichment'), 2)}× | {pct100(prod10.get('hmhs_pct'))} / {fmt(prod10.get('hmhs_enrichment'), 2)}× |",
+                    f"| Top 20% HM/HS | {pct100(top20.get('hmhs_pct'))} / {fmt(top20.get('hmhs_enrichment'), 2)}× | - |",
+                    f"| Population HM/HS | {pct100(joint.get('population_hmhs_pct'))} | same truth |",
+                ])
         for scope_label, scope_key in (("Daily universal OOS", "oos"), ("Breakout candidate OOS", "breakout_candidate_oos")):
             gate = dict((raw_eval.get(scope_key) or {}).get("model_gate") or {})
             if not gate:
@@ -784,6 +815,9 @@ def run(args) -> int:
     safety_raw_mfe_duo = (
         bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING
     )
+    safety_raw_mfe_hmhs_tri = (
+        bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING
+    )
     split = build_daily_ranker_split(bundle, inner_validation_months=int(args.inner_validation_months))
     forward_score_ids = resolve_forward_oos_score_group_ids(bundle)
 
@@ -886,20 +920,32 @@ def run(args) -> int:
         ranker_api.build_conditional_mfe_opportunity_targets_for_training(
             bundle.group_table, percentile_target
         )
-        if conditional_mfe_single or safety_conditional_mfe_duo or safety_raw_mfe_duo
+        if conditional_mfe_single or safety_conditional_mfe_duo or safety_raw_mfe_duo or safety_raw_mfe_hmhs_tri
         else None
     )
     reverse_conditional_mfe_evaluation = {}
     reverse_validation_heads = None
     reverse_forward_heads = None
     safety_raw_mfe_evaluation = {}
+    safety_raw_mfe_hmhs_evaluation = {}
     raw_mfe_validation_heads = None
     raw_mfe_forward_heads = None
 
     dual_component_evaluation = {}
     validation_components = None
     forward_components = None
-    if safety_raw_mfe_duo:
+    if safety_raw_mfe_hmhs_tri:
+        raw_mfe_validation_heads = ranker_api.predict_safety_raw_mfe_hmhs_scores(
+            torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+        )
+        raw_mfe_forward_heads = ranker_api.predict_safety_raw_mfe_hmhs_scores(
+            torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+        )
+        validation_scores = raw_mfe_validation_heads["raw_mfe"]
+        forward_scores = raw_mfe_forward_heads["raw_mfe"]
+    elif safety_raw_mfe_duo:
         raw_mfe_validation_heads = ranker_api.predict_safety_raw_mfe_scores(
             torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
             batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -1002,7 +1048,36 @@ def run(args) -> int:
             forward_components["predicted_favorable_r"][candidate_positions],
             forward_components["predicted_adverse_r"][candidate_positions],
         )
-    if safety_raw_mfe_duo:
+    if safety_raw_mfe_hmhs_tri:
+        assert reverse_conditional_mfe_targets is not None
+        assert raw_mfe_validation_heads is not None and raw_mfe_forward_heads is not None
+        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
+        oos_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in split.oos_ids], dtype=np.int64)
+        safety_raw_mfe_hmhs_evaluation["validation"] = ranker_api.safety_raw_mfe_hmhs_metrics(
+            split.validation_ids, bundle.group_table, reverse_conditional_mfe_targets,
+            raw_mfe_validation_heads, include_top_k_quality=True,
+        )
+        oos_heads = {key: values[oos_positions] for key, values in raw_mfe_forward_heads.items()}
+        safety_raw_mfe_hmhs_evaluation["oos"] = ranker_api.safety_raw_mfe_hmhs_metrics(
+            split.oos_ids, bundle.group_table, reverse_conditional_mfe_targets,
+            oos_heads, include_top_k_quality=True,
+        )
+        if len(candidate_ids) >= 2:
+            candidate_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in candidate_ids], dtype=np.int64)
+            candidate_heads = {key: values[candidate_positions] for key, values in raw_mfe_forward_heads.items()}
+            safety_raw_mfe_hmhs_evaluation["breakout_candidate_oos"] = ranker_api.safety_raw_mfe_hmhs_metrics(
+                candidate_ids, bundle.group_table, reverse_conditional_mfe_targets,
+                candidate_heads, include_top_k_quality=True,
+            )
+        else:
+            safety_raw_mfe_hmhs_evaluation["breakout_candidate_oos"] = {
+                "raw_safety": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
+                "raw_mfe": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
+                "joint_hmhs": {"group_count": int(len(candidate_ids)), "not_evaluated_reason": "breakout candidate OOS slice有效sample不足"},
+                "joint_product_control": {},
+                "model_gate": {"status": "not_evaluated_insufficient_sample"},
+            }
+    elif safety_raw_mfe_duo:
         assert reverse_conditional_mfe_targets is not None
         assert raw_mfe_validation_heads is not None and raw_mfe_forward_heads is not None
         forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
@@ -1272,9 +1347,14 @@ def run(args) -> int:
         oos_frame["target_low_adverse_safety_percentile"] = np.nan
         evaluable_ids = forward_score_ids[evaluable_forward_mask]
         oos_frame.loc[evaluable_forward_mask, "target_low_adverse_safety_percentile"] = reverse_conditional_mfe_targets.low_adverse_safety_percentile[evaluable_ids]
-        if safety_raw_mfe_duo:
+        if safety_raw_mfe_duo or safety_raw_mfe_hmhs_tri:
             oos_frame["target_pure_mfe_percentile"] = np.nan
             oos_frame.loc[evaluable_forward_mask, "target_pure_mfe_percentile"] = reverse_conditional_mfe_targets.primary_mfe_percentile[evaluable_ids]
+            if safety_raw_mfe_hmhs_tri:
+                oos_frame["target_direct_hmhs"] = np.nan
+                oos_frame.loc[evaluable_forward_mask, "target_direct_hmhs"] = (
+                    reverse_conditional_mfe_targets.direct_hmhs_target[evaluable_ids]
+                )
         else:
             oos_frame["target_conditional_mfe_residual"] = np.nan
             oos_frame["target_conditional_mfe_percentile"] = np.nan
@@ -1289,6 +1369,8 @@ def run(args) -> int:
     if raw_mfe_forward_heads is not None:
         oos_frame["raw_safety_score"] = raw_mfe_forward_heads["raw_safety"]
         oos_frame["raw_mfe_score"] = raw_mfe_forward_heads["raw_mfe"]
+        if "joint_hmhs" in raw_mfe_forward_heads:
+            oos_frame["joint_hmhs_score"] = raw_mfe_forward_heads["joint_hmhs"]
     elif reverse_forward_heads is not None:
         oos_frame["raw_safety_score"] = reverse_forward_heads["raw_safety"]
         oos_frame["conditional_mfe_score"] = reverse_forward_heads["conditional_mfe"]
@@ -1342,7 +1424,7 @@ def run(args) -> int:
                 else "primary_mfe_softmax_pass_probability"
                 if conditional_mfe_safety
                 else "raw_mfe_softmax_pass_probability"
-                if safety_raw_mfe_duo
+                if safety_raw_mfe_duo or safety_raw_mfe_hmhs_tri
                 else "conditional_mfe_softmax_pass_probability"
                 if conditional_mfe_single or safety_conditional_mfe_duo
                 else "softmax_pass_probability_monotonic_to_two_logit_margin"
@@ -1355,6 +1437,7 @@ def run(args) -> int:
             "conditional_mfe_single_head_contract": ranker_api.training_semantics(bundle.profile).get("conditional_mfe_single_head_contract"),
             "safety_conditional_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_conditional_mfe_duo_head_contract"),
             "safety_raw_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_raw_mfe_duo_head_contract"),
+            "safety_raw_mfe_hmhs_tri_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_raw_mfe_hmhs_tri_head_contract"),
             "pairwise_reduction": execution_recipe.pairwise_reduction,
             "selected_epoch": selected_epoch,
             "epoch_selection_metric": bundle.profile.epoch_selection_metric,
@@ -1370,6 +1453,7 @@ def run(args) -> int:
         "conditional_mfe_safety_evaluation": conditional_mfe_safety_evaluation,
         "reverse_conditional_mfe_evaluation": reverse_conditional_mfe_evaluation,
         "safety_raw_mfe_evaluation": safety_raw_mfe_evaluation,
+        "safety_raw_mfe_hmhs_evaluation": safety_raw_mfe_hmhs_evaluation,
         "pareto_pair_evaluation": pareto_pair_evaluation,
         "trade_alignment": {"available": False, "reason": "daily universal model先做模型本身驗證；未接策略trade attribution"},
         "target_manifest": bundle.target_manifest,

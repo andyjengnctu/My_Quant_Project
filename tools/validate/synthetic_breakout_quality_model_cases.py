@@ -2632,7 +2632,6 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config.breakout_quality import (
-        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
         DAILY_UNIVERSAL_SAFETY_CONDITIONAL_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
@@ -2657,7 +2656,7 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
     )
     spec = get_continuous_ranker_research_spec(profile.name)
     check(
-        "mr13s_identity_is_active_model_only_controlled_contrast",
+        "mr13s_identity_is_preserved_as_model_only_controlled_contrast",
         (
             DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
             "MR-13S",
@@ -2667,7 +2666,7 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
             False,
         ),
         (
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            profile.name,
             spec.model_research_id,
             profile.training_objective,
             profile.model_architecture,
@@ -2834,6 +2833,267 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
         "標準模型 SOP｜4. Truth / Prediction Geometry" in app_source
         and "Actual MFE×Safety Truth Geometry（只讀）" not in app_source
         and "Pred Safety↔Raw-MFE Daily rho" in app_source,
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+
+
+def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_params):
+    """Protect MR-13T as a raw-input direct-HM/HS supervision contrast to MR-13S."""
+
+    case_id = "BREAKOUT_QUALITY_SAFETY_RAW_MFE_HMHS_TRI_HEAD"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_execution_recipe,
+        get_continuous_ranker_research_spec,
+    )
+    from filters.breakout_quality.conditional_mfe_opportunity import (
+        HMHS_HIGH_PERCENTILE_CUTOFF,
+        build_conditional_mfe_opportunity_targets,
+    )
+    from filters.breakout_quality.contract import FEATURE_COLUMNS
+    from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.models.runtime import require_torch
+    from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality.ranker_training import safety_raw_mfe_hmhs_metrics
+
+    control = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    spec = get_continuous_ranker_research_spec(profile.name)
+    check(
+        "mr13t_is_active_raw_input_model_only_controlled_contrast",
+        (
+            profile.name,
+            "MR-13T",
+            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+            "inception_time_safety_raw_mfe_hmhs_v1",
+            False,
+            False,
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            spec.model_research_id,
+            profile.training_objective,
+            profile.model_architecture,
+            spec.selection_pit_authorized,
+            spec.current_time_validation_authorized,
+        ),
+    )
+    check(
+        "mr13t_keeps_mr13s_raw_mfe_epoch_selection_and_pairwise_reduction",
+        (
+            control.epoch_selection_metric,
+            get_continuous_ranker_execution_recipe(control.name).pairwise_reduction,
+        ),
+        (
+            profile.epoch_selection_metric,
+            get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction,
+        ),
+    )
+
+    control_model_spec = get_model_spec(control.model_architecture)
+    tri_model_spec = get_model_spec(profile.model_architecture)
+    check_true(
+        "mr13t_changes_head_structure_without_artificial_input_representation",
+        len(FEATURE_COLUMNS) == 10
+        and tuple(control_model_spec.sequence_input_paths) == ("raw_level",)
+        and tuple(tri_model_spec.sequence_input_paths) == ("raw_level",)
+        and not bool(control_model_spec.use_dataset_context)
+        and not bool(tri_model_spec.use_dataset_context)
+        and (
+            control_model_spec.inception_depth,
+            control_model_spec.inception_filters,
+            control_model_spec.inception_bottleneck_channels,
+            tuple(control_model_spec.inception_kernel_sizes or ()),
+            control_model_spec.inception_residual_every,
+            control_model_spec.normalization,
+            control_model_spec.dropout,
+        )
+        == (
+            tri_model_spec.inception_depth,
+            tri_model_spec.inception_filters,
+            tri_model_spec.inception_bottleneck_channels,
+            tuple(tri_model_spec.inception_kernel_sizes or ()),
+            tri_model_spec.inception_residual_every,
+            tri_model_spec.normalization,
+            tri_model_spec.dropout,
+        ),
+    )
+
+    sem = dict(training_semantics(profile).get("safety_raw_mfe_hmhs_tri_head_contract") or {})
+    check(
+        "mr13t_contract_is_direct_hmhs_shared_latent_three_head_equal_loss",
+        (
+            "same_date_low_adverse_safety_percentile",
+            "same_date_pure_mfe_percentile",
+            "indicator_of_safety_percentile_ge_0.5_and_pure_mfe_percentile_ge_0.5",
+            "stop_gradient_raw_safety_probability_for_raw_mfe_head_only",
+            "shared_raw_latent_only_no_safety_or_mfe_score_arithmetic",
+            "each_head_loss_updates_own_classifier_only",
+            True,
+            "fixed_equal_mean_three_heads_no_lambda_sweep",
+            "raw_mfe_mean_daily_spearman_same_as_mr13s_control",
+            "model_gate_only_no_pit_no_strategy_conversion",
+        ),
+        (
+            sem.get("safety_target"),
+            sem.get("raw_mfe_target"),
+            sem.get("joint_hmhs_target"),
+            sem.get("conditional_context"),
+            sem.get("joint_head_inputs"),
+            sem.get("classifier_isolation"),
+            sem.get("shared_encoder_gradient_from_all_heads"),
+            sem.get("head_weighting"),
+            sem.get("epoch_selection"),
+            sem.get("runtime_status"),
+        ),
+    )
+
+    frame = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-01-02"] * 10 + ["2026-01-05"] * 10),
+            "target_favorable_r": list(range(1, 11)) * 2,
+            "target_adverse_r": [0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 1.0, 0.5, 0.6, 0.1] * 2,
+            "label": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1] * 2,
+        }
+    )
+    targets = build_conditional_mfe_opportunity_targets(
+        frame, np.ones(len(frame), dtype=bool)
+    )
+    tri_target = targets.safety_raw_mfe_hmhs_training_target
+    expected_hmhs = np.asarray(
+        (targets.low_adverse_safety_percentile >= HMHS_HIGH_PERCENTILE_CUTOFF)
+        & (targets.primary_mfe_percentile >= HMHS_HIGH_PERCENTILE_CUTOFF),
+        dtype=np.float32,
+    )
+    check("mr13t_training_target_shape", (20, 3), tri_target.shape)
+    check_true(
+        "mr13t_first_two_targets_are_byte_identical_to_mr13s_and_joint_is_exact_intersection",
+        bool(
+            np.array_equal(tri_target[:, :2], targets.safety_raw_mfe_training_target)
+            and np.array_equal(tri_target[:, 2], expected_hmhs)
+            and np.array_equal(targets.direct_hmhs_target, expected_hmhs)
+        ),
+    )
+
+    torch, _nn = require_torch()
+    torch.manual_seed(17)
+    model = build_active_model(
+        feature_count=len(FEATURE_COLUMNS),
+        context_count=0,
+        architecture=profile.model_architecture,
+    )
+    x = torch.randn(4, 300, len(FEATURE_COLUMNS))
+    context = torch.empty(4, 0)
+    safety_logits, mfe_logits, joint_logits = model.forward_safety_raw_mfe_hmhs_heads(x, context)
+    check(
+        "mr13t_model_exposes_three_two_logit_heads_and_keeps_raw_mfe_as_default_score",
+        ((4, 2), (4, 2), (4, 2), (4, 2)),
+        (
+            tuple(safety_logits.shape),
+            tuple(mfe_logits.shape),
+            tuple(joint_logits.shape),
+            tuple(model(x, context).shape),
+        ),
+    )
+
+    def grad_present(parameter) -> bool:
+        return parameter.grad is not None and bool(torch.isfinite(parameter.grad).all().item())
+
+    shared_parameter = next(model.inception_modules[0].parameters())
+    model.zero_grad(set_to_none=True)
+    model.forward_safety_raw_mfe_hmhs_heads(x, context)[2].sum().backward()
+    check_true(
+        "mr13t_joint_loss_updates_joint_and_shared_only",
+        grad_present(model.joint_hmhs_classifier.weight)
+        and grad_present(shared_parameter)
+        and model.raw_safety_classifier.weight.grad is None
+        and model.conditional_mfe_classifier.weight.grad is None,
+    )
+    model.zero_grad(set_to_none=True)
+    model.forward_safety_raw_mfe_hmhs_heads(x, context)[1].sum().backward()
+    check_true(
+        "mr13t_raw_mfe_loss_keeps_safety_and_joint_classifiers_isolated",
+        grad_present(model.conditional_mfe_classifier.weight)
+        and grad_present(shared_parameter)
+        and model.raw_safety_classifier.weight.grad is None
+        and model.joint_hmhs_classifier.weight.grad is None,
+    )
+    model.zero_grad(set_to_none=True)
+    model.forward_safety_raw_mfe_hmhs_heads(x, context)[0].sum().backward()
+    check_true(
+        "mr13t_safety_loss_keeps_mfe_and_joint_classifiers_isolated",
+        grad_present(model.raw_safety_classifier.weight)
+        and grad_present(shared_parameter)
+        and model.conditional_mfe_classifier.weight.grad is None
+        and model.joint_hmhs_classifier.weight.grad is None,
+    )
+
+    mirror_safety = targets.low_adverse_safety_percentile.astype(np.float32)
+    mirror_mfe = (1.0 - targets.low_adverse_safety_percentile).astype(np.float32)
+    direct_score = expected_hmhs.astype(np.float32)
+    metrics = safety_raw_mfe_hmhs_metrics(
+        np.arange(len(frame), dtype=np.int64),
+        frame,
+        targets,
+        {
+            "raw_safety": mirror_safety,
+            "raw_mfe": mirror_mfe,
+            "joint_hmhs": direct_score,
+        },
+    )
+    joint = dict(metrics.get("joint_hmhs") or {})
+    product = dict(metrics.get("joint_product_control") or {})
+    check_true(
+        "mr13t_direct_joint_metrics_can_detect_information_missed_by_marginal_product",
+        joint.get("pairwise_concordance") is not None
+        and product.get("pairwise_concordance") is not None
+        and float(joint["pairwise_concordance"]) > float(product["pairwise_concordance"])
+        and float(dict(joint.get("top_10pct") or {}).get("hmhs_enrichment") or 0.0)
+        > float(dict(product.get("top_10pct") or {}).get("hmhs_enrichment") or 0.0),
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    trainer_source = (
+        project_root / "services" / "breakout_quality" / "train_continuous_ranker.py"
+    ).read_text(encoding="utf-8")
+    check_true(
+        "mr13t_training_uses_fixed_equal_three_head_mean_and_raw_mfe_epoch_selection",
+        "loss = sum(head_losses) / 3.0" in trainer_source
+        and "Val HM/HS Pair" in trainer_source
+        and profile.epoch_selection_metric == "raw_mfe_mean_daily_spearman",
+    )
+    daily_source = (
+        project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
+    ).read_text(encoding="utf-8")
+    app_source = (
+        project_root / "services" / "research" / "breakout_quality_application.py"
+    ).read_text(encoding="utf-8")
+    check_true(
+        "mr13t_joint_result_is_integrated_into_standard_model_sop_and_oos_artifact",
+        'oos_frame["joint_hmhs_score"]' in daily_source
+        and 'oos_frame["target_direct_hmhs"]' in daily_source
+        and "Direct HM/HS Joint Head" in daily_source
+        and "標準模型 SOP｜3. Direct HM/HS Joint Retrieval" in app_source,
+    )
+    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
+    check_true(
+        "mr13t_remains_model_only_without_new_strategy_arm",
+        '"C75"' not in strategy_source and "'C75'" not in strategy_source,
     )
 
     summary["training_performed"] = False

@@ -40,6 +40,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
     get_continuous_ranker_execution_recipe,
@@ -78,6 +79,7 @@ from filters.breakout_quality.conditional_mfe_safety import (
 )
 from filters.breakout_quality.conditional_mfe_opportunity import (
     ConditionalMfeOpportunityTargets,
+    HMHS_HIGH_PERCENTILE_CUTOFF,
     build_conditional_mfe_opportunity_targets,
 )
 from filters.breakout_quality.continuous_ranker_quality import (
@@ -1109,6 +1111,7 @@ def _train_epoch(
         TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
     }:
         batches = _date_coherent_batches(
             ids_all,
@@ -1139,7 +1142,34 @@ def _train_epoch(
             continue
         optimizer.zero_grad(set_to_none=True)
         with autocast_context(torch, plan):
-            if training_objective in {
+            if training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING:
+                if target.ndim != 2 or int(target.shape[1]) != 3:
+                    raise ValueError("Safety/Raw-MFE/HMHS tri-head target必須為[N,3]")
+                if not hasattr(model, "forward_safety_raw_mfe_hmhs_heads"):
+                    raise ValueError("Safety/Raw-MFE/HMHS objective需要tri-head model architecture")
+                safety_logits, raw_mfe_logits, joint_hmhs_logits = model.forward_safety_raw_mfe_hmhs_heads(xb, cb)
+                margins = (
+                    safety_logits.float()[:, LABEL_PASS] - safety_logits.float()[:, LABEL_REJECT],
+                    raw_mfe_logits.float()[:, LABEL_PASS] - raw_mfe_logits.float()[:, LABEL_REJECT],
+                    joint_hmhs_logits.float()[:, LABEL_PASS] - joint_hmhs_logits.float()[:, LABEL_REJECT],
+                )
+                batch_dates = group_dates_series.iloc[ids].to_numpy()
+                losses_and_counts = [
+                    _pairwise_logistic_loss(
+                        torch,
+                        margin,
+                        target[:, target_index],
+                        batch_dates,
+                        reduction=str(pairwise_reduction),
+                    )
+                    for target_index, margin in enumerate(margins)
+                ]
+                if any(item[0] is None for item in losses_and_counts):
+                    continue
+                head_losses = [item[0] for item in losses_and_counts]
+                loss = sum(head_losses) / 3.0
+                loss_weight = int(max(1, sum(int(item[1]) for item in losses_and_counts)))
+            elif training_objective in {
                 TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
                 TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
             }:
@@ -1196,6 +1226,7 @@ def _train_epoch(
                 TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
                 TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
                 TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
             }:
                 pass
             elif training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
@@ -1261,6 +1292,7 @@ def _train_epoch(
                 TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
                 TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
                 TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
             }
             and str(pairwise_reduction)
             == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
@@ -1305,9 +1337,10 @@ def _train_epoch(
         TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
     }:
         # Preserve historical scalar-regression reporting semantics exactly.
-        # Dual-head ranking reports the actual equal-head mean per optimizer
+        # Multi-head ranking reports the actual equal-head mean per optimizer
         # batch instead of inventing a cross-head pair-count weight.
         return float(np.mean(losses))
     return float(weighted_loss_sum / float(weighted_loss_count))
@@ -1453,6 +1486,97 @@ def predict_safety_raw_mfe_scores(
     }
 
 
+def predict_safety_raw_mfe_hmhs_scores(
+    torch,
+    model,
+    feature_bank: np.ndarray,
+    group_context: np.ndarray,
+    group_ids: np.ndarray,
+    *,
+    batch_size: int,
+    plan,
+) -> dict[str, np.ndarray]:
+    """Return all MR-13T head probabilities from one shared-encoder pass."""
+
+    ids = np.asarray(group_ids, dtype=np.int64)
+    logits = strict_parallel_batched_logits(
+        torch,
+        model,
+        feature_bank,
+        group_context,
+        indices=ids,
+        batch_size=int(batch_size),
+        workers=1,
+        execution_plan=plan,
+        output_head="tri_head",
+    ).astype(np.float32)
+    if logits.ndim != 2 or int(logits.shape[1]) != 6:
+        raise ValueError("Safety/Raw-MFE/HMHS model output必須為[N,6]")
+
+    def pass_probability(pair: np.ndarray) -> np.ndarray:
+        shifted = pair.astype(np.float64) - pair.max(axis=1, keepdims=True)
+        exp = np.exp(shifted)
+        return (exp[:, LABEL_PASS] / exp.sum(axis=1)).astype(np.float32)
+
+    return {
+        "raw_safety": pass_probability(logits[:, :2]),
+        "raw_mfe": pass_probability(logits[:, 2:4]),
+        "joint_hmhs": pass_probability(logits[:, 4:6]),
+    }
+
+
+def _mean_daily_average_precision(
+    dates: np.ndarray,
+    labels: np.ndarray,
+    scores: np.ndarray,
+) -> tuple[float | None, int]:
+    frame = pd.DataFrame({
+        "date": pd.to_datetime(dates, errors="raise"),
+        "label": np.asarray(labels, dtype=np.int64),
+        "score": np.asarray(scores, dtype=np.float64),
+    })
+    values: list[float] = []
+    for _date, day in frame.groupby("date", sort=True):
+        ap = _average_precision(
+            day["label"].to_numpy(dtype=np.int64),
+            day["score"].to_numpy(dtype=np.float64),
+        )
+        if ap is not None and math.isfinite(float(ap)):
+            values.append(float(ap))
+    return (float(np.mean(values)) if values else None, int(len(values)))
+
+
+def _joint_top_fraction_metrics(
+    labels: np.ndarray,
+    safety_percentile: np.ndarray,
+    mfe_percentile: np.ndarray,
+    scores: np.ndarray,
+    *,
+    fraction: float,
+) -> dict[str, Any]:
+    y = np.asarray(labels, dtype=bool)
+    s = np.asarray(scores, dtype=np.float64)
+    if len(y) == 0:
+        return {
+            "n": 0,
+            "hmhs_pct": None,
+            "hmhs_enrichment": None,
+            "mean_actual_safety_percentile": None,
+            "mean_actual_mfe_percentile": None,
+        }
+    count = max(1, int(math.ceil(len(y) * float(fraction))))
+    selected = np.argsort(-s, kind="mergesort")[:count]
+    population = float(y.mean())
+    selected_rate = float(y[selected].mean())
+    return {
+        "n": int(count),
+        "hmhs_pct": selected_rate * 100.0,
+        "hmhs_enrichment": None if population <= 0.0 else float(selected_rate / population),
+        "mean_actual_safety_percentile": float(np.mean(np.asarray(safety_percentile, dtype=np.float64)[selected])),
+        "mean_actual_mfe_percentile": float(np.mean(np.asarray(mfe_percentile, dtype=np.float64)[selected])),
+    }
+
+
 def _predicted_quintiles(dates: np.ndarray, values: np.ndarray) -> np.ndarray:
     score = np.asarray(values, dtype=np.float64)
     if score.ndim != 1 or not bool(np.isfinite(score).all()):
@@ -1529,8 +1653,8 @@ def safety_raw_mfe_metrics(
     dates = pd.to_datetime(group_table.iloc[ids]["date"], errors="raise").to_numpy()
     safety_q = _predicted_quintiles(dates, safety_scores)
     mfe_q = _predicted_quintiles(dates, mfe_scores)
-    actual_high_mfe = np.asarray(targets.primary_mfe_percentile[ids] >= 0.5, dtype=bool)
-    actual_high_safety = np.asarray(targets.low_adverse_safety_percentile[ids] >= 0.5, dtype=bool)
+    actual_high_mfe = np.asarray(targets.primary_mfe_percentile[ids] >= HMHS_HIGH_PERCENTILE_CUTOFF, dtype=bool)
+    actual_high_safety = np.asarray(targets.low_adverse_safety_percentile[ids] >= HMHS_HIGH_PERCENTILE_CUTOFF, dtype=bool)
     actual_hmhs = actual_high_mfe & actual_high_safety
     cells: list[list[dict[str, Any]]] = []
     for safety_level in range(1, 6):
@@ -1576,11 +1700,78 @@ def safety_raw_mfe_metrics(
         "predicted_safety_to_raw_mfe_mean_daily_spearman": predicted_relation.get("mean_daily_spearman"),
         "predicted_relation_valid_days": int(predicted_relation.get("rankable_date_count", 0) or 0),
         "actual_truth_geometry": truth_geometry,
-        "truth_cutoff": 0.5,
+        "truth_cutoff": float(HMHS_HIGH_PERCENTILE_CUTOFF),
         "predicted_quintile_method": "same_date_average_zero_based_percentile_then_fixed_quintile",
         "status": "diagnostic_only_no_fit_no_threshold_selection",
     }
     return head_metrics
+
+
+def safety_raw_mfe_hmhs_metrics(
+    group_ids: np.ndarray,
+    group_table: pd.DataFrame,
+    targets: ConditionalMfeOpportunityTargets,
+    scores: dict[str, np.ndarray],
+    *,
+    include_top_k_quality: bool = False,
+) -> dict[str, Any]:
+    """MR-13T marginal preservation plus direct-HM/HS retrieval diagnostics."""
+
+    ids = np.asarray(group_ids, dtype=np.int64)
+    base = safety_raw_mfe_metrics(
+        ids,
+        group_table,
+        targets,
+        {"raw_safety": scores["raw_safety"], "raw_mfe": scores["raw_mfe"]},
+        include_top_k_quality=bool(include_top_k_quality),
+    )
+    joint_scores = np.asarray(scores["joint_hmhs"], dtype=np.float32)
+    if len(joint_scores) != len(ids):
+        raise ValueError("Direct HM/HS score/group長度不一致")
+    dates = pd.to_datetime(group_table.iloc[ids]["date"], errors="raise").to_numpy()
+    safety_true = np.asarray(targets.low_adverse_safety_percentile[ids], dtype=np.float32)
+    mfe_true = np.asarray(targets.primary_mfe_percentile[ids], dtype=np.float32)
+    hmhs = np.asarray(
+        (safety_true >= HMHS_HIGH_PERCENTILE_CUTOFF)
+        & (mfe_true >= HMHS_HIGH_PERCENTILE_CUTOFF),
+        dtype=np.int64,
+    )
+    population_rate = float(hmhs.mean()) if len(hmhs) else 0.0
+    direct_rank = daily_rank_metrics(dates, joint_scores, hmhs.astype(np.float64))
+    direct_ap = _average_precision(hmhs, joint_scores)
+    direct_daily_ap, direct_daily_ap_days = _mean_daily_average_precision(dates, hmhs, joint_scores)
+    product_scores = (
+        np.asarray(scores["raw_safety"], dtype=np.float64)
+        * np.asarray(scores["raw_mfe"], dtype=np.float64)
+    )
+    product_rank = daily_rank_metrics(dates, product_scores, hmhs.astype(np.float64))
+    product_ap = _average_precision(hmhs, product_scores)
+    product_daily_ap, product_daily_ap_days = _mean_daily_average_precision(dates, hmhs, product_scores)
+
+    base["joint_hmhs"] = {
+        "group_count": int(len(ids)),
+        "positive_count": int(hmhs.sum()),
+        "population_hmhs_pct": population_rate * 100.0 if len(hmhs) else None,
+        "pairwise_concordance": direct_rank.get("pairwise_concordance"),
+        "comparable_pair_count": int(direct_rank.get("comparable_pair_count", 0) or 0),
+        "global_average_precision": direct_ap,
+        "mean_daily_average_precision": direct_daily_ap,
+        "daily_average_precision_days": int(direct_daily_ap_days),
+        "top_10pct": _joint_top_fraction_metrics(hmhs, safety_true, mfe_true, joint_scores, fraction=0.10),
+        "top_20pct": _joint_top_fraction_metrics(hmhs, safety_true, mfe_true, joint_scores, fraction=0.20),
+        "target": "direct_HMHS_indicator",
+        "truth_cutoff": float(HMHS_HIGH_PERCENTILE_CUTOFF),
+    }
+    base["joint_product_control"] = {
+        "pairwise_concordance": product_rank.get("pairwise_concordance"),
+        "global_average_precision": product_ap,
+        "mean_daily_average_precision": product_daily_ap,
+        "daily_average_precision_days": int(product_daily_ap_days),
+        "top_10pct": _joint_top_fraction_metrics(hmhs, safety_true, mfe_true, product_scores, fraction=0.10),
+        "top_20pct": _joint_top_fraction_metrics(hmhs, safety_true, mfe_true, product_scores, fraction=0.20),
+        "score": "raw_safety_probability_times_raw_mfe_probability",
+    }
+    return base
 
 
 def predict_conditional_mfe_safety_scores(
@@ -1819,6 +2010,10 @@ def _training_target_for_profile(
         return build_conditional_mfe_opportunity_targets_for_training(
             group_table, percentile_target
         ).safety_raw_mfe_training_target
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING:
+        return build_conditional_mfe_opportunity_targets_for_training(
+            group_table, percentile_target
+        ).safety_raw_mfe_hmhs_training_target
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
         return build_pareto_component_percentile_targets(group_table, raw_target)
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
@@ -1871,7 +2066,8 @@ def select_epoch(
         if profile.training_objective in {
             TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
         }
         else None
     )
@@ -1925,7 +2121,10 @@ def select_epoch(
                 TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
             }
             else "Validation Raw-MFE mean daily Spearman"
-            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING
+            if profile.training_objective in {
+                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+            }
             else "Validation mean daily Spearman"
         )
         print(f"\nEpoch選擇（依{label}）")
@@ -1959,7 +2158,18 @@ def select_epoch(
         validation_conditional_metrics = None
         validation_reverse_conditional_metrics = None
         validation_safety_raw_mfe_metrics = None
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
+        validation_safety_raw_mfe_hmhs_metrics = None
+        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING:
+            validation_head_scores = predict_safety_raw_mfe_hmhs_scores(
+                torch, model, feature_bank, group_context, validation_ids,
+                batch_size=int(args.evaluation_batch_size), plan=plan,
+            )
+            validation_safety_raw_mfe_hmhs_metrics = safety_raw_mfe_hmhs_metrics(
+                validation_ids, group_table, conditional_mfe_targets, validation_head_scores
+            )
+            validation_scores = validation_head_scores["raw_mfe"]
+            validation_metrics = validation_safety_raw_mfe_hmhs_metrics["raw_mfe"]
+        elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
             validation_head_scores = predict_safety_raw_mfe_scores(
                 torch, model, feature_bank, group_context, validation_ids,
                 batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -2029,7 +2239,16 @@ def select_epoch(
                 raw_r_huber_delta_r=raw_r_delta,
             )
         if bool(evaluate_train_metrics):
-            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
+            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING:
+                train_head_scores = predict_safety_raw_mfe_hmhs_scores(
+                    torch, model, feature_bank, group_context, train_ids,
+                    batch_size=int(args.evaluation_batch_size), plan=plan,
+                )
+                train_tri_metrics = safety_raw_mfe_hmhs_metrics(
+                    train_ids, group_table, conditional_mfe_targets, train_head_scores
+                )
+                train_metrics = train_tri_metrics["raw_mfe"]
+            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
                 train_head_scores = predict_safety_raw_mfe_scores(
                     torch, model, feature_bank, group_context, train_ids,
                     batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -2094,7 +2313,11 @@ def select_epoch(
                     "epoch selection仍只依完整validation metric"
                 ),
             }
-        if validation_safety_raw_mfe_metrics is not None:
+        if validation_safety_raw_mfe_hmhs_metrics is not None:
+            primary_daily_spearman = validation_safety_raw_mfe_hmhs_metrics["raw_safety"].get("mean_daily_spearman")
+            daily_spearman = validation_safety_raw_mfe_hmhs_metrics["raw_mfe"].get("mean_daily_spearman")
+            validation_mse = float(validation_safety_raw_mfe_hmhs_metrics["raw_mfe"]["mse_vs_daily_percentile"])
+        elif validation_safety_raw_mfe_metrics is not None:
             primary_daily_spearman = validation_safety_raw_mfe_metrics["raw_safety"].get("mean_daily_spearman")
             daily_spearman = validation_safety_raw_mfe_metrics["raw_mfe"].get("mean_daily_spearman")
             validation_mse = float(validation_safety_raw_mfe_metrics["raw_mfe"]["mse_vs_daily_percentile"])
@@ -2216,6 +2439,7 @@ def select_epoch(
             "inner_validation_conditional_mfe_safety_metrics": validation_conditional_metrics,
             "inner_validation_reverse_conditional_mfe_metrics": validation_reverse_conditional_metrics,
             "inner_validation_safety_raw_mfe_metrics": validation_safety_raw_mfe_metrics,
+            "inner_validation_safety_raw_mfe_hmhs_metrics": validation_safety_raw_mfe_hmhs_metrics,
             "inner_validation_pareto_metrics": validation_pareto_metrics,
             "elapsed_sec": round(float(elapsed), 3),
             "is_best_epoch": bool(improved),
@@ -2236,6 +2460,15 @@ def select_epoch(
                     f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
                     f"| Val Conditional rho {float(daily_spearman):.4f} "
                     f"| Val MFE rho {float(primary_daily_spearman):.4f} "
+                    f"| {elapsed:.1f}s{marker}"
+                )
+            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING:
+                joint = dict(validation_safety_raw_mfe_hmhs_metrics.get("joint_hmhs") or {})
+                print(
+                    f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
+                    f"| Val Raw-MFE rho {float(daily_spearman):.4f} "
+                    f"| Val Safety rho {float(primary_daily_spearman):.4f} "
+                    f"| Val HM/HS Pair {float(joint.get('pairwise_concordance') or 0.0):.4f} "
                     f"| {elapsed:.1f}s{marker}"
                 )
             elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
@@ -2293,7 +2526,10 @@ def select_epoch(
         ),
         "best_validation_raw_mfe_mean_daily_spearman": (
             float(best_daily_spearman)
-            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING
+            if profile.training_objective in {
+                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+            }
             else None
         ),
         "best_validation_raw_safety_mean_daily_spearman": (
@@ -2301,6 +2537,7 @@ def select_epoch(
             if profile.training_objective in {
                 TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
                 TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
             }
             and math.isfinite(best_primary_mfe_daily_spearman)
             else None
