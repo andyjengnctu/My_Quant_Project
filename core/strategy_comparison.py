@@ -70,6 +70,9 @@ STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0 = (
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE = (
     'resource-aware-continuous-score-no-k-no-r0-raw-safety-gate'
 )
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT = (
+    'resource-aware-continuous-score-no-k-no-r0-safety-mfe-product'
+)
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL = (
     'resource-aware-continuous-score-capital-no-r0-constrained-optimal'
 )
@@ -98,6 +101,7 @@ SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
 )
@@ -1108,6 +1112,28 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 safety_source = settings.dl_sources[safety_dl_id]
                 if primary_source.score_source != "selection_point_in_time" or safety_source.score_source != primary_source.score_source:
                     raise ValueError(f"arm {key} Raw Safety primary/secondary必須使用同一Selection PIT source")
+            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT:
+                if options.get("preserve_k") is not False:
+                    raise ValueError(f"arm {key} Safety×MFE product必須preserve_k=False")
+                if options.get("preserve_r0") is not False:
+                    raise ValueError(f"arm {key} Safety×MFE product必須preserve_r0=False")
+                if options.get("selection_order") != "same_day_orderable_percentile_product_desc_then_canonical_tie_v1":
+                    raise ValueError(f"arm {key} Safety×MFE product selection_order不支援")
+                if options.get("joint_score_transform") != "raw_safety_pct_x_conditional_mfe_pct_v1":
+                    raise ValueError(f"arm {key} Safety×MFE product transform不支援")
+                if options.get("selection_only") is not True:
+                    raise ValueError(f"arm {key} Safety×MFE product目前只允許Selection PIT score source")
+                safety_dl_id = str(options.get("safety_dl_id") or "").strip()
+                if not safety_dl_id or safety_dl_id not in settings.dl_sources:
+                    raise ValueError(f"arm {key} Safety×MFE product必須指定合法safety_dl_id")
+                if safety_dl_id != arm.dl_id:
+                    raise ValueError(f"arm {key} Safety×MFE product必須使用同一MR-13R PIT artifact")
+                if str(options.get("safety_score_column") or "").strip() != "raw_safety_score":
+                    raise ValueError(f"arm {key} Safety×MFE product必須使用raw_safety_score")
+                primary_source = settings.dl_sources[arm.dl_id]
+                safety_source = settings.dl_sources[safety_dl_id]
+                if primary_source.score_source != "selection_point_in_time" or safety_source.score_source != primary_source.score_source:
+                    raise ValueError(f"arm {key} Safety×MFE product primary/secondary必須使用同一Selection PIT source")
             if arm.dl_runtime_mode in {
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,

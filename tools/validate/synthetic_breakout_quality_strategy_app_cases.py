@@ -386,13 +386,37 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "c71_c72_c73_are_same_source_no_k_no_r0_raw_safety_cutoff_curve",
         bool(safety_curve_checks) and all(safety_curve_checks),
     )
+    joint_product_checks = []
+    for current_settings in settings_by_mode.values():
+        c74 = current_settings.arms["C74"]
+        options = dict(c74.dl_runtime_options or {})
+        joint_product_checks.append(
+            c74.dl_id == "CONT13R_ROLL"
+            and resolve_arm_runtime_dl_source_ids(current_settings, c74) == ("CONT13R_ROLL",)
+            and c74.dl_runtime_mode == "resource-aware-continuous-score-no-k-no-r0-safety-mfe-product"
+            and options.get("preserve_k") is False
+            and options.get("preserve_r0") is False
+            and options.get("selection_order") == "same_day_orderable_percentile_product_desc_then_canonical_tie_v1"
+            and options.get("joint_score_transform") == "raw_safety_pct_x_conditional_mfe_pct_v1"
+            and options.get("safety_dl_id") == "CONT13R_ROLL"
+            and options.get("safety_score_column") == "raw_safety_score"
+        )
     check_true(
-        "current_suite_removes_c70_and_adds_c71_c72_c73_safety_curve",
-        expected_arm_ids == ("C61", "C58", "C59", "C64", "C66", "C71", "C72", "C73")
+        "c74_is_parameter_free_same_source_safety_x_conditional_mfe_product_no_k_no_r0",
+        bool(joint_product_checks) and all(joint_product_checks),
+    )
+    check_true(
+        "current_suite_keeps_safety_curve_and_adds_c74_joint_product",
+        expected_arm_ids == ("C61", "C58", "C59", "C64", "C66", "C71", "C72", "C73", "C74")
         and "C72-C71" in expected_contrast_ids
         and "C73-C72" in expected_contrast_ids
         and "C73-C66" in expected_contrast_ids
         and "C73-C64" in expected_contrast_ids
+        and "C74-C71" in expected_contrast_ids
+        and "C74-C72" in expected_contrast_ids
+        and "C74-C73" in expected_contrast_ids
+        and "C74-C66" in expected_contrast_ids
+        and "C74-C64" in expected_contrast_ids
         and all(arm_id not in expected_arm_ids for arm_id in ("C70", "C62", "C63", "C68", "C69", "C60", "C65")),
     )
 

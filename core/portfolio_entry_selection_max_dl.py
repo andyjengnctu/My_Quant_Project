@@ -1868,6 +1868,97 @@ def _reorder_resource_aware_continuous_score_no_k_no_r0_raw_safety_gate(
     return final_order, diag
 
 
+def _reorder_resource_aware_continuous_score_no_k_no_r0_safety_mfe_product(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    """SR-C74: rank No-K/No-R0 candidates by Safety×Conditional-MFE percentiles.
+
+    There is no Safety threshold and no fitted weight.  Candidate membership is the
+    same orderable cross-section, except rows missing either decision-time head score
+    cannot receive a joint score and therefore cannot create an order.  The product
+    score is precomputed by the shared same-day percentile decorator; ties fall back
+    only to the canonical incoming rank.
+    """
+
+    candidates = list(rows or [])
+    physical_free_slots = max(0, int(free_slots))
+    base_rank = {id(row): idx for idx, row in enumerate(candidates)}
+    eligible = []
+    for row in candidates:
+        if not bool(row.get('breakout_quality_safety_mfe_product_available', False)):
+            continue
+        try:
+            score = float(row.get('breakout_quality_safety_mfe_product_score'))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(score):
+            continue
+        eligible.append(row)
+    joint_order = sorted(
+        eligible,
+        key=lambda row: (
+            -float(row['breakout_quality_safety_mfe_product_score']),
+            base_rank[id(row)],
+        ),
+    )
+    selected = _simulate_reserved_candidate_order(
+        joint_order,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=physical_free_slots,
+        params=params,
+    )
+    diag = _resource_aware_diag_from_result(
+        default_diag,
+        baseline,
+        selected,
+        changed=True,
+        promoted_pass_count=0,
+        selector='continuous-score-no-k-no-r0-safety-mfe-product',
+    )
+    selected_count = int(selected.get('selected_count', 0) or 0)
+    if not (0 <= selected_count <= physical_free_slots):
+        raise RuntimeError('No-K/No-R0 Safety×MFE product輸出超過physical free-slot contract')
+    eligible_ids = {id(row) for row in joint_order}
+    final_order = list(joint_order) + [row for row in candidates if id(row) not in eligible_ids]
+    selected_rows = list(selected.get('selected_rows') or [])
+    selected_products = [
+        float(row['breakout_quality_safety_mfe_product_score'])
+        for row in selected_rows
+        if bool(row.get('breakout_quality_safety_mfe_product_available', False))
+    ]
+    diag.update({
+        'mode': 'dl-selection',
+        'resource_preservation_required': False,
+        'count_constraint': 'zero_to_physical_free_slots_v1',
+        'baseline_k': int(baseline.get('selected_count', 0) or 0),
+        'physical_free_slots': int(physical_free_slots),
+        'no_k_no_r0': True,
+        'preserve_k': False,
+        'preserve_r0': False,
+        'safety_mfe_product_enabled': True,
+        'safety_mfe_product_eligible_count': int(len(joint_order)),
+        'safety_mfe_product_selected_score_mean': (
+            None
+            if not selected_products
+            else float(sum(selected_products) / len(selected_products))
+        ),
+        'pre_market_order_limit': int(selected_count),
+        'direct_score_order_feasible': True,
+        'basket_search_states': 1,
+        'basket_feasible_count': 1,
+        'constrained_solver_optimality_certified': False,
+    })
+    return final_order, diag
+
+
 def _reorder_resource_aware_continuous_score_no_r0_constrained_optimal(
     rows,
     *,

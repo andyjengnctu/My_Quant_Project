@@ -155,6 +155,69 @@ def _decorate_same_day_rank_safety_scores(rows):
     }
 
 
+def _decorate_same_day_rank_safety_mfe_product_scores(rows):
+    """Attach parameter-free Raw-Safety × Conditional-MFE percentile products.
+
+    Each axis is independently transformed to a same-day average-rank percentile
+    over the current orderable cross-section using only decision-time model scores.
+    The joint selector score is the product of those two percentiles, so it is high
+    only when both Raw Safety and Conditional-MFE ranks are high.  Missing either
+    score makes the joint score unavailable; no score is imputed and no threshold is
+    fitted or applied.
+    """
+
+    decorated = [dict(row) for row in list(rows or [])]
+    primary_indices = []
+    primary_scores = []
+    safety_indices = []
+    safety_scores = []
+    for idx, row in enumerate(decorated):
+        primary = _candidate_continuous_score(row)
+        safety = _candidate_continuous_safety_score(row)
+        row['breakout_quality_conditional_mfe_score_percentile'] = None
+        row['breakout_quality_safety_score_percentile'] = None
+        row['breakout_quality_safety_mfe_product_score'] = None
+        row['breakout_quality_safety_mfe_product_available'] = False
+        if primary is not None:
+            primary_indices.append(idx)
+            primary_scores.append(float(primary))
+        if safety is not None:
+            safety_indices.append(idx)
+            safety_scores.append(float(safety))
+
+    primary_pct = _average_rank_percentiles(primary_scores)
+    safety_pct = _average_rank_percentiles(safety_scores)
+    for local_idx, row_idx in enumerate(primary_indices):
+        decorated[row_idx]['breakout_quality_conditional_mfe_score_percentile'] = float(
+            primary_pct[local_idx]
+        )
+    for local_idx, row_idx in enumerate(safety_indices):
+        decorated[row_idx]['breakout_quality_safety_score_percentile'] = float(
+            safety_pct[local_idx]
+        )
+
+    joint_count = 0
+    for row in decorated:
+        primary_percentile = row.get('breakout_quality_conditional_mfe_score_percentile')
+        safety_percentile = row.get('breakout_quality_safety_score_percentile')
+        if primary_percentile is None or safety_percentile is None:
+            continue
+        product = float(primary_percentile) * float(safety_percentile)
+        row['breakout_quality_safety_mfe_product_score'] = float(product)
+        row['breakout_quality_safety_mfe_product_available'] = True
+        joint_count += 1
+
+    return decorated, {
+        'safety_mfe_product_enabled': True,
+        'safety_mfe_product_candidate_count': int(len(decorated)),
+        'safety_mfe_product_primary_scored_count': int(len(primary_indices)),
+        'safety_mfe_product_safety_scored_count': int(len(safety_indices)),
+        'safety_mfe_product_joint_scored_count': int(joint_count),
+        'safety_mfe_product_percentile_transform': 'same_day_orderable_average_zero_based_v1',
+        'safety_mfe_product_transform': 'raw_safety_pct_x_conditional_mfe_pct_v1',
+    }
+
+
 def _decorate_same_day_rank_residual_safety_scores(rows):
     """Residualize frozen MR-13M safety against frozen MR-13K score cross-sectionally.
 

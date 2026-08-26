@@ -47,7 +47,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 60
+STRATEGY_COMPARE_SCHEMA_VERSION = 61
 
 # =============================================================================
 # 1. 常用設定
@@ -170,12 +170,13 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_DUO = "Min MR-13R Conditional
 STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_RAW_SAFETY_GATE_50_NO_K_NO_R0 = "Min MR-13R Conditional-MFE Raw-Safety P50 No-K No-R0"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_RAW_SAFETY_GATE_60_NO_K_NO_R0 = "Min MR-13R Conditional-MFE Raw-Safety P60 No-K No-R0"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_RAW_SAFETY_GATE_70_NO_K_NO_R0 = "Min MR-13R Conditional-MFE Raw-Safety P70 No-K No-R0"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13R_SAFETY_MFE_PRODUCT_NO_K_NO_R0 = "Min MR-13R Raw-Safety × Conditional-MFE Product No-K No-R0"
 
 # Current Compare Suite是「比較誰／比較哪些差」的唯一真理來源。
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
 STRATEGY_COMPARE_SUITES = {
     "extending_current": {
-        "arm_ids": ("C61", "C58", "C59", "C64", "C66", "C71", "C72", "C73"),
+        "arm_ids": ("C61", "C58", "C59", "C64", "C66", "C71", "C72", "C73", "C74"),
         "contrast_ids": (
             "C61-C58",
             "C59-C58", "C59-C61",
@@ -185,6 +186,8 @@ STRATEGY_COMPARE_SUITES = {
             "C72-C71",
             "C73-C72",
             "C73-C66", "C73-C64",
+            "C74-C71", "C74-C72", "C74-C73",
+            "C74-C66", "C74-C64",
         ),
         "display_name_bases": {
             "C61": "Full Base-Finalist-Best",
@@ -195,6 +198,7 @@ STRATEGY_COMPARE_SUITES = {
             "C71": "Min MR-13R Conditional-MFE Raw-Safety P50 No-K No-R0",
             "C72": "Min MR-13R Conditional-MFE Raw-Safety P60 No-K No-R0",
             "C73": "Min MR-13R Conditional-MFE Raw-Safety P70 No-K No-R0",
+            "C74": "Min MR-13R Raw-Safety × Conditional-MFE Product No-K No-R0",
         },
     },
 }
@@ -257,6 +261,7 @@ STRATEGY_COMPARE_PROFILES = {
             "C71": "min_oos",
             "C72": "min_oos",
             "C73": "min_oos",
+            "C74": "min_oos",
         },
     },
     "extending_window_rolling": {
@@ -757,6 +762,32 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C74": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13R_SAFETY_MFE_PRODUCT_NO_K_NO_R0,
+        "description": (
+            "SR-C74 joint-selector treatment：與C71-C73共用同一MR-13R CONT13R_ROLL checkpoint/PIT source、"
+            "Min base-finalist-best、all-off、No-K/No-R0與canonical sizing/cash/orderability/execution。"
+            "不使用Raw Safety hard gate；在每日orderable candidate cross-section內，Raw Safety與final "
+            "Conditional-MFE各自轉average-rank percentile，selector唯一排序分數為兩者乘積。"
+            "沒有threshold、沒有fitted weight、沒有score fusion calibration；缺任一head score者不產生joint order。"
+        ),
+        "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13R_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0-safety-mfe-product",
+        "dl_runtime_options": {
+            "preserve_k": False,
+            "preserve_r0": False,
+            "selection_order": "same_day_orderable_percentile_product_desc_then_canonical_tie_v1",
+            "joint_score_transform": "raw_safety_pct_x_conditional_mfe_pct_v1",
+            "safety_dl_id": "CONT13R_ROLL",
+            "safety_score_column": "raw_safety_score",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
 }
 
 # =============================================================================
@@ -779,6 +810,11 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C73-C72": {"left": "C73", "right": "C72", "description": "完全相同MR-13R No-K/No-R0 Raw-Safety gate下，cutoff 0.70相對0.60的Safety/upside邊際效果；primary sensitivity contrast"},
     "C73-C66": {"left": "C73", "right": "C66", "description": "P70 Raw-Safety gated No-K/No-R0 MR-13R相對原fixed-K/R0 C66 reference"},
     "C73-C64": {"left": "C73", "right": "C64", "description": "P70 Raw-Safety gated MR-13R相對MR-13P Conditional Safety reference"},
+    "C74-C71": {"left": "C74", "right": "C71", "description": "同一MR-13R No-K/No-R0下，parameter-free Safety×Conditional-MFE percentile product相對P50 hard-gate+Conditional-MFE排序；primary joint-selector contrast"},
+    "C74-C72": {"left": "C74", "right": "C72", "description": "Safety×Conditional-MFE percentile product相對P60 hard-gate reference"},
+    "C74-C73": {"left": "C74", "right": "C73", "description": "Safety×Conditional-MFE percentile product相對P70 hard-gate reference"},
+    "C74-C66": {"left": "C74", "right": "C66", "description": "Safety×Conditional-MFE percentile product No-K/No-R0相對原MR-13R fixed-K/R0 C66 reference"},
+    "C74-C64": {"left": "C74", "right": "C64", "description": "Safety×Conditional-MFE percentile product相對MR-13P Conditional Safety reference"},
 }
 
 def _merge_compatibility_catalog(

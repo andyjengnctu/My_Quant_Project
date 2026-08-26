@@ -10202,3 +10202,21 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - GPT targeted regression：Strategy Compare contract=`19/19`、readable report=`50/50`（含C71/C72/C73三個pair key唯一且scenario materialization三arm皆存在）、config/reuse=`63/63`、Daily PIT=`10/10`、runtime integration=`13/13`、retained Audit=`10/10`。未執行`apps/run_bundle.py`／`apps/test_suite.py`。
 - Decision：**ENGINEERING_PAIR_STORAGE_IDENTITY_FIXED / C72_C73_SCIENTIFIC_SEMANTICS_UNCHANGED / LEGACY_PAIR_KEY_REUSE_PRESERVED / REPORT_RETRY_REQUIRED**。
 
+
+### 2026-08-26 — SR-C72/C73 OOS + Rolling結果；停止Safety threshold tuning，下一步改測C74 joint product selector
+
+- C72/C73與C71共用同一MR-13R checkpoint/PIT source、final Conditional-MFE ranking、No-K/No-R0與canonical execution；唯一差異為Raw Safety same-day orderable percentile cutoff=`0.60/0.70`。
+- OOS：C71/C72/C73 Exposure=`62.77/68.91/76.04%`、HM/HS=`24.87/23.22/23.38%`、HM/LS=`25.40/19.40/15.32%`、High-MFE=`50.27/42.62/38.70%`、High-Safety=`49.20/55.46/59.22%`、Full-MFE=`1.43/1.06/0.99R`、Adverse=`0.34/0.29/0.27R`、Realized EV=`0.54/0.53/0.65R`、RoMD=`6.66/5.68/5.11`。
+- Rolling：Exposure=`63.97/72.31/80.56%`、HM/HS=`21.75/23.35/24.36%`、HM/LS=`29.38/21.56/13.47%`、High-MFE=`51.13/44.91/37.82%`、High-Safety=`47.46/51.50/61.32%`、Full-MFE=`1.30/1.22/0.91R`、Adverse=`0.36/0.32/0.25R`、Realized EV=`0.50/0.72/0.53R`、RoMD=`7.03/6.52/4.77`。
+- Mechanism：Safety constraint確實改善Low-Safety排除與capital utilization，但HM/LS下降主要轉為LM/HS，而不是等量轉成HM/HS；constraint愈強時High-MFE/Full-MFE與RoMD整體走弱。這支持「兩個head都有訊號，但目前hard-gate + Conditional-MFE ranking不等於joint HM/HS objective」。
+- 使用者明確指出繼續在C71-C73之間調Safety threshold等同迭代OOS上挑threshold，且最多只會在既有Safety/upside trade-off曲線內移動；因此停止0.55/0.65等threshold搜尋。
+- Decision：**C72_C73_RESULT_AVAILABLE / SAFETY_CONSTRAINT_MECHANISM_CONFIRMED / THRESHOLD_TUNING_STOPPED / NO_MULTI_SEED / NEXT=SR-C74_PARAMETER_FREE_JOINT_SELECTOR**。
+
+### 2026-08-26 — SR-C74實作：Raw Safety percentile × Conditional-MFE percentile No-K / No-R0 joint selector
+
+- 新scientific identity=`SR-C74 / C74`。不訓練新模型、不改MR-13R checkpoint/PIT scores、不加K/R0、不改Min params/rules/sizing/cash/orderability/execution。
+- 每日orderable candidate cross-section內，Raw Safety與final Conditional-MFE score**各自獨立**轉為average-rank zero-based percentile；joint selector score=`Safety_pct × ConditionalMFE_pct`，descending排序，product tie只回到canonical incoming rank。這避免raw score尺度差異，也沒有threshold、權重λ、calibration或OOS-derived fitting。
+- missing任一decision-time head score時joint score unavailable，該candidate不能產生C74 pre-market order；這是score availability fail-closed，不是Safety threshold。
+- Current Compare Suite擴為`C61/C58/C59/C64/C66/C71/C72/C73/C74`，schema=`61`。Primary contrast=`C74-C71`；另保留`C74-C72/C74-C73/C74-C66/C74-C64` reference。C71-C73 Raw Safety sensitivity仍保留已完成evidence，不再做threshold tuning。
+- Decision Gate：先跑single-seed OOS + Rolling；主要看C74是否相對C71-C73**提高HM/HS**、維持較低HM/LS，同時保留High-MFE/Full-MFE並改善或至少不惡化RoMD/Exposure。若只是落在C71-C73既有trade-off內，停止selector arithmetic並進Joint-Signal/Capital/Drawdown Audit；不先做Multi-seed。
+- Status：**IMPLEMENTED / RESULT_PENDING / PARAMETER_FREE_JOINT_SELECTOR / NO_THRESHOLD_SWEEP / ROBUSTNESS_DEFERRED / NOT_PROMOTED**。

@@ -20,6 +20,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
 )
@@ -33,6 +34,7 @@ from core.portfolio_entry_selection_common import (
     _resource_aware_default_diag,
     _resource_aware_diag_from_result,
     _decorate_same_day_rank_safety_scores,
+    _decorate_same_day_rank_safety_mfe_product_scores,
     _decorate_same_day_rank_residual_safety_scores,
     _reorder_resource_aware_binary_greedy,
     _resource_aware_trial_rank_key,
@@ -61,6 +63,7 @@ from core.portfolio_entry_selection_max_dl import (
     _reorder_resource_aware_continuous_score_no_r0_constrained_optimal,
     _reorder_resource_aware_continuous_score_no_k_no_r0,
     _reorder_resource_aware_continuous_score_no_k_no_r0_raw_safety_gate,
+    _reorder_resource_aware_continuous_score_no_k_no_r0_safety_mfe_product,
     _reorder_resource_aware_continuous_score_capital_no_r0_constrained_optimal,
     _reorder_resource_aware_continuous_score_capital_pareto_no_r0_constrained_optimal,
 )
@@ -133,6 +136,8 @@ def reorder_candidates_for_resource_aware_quality(
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL
         else 'continuous-score-no-k-no-r0-raw-safety-gate'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE
+        else 'continuous-score-no-k-no-r0-safety-mfe-product'
+        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT
         else 'continuous-score-no-k-no-r0'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0
         else 'continuous-score-capital-no-r0-constrained-optimal'
@@ -152,6 +157,8 @@ def reorder_candidates_for_resource_aware_quality(
     residual_fit_diag = {}
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE:
         rows, residual_fit_diag = _decorate_same_day_rank_safety_scores(rows)
+    elif policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT:
+        rows, residual_fit_diag = _decorate_same_day_rank_safety_mfe_product_scores(rows)
     elif policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL:
         rows, residual_fit_diag = _decorate_same_day_rank_residual_safety_scores(rows)
     default_diag = _resource_aware_default_diag(rows, free_slots, selector=selector)
@@ -187,6 +194,17 @@ def reorder_candidates_for_resource_aware_quality(
             baseline=baseline,
             default_diag=default_diag,
             stale_score_membership_guard_max_age_days=max_age_days,
+        )
+        return finish(order, diag)
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT:
+        order, diag = _reorder_resource_aware_continuous_score_no_k_no_r0_safety_mfe_product(
+            rows,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=free_slots,
+            params=params,
+            baseline=baseline,
+            default_diag=default_diag,
         )
         return finish(order, diag)
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT:

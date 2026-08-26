@@ -1522,6 +1522,55 @@ def _run_resource_aware_entry_selection_matrix_case(base_params):
         ),
     )
 
+    # SR-C74 joint-selector treatment: no hard Safety gate.  Both MR-13R heads
+    # are independently converted to same-day orderable percentiles and their
+    # product becomes the only ranking score.  A has the strongest Conditional-
+    # MFE but the weakest Safety, while B/C are jointly high; the product must
+    # therefore select B/C without any threshold, K, or R0 floor.
+    c74_rows = [
+        candidate(
+            t, 100.0, 800, primary,
+            "resource-aware-continuous-score-no-k-no-r0-safety-mfe-product",
+            0.0, safety,
+        )
+        for t, primary, safety in (
+            ("A", 0.99, 0.10),
+            ("B", 0.80, 0.90),
+            ("C", 0.70, 0.80),
+            ("D", 0.60, 0.70),
+        )
+    ]
+    c74_order, c74_diag = reorder_candidates_for_resource_aware_quality(
+        c74_rows,
+        available_cash=300_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=params,
+    )
+    c74_selected = select_resource_aware_action_candidates(c74_order, c74_diag)
+    add_check(
+        results, "portfolio_entry_selection", case_id,
+        "c74_safety_x_conditional_mfe_percentile_product_promotes_jointly_high_names",
+        (2, ("B", "C")),
+        (
+            int(c74_diag.get("selected_count", -1)),
+            tuple(row["ticker"] for row in c74_selected),
+        ),
+    )
+    add_check(
+        results, "portfolio_entry_selection", case_id,
+        "c74_joint_product_is_parameter_free_no_k_no_r0_same_day_percentile_ranking",
+        (4, 4, "raw_safety_pct_x_conditional_mfe_pct_v1", False, False),
+        (
+            int(c74_diag.get("safety_mfe_product_primary_scored_count", -1)),
+            int(c74_diag.get("safety_mfe_product_joint_scored_count", -1)),
+            str(c74_diag.get("safety_mfe_product_transform") or ""),
+            bool(c74_diag.get("preserve_k")),
+            bool(c74_diag.get("preserve_r0")),
+        ),
+    )
+
     # Performance-contract fixture: physical slots can be much wider than the
     # cash-feasible count.  The exact scientific result is unchanged, but K-Flex
     # must use the admissible minimum-notional cash cap before branch-and-bound
