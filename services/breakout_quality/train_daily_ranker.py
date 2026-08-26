@@ -8,6 +8,8 @@ validation views so additional Daily DL experiments do not fork a new trainer.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+from pathlib import Path
 import time
 
 import numpy as np
@@ -33,6 +35,7 @@ from filters.breakout_quality.contract import (
 )
 from filters.breakout_quality.daily_ranker_data import (
     build_daily_ranker_split,
+    load_official_breakout_candidate_keys,
     load_daily_universal_ranker_data,
     select_breakout_candidate_group_ids,
 )
@@ -41,6 +44,7 @@ from filters.breakout_quality.ranker_sample_contract import (
     build_score_eligibility_contract,
     resolve_forward_oos_score_group_ids,
 )
+from filters.breakout_quality.paths import resolve_filter_model_output_dir
 from filters.breakout_quality.ranking_score_store import DAILY_RANKER_OOS_SCORE_FILENAME
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from core.console_report import print_artifact_paths
@@ -49,6 +53,8 @@ from services.breakout_quality import ranker_training as ranker_api
 from services.breakout_quality.continuous_ranker_pipeline import resolve_ranker_execution_plan
 
 DAILY_SPLIT_FILENAME = "daily_split_by_date.csv"
+MR13S_TRUTH_GEOMETRY_JSON_FILENAME = "mr13s_truth_geometry_control.json"
+MR13S_TRUTH_GEOMETRY_MARKDOWN_FILENAME = "mr13s_truth_geometry_control.md"
 
 
 
@@ -77,6 +83,213 @@ def _empty_split_metrics(group_count: int, reason: str) -> dict:
         "p_at_70pct": None,
         "raw_r_regression": None,
     }
+
+
+def build_safety_raw_mfe_truth_geometry_control_from_score_frame(
+    score_frame: pd.DataFrame,
+    *,
+    breakout_candidate_keys: set[tuple[str, pd.Timestamp]],
+) -> dict:
+    """Build actual Daily/Breakout 5×5 geometry from persisted MR-13S OOS targets.
+
+    Breakout rows are filtered *after* the canonical daily-universal target percentiles
+    have been loaded.  Percentiles are never recomputed inside the breakout subset.
+    """
+
+    required = {
+        "ticker",
+        "date",
+        "target_low_adverse_safety_percentile",
+        "target_pure_mfe_percentile",
+        "raw_safety_score",
+        "raw_mfe_score",
+    }
+    missing = sorted(required.difference(score_frame.columns))
+    if missing:
+        raise ValueError(f"MR-13S Truth Geometry score artifact缺少欄位: {missing}")
+    frame = score_frame.loc[:, sorted(required)].copy()
+    frame["ticker"] = frame["ticker"].astype(str)
+    frame["date"] = pd.to_datetime(frame["date"], errors="raise").dt.normalize()
+    for column in (
+        "target_low_adverse_safety_percentile",
+        "target_pure_mfe_percentile",
+        "raw_safety_score",
+        "raw_mfe_score",
+    ):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    evaluable = frame[
+        np.isfinite(frame["target_low_adverse_safety_percentile"].to_numpy(dtype=np.float64))
+        & np.isfinite(frame["target_pure_mfe_percentile"].to_numpy(dtype=np.float64))
+    ].copy()
+    if evaluable.empty:
+        raise ValueError("MR-13S Truth Geometry沒有target-evaluable OOS rows")
+
+    candidate_mask = np.fromiter(
+        (
+            (ticker, date) in breakout_candidate_keys
+            for ticker, date in zip(evaluable["ticker"], evaluable["date"])
+        ),
+        dtype=bool,
+        count=len(evaluable),
+    )
+    breakout = evaluable.loc[candidate_mask].copy()
+
+    def build_scope(rows: pd.DataFrame) -> dict:
+        dates = rows["date"].to_numpy()
+        safety_true = rows["target_low_adverse_safety_percentile"].to_numpy(dtype=np.float64)
+        mfe_true = rows["target_pure_mfe_percentile"].to_numpy(dtype=np.float64)
+        actual = ranker_api.safety_mfe_truth_geometry(dates, safety_true, mfe_true)
+        safety_pred = rows["raw_safety_score"].to_numpy(dtype=np.float64)
+        mfe_pred = rows["raw_mfe_score"].to_numpy(dtype=np.float64)
+        pred_valid = np.isfinite(safety_pred) & np.isfinite(mfe_pred)
+        predicted_relation = (
+            ranker_api.daily_rank_metrics(
+                dates[pred_valid], safety_pred[pred_valid], mfe_pred[pred_valid]
+            )
+            if bool(pred_valid.any())
+            else {}
+        )
+        return {
+            "population_n": int(len(rows)),
+            "actual": actual,
+            "predicted_safety_to_raw_mfe_mean_daily_spearman": predicted_relation.get("mean_daily_spearman"),
+            "predicted_relation_valid_days": int(predicted_relation.get("rankable_date_count", 0) or 0),
+        }
+
+    return {
+        "daily_universal_oos": build_scope(evaluable),
+        "breakout_candidate_oos": build_scope(breakout),
+        "breakout_percentile_policy": "filter_daily_universal_percentiles_without_subset_rerank",
+    }
+
+
+def _render_truth_geometry_markdown(payload: dict) -> str:
+    def fmt(value, digits: int = 4) -> str:
+        return "-" if value is None else f"{float(value):.{digits}f}"
+
+    def cell_text(cell: dict) -> str:
+        if not cell:
+            return "0 / - / -"
+        return (
+            f"{int(cell.get('n', 0) or 0):,} / "
+            f"{fmt(cell.get('population_pct'), 2)}% / "
+            f"{fmt(cell.get('independence_enrichment'), 2)}×"
+        )
+
+    lines = [
+        "# MR-13S Actual MFE×Safety Truth Geometry Control",
+        "",
+        "此報表只讀既有MR-13S frozen Forward-OOS score artifact與canonical breakout membership；"
+        "不訓練模型、不重算breakout subset percentile，也不建立PIT／Strategy arm。",
+        "",
+        "## Summary",
+        "",
+        "| Scope | N | Actual Safety↔MFE Dailyρ | Pred Safety↔Raw-MFE Dailyρ | S5×M5 N / Pop / Enrich | S4+×M4+ N / Pop / Enrich |",
+        "|---|---:|---:|---:|---|---|",
+    ]
+    for label, key in (("Daily universal OOS", "daily_universal_oos"), ("Breakout candidate OOS", "breakout_candidate_oos")):
+        scope = dict(payload.get(key) or {})
+        actual = dict(scope.get("actual") or {})
+        lines.append(
+            f"| {label} | {int(scope.get('population_n', 0) or 0):,} "
+            f"| {fmt(actual.get('safety_to_mfe_mean_daily_spearman'))} "
+            f"| {fmt(scope.get('predicted_safety_to_raw_mfe_mean_daily_spearman'))} "
+            f"| {cell_text(dict(actual.get('s5_m5') or {}))} "
+            f"| {cell_text(dict(actual.get('s4plus_m4plus') or {}))} |"
+        )
+    for label, key in (("Daily universal OOS", "daily_universal_oos"), ("Breakout candidate OOS", "breakout_candidate_oos")):
+        scope = dict(payload.get(key) or {})
+        actual = dict(scope.get("actual") or {})
+        lines.extend([
+            "",
+            f"## {label} actual 5×5",
+            "",
+            "Cell = `N / population% / independence enrichment×`。Expected使用該scope實際row/column marginals；Breakout不重新排名percentile。",
+            "",
+            "| Actual Safety \\ Pure-MFE | M1 | M2 | M3 | M4 | M5 |",
+            "|---|---|---|---|---|---|",
+        ])
+        for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1):
+            lines.append(f"| S{s_idx} | " + " | ".join(cell_text(dict(cell or {})) for cell in row) + " |")
+    lines.extend([
+        "",
+        "## Contract",
+        "",
+        "- Diagnostic only；不得以此結果回頭fit MR-13S training、threshold、weight或calibration。",
+        "- Breakout candidate只做membership filter，沿用daily-universal同日Safety/MFE percentile。",
+        "- Independence enrichment=`observed N / (N × P(S-bin) × P(M-bin))`。",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def build_mr13s_truth_geometry_control(
+    *,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    allow_stale_source: bool = False,
+    project_root: str | Path = PROJECT_ROOT,
+) -> tuple[dict, Path, Path]:
+    """Build the read-only MR-13S actual truth-geometry control from frozen artifacts."""
+
+    root = Path(project_root).resolve()
+    output_dir = resolve_filter_model_output_dir(
+        root, str(filter_id), str(model_architecture), str(experiment_profile)
+    )
+    report_path = output_dir / ranker_api.RANKER_REPORT_JSON_FILENAME
+    score_path = output_dir / DAILY_RANKER_OOS_SCORE_FILENAME
+    if not report_path.is_file() or not score_path.is_file():
+        raise FileNotFoundError("MR-13S Truth Geometry需要既有continuous_ranker_report.json與daily_ranker_oos_scores.csv.gz")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    expected_identity = {
+        "filter_id": str(filter_id),
+        "model_architecture": str(model_architecture),
+        "experiment_profile": str(experiment_profile),
+    }
+    for field, expected in expected_identity.items():
+        if str(report.get(field) or "") != expected:
+            raise ValueError(f"MR-13S Truth Geometry report identity不一致: {field}")
+    if str((report.get("training") or {}).get("objective") or "") != TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
+        raise ValueError("Actual MFE×Safety Truth Geometry目前只適用Safety→Raw-MFE duo-head profile")
+    recorded_score = dict((report.get("artifacts") or {}).get("oos_scores_gzip") or {})
+    if recorded_score and build_file_manifest(score_path) != recorded_score:
+        raise ValueError("MR-13S Truth Geometry OOS score artifact與frozen report manifest不一致")
+
+    score_frame = pd.read_csv(score_path, compression="gzip", dtype={"ticker": str})
+    candidate_keys = load_official_breakout_candidate_keys(
+        str(filter_id), allow_stale_source=bool(allow_stale_source)
+    )
+    control = build_safety_raw_mfe_truth_geometry_control_from_score_frame(
+        score_frame, breakout_candidate_keys=candidate_keys
+    )
+    raw_eval = dict(report.get("safety_raw_mfe_evaluation") or {})
+    for scope_key in ("oos", "breakout_candidate_oos"):
+        prior_n = int((((raw_eval.get(scope_key) or {}).get("model_gate") or {}).get("population_n") or 0))
+        current_n = int((control.get("daily_universal_oos" if scope_key == "oos" else "breakout_candidate_oos") or {}).get("population_n", 0) or 0)
+        if prior_n and current_n != prior_n:
+            raise ValueError(
+                f"MR-13S Truth Geometry {scope_key} membership與原frozen model report不一致: expected={prior_n}, actual={current_n}"
+            )
+
+    payload = {
+        "schema_version": 1,
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        **expected_identity,
+        "status": "RESULT_AVAILABLE_PENDING_REVIEW",
+        "diagnostic": "MR-13S actual MFE×Safety truth geometry control",
+        "source_model_report": build_file_manifest(report_path),
+        "source_oos_scores": build_file_manifest(score_path),
+        "source_breakout_membership": "canonical breakout_quality validated event ticker/date membership",
+        "oos_used_for_training_or_epoch_selection": False,
+        "model_weights_changed": False,
+        **control,
+    }
+    json_path = output_dir / MR13S_TRUTH_GEOMETRY_JSON_FILENAME
+    markdown_path = output_dir / MR13S_TRUTH_GEOMETRY_MARKDOWN_FILENAME
+    write_json(json_path, payload)
+    markdown_path.write_text(_render_truth_geometry_markdown(payload), encoding="utf-8")
+    return payload, json_path, markdown_path
 
 
 def _date_split_frame(

@@ -2652,6 +2652,9 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
     )
     from filters.breakout_quality.ranker_training_contract import training_semantics
     from services.breakout_quality.ranker_training import safety_raw_mfe_metrics
+    from services.breakout_quality.train_daily_ranker import (
+        build_safety_raw_mfe_truth_geometry_control_from_score_frame,
+    )
 
     old_profile = get_breakout_quality_experiment_profile(
         DAILY_UNIVERSAL_SAFETY_CONDITIONAL_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
@@ -2764,6 +2767,54 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
         and all("raw_mfe_to_actual_mfe_mean_daily_spearman" in row for row in cohorts)
         and gate.get("joint_product_to_actual_hmhs_mean_daily_spearman") is not None,
     )
+    truth = dict(gate.get("actual_truth_geometry") or {})
+    check_true(
+        "mr13s_model_gate_exposes_actual_truth_geometry_and_predicted_head_relation",
+        len(list(truth.get("actual_joint_geometry") or [])) == 5
+        and gate.get("predicted_safety_to_raw_mfe_mean_daily_spearman") is not None
+        and truth.get("safety_to_mfe_mean_daily_spearman") is not None,
+    )
+
+    score_frame = pd.DataFrame({
+        "ticker": [f"T{i:02d}" for i in range(len(frame))],
+        "date": frame["date"],
+        "target_low_adverse_safety_percentile": targets.low_adverse_safety_percentile,
+        "target_pure_mfe_percentile": targets.primary_mfe_percentile,
+        "raw_safety_score": scores["raw_safety"],
+        "raw_mfe_score": scores["raw_mfe"],
+    })
+    candidate_positions = np.asarray([0, 1, 8, 9, 10, 11, 18, 19], dtype=np.int64)
+    candidate_keys = {
+        (str(score_frame.iloc[pos]["ticker"]), pd.Timestamp(score_frame.iloc[pos]["date"]).normalize())
+        for pos in candidate_positions
+    }
+    truth_control = build_safety_raw_mfe_truth_geometry_control_from_score_frame(
+        score_frame,
+        breakout_candidate_keys=candidate_keys,
+    )
+    breakout_truth = dict((truth_control.get("breakout_candidate_oos") or {}).get("actual") or {})
+    expected_counts = np.zeros((5, 5), dtype=np.int64)
+    for pos in candidate_positions:
+        safety_q = min(4, int(float(targets.low_adverse_safety_percentile[pos]) * 5.0))
+        mfe_q = min(4, int(float(targets.primary_mfe_percentile[pos]) * 5.0))
+        expected_counts[safety_q, mfe_q] += 1
+    actual_counts = np.asarray([
+        [int(dict(cell or {}).get("n", 0) or 0) for cell in row]
+        for row in list(breakout_truth.get("actual_joint_geometry") or [])
+    ], dtype=np.int64)
+    check_true(
+        "mr13s_truth_geometry_breakout_filters_daily_percentiles_without_subset_rerank",
+        int((truth_control.get("breakout_candidate_oos") or {}).get("population_n", 0) or 0) == len(candidate_positions)
+        and truth_control.get("breakout_percentile_policy") == "filter_daily_universal_percentiles_without_subset_rerank"
+        and np.array_equal(actual_counts, expected_counts),
+    )
+    daily_truth = dict((truth_control.get("daily_universal_oos") or {}).get("actual") or {})
+    check_true(
+        "mr13s_truth_geometry_reports_population_and_independence_enrichment",
+        int(daily_truth.get("population_n", 0) or 0) == len(frame)
+        and dict(daily_truth.get("s5_m5") or {}).get("independence_enrichment") is not None
+        and dict(daily_truth.get("s4plus_m4plus") or {}).get("independence_enrichment") is not None,
+    )
 
     project_root = Path(__file__).resolve().parents[2]
     strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
@@ -2779,6 +2830,14 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
         "MR-13S Safety→Raw-MFE Model Gate" in report_source
         and "predicted_joint_geometry" in report_source
         and "safety_cohorts" in report_source,
+    )
+    app_source = (
+        project_root / "services" / "research" / "breakout_quality_application.py"
+    ).read_text(encoding="utf-8")
+    check_true(
+        "mr13s_truth_geometry_has_read_only_formal_menu_entry_without_retraining",
+        "Actual MFE×Safety Truth Geometry（只讀）" in app_source
+        and "build_mr13s_truth_geometry_control" in app_source,
     )
 
     summary["training_performed"] = False

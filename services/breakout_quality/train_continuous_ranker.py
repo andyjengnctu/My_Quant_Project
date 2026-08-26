@@ -1462,6 +1462,89 @@ def _predicted_quintiles(dates: np.ndarray, values: np.ndarray) -> np.ndarray:
     return np.minimum(4, np.floor(np.asarray(percentile, dtype=np.float64) * 5.0).astype(np.int64)) + 1
 
 
+def _fixed_quintiles_from_percentiles(values: np.ndarray) -> np.ndarray:
+    percentile = np.asarray(values, dtype=np.float64)
+    if percentile.ndim != 1 or not bool(np.isfinite(percentile).all()):
+        raise ValueError("Truth Geometry percentile必須為finite 1D")
+    if bool(np.any((percentile < 0.0) | (percentile > 1.0))):
+        raise ValueError("Truth Geometry percentile必須位於[0,1]")
+    return np.minimum(4, np.floor(percentile * 5.0).astype(np.int64)) + 1
+
+
+def safety_mfe_truth_geometry(
+    dates: np.ndarray,
+    safety_percentile: np.ndarray,
+    mfe_percentile: np.ndarray,
+) -> dict[str, Any]:
+    """Return actual same-day Safety×Pure-MFE support without re-ranking a subset.
+
+    The inputs must already be the canonical daily-universal same-day percentiles.  This
+    matters for breakout-candidate diagnostics: filtering to candidate rows must not
+    recompute percentile ranks inside the smaller strategy-derived subset.
+    """
+
+    day = pd.to_datetime(np.asarray(dates), errors="raise").to_numpy()
+    safety = np.asarray(safety_percentile, dtype=np.float64)
+    mfe = np.asarray(mfe_percentile, dtype=np.float64)
+    if not (len(day) == len(safety) == len(mfe)):
+        raise ValueError("Truth Geometry dates/Safety/MFE長度不一致")
+    if len(day) == 0:
+        return {
+            "population_n": 0,
+            "safety_to_mfe_mean_daily_spearman": None,
+            "valid_days": 0,
+            "actual_joint_geometry": [[{
+                "n": 0,
+                "population_pct": None,
+                "expected_n_independent": None,
+                "independence_enrichment": None,
+            } for _ in range(5)] for _ in range(5)],
+            "s5_m5": {"n": 0, "population_pct": None, "expected_n_independent": None, "independence_enrichment": None},
+            "s4plus_m4plus": {"n": 0, "population_pct": None, "expected_n_independent": None, "independence_enrichment": None},
+        }
+    if not bool(np.isfinite(safety).all() and np.isfinite(mfe).all()):
+        raise ValueError("Truth Geometry Safety/MFE percentile含non-finite")
+
+    safety_q = _fixed_quintiles_from_percentiles(safety)
+    mfe_q = _fixed_quintiles_from_percentiles(mfe)
+    population_n = int(len(day))
+    row_counts = np.asarray([(safety_q == level).sum() for level in range(1, 6)], dtype=np.int64)
+    col_counts = np.asarray([(mfe_q == level).sum() for level in range(1, 6)], dtype=np.int64)
+
+    def summarize(mask: np.ndarray, expected_n: float) -> dict[str, Any]:
+        n = int(mask.sum())
+        return {
+            "n": n,
+            "population_pct": float(n / population_n * 100.0),
+            "expected_n_independent": float(expected_n),
+            "independence_enrichment": None if expected_n <= 0.0 else float(n / expected_n),
+        }
+
+    cells: list[list[dict[str, Any]]] = []
+    for safety_level in range(1, 6):
+        row: list[dict[str, Any]] = []
+        for mfe_level in range(1, 6):
+            expected_n = float(row_counts[safety_level - 1] * col_counts[mfe_level - 1] / population_n)
+            row.append(summarize((safety_q == safety_level) & (mfe_q == mfe_level), expected_n))
+        cells.append(row)
+
+    s5_expected = float(row_counts[4] * col_counts[4] / population_n)
+    s4plus_rows = int(row_counts[3:].sum())
+    m4plus_cols = int(col_counts[3:].sum())
+    s4plus_expected = float(s4plus_rows * m4plus_cols / population_n)
+    relation = daily_rank_metrics(day, safety, mfe)
+    return {
+        "population_n": population_n,
+        "safety_to_mfe_mean_daily_spearman": relation.get("mean_daily_spearman"),
+        "valid_days": int(relation.get("rankable_date_count", 0) or 0),
+        "actual_joint_geometry": cells,
+        "s5_m5": summarize((safety_q == 5) & (mfe_q == 5), s5_expected),
+        "s4plus_m4plus": summarize((safety_q >= 4) & (mfe_q >= 4), s4plus_expected),
+        "quintile_source": "canonical_daily_universal_same_date_percentiles_no_subset_rerank",
+        "independence_expected_method": "scope_marginals_n_times_p_s_times_p_m",
+    }
+
+
 def safety_raw_mfe_metrics(
     group_ids: np.ndarray,
     group_table: pd.DataFrame,
@@ -1521,6 +1604,12 @@ def safety_raw_mfe_metrics(
         })
     joint_product = safety_scores.astype(np.float64) * mfe_scores.astype(np.float64)
     joint_rank = daily_rank_metrics(dates, joint_product, actual_hmhs.astype(np.float64))
+    predicted_relation = daily_rank_metrics(dates, safety_scores, mfe_scores)
+    truth_geometry = safety_mfe_truth_geometry(
+        dates,
+        targets.low_adverse_safety_percentile[ids],
+        targets.primary_mfe_percentile[ids],
+    )
     upper_right = cells[4][4]
     head_metrics["model_gate"] = {
         "population_n": int(len(ids)),
@@ -1530,6 +1619,9 @@ def safety_raw_mfe_metrics(
         "safety_cohorts": cohorts,
         "joint_product_to_actual_hmhs_mean_daily_spearman": joint_rank.get("mean_daily_spearman"),
         "joint_product_valid_days": int(joint_rank.get("rankable_date_count", 0) or 0),
+        "predicted_safety_to_raw_mfe_mean_daily_spearman": predicted_relation.get("mean_daily_spearman"),
+        "predicted_relation_valid_days": int(predicted_relation.get("rankable_date_count", 0) or 0),
+        "actual_truth_geometry": truth_geometry,
         "truth_cutoff": 0.5,
         "predicted_quintile_method": "same_date_average_zero_based_percentile_then_fixed_quintile",
         "status": "diagnostic_only_no_fit_no_threshold_selection",

@@ -1037,17 +1037,10 @@ def select_breakout_candidate_group_ids(
 ) -> np.ndarray:
     """Select official breakout ticker/date membership for post-model diagnostics."""
 
-    _summary, _features, _context, _labels, events = load_validated_dataset_bundle(
+    event_keys = load_official_breakout_candidate_keys(
         str(bundle.summary["filter_id"]),
-        expected_policy=DEFAULT_LABEL_POLICY.as_manifest_payload(),
-        require_current_source=not bool(allow_stale_source),
+        allow_stale_source=bool(allow_stale_source),
     )
-    event_frame = events.loc[:, ["ticker", "date"]].copy()
-    event_frame["ticker"] = event_frame["ticker"].astype(str)
-    event_frame["date"] = pd.to_datetime(
-        event_frame["date"], errors="raise"
-    ).dt.normalize()
-    event_keys = set(zip(event_frame["ticker"].tolist(), event_frame["date"].tolist()))
     ids = np.asarray(group_ids, dtype=np.int64)
     groups = bundle.group_table.iloc[ids]
     mask = np.fromiter(
@@ -1059,6 +1052,26 @@ def select_breakout_candidate_group_ids(
         count=len(groups),
     )
     return ids[mask]
+
+
+def load_official_breakout_candidate_keys(
+    filter_id: str,
+    *,
+    allow_stale_source: bool,
+) -> set[tuple[str, pd.Timestamp]]:
+    """Return canonical breakout ticker/date membership for read-only diagnostics."""
+
+    _summary, _features, _context, _labels, events = load_validated_dataset_bundle(
+        str(filter_id),
+        expected_policy=DEFAULT_LABEL_POLICY.as_manifest_payload(),
+        require_current_source=not bool(allow_stale_source),
+    )
+    event_frame = events.loc[:, ["ticker", "date"]].copy()
+    event_frame["ticker"] = event_frame["ticker"].astype(str)
+    event_frame["date"] = pd.to_datetime(
+        event_frame["date"], errors="raise"
+    ).dt.normalize()
+    return set(zip(event_frame["ticker"].tolist(), event_frame["date"].tolist()))
 
 
 def build_daily_ranker_split(bundle: ContinuousRankerDataBundle, *, inner_validation_months: int) -> DailyRankerSplit:
@@ -1144,6 +1157,7 @@ __all__ = [
     "build_equal_rank_mfe_low_adverse_target",
     "compute_daily_opportunity_target_batch",
     "load_daily_universal_ranker_data",
+    "load_official_breakout_candidate_keys",
     "resolve_daily_training_universe_start",
     "select_breakout_candidate_group_ids",
 ]

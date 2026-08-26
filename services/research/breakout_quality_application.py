@@ -23,6 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.breakout_quality import (
+    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
@@ -317,6 +318,107 @@ def _print_existing_continuous_ranker_report(settings) -> bool:
     print(
         render_status_paths(
             (("詳細模型報表", detail_report, detail_report.is_file()),),
+            project_root=PROJECT_ROOT,
+        )
+    )
+    truth_json = detail_report.with_name("mr13s_truth_geometry_control.json")
+    truth_payload = load_json_object_or_none(truth_json) or {}
+    if truth_payload:
+        print("\n" + _render_mr13s_truth_geometry_console(truth_payload))
+        truth_md = truth_json.with_name("mr13s_truth_geometry_control.md")
+        print(
+            render_status_paths(
+                (("Truth Geometry", truth_md, truth_md.is_file()),),
+                project_root=PROJECT_ROOT,
+            )
+        )
+    return True
+
+
+def _render_mr13s_truth_geometry_console(payload: dict) -> str:
+    def fmt(value, *, digits: int = 4) -> str:
+        return "-" if value is None else f"{float(value):.{digits}f}"
+
+    def support(cell: dict) -> str:
+        return (
+            f"N={int(cell.get('n', 0) or 0):,} / "
+            f"{fmt(cell.get('population_pct'), digits=2)}% / "
+            f"{fmt(cell.get('independence_enrichment'), digits=2)}×"
+        )
+
+    lines = [render_section("MR-13S Actual MFE×Safety Truth Geometry Control")]
+    summary_rows = []
+    for label, key in (
+        ("Daily universal OOS", "daily_universal_oos"),
+        ("Breakout candidate OOS", "breakout_candidate_oos"),
+    ):
+        scope = dict(payload.get(key) or {})
+        actual = dict(scope.get("actual") or {})
+        summary_rows.append((
+            label,
+            f"{int(scope.get('population_n', 0) or 0):,}",
+            fmt(actual.get("safety_to_mfe_mean_daily_spearman")),
+            fmt(scope.get("predicted_safety_to_raw_mfe_mean_daily_spearman")),
+            support(dict(actual.get("s5_m5") or {})),
+            support(dict(actual.get("s4plus_m4plus") or {})),
+        ))
+    lines.append(
+        render_table(
+            ("Scope", "N", "Actual S↔MFE rho", "Pred S↔MFE rho", "S5×M5 N/Pop/×Exp", "S4+×M4+ N/Pop/×Exp"),
+            summary_rows,
+            alignments=("left", "right", "right", "right", "right", "right"),
+        )
+    )
+    for label, key in (
+        ("Daily universal OOS actual 5×5", "daily_universal_oos"),
+        ("Breakout candidate OOS actual 5×5", "breakout_candidate_oos"),
+    ):
+        scope = dict(payload.get(key) or {})
+        actual = dict(scope.get("actual") or {})
+        rows = []
+        for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1):
+            cells = []
+            for cell in row:
+                cell = dict(cell or {})
+                cells.append(
+                    f"{int(cell.get('n', 0) or 0):,} / "
+                    f"{fmt(cell.get('population_pct'), digits=2)}% / "
+                    f"{fmt(cell.get('independence_enrichment'), digits=2)}×"
+                )
+            rows.append((f"S{s_idx}", *cells))
+        lines.extend([
+            label,
+            "cell = N / population% / independence enrichment×",
+            render_table(
+                ("Actual Safety \\ Pure-MFE", "M1", "M2", "M3", "M4", "M5"),
+                rows,
+                alignments=("left", "right", "right", "right", "right", "right"),
+            ),
+        ])
+    lines.append(
+        "Breakout percentile口徑：沿用Daily universal同日percentile，只filter candidate membership，不在subset內重新排名。"
+    )
+    return "\n".join(lines)
+
+
+def _run_mr13s_truth_geometry_control(settings) -> bool:
+    from services.breakout_quality.train_daily_ranker import (
+        build_mr13s_truth_geometry_control,
+    )
+
+    payload, json_path, markdown_path = build_mr13s_truth_geometry_control(
+        filter_id=settings.filter_id,
+        model_architecture=settings.model_architecture,
+        experiment_profile=settings.experiment_profile,
+        project_root=PROJECT_ROOT,
+    )
+    print("\n" + _render_mr13s_truth_geometry_console(payload))
+    print(
+        render_status_paths(
+            (
+                ("Truth Geometry JSON", json_path, json_path.is_file()),
+                ("Truth Geometry Markdown", markdown_path, markdown_path.is_file()),
+            ),
             project_root=PROJECT_ROOT,
         )
     )
@@ -3373,6 +3475,8 @@ def _interactive_model_research(program_name: str) -> int:
         print(render_menu_item(4, "比較目前 Target 與 reference Target"))
         print(render_menu_item(5, "Timing Mode｜Rolling 訓練前後比較"))
         print(render_menu_item(6, BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL))
+        if settings.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
+            print(render_menu_item(7, "Actual MFE×Safety Truth Geometry（只讀）"))
         print(render_menu_item(0, "返回"))
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
@@ -3436,6 +3540,15 @@ def _interactive_model_research(program_name: str) -> int:
             return int(_interactive_rolling_timing_mode(program_name, timing_settings))
         if choice == "6":
             return int(_run_configured_continuous_ranker_model_gates(program_name))
+        if choice == "7":
+            if settings.training_objective != TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
+                print("目前Active Profile不支援Actual MFE×Safety Truth Geometry。")
+                continue
+            try:
+                _run_mr13s_truth_geometry_control(settings)
+            except (FileNotFoundError, ValueError) as exc:
+                print(f"Truth Geometry BLOCKED：{exc}")
+            continue
         print("無效選項，請重新輸入。")
 
 def run_model_training_menu(program_name: str = "apps/research.py model") -> int:

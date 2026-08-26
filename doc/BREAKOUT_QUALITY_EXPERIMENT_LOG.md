@@ -10267,3 +10267,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Forward model report直接新增model-only joint Gate：Raw Safety/Raw-MFE marginal rho、predicted Safety×Raw-MFE 5×5 `N / actual HM/HS%`、S5×M5 N/HMHS、Safety quintile內Raw-MFE→actual-MFE Dailyρ/High-MFE/HMHS，以及joint-product→HM/HS Dailyρ。這些OOS cells只作GO/STOP diagnostic，禁止回頭fit weight／threshold／calibration。
 - Authorization：`selection_pit_authorized=False`、`current_time_validation_authorized=False`；本輪不建立DL source、PIT或`SR-C75`。只有MR-13S Forward Model Gate先證明absolute Safety×Raw-MFE joint upper-right具有實質support/enrichment，才授權下一個唯一strategy conversion。
 - Decision：**IMPLEMENTED / MODEL_GATE_RESULT_PENDING / NO_PIT / NO_STRATEGY_ARM / NOT_PROMOTED**。
+
+### 2026-08-26 — MR-13S Forward Model Gate結果；先補Actual Daily/Breakout Truth Geometry Control
+
+- 使用者完成MR-13S Seed42 frozen Forward Model Gate。Validation Raw Safety/Raw-MFE Dailyρ=`0.3505/0.4354`；Forward OOS=`0.3556/0.3948`，Breakout slice=`0.3165/0.3567`，兩個absolute heads的marginal learnability都保留。
+- 但joint conversion仍collapse：Forward OOS joint-product→actual HM/HS Dailyρ=`0.0380`，predicted S5×M5=`N=0`；5×5大量集中在S1×M4/M5與S4/S5×M1/M2，absolute U並未解除MR-13R已有的近反對角geometry。故MR-13S不進PIT、不建立C75，也不做threshold/weight/calibration。
+- 高Safety S5內Raw-MFE→actual MFE Dailyρ仍=`0.2587`，顯示local MFE information沒有消失；因此目前不能只用predicted geometry判定是input representation問題，還需要比較canonical **actual** Safety×Pure-MFE joint support。
+- 本輪實作同一MR-13S identity的read-only Truth Geometry Control，不新增Audit或scientific identity：直接讀frozen `daily_ranker_oos_scores.csv.gz`已保存的daily-universal `target_low_adverse_safety_percentile` / `target_pure_mfe_percentile`；Breakout只依canonical event ticker/date membership filter，**不得在breakout subset內重算percentile**。
+- 報表固定輸出Daily universal OOS與Breakout candidate OOS actual 5×5，每格=`N / population% / independence enrichment×`，另列actual Safety↔MFE Dailyρ、predicted Safety↔Raw-MFE Dailyρ、S5×M5與S4+×M4+ support。Independence expected=`N × P(S-bin) × P(M-bin)`，Breakout使用該subset實際marginals。
+- Decision：**MR13S_MODEL_GATE_FAIL_JOINT_COLLAPSE / NO_STRATEGY_CONVERSION / ACTUAL_TRUTH_GEOMETRY_CONTROL_IMPLEMENTED_RESULT_PENDING**。取得Daily/Breakout actual geometry後，才決定下一步是representation-level controlled experiment、breakout-universe structural trade-off，或兩者並存。
