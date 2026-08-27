@@ -2864,6 +2864,7 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
     from filters.breakout_quality.models.active import build_active_model
     from filters.breakout_quality.models.runtime import require_torch
     from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.inference import strict_parallel_batched_logits
     from filters.breakout_quality.ranker_training_contract import training_semantics
     from services.breakout_quality.ranker_training import safety_raw_mfe_hmhs_metrics
 
@@ -3009,6 +3010,30 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
             tuple(joint_logits.shape),
             tuple(model(x, context).shape),
         ),
+    )
+    class _TriHeadInferenceProbe(_nn.Module):
+        def forward_output_head(self, probe_x, probe_context, output_head):
+            if str(output_head) != "tri_head":
+                raise ValueError("probe只接受tri_head")
+            return torch.zeros((probe_x.shape[0], 6), dtype=probe_x.dtype)
+
+    probe_features = np.zeros((4, 2, 1), dtype=np.float32)
+    probe_context = np.empty((4, 0), dtype=np.float32)
+    tri_logits = strict_parallel_batched_logits(
+        torch,
+        _TriHeadInferenceProbe(),
+        probe_features,
+        probe_context,
+        indices=np.arange(len(probe_features), dtype=np.int64),
+        batch_size=2,
+        workers=1,
+        execution_plan=None,
+        output_head="tri_head",
+    )
+    check(
+        "mr13t_shared_batched_inference_allocates_six_logit_tri_head_buffer",
+        (4, 6),
+        tuple(tri_logits.shape),
     )
 
     def grad_present(parameter) -> bool:

@@ -10329,3 +10329,11 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Model SOP新增Direct Joint vs same-model marginal product control：Pair concordance、Global/Mean-Daily PR-AUC、Top10/Top20 HM/HS rate/enrichment與actual mean S/U；原marginal head、actual/predicted 5×5 geometry繼續同報表。OOS score artifact另封存`joint_hmhs_score`與evaluable `target_direct_hmhs`。
 - Predeclared decision：若Direct head在Forward OOS的joint retrieval明確優於same-model marginal product，且Breakout同方向、marginal Safety/MFE未失去原可學性，才支持「raw representation含joint information、MR-13S主要缺direct supervision」；若Direct head仍無法超越product／無HM/HS enrichment，才進下一個raw-data joint representation/architecture experiment。此輪不做人工path input、不做multi-seed/Fixed、不建Strategy arm。
 - Status：**IMPLEMENTED / RESULT_PENDING / DIRECT_JOINT_SUPERVISION_ONLY / RAW_300x10_UNCHANGED / NO_OOS_FIT / NO_PIT / NO_STRATEGY_CONVERSION**。
+
+### 2026-08-27 — MR-13T tri-head shared batched inference width bug修正（無scientific change）
+
+- 使用者首次正式執行MR-13T訓練，在Epoch選擇前Validation batched inference觸發`ValueError: shape mismatch: value array of shape (4096,6) could not be broadcast to indexing result of shape (4096,2)`。
+- 根因位於共用`filters/breakout_quality/inference.py::strict_parallel_batched_logits`：buffer width contract只辨識default single-head=`2`與duo-head=`4`，未包含MR-13T `output_head=tri_head`的`6 logits`；model本身三個2-logit heads、training target/loss與gradient contract無異常。
+- 修正共用inference output-head width SSOT，正式支援single-head=`2`、duo-head=`4`、tri-head=`6`，未知explicit output head fail-fast；MR-13T trainer不建立專屬繞路。新增synthetic直接走shared batched inference驗`tri_head -> (N,6)`，避免只驗direct model forward而漏掉production evaluator buffer。
+- Scientific identity、raw 300×10 input、targets S/U/H、三head等權loss、Seed42、split、optimizer、Raw-MFE epoch selection、OOS Gate、PIT/runtime authorization皆未修改。先前正式run在尚未完成第一個Validation evaluation前即停止，未產生可用MR-13T result；Queue仍維持`RESULT_PENDING`，修正後需重新執行同一Model SOP。
+- Decision：**ENGINEERING_BUG_FIX / SHARED_INFERENCE_WIDTH_CONTRACT / MR13T_RESULT_STILL_PENDING / NO_SCIENTIFIC_CHANGE**。
