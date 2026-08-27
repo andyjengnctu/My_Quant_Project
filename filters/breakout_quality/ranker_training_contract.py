@@ -18,6 +18,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
@@ -127,6 +128,18 @@ SAFETY_RAW_MFE_HMHS_TRI_HEAD_TRAINING_CONTRACT = {
     "batching": "whole_date_pack_no_date_split",
 }
 
+DIRECT_HMHS_SINGLE_HEAD_TRAINING_CONTRACT = {
+    "sample_scope": "daily_eligible_stock_days",
+    "joint_hmhs_target": "indicator_of_safety_percentile_ge_0.5_and_pure_mfe_percentile_ge_0.5",
+    "architecture": "single_head_inception_time_raw_300x10",
+    "joint_head_inputs": "shared_raw_latent_only",
+    "removed_auxiliary_heads": "raw_safety_and_raw_mfe",
+    "head_losses": "full_list_delta_ndcg_pairwise_logistic",
+    "epoch_selection": "validation_hmhs_pairwise_concordance_then_global_pr_auc_tiebreak",
+    "runtime_status": "model_gate_only_no_pit_no_strategy_conversion",
+    "batching": "whole_date_pack_no_date_split",
+}
+
 
 RAW_R_REGRESSION_TRAINING_CONTRACT = {
     "sample_scope": "daily_eligible_stock_days",
@@ -168,6 +181,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING:
         recipe = get_continuous_ranker_execution_recipe(profile.name)
@@ -186,6 +200,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": contract,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
         recipe = get_continuous_ranker_execution_recipe(profile.name)
@@ -204,6 +219,26 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": contract,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "direct_hmhs_single_head_contract": None,
+        }
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING:
+        recipe = get_continuous_ranker_execution_recipe(profile.name)
+        pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
+        pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
+        contract = dict(DIRECT_HMHS_SINGLE_HEAD_TRAINING_CONTRACT)
+        contract["pair_weighting"] = str(recipe.pairwise_reduction)
+        return {
+            "batching": contract["batching"],
+            "pairwise_contract": pairwise_contract,
+            "listwise_contract": None,
+            "raw_r_regression_contract": None,
+            "dual_component_r_regression_contract": None,
+            "conditional_mfe_safety_contract": None,
+            "conditional_mfe_single_head_contract": None,
+            "safety_conditional_mfe_duo_head_contract": None,
+            "safety_raw_mfe_duo_head_contract": None,
+            "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "direct_hmhs_single_head_contract": contract,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING:
         recipe = get_continuous_ranker_execution_recipe(profile.name)
@@ -222,6 +257,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": contract,
+            "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
         recipe = get_continuous_ranker_execution_recipe(profile.name)
@@ -240,6 +276,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective in {
         TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
@@ -270,6 +307,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING:
         return {
@@ -283,6 +321,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
         contract = dict(DUAL_COMPONENT_R_REGRESSION_TRAINING_CONTRACT)
@@ -297,6 +336,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
         contract = dict(RAW_R_REGRESSION_TRAINING_CONTRACT)
@@ -317,6 +357,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "direct_hmhs_single_head_contract": None,
         }
     return {
         "batching": "shuffled_unique_group_batches",

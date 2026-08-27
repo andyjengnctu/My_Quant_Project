@@ -10337,3 +10337,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 修正共用inference output-head width SSOT，正式支援single-head=`2`、duo-head=`4`、tri-head=`6`，未知explicit output head fail-fast；MR-13T trainer不建立專屬繞路。新增synthetic直接走shared batched inference驗`tri_head -> (N,6)`，避免只驗direct model forward而漏掉production evaluator buffer。
 - Scientific identity、raw 300×10 input、targets S/U/H、三head等權loss、Seed42、split、optimizer、Raw-MFE epoch selection、OOS Gate、PIT/runtime authorization皆未修改。先前正式run在尚未完成第一個Validation evaluation前即停止，未產生可用MR-13T result；Queue仍維持`RESULT_PENDING`，修正後需重新執行同一Model SOP。
 - Decision：**ENGINEERING_BUG_FIX / SHARED_INFERENCE_WIDTH_CONTRACT / MR13T_RESULT_STILL_PENDING / NO_SCIENTIFIC_CHANGE**。
+
+### 2026-08-27 — MR-13T正式Model Gate FAIL；MR-13U H-only learnability control實作
+
+- MR-13T Seed42正式Forward SOP結果：OOS Direct HM/HS相對same-model marginal product僅弱改善，Pair=`53.42% vs 52.53%`、PR-AUC=`0.2366 vs 0.2321`、Top10 HM/HS=`24.89% / 1.1159×` vs `22.95% / 1.0289×`。Breakout slice未確認，Direct反而落後product：Pair=`50.25% vs 51.47%`、PR-AUC=`0.2441 vs 0.2481`、Top10=`24.61% / 1.0299×` vs `24.84% / 1.0396×`。
+- MR-13T marginal signal沒有崩潰：Forward Raw Safety/Raw-MFE Dailyρ=`0.3497/0.3876`、Breakout=`0.3051/0.3595`；但原mirror geometry幾乎不變，Daily predicted Safety↔MFE=`-0.9375`、S5×M5=`0`，Breakout=`-0.8962`、S5×M5=`8`。因此Direct H supervision只證明raw latent存在弱H-specific information，沒有證明shared tri-head已解joint problem。
+- Decision：**MR13T_MODEL_GATE_FAIL / DIRECT_JOINT_SIGNAL_WEAKLY_PRESENT / FORWARD_ONLY_GAIN / BREAKOUT_NOT_CONFIRMED / SHARED_MARGINAL_MIRROR_UNCHANGED / NO_PIT / NO_STRATEGY_CONVERSION**。不做multi-seed/Fixed/Strategy conversion。
+- 下一個最小scientific control=`MR-13U`，profile=`daily_universal_hmhs_single_head_full_list_ndcg_pairwise`。不建立新ARCH identity：H-only模型使用既有`inception_time_v1` single-head結構與canonical raw `300×10` sequence；與MR-13T保持同一InceptionTime trunk超參數、daily-universal universe、Seed42、split、optimizer、H target與full-list Delta-NDCG reduction，唯一變更是移除Safety/MFE heads與loss，encoder只受H supervision。
+- MR-13U epoch selection事前固定Validation HM/HS Pair concordance；只有Pair完全同值才用Validation global PR-AUC tie-break。Forward/Breakout完全frozen，不回流selection/fitting。Model SOP固定顯示HM/HS population、Pair、Global/Mean-Daily PR-AUC、Top10/20 HM/HS rate/enrichment。
+- Predeclared decision：若MR-13U在Forward與Breakout都明顯高於MR-13T Direct H，支持multi-task gradient interference，下一步研究dedicated joint representation；若H-only仍弱且Breakout無增益，才支持current raw 300×10/current InceptionTime對joint intersection表示能力不足並重開raw-data architecture comparison。
+- Status：**IMPLEMENTED / RESULT_PENDING / H_ONLY_LEARNABILITY_ABLATION / RAW_300x10_UNCHANGED / NO_OOS_FIT / NO_PIT / NO_STRATEGY_CONVERSION**。

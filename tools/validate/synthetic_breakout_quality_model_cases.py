@@ -2876,9 +2876,8 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
     )
     spec = get_continuous_ranker_research_spec(profile.name)
     check(
-        "mr13t_is_active_raw_input_model_only_controlled_contrast",
+        "mr13t_historical_raw_input_model_only_controlled_contrast_remains_registered",
         (
-            profile.name,
             "MR-13T",
             TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
             "inception_time_safety_raw_mfe_hmhs_v1",
@@ -2886,7 +2885,6 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
             False,
         ),
         (
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
             spec.model_research_id,
             profile.training_objective,
             profile.model_architecture,
@@ -3118,6 +3116,195 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
     strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
     check_true(
         "mr13t_remains_model_only_without_new_strategy_arm",
+        '"C75"' not in strategy_source and "'C75'" not in strategy_source,
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+
+
+def validate_breakout_quality_hmhs_single_head_contract_case(_base_params):
+    """Protect MR-13U as the raw-input Direct-HM/HS H-only learnability ablation."""
+
+    case_id = "BREAKOUT_QUALITY_HMHS_SINGLE_HEAD"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        DAILY_UNIVERSAL_HMHS_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_execution_recipe,
+        get_continuous_ranker_research_spec,
+    )
+    from filters.breakout_quality.conditional_mfe_opportunity import (
+        HMHS_HIGH_PERCENTILE_CUTOFF,
+        build_conditional_mfe_opportunity_targets,
+    )
+    from filters.breakout_quality.contract import FEATURE_COLUMNS
+    from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.models.runtime import require_torch
+    from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality.ranker_training import direct_hmhs_metrics
+
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_HMHS_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    control = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    spec = get_continuous_ranker_research_spec(profile.name)
+    check(
+        "mr13u_is_active_h_only_model_gate_profile",
+        (
+            profile.name,
+            "MR-13U",
+            TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
+            "inception_time_v1",
+            "hmhs_pairwise_concordance",
+            False,
+            False,
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            spec.model_research_id,
+            profile.training_objective,
+            profile.model_architecture,
+            profile.epoch_selection_metric,
+            spec.selection_pit_authorized,
+            spec.current_time_validation_authorized,
+        ),
+    )
+    check(
+        "mr13u_keeps_mr13t_full_list_pairwise_reduction",
+        get_continuous_ranker_execution_recipe(control.name).pairwise_reduction,
+        get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction,
+    )
+
+    h_spec = get_model_spec(profile.model_architecture)
+    tri_spec = get_model_spec(control.model_architecture)
+    check_true(
+        "mr13u_keeps_raw_300x10_inceptiontime_trunk_without_artificial_inputs",
+        len(FEATURE_COLUMNS) == 10
+        and tuple(h_spec.sequence_input_paths) == ("raw_level",)
+        and tuple(tri_spec.sequence_input_paths) == ("raw_level",)
+        and not bool(h_spec.use_dataset_context)
+        and not bool(tri_spec.use_dataset_context)
+        and (
+            h_spec.inception_depth,
+            h_spec.inception_filters,
+            h_spec.inception_bottleneck_channels,
+            tuple(h_spec.inception_kernel_sizes or ()),
+            h_spec.inception_residual_every,
+            h_spec.normalization,
+            h_spec.dropout,
+        )
+        == (
+            tri_spec.inception_depth,
+            tri_spec.inception_filters,
+            tri_spec.inception_bottleneck_channels,
+            tuple(tri_spec.inception_kernel_sizes or ()),
+            tri_spec.inception_residual_every,
+            tri_spec.normalization,
+            tri_spec.dropout,
+        ),
+    )
+
+    sem = dict(training_semantics(profile).get("direct_hmhs_single_head_contract") or {})
+    check(
+        "mr13u_contract_is_h_only_full_list_model_gate",
+        (
+            "indicator_of_safety_percentile_ge_0.5_and_pure_mfe_percentile_ge_0.5",
+            "single_head_inception_time_raw_300x10",
+            "shared_raw_latent_only",
+            "raw_safety_and_raw_mfe",
+            "full_list_delta_ndcg_pairwise_logistic",
+            "validation_hmhs_pairwise_concordance_then_global_pr_auc_tiebreak",
+            "model_gate_only_no_pit_no_strategy_conversion",
+        ),
+        (
+            sem.get("joint_hmhs_target"),
+            sem.get("architecture"),
+            sem.get("joint_head_inputs"),
+            sem.get("removed_auxiliary_heads"),
+            sem.get("head_losses"),
+            sem.get("epoch_selection"),
+            sem.get("runtime_status"),
+        ),
+    )
+
+    frame = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-01-02"] * 10 + ["2026-01-05"] * 10),
+            "target_favorable_r": list(range(1, 11)) * 2,
+            "target_adverse_r": [0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 1.0, 0.5, 0.6, 0.1] * 2,
+            "label": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1] * 2,
+        }
+    )
+    targets = build_conditional_mfe_opportunity_targets(frame, np.ones(len(frame), dtype=bool))
+    expected = np.asarray(
+        (targets.low_adverse_safety_percentile >= HMHS_HIGH_PERCENTILE_CUTOFF)
+        & (targets.primary_mfe_percentile >= HMHS_HIGH_PERCENTILE_CUTOFF),
+        dtype=np.float32,
+    )
+    check_true(
+        "mr13u_target_is_exact_canonical_hmhs_intersection",
+        np.array_equal(targets.direct_hmhs_target, expected),
+    )
+
+    torch, _nn = require_torch()
+    torch.manual_seed(23)
+    model = build_active_model(
+        feature_count=len(FEATURE_COLUMNS),
+        context_count=0,
+        architecture=profile.model_architecture,
+    )
+    x = torch.randn(4, 300, len(FEATURE_COLUMNS))
+    context = torch.empty(4, 0)
+    logits = model(x, context)
+    check("mr13u_model_is_single_two_logit_head", (4, 2), tuple(logits.shape))
+    check_true(
+        "mr13u_model_has_no_mr13t_auxiliary_classifiers",
+        getattr(model, "raw_safety_classifier", None) is None
+        and getattr(model, "conditional_mfe_classifier", None) is None
+        and getattr(model, "joint_hmhs_classifier", None) is None,
+    )
+
+    direct_score = expected.astype(np.float32)
+    metrics = direct_hmhs_metrics(
+        np.arange(len(frame), dtype=np.int64), frame, targets, direct_score
+    )
+    check_true(
+        "mr13u_direct_hmhs_metric_surface_rewards_perfect_h_ranking",
+        float(metrics.get("pairwise_concordance") or 0.0) >= 0.999
+        and float(metrics.get("global_average_precision") or 0.0) >= 0.999
+        and float(dict(metrics.get("top_10pct") or {}).get("hmhs_enrichment") or 0.0) > 1.0,
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    trainer_source = (project_root / "services" / "breakout_quality" / "train_continuous_ranker.py").read_text(encoding="utf-8")
+    daily_source = (project_root / "services" / "breakout_quality" / "train_daily_ranker.py").read_text(encoding="utf-8")
+    app_source = (project_root / "services" / "research" / "breakout_quality_application.py").read_text(encoding="utf-8")
+    check_true(
+        "mr13u_epoch_selection_is_validation_h_pair_then_pr_auc_without_oos_fit",
+        "best_hmhs_pairwise_concordance" in trainer_source
+        and "best_hmhs_global_average_precision" in trainer_source
+        and "Val HM/HS Pair" in trainer_source
+        and profile.epoch_selection_metric == "hmhs_pairwise_concordance",
+    )
+    check_true(
+        "mr13u_standard_model_sop_and_oos_artifact_expose_h_only_evidence",
+        'oos_frame["target_direct_hmhs"]' in daily_source
+        and "Direct HM/HS H-only Learnability" in daily_source
+        and "標準模型 SOP｜3. Direct HM/HS H-only Learnability" in app_source,
+    )
+    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
+    check_true(
+        "mr13u_remains_model_only_without_strategy_conversion",
         '"C75"' not in strategy_source and "'C75'" not in strategy_source,
     )
 

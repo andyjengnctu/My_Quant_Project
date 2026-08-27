@@ -25,6 +25,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     get_continuous_ranker_execution_recipe,
     get_continuous_ranker_research_spec,
 )
@@ -394,6 +395,7 @@ def _render_markdown(payload: dict) -> str:
     safety_conditional_mfe_duo = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
     safety_raw_mfe_duo = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING
     safety_raw_mfe_hmhs_tri = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING
+    direct_hmhs_only = objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING
     source_dataset = dict(payload.get("source_dataset") or {})
     target_manifest = dict(payload.get("target_manifest") or {})
     def section(title: str, *, level: int = 2) -> str:
@@ -468,6 +470,32 @@ def _render_markdown(payload: dict) -> str:
             f"| Forward OOS → Breakout slice | {delta(oos.get('mean_daily_spearman'), breakout.get('mean_daily_spearman'))} "
             f"| {delta(oos.get('pairwise_concordance'), breakout.get('pairwise_concordance'), percent=True)} |"
         )
+    if direct_hmhs_only:
+        lines.extend([
+            "",
+            section("3. Direct HM/HS H-only Learnability"),
+            "",
+            "- H-only control：raw 300×10與InceptionTime trunk不變；移除Safety/MFE heads與loss，encoder只接受Direct HM/HS supervision。",
+            "- Epoch selection固定為Validation HM/HS Pair concordance；同值才以Validation global PR-AUC tie-break；OOS不參與selection。",
+            "",
+            "| Scope | HM/HS Pop | Pair | Global PR-AUC | Mean Daily PR-AUC | Top 10% HM/HS / × | Top 20% HM/HS / × |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ])
+        for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
+            row = dict((payload.get("split_metrics") or {}).get(key) or {})
+            top10 = dict(row.get("top_10pct") or {})
+            top20 = dict(row.get("top_20pct") or {})
+            def pct100(value):
+                return "-" if value is None else f"{float(value):.2f}%"
+            pair = row.get("pairwise_concordance")
+            lines.append(
+                f"| {label} | {pct100(row.get('population_hmhs_pct'))} "
+                f"| {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
+                f"| {fmt(row.get('global_average_precision'))} "
+                f"| {fmt(row.get('mean_daily_average_precision'))} "
+                f"| {pct100(top10.get('hmhs_pct'))} / {fmt(top10.get('hmhs_enrichment'), 2)}× "
+                f"| {pct100(top20.get('hmhs_pct'))} / {fmt(top20.get('hmhs_enrichment'), 2)}× |"
+            )
     if direct_r:
         regression_contract = dict(payload["training"].get("raw_r_regression_contract") or {})
         loss_name = str(regression_contract.get("loss") or payload["training"].get("loss") or "")
@@ -818,6 +846,9 @@ def run(args) -> int:
     safety_raw_mfe_hmhs_tri = (
         bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING
     )
+    direct_hmhs_only = (
+        bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING
+    )
     split = build_daily_ranker_split(bundle, inner_validation_months=int(args.inner_validation_months))
     forward_score_ids = resolve_forward_oos_score_group_ids(bundle)
 
@@ -920,7 +951,7 @@ def run(args) -> int:
         ranker_api.build_conditional_mfe_opportunity_targets_for_training(
             bundle.group_table, percentile_target
         )
-        if conditional_mfe_single or safety_conditional_mfe_duo or safety_raw_mfe_duo or safety_raw_mfe_hmhs_tri
+        if conditional_mfe_single or safety_conditional_mfe_duo or safety_raw_mfe_duo or safety_raw_mfe_hmhs_tri or direct_hmhs_only
         else None
     )
     reverse_conditional_mfe_evaluation = {}
@@ -1019,18 +1050,29 @@ def run(args) -> int:
     score_by_group = np.full(len(bundle.group_table), np.nan, dtype=np.float32)
     score_by_group[forward_score_ids] = forward_scores
     oos_scores = score_by_group[split.oos_ids]
-    validation_metrics = ranker_api.split_metrics(
-        split.validation_ids, bundle.group_table, bundle.raw_target, percentile_target,
-        validation_scores, include_top_k_quality=True,
-        raw_r_regression_loss_name=raw_r_loss_name,
-        raw_r_huber_delta_r=raw_r_huber_delta,
-    )
-    oos_metrics = ranker_api.split_metrics(
-        split.oos_ids, bundle.group_table, bundle.raw_target, percentile_target,
-        oos_scores, include_top_k_quality=True,
-        raw_r_regression_loss_name=raw_r_loss_name,
-        raw_r_huber_delta_r=raw_r_huber_delta,
-    )
+    if direct_hmhs_only:
+        assert reverse_conditional_mfe_targets is not None
+        validation_metrics = ranker_api.direct_hmhs_metrics(
+            split.validation_ids, bundle.group_table, reverse_conditional_mfe_targets,
+            validation_scores, include_top_k_quality=True,
+        )
+        oos_metrics = ranker_api.direct_hmhs_metrics(
+            split.oos_ids, bundle.group_table, reverse_conditional_mfe_targets,
+            oos_scores, include_top_k_quality=True,
+        )
+    else:
+        validation_metrics = ranker_api.split_metrics(
+            split.validation_ids, bundle.group_table, bundle.raw_target, percentile_target,
+            validation_scores, include_top_k_quality=True,
+            raw_r_regression_loss_name=raw_r_loss_name,
+            raw_r_huber_delta_r=raw_r_huber_delta,
+        )
+        oos_metrics = ranker_api.split_metrics(
+            split.oos_ids, bundle.group_table, bundle.raw_target, percentile_target,
+            oos_scores, include_top_k_quality=True,
+            raw_r_regression_loss_name=raw_r_loss_name,
+            raw_r_huber_delta_r=raw_r_huber_delta,
+        )
     candidate_ids = select_breakout_candidate_group_ids(
         bundle, split.oos_ids, allow_stale_source=bool(args.allow_stale_source)
     )
@@ -1212,15 +1254,22 @@ def run(args) -> int:
             }
 
     candidate_metrics = (
-        ranker_api.split_metrics(
-            candidate_ids,
-            bundle.group_table,
-            bundle.raw_target,
-            percentile_target,
-            score_by_group[candidate_ids],
-            include_top_k_quality=True,
-            raw_r_regression_loss_name=raw_r_loss_name,
-            raw_r_huber_delta_r=raw_r_huber_delta,
+        (
+            ranker_api.direct_hmhs_metrics(
+                candidate_ids, bundle.group_table, reverse_conditional_mfe_targets,
+                score_by_group[candidate_ids], include_top_k_quality=True,
+            )
+            if direct_hmhs_only
+            else ranker_api.split_metrics(
+                candidate_ids,
+                bundle.group_table,
+                bundle.raw_target,
+                percentile_target,
+                score_by_group[candidate_ids],
+                include_top_k_quality=True,
+                raw_r_regression_loss_name=raw_r_loss_name,
+                raw_r_huber_delta_r=raw_r_huber_delta,
+            )
         )
         if len(candidate_ids) >= 2
         else _empty_split_metrics(
@@ -1347,10 +1396,10 @@ def run(args) -> int:
         oos_frame["target_low_adverse_safety_percentile"] = np.nan
         evaluable_ids = forward_score_ids[evaluable_forward_mask]
         oos_frame.loc[evaluable_forward_mask, "target_low_adverse_safety_percentile"] = reverse_conditional_mfe_targets.low_adverse_safety_percentile[evaluable_ids]
-        if safety_raw_mfe_duo or safety_raw_mfe_hmhs_tri:
+        if safety_raw_mfe_duo or safety_raw_mfe_hmhs_tri or direct_hmhs_only:
             oos_frame["target_pure_mfe_percentile"] = np.nan
             oos_frame.loc[evaluable_forward_mask, "target_pure_mfe_percentile"] = reverse_conditional_mfe_targets.primary_mfe_percentile[evaluable_ids]
-            if safety_raw_mfe_hmhs_tri:
+            if safety_raw_mfe_hmhs_tri or direct_hmhs_only:
                 oos_frame["target_direct_hmhs"] = np.nan
                 oos_frame.loc[evaluable_forward_mask, "target_direct_hmhs"] = (
                     reverse_conditional_mfe_targets.direct_hmhs_target[evaluable_ids]
@@ -1438,6 +1487,7 @@ def run(args) -> int:
             "safety_conditional_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_conditional_mfe_duo_head_contract"),
             "safety_raw_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_raw_mfe_duo_head_contract"),
             "safety_raw_mfe_hmhs_tri_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_raw_mfe_hmhs_tri_head_contract"),
+            "direct_hmhs_single_head_contract": ranker_api.training_semantics(bundle.profile).get("direct_hmhs_single_head_contract"),
             "pairwise_reduction": execution_recipe.pairwise_reduction,
             "selected_epoch": selected_epoch,
             "epoch_selection_metric": bundle.profile.epoch_selection_metric,
@@ -1540,7 +1590,19 @@ def run(args) -> int:
             f"selected_epoch={selected_epoch} | {primary} "
             f"| MAE={_fmt_metric(regression.get('mae_raw_r'))}R | bias={_fmt_metric(regression.get('bias_raw_r'))}R"
         )
-    if pareto_pair_evaluation:
+    if direct_hmhs_only:
+        print(
+            f"OOS HM/HS pair={_fmt_metric(oos_metrics.get('pairwise_concordance'))} | "
+            f"PR-AUC={_fmt_metric(oos_metrics.get('global_average_precision'))} | "
+            f"Top10×={_fmt_metric(dict(oos_metrics.get('top_10pct') or {}).get('hmhs_enrichment'))}"
+        )
+        print(
+            f"breakout candidate slice: groups={candidate_metrics['group_count']:,} | "
+            f"HM/HS pair={_fmt_metric(candidate_metrics.get('pairwise_concordance'))} | "
+            f"PR-AUC={_fmt_metric(candidate_metrics.get('global_average_precision'))} | "
+            f"Top10×={_fmt_metric(dict(candidate_metrics.get('top_10pct') or {}).get('hmhs_enrichment'))}"
+        )
+    elif pareto_pair_evaluation:
         pareto_oos = dict(pareto_pair_evaluation.get("oos") or {})
         print(
             f"OOS Pareto={_fmt_metric(pareto_oos.get('mean_daily_pareto_pair_concordance'))} "
@@ -1548,16 +1610,21 @@ def run(args) -> int:
             f"| economic rho={_fmt_metric(oos_metrics.get('mean_daily_spearman'))} "
             f"| economic pair={_fmt_metric(oos_metrics.get('pairwise_concordance'))}"
         )
+        print(
+            f"breakout candidate slice: groups={candidate_metrics['group_count']:,} | "
+            f"daily rho={_fmt_metric(candidate_metrics.get('mean_daily_spearman'))} | "
+            f"pair={_fmt_metric(candidate_metrics.get('pairwise_concordance'))}"
+        )
     else:
         print(
             f"OOS daily rho={_fmt_metric(oos_metrics.get('mean_daily_spearman'))} | "
             f"pair={_fmt_metric(oos_metrics.get('pairwise_concordance'))}"
         )
-    print(
-        f"breakout candidate slice: groups={candidate_metrics['group_count']:,} | "
-        f"daily rho={_fmt_metric(candidate_metrics.get('mean_daily_spearman'))} | "
-        f"pair={_fmt_metric(candidate_metrics.get('pairwise_concordance'))}"
-    )
+        print(
+            f"breakout candidate slice: groups={candidate_metrics['group_count']:,} | "
+            f"daily rho={_fmt_metric(candidate_metrics.get('mean_daily_spearman'))} | "
+            f"pair={_fmt_metric(candidate_metrics.get('pairwise_concordance'))}"
+        )
     print_artifact_paths(
         (("Daily ranker model", artifact_paths.model_path), ("Markdown", report_markdown_path), ("OOS scores", score_path)),
         project_root=PROJECT_ROOT,

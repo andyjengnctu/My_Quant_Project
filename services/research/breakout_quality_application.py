@@ -24,6 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
@@ -429,6 +430,8 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
     metrics = dict(payload.get("split_metrics") or {})
     if not metrics:
         return ""
+    training = dict(payload.get("training") or {})
+    direct_hmhs_only = training.get("objective") == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING
 
     color = console_color_enabled()
 
@@ -494,34 +497,83 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
     if "validation" in metrics and "oos" in metrics:
         val = dict(metrics.get("validation") or {})
         oos = dict(metrics.get("oos") or {})
-        generalization_rows = [(
-            "Primary score",
-            delta_cell(val.get("mean_daily_spearman"), oos.get("mean_daily_spearman")),
-            delta_cell(val.get("pairwise_concordance"), oos.get("pairwise_concordance"), percent=True),
-            delta_cell(
-                None if val.get("top_score_decile_raw_target_mean") is None or val.get("bottom_score_decile_raw_target_mean") is None else float(val["top_score_decile_raw_target_mean"]) - float(val["bottom_score_decile_raw_target_mean"]),
-                None if oos.get("top_score_decile_raw_target_mean") is None or oos.get("bottom_score_decile_raw_target_mean") is None else float(oos["top_score_decile_raw_target_mean"]) - float(oos["bottom_score_decile_raw_target_mean"]),
-            ),
-        )]
-        if daily_universal and metrics.get("breakout_candidate_oos"):
-            breakout = dict(metrics.get("breakout_candidate_oos") or {})
-            generalization_rows.append((
-                "OOS → Breakout slice",
-                delta_cell(oos.get("mean_daily_spearman"), breakout.get("mean_daily_spearman")),
-                delta_cell(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance"), percent=True),
-                delta_cell(
-                    None if oos.get("top_score_decile_raw_target_mean") is None or oos.get("bottom_score_decile_raw_target_mean") is None else float(oos["top_score_decile_raw_target_mean"]) - float(oos["bottom_score_decile_raw_target_mean"]),
-                    None if breakout.get("top_score_decile_raw_target_mean") is None or breakout.get("bottom_score_decile_raw_target_mean") is None else float(breakout["top_score_decile_raw_target_mean"]) - float(breakout["bottom_score_decile_raw_target_mean"]),
+        breakout = dict(metrics.get("breakout_candidate_oos") or {})
+        if direct_hmhs_only:
+            def enrich(row: dict) -> float | None:
+                return (dict(row.get("top_10pct") or {})).get("hmhs_enrichment")
+            generalization_rows = [(
+                "Validation → Forward OOS",
+                delta_cell(val.get("pairwise_concordance"), oos.get("pairwise_concordance"), percent=True),
+                delta_cell(val.get("global_average_precision"), oos.get("global_average_precision")),
+                delta_cell(enrich(val), enrich(oos)),
+            )]
+            if breakout:
+                generalization_rows.append((
+                    "Forward OOS → Breakout slice",
+                    delta_cell(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance"), percent=True),
+                    delta_cell(oos.get("global_average_precision"), breakout.get("global_average_precision")),
+                    delta_cell(enrich(oos), enrich(breakout)),
+                ))
+            lines.extend([
+                section("標準模型 SOP｜2. Generalization"),
+                render_table(
+                    ("Comparison", "Δ HM/HS Pair", "Δ PR-AUC", "Δ Top10×"),
+                    generalization_rows,
+                    alignments=("left", "right", "right", "right"),
                 ),
-            ))
-        lines.extend([
-            section("標準模型 SOP｜2. Generalization"),
-            render_table(
-                ("Comparison", "Δ Daily rho", "Δ Pair", "Δ Top-Bottom"),
-                generalization_rows,
-                alignments=("left", "right", "right", "right"),
-            ),
-        ])
+            ])
+            h_rows = []
+            for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
+                row = dict(metrics.get(key) or {})
+                if not row:
+                    continue
+                top10 = dict(row.get("top_10pct") or {})
+                top20 = dict(row.get("top_20pct") or {})
+                h_rows.append((
+                    scope_text(label),
+                    _fmt_simple_metric(None if row.get("population_hmhs_pct") is None else float(row["population_hmhs_pct"]) / 100.0, percent=True),
+                    _fmt_simple_metric(row.get("pairwise_concordance"), percent=True),
+                    _fmt_simple_metric(row.get("global_average_precision")),
+                    _fmt_simple_metric(row.get("mean_daily_average_precision")),
+                    f"{_fmt_simple_metric(None if top10.get('hmhs_pct') is None else float(top10['hmhs_pct']) / 100.0, percent=True)} / {_fmt_simple_metric(top10.get('hmhs_enrichment'))}×",
+                    f"{_fmt_simple_metric(None if top20.get('hmhs_pct') is None else float(top20['hmhs_pct']) / 100.0, percent=True)} / {_fmt_simple_metric(top20.get('hmhs_enrichment'))}×",
+                ))
+            lines.extend([
+                section("標準模型 SOP｜3. Direct HM/HS H-only Learnability"),
+                render_table(
+                    ("Split", "HM/HS Pop", "Pair", "PR-AUC", "Daily PR-AUC", "Top10 / ×", "Top20 / ×"),
+                    h_rows,
+                    alignments=("left", "right", "right", "right", "right", "right", "right"),
+                ),
+            ])
+        else:
+            generalization_rows = [(
+                "Primary score",
+                delta_cell(val.get("mean_daily_spearman"), oos.get("mean_daily_spearman")),
+                delta_cell(val.get("pairwise_concordance"), oos.get("pairwise_concordance"), percent=True),
+                delta_cell(
+                    None if val.get("top_score_decile_raw_target_mean") is None or val.get("bottom_score_decile_raw_target_mean") is None else float(val["top_score_decile_raw_target_mean"]) - float(val["bottom_score_decile_raw_target_mean"]),
+                    None if oos.get("top_score_decile_raw_target_mean") is None or oos.get("bottom_score_decile_raw_target_mean") is None else float(oos["top_score_decile_raw_target_mean"]) - float(oos["bottom_score_decile_raw_target_mean"]),
+                ),
+            )]
+            if daily_universal and breakout:
+                generalization_rows.append((
+                    "OOS → Breakout slice",
+                    delta_cell(oos.get("mean_daily_spearman"), breakout.get("mean_daily_spearman")),
+                    delta_cell(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance"), percent=True),
+                    delta_cell(
+                        None if oos.get("top_score_decile_raw_target_mean") is None or oos.get("bottom_score_decile_raw_target_mean") is None else float(oos["top_score_decile_raw_target_mean"]) - float(oos["bottom_score_decile_raw_target_mean"]),
+                        None if breakout.get("top_score_decile_raw_target_mean") is None or breakout.get("bottom_score_decile_raw_target_mean") is None else float(breakout["top_score_decile_raw_target_mean"]) - float(breakout["bottom_score_decile_raw_target_mean"]),
+                    ),
+                ))
+            lines.extend([
+                section("標準模型 SOP｜2. Generalization"),
+                render_table(
+                    ("Comparison", "Δ Daily rho", "Δ Pair", "Δ Top-Bottom"),
+                    generalization_rows,
+                    alignments=("left", "right", "right", "right"),
+                ),
+            ])
 
     def add_head_gate(title: str, evaluation: dict, heads: tuple[tuple[str, str], ...]) -> None:
         rows = []
@@ -1002,11 +1054,17 @@ def _simple_report_details(
         selection_pareto = epoch_selection.get(
             "best_validation_mean_daily_pareto_pair_concordance"
         )
+        direct_hmhs_only = training.get("objective") == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING
         rows.extend(
             [
                 ("Selected epoch", training.get("selected_epoch")),
                 *(
                     [
+                        ("選模 Validation HM/HS Pair", _fmt_simple_metric(epoch_selection.get("best_validation_direct_hmhs_pairwise_concordance"), percent=True)),
+                        ("選模 Validation HM/HS PR-AUC", _fmt_simple_metric(epoch_selection.get("best_validation_direct_hmhs_global_average_precision"))),
+                    ]
+                    if direct_hmhs_only
+                    else [
                         ("選模 Validation Pareto", _fmt_simple_metric(selection_pareto)),
                         (
                             "選模 epoch Economic rho",
@@ -1018,8 +1076,17 @@ def _simple_report_details(
                         ("選模 Validation rho", _fmt_simple_metric(epoch_selection.get("best_validation_mean_daily_spearman")))
                     ]
                 ),
-                ("重訓後原 Validation rho", _fmt_simple_metric((metrics.get("validation") or {}).get("mean_daily_spearman"))),
-                ("Forward OOS rho", _fmt_simple_metric((metrics.get("oos") or {}).get("mean_daily_spearman"))),
+                *(
+                    [
+                        ("Validation HM/HS Pair", _fmt_simple_metric((metrics.get("validation") or {}).get("pairwise_concordance"), percent=True)),
+                        ("Forward OOS HM/HS Pair", _fmt_simple_metric((metrics.get("oos") or {}).get("pairwise_concordance"), percent=True)),
+                    ]
+                    if direct_hmhs_only
+                    else [
+                        ("重訓後原 Validation rho", _fmt_simple_metric((metrics.get("validation") or {}).get("mean_daily_spearman"))),
+                        ("Forward OOS rho", _fmt_simple_metric((metrics.get("oos") or {}).get("mean_daily_spearman"))),
+                    ]
+                ),
                 *(
                     [
                         (
