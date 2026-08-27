@@ -3162,9 +3162,8 @@ def validate_breakout_quality_hmhs_single_head_contract_case(_base_params):
     )
     spec = get_continuous_ranker_research_spec(profile.name)
     check(
-        "mr13u_is_active_h_only_model_gate_profile",
+        "mr13u_historical_h_only_model_gate_profile_remains_registered",
         (
-            profile.name,
             "MR-13U",
             TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
             "inception_time_v1",
@@ -3173,7 +3172,6 @@ def validate_breakout_quality_hmhs_single_head_contract_case(_base_params):
             False,
         ),
         (
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
             spec.model_research_id,
             profile.training_objective,
             profile.model_architecture,
@@ -3311,6 +3309,231 @@ def validate_breakout_quality_hmhs_single_head_contract_case(_base_params):
     strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
     check_true(
         "mr13u_remains_model_only_without_strategy_conversion",
+        '"C75"' not in strategy_source and "'C75'" not in strategy_source,
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+
+
+def validate_breakout_quality_nonlinear_hmhs_head_contract_case(_base_params):
+    """Protect MR-13V as the single-mechanism nonlinear Direct-HM/HS readout contrast."""
+
+    case_id = "BREAKOUT_QUALITY_NONLINEAR_HMHS_HEAD"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_FEATURE_WINDOW_BARS,
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_execution_recipe,
+        get_continuous_ranker_research_spec,
+    )
+    from core.research_report_contract import (
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
+        persistent_report_contract_fingerprint,
+    )
+    from filters.breakout_quality.contract import FEATURE_COLUMNS
+    from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.models.runtime import require_torch
+    from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.research import breakout_quality_application as research_app
+
+    control = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    spec = get_continuous_ranker_research_spec(profile.name)
+    check(
+        "mr13v_is_active_mr13t_nonlinear_head_only_contrast",
+        (
+            profile.name,
+            "MR-13V",
+            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+            "inception_time_safety_raw_mfe_hmhs_mlp_v1",
+            "raw_mfe_mean_daily_spearman",
+            False,
+            False,
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            spec.model_research_id,
+            profile.training_objective,
+            profile.model_architecture,
+            profile.epoch_selection_metric,
+            spec.selection_pit_authorized,
+            spec.current_time_validation_authorized,
+        ),
+    )
+    check(
+        "mr13v_keeps_mr13t_objective_loss_epoch_selection_and_pairwise_reduction",
+        (
+            control.training_objective,
+            control.loss_name,
+            control.epoch_selection_metric,
+            get_continuous_ranker_execution_recipe(control.name).pairwise_reduction,
+        ),
+        (
+            profile.training_objective,
+            profile.loss_name,
+            profile.epoch_selection_metric,
+            get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction,
+        ),
+    )
+
+    control_spec = get_model_spec(control.model_architecture)
+    nonlinear_spec = get_model_spec(profile.model_architecture)
+    control_trunk = (
+        control_spec.inception_depth,
+        control_spec.inception_filters,
+        control_spec.inception_bottleneck_channels,
+        tuple(control_spec.inception_kernel_sizes or ()),
+        control_spec.inception_residual_every,
+        control_spec.normalization,
+        control_spec.dropout,
+        tuple(control_spec.sequence_input_paths),
+        bool(control_spec.use_dataset_context),
+    )
+    nonlinear_trunk = (
+        nonlinear_spec.inception_depth,
+        nonlinear_spec.inception_filters,
+        nonlinear_spec.inception_bottleneck_channels,
+        tuple(nonlinear_spec.inception_kernel_sizes or ()),
+        nonlinear_spec.inception_residual_every,
+        nonlinear_spec.normalization,
+        nonlinear_spec.dropout,
+        tuple(nonlinear_spec.sequence_input_paths),
+        bool(nonlinear_spec.use_dataset_context),
+    )
+    latent_width = int(nonlinear_spec.inception_filters) * (
+        len(tuple(nonlinear_spec.inception_kernel_sizes or ())) + 1
+    )
+    check_true(
+        "mr13v_keeps_raw_300x10_and_mr13t_trunk_while_only_changing_joint_readout",
+        int(BREAKOUT_QUALITY_FEATURE_WINDOW_BARS) == 300
+        and len(FEATURE_COLUMNS) == 10
+        and control_trunk == nonlinear_trunk
+        and int(nonlinear_spec.head_width or 0) == latent_width
+        and "direct_hmhs_head" in tuple(control_spec.pooling)
+        and "direct_hmhs_mlp_head" in tuple(nonlinear_spec.pooling),
+    )
+
+    sem = dict(training_semantics(profile).get("safety_raw_mfe_hmhs_tri_head_contract") or {})
+    check_true(
+        "mr13v_reuses_mr13t_three_head_training_semantics_without_weight_or_target_change",
+        sem.get("joint_hmhs_target")
+        == "indicator_of_safety_percentile_ge_0.5_and_pure_mfe_percentile_ge_0.5"
+        and sem.get("head_weighting") == "fixed_equal_mean_three_heads_no_lambda_sweep"
+        and sem.get("epoch_selection") == "raw_mfe_mean_daily_spearman_same_as_mr13s_control"
+        and sem.get("joint_head_inputs") == "shared_raw_latent_only_no_safety_or_mfe_score_arithmetic",
+    )
+
+    torch, nn = require_torch()
+    torch.manual_seed(29)
+    model = build_active_model(
+        feature_count=len(FEATURE_COLUMNS),
+        context_count=0,
+        architecture=profile.model_architecture,
+    )
+    check_true(
+        "mr13v_direct_hmhs_head_is_fixed_one_hidden_layer_relu_mlp",
+        isinstance(model.joint_hmhs_classifier, nn.Sequential)
+        and len(model.joint_hmhs_classifier) == 3
+        and isinstance(model.joint_hmhs_classifier[0], nn.Linear)
+        and int(model.joint_hmhs_classifier[0].in_features) == latent_width
+        and int(model.joint_hmhs_classifier[0].out_features) == latent_width
+        and isinstance(model.joint_hmhs_classifier[1], nn.ReLU)
+        and isinstance(model.joint_hmhs_classifier[2], nn.Linear)
+        and int(model.joint_hmhs_classifier[2].in_features) == latent_width
+        and int(model.joint_hmhs_classifier[2].out_features) == 2,
+    )
+    x = torch.randn(2, 32, len(FEATURE_COLUMNS))
+    context = torch.empty(2, 0)
+    safety_logits, mfe_logits, joint_logits = model.forward_safety_raw_mfe_hmhs_heads(x, context)
+    check(
+        "mr13v_preserves_three_two_logit_output_surface",
+        ((2, 2), (2, 2), (2, 2), (2, 6)),
+        (
+            tuple(safety_logits.shape),
+            tuple(mfe_logits.shape),
+            tuple(joint_logits.shape),
+            tuple(model.forward_output_head(x, context, "tri_head").shape),
+        ),
+    )
+
+    shared_parameter = next(model.inception_modules[0].parameters())
+    model.zero_grad(set_to_none=True)
+    model.forward_safety_raw_mfe_hmhs_heads(x, context)[2].sum().backward()
+    joint_params = tuple(model.joint_hmhs_classifier.parameters())
+    check_true(
+        "mr13v_joint_loss_updates_nonlinear_joint_head_and_shared_trunk_only",
+        all(parameter.grad is not None for parameter in joint_params)
+        and shared_parameter.grad is not None
+        and model.raw_safety_classifier.weight.grad is None
+        and model.conditional_mfe_classifier.weight.grad is None,
+    )
+
+    # B18/B19: MR-specific evidence must consume the existing extension schema;
+    # the user-approved Standard Model SOP fingerprint cannot move in this experiment.
+    check(
+        "mr13v_does_not_change_user_approved_standard_model_sop_fingerprint",
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
+        persistent_report_contract_fingerprint("model.standard_sop"),
+    )
+    base_metric = {
+        "group_count": 10,
+        "mean_daily_spearman": 0.30,
+        "global_spearman_vs_raw_target": 0.31,
+        "pairwise_concordance": 0.60,
+        "top_score_decile_raw_target_mean": 1.2,
+        "bottom_score_decile_raw_target_mean": 0.3,
+    }
+    joint = {
+        "population_hmhs_pct": 22.0,
+        "pairwise_concordance": 0.57,
+        "global_average_precision": 0.25,
+        "top_10pct": {"hmhs_pct": 26.0, "hmhs_enrichment": 1.18},
+    }
+    product = {
+        "pairwise_concordance": 0.56,
+        "global_average_precision": 0.24,
+        "top_10pct": {"hmhs_pct": 25.0, "hmhs_enrichment": 1.12},
+    }
+    payload = {
+        "model_research_id": "MR-13V",
+        "training": {"objective": profile.training_objective},
+        "split_metrics": {
+            "validation": dict(base_metric),
+            "oos": dict(base_metric),
+            "breakout_candidate_oos": dict(base_metric),
+        },
+        "safety_raw_mfe_hmhs_evaluation": {
+            "validation": {"joint_hmhs": joint, "joint_product_control": product},
+        },
+    }
+    rendered = research_app._render_continuous_ranker_simple_console(payload)
+    standard_titles = "\n".join(
+        line for line in rendered.splitlines() if line.startswith("標準模型 SOP｜")
+    )
+    check_true(
+        "mr13v_evidence_uses_existing_model_specific_extension_without_standard_schema_drift",
+        "Model-specific Extension｜MR-13V｜Direct HM/HS Joint Retrieval" in rendered
+        and "Direct HM/HS" not in standard_titles
+        and "標準模型 SOP｜1. Learnability" in standard_titles
+        and "標準模型 SOP｜6. Evidence Coverage" in standard_titles,
+    )
+
+    strategy_source = (Path(__file__).resolve().parents[2] / "config" / "strategy_compare.py").read_text(encoding="utf-8")
+    check_true(
+        "mr13v_remains_model_only_without_strategy_conversion",
         '"C75"' not in strategy_source and "'C75'" not in strategy_source,
     )
 

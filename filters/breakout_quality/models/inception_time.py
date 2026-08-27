@@ -11,8 +11,12 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_safety_conditional_mfe = (
         str(spec.architecture) == "inception_time_safety_conditional_mfe_v1"
     )
-    use_safety_raw_mfe_hmhs = (
-        str(spec.architecture) == "inception_time_safety_raw_mfe_hmhs_v1"
+    use_safety_raw_mfe_hmhs = str(spec.architecture) in {
+        "inception_time_safety_raw_mfe_hmhs_v1",
+        "inception_time_safety_raw_mfe_hmhs_mlp_v1",
+    }
+    use_nonlinear_hmhs_head = (
+        str(spec.architecture) == "inception_time_safety_raw_mfe_hmhs_mlp_v1"
     )
     if bool(spec.use_dataset_context) != bool(use_risk_context):
         raise ValueError("InceptionTime dataset context contract與architecture不一致")
@@ -149,11 +153,23 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 if use_safety_conditional_mfe or use_safety_raw_mfe_hmhs
                 else None
             )
-            self.joint_hmhs_classifier = (
-                nn.Linear(module_output_channels, 2)
-                if use_safety_raw_mfe_hmhs
-                else None
-            )
+            if use_nonlinear_hmhs_head:
+                hidden_width = int(spec.head_width or module_output_channels)
+                if hidden_width != module_output_channels:
+                    raise ValueError(
+                        "MR-13V Direct HM/HS MLP hidden width必須等於shared latent width"
+                    )
+                self.joint_hmhs_classifier = nn.Sequential(
+                    nn.Linear(module_output_channels, hidden_width),
+                    nn.ReLU(),
+                    nn.Linear(hidden_width, 2),
+                )
+            else:
+                self.joint_hmhs_classifier = (
+                    nn.Linear(module_output_channels, 2)
+                    if use_safety_raw_mfe_hmhs
+                    else None
+                )
 
         def encode(self, x):
             z = x.transpose(1, 2)

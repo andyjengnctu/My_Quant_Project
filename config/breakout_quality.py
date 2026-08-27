@@ -61,13 +61,14 @@ from config.execution_policy import (
 # - MR-13S safety-conditioned absolute MFE duo-head ranker: "daily_universal_safety_raw_mfe_duo_head_full_list_ndcg_pairwise"
 # - MR-13T raw-data direct HM/HS tri-head ranker: "daily_universal_safety_raw_mfe_hmhs_tri_head_full_list_ndcg_pairwise"
 # - MR-13U raw-data direct HM/HS H-only single-head control: "daily_universal_hmhs_single_head_full_list_ndcg_pairwise"
+# - MR-13V MR-13T control + nonlinear Direct HM/HS MLP head: "daily_universal_safety_raw_mfe_hmhs_mlp_head_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_hmhs_single_head_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_safety_raw_mfe_hmhs_mlp_head_full_list_ndcg_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = RESEARCH_SINGLE_SEED
@@ -392,6 +393,9 @@ DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
 )
 DAILY_UNIVERSAL_HMHS_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_hmhs_single_head_full_list_ndcg_pairwise"
+)
+DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_safety_raw_mfe_hmhs_mlp_head_full_list_ndcg_pairwise"
 )
 DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_context_net_full_list_ndcg_pairwise"
@@ -1142,6 +1146,18 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_safety_raw_mfe_hmhs_v1",
     ),
+    DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="tri_head_pairwise_logistic",
+        epoch_selection_metric="raw_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_safety_raw_mfe_hmhs_mlp_v1",
+    ),
     DAILY_UNIVERSAL_HMHS_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_HMHS_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         optimizer_name="adam",
@@ -1748,6 +1764,30 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
             "loss固定等權平均；HM/HS head不接Safety/MFE score arithmetic，不使用人工feature、breakout state、strategy state、threshold sweep或OOS fitting。"
         ),
         metric_scope="all_stock_days_safety_raw_mfe_direct_hmhs_tri_head",
+        score_semantic_id="daily_safety_raw_mfe_direct_hmhs_research",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13V",
+        experiment_name="MR-13V MR-13T Control + Nonlinear Direct HM/HS MLP Head",
+        phase="13V",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_low_adverse_safety_percentile; "
+            "head2=same_date_pure_mfe_percentile; "
+            "head3=direct_hmhs_indicator_of_both_percentiles_ge_0.5"
+        ),
+        objective_description=(
+            "MR-13T strict architecture contrast：canonical raw 300×10、shared InceptionTime trunk、Raw Safety head、"
+            "stop-gradient Safety-conditioned Raw-MFE head、S/U/H targets、Seed42、daily-universal split、optimizer、"
+            "full-list Delta-NDCG、三head等權loss與Raw-MFE Validation epoch selection全部不變；唯一scientific change是"
+            "Direct HM/HS readout由Linear(latent,2)改為固定Linear(latent,latent)->ReLU->Linear(latent,2)。"
+            "hidden width等於shared latent width，不設dropout、不做width/depth/activation/lambda sweep；Joint head仍不讀Safety/MFE predicted scores。"
+        ),
+        metric_scope="all_stock_days_safety_raw_mfe_direct_hmhs_nonlinear_head",
         score_semantic_id="daily_safety_raw_mfe_direct_hmhs_research",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         selection_pit_authorized=False,
