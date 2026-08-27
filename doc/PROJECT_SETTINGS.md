@@ -33,6 +33,7 @@
 15. 所有人讀報表必須共用 canonical metric/report contract：metric 定義、label、單位、precision、方向性、欄位集合／順序與色彩語意由共用 registry／`core/report_metrics.py`／`core/report_style.py` 持有；renderer 只負責組裝與顯示，不得從 raw rows 重算第二套同名指標、直接以數值正負取代 metric direction，或以 emoji／燈號建立第二套判讀規則。
 16. RCE 等診斷 metric 的 trade partition、Target join、coverage、numerator／denominator 與合法性條件必須由 canonical diagnostics contract 唯一定義；不同診斷 metric 不得以 proxy 互相替代。既有模型驗證 metric 必須直接重用 canonical validation artifact，不得為報表另算第二套。
 17. 長流程互動執行預設只顯示必要的 RUN／REUSE／DONE 進度與最終核心摘要；pair-level 詳細報表、solver states、repair/ascent、stale guard、timing 等過程資訊應保存於工件供追查，不得在 aggregate 執行時重複洗版。
+18. 所有正式 Research 報表必須遵守目前已落地的 canonical 報表架構、格式與使用規則，包含報表分工、章節／欄位集合與順序、metric／label／precision、色彩語意、輸出位置、正式 menu 入口與操作方式；不得因單次研究、除錯、重構或 GPT 偏好自行建立第二套常駐格式。凡屬**常駐／標準／可重複使用**的 Research 報表或其正式操作流程，如需新增、刪除、合併、拆分、重新排序章節／欄位，改變報表分工、格式、色彩語意、輸出位置或 menu／使用方式，必須先取得使用者明確授權後才可修改。**一次性／專題 Audit 報表**不需為其自身版型或內容調整事先取得使用者授權，但仍須遵守既有 SSOT、metric/report contract、PIT／read-only／scientific legality 與歷史 evidence 規則，且不得藉一次性報表修改、取代或隱性重定義任何常駐報表契約。
 
 
 ## C. Coding 與架構原則
