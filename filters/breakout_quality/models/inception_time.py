@@ -14,9 +14,14 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_safety_raw_mfe_hmhs = str(spec.architecture) in {
         "inception_time_safety_raw_mfe_hmhs_v1",
         "inception_time_safety_raw_mfe_hmhs_mlp_v1",
+        "inception_time_safety_raw_mfe_joint_attn_mlp_v1",
     }
-    use_nonlinear_hmhs_head = (
-        str(spec.architecture) == "inception_time_safety_raw_mfe_hmhs_mlp_v1"
+    use_nonlinear_hmhs_head = str(spec.architecture) in {
+        "inception_time_safety_raw_mfe_hmhs_mlp_v1",
+        "inception_time_safety_raw_mfe_joint_attn_mlp_v1",
+    }
+    use_joint_attention_pool = (
+        str(spec.architecture) == "inception_time_safety_raw_mfe_joint_attn_mlp_v1"
     )
     if bool(spec.use_dataset_context) != bool(use_risk_context):
         raise ValueError("InceptionTime dataset context contract與architecture不一致")
@@ -170,8 +175,16 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                     if use_safety_raw_mfe_hmhs
                     else None
                 )
+            # Keep this parameterized pooling module after all MR-13W modules so
+            # the same seed initializes every shared/marginal/MLP parameter
+            # identically in the strict MR-13W -> MR-13X architecture contrast.
+            self.joint_attention_scorer = (
+                nn.Conv1d(module_output_channels, 1, kernel_size=1, bias=True)
+                if use_joint_attention_pool
+                else None
+            )
 
-        def encode(self, x):
+        def encode_feature_map(self, x):
             z = x.transpose(1, 2)
             residual = z
             shortcut_index = 0
@@ -183,7 +196,25 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                     )
                     residual = z
                     shortcut_index += 1
+            return z
+
+        def encode(self, x):
+            z = self.encode_feature_map(x)
             return torch.mean(z, dim=2)
+
+        def joint_attention_weights(self, x):
+            if self.joint_attention_scorer is None:
+                raise ValueError("目前architecture沒有Joint temporal attention pooling")
+            feature_map = self.encode_feature_map(x)
+            logits = self.joint_attention_scorer(feature_map).squeeze(1)
+            return torch.softmax(logits.float(), dim=1).to(feature_map.dtype)
+
+        def _joint_attention_pool(self, feature_map):
+            if self.joint_attention_scorer is None:
+                return torch.mean(feature_map, dim=2)
+            logits = self.joint_attention_scorer(feature_map).squeeze(1)
+            weights = torch.softmax(logits.float(), dim=1).to(feature_map.dtype)
+            return torch.sum(feature_map * weights.unsqueeze(1), dim=2)
 
         def _encoded_for_heads(self, x, context):
             encoded = self.dropout(self.encode(x))
@@ -224,14 +255,20 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 or self.joint_hmhs_classifier is None
             ):
                 raise ValueError("目前architecture沒有Safety/Raw-MFE/HMHS tri-heads")
-            _primary_input, shared_encoded = self._encoded_for_heads(x, context)
+            if self.joint_attention_scorer is not None:
+                feature_map = self.encode_feature_map(x)
+                shared_encoded = self.dropout(torch.mean(feature_map, dim=2))
+                joint_encoded = self.dropout(self._joint_attention_pool(feature_map))
+            else:
+                _primary_input, shared_encoded = self._encoded_for_heads(x, context)
+                joint_encoded = shared_encoded
             safety_logits = self.raw_safety_classifier(shared_encoded)
             safety_probability = torch.softmax(safety_logits.float(), dim=1)[:, 1]
             safety_context = safety_probability.detach().to(shared_encoded.dtype).unsqueeze(1)
             raw_mfe_logits = self.conditional_mfe_classifier(
                 torch.cat([shared_encoded, safety_context], dim=1)
             )
-            joint_hmhs_logits = self.joint_hmhs_classifier(shared_encoded)
+            joint_hmhs_logits = self.joint_hmhs_classifier(joint_encoded)
             return safety_logits, raw_mfe_logits, joint_hmhs_logits
 
         def forward_output_head(self, x, context, output_head: str):
