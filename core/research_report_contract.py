@@ -173,6 +173,23 @@ MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
             )),
         ),
     ),
+    "joint_min_retrieval": ModelExtensionContract(
+        "joint_min_retrieval", "Continuous Joint-Min Retrieval",
+        "marginal_safety_raw_mfe_plus_continuous_joint_min_head",
+        (T("joint_min_retrieval", (
+            C("split", "Split", alignment="left"),
+            C("population_joint_min_mean", "Pop Min", 4, preference="higher", format_kind="number"),
+            C("joint_min_daily_rho", "Joint-Min rho", 4, preference="higher", format_kind="number"),
+            C("joint_min_pair", "Pair", 2, "%", "higher", "fraction_pct"),
+            C("top10_joint_min", "Top10 Min", 4, preference="higher", format_kind="number"),
+            C("top10_safety", "Top10 S", 4, preference="higher", format_kind="number"),
+            C("top10_mfe", "Top10 MFE", 4, preference="higher", format_kind="number"),
+            C("top10_hmhs_pct", "Top10 HM/HS", 2, "%", "higher", "pct"),
+            C("top10_hmhs_enrichment", "HM/HS ×", 4, preference="higher", format_kind="number"),
+            C("top20_joint_min", "Top20 Min", 4, preference="higher", format_kind="number"),
+            C("top20_hmhs_enrichment", "Top20 ×", 4, preference="higher", format_kind="number"),
+        )),),
+    ),
 }
 
 STRATEGY_STANDARD_SOP = PersistentReportContract(

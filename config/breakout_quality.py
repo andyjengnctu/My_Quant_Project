@@ -62,13 +62,14 @@ from config.execution_policy import (
 # - MR-13T raw-data direct HM/HS tri-head ranker: "daily_universal_safety_raw_mfe_hmhs_tri_head_full_list_ndcg_pairwise"
 # - MR-13U raw-data direct HM/HS H-only single-head control: "daily_universal_hmhs_single_head_full_list_ndcg_pairwise"
 # - MR-13V MR-13T control + nonlinear Direct HM/HS MLP head: "daily_universal_safety_raw_mfe_hmhs_mlp_head_full_list_ndcg_pairwise"
+# - MR-13W MR-13V architecture + continuous joint-min target: "daily_universal_safety_raw_mfe_joint_min_mlp_head_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_safety_raw_mfe_hmhs_mlp_head_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_safety_raw_mfe_joint_min_mlp_head_full_list_ndcg_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = RESEARCH_SINGLE_SEED
@@ -397,6 +398,9 @@ DAILY_UNIVERSAL_HMHS_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
 DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_safety_raw_mfe_hmhs_mlp_head_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_safety_raw_mfe_joint_min_mlp_head_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 
@@ -446,6 +450,7 @@ TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING = "daily_conditional_m
 TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING = "daily_safety_conditional_mfe_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING = "daily_safety_raw_mfe_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING = "daily_safety_raw_mfe_hmhs_pairwise_ranking"
+TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING = "daily_safety_raw_mfe_joint_min_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING = "daily_hmhs_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING = "daily_listwise_ranking"
 CONTINUOUS_RANKER_TRAINING_OBJECTIVES = (
@@ -459,6 +464,7 @@ CONTINUOUS_RANKER_TRAINING_OBJECTIVES = (
     TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
 )
@@ -588,6 +594,7 @@ class BreakoutQualityExperimentProfile:
                     TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING: "tri_head_pairwise_logistic",
+                    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING: "tri_head_pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING: "pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: "listnet_top_one_cross_entropy",
                 }[self.training_objective]
@@ -606,7 +613,10 @@ class BreakoutQualityExperimentProfile:
                     else "raw_mfe_mean_daily_spearman"
                     if self.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING
                     else "raw_mfe_mean_daily_spearman"
-                    if self.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING
+                    if self.training_objective in {
+                        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+                        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
+                    }
                     else "hmhs_pairwise_concordance"
                     if self.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING
                     else "mean_daily_spearman"
@@ -1158,6 +1168,18 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_safety_raw_mfe_hmhs_mlp_v1",
     ),
+    DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="tri_head_pairwise_logistic",
+        epoch_selection_metric="raw_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_safety_raw_mfe_hmhs_mlp_v1",
+    ),
     DAILY_UNIVERSAL_HMHS_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_HMHS_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         optimizer_name="adam",
@@ -1309,6 +1331,7 @@ class ContinuousRankerResearchSpec:
             TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
         }:
             if self.pairwise_reduction not in SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS:
@@ -1328,6 +1351,7 @@ class ContinuousRankerResearchSpec:
                     TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
                     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
                     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+                    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
                     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
                 }
                 and self.pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE
@@ -1789,6 +1813,30 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         metric_scope="all_stock_days_safety_raw_mfe_direct_hmhs_nonlinear_head",
         score_semantic_id="daily_safety_raw_mfe_direct_hmhs_research",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13W",
+        experiment_name="MR-13W MR-13V Architecture + Continuous Joint-Min Target",
+        phase="13W",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_low_adverse_safety_percentile; "
+            "head2=same_date_pure_mfe_percentile; "
+            "head3=min(same_date_low_adverse_safety_percentile,same_date_pure_mfe_percentile)"
+        ),
+        objective_description=(
+            "MR-13V strict target contrast：raw 300×10、shared InceptionTime trunk、Raw Safety head、"
+            "stop-gradient Safety-conditioned Raw-MFE head、nonlinear Joint MLP architecture、Seed42、split、optimizer、"
+            "full-list Delta-NDCG、三head固定等權loss與Raw-MFE Validation epoch selection全部不變；唯一fitting change是"
+            "第三head supervision由binary 1[S>=0.5 and U>=0.5]改為continuous min(S,U)。"
+            "不重新rank min target、不設threshold/temperature/weight，不使用OOS統計或strategy state。"
+        ),
+        metric_scope="all_stock_days_safety_raw_mfe_joint_min_nonlinear_head",
+        score_semantic_id="daily_safety_raw_mfe_joint_min_research",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         selection_pit_authorized=False,
         current_time_validation_authorized=False,

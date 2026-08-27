@@ -3353,9 +3353,8 @@ def validate_breakout_quality_nonlinear_hmhs_head_contract_case(_base_params):
     )
     spec = get_continuous_ranker_research_spec(profile.name)
     check(
-        "mr13v_is_active_mr13t_nonlinear_head_only_contrast",
+        "mr13v_historical_mr13t_nonlinear_head_only_contrast_remains_registered",
         (
-            profile.name,
             "MR-13V",
             TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
             "inception_time_safety_raw_mfe_hmhs_mlp_v1",
@@ -3364,7 +3363,6 @@ def validate_breakout_quality_nonlinear_hmhs_head_contract_case(_base_params):
             False,
         ),
         (
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
             spec.model_research_id,
             profile.training_objective,
             profile.model_architecture,
@@ -3534,6 +3532,232 @@ def validate_breakout_quality_nonlinear_hmhs_head_contract_case(_base_params):
     strategy_source = (Path(__file__).resolve().parents[2] / "config" / "strategy_compare.py").read_text(encoding="utf-8")
     check_true(
         "mr13v_remains_model_only_without_strategy_conversion",
+        '"C75"' not in strategy_source and "'C75'" not in strategy_source,
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+
+
+def validate_breakout_quality_joint_min_target_contract_case(_base_params):
+    """Protect MR-13W as the MR-13V-architecture target-only Joint-Min contrast."""
+
+    case_id = "BREAKOUT_QUALITY_JOINT_MIN_TARGET"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_execution_recipe,
+        get_continuous_ranker_research_spec,
+    )
+    from core.research_report_contract import (
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
+        persistent_report_contract_fingerprint,
+    )
+    from filters.breakout_quality.conditional_mfe_opportunity import (
+        build_conditional_mfe_opportunity_targets,
+    )
+    from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality.ranker_training import safety_raw_mfe_joint_min_metrics
+    from services.research import breakout_quality_application as research_app
+
+    control = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    spec = get_continuous_ranker_research_spec(profile.name)
+    check(
+        "mr13w_is_active_mr13v_architecture_target_only_contrast",
+        (
+            profile.name,
+            "MR-13W",
+            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
+            "inception_time_safety_raw_mfe_hmhs_mlp_v1",
+            "raw_mfe_mean_daily_spearman",
+            False,
+            False,
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            spec.model_research_id,
+            profile.training_objective,
+            profile.model_architecture,
+            profile.epoch_selection_metric,
+            spec.selection_pit_authorized,
+            spec.current_time_validation_authorized,
+        ),
+    )
+    check_true(
+        "mr13w_changes_target_only_not_architecture_loss_epoch_or_pairwise_reduction",
+        control.training_objective
+        == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING
+        and profile.training_objective
+        == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING
+        and control.model_architecture == profile.model_architecture
+        and control.loss_name == profile.loss_name
+        and control.epoch_selection_metric == profile.epoch_selection_metric
+        and get_continuous_ranker_execution_recipe(control.name).pairwise_reduction
+        == get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction
+        and get_model_spec(control.model_architecture).as_manifest_payload()
+        == get_model_spec(profile.model_architecture).as_manifest_payload(),
+    )
+
+    frame = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-01-02"] * 10 + ["2026-01-05"] * 10),
+            "target_favorable_r": list(range(1, 11)) * 2,
+            "target_adverse_r": [0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 1.0, 0.5, 0.6, 0.1] * 2,
+            "label": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1] * 2,
+        }
+    )
+    targets = build_conditional_mfe_opportunity_targets(
+        frame, np.ones(len(frame), dtype=bool)
+    )
+    expected_min = np.minimum(
+        targets.low_adverse_safety_percentile,
+        targets.primary_mfe_percentile,
+    ).astype(np.float32)
+    check_true(
+        "mr13w_joint_min_target_is_exact_unthresholded_min_and_preserves_marginal_targets",
+        np.array_equal(targets.joint_min_target, expected_min)
+        and np.array_equal(
+            targets.safety_raw_mfe_joint_min_training_target[:, :2],
+            targets.safety_raw_mfe_hmhs_training_target[:, :2],
+        )
+        and np.array_equal(
+            targets.safety_raw_mfe_joint_min_training_target[:, 2], expected_min
+        )
+        and bool(np.all((expected_min >= 0.0) & (expected_min <= 1.0))),
+    )
+    # Two HM/HS positives need not be equivalent under Joint-Min. This is the
+    # exact information-loss problem the experiment is designed to test.
+    hmhs = targets.direct_hmhs_target.astype(bool)
+    hmhs_values = np.unique(np.round(expected_min[hmhs], 6))
+    check_true(
+        "mr13w_continuous_target_retains_depth_inside_binary_hmhs_positive_region",
+        bool(hmhs.sum() >= 2 and len(hmhs_values) >= 2),
+    )
+
+    sem = dict(
+        training_semantics(profile).get("safety_raw_mfe_joint_min_tri_head_contract")
+        or {}
+    )
+    check(
+        "mr13w_training_contract_is_parameter_free_continuous_joint_min",
+        (
+            "same_date_low_adverse_safety_percentile",
+            "same_date_pure_mfe_percentile",
+            "min_same_date_safety_and_pure_mfe_percentiles",
+            "fixed_equal_mean_three_heads_no_lambda_sweep",
+            "raw_mfe_mean_daily_spearman_same_as_mr13v_control",
+            "model_gate_only_no_pit_no_strategy_conversion",
+        ),
+        (
+            sem.get("safety_target"),
+            sem.get("raw_mfe_target"),
+            sem.get("joint_min_target"),
+            sem.get("head_weighting"),
+            sem.get("epoch_selection"),
+            sem.get("runtime_status"),
+        ),
+    )
+
+    perfect_scores = {
+        "raw_safety": targets.low_adverse_safety_percentile.copy(),
+        "raw_mfe": targets.primary_mfe_percentile.copy(),
+        "joint_min": expected_min.copy(),
+    }
+    metrics = safety_raw_mfe_joint_min_metrics(
+        np.arange(len(frame), dtype=np.int64), frame, targets, perfect_scores
+    )
+    joint = dict(metrics.get("joint_min") or {})
+    top10 = dict(joint.get("top_10pct") or {})
+    check_true(
+        "mr13w_joint_min_metric_surface_measures_rank_depth_and_hmhs_tail_conversion",
+        float(joint.get("mean_daily_spearman") or 0.0) >= 0.999
+        and float(joint.get("pairwise_concordance") or 0.0) >= 0.999
+        and float(top10.get("mean_joint_min") or 0.0)
+        > float(joint.get("population_joint_min_mean") or 0.0)
+        and float(top10.get("mean_safety") or 0.0) > 0.5
+        and float(top10.get("mean_mfe") or 0.0) > 0.5,
+    )
+
+    check(
+        "mr13w_keeps_user_approved_standard_model_sop_fingerprint",
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
+        persistent_report_contract_fingerprint("model.standard_sop"),
+    )
+    base_metric = {
+        "group_count": 10,
+        "mean_daily_spearman": 0.30,
+        "global_spearman_vs_raw_target": 0.31,
+        "pairwise_concordance": 0.60,
+        "top_score_decile_raw_target_mean": 1.2,
+        "bottom_score_decile_raw_target_mean": 0.3,
+    }
+    joint_min = {
+        "population_joint_min_mean": 0.33,
+        "mean_daily_spearman": 0.41,
+        "pairwise_concordance": 0.63,
+        "top_10pct": {
+            "mean_joint_min": 0.61,
+            "mean_safety": 0.72,
+            "mean_mfe": 0.74,
+            "hmhs_pct": 62.0,
+            "hmhs_enrichment": 2.7,
+        },
+        "top_20pct": {"mean_joint_min": 0.55, "hmhs_enrichment": 2.1},
+    }
+    payload = {
+        "model_research_id": "MR-13W",
+        "training": {"objective": profile.training_objective},
+        "split_metrics": {
+            "validation": dict(base_metric),
+            "oos": dict(base_metric),
+            "breakout_candidate_oos": dict(base_metric),
+        },
+        "safety_raw_mfe_joint_min_evaluation": {
+            "validation": {
+                "raw_safety": dict(base_metric),
+                "raw_mfe": dict(base_metric),
+                "joint_min": joint_min,
+            }
+        },
+    }
+    rendered = research_app._render_continuous_ranker_simple_console(payload)
+    standard_titles = "\n".join(
+        line for line in rendered.splitlines() if line.startswith("標準模型 SOP｜")
+    )
+    check_true(
+        "mr13w_evidence_uses_joint_min_model_extension_without_standard_schema_drift",
+        "Model-specific Extension｜MR-13W｜Continuous Joint-Min Retrieval" in rendered
+        and "Joint-Min" not in standard_titles
+        and "標準模型 SOP｜1. Learnability" in standard_titles
+        and "標準模型 SOP｜6. Evidence Coverage" in standard_titles,
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    daily_source = (
+        project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
+    ).read_text(encoding="utf-8")
+    check_true(
+        "mr13w_oos_artifact_preserves_continuous_joint_truth_and_score",
+        'oos_frame["target_joint_min"]' in daily_source
+        and 'oos_frame["joint_min_score"]' in daily_source,
+    )
+    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
+    check_true(
+        "mr13w_remains_model_only_without_strategy_conversion",
         '"C75"' not in strategy_source and "'C75'" not in strategy_source,
     )
 

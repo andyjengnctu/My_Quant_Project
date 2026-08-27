@@ -514,8 +514,10 @@ def _model_sop_view(payload: dict) -> dict:
                         "pairwise_concordance": row.get("pairwise_concordance"),
                     })
 
+    joint_min_eval = dict(payload.get("safety_raw_mfe_joint_min_evaluation") or {})
     raw_eval = dict(
-        payload.get("safety_raw_mfe_hmhs_evaluation")
+        joint_min_eval
+        or payload.get("safety_raw_mfe_hmhs_evaluation")
         or payload.get("safety_raw_mfe_evaluation")
         or {}
     )
@@ -630,6 +632,30 @@ def _model_sop_view(payload: dict) -> dict:
         })
     if joint_rows:
         extensions.append({"id": "direct_hmhs_joint_retrieval", "rows": joint_rows})
+
+    joint_min_rows = []
+    for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
+        scope = dict(joint_min_eval.get(scope_key) or {})
+        joint = dict(scope.get("joint_min") or {})
+        if not joint:
+            continue
+        top10 = dict(joint.get("top_10pct") or {})
+        top20 = dict(joint.get("top_20pct") or {})
+        joint_min_rows.append({
+            "split": scope_label,
+            "population_joint_min_mean": joint.get("population_joint_min_mean"),
+            "joint_min_daily_rho": joint.get("mean_daily_spearman"),
+            "joint_min_pair": joint.get("pairwise_concordance"),
+            "top10_joint_min": top10.get("mean_joint_min"),
+            "top10_safety": top10.get("mean_safety"),
+            "top10_mfe": top10.get("mean_mfe"),
+            "top10_hmhs_pct": top10.get("hmhs_pct"),
+            "top10_hmhs_enrichment": top10.get("hmhs_enrichment"),
+            "top20_joint_min": top20.get("mean_joint_min"),
+            "top20_hmhs_enrichment": top20.get("hmhs_enrichment"),
+        })
+    if joint_min_rows:
+        extensions.append({"id": "joint_min_retrieval", "rows": joint_min_rows})
 
     return {
         "split_names": split_names,
@@ -812,6 +838,10 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             lines.append(_render_model_contract_table(
                 extension_contract(ext_id).tables[0], ext["rows"], target="console", scope_styler=scope_text,
             ))
+        elif ext_id == "joint_min_retrieval":
+            lines.append(_render_model_contract_table(
+                extension_contract(ext_id).tables[0], ext["rows"], target="console", scope_styler=scope_text,
+            ))
     return "\n".join(line for line in lines if line)
 
 
@@ -928,6 +958,10 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
                 extension_contract(ext_id).tables[0], ext["rows"], target="markdown", scope_styler=scope_text,
             )])
         elif ext_id == "direct_hmhs_joint_retrieval":
+            lines.append(_render_model_contract_table(
+                extension_contract(ext_id).tables[0], ext["rows"], target="markdown", scope_styler=scope_text,
+            ))
+        elif ext_id == "joint_min_retrieval":
             lines.append(_render_model_contract_table(
                 extension_contract(ext_id).tables[0], ext["rows"], target="markdown", scope_styler=scope_text,
             ))

@@ -18,6 +18,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
@@ -128,6 +129,23 @@ SAFETY_RAW_MFE_HMHS_TRI_HEAD_TRAINING_CONTRACT = {
     "batching": "whole_date_pack_no_date_split",
 }
 
+SAFETY_RAW_MFE_JOINT_MIN_TRI_HEAD_TRAINING_CONTRACT = {
+    "sample_scope": "daily_eligible_stock_days",
+    "safety_target": "same_date_low_adverse_safety_percentile",
+    "raw_mfe_target": "same_date_pure_mfe_percentile",
+    "joint_min_target": "min_same_date_safety_and_pure_mfe_percentiles",
+    "architecture": "shared_encoder_raw_safety_plus_safety_conditioned_raw_mfe_plus_nonlinear_joint_head",
+    "conditional_context": "stop_gradient_raw_safety_probability_for_raw_mfe_head_only",
+    "joint_head_inputs": "shared_raw_latent_only_no_safety_or_mfe_score_arithmetic",
+    "classifier_isolation": "each_head_loss_updates_own_classifier_only",
+    "shared_encoder_gradient_from_all_heads": True,
+    "head_losses": "full_list_delta_ndcg_pairwise_logistic_each_head",
+    "head_weighting": "fixed_equal_mean_three_heads_no_lambda_sweep",
+    "epoch_selection": "raw_mfe_mean_daily_spearman_same_as_mr13v_control",
+    "runtime_status": "model_gate_only_no_pit_no_strategy_conversion",
+    "batching": "whole_date_pack_no_date_split",
+}
+
 DIRECT_HMHS_SINGLE_HEAD_TRAINING_CONTRACT = {
     "sample_scope": "daily_eligible_stock_days",
     "joint_hmhs_target": "indicator_of_safety_percentile_ge_0.5_and_pure_mfe_percentile_ge_0.5",
@@ -181,6 +199,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "safety_raw_mfe_joint_min_tri_head_contract": None,
             "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING:
@@ -200,6 +219,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": contract,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "safety_raw_mfe_joint_min_tri_head_contract": None,
             "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
@@ -219,6 +239,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": contract,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "safety_raw_mfe_joint_min_tri_head_contract": None,
             "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING:
@@ -238,6 +259,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "safety_raw_mfe_joint_min_tri_head_contract": None,
             "direct_hmhs_single_head_contract": contract,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING:
@@ -257,6 +279,27 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": contract,
+            "safety_raw_mfe_joint_min_tri_head_contract": None,
+            "direct_hmhs_single_head_contract": None,
+        }
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING:
+        recipe = get_continuous_ranker_execution_recipe(profile.name)
+        pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
+        pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
+        contract = dict(SAFETY_RAW_MFE_JOINT_MIN_TRI_HEAD_TRAINING_CONTRACT)
+        contract["pair_weighting"] = str(recipe.pairwise_reduction)
+        return {
+            "batching": contract["batching"],
+            "pairwise_contract": pairwise_contract,
+            "listwise_contract": None,
+            "raw_r_regression_contract": None,
+            "dual_component_r_regression_contract": None,
+            "conditional_mfe_safety_contract": None,
+            "conditional_mfe_single_head_contract": None,
+            "safety_conditional_mfe_duo_head_contract": None,
+            "safety_raw_mfe_duo_head_contract": None,
+            "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "safety_raw_mfe_joint_min_tri_head_contract": contract,
             "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
@@ -276,6 +319,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "safety_raw_mfe_joint_min_tri_head_contract": None,
             "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective in {
@@ -307,6 +351,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "safety_raw_mfe_joint_min_tri_head_contract": None,
             "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING:
@@ -321,6 +366,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "safety_raw_mfe_joint_min_tri_head_contract": None,
             "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
@@ -336,6 +382,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "safety_raw_mfe_joint_min_tri_head_contract": None,
             "direct_hmhs_single_head_contract": None,
         }
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
@@ -357,6 +404,7 @@ def training_semantics(profile) -> dict[str, Any]:
             "safety_conditional_mfe_duo_head_contract": None,
             "safety_raw_mfe_duo_head_contract": None,
             "safety_raw_mfe_hmhs_tri_head_contract": None,
+            "safety_raw_mfe_joint_min_tri_head_contract": None,
             "direct_hmhs_single_head_contract": None,
         }
     return {
@@ -411,6 +459,7 @@ __all__ = [
     "RAW_R_REGRESSION_TRAINING_CONTRACT",
     "SAFETY_RAW_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SAFETY_RAW_MFE_HMHS_TRI_HEAD_TRAINING_CONTRACT",
+    "SAFETY_RAW_MFE_JOINT_MIN_TRI_HEAD_TRAINING_CONTRACT",
     "training_semantics",
     "training_semantics_mismatches",
 ]

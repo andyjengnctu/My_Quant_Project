@@ -60,6 +60,21 @@ class ConditionalMfeOpportunityTargets:
         ).astype(np.float32)
 
     @property
+    def joint_min_target(self) -> np.ndarray:
+        """Continuous maximin joint-quality target used by MR-13W.
+
+        The weaker of Safety and Pure-MFE determines joint quality.  Keeping the
+        target continuous avoids the information loss of the historical HM/HS
+        binary threshold while remaining same-date, strategy-agnostic, and
+        parameter-free.
+        """
+
+        return np.minimum(
+            self.low_adverse_safety_percentile,
+            self.primary_mfe_percentile,
+        ).astype(np.float32, copy=False)
+
+    @property
     def safety_raw_mfe_hmhs_training_target(self) -> np.ndarray:
         # MR-13T keeps MR-13S's two marginal targets intact and adds one direct
         # upper-right intersection target.  The joint head receives no score
@@ -69,6 +84,16 @@ class ConditionalMfeOpportunityTargets:
                 self.low_adverse_safety_percentile,
                 self.primary_mfe_percentile,
                 self.direct_hmhs_target,
+            ]
+        ).astype(np.float32, copy=False)
+
+    @property
+    def safety_raw_mfe_joint_min_training_target(self) -> np.ndarray:
+        return np.column_stack(
+            [
+                self.low_adverse_safety_percentile,
+                self.primary_mfe_percentile,
+                self.joint_min_target,
             ]
         ).astype(np.float32, copy=False)
 
