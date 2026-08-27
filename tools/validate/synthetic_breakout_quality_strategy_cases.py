@@ -1364,14 +1364,15 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         comparison_source.index("def render_strategy_aggregate_report("):
         comparison_source.index("def _run_directory(")
     ]
+    research_report_contract_source = (project_root / "core/research_report_contract.py").read_text(encoding="utf-8")
     check_true(
         "strategy_compare_main_report_is_fixed_sop_without_hypothesis_specific_safety_curve",
         '"strategy_diagnostics.md"' in comparison_source
-                and "1. Core Performance" in render_report_source
-                and "2. Trade Quality / MFE × Safety" in render_report_source
-                and "3. Selection Quality" in render_report_source
-                and "5. Capital / Execution" in render_report_source
-                and "7. Execution Summary" in render_report_source
+                and "Core Performance" in research_report_contract_source
+                and "Trade Quality / MFE × Safety" in research_report_contract_source
+                and "Selection Quality" in research_report_contract_source
+                and "Capital / Execution" in research_report_contract_source
+                and "Execution Summary" in research_report_contract_source
                 and "Raw Safety Gate Sensitivity" not in render_report_source
                 and "render_safety_gate_sensitivity_table" not in render_report_source
                 and "render_strategy_run_execution_table" in render_report_source
@@ -1415,7 +1416,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and 'f"[DONE] {on_arm.arm_id} {on_arm.name} "' in comparison_source
                 and 'elapsed={format_elapsed(' in comparison_source
                 and 'total={format_elapsed(' in comparison_source
-                and 'render_section("7. Execution Summary")' in comparison_source
+                and 'section_contract("strategy.standard_sop", "execution_summary").display_title' in comparison_source
                 and "render_strategy_run_execution_table" in comparison_source
                 and "_selector_timing_table(" not in render_report_source,
     )
@@ -2545,7 +2546,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "pair_upside_realization_refresh_required" in comparison_source
         and '"REFRESH"' in comparison_source
         and '"Diagnostics | Upside Realization"' in comparison_source
-        and 'render_section("4. Upside Survival / First-Passage")' in comparison_source
+        and 'section_contract("strategy.standard_sop", "upside_survival").display_title' in comparison_source
         and "render_upside_survival_summary_table" in comparison_source
         and "STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS" in strategy_compare_config_source,
     )

@@ -34,6 +34,7 @@
 16. RCE 等診斷 metric 的 trade partition、Target join、coverage、numerator／denominator 與合法性條件必須由 canonical diagnostics contract 唯一定義；不同診斷 metric 不得以 proxy 互相替代。既有模型驗證 metric 必須直接重用 canonical validation artifact，不得為報表另算第二套。
 17. 長流程互動執行預設只顯示必要的 RUN／REUSE／DONE 進度與最終核心摘要；pair-level 詳細報表、solver states、repair/ascent、stale guard、timing 等過程資訊應保存於工件供追查，不得在 aggregate 執行時重複洗版。
 18. 所有正式 Research 報表必須遵守目前已落地的 canonical 報表架構、格式與使用規則，包含報表分工、章節／欄位集合與順序、metric／label／precision、色彩語意、輸出位置、正式 menu 入口與操作方式；不得因單次研究、除錯、重構或 GPT 偏好自行建立第二套常駐格式。凡屬**常駐／標準／可重複使用**的 Research 報表或其正式操作流程，如需新增、刪除、合併、拆分、重新排序章節／欄位，改變報表分工、格式、色彩語意、輸出位置或 menu／使用方式，必須先取得使用者明確授權後才可修改。**一次性／專題 Audit 報表**不需為其自身版型或內容調整事先取得使用者授權，但仍須遵守既有 SSOT、metric/report contract、PIT／read-only／scientific legality 與歷史 evidence 規則，且不得藉一次性報表修改、取代或隱性重定義任何常駐報表契約。
+19. B18 所稱常駐／標準／可重複使用 Research 報表必須另有 machine-readable canonical report contract，固定其 report identity、menu/use role、section identity／順序、table columns、label、precision、unit、direction 與適用條件；console／Markdown／RUN／REUSE renderers只能消費此 contract，不得各自持有第二套 schema。Model-specific research evidence只能新增於明確的 **Model-specific Extension** namespace，extension 不得取得 Standard SOP section number、取代 Standard Generalization／Evidence schema，或改變其他 profile 的 Standard SOP。所有常駐 contract 必須保存使用者已授權的 fingerprint/version；formal/meta validation須在未同步取得使用者授權時對 fingerprint drift fail-fast，並驗證不同 model/profile 的 Standard SOP schema invariance。常駐 contract與其 approved fingerprint只有在使用者明確授權後才能同輪更新；一次性／專題 Audit 不納入 persistent-report fingerprint freeze，但仍不得修改常駐 contract。
 
 
 ## C. Coding 與架構原則

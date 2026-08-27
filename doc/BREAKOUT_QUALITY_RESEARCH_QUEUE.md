@@ -29,6 +29,7 @@
 
 ### 2.1 Framework migration對既有研究的處理
 
+- 2026-08-27：Persistent Research report freeze已落地（純engineering governance，不改Queue priority）：Standard Model SOP 1～6跨MR/profile固定不變；MR-13T Direct Joint與MR-13U H-only metrics改為Model-specific Extension。Standard Strategy、OOS↔Rolling Consistency與三個Reusable Audit同樣以user-approved fingerprint freeze；未授權schema drift必須fail-fast。
 - 2026-08-27：MR-13T正式Model Gate完成。Forward OOS Direct H相對marginal product有弱增量（Pair=`53.42% vs 52.53%`、PR-AUC=`0.2366 vs 0.2321`、Top10=`1.1159× vs 1.0289×`），但Breakout Direct反向落後（Pair=`50.25% vs 51.47%`、PR-AUC=`0.2441 vs 0.2481`、Top10=`1.0299× vs 1.0396×`），且marginal predicted geometry仍Daily `-0.9375`/S5×M5=`0`。Decision=`DIRECT_JOINT_SIGNAL_WEAKLY_PRESENT / FORWARD_ONLY_GAIN / BREAKOUT_NOT_CONFIRMED / MODEL_GATE_FAIL`。因此Priority 1改為MR-13U H-only：同raw 300×10/同InceptionTime只保留H supervision，以區分multi-task interference與raw representation不足。
 
 

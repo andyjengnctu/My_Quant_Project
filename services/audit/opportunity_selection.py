@@ -14,6 +14,7 @@ from typing import Any, Mapping
 import pandas as pd
 
 from core.console_report import render_table
+from core.research_report_contract import section_contract, table_contract
 
 from filters.breakout_quality.daily_ranker_data import load_official_breakout_candidate_keys
 from filters.breakout_quality.mfe_safety_geometry import (
@@ -29,6 +30,7 @@ from services.audit.reusable_report import (
     audit_section,
     audit_title,
     fmt,
+    format_contract_row,
     markdown_table,
     persist_reusable_report,
     render_evidence_rows,
@@ -71,17 +73,11 @@ def _truth_summary(geometry: Mapping[str, Any]) -> dict[str, Any]:
 
 def _geometry_row(label: str, distribution: Mapping[str, Any]) -> list[str]:
     d = dict(distribution or {})
-    return [
-        label,
-        f"{int(d.get('truth_covered_rows', 0) or 0):,}",
-        fmt(d.get("truth_coverage_pct"), 2, "%"),
-        fmt(d.get("high_mfe_high_safety_pct"), 2, "%"),
-        fmt(d.get("high_mfe_low_safety_pct"), 2, "%"),
-        fmt(d.get("low_mfe_high_safety_pct"), 2, "%"),
-        fmt(d.get("low_mfe_low_safety_pct"), 2, "%"),
-        fmt(d.get("high_mfe_total_pct"), 2, "%"),
-        fmt(d.get("high_safety_total_pct"), 2, "%"),
-    ]
+    values = {"cohort": label, "n": int(d.get("truth_covered_rows", 0) or 0), **d}
+    return format_contract_row(
+        table_contract("audit.opportunity_selection", "selection_funnel", "geometry"),
+        values,
+    )
 
 
 def _membership_summary(frame: pd.DataFrame, truth: pd.DataFrame) -> dict[str, Any]:
@@ -227,18 +223,19 @@ def _render_mode(mode: Mapping[str, Any], *, target: str, section_start: int) ->
     lines: list[str] = []
     n = section_start
 
-    lines.append(audit_section(f"{mode['display_name']}｜Actual Opportunity Baseline", n, target=target)); n += 1
+    lines.append(audit_section(f"{mode['display_name']}｜{section_contract("audit.opportunity_selection", "actual_opportunity").title}", n, target=target)); n += 1
     summary_rows = []
     for label, geometry in (("Daily universal", daily), ("Breakout candidate", breakout)):
         summary = _truth_summary(geometry)
-        summary_rows.append([
-            label,
-            f"{summary['n']:,}",
-            fmt(summary["rho"], 4),
-            truth_cell(summary["s5_m5"]),
-            truth_cell(summary["s4plus_m4plus"]),
-        ])
-    headers = ["Scope", "N", "Actual S↔MFE Daily rho", "S5×M5 N/Pop/×Exp", "S4+×M4+ N/Pop/×Exp"]
+        summary_rows.append(format_contract_row(
+            table_contract("audit.opportunity_selection", "actual_opportunity", "truth_summary"),
+            {
+                "scope": label, "n": summary["n"], "rho": summary["rho"],
+                "s5_m5": truth_cell(summary["s5_m5"]),
+                "s4plus_m4plus": truth_cell(summary["s4plus_m4plus"]),
+            },
+        ))
+    headers = list(table_contract("audit.opportunity_selection", "actual_opportunity", "truth_summary").headers)
     lines.append(
         render_table(headers, summary_rows)
         if target == "console" else markdown_table(headers, summary_rows)
@@ -246,62 +243,54 @@ def _render_mode(mode: Mapping[str, Any], *, target: str, section_start: int) ->
     lines.append(("Daily actual 5×5\n" if target == "console" else "### Daily actual 5×5\n") + render_truth_5x5(daily, target=target))
     lines.append(("Breakout actual 5×5\n" if target == "console" else "### Breakout actual 5×5\n") + render_truth_5x5(breakout, target=target))
 
-    lines.append(audit_section(f"{mode['display_name']}｜Breakout → Orderable → Planned", n, target=target)); n += 1
+    lines.append(audit_section(f"{mode['display_name']}｜{section_contract("audit.opportunity_selection", "selection_funnel").title}", n, target=target)); n += 1
     geometry_rows = [_geometry_row("Breakout", mode["breakout_distribution"])]
     for arm_id in (control, treatment):
         geometry_rows.append(_geometry_row(f"{arm_id} Orderable", arms[arm_id]["orderable"]))
         geometry_rows.append(_geometry_row(f"{arm_id} Planned", arms[arm_id]["planned"]))
-    headers2 = ["Cohort", "N", "Truth Cov", "HM/HS", "HM/LS", "LM/HS", "LM/LS", "High-MFE", "High-Safety"]
+    headers2 = list(table_contract("audit.opportunity_selection", "selection_funnel", "geometry").headers)
     lines.append(
         render_table(headers2, geometry_rows)
         if target == "console" else markdown_table(headers2, geometry_rows)
     )
 
-    lines.append(audit_section(f"{mode['display_name']}｜Final Planned 5×5", n, target=target)); n += 1
+    lines.append(audit_section(f"{mode['display_name']}｜{section_contract("audit.opportunity_selection", "planned_geometry").title}", n, target=target)); n += 1
     lines.append((f"{control} Planned\n" if target == "console" else f"### {control} Planned\n") + render_truth_5x5(arms[control]["planned_5x5"], target=target))
     lines.append((f"{treatment} Planned\n" if target == "console" else f"### {treatment} Planned\n") + render_truth_5x5(arms[treatment]["planned_5x5"], target=target))
+    delta_table = table_contract("audit.opportunity_selection", "planned_geometry", "planned_delta")
     delta_rows = [
-        [f"S{idx}", *("-" if value is None else f"{float(value):+.2f}pp" for value in row)]
+        format_contract_row(delta_table, {"safety": f"S{idx}", **{f"m{j}": value for j, value in enumerate(row, start=1)}})
         for idx, row in enumerate(mode["planned_share_delta_pp"], start=1)
     ]
-    delta_headers = ["Treatment-Control", "M1", "M2", "M3", "M4", "M5"]
+    delta_headers = list(table_contract("audit.opportunity_selection", "planned_geometry", "planned_delta").headers)
     lines.append(("Treatment − Control population-share Δ\n" if target == "console" else "### Treatment − Control population-share Δ\n") + (
         render_table(delta_headers, delta_rows)
         if target == "console" else markdown_table(delta_headers, delta_rows)
     ))
 
-    lines.append(audit_section(f"{mode['display_name']}｜Pair Membership Attribution", n, target=target)); n += 1
+    lines.append(audit_section(f"{mode['display_name']}｜{section_contract("audit.opportunity_selection", "pair_membership").title}", n, target=target)); n += 1
     cohort_rows = []
     for key, label in (("common", "Common"), ("control_only", f"{control}-only"), ("treatment_only", f"{treatment}-only")):
         row = dict(mode["pair_cohorts"].get(key) or {})
-        cohort_rows.append([
-            label,
-            f"{int(row.get('truth_covered_rows', 0) or 0):,}",
-            fmt(row.get("score_percentile_mean"), 3),
-            fmt(row.get("high_mfe_high_safety_pct"), 2, "%"),
-            fmt(row.get("high_mfe_low_safety_pct"), 2, "%"),
-            fmt(row.get("high_mfe_total_pct"), 2, "%"),
-            fmt(row.get("high_safety_total_pct"), 2, "%"),
-        ])
-    ch = ["Cohort", "N", "Score %ile", "HM/HS", "HM/LS", "High-MFE", "High-Safety"]
+        cohort_rows.append(format_contract_row(
+            table_contract("audit.opportunity_selection", "pair_membership", "pair_cohorts"),
+            {"cohort": label, "n": int(row.get("truth_covered_rows", 0) or 0), **row},
+        ))
+    ch = list(table_contract("audit.opportunity_selection", "pair_membership", "pair_cohorts").headers)
     lines.append(
         render_table(ch, cohort_rows)
         if target == "console" else markdown_table(ch, cohort_rows)
     )
 
-    lines.append(audit_section(f"{mode['display_name']}｜Selection Quality", n, target=target)); n += 1
+    lines.append(audit_section(f"{mode['display_name']}｜{section_contract("audit.opportunity_selection", "selection_quality").title}", n, target=target)); n += 1
     quality_rows = []
     for arm_id in (control, treatment):
         row = dict(arms[arm_id].get("selection_quality") or {})
-        quality_rows.append([
-            arm_id,
-            fmt(row.get("selected_target_mean_r"), 3, "R"),
-            fmt(row.get("selected_target_percentile"), 3),
-            fmt(row.get("target_top_k_retention"), 2, "%"),
-            fmt(row.get("target_opportunity_gap_r"), 3, "R"),
-            fmt(row.get("r_conversion_efficiency"), 3),
-        ])
-    qh = ["Arm", "Target mean", "Target %ile", "Top-K retention", "Opp gap", "RCE"]
+        quality_rows.append(format_contract_row(
+            table_contract("audit.opportunity_selection", "selection_quality", "selection_quality"),
+            {"arm": arm_id, **row},
+        ))
+    qh = list(table_contract("audit.opportunity_selection", "selection_quality", "selection_quality").headers)
     lines.append(
         render_table(qh, quality_rows)
         if target == "console" else markdown_table(qh, quality_rows)
@@ -325,7 +314,7 @@ def render_result(result: Mapping[str, Any], *, target: str = "console") -> str:
             "PRESENT" if int(daily_s5 or 0) > 0 and int(breakout_s5 or 0) > 0 else "MISSING",
             f"Daily S5×M5={int(daily_s5 or 0):,}; Breakout S5×M5={int(breakout_s5 or 0):,}",
         ))
-    lines.append(audit_section("Key Evidence", section, target=target))
+    lines.append(audit_section(section_contract("audit.opportunity_selection", "key_evidence").title, section, target=target))
     lines.append(render_evidence_rows(evidence_rows, target=target))
     lines.append(
         "K/R0/cash/slot binding不屬本Reusable report；只有資源約束本身成為待決策問題時才使用One-time Resource Constraint Attribution。"

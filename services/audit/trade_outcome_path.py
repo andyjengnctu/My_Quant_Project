@@ -9,6 +9,12 @@ from typing import Any, Mapping, Sequence
 import pandas as pd
 
 from core.console_report import render_table
+from core.research_report_contract import (
+    TRADE_OUTCOME_FIRST_PASSAGE_THRESHOLDS_R,
+    format_contract_value,
+    section_contract,
+    table_contract,
+)
 from filters.breakout_quality.mfe_safety_geometry import (
     attach_quadrants,
     build_truth_geometry,
@@ -18,7 +24,9 @@ from services.audit.mfe_safety_truth import AuditBlockedError, normalize_date, n
 from services.audit.reusable_report import (
     audit_section,
     audit_title,
+    evidence_status_for_delta,
     fmt,
+    format_contract_row,
     markdown_table,
     persist_reusable_report,
     render_evidence_rows,
@@ -170,7 +178,13 @@ def _mode_result(definition, *, project_root: Path, profile_id: str) -> dict[str
     fingerprint = str(dict(source_cfg.get("strategy_result_fingerprints") or {}).get(profile_id) or "")
     source = load_strategy_compare_source(project_root, profile_id=profile_id, pinned_config_fingerprint=fingerprint or None)
     control = str(source_cfg["control_arm_id"]); treatment = str(source_cfg["treatment_arm_id"])
-    thresholds = tuple(float(v) for v in definition.dimensions.get("first_passage_thresholds_r", (1.0, 2.0, 3.0)))
+    configured_thresholds = tuple(float(v) for v in definition.dimensions.get("first_passage_thresholds_r", TRADE_OUTCOME_FIRST_PASSAGE_THRESHOLDS_R))
+    if configured_thresholds != TRADE_OUTCOME_FIRST_PASSAGE_THRESHOLDS_R:
+        raise AuditBlockedError(
+            "persistent Trade Outcome／Path contract固定first-passage thresholds=+1R/+2R/+3R；"
+            f"config={configured_thresholds}"
+        )
+    thresholds = TRADE_OUTCOME_FIRST_PASSAGE_THRESHOLDS_R
     start, end = _period(source)
     truth, truth_source = build_truth_geometry(
         project_root=project_root,
@@ -237,45 +251,57 @@ def render_result(result: Mapping[str, Any], *, target: str = "console") -> str:
     for mode in result["modes"]:
         control = str(mode["control_arm_id"]); treatment = str(mode["treatment_arm_id"])
         thresholds = [float(x) for x in mode["thresholds_r"]]
-        lines.append(audit_section(f"{mode['display_name']}｜Planned → Filled", section, target=target)); section += 1
+        lines.append(audit_section(f"{mode['display_name']}｜{section_contract("audit.trade_outcome_path", "planned_to_filled").title}", section, target=target)); section += 1
         rows = []
         for arm_id in (control, treatment):
             s = dict(mode["arms"][arm_id]["summary"])
-            rows.append([arm_id, f"{int(s.get('planned_count',0) or 0):,}", f"{int(s.get('filled_count',0) or 0):,}", fmt(s.get("fill_rate_pct"),2,"%"), fmt(s.get("path_coverage_pct"),2,"%")])
-        lines.append(_table(["Arm","Planned","Filled","Fill","Path coverage"], rows, target=target))
+            rows.append(format_contract_row(
+                table_contract("audit.trade_outcome_path", "planned_to_filled", "planned_to_filled"),
+                {"arm": arm_id, **s},
+            ))
+        lines.append(_table(table_contract("audit.trade_outcome_path", "planned_to_filled", "planned_to_filled").headers, rows, target=target))
 
-        lines.append(audit_section(f"{mode['display_name']}｜Realized Outcome / First Passage", section, target=target)); section += 1
+        lines.append(audit_section(f"{mode['display_name']}｜{section_contract("audit.trade_outcome_path", "realized_first_passage").title}", section, target=target)); section += 1
+        if tuple(thresholds) != TRADE_OUTCOME_FIRST_PASSAGE_THRESHOLDS_R:
+            raise AuditBlockedError("Trade Outcome／Path payload與persistent first-passage contract不一致")
+        realized_table = table_contract("audit.trade_outcome_path", "realized_first_passage", "realized_first_passage")
         rows = []
         for arm_id in (control, treatment):
             s = dict(mode["arms"][arm_id]["summary"])
-            row = [arm_id, fmt(s.get("realized_mean_r"),3,"R"), fmt(s.get("realized_median_r"),3,"R"), fmt(s.get("full_horizon_mfe_mean_r"),3,"R"), fmt(s.get("adverse_to_peak_mean_r"),3,"R")]
-            for t in thresholds:
-                row += [fmt(s.get(f"first_{t:g}r_reached_pct"),2,"%"), fmt(s.get(f"initial_stop_before_{t:g}r_pct"),2,"%")]
-            rows.append(row)
-        headers = ["Arm","Avg R","Median R","Full MFE","Adverse"]
-        for t in thresholds: headers += [f"+{t:g}R reached", f"Stop before +{t:g}R"]
-        lines.append(_table(headers, rows, target=target))
+            rows.append(format_contract_row(realized_table, {"arm": arm_id, **s}))
+        lines.append(_table(realized_table.headers, rows, target=target))
 
-        lines.append(audit_section(f"{mode['display_name']}｜Pair Cohorts", section, target=target)); section += 1
+        lines.append(audit_section(f"{mode['display_name']}｜{section_contract("audit.trade_outcome_path", "pair_cohorts").title}", section, target=target)); section += 1
         rows=[]
         for key,label in (("common","Common"),("control_only",f"{control}-only"),("treatment_only",f"{treatment}-only")):
             s=dict(mode["pair_cohorts"].get(key) or {})
-            rows.append([label, f"{int(s.get('filled_count',0) or 0):,}", fmt(s.get("realized_mean_r"),3,"R"), fmt(s.get("full_horizon_mfe_mean_r"),3,"R"), fmt(s.get("adverse_to_peak_mean_r"),3,"R"), fmt(s.get("initial_stop_before_2r_pct"),2,"%")])
-        lines.append(_table(["Cohort","Filled","Avg R","Full MFE","Adverse","Stop before +2R"],rows,target=target))
+            rows.append(format_contract_row(
+                table_contract("audit.trade_outcome_path", "pair_cohorts", "pair_cohorts"),
+                {"cohort": label, **s},
+            ))
+        lines.append(_table(table_contract("audit.trade_outcome_path", "pair_cohorts", "pair_cohorts").headers,rows,target=target))
 
-        lines.append(audit_section(f"{mode['display_name']}｜Truth Cohort Outcome", section, target=target)); section += 1
+        lines.append(audit_section(f"{mode['display_name']}｜{section_contract("audit.trade_outcome_path", "truth_cohort_outcome").title}", section, target=target)); section += 1
         rows=[]
         for arm_id in (control,treatment):
             for quadrant in ("high_mfe_high_safety_pct","high_mfe_low_safety_pct","low_mfe_high_safety_pct","low_mfe_low_safety_pct"):
                 s=dict(mode["arms"][arm_id]["truth_outcomes"].get(quadrant) or {})
                 if not s: continue
-                rows.append([arm_id,quadrant.replace("_pct",""),f"{int(s.get('filled_count',0) or 0):,}",fmt(s.get("realized_mean_r"),3,"R"),fmt(s.get("full_horizon_mfe_mean_r"),3,"R"),fmt(s.get("adverse_to_peak_mean_r"),3,"R"),fmt(s.get("initial_stop_before_2r_pct"),2,"%")])
-        lines.append(_table(["Arm","Truth cohort","N","Avg R","Full MFE","Adverse","Stop before +2R"],rows,target=target))
+                rows.append(format_contract_row(
+                    table_contract("audit.trade_outcome_path", "truth_cohort_outcome", "truth_cohort_outcome"),
+                    {"arm": arm_id, "truth_cohort": quadrant.replace("_pct", ""), **s},
+                ))
+        lines.append(_table(table_contract("audit.trade_outcome_path", "truth_cohort_outcome", "truth_cohort_outcome").headers,rows,target=target))
 
         t_summary=dict(mode["arms"][treatment]["summary"]); c_summary=dict(mode["arms"][control]["summary"])
         delta = None if t_summary.get("realized_mean_r") is None or c_summary.get("realized_mean_r") is None else float(t_summary["realized_mean_r"])-float(c_summary["realized_mean_r"])
-        evidence.append((str(mode["display_name"]),"IMPROVED" if delta is not None and delta>0 else "WORSE" if delta is not None and delta<0 else "MIXED",f"Treatment-Control Avg R={fmt(delta,3,'R')}"))
-    lines.append(audit_section("Key Evidence", section, target=target))
+        realized_column = next(column for column in table_contract("audit.trade_outcome_path", "pair_cohorts", "pair_cohorts").columns if column.key == "realized_mean_r")
+        evidence.append((
+            str(mode["display_name"]),
+            evidence_status_for_delta(delta, preference=realized_column.preference),
+            f"Treatment-Control Avg R={format_contract_value(realized_column, delta)}",
+        ))
+    lines.append(audit_section(section_contract("audit.trade_outcome_path", "key_evidence").title, section, target=target))
     lines.append(render_evidence_rows(evidence,target=target))
     return "\n\n".join(str(x) for x in lines if str(x).strip())
 

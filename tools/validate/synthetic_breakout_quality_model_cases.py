@@ -2828,9 +2828,10 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
     app_source = (
         project_root / "services" / "research" / "breakout_quality_application.py"
     ).read_text(encoding="utf-8")
+    contract_source = (project_root / "core" / "research_report_contract.py").read_text(encoding="utf-8")
     check_true(
         "mr13s_truth_geometry_is_promoted_into_standard_model_sop_without_dedicated_menu",
-        "標準模型 SOP｜4. Truth / Prediction Geometry" in app_source
+        'S("truth_prediction_geometry", 4, "Truth / Prediction Geometry"' in contract_source
         and "Actual MFE×Safety Truth Geometry（只讀）" not in app_source
         and "Pred Safety↔Raw-MFE Daily rho" in app_source,
     )
@@ -3107,11 +3108,13 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
         project_root / "services" / "research" / "breakout_quality_application.py"
     ).read_text(encoding="utf-8")
     check_true(
-        "mr13t_joint_result_is_integrated_into_standard_model_sop_and_oos_artifact",
+        "mr13t_joint_result_is_model_specific_extension_and_oos_artifact_without_standard_sop_pollution",
         'oos_frame["joint_hmhs_score"]' in daily_source
         and 'oos_frame["target_direct_hmhs"]' in daily_source
-        and "Direct HM/HS Joint Head" in daily_source
-        and "標準模型 SOP｜3. Direct HM/HS Joint Retrieval" in app_source,
+        and "Direct HM/HS Joint Retrieval" in daily_source
+        and "Model-specific Extension" in daily_source
+        and "Model-specific Extension" in app_source
+        and "標準模型 SOP｜3. Direct HM/HS Joint Retrieval" not in app_source,
     )
     strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
     check_true(
@@ -3297,10 +3300,13 @@ def validate_breakout_quality_hmhs_single_head_contract_case(_base_params):
         and profile.epoch_selection_metric == "hmhs_pairwise_concordance",
     )
     check_true(
-        "mr13u_standard_model_sop_and_oos_artifact_expose_h_only_evidence",
+        "mr13u_h_only_evidence_is_model_specific_extension_without_standard_generalization_override",
         'oos_frame["target_direct_hmhs"]' in daily_source
         and "Direct HM/HS H-only Learnability" in daily_source
-        and "標準模型 SOP｜3. Direct HM/HS H-only Learnability" in app_source,
+        and "Model-specific Extension" in daily_source
+        and "Model-specific Extension" in app_source
+        and "標準模型 SOP｜3. Direct HM/HS H-only Learnability" not in app_source
+        and '"Δ HM/HS Pair", "Δ PR-AUC", "Δ Top10×"' not in app_source,
     )
     strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
     check_true(

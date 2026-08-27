@@ -414,7 +414,7 @@ def _render_markdown(payload: dict) -> str:
         )
 
     lines = [
-        f"# {markdown_tone('Standard Model SOP Report', 'blue', bold=True)}",
+        f"# {markdown_tone('Detailed Model Research Report', 'blue', bold=True)}",
         "",
         f"- Experiment：`{payload['experiment']}`",
         f"- Profile：`{payload['experiment_profile']}`",
@@ -473,7 +473,7 @@ def _render_markdown(payload: dict) -> str:
     if direct_hmhs_only:
         lines.extend([
             "",
-            section("3. Direct HM/HS H-only Learnability"),
+            section(f"Model-specific Extension｜{payload['model_research_id']}｜Direct HM/HS H-only Learnability"),
             "",
             "- H-only control：raw 300×10與InceptionTime trunk不變；移除Safety/MFE heads與loss，encoder只接受Direct HM/HS supervision。",
             "- Epoch selection固定為Validation HM/HS Pair concordance；同值才以Validation global PR-AUC tie-break；OOS不參與selection。",
@@ -643,7 +643,7 @@ def _render_markdown(payload: dict) -> str:
                 prod10 = dict(product.get("top_10pct") or {})
                 lines.extend([
                     "",
-                    f"### Direct HM/HS Joint Head｜{scope_label}",
+                    f"### Model-specific Extension｜{payload['model_research_id']}｜Direct HM/HS Joint Retrieval｜{scope_label}",
                     "",
                     "| Metric | Direct Joint Head | Marginal Product Control |",
                     "|---|---:|---:|",

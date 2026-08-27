@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from config.audit import AUDIT_OUTPUT_ROOT
+from core.research_report_contract import ReportTableContract, format_contract_value
 from core.console_report import (
     console_color_enabled,
     paint,
@@ -23,6 +24,7 @@ from core.report_style import (
     SIGNAL_POSITIVE,
     SIGNAL_WARNING,
     markdown_tone,
+    signal_for_delta,
     styled_signal,
 )
 
@@ -60,6 +62,15 @@ def evidence_signal(status: str) -> str:
     return SIGNAL_NEUTRAL
 
 
+def evidence_status_for_delta(value: Any, *, preference: str) -> str:
+    signal = signal_for_delta(value, preference=str(preference))
+    if signal == SIGNAL_POSITIVE:
+        return "IMPROVED"
+    if signal == SIGNAL_NEGATIVE:
+        return "WORSE"
+    return "MIXED"
+
+
 def render_evidence_rows(rows: Iterable[tuple[str, str, str]], *, target: str) -> str:
     styled = [
         (label, status_text(status, evidence_signal(status), target=target, bold=True), detail)
@@ -80,6 +91,12 @@ def fmt(value: Any, digits: int = 2, suffix: str = "") -> str:
     except (TypeError, ValueError):
         return str(value)
 
+
+
+
+def format_contract_row(table: ReportTableContract, values: Mapping[str, Any]) -> list[str]:
+    row = dict(values or {})
+    return [format_contract_value(column, row.get(column.key)) for column in table.columns]
 
 def truth_cell(cell: Mapping[str, Any]) -> str:
     row = dict(cell or {})
@@ -160,7 +177,9 @@ __all__ = [
     "audit_section",
     "audit_title",
     "evidence_signal",
+    "evidence_status_for_delta",
     "fmt",
+    "format_contract_row",
     "markdown_table",
     "persist_reusable_report",
     "render_evidence_rows",

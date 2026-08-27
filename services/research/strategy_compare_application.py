@@ -27,6 +27,11 @@ from core.console_report import (
     render_title,
 )
 from core.file_integrity import atomic_write_json
+from core.research_report_contract import (
+    STRATEGY_CONSISTENCY_METRIC_KEYS,
+    section_contract,
+    table_contract,
+)
 from core.report_metrics import (
     CORE_STRATEGY_RESULT_METRICS,
     MFE_SAFETY_COMPARE_RESULT_METRICS,
@@ -38,19 +43,6 @@ _RUNTIME_INTEGRATION_MUTATING_ACTIONS = frozenset({"run", "gate", "promote", "ap
 _RUNTIME_INTEGRATION_READ_ONLY_ACTIONS = frozenset({"status", "show", "latest"})
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-_CONSISTENCY_CORE_KEYS = (
-    "total_return_pct",
-    "max_drawdown_pct",
-    "return_over_max_drawdown",
-    "expected_value_r",
-    "avg_exposure_pct",
-)
-_CONSISTENCY_GEOMETRY_KEYS = (
-    "high_mfe_high_safety_pct",
-    "high_mfe_total_pct",
-)
-
 
 def _metric_spec_map() -> dict[str, object]:
     return {
@@ -78,7 +70,7 @@ def _payload_geometry_arm(payload: dict, arm_id: str) -> dict:
 
 
 def _payload_metric(payload: dict, arm_id: str, key: str):
-    if key in _CONSISTENCY_GEOMETRY_KEYS:
+    if key in {"high_mfe_high_safety_pct", "high_mfe_total_pct"}:
         return _payload_geometry_arm(payload, arm_id).get(key)
     return dict((payload.get("scenarios") or {}).get(str(arm_id)) or {}).get(key)
 
@@ -122,7 +114,7 @@ def build_strategy_oos_rolling_consistency(
     if oos_contrasts != rolling_contrasts:
         raise ValueError("OOS／Rolling Consistency contrasts不一致")
 
-    metric_keys = (*_CONSISTENCY_CORE_KEYS, *_CONSISTENCY_GEOMETRY_KEYS)
+    metric_keys = STRATEGY_CONSISTENCY_METRIC_KEYS
     arm_rows = []
     for arm_id in sorted(oos_arms):
         for key in metric_keys:
@@ -202,15 +194,15 @@ def render_strategy_oos_rolling_consistency(payload: dict) -> str:
             ("Rolling fingerprint", payload.get("rolling_fingerprint")),
             ("Contrast delta", "left - right"),
         )),
-        "Arm-level values\n" + render_table(
-            ("Arm", "Metric", "OOS", "Rolling"),
+        section_contract("strategy.oos_rolling_consistency", "arm_values").title + "\n" + render_table(
+            table_contract("strategy.oos_rolling_consistency", "arm_values", "arm_values").headers,
             arm_rows,
-            alignments=("left", "left", "right", "right"),
+            alignments=table_contract("strategy.oos_rolling_consistency", "arm_values", "arm_values").alignments,
         ),
-        "Configured contrast consistency\n" + render_table(
-            ("Contrast", "Metric", "OOS Δ", "Rolling Δ", "Direction"),
+        section_contract("strategy.oos_rolling_consistency", "contrast_consistency").title + "\n" + render_table(
+            table_contract("strategy.oos_rolling_consistency", "contrast_consistency", "contrast_consistency").headers,
             contrast_rows,
-            alignments=("left", "left", "right", "right", "left"),
+            alignments=table_contract("strategy.oos_rolling_consistency", "contrast_consistency", "contrast_consistency").alignments,
         ),
     ))
 

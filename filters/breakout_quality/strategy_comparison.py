@@ -48,6 +48,7 @@ from core.strategy_comparison import (
     resolve_strategy_comparison_arm_param_policy,
     strategy_comparison_fingerprint,
 )
+from core.research_report_contract import section_contract
 from core.report_metrics import (
     EXECUTION_STRATEGY_RESULT_METRICS,
     CORE_STRATEGY_RESULT_METRICS,
@@ -1049,21 +1050,21 @@ def render_strategy_aggregate_report(
     sections = [
         render_title(title),
         render_key_values(metadata_rows),
-        render_section("1. Core Performance"),
+        render_section(section_contract("strategy.standard_sop", "core_performance").display_title),
         render_strategy_core_result_table(
             scenarios, settings=settings, target=target
         ),
-        render_section("2. Trade Quality / MFE × Safety（Filled buys）"),
+        render_section(section_contract("strategy.standard_sop", "trade_quality").display_title),
         render_mfe_safety_geometry_table(diagnostics, target=target),
-        render_section("3. Selection Quality"),
+        render_section(section_contract("strategy.standard_sop", "selection_quality").display_title),
         render_strategy_selection_quality_table(diagnostics, target=target),
-        render_section("4. Upside Survival / First-Passage"),
+        render_section(section_contract("strategy.standard_sop", "upside_survival").display_title),
         render_upside_survival_summary_table(diagnostics, target=target),
-        render_section("5. Capital / Execution"),
+        render_section(section_contract("strategy.standard_sop", "capital_execution").display_title),
         render_strategy_execution_table(
             scenarios, settings=settings, target=target
         ),
-        render_section("6. Yearly Results"),
+        render_section(section_contract("strategy.standard_sop", "yearly_results").display_title),
         render_strategy_yearly_values_table(
             yearly_by_id, settings=settings, target=target
         ),
@@ -1071,7 +1072,7 @@ def render_strategy_aggregate_report(
     if execution_summary is not None:
         sections.extend(
             (
-                render_section("7. Execution Summary"),
+                render_section(section_contract("strategy.standard_sop", "execution_summary").display_title),
                 render_strategy_run_execution_table(
                     execution_summary, settings=settings, target=target
                 ),

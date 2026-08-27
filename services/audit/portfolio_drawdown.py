@@ -8,6 +8,7 @@ from typing import Any, Mapping
 import pandas as pd
 
 from core.console_report import render_table
+from core.research_report_contract import format_contract_value, section_contract, table_contract
 from core.data_utils import discover_unique_csv_map
 from core.dataset_profiles import get_dataset_dir
 from filters.breakout_quality.mfe_safety_geometry import (
@@ -22,7 +23,9 @@ from services.audit.portfolio_mtm import build_drawdown_analysis
 from services.audit.reusable_report import (
     audit_section,
     audit_title,
+    evidence_status_for_delta,
     fmt,
+    format_contract_row,
     markdown_table,
     persist_reusable_report,
     render_evidence_rows,
@@ -173,14 +176,10 @@ def _max_dd_row(arm_id: str, payload: Mapping[str, Any]) -> list[str]:
     dd = dict(payload.get("drawdown") or {})
     top = list(dd.get("top_episodes") or [])
     row = dict(top[0]) if top else {}
-    return [
-        arm_id,
-        fmt(dd.get("max_drawdown_pct"), 2, "%"),
-        str(row.get("peak_date") or "-"),
-        str(row.get("trough_date") or "-"),
-        fmt(row.get("position_mtm_contribution_pct_peak_equity"), 2, "%"),
-        fmt(row.get("reconciliation_delta"), 3),
-    ]
+    return format_contract_row(
+        table_contract("audit.portfolio_drawdown", "max_drawdown_mtm", "max_drawdown_mtm"),
+        {"arm": arm_id, "max_drawdown_pct": dd.get("max_drawdown_pct"), **row},
+    )
 
 
 def render_result(result: Mapping[str, Any], *, target: str = "console") -> str:
@@ -189,36 +188,50 @@ def render_result(result: Mapping[str, Any], *, target: str = "console") -> str:
     evidence_rows: list[tuple[str, str, str]] = []
     for mode in result["modes"]:
         control = str(mode["control_arm_id"]); treatment = str(mode["treatment_arm_id"])
-        lines.append(audit_section(f"{mode['display_name']}｜Capital / Exposure", section, target=target)); section += 1
+        lines.append(audit_section(f"{mode['display_name']}｜{section_contract("audit.portfolio_drawdown", "capital_exposure").title}", section, target=target)); section += 1
         rows=[]
         for arm_id in (control,treatment):
             c=dict(mode["arms"][arm_id]["capital"])
-            rows.append([arm_id,fmt(c.get("average_exposure_pct"),2,"%"),fmt(c.get("median_stop_distance_pct"),2,"%"),fmt(c.get("median_reserved_fraction_pct"),2,"%"),fmt(c.get("mean_chosen_risk_utilization"),3),fmt(c.get("mean_holding_calendar_days"),1,"d"),f"{int(c.get('round_trip_count',0) or 0):,}"])
-        lines.append(_table(["Arm","Exposure","Median stop dist","Reserved/Equity","Risk util","Holding days","Trades"],rows,target=target))
+            rows.append(format_contract_row(
+                table_contract("audit.portfolio_drawdown", "capital_exposure", "capital_exposure"),
+                {"arm": arm_id, **c},
+            ))
+        lines.append(_table(table_contract("audit.portfolio_drawdown", "capital_exposure", "capital_exposure").headers,rows,target=target))
 
-        lines.append(audit_section(f"{mode['display_name']}｜Max Drawdown MTM", section, target=target)); section += 1
+        lines.append(audit_section(f"{mode['display_name']}｜{section_contract("audit.portfolio_drawdown", "max_drawdown_mtm").title}", section, target=target)); section += 1
         rows=[_max_dd_row(control,mode["arms"][control]),_max_dd_row(treatment,mode["arms"][treatment])]
-        lines.append(_table(["Arm","MDD","Peak","Trough","ΣPosition MTM / Peak","Reconcile Δ"],rows,target=target))
+        lines.append(_table(table_contract("audit.portfolio_drawdown", "max_drawdown_mtm", "max_drawdown_mtm").headers,rows,target=target))
 
-        lines.append(audit_section(f"{mode['display_name']}｜Position Lifecycle", section, target=target)); section += 1
+        lines.append(audit_section(f"{mode['display_name']}｜{section_contract("audit.portfolio_drawdown", "position_lifecycle").title}", section, target=target)); section += 1
         rows=[]
         for arm_id in (control,treatment):
             top=list(dict(mode["arms"][arm_id]["drawdown"]).get("top_episodes") or []); d=dict(top[0]) if top else {}
-            rows.append([arm_id,f"{int(d.get('peak_held_count',0) or 0):,}",f"{int(d.get('entered_during_drawdown_count',0) or 0):,}",f"{int(d.get('exited_during_drawdown_count',0) or 0):,}",f"{int(d.get('trough_held_count',0) or 0):,}",f"{int(d.get('max_same_day_entries',0) or 0):,}"])
-        lines.append(_table(["Arm","Peak-held","Entered during DD","Exited during DD","Trough-held","Max same-day entries"],rows,target=target))
+            rows.append(format_contract_row(
+                table_contract("audit.portfolio_drawdown", "position_lifecycle", "position_lifecycle"),
+                {"arm": arm_id, **d},
+            ))
+        lines.append(_table(table_contract("audit.portfolio_drawdown", "position_lifecycle", "position_lifecycle").headers,rows,target=target))
 
-        lines.append(audit_section(f"{mode['display_name']}｜Drawdown Truth Contribution", section, target=target)); section += 1
+        lines.append(audit_section(f"{mode['display_name']}｜{section_contract("audit.portfolio_drawdown", "drawdown_truth").title}", section, target=target)); section += 1
         rows=[]
         for arm_id in (control,treatment):
             top=list(dict(mode["arms"][arm_id]["drawdown"]).get("top_episodes") or []); d=dict(top[0]) if top else {}
-            rows.append([arm_id,fmt(d.get("hmhs_mtm_contribution_pct_peak_equity"),2,"%"),fmt(d.get("hmls_mtm_contribution_pct_peak_equity"),2,"%"),fmt(d.get("lmhs_mtm_contribution_pct_peak_equity"),2,"%"),fmt(d.get("lmls_mtm_contribution_pct_peak_equity"),2,"%")])
-        lines.append(_table(["Arm","HM/HS","HM/LS","LM/HS","LM/LS"],rows,target=target))
+            rows.append(format_contract_row(
+                table_contract("audit.portfolio_drawdown", "drawdown_truth", "drawdown_truth"),
+                {"arm": arm_id, **d},
+            ))
+        lines.append(_table(table_contract("audit.portfolio_drawdown", "drawdown_truth", "drawdown_truth").headers,rows,target=target))
 
         cdd=dict(mode["arms"][control]["drawdown"]); tdd=dict(mode["arms"][treatment]["drawdown"])
         cmax=cdd.get("max_drawdown_pct"); tmax=tdd.get("max_drawdown_pct")
         delta=None if cmax is None or tmax is None else float(tmax)-float(cmax)
-        evidence_rows.append((str(mode["display_name"]),"IMPROVED" if delta is not None and delta<0 else "WORSE" if delta is not None and delta>0 else "MIXED",f"Treatment-Control MDD={fmt(delta,2,'%')}"))
-    lines.append(audit_section("Key Evidence", section, target=target))
+        mdd_column = next(column for column in table_contract("audit.portfolio_drawdown", "max_drawdown_mtm", "max_drawdown_mtm").columns if column.key == "max_drawdown_pct")
+        evidence_rows.append((
+            str(mode["display_name"]),
+            evidence_status_for_delta(delta, preference=mdd_column.preference),
+            f"Treatment-Control MDD={format_contract_value(mdd_column, delta)}",
+        ))
+    lines.append(audit_section(section_contract("audit.portfolio_drawdown", "key_evidence").title, section, target=target))
     lines.append(render_evidence_rows(evidence_rows,target=target))
     lines.append("此Reusable report不顯示K/R0/cash/slot binding signature；資源約束只有在成為獨立待決策問題時才進One-time Audit。")
     return "\n\n".join(str(x) for x in lines if str(x).strip())

@@ -2701,3 +2701,132 @@ def validate_portfolio_rotation_mark_to_market_return_contract_case(_base_params
     return results, summary
 
 
+
+
+def validate_research_report_contract_freeze_case(_base_params):
+    """Persistent Research reports are user-approved schemas; model extensions cannot mutate them."""
+
+    from core.research_report_contract import (
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
+        MODEL_STANDARD_SOP,
+        persistent_report_contract_fingerprints,
+        validate_approved_persistent_report_contracts,
+    )
+    from services.research import breakout_quality_application as app
+    from config.breakout_quality import (
+        TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+    )
+
+    case_id = "RESEARCH_REPORT_CONTRACT_FREEZE"
+    results = []
+
+    def check_true(name, condition, detail=""):
+        add_check(results, "synthetic_meta", case_id, name, True, bool(condition), note=detail)
+
+    current = persistent_report_contract_fingerprints()
+    check_true(
+        "persistent_research_report_contract_fingerprints_match_user_approved_freeze",
+        not validate_approved_persistent_report_contracts()
+        and current == dict(APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS),
+        detail=str(validate_approved_persistent_report_contracts()),
+    )
+    check_true(
+        "standard_model_sop_skeleton_is_fixed_one_through_six",
+        [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
+        == [
+            (1, "Learnability"),
+            (2, "Generalization"),
+            (3, "Multi-head Learnability"),
+            (4, "Truth / Prediction Geometry"),
+            (5, "Ranking / Boundary"),
+            (6, "Evidence Coverage"),
+        ],
+    )
+
+    base_metrics = {
+        "validation": {
+            "group_count": 10,
+            "mean_daily_spearman": 0.30,
+            "global_spearman_vs_raw_target": 0.31,
+            "pairwise_concordance": 0.60,
+            "top_score_decile_raw_target_mean": 1.2,
+            "bottom_score_decile_raw_target_mean": 0.3,
+        },
+        "oos": {
+            "group_count": 10,
+            "mean_daily_spearman": 0.28,
+            "global_spearman_vs_raw_target": 0.29,
+            "pairwise_concordance": 0.58,
+            "top_score_decile_raw_target_mean": 1.1,
+            "bottom_score_decile_raw_target_mean": 0.35,
+        },
+        "breakout_candidate_oos": {
+            "group_count": 5,
+            "mean_daily_spearman": 0.25,
+            "global_spearman_vs_raw_target": 0.26,
+            "pairwise_concordance": 0.56,
+            "top_score_decile_raw_target_mean": 1.0,
+            "bottom_score_decile_raw_target_mean": 0.4,
+        },
+    }
+
+    def payload(model_id, objective):
+        return {
+            "model_research_id": model_id,
+            "training": {"objective": objective},
+            "split_metrics": json.loads(json.dumps(base_metrics)),
+        }
+
+    mr13s = payload("MR-13S", TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING)
+    mr13t = payload("MR-13T", TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING)
+    mr13u = payload("MR-13U", TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING)
+    mr13t["safety_raw_mfe_hmhs_evaluation"] = {
+        "validation": {
+            "joint_hmhs": {"population_hmhs_pct": 22.0, "pairwise_concordance": 0.57, "global_average_precision": 0.25, "top_10pct": {"hmhs_pct": 26.0, "hmhs_enrichment": 1.18}},
+            "joint_product_control": {"pairwise_concordance": 0.56, "global_average_precision": 0.24, "top_10pct": {"hmhs_pct": 25.0, "hmhs_enrichment": 1.12}},
+        }
+    }
+    for key, pct, pair, ap, daily_ap, top10, top20 in (
+        ("validation", 22.0, 0.57, 0.25, 0.24, 1.17, 1.10),
+        ("oos", 22.0, 0.54, 0.23, 0.22, 1.11, 1.08),
+        ("breakout_candidate_oos", 24.0, 0.50, 0.24, 0.23, 1.03, 1.02),
+    ):
+        mr13u["split_metrics"][key].update({
+            "population_hmhs_pct": pct,
+            "global_average_precision": ap,
+            "mean_daily_average_precision": daily_ap,
+            "top_10pct": {"hmhs_pct": pct + 1.0, "hmhs_enrichment": top10},
+            "top_20pct": {"hmhs_pct": pct + 0.5, "hmhs_enrichment": top20},
+            "pairwise_concordance": pair,
+        })
+
+    rendered = {
+        "S": app._render_continuous_ranker_simple_console(mr13s),
+        "T": app._render_continuous_ranker_simple_console(mr13t),
+        "U": app._render_continuous_ranker_simple_console(mr13u),
+    }
+    standard_lines = {
+        key: "\n".join(
+            line for line in text.splitlines() if line.startswith("標準模型 SOP｜")
+        )
+        for key, text in rendered.items()
+    }
+    check_true(
+        "mr13t_u_cannot_mutate_standard_model_sop_namespace",
+        all("Direct HM/HS" not in text for text in standard_lines.values())
+        and "Model-specific Extension｜MR-13T｜Direct HM/HS Joint Retrieval" in rendered["T"]
+        and "Model-specific Extension｜MR-13U｜Direct HM/HS H-only Learnability" in rendered["U"]
+        and "Δ HM/HS Pair" not in standard_lines["U"],
+    )
+    standard_generalization_header = ("Comparison", "Δ Daily rho", "Δ Pair", "Δ Top-Bottom")
+    check_true(
+        "cross_profile_standard_generalization_schema_is_invariant",
+        all(header in app.table_contract("model.standard_sop", "generalization", "generalization").headers for header in standard_generalization_header)
+        and "Δ Daily rho" in rendered["S"]
+        and "Δ Daily rho" in rendered["T"]
+        and "Δ Daily rho" in rendered["U"],
+    )
+
+    return results, {"ticker": case_id, "synthetic": True, "training_performed": False}

@@ -702,7 +702,7 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             and "0.2876" in conditional_console
             and "59.88%" in conditional_console
             and "標準模型 SOP｜1. Learnability" in conditional_markdown
-            and "標準模型 SOP｜3. Multi-head Learnability｜Conditional MFE-Safety" in conditional_markdown
+            and "標準模型 SOP｜3. Multi-head Learnability" in conditional_markdown
             and "0.2876" in conditional_markdown
             and "59.88%" in conditional_markdown
             and "Actual Round-trip R" not in conditional_markdown,

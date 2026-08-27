@@ -58,6 +58,12 @@ from core.training_progress import (
 )
 from core.strategy_comparison import validate_strategy_compare_gpu_train_workers
 from core.training_scheduler import pop_next_seed_diverse_unit
+from core.research_report_contract import (
+    extension_contract,
+    format_contract_value,
+    section_contract,
+    table_contract,
+)
 from core.report_style import (
     SIGNAL_NEGATIVE,
     SIGNAL_NEUTRAL,
@@ -418,202 +424,95 @@ def _run_mr13s_truth_geometry_control(settings) -> bool:
     return True
 
 
-def _render_continuous_ranker_simple_console(payload: dict) -> str:
-    """Render the one-click Standard Model SOP surface.
+def _model_sop_section_title(section_id: str, *, suffix: str = "") -> str:
+    section = section_contract("model.standard_sop", section_id)
+    base = f"標準模型 SOP｜{section.number}. {section.title}"
+    return base + (f"｜{suffix}" if suffix else "")
 
-    This report stays model-side: learnability, generalization, truth/prediction
-    geometry, ranking/boundary quality and application slices.  Strategy PnL and
-    round-trip attribution belong to Strategy Compare / Audit and are intentionally
-    excluded from this surface.
-    """
+
+def _model_extension_title(payload: dict, extension_id: str) -> str:
+    model_id = str(payload.get("model_research_id") or "MODEL")
+    extension = extension_contract(extension_id)
+    return f"Model-specific Extension｜{model_id}｜{extension.title}"
+
+
+def _model_sop_view(payload: dict) -> dict:
+    """Build one target-neutral view consumed by console and Markdown renderers."""
 
     metrics = dict(payload.get("split_metrics") or {})
     if not metrics:
-        return ""
+        return {}
     training = dict(payload.get("training") or {})
-    direct_hmhs_only = training.get("objective") == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING
-
-    color = console_color_enabled()
-
-    def section(title: str) -> str:
-        return render_section(paint(title, "cyan", enabled=color, bold=True))
-
-    def scope_text(value: str) -> str:
-        key = str(value)
-        tone = "gray" if key.lower() == "validation" else "cyan"
-        return paint(key, tone, enabled=color, bold=key.lower() != "validation")
-
-    def delta_cell(left, right, *, percent: bool = False) -> str:
-        if left is None or right is None:
-            return styled_signal("-", SIGNAL_NEUTRAL, target="console", enabled=color)
-        value = float(right) - float(left)
-        text = f"{value * 100:+.2f}pp" if percent else f"{value:+.4f}"
-        return styled_signal(
-            text,
-            signal_for_delta(value, preference="higher"),
-            target="console",
-            enabled=color,
-            bold=True,
-        )
-
-    def evidence_status(status: str) -> str:
-        normalized = str(status).strip().upper()
-        signal = {
-            "AVAILABLE": SIGNAL_POSITIVE,
-            "READY": SIGNAL_POSITIVE,
-            "PARTIAL": SIGNAL_WARNING,
-            "BLOCKED": SIGNAL_NEGATIVE,
-            "MISSING": SIGNAL_NEGATIVE,
-        }.get(normalized, SIGNAL_NEUTRAL)
-        return styled_signal(status, signal, target="console", enabled=color, bold=True)
-
-    def split_row(name: str) -> tuple[str, ...]:
-        row = dict(metrics.get(name) or {})
-        return (
-            scope_text(name),
-            f"{int(row.get('group_count', 0) or 0):,}",
-            _fmt_simple_metric(row.get("mean_daily_spearman")),
-            _fmt_simple_metric(row.get("global_spearman_vs_raw_target")),
-            _fmt_simple_metric(row.get("pairwise_concordance"), percent=True),
-            _fmt_simple_metric(row.get("top_score_decile_raw_target_mean")),
-            _fmt_simple_metric(row.get("bottom_score_decile_raw_target_mean")),
-        )
-
+    direct_hmhs_only = (
+        training.get("objective") == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING
+    )
     daily_universal = bool(metrics.get("breakout_candidate_oos"))
     split_names = (
         ["validation", "oos", "breakout_candidate_oos"]
         if daily_universal
         else ["validation", "selection", "oos"]
     )
-    lines = [
-        section("標準模型 SOP｜1. Learnability"),
-        render_table(
-            ("Split", "Groups", "Daily rho", "Global rho", "Pair", "Top 10% Target", "Bottom 10% Target"),
-            [split_row(name) for name in split_names],
-            alignments=("left", "right", "right", "right", "right", "right", "right"),
-        ),
-    ]
 
-    if "validation" in metrics and "oos" in metrics:
-        val = dict(metrics.get("validation") or {})
-        oos = dict(metrics.get("oos") or {})
-        breakout = dict(metrics.get("breakout_candidate_oos") or {})
-        if direct_hmhs_only:
-            def enrich(row: dict) -> float | None:
-                return (dict(row.get("top_10pct") or {})).get("hmhs_enrichment")
-            generalization_rows = [(
-                "Validation → Forward OOS",
-                delta_cell(val.get("pairwise_concordance"), oos.get("pairwise_concordance"), percent=True),
-                delta_cell(val.get("global_average_precision"), oos.get("global_average_precision")),
-                delta_cell(enrich(val), enrich(oos)),
-            )]
-            if breakout:
-                generalization_rows.append((
-                    "Forward OOS → Breakout slice",
-                    delta_cell(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance"), percent=True),
-                    delta_cell(oos.get("global_average_precision"), breakout.get("global_average_precision")),
-                    delta_cell(enrich(oos), enrich(breakout)),
-                ))
-            lines.extend([
-                section("標準模型 SOP｜2. Generalization"),
-                render_table(
-                    ("Comparison", "Δ HM/HS Pair", "Δ PR-AUC", "Δ Top10×"),
-                    generalization_rows,
-                    alignments=("left", "right", "right", "right"),
-                ),
-            ])
-            h_rows = []
-            for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
-                row = dict(metrics.get(key) or {})
-                if not row:
-                    continue
-                top10 = dict(row.get("top_10pct") or {})
-                top20 = dict(row.get("top_20pct") or {})
-                h_rows.append((
-                    scope_text(label),
-                    _fmt_simple_metric(None if row.get("population_hmhs_pct") is None else float(row["population_hmhs_pct"]) / 100.0, percent=True),
-                    _fmt_simple_metric(row.get("pairwise_concordance"), percent=True),
-                    _fmt_simple_metric(row.get("global_average_precision")),
-                    _fmt_simple_metric(row.get("mean_daily_average_precision")),
-                    f"{_fmt_simple_metric(None if top10.get('hmhs_pct') is None else float(top10['hmhs_pct']) / 100.0, percent=True)} / {_fmt_simple_metric(top10.get('hmhs_enrichment'))}×",
-                    f"{_fmt_simple_metric(None if top20.get('hmhs_pct') is None else float(top20['hmhs_pct']) / 100.0, percent=True)} / {_fmt_simple_metric(top20.get('hmhs_enrichment'))}×",
-                ))
-            lines.extend([
-                section("標準模型 SOP｜3. Direct HM/HS H-only Learnability"),
-                render_table(
-                    ("Split", "HM/HS Pop", "Pair", "PR-AUC", "Daily PR-AUC", "Top10 / ×", "Top20 / ×"),
-                    h_rows,
-                    alignments=("left", "right", "right", "right", "right", "right", "right"),
-                ),
-            ])
-        else:
-            generalization_rows = [(
-                "Primary score",
-                delta_cell(val.get("mean_daily_spearman"), oos.get("mean_daily_spearman")),
-                delta_cell(val.get("pairwise_concordance"), oos.get("pairwise_concordance"), percent=True),
-                delta_cell(
-                    None if val.get("top_score_decile_raw_target_mean") is None or val.get("bottom_score_decile_raw_target_mean") is None else float(val["top_score_decile_raw_target_mean"]) - float(val["bottom_score_decile_raw_target_mean"]),
-                    None if oos.get("top_score_decile_raw_target_mean") is None or oos.get("bottom_score_decile_raw_target_mean") is None else float(oos["top_score_decile_raw_target_mean"]) - float(oos["bottom_score_decile_raw_target_mean"]),
-                ),
-            )]
-            if daily_universal and breakout:
-                generalization_rows.append((
-                    "OOS → Breakout slice",
-                    delta_cell(oos.get("mean_daily_spearman"), breakout.get("mean_daily_spearman")),
-                    delta_cell(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance"), percent=True),
-                    delta_cell(
-                        None if oos.get("top_score_decile_raw_target_mean") is None or oos.get("bottom_score_decile_raw_target_mean") is None else float(oos["top_score_decile_raw_target_mean"]) - float(oos["bottom_score_decile_raw_target_mean"]),
-                        None if breakout.get("top_score_decile_raw_target_mean") is None or breakout.get("bottom_score_decile_raw_target_mean") is None else float(breakout["top_score_decile_raw_target_mean"]) - float(breakout["bottom_score_decile_raw_target_mean"]),
-                    ),
-                ))
-            lines.extend([
-                section("標準模型 SOP｜2. Generalization"),
-                render_table(
-                    ("Comparison", "Δ Daily rho", "Δ Pair", "Δ Top-Bottom"),
-                    generalization_rows,
-                    alignments=("left", "right", "right", "right"),
-                ),
-            ])
+    learnability_rows = []
+    for name in split_names:
+        row = dict(metrics.get(name) or {})
+        learnability_rows.append({
+            "split": name,
+            "group_count": int(row.get("group_count", 0) or 0),
+            "mean_daily_spearman": row.get("mean_daily_spearman"),
+            "global_spearman_vs_raw_target": row.get("global_spearman_vs_raw_target"),
+            "pairwise_concordance": row.get("pairwise_concordance"),
+            "top_score_decile_raw_target_mean": row.get("top_score_decile_raw_target_mean"),
+            "bottom_score_decile_raw_target_mean": row.get("bottom_score_decile_raw_target_mean"),
+        })
 
-    def add_head_gate(title: str, evaluation: dict, heads: tuple[tuple[str, str], ...]) -> None:
-        rows = []
+    generalization_rows = []
+    val = dict(metrics.get("validation") or {})
+    oos = dict(metrics.get("oos") or {})
+    breakout = dict(metrics.get("breakout_candidate_oos") or {})
+
+    def top_bottom(row: dict) -> float | None:
+        top = row.get("top_score_decile_raw_target_mean")
+        bottom = row.get("bottom_score_decile_raw_target_mean")
+        return None if top is None or bottom is None else float(top) - float(bottom)
+
+    def delta(left, right):
+        return None if left is None or right is None else float(right) - float(left)
+
+    if val and oos:
+        generalization_rows.append({
+            "comparison": "Primary score",
+            "delta_daily_rho": delta(val.get("mean_daily_spearman"), oos.get("mean_daily_spearman")),
+            "delta_pair": None if delta(val.get("pairwise_concordance"), oos.get("pairwise_concordance")) is None else delta(val.get("pairwise_concordance"), oos.get("pairwise_concordance")) * 100.0,
+            "delta_top_bottom": delta(top_bottom(val), top_bottom(oos)),
+        })
+        if daily_universal and breakout:
+            generalization_rows.append({
+                "comparison": "OOS → Breakout slice",
+                "delta_daily_rho": delta(oos.get("mean_daily_spearman"), breakout.get("mean_daily_spearman")),
+                "delta_pair": None if delta(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance")) is None else delta(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance")) * 100.0,
+                "delta_top_bottom": delta(top_bottom(oos), top_bottom(breakout)),
+            })
+
+    multi_head_rows = []
+    for evaluation, heads in (
+        (dict(payload.get("conditional_mfe_safety_evaluation") or {}), (("Primary MFE", "primary_mfe"), ("Conditional Safety", "conditional_safety"))),
+        (dict(payload.get("reverse_conditional_mfe_evaluation") or {}), (("Raw Safety", "raw_safety"), ("Conditional MFE", "conditional_mfe"))),
+    ):
+        if not evaluation:
+            continue
         for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
             scope = dict(evaluation.get(scope_key) or {})
             for head_label, head_key in heads:
                 row = dict(scope.get(head_key) or {})
-                if not row:
-                    continue
-                rows.append((
-                    scope_text(scope_label),
-                    head_label,
-                    _fmt_simple_metric(row.get("mean_daily_spearman")),
-                    _fmt_simple_metric(row.get("global_spearman_vs_raw_target")),
-                    _fmt_simple_metric(row.get("pairwise_concordance"), percent=True),
-                ))
-        if rows:
-            lines.extend([
-                section(title),
-                render_table(
-                    ("Split", "Head", "Daily rho", "Global rho", "Pair"),
-                    rows,
-                    alignments=("left", "left", "right", "right", "right"),
-                ),
-            ])
-
-    conditional_eval = dict(payload.get("conditional_mfe_safety_evaluation") or {})
-    if conditional_eval:
-        add_head_gate(
-            "標準模型 SOP｜3. Multi-head Learnability",
-            conditional_eval,
-            (("Primary MFE", "primary_mfe"), ("Conditional Safety", "conditional_safety")),
-        )
-    reverse_eval = dict(payload.get("reverse_conditional_mfe_evaluation") or {})
-    if reverse_eval:
-        add_head_gate(
-            "標準模型 SOP｜3. Multi-head Learnability",
-            reverse_eval,
-            (("Raw Safety", "raw_safety"), ("Conditional MFE", "conditional_mfe")),
-        )
+                if row:
+                    multi_head_rows.append({
+                        "split": scope_label,
+                        "head": head_label,
+                        "mean_daily_spearman": row.get("mean_daily_spearman"),
+                        "global_spearman_vs_raw_target": row.get("global_spearman_vs_raw_target"),
+                        "pairwise_concordance": row.get("pairwise_concordance"),
+                    })
 
     raw_eval = dict(
         payload.get("safety_raw_mfe_hmhs_evaluation")
@@ -621,368 +520,418 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
         or {}
     )
     if raw_eval:
-        add_head_gate(
-            "標準模型 SOP｜3. Multi-head Learnability",
-            raw_eval,
-            (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")),
-        )
-
-        joint_rows = []
-        for scope_label, scope_key in (
-            ("Validation", "validation"),
-            ("Forward OOS", "oos"),
-            ("Breakout slice", "breakout_candidate_oos"),
-        ):
+        for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
             scope = dict(raw_eval.get(scope_key) or {})
-            joint = dict(scope.get("joint_hmhs") or {})
-            product = dict(scope.get("joint_product_control") or {})
-            if not joint:
-                continue
-            top10 = dict(joint.get("top_10pct") or {})
-            product10 = dict(product.get("top_10pct") or {})
-            joint_rows.append((
-                scope_text(scope_label),
-                _fmt_simple_metric(None if joint.get("population_hmhs_pct") is None else float(joint["population_hmhs_pct"]) / 100.0, percent=True),
-                _fmt_simple_metric(joint.get("pairwise_concordance"), percent=True),
-                _fmt_simple_metric(product.get("pairwise_concordance"), percent=True),
-                _fmt_simple_metric(joint.get("global_average_precision")),
-                _fmt_simple_metric(product.get("global_average_precision")),
-                _fmt_simple_metric(None if top10.get("hmhs_pct") is None else float(top10["hmhs_pct"]) / 100.0, percent=True),
-                _fmt_simple_metric(top10.get("hmhs_enrichment")),
-                _fmt_simple_metric(None if product10.get("hmhs_pct") is None else float(product10["hmhs_pct"]) / 100.0, percent=True),
-                _fmt_simple_metric(product10.get("hmhs_enrichment")),
-            ))
-        if joint_rows:
-            lines.extend([
-                section("標準模型 SOP｜3. Direct HM/HS Joint Retrieval"),
-                render_table(
-                    (
-                        "Split", "HM/HS Pop", "Direct Pair", "Product Pair",
-                        "Direct PR-AUC", "Product PR-AUC",
-                        "Direct Top10", "Direct ×", "Product Top10", "Product ×",
-                    ),
-                    joint_rows,
-                    alignments=("left", "right", "right", "right", "right", "right", "right", "right", "right", "right"),
-                ),
-            ])
+            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")):
+                row = dict(scope.get(head_key) or {})
+                if row:
+                    multi_head_rows.append({
+                        "split": scope_label,
+                        "head": head_label,
+                        "mean_daily_spearman": row.get("mean_daily_spearman"),
+                        "global_spearman_vs_raw_target": row.get("global_spearman_vs_raw_target"),
+                        "pairwise_concordance": row.get("pairwise_concordance"),
+                    })
 
-        def truth_cell(cell: dict) -> str:
-            if not cell:
-                return "0 / - / -"
-            pct = cell.get("population_pct")
-            enrich = cell.get("independence_enrichment")
-            return (
-                f"{int(cell.get('n', 0) or 0):,} / "
-                f"{'-' if pct is None else f'{float(pct):.2f}%'} / "
-                f"{'-' if enrich is None else f'{float(enrich):.2f}×'}"
-            )
-
-        for scope_label, scope_key in (("Daily universal OOS", "oos"), ("Breakout candidate OOS", "breakout_candidate_oos")):
-            scope = dict(raw_eval.get(scope_key) or {})
-            gate = dict(scope.get("model_gate") or {})
-            if not gate:
-                continue
-            actual = dict(gate.get("actual_truth_geometry") or {})
-            upper = dict(gate.get("upper_right_s5_m5") or {})
-            lines.extend([
-                section(f"標準模型 SOP｜4. Truth / Prediction Geometry｜{scope_label}"),
-                render_key_values((
-                    ("Actual Safety↔MFE Daily rho", _fmt_simple_metric(actual.get("safety_to_mfe_mean_daily_spearman"))),
-                    ("Pred Safety↔Raw-MFE Daily rho", _fmt_simple_metric(gate.get("predicted_safety_to_raw_mfe_mean_daily_spearman"))),
-                    ("Actual S5×M5", truth_cell(dict(actual.get("s5_m5") or {}))),
-                    ("Actual S4+×M4+", truth_cell(dict(actual.get("s4plus_m4plus") or {}))),
-                    (
-                        "Pred S5×M5 N",
-                        styled_signal(
-                            f"{int(upper.get('n', 0) or 0):,}",
-                            SIGNAL_NEGATIVE
-                            if int(dict(actual.get("s5_m5") or {}).get("n", 0) or 0) > 0
-                            and int(upper.get("n", 0) or 0) == 0
-                            else SIGNAL_NEUTRAL,
-                            target="console",
-                            enabled=color,
-                            bold=True,
-                        ),
-                    ),
-                    ("Joint product→actual HM/HS Daily rho", _fmt_simple_metric(gate.get("joint_product_to_actual_hmhs_mean_daily_spearman"))),
-                )),
-            ])
-            actual_rows = []
-            for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1):
-                actual_rows.append((f"S{s_idx}", *(truth_cell(dict(cell or {})) for cell in row)))
-            if actual_rows:
-                lines.append(render_table(
-                    ("Actual Safety \\ Pure-MFE", "M1", "M2", "M3", "M4", "M5"),
-                    actual_rows,
-                    alignments=("left", "right", "right", "right", "right", "right"),
-                ))
-            predicted_rows = []
-            for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
-                cells = []
-                for cell in row:
-                    cell = dict(cell or {})
-                    pct = cell.get("actual_hmhs_pct")
-                    cells.append(f"{int(cell.get('n', 0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'}")
-                predicted_rows.append((f"S{s_idx}", *cells))
-            if predicted_rows:
-                lines.append(render_table(
-                    ("Pred Safety \\ Raw-MFE", "M1", "M2", "M3", "M4", "M5"),
-                    predicted_rows,
-                    alignments=("left", "right", "right", "right", "right", "right"),
-                ))
-            cohort_rows = []
-            for cohort in list(gate.get("safety_cohorts") or []):
-                cohort = dict(cohort or {})
-                cohort_rows.append((
-                    f"S{int(cohort.get('predicted_safety_quintile', 0) or 0)}",
-                    f"{int(cohort.get('n', 0) or 0):,}",
-                    _fmt_simple_metric(cohort.get("raw_mfe_to_actual_mfe_mean_daily_spearman")),
-                    _fmt_simple_metric(None if cohort.get("high_mfe_pct") is None else float(cohort["high_mfe_pct"]) / 100.0, percent=True),
-                    _fmt_simple_metric(None if cohort.get("hmhs_pct") is None else float(cohort["hmhs_pct"]) / 100.0, percent=True),
-                ))
-            if cohort_rows:
-                lines.append(render_table(
-                    ("Pred Safety", "N", "Raw-MFE→MFE rho", "High-MFE", "HM/HS"),
-                    cohort_rows,
-                    alignments=("left", "right", "right", "right", "right"),
-                ))
+    geometry_scopes = []
+    for scope_label, scope_key in (("Daily universal OOS", "oos"), ("Breakout candidate OOS", "breakout_candidate_oos")):
+        scope = dict(raw_eval.get(scope_key) or {})
+        gate = dict(scope.get("model_gate") or {})
+        if gate:
+            geometry_scopes.append((scope_label, gate))
 
     sample = dict((metrics.get("oos") or {}).get("top_k_quality") or {})
+    ranking = None
     if sample:
-        top_k = int(sample.get("top_k", 0) or 0)
-        boundary_width = int(sample.get("boundary_width", 0) or 0)
-        competition_scope = "只看同日樣本數>K" if daily_universal else "只看候選數>K"
-
-        def top_k_row(name: str) -> tuple[str, ...]:
+        ranking = {
+            "top_k": int(sample.get("top_k", 0) or 0),
+            "boundary_width": int(sample.get("boundary_width", 0) or 0),
+            "competition_scope": "只看同日樣本數>K" if daily_universal else "只看候選數>K",
+            "rows": [],
+        }
+        for name in split_names:
             quality = dict((metrics.get(name) or {}).get("top_k_quality") or {})
-            return (
-                name,
-                _fmt_simple_metric(quality.get("ndcg_at_k")),
-                _fmt_simple_metric(quality.get("top_k_raw_target_mean")),
-                _fmt_simple_metric(quality.get("top_k_raw_target_lift")),
-                _fmt_simple_metric(quality.get("oracle_top_k_overlap"), percent=True),
-                _fmt_simple_metric(quality.get("boundary_concordance"), percent=True),
-                _fmt_simple_metric(quality.get("boundary_raw_target_gap")),
-                f"{int(quality.get('competition_date_count', quality.get('top_k_date_count', 0)) or 0):,}",
-            )
+            ranking["rows"].append({
+                "split": name,
+                "ndcg_at_k": quality.get("ndcg_at_k"),
+                "top_k_raw_target_mean": quality.get("top_k_raw_target_mean"),
+                "top_k_raw_target_lift": quality.get("top_k_raw_target_lift"),
+                "oracle_top_k_overlap": quality.get("oracle_top_k_overlap"),
+                "boundary_concordance": quality.get("boundary_concordance"),
+                "boundary_raw_target_gap": quality.get("boundary_raw_target_gap"),
+                "competition_date_count": int(quality.get("competition_date_count", quality.get("top_k_date_count", 0)) or 0),
+            })
 
+    evidence = [
+        ("Learnability", "AVAILABLE" if metrics.get("oos") else "N/A"),
+        ("Generalization", "AVAILABLE" if metrics.get("validation") and metrics.get("oos") else "N/A"),
+        ("Truth / Prediction Geometry", "AVAILABLE" if geometry_scopes else "N/A"),
+        ("Breakout application slice", "AVAILABLE" if metrics.get("breakout_candidate_oos") else "N/A"),
+        ("Ranking / Boundary", "AVAILABLE" if sample else "N/A"),
+    ]
+
+    extensions = []
+    if direct_hmhs_only:
+        ext_rows = []
+        for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
+            row = dict(metrics.get(key) or {})
+            if not row:
+                continue
+            top10 = dict(row.get("top_10pct") or {})
+            top20 = dict(row.get("top_20pct") or {})
+            ext_rows.append({
+                "split": label,
+                "population_hmhs_pct": row.get("population_hmhs_pct"),
+                "pairwise_concordance": row.get("pairwise_concordance"),
+                "global_average_precision": row.get("global_average_precision"),
+                "mean_daily_average_precision": row.get("mean_daily_average_precision"),
+                "top10": f"{_fmt_simple_metric(None if top10.get('hmhs_pct') is None else float(top10['hmhs_pct']) / 100.0, percent=True)} / {_fmt_simple_metric(top10.get('hmhs_enrichment'))}×",
+                "top20": f"{_fmt_simple_metric(None if top20.get('hmhs_pct') is None else float(top20['hmhs_pct']) / 100.0, percent=True)} / {_fmt_simple_metric(top20.get('hmhs_enrichment'))}×",
+            })
+        def enrich(row: dict) -> float | None:
+            return dict(row.get("top_10pct") or {}).get("hmhs_enrichment")
+        ext_gen = []
+        if val and oos:
+            ext_gen.append({
+                "comparison": "Validation → Forward OOS",
+                "delta_pair": None if delta(val.get("pairwise_concordance"), oos.get("pairwise_concordance")) is None else delta(val.get("pairwise_concordance"), oos.get("pairwise_concordance")) * 100.0,
+                "delta_pr_auc": delta(val.get("global_average_precision"), oos.get("global_average_precision")),
+                "delta_top10_enrichment": delta(enrich(val), enrich(oos)),
+            })
+            if breakout:
+                ext_gen.append({
+                    "comparison": "Forward OOS → Breakout slice",
+                    "delta_pair": None if delta(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance")) is None else delta(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance")) * 100.0,
+                    "delta_pr_auc": delta(oos.get("global_average_precision"), breakout.get("global_average_precision")),
+                    "delta_top10_enrichment": delta(enrich(oos), enrich(breakout)),
+                })
+        extensions.append({"id": "direct_hmhs_h_only", "rows": ext_rows, "generalization": ext_gen})
+
+    joint_rows = []
+    for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
+        scope = dict(raw_eval.get(scope_key) or {})
+        joint = dict(scope.get("joint_hmhs") or {})
+        product = dict(scope.get("joint_product_control") or {})
+        if not joint:
+            continue
+        top10 = dict(joint.get("top_10pct") or {})
+        product10 = dict(product.get("top_10pct") or {})
+        joint_rows.append({
+            "split": scope_label,
+            "population_hmhs_pct": joint.get("population_hmhs_pct"),
+            "direct_pair": joint.get("pairwise_concordance"),
+            "product_pair": product.get("pairwise_concordance"),
+            "direct_pr_auc": joint.get("global_average_precision"),
+            "product_pr_auc": product.get("global_average_precision"),
+            "direct_top10_pct": top10.get("hmhs_pct"),
+            "direct_top10_enrichment": top10.get("hmhs_enrichment"),
+            "product_top10_pct": product10.get("hmhs_pct"),
+            "product_top10_enrichment": product10.get("hmhs_enrichment"),
+        })
+    if joint_rows:
+        extensions.append({"id": "direct_hmhs_joint_retrieval", "rows": joint_rows})
+
+    return {
+        "split_names": split_names,
+        "learnability": learnability_rows,
+        "generalization": generalization_rows,
+        "multi_head": multi_head_rows,
+        "geometry": geometry_scopes,
+        "ranking": ranking,
+        "evidence": evidence,
+        "extensions": extensions,
+    }
+
+
+def _render_model_contract_table(table, rows, *, target: str, scope_styler=None, delta_style: bool = False) -> str:
+    rendered = []
+    for row in rows:
+        cells = []
+        for column in table.columns:
+            value = row.get(column.key)
+            text = format_contract_value(column, value)
+            if column.key == "split" and scope_styler is not None:
+                text = scope_styler(text)
+            if delta_style and column.preference in {"higher", "lower"} and value is not None:
+                signal = signal_for_delta(value, preference=column.preference)
+                text = styled_signal(
+                    text, signal, target=target,
+                    enabled=console_color_enabled() if target == "console" else None,
+                    bold=True,
+                )
+            cells.append(text)
+        rendered.append(tuple(cells))
+    if target == "console":
+        return render_table(table.headers, rendered, alignments=table.alignments)
+    header = "| " + " | ".join(table.headers) + " |"
+    separator = "|" + "|".join("---" if align == "left" else "---:" for align in table.alignments) + "|"
+    body = ["| " + " | ".join(row) + " |" for row in rendered]
+    return "\n".join([header, separator, *body])
+
+
+def _render_continuous_ranker_simple_console(payload: dict) -> str:
+    view = _model_sop_view(payload)
+    if not view:
+        return ""
+    color = console_color_enabled()
+
+    def section(section_id: str, *, suffix: str = "") -> str:
+        return render_section(paint(_model_sop_section_title(section_id, suffix=suffix), "cyan", enabled=color, bold=True))
+
+    def extension(title: str) -> str:
+        return render_section(paint(title, "cyan", enabled=color, bold=True))
+
+    def scope_text(value: str) -> str:
+        tone = "gray" if str(value).lower() == "validation" else "cyan"
+        return paint(str(value), tone, enabled=color, bold=str(value).lower() != "validation")
+
+    lines = []
+    lines.extend([
+        section("learnability"),
+        _render_model_contract_table(
+            table_contract("model.standard_sop", "learnability", "learnability"),
+            view["learnability"], target="console", scope_styler=scope_text,
+        ),
+    ])
+    if view["generalization"]:
         lines.extend([
-            section(f"標準模型 SOP｜5. Ranking / Boundary（K={top_k}，boundary={boundary_width}；{competition_scope}）"),
-            render_table(
-                ("Split", "NDCG@K", "Top-K Target", "Lift", "Oracle overlap", "Boundary", "Boundary gap", "競爭日"),
-                [top_k_row(name) for name in split_names],
-                alignments=("left", "right", "right", "right", "right", "right", "right", "right"),
+            section("generalization"),
+            _render_model_contract_table(
+                table_contract("model.standard_sop", "generalization", "generalization"),
+                view["generalization"], target="console", delta_style=True,
+            ),
+        ])
+    if view["multi_head"]:
+        lines.extend([
+            section("multi_head"),
+            _render_model_contract_table(
+                table_contract("model.standard_sop", "multi_head", "multi_head"),
+                view["multi_head"], target="console", scope_styler=scope_text,
             ),
         ])
 
-    evidence = [
-        ("Learnability", evidence_status("AVAILABLE" if metrics.get("oos") else "N/A")),
-        ("Generalization", evidence_status("AVAILABLE" if metrics.get("validation") and metrics.get("oos") else "N/A")),
-        ("Truth / Prediction Geometry", evidence_status("AVAILABLE" if raw_eval else "N/A")),
-        (
-            "Direct HM/HS Joint Retrieval",
-            evidence_status(
-                "AVAILABLE"
-                if any(dict(raw_eval.get(key) or {}).get("joint_hmhs") for key in ("validation", "oos", "breakout_candidate_oos"))
-                else "N/A"
+    def truth_cell(cell: dict) -> str:
+        if not cell:
+            return "0 / - / -"
+        pct = cell.get("population_pct")
+        enrich = cell.get("independence_enrichment")
+        return f"{int(cell.get('n', 0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'} / {'-' if enrich is None else f'{float(enrich):.2f}×'}"
+
+    for scope_label, gate in view["geometry"]:
+        actual = dict(gate.get("actual_truth_geometry") or {})
+        upper = dict(gate.get("upper_right_s5_m5") or {})
+        pred_n = int(upper.get("n", 0) or 0)
+        actual_s5_n = int(dict(actual.get("s5_m5") or {}).get("n", 0) or 0)
+        pred_n_text = styled_signal(
+            f"{pred_n:,}",
+            SIGNAL_NEGATIVE if actual_s5_n > 0 and pred_n == 0 else SIGNAL_NEUTRAL,
+            target="console", enabled=color, bold=True,
+        )
+        lines.extend([
+            section("truth_prediction_geometry", suffix=scope_label),
+            render_key_values((
+                ("Actual Safety↔MFE Daily rho", _fmt_simple_metric(actual.get("safety_to_mfe_mean_daily_spearman"))),
+                ("Pred Safety↔Raw-MFE Daily rho", _fmt_simple_metric(gate.get("predicted_safety_to_raw_mfe_mean_daily_spearman"))),
+                ("Actual S5×M5", truth_cell(dict(actual.get("s5_m5") or {}))),
+                ("Actual S4+×M4+", truth_cell(dict(actual.get("s4plus_m4plus") or {}))),
+                ("Pred S5×M5 N", pred_n_text),
+                ("Joint product→actual HM/HS Daily rho", _fmt_simple_metric(gate.get("joint_product_to_actual_hmhs_mean_daily_spearman"))),
+            )),
+        ])
+        actual_rows = []
+        for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1):
+            actual_rows.append((f"S{s_idx}", *(truth_cell(dict(cell or {})) for cell in row)))
+        if actual_rows:
+            t = table_contract("model.standard_sop", "truth_prediction_geometry", "truth_5x5")
+            lines.append(render_table(t.headers, actual_rows, alignments=t.alignments))
+        predicted_rows = []
+        for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
+            cells = []
+            for cell in row:
+                cell = dict(cell or {})
+                pct = cell.get("actual_hmhs_pct")
+                cells.append(f"{int(cell.get('n', 0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'}")
+            predicted_rows.append((f"S{s_idx}", *cells))
+        if predicted_rows:
+            t = table_contract("model.standard_sop", "truth_prediction_geometry", "predicted_5x5")
+            lines.append(render_table(t.headers, predicted_rows, alignments=t.alignments))
+        cohort_rows = []
+        for cohort in list(gate.get("safety_cohorts") or []):
+            cohort = dict(cohort or {})
+            cohort_rows.append({
+                "safety": f"S{int(cohort.get('predicted_safety_quintile', 0) or 0)}",
+                "n": int(cohort.get("n", 0) or 0),
+                "raw_mfe_to_actual_mfe_mean_daily_spearman": cohort.get("raw_mfe_to_actual_mfe_mean_daily_spearman"),
+                "high_mfe_pct": cohort.get("high_mfe_pct"),
+                "hmhs_pct": cohort.get("hmhs_pct"),
+            })
+        if cohort_rows:
+            lines.append(_render_model_contract_table(
+                table_contract("model.standard_sop", "truth_prediction_geometry", "safety_cohorts"),
+                cohort_rows, target="console",
+            ))
+
+    ranking = view.get("ranking")
+    if ranking:
+        suffix = f"K={ranking['top_k']}，boundary={ranking['boundary_width']}；{ranking['competition_scope']}"
+        lines.extend([
+            section("ranking_boundary", suffix=suffix),
+            _render_model_contract_table(
+                table_contract("model.standard_sop", "ranking_boundary", "ranking_boundary"),
+                ranking["rows"], target="console", scope_styler=scope_text,
             ),
-        ),
-        ("Breakout application slice", evidence_status("AVAILABLE" if metrics.get("breakout_candidate_oos") else "N/A")),
-        ("Ranking / Boundary", evidence_status("AVAILABLE" if sample else "N/A")),
-    ]
+        ])
+
+    evidence_rows = []
+    for label, status in view["evidence"]:
+        normalized = str(status).upper()
+        signal = {"AVAILABLE": SIGNAL_POSITIVE, "READY": SIGNAL_POSITIVE, "PARTIAL": SIGNAL_WARNING, "BLOCKED": SIGNAL_NEGATIVE, "MISSING": SIGNAL_NEGATIVE}.get(normalized, SIGNAL_NEUTRAL)
+        evidence_rows.append({"evidence": label, "status": styled_signal(status, signal, target="console", enabled=color, bold=True)})
     lines.extend([
-        section("標準模型 SOP｜6. Evidence Coverage"),
-        render_table(("Evidence", "Status"), evidence, alignments=("left", "left")),
+        section("evidence_coverage"),
+        _render_model_contract_table(
+            table_contract("model.standard_sop", "evidence_coverage", "evidence_coverage"),
+            evidence_rows, target="console",
+        ),
     ])
+
+    for ext in view["extensions"]:
+        ext_id = str(ext["id"])
+        lines.append(extension(_model_extension_title(payload, ext_id)))
+        if ext_id == "direct_hmhs_h_only":
+            if ext.get("generalization"):
+                lines.append("Generalization")
+                lines.append(_render_model_contract_table(
+                    extension_contract(ext_id).tables[1], ext["generalization"], target="console", delta_style=True,
+                ))
+            lines.append("Learnability")
+            lines.append(_render_model_contract_table(
+                extension_contract(ext_id).tables[0], ext["rows"], target="console", scope_styler=scope_text,
+            ))
+        elif ext_id == "direct_hmhs_joint_retrieval":
+            lines.append(_render_model_contract_table(
+                extension_contract(ext_id).tables[0], ext["rows"], target="console", scope_styler=scope_text,
+            ))
     return "\n".join(line for line in lines if line)
 
+
 def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
-    metrics = dict(payload.get("split_metrics") or {})
-    if not metrics:
+    view = _model_sop_view(payload)
+    if not view:
         return []
 
-    def section(title: str, *, level: int = 2) -> str:
-        return f"{'#' * int(level)} {markdown_tone(title, 'blue', bold=True)}"
+    def section(section_id: str, *, suffix: str = "") -> str:
+        return f"## {markdown_tone(_model_sop_section_title(section_id, suffix=suffix), 'blue', bold=True)}"
+
+    def extension(title: str) -> str:
+        return f"## {markdown_tone(title, 'blue', bold=True)}"
 
     def scope_text(value: str) -> str:
         tone = "gray" if str(value).lower() == "validation" else "blue"
         return markdown_tone(value, tone, bold=str(value).lower() != "validation")
 
-    daily_universal = bool(metrics.get("breakout_candidate_oos"))
-    lines = [
-        "",
-        section("標準模型 SOP｜1. Learnability"),
-        "",
-        "| Split | Groups | Daily rho | Global rho | Pair | Top 10% Target | Bottom 10% Target |",
-        "|---|---:|---:|---:|---:|---:|---:|",
-    ]
-    split_names = (
-        ["validation", "oos", "breakout_candidate_oos"]
-        if daily_universal
-        else ["validation", "selection", "oos"]
-    )
-    for name in split_names:
-        row = dict(metrics.get(name) or {})
-        lines.append(
-            f"| {scope_text(name)} | {int(row.get('group_count', 0) or 0):,} "
-            f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
-            f"| {_fmt_simple_metric(row.get('global_spearman_vs_raw_target'))} "
-            f"| {_fmt_simple_metric(row.get('pairwise_concordance'), percent=True)} "
-            f"| {_fmt_simple_metric(row.get('top_score_decile_raw_target_mean'))} "
-            f"| {_fmt_simple_metric(row.get('bottom_score_decile_raw_target_mean'))} |"
+    lines = ["", section("learnability"), "", _render_model_contract_table(
+        table_contract("model.standard_sop", "learnability", "learnability"), view["learnability"], target="markdown", scope_styler=scope_text,
+    )]
+    if view["generalization"]:
+        lines.extend(["", section("generalization"), "", _render_model_contract_table(
+            table_contract("model.standard_sop", "generalization", "generalization"), view["generalization"], target="markdown", delta_style=True,
+        )])
+    if view["multi_head"]:
+        lines.extend(["", section("multi_head"), "", _render_model_contract_table(
+            table_contract("model.standard_sop", "multi_head", "multi_head"), view["multi_head"], target="markdown", scope_styler=scope_text,
+        )])
+
+    def truth_cell(cell: dict) -> str:
+        if not cell:
+            return "0 / - / -"
+        pct = cell.get("population_pct")
+        enrich = cell.get("independence_enrichment")
+        return f"{int(cell.get('n', 0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'} / {'-' if enrich is None else f'{float(enrich):.2f}×'}"
+
+    for scope_label, gate in view["geometry"]:
+        actual = dict(gate.get("actual_truth_geometry") or {})
+        upper = dict(gate.get("upper_right_s5_m5") or {})
+        pred_n = int(upper.get("n", 0) or 0)
+        actual_s5_n = int(dict(actual.get("s5_m5") or {}).get("n", 0) or 0)
+        pred_n_text = styled_signal(
+            f"{pred_n:,}", SIGNAL_NEGATIVE if actual_s5_n > 0 and pred_n == 0 else SIGNAL_NEUTRAL,
+            target="markdown", bold=True,
         )
-
-    conditional_eval = dict(payload.get("conditional_mfe_safety_evaluation") or {})
-    conditional_rows: list[tuple[str, str, dict]] = []
-    if conditional_eval:
-        for scope_label, scope_key in (
-            ("Validation", "validation"),
-            ("Forward OOS", "oos"),
-            ("Breakout slice", "breakout_candidate_oos"),
-        ):
-            scope = dict(conditional_eval.get(scope_key) or {})
-            for head_label, head_key in (
-                ("Primary MFE", "primary_mfe"),
-                ("Conditional Safety", "conditional_safety"),
-            ):
-                row = dict(scope.get(head_key) or {})
-                if row:
-                    conditional_rows.append((scope_label, head_label, row))
-        if conditional_rows:
-            lines.extend([
-                "",
-                section("標準模型 SOP｜3. Multi-head Learnability｜Conditional MFE-Safety"),
-                "",
-                "| Split | Head | Daily rho | Global rho | Pair |",
-                "|---|---|---:|---:|---:|",
-            ])
-            for scope_label, head_label, row in conditional_rows:
-                lines.append(
-                    f"| {scope_text(scope_label)} | {head_label} "
-                    f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
-                    f"| {_fmt_simple_metric(row.get('global_spearman_vs_raw_target'))} "
-                    f"| {_fmt_simple_metric(row.get('pairwise_concordance'), percent=True)} |"
-                )
-
-    reverse_eval = dict(payload.get("reverse_conditional_mfe_evaluation") or {})
-    reverse_rows: list[tuple[str, str, dict]] = []
-    if reverse_eval:
-        for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
-            scope = dict(reverse_eval.get(scope_key) or {})
-            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Conditional MFE", "conditional_mfe")):
-                row = dict(scope.get(head_key) or {})
-                if row:
-                    reverse_rows.append((scope_label, head_label, row))
-        if reverse_rows:
-            lines.extend([
-                "",
-                section("標準模型 SOP｜3. Multi-head Learnability｜Reverse-Conditional MFE"),
-                "",
-                "| Split | Head | Daily rho | Global rho | Pair |",
-                "|---|---|---:|---:|---:|",
-            ])
-            for scope_label, head_label, row in reverse_rows:
-                lines.append(
-                    f"| {scope_text(scope_label)} | {head_label} "
-                    f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
-                    f"| {_fmt_simple_metric(row.get('global_spearman_vs_raw_target'))} "
-                    f"| {_fmt_simple_metric(row.get('pairwise_concordance'), percent=True)} |"
-                )
-
-    raw_eval = dict(
-        payload.get("safety_raw_mfe_hmhs_evaluation")
-        or payload.get("safety_raw_mfe_evaluation")
-        or {}
-    )
-    raw_rows: list[tuple[str, str, dict]] = []
-    if raw_eval:
-        for scope_label, scope_key in (
-            ("Validation", "validation"),
-            ("Forward OOS", "oos"),
-            ("Breakout slice", "breakout_candidate_oos"),
-        ):
-            scope = dict(raw_eval.get(scope_key) or {})
-            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")):
-                row = dict(scope.get(head_key) or {})
-                if row:
-                    raw_rows.append((scope_label, head_label, row))
-        if raw_rows:
-            lines.extend([
-                "",
-                section("標準模型 SOP｜3. Multi-head Learnability｜Safety / Raw-MFE"),
-                "",
-                "| Split | Head | Daily rho | Global rho | Pair |",
-                "|---|---|---:|---:|---:|",
-            ])
-            for scope_label, head_label, row in raw_rows:
-                lines.append(
-                    f"| {scope_text(scope_label)} | {head_label} "
-                    f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
-                    f"| {_fmt_simple_metric(row.get('global_spearman_vs_raw_target'))} "
-                    f"| {_fmt_simple_metric(row.get('pairwise_concordance'), percent=True)} |"
-                )
-        joint_rows = []
-        for scope_label, scope_key in (
-            ("Validation", "validation"),
-            ("Forward OOS", "oos"),
-            ("Breakout slice", "breakout_candidate_oos"),
-        ):
-            scope = dict(raw_eval.get(scope_key) or {})
-            joint = dict(scope.get("joint_hmhs") or {})
-            product = dict(scope.get("joint_product_control") or {})
-            if not joint:
-                continue
-            top10 = dict(joint.get("top_10pct") or {})
-            product10 = dict(product.get("top_10pct") or {})
-            joint_rows.append((scope_label, joint, product, top10, product10))
-        if joint_rows:
-            lines.extend([
-                "",
-                section("標準模型 SOP｜3. Direct HM/HS Joint Retrieval"),
-                "",
-                "| Split | HM/HS Pop | Direct Pair | Product Pair | Direct PR-AUC | Product PR-AUC | Direct Top10 / × | Product Top10 / × |",
-                "|---|---:|---:|---:|---:|---:|---:|---:|",
-            ])
-            for scope_label, joint, product, top10, product10 in joint_rows:
-                pop = joint.get("population_hmhs_pct")
-                direct_top = top10.get("hmhs_pct")
-                product_top = product10.get("hmhs_pct")
-                lines.append(
-                    f"| {scope_text(scope_label)} "
-                    f"| {'-' if pop is None else f'{float(pop):.2f}%'} "
-                    f"| {_fmt_simple_metric(joint.get('pairwise_concordance'), percent=True)} "
-                    f"| {_fmt_simple_metric(product.get('pairwise_concordance'), percent=True)} "
-                    f"| {_fmt_simple_metric(joint.get('global_average_precision'))} "
-                    f"| {_fmt_simple_metric(product.get('global_average_precision'))} "
-                    f"| {'-' if direct_top is None else f'{float(direct_top):.2f}%'} / {_fmt_simple_metric(top10.get('hmhs_enrichment'))}× "
-                    f"| {'-' if product_top is None else f'{float(product_top):.2f}%'} / {_fmt_simple_metric(product10.get('hmhs_enrichment'))}× |"
-                )
-
-    sample = dict((metrics.get("oos") or {}).get("top_k_quality") or {})
-    if sample:
-        top_k = int(sample.get("top_k", 0) or 0)
-        boundary_width = int(sample.get("boundary_width", 0) or 0)
-        competition_scope = "只看同日樣本數>K" if daily_universal else "只看候選數>K"
         lines.extend([
-            "",
-            section(f"標準模型 SOP｜4. Ranking / Boundary Quality（K={top_k}，邊界寬度={boundary_width}；{competition_scope}）"),
-            "",
-            "| Split | NDCG@K | Top-K Target | Lift | Oracle overlap | Boundary | Boundary gap | 競爭日 |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|",
+            "", section("truth_prediction_geometry", suffix=scope_label), "",
+            f"- **Actual Safety↔MFE Daily rho**: `{_fmt_simple_metric(actual.get('safety_to_mfe_mean_daily_spearman'))}`",
+            f"- **Pred Safety↔Raw-MFE Daily rho**: `{_fmt_simple_metric(gate.get('predicted_safety_to_raw_mfe_mean_daily_spearman'))}`",
+            f"- **Actual S5×M5**: `{truth_cell(dict(actual.get('s5_m5') or {}))}`",
+            f"- **Actual S4+×M4+**: `{truth_cell(dict(actual.get('s4plus_m4plus') or {}))}`",
+            f"- **Pred S5×M5 N**: {pred_n_text}",
+            f"- **Joint product→actual HM/HS Daily rho**: `{_fmt_simple_metric(gate.get('joint_product_to_actual_hmhs_mean_daily_spearman'))}`",
         ])
-        for name in split_names:
-            quality = dict((metrics.get(name) or {}).get("top_k_quality") or {})
-            lines.append(
-                f"| {scope_text(name)} | {_fmt_simple_metric(quality.get('ndcg_at_k'))} "
-                f"| {_fmt_simple_metric(quality.get('top_k_raw_target_mean'))} "
-                f"| {_fmt_simple_metric(quality.get('top_k_raw_target_lift'))} "
-                f"| {_fmt_simple_metric(quality.get('oracle_top_k_overlap'), percent=True)} "
-                f"| {_fmt_simple_metric(quality.get('boundary_concordance'), percent=True)} "
-                f"| {_fmt_simple_metric(quality.get('boundary_raw_target_gap'))} "
-                f"| {int(quality.get('competition_date_count', quality.get('top_k_date_count', 0)) or 0):,} |"
-            )
-    return lines
+        actual_rows = []
+        for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1):
+            actual_rows.append({"safety": f"S{s_idx}", **{f"m{i}": truth_cell(dict(cell or {})) for i, cell in enumerate(row, start=1)}})
+        if actual_rows:
+            lines.extend(["", "### Actual 5×5", "", _render_model_contract_table(
+                table_contract("model.standard_sop", "truth_prediction_geometry", "truth_5x5"), actual_rows, target="markdown",
+            )])
+        predicted_rows = []
+        for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
+            cells = {}
+            for i, cell in enumerate(row, start=1):
+                cell = dict(cell or {})
+                pct = cell.get("actual_hmhs_pct")
+                cells[f"m{i}"] = f"{int(cell.get('n', 0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'}"
+            predicted_rows.append({"safety": f"S{s_idx}", **cells})
+        if predicted_rows:
+            lines.extend(["", "### Predicted 5×5", "", _render_model_contract_table(
+                table_contract("model.standard_sop", "truth_prediction_geometry", "predicted_5x5"), predicted_rows, target="markdown",
+            )])
+        cohort_rows = []
+        for cohort in list(gate.get("safety_cohorts") or []):
+            cohort = dict(cohort or {})
+            cohort_rows.append({
+                "safety": f"S{int(cohort.get('predicted_safety_quintile', 0) or 0)}",
+                "n": int(cohort.get("n", 0) or 0),
+                "raw_mfe_to_actual_mfe_mean_daily_spearman": cohort.get("raw_mfe_to_actual_mfe_mean_daily_spearman"),
+                "high_mfe_pct": cohort.get("high_mfe_pct"), "hmhs_pct": cohort.get("hmhs_pct"),
+            })
+        if cohort_rows:
+            lines.extend(["", _render_model_contract_table(
+                table_contract("model.standard_sop", "truth_prediction_geometry", "safety_cohorts"), cohort_rows, target="markdown",
+            )])
 
+    ranking = view.get("ranking")
+    if ranking:
+        suffix = f"K={ranking['top_k']}，boundary={ranking['boundary_width']}；{ranking['competition_scope']}"
+        lines.extend(["", section("ranking_boundary", suffix=suffix), "", _render_model_contract_table(
+            table_contract("model.standard_sop", "ranking_boundary", "ranking_boundary"), ranking["rows"], target="markdown", scope_styler=scope_text,
+        )])
+
+    evidence_rows = []
+    for label, status in view["evidence"]:
+        normalized = str(status).upper()
+        signal = {"AVAILABLE": SIGNAL_POSITIVE, "READY": SIGNAL_POSITIVE, "PARTIAL": SIGNAL_WARNING, "BLOCKED": SIGNAL_NEGATIVE, "MISSING": SIGNAL_NEGATIVE}.get(normalized, SIGNAL_NEUTRAL)
+        evidence_rows.append({"evidence": label, "status": styled_signal(status, signal, target="markdown", bold=True)})
+    lines.extend(["", section("evidence_coverage"), "", _render_model_contract_table(
+        table_contract("model.standard_sop", "evidence_coverage", "evidence_coverage"), evidence_rows, target="markdown",
+    )])
+
+    for ext in view["extensions"]:
+        ext_id = str(ext["id"])
+        lines.extend(["", extension(_model_extension_title(payload, ext_id)), ""])
+        if ext_id == "direct_hmhs_h_only":
+            if ext.get("generalization"):
+                lines.extend(["### Generalization", "", _render_model_contract_table(
+                    extension_contract(ext_id).tables[1], ext["generalization"], target="markdown", delta_style=True,
+                ), ""])
+            lines.extend(["### Learnability", "", _render_model_contract_table(
+                extension_contract(ext_id).tables[0], ext["rows"], target="markdown", scope_styler=scope_text,
+            )])
+        elif ext_id == "direct_hmhs_joint_retrieval":
+            lines.append(_render_model_contract_table(
+                extension_contract(ext_id).tables[0], ext["rows"], target="markdown", scope_styler=scope_text,
+            ))
+    return lines
 
 def _simple_report_details(
     command: str,
