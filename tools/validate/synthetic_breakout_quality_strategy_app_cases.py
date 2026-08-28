@@ -508,6 +508,92 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "c75_cache_identity_hashes_joint_min_projection_not_legacy_raw_mfe_primary",
         bool(projection_checks) and all(projection_checks),
     )
+
+    # C75 runtime stores the selected source value in the generic replay field
+    # ``breakout_quality_score``.  Offline replay diagnostics must therefore compare
+    # that runtime value against the arm-selected PIT column, not the legacy Raw-MFE
+    # physical primary column.
+    from filters.breakout_quality import strategy_compare_diagnostics as diag_module
+    synthetic_pit_scores = pd.DataFrame(
+        [{
+            "ticker": "00643",
+            "date": "2021-01-04",
+            "group_index": 1,
+            "breakout_quality_score": 0.5498823523521423,
+            "joint_min_score": 0.8164063692092896,
+            "fold_id": "fold_20210101_20260302",
+            "model_information_cutoff": "2020-12-31",
+        }]
+    ).set_index(["ticker", "date"])
+    synthetic_bundle = SimpleNamespace(
+        group_table=pd.DataFrame(
+            [{
+                "group_index": 1,
+                "ticker": "00643",
+                "date": "2021-01-04",
+                "label": 1,
+            }]
+        ),
+        raw_target=np.asarray([1.25], dtype=np.float64),
+        target_valid=np.asarray([True], dtype=bool),
+    )
+    with patch.object(
+        diag_module,
+        "load_selection_point_in_time_score_table_from_path",
+        return_value=synthetic_pit_scores,
+    ), patch.object(
+        diag_module,
+        "load_profile_continuous_ranker_data",
+        return_value=synthetic_bundle,
+    ):
+        c75_lookup = diag_module._selection_target_lookup(
+            root=Path("."),
+            filter_id="breakout_quality_v1",
+            architecture="patch_token_transformer_safety_raw_mfe_joint_attn_mlp_v1",
+            profile="daily_universal_safety_raw_mfe_joint_min_patch_transformer_attn_pool_mlp_head_full_list_ndcg_pairwise",
+            score_path_override="synthetic.csv",
+            manifest_path_override="synthetic.json",
+            score_column="joint_min_score",
+        )
+        legacy_lookup = diag_module._selection_target_lookup(
+            root=Path("."),
+            filter_id="breakout_quality_v1",
+            architecture="patch_token_transformer_safety_raw_mfe_joint_attn_mlp_v1",
+            profile="daily_universal_safety_raw_mfe_joint_min_patch_transformer_attn_pool_mlp_head_full_list_ndcg_pairwise",
+            score_path_override="synthetic.csv",
+            manifest_path_override="synthetic.json",
+        )
+    c75_runtime_score = float(c75_lookup.iloc[0]["breakout_quality_score"])
+    legacy_runtime_score = float(legacy_lookup.iloc[0]["breakout_quality_score"])
+    c75_orderable = pd.DataFrame(
+        [{
+            "ticker": "00643",
+            "trade_date": "2021-01-05",
+            "signal_date": "2021-01-04",
+            "breakout_quality_score": c75_runtime_score,
+            "breakout_quality_score_date": "2021-01-04",
+            "breakout_quality_score_available": True,
+        }]
+    )
+    c75_selected = pd.DataFrame(
+        [{
+            "ticker": "00643",
+            "trade_date": "2021-01-05",
+            "signal_date": "2021-01-04",
+            "type": "買進 (synthetic)",
+        }]
+    )
+    c75_diag, _, _ = diag_module._strategy_selection_diagnostics(
+        orderable=c75_orderable,
+        selected=c75_selected,
+        lookup=c75_lookup,
+    )
+    check_true(
+        "c75_replay_identity_diagnostic_uses_configured_joint_min_pit_column_and_legacy_default_stays_raw_mfe",
+        abs(c75_runtime_score - 0.8164063692092896) < 1e-12
+        and abs(legacy_runtime_score - 0.5498823523521423) < 1e-12
+        and c75_diag.get("runtime_score_identity_match") is True,
+    )
     check_true(
         "current_suite_keeps_prior_mechanism_arms_and_adds_c75_learned_joint_min",
         expected_arm_ids == ("C61", "C58", "C59", "C64", "C66", "C71", "C72", "C73", "C74", "C75")

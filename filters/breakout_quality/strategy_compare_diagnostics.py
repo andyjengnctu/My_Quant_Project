@@ -677,6 +677,7 @@ def _flatten_selected_buy_rows(trade_history: pd.DataFrame) -> pd.DataFrame:
 def _selection_target_lookup(
     *, root: Path, filter_id: str, architecture: str, profile: str,
     score_path_override: str | None = None, manifest_path_override: str | None = None,
+    score_column: str = "breakout_quality_score",
 ) -> pd.DataFrame:
     scores = (
         load_selection_point_in_time_score_table_from_path(
@@ -687,6 +688,14 @@ def _selection_target_lookup(
             str(root), filter_id, architecture, profile
         )
     ).reset_index()
+    resolved_score_column = str(score_column or "breakout_quality_score").strip()
+    if resolved_score_column not in scores.columns:
+        raise ValueError(
+            f"Selection PIT diagnostic score table缺少runtime欄位: {resolved_score_column}"
+        )
+    scores["__runtime_score__"] = pd.to_numeric(
+        scores[resolved_score_column], errors="raise"
+    ).astype(float)
     bundle = load_profile_continuous_ranker_data(
         filter_id=filter_id,
         model_architecture=architecture,
@@ -709,14 +718,18 @@ def _selection_target_lookup(
     if bool(mismatch.any()):
         raise ValueError("Selection PIT Score與Dataset group identity不一致")
     return joined[[
-        "ticker", "date", "group_index", "breakout_quality_score", "fold_id",
+        "ticker", "date", "group_index", "__runtime_score__", "fold_id",
         "model_information_cutoff", "label", "target_raw_r", "target_available",
-    ]].rename(columns={"date": "signal_date"})
+    ]].rename(columns={
+        "date": "signal_date",
+        "__runtime_score__": "breakout_quality_score",
+    })
 
 
 def _continuous_forward_target_lookup(
     *, root: Path, filter_id: str, architecture: str, profile: str,
     score_path_override: str | None = None,
+    score_column: str = "model_score",
 ) -> pd.DataFrame:
     """Build a post-replay diagnostic lookup from frozen Forward-OOS scores.
 
@@ -735,14 +748,15 @@ def _continuous_forward_target_lookup(
             str(root), str(filter_id), str(architecture), str(profile)
         )
     ).reset_index()
-    required = {"ticker", "date", "group_index", "model_score", "target_raw_r"}
+    resolved_score_column = str(score_column or "model_score").strip()
+    required = {"ticker", "date", "group_index", resolved_score_column, "target_raw_r"}
     missing = sorted(required - set(scores.columns))
     if missing:
         raise ValueError(f"Forward-OOS diagnostic score table缺少欄位: {missing}")
     scores["ticker"] = scores["ticker"].fillna("").astype(str).str.strip()
     scores["date"] = pd.to_datetime(scores["date"], errors="raise").dt.strftime("%Y-%m-%d")
     scores["breakout_quality_score"] = pd.to_numeric(
-        scores["model_score"], errors="raise"
+        scores[resolved_score_column], errors="raise"
     ).astype(float)
     scores["target_raw_r"] = pd.to_numeric(scores["target_raw_r"], errors="coerce")
     scores["target_available"] = scores["target_raw_r"].map(math.isfinite)
@@ -1262,6 +1276,10 @@ def backfill_pair_selection_diagnostics(
         architecture=architecture,
         profile=profile,
         score_path_override=str(score_path),
+        score_column=str(
+            (metadata.get("score_ranking_options") or {}).get("primary_score_column")
+            or "model_score"
+        ),
     )
     baseline_diag, baseline_orderable_joined, baseline_selected_joined = (
         _strategy_selection_diagnostics(

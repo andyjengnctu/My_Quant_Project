@@ -10430,3 +10430,10 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 第二個CPU idle來源是PIT每個epoch在Raw-MFE checkpoint selection之外，仍重算Joint-Min Pair、5×5 geometry、cohort等O(N²) diagnostics。MR-13Z正式epoch selection原本且仍然只依`Validation Raw-MFE mean Daily Spearman`，percentile-MSE僅作tie-break。PIT現在可由config啟用selection-only metric path：validation仍完整推論Raw-MFE score且sample universe完全相同，但每epoch只算上述selection metrics；完整Safety/MFE/Joint-Min/Pair/geometry evidence仍由final frozen fold score/audit產生。
 - Exact-equivalence evidence：同一fixture下full vs lightweight的mean/median Daily Spearman、rankable dates、percentile-MSE完全相同；同一MR-13Z Patch Transformer A/B run的每epoch training batch loss、best epoch、best Validation rho與MSE完全相同。Main one-click Model SOP不受此PIT execution path影響。
 - Decision：**ENGINEERING_PERFORMANCE_ONLY / VRAM_NOT_PRIMARY_LIMIT / DATE_COHERENT_BATCH_UNCHANGED / FEATURE_VALUES_BYTE_EXACT / PIT_EPOCH_SELECTION_EXACT / NO_MODEL_RETRAIN_SEMANTIC_CHANGE / NO_NEW_SCIENTIFIC_IDENTITY**。
+
+### 2026-08-28 — C75 PIT runtime score identity diagnostic修正（無scientific change）
+
+- C75 OOS replay首次執行時，runtime已正確以`primary_score_column=joint_min_score`排序，但post-replay selection diagnostic仍固定把generic runtime欄`breakout_quality_score`對回PIT physical legacy primary `breakout_quality_score`（Raw-MFE），因此首筆即以`runtime_score=0.816406...` vs `pit_score=0.549882...`誤報identity mismatch。
+- 修正後PIT／Forward diagnostic lookup依arm的正式`primary_score_column`投影runtime reference；未指定override的既有arms維持Selection PIT=`breakout_quality_score`、Forward OOS=`model_score`預設。C75只在diagnostic reference選`joint_min_score`，不改replay排序、PIT bytes、cache projection、target、model、params、selector、execution或任何strategy result。
+- 同步補synthetic反例，固定驗同一PIT row Raw-MFE與Joint-Min不同時C75必須對Joint-Min，而legacy default仍對Raw-MFE。Decision=`ENGINEERING_BUG_FIX / ARM_SELECTED_RUNTIME_SCORE_IDENTITY / NO_RETRAIN / NO_SCIENTIFIC_CHANGE`。
+- 另確認Strategy Compare顯示的OOS `PIT 0/1`是獨立single-block evaluation，不是重做Rolling 6 folds；本輪不建立Forward-OOS→PIT cross-producer checkpoint migration，避免在缺少正式跨producer fitting-identity migration contract時以數值相同推定可重用。現有OOS single-block已完成，修正後可直接依既有artifact contract REUSE。

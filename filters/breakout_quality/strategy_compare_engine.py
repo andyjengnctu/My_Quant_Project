@@ -50,6 +50,9 @@ from filters.breakout_quality.strategy_compare_sources import (
     _validate_requested_param_policy,
     canonical_strategy_compare_output_dir_names,
 )
+from filters.breakout_quality.strategy_score_projection import (
+    primary_score_column_for_source,
+)
 from filters.breakout_quality.strategy_compare_reporting import (
     _assert_shared_benchmark,
     _build_yearly_comparison,
@@ -952,12 +955,17 @@ def run_comparison(
             }
             and bool(capture_selection_target_diagnostics)
         ):
+            runtime_primary_score_column = str(
+                ranking_options.get("primary_score_column")
+                or primary_score_column_for_source(score_source)
+            ).strip()
             if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
                 lookup = _selection_target_lookup(
                     root=root, filter_id=filter_id, architecture=manifest_architecture,
                     profile=manifest_profile,
                     score_path_override=str(pit_contract.score_path),
                     manifest_path_override=str(pit_contract.manifest_path),
+                    score_column=runtime_primary_score_column,
                 )
             else:
                 forward_score_path = (
@@ -969,6 +977,7 @@ def run_comparison(
                     root=root, filter_id=filter_id, architecture=manifest_architecture,
                     profile=manifest_profile,
                     score_path_override=forward_score_path,
+                    score_column=runtime_primary_score_column,
                 )
             baseline_diag, baseline_orderable_joined, baseline_selected_joined = (
                 _strategy_selection_diagnostics(
