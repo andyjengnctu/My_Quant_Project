@@ -183,6 +183,7 @@ def validate_strategy_compare_training_artifacts(
     research_dir: str | Path | None,
     comparison_start: str | None,
     comparison_end: str | None,
+    point_in_time_dir_override: str | Path | None = None,
 ) -> dict[str, Any]:
     """Validate one completed Strategy Compare model unit in any output namespace.
 
@@ -203,7 +204,11 @@ def validate_strategy_compare_training_artifacts(
             source=source,
             workflow=workflow,
             seed=int(seed),
-            point_in_time_dir_override=model_root,
+            point_in_time_dir_override=(
+                None
+                if point_in_time_dir_override in (None, "")
+                else Path(point_in_time_dir_override).resolve()
+            ),
             comparison_start=comparison_start,
             comparison_end=comparison_end,
         )
@@ -366,7 +371,11 @@ def run_strategy_compare_training_unit(
             filter_id=str(source.filter_id),
             model_architecture=str(source.model_architecture),
             experiment_profile=str(source.experiment_profile),
-            point_in_time_dir_override=str(Path(model_dir).resolve()),
+            point_in_time_dir_override=(
+                None
+                if point_in_time_dir_override in (None, "")
+                else str(Path(point_in_time_dir_override).resolve())
+            ),
         )
         audit_elapsed_sec = time.perf_counter() - audit_started
         if int(code) != 0:
@@ -393,6 +402,7 @@ def run_strategy_compare_training_unit(
         research_dir=research_dir,
         comparison_start=(None if validation_start in (None, "") else str(validation_start)),
         comparison_end=(None if validation_end in (None, "") else str(validation_end)),
+        point_in_time_dir_override=point_in_time_dir_override,
     )
     return {
         "artifacts": artifacts,

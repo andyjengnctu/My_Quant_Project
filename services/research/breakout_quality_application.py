@@ -3484,6 +3484,7 @@ def _prepare_strategy_compare_model_artifacts(
                         research_dir=research_dir,
                         comparison_start=None,
                         comparison_end=None,
+                        point_in_time_dir_override=pit_dir_override,
                     )
                 except (OSError, ValueError, KeyError, TypeError) as exc:
                     reuse_validation_error = f"{type(exc).__name__}: {exc}"

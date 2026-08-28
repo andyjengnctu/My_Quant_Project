@@ -129,10 +129,15 @@ def append_strategy_compare_preparation_contract_checks(
     )
 
     from config.strategy_compare import get_strategy_comparison_settings as _get_pit_bundle_settings
-    from filters.breakout_quality.paths import resolve_selection_point_in_time_score_path
+    from filters.breakout_quality.paths import (
+        resolve_filter_model_output_dir,
+        resolve_selection_point_in_time_audit_json_path,
+        resolve_selection_point_in_time_score_path,
+    )
     from filters.breakout_quality.strategy_compare_execution import selection_pit_mode_paths
     from filters.breakout_quality.strategy_compare_pit_contract import (
         resolve_strategy_compare_selection_pit_bundle_dir,
+        resolve_strategy_compare_selection_pit_contract_override,
     )
     pit_bundle_settings = _get_pit_bundle_settings("extending_window_rolling")
     default_pit_source = next(
@@ -147,15 +152,78 @@ def append_strategy_compare_preparation_contract_checks(
         default_pit_source.model_architecture,
         default_pit_source.experiment_profile,
     ).parent.resolve()
+    expected_default_pit_audit = resolve_selection_point_in_time_audit_json_path(
+        project_root,
+        default_pit_source.filter_id,
+        default_pit_source.model_architecture,
+        default_pit_source.experiment_profile,
+    ).resolve()
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "strategy_compare_default_pit_bundle_uses_one_models_namespace_for_score_manifest_audit",
-        expected_default_pit_dir,
-        resolve_strategy_compare_selection_pit_bundle_dir(
-            root=project_root,
-            source=default_pit_source,
+        "strategy_compare_default_rolling_pit_keeps_model_bundle_and_output_audit_split",
+        (
+            expected_default_pit_dir,
+            True,
+            None,
+        ),
+        (
+            resolve_strategy_compare_selection_pit_bundle_dir(
+                root=project_root,
+                source=default_pit_source,
+            ),
+            "outputs/filters/breakout_quality" in expected_default_pit_audit.as_posix(),
+            resolve_strategy_compare_selection_pit_contract_override(
+                root=project_root,
+                source=default_pit_source,
+            ),
         ),
     )
+    training_contract_source = (
+        project_root / "services" / "research" / "strategy_compare_training.py"
+    ).read_text(encoding="utf-8")
+    research_application_source = (
+        project_root / "services" / "research" / "breakout_quality_application.py"
+    ).read_text(encoding="utf-8")
+    robustness_source = (
+        project_root / "filters" / "breakout_quality" / "strategy_multi_seed_robustness.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_compare_training_lifecycle_preserves_canonical_none_vs_isolated_pit_override",
+        True,
+        "point_in_time_dir_override=pit_dir_override" in research_application_source
+        and "point_in_time_dir_override=point_in_time_dir_override" in training_contract_source
+        and "if point_in_time_dir_override in (None, \"\")" in training_contract_source
+        and "point_in_time_dir_override=(model_dir if is_selection_pit else None)"
+        in robustness_source,
+    )
+
+    oos_pit_settings = _get_pit_bundle_settings("extending_window_oos")
+    oos_pit_source = next(
+        source
+        for source in oos_pit_settings.dl_sources.values()
+        if str(source.score_source) == "selection_point_in_time"
+        and source.point_in_time_dirname not in (None, "")
+    )
+    expected_oos_override = (
+        resolve_filter_model_output_dir(
+            project_root,
+            oos_pit_source.filter_id,
+            oos_pit_source.model_architecture,
+            oos_pit_source.experiment_profile,
+        )
+        / str(oos_pit_source.point_in_time_dirname)
+    ).resolve()
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_compare_mode_specific_oos_pit_keeps_colocated_override",
+        expected_oos_override,
+        resolve_strategy_compare_selection_pit_contract_override(
+            root=project_root,
+            source=oos_pit_source,
+        ),
+    )
+
     default_mode_paths = selection_pit_mode_paths(
         default_pit_source,
         project_root=project_root,
@@ -197,7 +265,7 @@ def append_strategy_compare_preparation_contract_checks(
     c64_safety = Path(str(c64_options.get("safety_score_path_override") or ""))
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "current_c59_c60_execution_consumes_models_pit_bundle_without_legacy_audit_fallback",
+        "current_c59_c60_execution_consumes_models_score_manifest_bundle",
         True,
         all(
             path.name == "selection_point_in_time_scores.csv"

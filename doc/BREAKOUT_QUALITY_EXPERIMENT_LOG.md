@@ -10437,3 +10437,10 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 修正後PIT／Forward diagnostic lookup依arm的正式`primary_score_column`投影runtime reference；未指定override的既有arms維持Selection PIT=`breakout_quality_score`、Forward OOS=`model_score`預設。C75只在diagnostic reference選`joint_min_score`，不改replay排序、PIT bytes、cache projection、target、model、params、selector、execution或任何strategy result。
 - 同步補synthetic反例，固定驗同一PIT row Raw-MFE與Joint-Min不同時C75必須對Joint-Min，而legacy default仍對Raw-MFE。Decision=`ENGINEERING_BUG_FIX / ARM_SELECTED_RUNTIME_SCORE_IDENTITY / NO_RETRAIN / NO_SCIENTIFIC_CHANGE`。
 - 另確認Strategy Compare顯示的OOS `PIT 0/1`是獨立single-block evaluation，不是重做Rolling 6 folds；本輪不建立Forward-OOS→PIT cross-producer checkpoint migration，避免在缺少正式跨producer fitting-identity migration contract時以數值相同推定可重用。現有OOS single-block已完成，修正後可直接依既有artifact contract REUSE。
+
+### 2026-08-28 — Strategy Compare default Rolling PIT split-ownership REUSE修正（無scientific change）
+
+- C75 OOS完成後，一鍵流程進Rolling時誤把已完成且Model Gate PASS的MR-13Z 6-fold canonical PIT判為`RESUME`。前置錯誤顯示`Selection PIT audit`被錯誤尋址到`models/.../point_in_time/selection_point_in_time_audit.json`，但Model Research canonical ownership本來就是score/manifest/folds在`models/.../point_in_time`、audit在`outputs/.../point_in_time`。
+- 根因是Strategy Compare readiness/training shared contract把default Rolling的model PIT dir當成generic `point_in_time_dir_override`傳給ranking-contract loader；override語意會強制score/manifest/coverage/audit全部共置，因而永遠找不到canonical output audit並誤啟動producer。producer在重用既有fold後又嘗試publish checkpoint cache，才進一步觸發「同fitting identity不同checkpoint bytes」fail-fast；該cache保護本身正確，不應放寬。
+- 修正後只有明確`point_in_time_dirname`的mode-specific OOS／isolated robustness bundle使用共置override；default Rolling傳`None`，由canonical loader分別解析models score/manifest/folds與outputs audit。Preparation fallback path與training completion validation同步遵守同一split ownership；multi-seed isolated namespace仍顯式傳其seed-local model dir，不受影響。
+- Decision：**ENGINEERING_BUG_FIX / CANONICAL_ROLLING_PIT_SPLIT_OWNERSHIP / COMPLETED_6_FOLD_REUSE / CHECKPOINT_CACHE_FAILFAST_PRESERVED / NO_RETRAIN_REQUIRED / NO_STRATEGY_OR_MODEL_SEMANTIC_CHANGE**。

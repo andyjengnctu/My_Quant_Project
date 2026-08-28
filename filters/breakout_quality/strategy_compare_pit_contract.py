@@ -24,12 +24,12 @@ def resolve_strategy_compare_selection_pit_bundle_dir(
     root: str | Path,
     source: Any,
 ) -> Path:
-    """Resolve the one Strategy Compare directory that owns a complete PIT bundle.
+    """Resolve the directory that owns PIT score/manifest/fold artifacts.
 
-    Current default Rolling PIT artifacts live beside the score/manifest under
-    ``models/.../point_in_time``.  Mode-specific profiles may select a dedicated
-    model-output dirname.  Strategy Compare callers must use this resolver rather
-    than letting the generic legacy loader split audit lookup into ``outputs/``.
+    Default Rolling PIT keeps fitted artifacts under ``models/.../point_in_time``
+    while its audit is a research output under ``outputs/.../point_in_time``.
+    Mode-specific OOS profiles use an explicit dirname under the model-output tree
+    and intentionally colocate score/manifest/audit there.
     """
 
     project_root = Path(root).resolve()
@@ -54,6 +54,24 @@ def resolve_strategy_compare_selection_pit_bundle_dir(
         str(source.model_architecture),
         str(source.experiment_profile),
     ).parent.resolve()
+
+
+def resolve_strategy_compare_selection_pit_contract_override(
+    *,
+    root: str | Path,
+    source: Any,
+) -> Path | None:
+    """Return an override only for intentionally colocated mode-specific PIT bundles.
+
+    ``None`` is meaningful for the canonical Rolling store: the ranking-contract
+    loader must then resolve score/manifest from ``models`` and audit from ``outputs``.
+    Passing the model PIT directory as a generic override would incorrectly force the
+    audit lookup into ``models`` and make a fully completed Rolling PIT look resumable.
+    """
+
+    if getattr(source, "point_in_time_dirname", None) in (None, ""):
+        return None
+    return resolve_strategy_compare_selection_pit_bundle_dir(root=root, source=source)
 
 
 def _normalize_contract_date(value: Any) -> str:
@@ -194,5 +212,6 @@ def load_validated_selection_pit_strategy_compare_contract(
 __all__ = [
     "load_validated_selection_pit_strategy_compare_contract",
     "resolve_strategy_compare_selection_pit_bundle_dir",
+    "resolve_strategy_compare_selection_pit_contract_override",
     "validate_selection_pit_score_period",
 ]

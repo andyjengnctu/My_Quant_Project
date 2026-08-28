@@ -2562,6 +2562,7 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
                 research_dir=research_dir,
                 comparison_start=str(job["comparison_start"]),
                 comparison_end=str(job["comparison_end"]),
+                point_in_time_dir_override=(model_dir if is_selection_pit else None),
             )
         except (FileNotFoundError, ValueError):
             artifacts = None

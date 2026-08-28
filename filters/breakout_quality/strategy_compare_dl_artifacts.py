@@ -41,11 +41,13 @@ from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_SCORE_FILENAME,
     resolve_filter_artifact_paths,
     resolve_filter_model_output_dir,
+    resolve_selection_point_in_time_audit_json_path,
 )
 from filters.breakout_quality.strategy_compare_contracts import build_strategy_preparation_action
 from filters.breakout_quality.strategy_compare_pit_contract import (
     load_validated_selection_pit_strategy_compare_contract,
     resolve_strategy_compare_selection_pit_bundle_dir,
+    resolve_strategy_compare_selection_pit_contract_override,
 )
 from filters.breakout_quality.strategy_score_projection import (
     compute_score_projection_sha256s,
@@ -324,7 +326,9 @@ def _collect_selection_pit_source_status(
     pit_gate_status: str | None = None
     pit_validation_error: str | None = None
     try:
-        pit_override_dir = resolve_strategy_compare_selection_pit_bundle_dir(root=root, source=source)
+        pit_override_dir = resolve_strategy_compare_selection_pit_contract_override(
+            root=root, source=source
+        )
         workflow = get_breakout_quality_workflow_settings(
             experiment_profile=str(source.experiment_profile)
         )
@@ -367,9 +371,18 @@ def _collect_selection_pit_source_status(
         }
     else:
         pit_bundle_dir = resolve_strategy_compare_selection_pit_bundle_dir(root=root, source=source)
+        if getattr(source, "point_in_time_dirname", None) in (None, ""):
+            audit_path = resolve_selection_point_in_time_audit_json_path(
+                root,
+                str(source.filter_id),
+                str(source.model_architecture),
+                str(source.experiment_profile),
+            ).resolve()
+        else:
+            audit_path = pit_bundle_dir / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME
         files = {
             "manifest": pit_bundle_dir / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
-            "audit": pit_bundle_dir / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
+            "audit": audit_path,
             "forward_scores": pit_bundle_dir / SELECTION_POINT_IN_TIME_SCORE_FILENAME,
         }
     # Rolling PIT scores / manifest / audit are model-research artifacts.
