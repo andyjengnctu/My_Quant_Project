@@ -8,14 +8,13 @@
     - centralized color template file to consist rule
 
 - imrove DL module
-    - select HM/LS (higher learnability) as candidates with iniital stop pre-emption 
+    - attention (temperal / cross-secction)
     - hihger weight for high mfe or high safety   
     - retrain min parameters
     - simply label
         - the 40t day's R
         - self learn the label days and input days
     - sell using score    
-    - attention (cross-secction)
     - non breakout strategy
     - 三大法人籌碼資訊/ EPS財報/ 基本面 
 

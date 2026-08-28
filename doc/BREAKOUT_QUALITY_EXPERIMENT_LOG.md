@@ -10444,3 +10444,22 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 根因是Strategy Compare readiness/training shared contract把default Rolling的model PIT dir當成generic `point_in_time_dir_override`傳給ranking-contract loader；override語意會強制score/manifest/coverage/audit全部共置，因而永遠找不到canonical output audit並誤啟動producer。producer在重用既有fold後又嘗試publish checkpoint cache，才進一步觸發「同fitting identity不同checkpoint bytes」fail-fast；該cache保護本身正確，不應放寬。
 - 修正後只有明確`point_in_time_dirname`的mode-specific OOS／isolated robustness bundle使用共置override；default Rolling傳`None`，由canonical loader分別解析models score/manifest/folds與outputs audit。Preparation fallback path與training completion validation同步遵守同一split ownership；multi-seed isolated namespace仍顯式傳其seed-local model dir，不受影響。
 - Decision：**ENGINEERING_BUG_FIX / CANONICAL_ROLLING_PIT_SPLIT_OWNERSHIP / COMPLETED_6_FOLD_REUSE / CHECKPOINT_CACHE_FAILFAST_PRESERVED / NO_RETRAIN_REQUIRED / NO_STRATEGY_OR_MODEL_SEMANTIC_CHANGE**。
+
+### 2026-08-28 — C75 Direct Joint-Min conversion Gate FAIL；MR-13Z Model Gate PASS維持
+
+- C75=`Min MR-13Z Direct Joint-Min No-K / No-R0`，與C74固定共用Min `base-finalist-best`、all-off、No-K/No-R0、canonical sizing/cash/orderability/execution；唯一selector treatment為`CONT13Z_ROLL.joint_min_score` descending，沒有Safety gate、threshold、product、calibration或fitted weights。
+- OOS：C74 Return/MDD/RoMD/EV=`61.71% / 20.16% / 3.06 / 0.42R`；C75=`91.20% / 17.88% / 5.10 / 0.51R`，形成局部改善。
+- Rolling：C74=`108.52% / 15.03% / 7.22 / 0.62R`；C75=`44.66% / 19.95% / 2.24 / 0.33R`，核心strategy economics collapse。
+- Rolling mechanism：C74 HM/HS=`22.85%`、HM/LS=`26.71%`、High-MFE=`49.55%`、+2R前initial stop=`12.50%`、+3R前=`14.29%`；C75=`24.33% / 18.45% / 42.78% / 26.87% / 26.67%`。因此learned Joint-Min確實改善部分Safety×MFE geometry，但沒有改善「先活過initial stop再取得upside」的path survival。
+- Decision：**OOS_LOCAL_GAIN / ROLLING_COLLAPSE / JOINT_GEOMETRY_IMPROVED_BUT_PATH_SURVIVAL_FAILED / CONVERSION_GATE_FAIL / NO_ROBUSTNESS**。C75不進Multi-seed、Fixed Window或C75 tuning。
+- MR-13Z scientific layer維持 **PATCH_TRANSFORMER_JOINT_SIGNAL_CONFIRMED / MODEL_GATE_PASS**；strategy conversion FAIL不得反向把model判成FAIL。
+
+### 2026-08-28 — MR-13AA：MR-13H exact target × frozen Patch Transformer controlled architecture test實作
+
+- Registry確認MR-13A～MR-13Z均已占用，下一個合法model research identity分配為`MR-13AA`。profile=`daily_universal_full_horizon_no_breach_patch_transformer_full_list_ndcg_pairwise`。
+- Scientific control固定historical MR-13H：target=`daily_full_horizon_opportunity_r_v1`、daily-universal universe、full-list ΔNDCG pairwise objective/reduction、Seed42、split、optimizer、epoch selection=`mean_daily_spearman`、training label/sample scope全部不變。唯一scientific dimension是architecture由`inception_time_v1`換成MR-13Z已freeze的Patch Transformer。
+- 依architecture identity治理，不復活historical `patch_transformer_v1`；建立新active architecture identity=`ARCH-patch_token_transformer_ranker_v1`，runtime string=`patch_token_transformer_ranker_v1`。其temporal recipe與MR-13Z exact一致：non-overlap patch=`10`、300 bars→30 tokens、embedding=`128`、depth=`3`、heads=`4`、FFN=`256`、sinusoidal position、LayerNorm、dropout=`0.10`、mean pooling；輸出只保留single `128→2` rank head。
+- 明確禁止Safety head、Joint-Min、新target、新loss、Patch hyperparameter tuning、PIT、strategy conversion、Multi-seed與Fixed Window。本輪只允許Seed42 Standard Model SOP Model Gate。
+- Primary comparison事前固定為historical MR-13H InceptionTime。若Patch Transformer明顯提升MR-13H的Forward+Breakout learnability/generalization，支持Patch representation可能是較通用raw temporal representation；若沒有，則MR-13Z gain較可能主要是difficult Joint-Min objective×architecture interaction，不能外推為所有target的通用最佳backbone。
+- Standard Model SOP 1～6與approved persistent report fingerprint `2b372bd465258234`完全不變。
+- Status：**IMPLEMENTED / RESULT_PENDING / MR13H_TARGET_EXACT_CONTROL / PATCH_TRANSFORMER_FROZEN_RECIPE / MODEL_GATE_ONLY / NO_PIT / NO_STRATEGY_CONVERSION**。

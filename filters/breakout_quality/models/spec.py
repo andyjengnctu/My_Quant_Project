@@ -63,6 +63,7 @@ MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1 = "modern_tcn_safety_raw_mfe_joint_a
 PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1 = (
     "patch_token_transformer_safety_raw_mfe_joint_attn_mlp_v1"
 )
+PATCH_TOKEN_TRANSFORMER_RANKER_V1 = "patch_token_transformer_ranker_v1"
 MANTIS_V2_FROZEN_LINEAR_V1 = "mantis_v2_frozen_linear_v1"
 MOMENT_1_BASE_FROZEN_LINEAR_V1 = "moment_1_base_frozen_linear_v1"
 PATCH_TRANSFORMER_V1 = "patch_transformer_v1"
@@ -94,6 +95,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     MODERN_TCN_V1,
     MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
     PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
+    PATCH_TOKEN_TRANSFORMER_RANKER_V1,
     MANTIS_V2_FROZEN_LINEAR_V1,
     MOMENT_1_BASE_FROZEN_LINEAR_V1,
     PATCH_TRANSFORMER_V1,
@@ -110,6 +112,7 @@ ACTIVE_MODEL_ARCHITECTURES = (
     INCEPTION_TIME_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
     MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
     PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
+    PATCH_TOKEN_TRANSFORMER_RANKER_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
 )
 LEGACY_MODEL_ARCHITECTURES = tuple(
@@ -673,6 +676,37 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             modern_tcn_expansion_ratio=expansion_ratio,
         )
 
+    if normalized == PATCH_TOKEN_TRANSFORMER_RANKER_V1:
+        # MR-13AA reuses the same frozen Patch Transformer temporal recipe as
+        # MR-13Z while restoring MR-13H's ordinary single-score ranking head.
+        patch_size = 10
+        embedding_dim = 128
+        depth = 3
+        heads = 4
+        mlp_dim = 256
+        return BreakoutQualityModelSpec(
+            architecture=normalized,
+            family="patch_token_transformer_ranker",
+            channels=embedding_dim,
+            kernel_size=patch_size,
+            dilations=(),
+            convolutions_per_block=1,
+            pooling=("patch_token_global_average", "single_rank_head"),
+            dropout=0.10,
+            receptive_field_bars=300,
+            normalization="layer_norm",
+            use_dataset_context=False,
+            sequence_input_paths=("raw_level_temporal_nonoverlap_patches",),
+            patch_transformer_patch_size=patch_size,
+            patch_transformer_patch_stride=patch_size,
+            patch_transformer_embedding_dim=embedding_dim,
+            patch_transformer_depth=depth,
+            patch_transformer_heads=heads,
+            patch_transformer_mlp_dim=mlp_dim,
+            patch_transformer_pooling="mean",
+            patch_transformer_positional_encoding="sinusoidal",
+        )
+
     if normalized == PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1:
         # Reuse the historical 9F supervised Patch Transformer recipe exactly;
         # only the current Joint-Min tri-head surface differs from legacy 9F.
@@ -1048,6 +1082,7 @@ def validate_model_sequence_length(
             )
     if model_spec.family not in {
         "patch_transformer",
+        "patch_token_transformer_ranker",
         "patch_token_transformer_safety_raw_mfe_joint_attn_mlp",
     }:
         return
@@ -1055,6 +1090,7 @@ def validate_model_sequence_length(
         raise ValueError("Patch Transformer sequence_length 必須 >= 1")
     if model_spec.family in {
         "patch_transformer",
+        "patch_token_transformer_ranker",
         "patch_token_transformer_safety_raw_mfe_joint_attn_mlp",
     }:
         patch_size = int(model_spec.patch_transformer_patch_size or 0)
@@ -1110,6 +1146,7 @@ __all__ = [
     "MODERN_TCN_V1",
     "MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1",
     "PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1",
+    "PATCH_TOKEN_TRANSFORMER_RANKER_V1",
     "MANTIS_V2_FROZEN_LINEAR_V1",
     "MOMENT_1_BASE_FROZEN_LINEAR_V1",
     "PATCH_TRANSFORMER_V1",
