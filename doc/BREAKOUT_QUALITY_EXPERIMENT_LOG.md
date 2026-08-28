@@ -10668,3 +10668,14 @@ Decision：`STANDALONE_CONVERSION_FAIL / MODEL_GATE_RETAINED`。不得以C78 FAI
 `MR13H_DIRECT_NO_STABLE_GAIN / MR13AC_STANDALONE_FAIL / DIRECT_NO_K_NO_R0_DEPLOYMENT_COLLAPSE / C76_C59_PURE_KR0_INTERPRETATION_RETRACTED / NO_ROBUSTNESS / STOP`
 
 下一步不自動做Multi-seed／Fixed，也不因本結果修改MR-13AC Model Gate。若使用者仍要研究單一head「漲多跌少」，應重新定義下一個joint economic target問題；若要研究K/R0本身，必須另建只改constraint、且明確固定allocator/solver semantics的新strategy identity，不得覆寫C76-C78。
+
+## 2026-08-29 — C79 authorized：C59 exact K/R0 portfolio contract × MR-13AC DL-source-only controlled replacement
+
+- 使用者決策：在C78 standalone AC 已確認「Safety signal有進selection、但standalone economic conversion FAIL」後，不直接開新joint target；先回答更乾淨的strategy問題：**如果C59所有portfolio construction完全不動，只把MR-13E score換成MR-13AC，實際績效/path會怎樣？**
+- 新strategy identity=`C79`。固定C59全部contract：`param_source=min_rolling`、`base-finalist-best`、`all_off`、`resource-aware-continuous-score-constrained-optimal`、`preserve_k_r0=True`、`constrained_solver=exact_branch_and_bound_v1`、`selection_only=True`。唯一scientific treatment=`dl_id: CONT13E_ROLL → CONT13AC_ROLL`。
+- Primary contrast=`C79-C59`；secondary=`C79-C58`與`C79-C78`。C79-C59因此才是目前MR-13AC vs MR-13E的DL-source-only controlled strategy comparison。
+- Current Compare Suite升schema64，arms=`C61/C58/C59/C77/C78/C79`。已完成的C76從current移至historical compatibility；其OOS/Rolling結果與C76-C59「非pure K/R0 ablation」結論永久保留，不回收identity。
+- MR-13AC scientific contract完全不變：Stage-1仍MR-13K PIT-safe predicted-upside context；Rolling只refit Stage-2；target/architecture/loss/Seed42均不改。Production C42/C44不變。
+- Stop rule：只先跑single-seed OOS + Rolling。若C79仍只降低Adverse但Full-MFE/EV/Return/RoMD無法保留，不做Multi-seed/Fixed，停止AC direct replacement；若兩mode出現有決策價值的path/performance改善，再另行決定robustness。
+- Decision=`C79_AUTHORIZED / DL_SOURCE_ONLY_CONTROL / C76_RETIRED_TO_HISTORY / RESULT_PENDING / NO_ROBUSTNESS_YET`。
+

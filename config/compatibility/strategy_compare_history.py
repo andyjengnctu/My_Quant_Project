@@ -2095,3 +2095,56 @@ HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({'C64-C58': {'left': 'C64', 'right'
              'description': 'MR-13Z learned Joint-Min direct score相對MR-13R P50 Raw-Safety gate + Conditional-MFE '
                             'ranking；secondary conversion reference'}})
 
+
+# 2026-08-29 current matrix refinement: C76 completed direct MR-13E No-K/No-R0
+# evidence remains historical-only after the user authorized the C79 controlled
+# MR-13AC-vs-MR-13E exact K/R0 comparison.
+HISTORICAL_STRATEGY_COMPARE_ARMS.update({
+    "C76": {
+        "name": "Min MR-13E No-K No-R0",
+        "description": (
+            "Completed MR-13E direct-score No-K/No-R0 arm. Min base-finalist-best/all-off; "
+            "runtime=model_score desc + canonical greedy reservation, preserve_k=False, preserve_r0=False. "
+            "Retained only for historical OOS/Rolling result reconstruction; no longer current."
+        ),
+        "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13E_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False,
+            "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+})
+
+HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({
+    "C76-C58": {
+        "left": "C76",
+        "right": "C58",
+        "description": "Historical MR-13E No-K/No-R0 direct score relative to Min DL-off baseline.",
+    },
+    "C76-C59": {
+        "left": "C76",
+        "right": "C59",
+        "description": (
+            "Historical same-source MR-13E direct No-K/No-R0 allocator vs exact K/R0 constrained reference; "
+            "also changes allocator/solver and is not a pure K/R0 ablation."
+        ),
+    },
+    "C77-C76": {
+        "left": "C77",
+        "right": "C76",
+        "description": "Historical same-direct-allocator MR-13H vs MR-13E score-source comparison.",
+    },
+    "C78-C76": {
+        "left": "C78",
+        "right": "C76",
+        "description": "Historical same-direct-allocator MR-13AC conditional-safety vs MR-13E comparison.",
+    },
+})
