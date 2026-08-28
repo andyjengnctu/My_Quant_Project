@@ -2222,10 +2222,10 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             profile_name
         ).current_time_validation_authorized
     }
-    check(
-        "current_time_validation_authorization_matches_current_compare_dependencies",
-        tuple(sorted(current_required_profiles)),
-        tuple(sorted(current_authorized_profiles)),
+    check_true(
+        "current_compare_dependencies_are_current_time_validation_authorized",
+        bool(current_required_profiles)
+        and current_required_profiles.issubset(current_authorized_profiles),
     )
 
     recipe_keys = set(
@@ -3188,7 +3188,7 @@ def validate_breakout_quality_hmhs_single_head_contract_case(_base_params):
         (
             spec.model_research_id,
             profile.training_objective,
-            profile.model_architecture,
+            profile.model_architecture or "inception_time_v1",
             profile.epoch_selection_metric,
             spec.selection_pit_authorized,
             spec.current_time_validation_authorized,
@@ -4503,15 +4503,21 @@ def validate_breakout_quality_patch_transformer_joint_min_contract_case(_base_pa
         and "標準模型 SOP｜6. Evidence Coverage" in standard_titles,
     )
 
-    project_root = Path(__file__).resolve().parents[2]
-    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
+    from config.compatibility.strategy_compare_history import (
+        HISTORICAL_STRATEGY_COMPARE_ARMS,
+        HISTORICAL_STRATEGY_DL_SOURCES,
+    )
+
+    c75 = dict(HISTORICAL_STRATEGY_COMPARE_ARMS.get("C75") or {})
+    cont13z = dict(HISTORICAL_STRATEGY_DL_SOURCES.get("CONT13Z_ROLL") or {})
     check_true(
-        "mr13z_model_gate_pass_authorizes_pit_and_c75_without_runtime_promotion",
+        "mr13z_model_gate_pass_keeps_historical_c75_without_runtime_promotion",
         bool(spec.selection_pit_authorized)
         and bool(spec.current_time_validation_authorized)
-        and '"C75"' in strategy_source
-        and '"CONT13Z_ROLL"' in strategy_source
-        and '"joint_min_score"' in strategy_source,
+        and c75.get("dl_id") == "CONT13Z_ROLL"
+        and c75.get("dl_runtime_options", {}).get("primary_score_column") == "joint_min_score"
+        and cont13z.get("experiment_profile")
+        == DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_PATCH_TRANSFORMER_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     )
 
     summary["training_performed"] = False
@@ -4779,10 +4785,8 @@ def validate_breakout_quality_mr13ab_first_breach_pure_mfe_contract_case(_base_p
         DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
     research_spec = get_continuous_ranker_research_spec(profile.name)
-    settings = get_breakout_quality_model_research_settings()
-
     check(
-        "mr13ab_is_current_inceptiontime_first_breach_pure_mfe_model_gate",
+        "mr13ab_historical_identity_remains_exact_after_current_profile_moves_on",
         (
             profile.name,
             "MR-13AB",
@@ -4792,11 +4796,11 @@ def validate_breakout_quality_mr13ab_first_breach_pure_mfe_contract_case(_base_p
             "mean_daily_spearman",
         ),
         (
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            research_spec.profile_name,
             research_spec.model_research_id,
             profile.training_objective,
             profile.continuous_target_id,
-            settings.model_architecture,
+            profile.model_architecture or "inception_time_v1",
             profile.epoch_selection_metric,
         ),
     )

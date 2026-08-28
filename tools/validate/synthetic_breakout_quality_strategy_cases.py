@@ -2652,9 +2652,29 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and "selection_diagnostics" in diagnostics_source,
     )
 
+    from dataclasses import replace
     from config.strategy_compare import get_strategy_comparison_settings
     from filters.breakout_quality.strategy_comparison import render_safety_gate_sensitivity_table
-    sensitivity_settings = get_strategy_comparison_settings("extending_window_oos")
+
+    # C71-C73 are historical-only now.  Keep testing the reusable sensitivity renderer
+    # with a deliberate historical fixture instead of requiring retired arms in current.
+    current_settings = get_strategy_comparison_settings("extending_window_oos")
+    historical_gate_ids = {"C58", "C71", "C72", "C73"}
+    sensitivity_settings = replace(
+        current_settings,
+        arms={
+            arm_id: replace(
+                arm,
+                enabled=arm_id in historical_gate_ids,
+                param_source=("min_rolling" if arm_id == "C58" else arm.param_source),
+            )
+            for arm_id, arm in current_settings.arms.items()
+        },
+        contrasts={
+            contrast_id: replace(contrast, enabled=False)
+            for contrast_id, contrast in current_settings.contrasts.items()
+        },
+    )
     sensitivity_scenarios = {
         arm_id: {"avg_exposure_pct": exposure, "return_over_max_drawdown": romd}
         for arm_id, exposure, romd in (("C71", 62.0, 6.0), ("C72", 64.0, 7.0), ("C73", 61.0, 6.5))

@@ -377,6 +377,38 @@ DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
 DAILY_UNIVERSAL_PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_predicted_upside_conditional_low_adverse_full_list_ndcg_pairwise"
 )
+
+PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID = (
+    "daily_predicted_upside_conditional_low_adverse_v1"
+)
+PREDICTED_UPSIDE_CONTEXT_SCHEMA_VERSION = 1
+PREDICTED_UPSIDE_CONTEXT_STAGE1_PROFILE = (
+    DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+)
+PREDICTED_UPSIDE_CONTEXT_STAGE1_ARCHITECTURE = "inception_time_v1"
+PREDICTED_UPSIDE_CONTEXT_STAGE1_RESEARCH_ID = "MR-13K"
+PREDICTED_UPSIDE_CONTEXT_STAGE1_SEED = 42
+
+
+def get_predicted_upside_context_contract() -> dict[str, Any]:
+    """Lightweight MR-13AC stacking contract shared by config/training/artifact consumers."""
+
+    return {
+        "schema_version": PREDICTED_UPSIDE_CONTEXT_SCHEMA_VERSION,
+        "stage1_profile": PREDICTED_UPSIDE_CONTEXT_STAGE1_PROFILE,
+        "stage1_architecture": PREDICTED_UPSIDE_CONTEXT_STAGE1_ARCHITECTURE,
+        "stage1_research_id": PREDICTED_UPSIDE_CONTEXT_STAGE1_RESEARCH_ID,
+        "stage1_seed": PREDICTED_UPSIDE_CONTEXT_STAGE1_SEED,
+        "context_semantic": "same_date_average_rank_percentile_of_stage1_predicted_pure_mfe",
+        "selection_context": "expanding_cross_fitted_point_in_time",
+        "forward_context": "single_fixed_pre_oos_fit",
+        "full_fit_selection_score_forbidden": True,
+        "oos_statistics_for_training_forbidden": True,
+        "selection_training_universe": "pit_context_covered_rows_only",
+        "stage2_response": "same_date_low_adverse_percentile",
+        "stage2_target": "same_date_percentile_of_low_adverse_residual_given_predicted_upside_percentile",
+        "stage2_context_used_as_input": True,
+    }
 DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE = (
     "daily_universal_full_horizon_mfe_adverse_dual_mse"
 )
@@ -1104,7 +1136,7 @@ _EXPERIMENT_PROFILES = {
         optimizer_name="adam",
         training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
         training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-        continuous_target_id="daily_predicted_upside_conditional_low_adverse_v1",
+        continuous_target_id=PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
         loss_name="pairwise_logistic",
         epoch_selection_metric="mean_daily_spearman",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
@@ -3155,6 +3187,13 @@ __all__ = [
     'DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID',
+    'PREDICTED_UPSIDE_CONTEXT_SCHEMA_VERSION',
+    'PREDICTED_UPSIDE_CONTEXT_STAGE1_PROFILE',
+    'PREDICTED_UPSIDE_CONTEXT_STAGE1_ARCHITECTURE',
+    'PREDICTED_UPSIDE_CONTEXT_STAGE1_RESEARCH_ID',
+    'PREDICTED_UPSIDE_CONTEXT_STAGE1_SEED',
+    'get_predicted_upside_context_contract',
     'DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE',
     'DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE',

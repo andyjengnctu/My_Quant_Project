@@ -10561,3 +10561,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Primary contrasts：`C76-C58`=13E direct score增量、`C76-C59`=同13E source拿掉K/R0的resource effect、`C77-C58`與`C77-C76`=MR-13H single-head economic score actual value、`C78-C58/C76/C77`=MR-13AC standalone conditional-safety diagnostic。C78績效FAIL不得反向推翻MR-13AC Model Gate。
 - Execution gate：只先跑single-seed Extending OOS + Rolling。未看到結果前不做Multi-seed、Fixed、不改target/architecture、不新增MR-13AD，不改production C42/C44。
 - Decision：**SIX_ARM_DIRECT_CONVERSION_MATRIX_IMPLEMENTED / C58_UNCHANGED / K_R0_REMOVED_FOR_C76_C77_C78 / MR13H_PRIMARY_COMPARISON / MR13AC_DIAGNOSTIC / RESULT_PENDING / NO_ROBUSTNESS_YET**。
+
+### 2026-08-28 — C76-C78 formal gate closure：retired-current synthetic assumptions + MR-13AC import cycle + checklist convergence
+
+- 使用者對`C61/C58/C59/C76/C77/C78` schema63交付執行正式`run_bundle`；quick gate、chain checks、ml smoke均PASS，但consistency有7 failures，meta quality有4 failures。失敗bundle顯示6個synthetic仍假設已退役的current狀態（MR-13AB仍為active、C75仍current、C64/C66/C71-C75仍屬current dependency/sensitivity matrix），另1個為MR-13AC training contract對heavy predicted-upside implementation的top-level import cycle；meta quality另抓到Checklist convergence已DONE的B292-B295/T409-T411未同步回main/DONE summary。
+- 修正synthetic只更新**current-vs-historical governance**：MR-13AB驗historical identity；MR-13Z驗C75 historical compatibility而非current membership；current Compare只要求其DL dependencies為authorized subset，不要求所有歷史authorized profiles仍current；C71-C73 Raw-Safety sensitivity renderer改用明確historical fixture，不把退役arms塞回current matrix。
+- Import-cycle修正不改MR-13AC science：`PREDICTED_UPSIDE_*` target/context identity與contract移至`config/breakout_quality.py` lightweight SSOT；heavy `filters/breakout_quality/predicted_upside_context.py`改為delegate/re-export，`ranker_training_contract.py`只讀config contract，不再反向import heavy target/data implementation。Stage-1 cross-fit/fixed-forward、Stage-2 target、architecture、loss、Seed42與artifact schema均不變。
+- Checklist補回B292-B295 historical DONE main rows與T409-T411 DONE summary，使main table、T summary與convergence G records重新一致；不復活已退役MR-13AB Audit implementation。
+- Scientific status不變：current matrix仍**恰為C61/C58/C59/C76/C77/C78**；C58 untouched，C59 constrained，C76/C77/C78 No-K/No-R0；MR-13AC Model Gate GO不變，production C42/C44不變。
+

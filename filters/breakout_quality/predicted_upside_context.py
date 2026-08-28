@@ -11,6 +11,15 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from config.breakout_quality import (
+    PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
+    PREDICTED_UPSIDE_CONTEXT_SCHEMA_VERSION,
+    PREDICTED_UPSIDE_CONTEXT_STAGE1_ARCHITECTURE,
+    PREDICTED_UPSIDE_CONTEXT_STAGE1_PROFILE,
+    PREDICTED_UPSIDE_CONTEXT_STAGE1_RESEARCH_ID,
+    PREDICTED_UPSIDE_CONTEXT_STAGE1_SEED,
+    get_predicted_upside_context_contract,
+)
 from filters.breakout_quality.conditional_mfe_safety import (
     build_same_date_residual_percentile,
 )
@@ -19,16 +28,12 @@ from filters.breakout_quality.continuous_ranker_data import (
 )
 from filters.breakout_quality.paths import resolve_filter_model_dir
 
-PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID = (
-    "daily_predicted_upside_conditional_low_adverse_v1"
-)
-PREDICTED_UPSIDE_CONTEXT_SCHEMA_VERSION = 1
 PREDICTED_UPSIDE_CONTEXT_FILENAME = "predicted_upside_context.csv.gz"
 PREDICTED_UPSIDE_CONTEXT_MANIFEST_FILENAME = "manifest.json"
-STAGE1_PROFILE = "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise"
-STAGE1_ARCHITECTURE = "inception_time_v1"
-STAGE1_RESEARCH_ID = "MR-13K"
-STAGE1_SEED = 42
+STAGE1_PROFILE = PREDICTED_UPSIDE_CONTEXT_STAGE1_PROFILE
+STAGE1_ARCHITECTURE = PREDICTED_UPSIDE_CONTEXT_STAGE1_ARCHITECTURE
+STAGE1_RESEARCH_ID = PREDICTED_UPSIDE_CONTEXT_STAGE1_RESEARCH_ID
+STAGE1_SEED = PREDICTED_UPSIDE_CONTEXT_STAGE1_SEED
 CONTEXT_COLUMN = "predicted_upside_percentile"
 
 
@@ -63,22 +68,7 @@ def resolve_predicted_upside_context_dir(
 
 
 def predicted_upside_context_contract() -> dict[str, Any]:
-    return {
-        "schema_version": PREDICTED_UPSIDE_CONTEXT_SCHEMA_VERSION,
-        "stage1_profile": STAGE1_PROFILE,
-        "stage1_architecture": STAGE1_ARCHITECTURE,
-        "stage1_research_id": STAGE1_RESEARCH_ID,
-        "stage1_seed": STAGE1_SEED,
-        "context_semantic": "same_date_average_rank_percentile_of_stage1_predicted_pure_mfe",
-        "selection_context": "expanding_cross_fitted_point_in_time",
-        "forward_context": "single_fixed_pre_oos_fit",
-        "full_fit_selection_score_forbidden": True,
-        "oos_statistics_for_training_forbidden": True,
-        "selection_training_universe": "pit_context_covered_rows_only",
-        "stage2_response": "same_date_low_adverse_percentile",
-        "stage2_target": "same_date_percentile_of_low_adverse_residual_given_predicted_upside_percentile",
-        "stage2_context_used_as_input": True,
-    }
+    return get_predicted_upside_context_contract()
 
 
 def _sha256(path: Path) -> str:
