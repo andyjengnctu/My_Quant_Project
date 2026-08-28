@@ -163,47 +163,6 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
     "breakout_quality": {
         "enabled": True,
         "audits": {
-            "AUD-mr13ab-survival-increment": {
-                "enabled": True,
-                "audit_type": "mr13ab_survival_increment",
-                "description": (
-                    "只讀MR-13AB frozen Forward OOS score/report與其內嵌MR-13K full-horizon reference target；"
-                    "只在first-breach target真正改寫的rows與兩Target要求相反排序的same-date pairs上，"
-                    "檢驗MR-13AB frozen score是否呈現survival ordering。"
-                ),
-                "source": {
-                    "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
-                    "model_architecture": "inception_time_v1",
-                    "candidate_profile_id": DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-                    "candidate_research_id": "MR-13AB",
-                    "candidate_target_id": DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
-                    "reference_profile_id": DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-                    "reference_research_id": "MR-13K",
-                    "reference_target_id": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-                    "seed": 42,
-                },
-                "dimensions": {
-                    "changed_tolerance_r": 1e-6,
-                    "top_fraction": 0.10,
-                    "percentile_method": "average_zero_based",
-                },
-                "outcomes": {
-                    "decision_question": (
-                        "MR-13AB frozen score是否在first-breach改寫rows／conflict pairs上真正遵循survival-adjusted ordering，"
-                        "同時保留既有Pure-MFE ranking能力？"
-                    ),
-                    "critical_uncertainty": (
-                        "MR-13AB aggregate learnability可能只由92%+未改Target rows支撐；必須隔離7.63% changed rows與"
-                        "target-order conflict pairs，直接檢查同一frozen score在AB truth與K reference truth衝突處偏向哪一方。"
-                    ),
-                    "stopping_condition": (
-                        "一次 reference-target-controlled frozen-score Audit 足以決定 "
-                        "SURVIVAL_INCREMENT_CONFIRMED → Model Gate PASS/進PIT-safe Rolling，"
-                        "或 NO_INCREMENT → STOP；不得延伸barrier/lambda/threshold/backbone sweep。"
-                    ),
-                },
-                "output_subdir": "breakout_quality/mr13ab_survival_increment",
-            },
             # Retained while the K/R0 mechanism remains an active research question.
             "AUD-selection-k-r0-attribution": {
                 "enabled": True,

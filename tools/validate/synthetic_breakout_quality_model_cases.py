@@ -4981,6 +4981,282 @@ def validate_breakout_quality_mr13ab_first_breach_pure_mfe_contract_case(_base_p
     summary["training_performed"] = False
     return results, summary
 
+
+def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contract_case(_base_params):
+    """Protect MR-13AC PIT-safe predicted-upside conditional low-adverse semantics."""
+
+    case_id = "BREAKOUT_QUALITY_MR13AC_PREDICTED_UPSIDE_CONDITIONAL_SAFETY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    import inspect
+    import numpy as np
+    import pandas as pd
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        get_breakout_quality_experiment_profile,
+        get_breakout_quality_model_research_settings,
+        get_continuous_ranker_execution_recipe,
+        get_continuous_ranker_research_spec,
+    )
+    from core.research_report_contract import (
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
+        persistent_report_contract_fingerprint,
+    )
+    from filters.breakout_quality.artifact_dependency_registry import (
+        ARTIFACT_DATASET_CORE,
+        ARTIFACT_PREDICTED_UPSIDE_CONTEXT,
+        required_upstream_artifact_types,
+    )
+    from filters.breakout_quality.conditional_mfe_safety import (
+        build_conditional_mfe_safety_targets,
+        build_same_date_residual_percentile,
+    )
+    from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.models.runtime import require_torch
+    from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.predicted_upside_context import (
+        PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
+        STAGE1_ARCHITECTURE,
+        STAGE1_PROFILE,
+        STAGE1_RESEARCH_ID,
+        STAGE1_SEED,
+        build_predicted_upside_conditional_low_adverse_targets,
+        predicted_upside_context_contract,
+    )
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality.point_in_time_scores import (
+        build_cross_fitted_context_scores,
+    )
+    from services.breakout_quality.predicted_upside_context import (
+        build_predicted_upside_context,
+    )
+
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    control = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    research_spec = get_continuous_ranker_research_spec(profile.name)
+    settings = get_breakout_quality_model_research_settings()
+    check(
+        "mr13ac_current_identity_target_architecture_and_model_gate_only",
+        (
+            profile.name,
+            "MR-13AC",
+            PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
+            "inception_time_predicted_upside_context_v1",
+            False,
+            False,
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            research_spec.model_research_id,
+            profile.continuous_target_id,
+            settings.model_architecture,
+            bool(research_spec.selection_pit_authorized),
+            bool(research_spec.current_time_validation_authorized),
+        ),
+    )
+    check_true(
+        "mr13ac_keeps_mr13m_stage2_training_recipe_except_target_and_one_context_scalar",
+        profile.optimizer_name == control.optimizer_name
+        and profile.lr_schedule_name == control.lr_schedule_name
+        and profile.augmentation_name == control.augmentation_name
+        and profile.training_sampling_mode == control.training_sampling_mode
+        and profile.training_objective == control.training_objective
+        and profile.loss_name == control.loss_name
+        and profile.epoch_selection_metric == control.epoch_selection_metric
+        and profile.training_label_scope == control.training_label_scope
+        and profile.training_sample_scope == control.training_sample_scope
+        and get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction
+        == get_continuous_ranker_execution_recipe(control.name).pairwise_reduction,
+    )
+
+    context_contract = predicted_upside_context_contract()
+    stage1_spec = get_continuous_ranker_research_spec(STAGE1_PROFILE)
+    check(
+        "mr13ac_stage1_is_frozen_mr13k_seed42_with_crossfit_selection_and_fixed_forward",
+        (
+            "MR-13K",
+            "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise",
+            "inception_time_v1",
+            42,
+            True,
+            False,
+            "expanding_cross_fitted_point_in_time",
+            "single_fixed_pre_oos_fit",
+            True,
+            True,
+        ),
+        (
+            STAGE1_RESEARCH_ID,
+            STAGE1_PROFILE,
+            STAGE1_ARCHITECTURE,
+            int(STAGE1_SEED),
+            bool(stage1_spec.selection_pit_authorized),
+            bool(stage1_spec.current_time_validation_authorized),
+            context_contract.get("selection_context"),
+            context_contract.get("forward_context"),
+            bool(context_contract.get("full_fit_selection_score_forbidden")),
+            bool(context_contract.get("oos_statistics_for_training_forbidden")),
+        ),
+    )
+    producer_source = inspect.getsource(build_predicted_upside_context)
+    check_true(
+        "mr13ac_context_producer_uses_isolated_crossfit_and_one_forward_score_block",
+        "build_cross_fitted_context_scores" in producer_source
+        and "stage1_selection_crossfit" in producer_source
+        and "stage1_forward_fixed" in producer_source
+        and "single_score_block=False" in producer_source
+        and "single_score_block=True" in producer_source
+        and "model_information_cutoff" in producer_source,
+    )
+    wrapper_source = inspect.getsource(build_cross_fitted_context_scores)
+    check_true(
+        "mr13ac_stage1_stacking_wrapper_requires_isolated_directory_without_ui_authorization_change",
+        '"stacking_context"' in wrapper_source
+        and "point_in_time_dir_override" in wrapper_source,
+    )
+
+    dates = pd.to_datetime(["2026-01-02"] * 6 + ["2026-01-05"] * 6)
+    frame = pd.DataFrame(
+        {
+            "date": dates,
+            "target_adverse_r": [0.9, 0.2, 0.7, 0.1, 0.5, 0.4, 0.8, 0.3, 0.6, 0.2, 0.9, 0.1],
+        }
+    )
+    context = np.asarray(
+        [0.1, 0.3, 0.5, 0.7, 0.9, 1.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+        dtype=np.float32,
+    )
+    valid = np.ones(len(frame), dtype=bool)
+    targets = build_predicted_upside_conditional_low_adverse_targets(frame, valid, context)
+    orthogonal = True
+    for _date, day in frame.groupby("date", sort=True):
+        idx = day.index.to_numpy(dtype=np.int64)
+        x = context[idx].astype(np.float64)
+        residual = targets.residual[idx].astype(np.float64)
+        orthogonal &= abs(float(np.mean(residual))) < 1e-6
+        orthogonal &= abs(float(np.dot(x - np.mean(x), residual))) < 1e-6
+    check_true(
+        "mr13ac_target_is_same_date_low_adverse_residual_orthogonal_to_predicted_upside_context",
+        orthogonal
+        and np.isfinite(targets.residual_percentile).all()
+        and bool((targets.residual_percentile >= 0.0).all())
+        and bool((targets.residual_percentile <= 1.0).all()),
+    )
+    check_true(
+        "mr13ac_training_target_is_same_date_residual_percentile_not_raw_residual",
+        np.array_equal(targets.training_target, targets.residual_percentile)
+        and bool((targets.training_target >= 0.0).all())
+        and bool((targets.training_target <= 1.0).all()),
+    )
+    check(
+        "mr13ac_selection_stage2_universe_is_only_pit_context_covered_rows",
+        "pit_context_covered_rows_only",
+        context_contract.get("selection_training_universe"),
+    )
+
+    # Refactoring MR-13P onto the shared residual helper must preserve its exact transform.
+    legacy_frame = frame.copy()
+    legacy_frame["target_favorable_r"] = [1, 2, 3, 4, 5, 6] * 2
+    mr13p = build_conditional_mfe_safety_targets(legacy_frame, valid)
+    manual_residual, manual_percentile = build_same_date_residual_percentile(
+        mr13p.primary_mfe_percentile,
+        mr13p.low_adverse_percentile,
+        valid,
+        legacy_frame["date"],
+    )
+    check_true(
+        "mr13ac_shared_residual_helper_keeps_mr13p_transform_exact",
+        np.array_equal(mr13p.conditional_safety_residual, manual_residual)
+        and np.array_equal(mr13p.conditional_safety_percentile, manual_percentile),
+    )
+
+    base_spec = get_model_spec("inception_time_v1")
+    model_spec = get_model_spec("inception_time_predicted_upside_context_v1")
+    check_true(
+        "mr13ac_backbone_is_mr13m_inceptiontime_plus_exactly_one_direct_scalar_context",
+        model_spec.inception_depth == base_spec.inception_depth
+        and model_spec.inception_filters == base_spec.inception_filters
+        and model_spec.inception_bottleneck_channels == base_spec.inception_bottleneck_channels
+        and model_spec.inception_kernel_sizes == base_spec.inception_kernel_sizes
+        and model_spec.inception_residual_every == base_spec.inception_residual_every
+        and model_spec.dropout == base_spec.dropout
+        and bool(model_spec.use_dataset_context)
+        and model_spec.pooling == ("global_average", "predicted_upside_percentile_concat")
+        and model_spec.head_width is None,
+    )
+    torch, _nn = require_torch()
+    torch.manual_seed(29)
+    model = build_active_model(
+        feature_count=10,
+        context_count=1,
+        architecture="inception_time_predicted_upside_context_v1",
+    )
+    model.eval()
+    with torch.no_grad():
+        model.classifier.weight.zero_()
+        model.classifier.bias.zero_()
+        model.classifier.weight[1, -1] = 1.0
+        x = torch.randn(1, 300, 10).repeat(2, 1, 1)
+        logits = model(x, torch.tensor([[0.2], [0.8]], dtype=x.dtype))
+    check_true(
+        "mr13ac_model_has_one_two_logit_head_and_context_enters_only_as_direct_scalar_concat",
+        bool(getattr(model, "direct_context_concat", False))
+        and int(model.classifier.out_features) == 2
+        and int(model.classifier.in_features) == int(base_spec.inception_filters) * 4 + 1
+        and abs(float(logits[1, 1] - logits[0, 1]) - 0.6) < 1e-5
+        and not hasattr(model, "predicted_upside_context_network"),
+    )
+    rejected_bad_width = False
+    try:
+        build_active_model(
+            feature_count=10,
+            context_count=0,
+            architecture="inception_time_predicted_upside_context_v1",
+        )
+    except ValueError:
+        rejected_bad_width = True
+    check_true("mr13ac_model_rejects_missing_context_scalar", rejected_bad_width)
+
+    check(
+        "mr13ac_dependency_plan_requires_dataset_then_predicted_upside_context",
+        (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_UPSIDE_CONTEXT),
+        required_upstream_artifact_types(profile.name),
+    )
+    semantics = training_semantics(profile)
+    embedded = dict(semantics.get("predicted_upside_context_contract") or {})
+    if not embedded:
+        embedded = dict(
+            (semantics.get("pairwise_contract") or {}).get("predicted_upside_context_contract") or {}
+        )
+    check_true(
+        "mr13ac_training_semantics_persist_stage1_context_provenance",
+        embedded == context_contract,
+    )
+    check(
+        "mr13ac_keeps_user_approved_standard_model_sop_fingerprint",
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
+        persistent_report_contract_fingerprint("model.standard_sop"),
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
+    check_true(
+        "mr13ac_has_no_strategy_conversion_or_runtime_source",
+        profile.name not in strategy_source and "MR-13AC" not in strategy_source,
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+
 def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_params):
     """Pin the profile-driven continuous-ranker boundary before adding new Daily MR variants."""
 

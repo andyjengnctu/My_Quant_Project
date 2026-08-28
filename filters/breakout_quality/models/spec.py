@@ -50,6 +50,7 @@ MULTISCALE_CNN_SEQUENCE_ONLY_V1 = "multiscale_cnn_sequence_only_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1 = "multiscale_cnn_sequence_only_dual_path_v1"
 INCEPTION_TIME_V1 = "inception_time_v1"
 INCEPTION_TIME_RISK_CONTEXT_V1 = "inception_time_risk_context_v1"
+INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1 = "inception_time_predicted_upside_context_v1"
 INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1 = "inception_time_conditional_mfe_safety_v1"
 INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1 = "inception_time_safety_conditional_mfe_v1"
 INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1 = "inception_time_safety_raw_mfe_hmhs_v1"
@@ -84,6 +85,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1,
     INCEPTION_TIME_V1,
     INCEPTION_TIME_RISK_CONTEXT_V1,
+    INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1,
     INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1,
     INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1,
     INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1,
@@ -105,6 +107,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
 ACTIVE_MODEL_ARCHITECTURES = (
     INCEPTION_TIME_V1,
     INCEPTION_TIME_RISK_CONTEXT_V1,
+    INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1,
     INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1,
     INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1,
     INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1,
@@ -997,6 +1000,30 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             inception_residual_every=int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY),
         )
 
+    if normalized == INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1:
+        depth = int(BREAKOUT_QUALITY_INCEPTION_DEPTH)
+        kernel_sizes = build_breakout_quality_inception_kernel_sizes()
+        return BreakoutQualityModelSpec(
+            architecture=normalized,
+            family="inception_time_predicted_upside_context",
+            channels=32,
+            kernel_size=max(kernel_sizes),
+            dilations=(),
+            convolutions_per_block=1,
+            pooling=("global_average", "predicted_upside_percentile_concat"),
+            dropout=0.0,
+            receptive_field_bars=resolve_breakout_quality_inception_receptive_field_bars(),
+            normalization="batch_norm",
+            normalization_groups=None,
+            use_dataset_context=True,
+            sequence_input_paths=("raw_level", "pit_safe_predicted_upside_percentile"),
+            inception_depth=depth,
+            inception_filters=32,
+            inception_bottleneck_channels=32,
+            inception_kernel_sizes=kernel_sizes,
+            inception_residual_every=int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY),
+        )
+
     if normalized == INCEPTION_TIME_RISK_CONTEXT_V1:
         depth = int(BREAKOUT_QUALITY_INCEPTION_DEPTH)
         kernel_sizes = build_breakout_quality_inception_kernel_sizes()
@@ -1126,6 +1153,7 @@ __all__ = [
     "INCEPTION_TIME_MARKET_SET_V1",
     "INCEPTION_TIME_V1",
     "INCEPTION_TIME_RISK_CONTEXT_V1",
+    "INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1",
     "INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1",
     "INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1",
     "INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1",

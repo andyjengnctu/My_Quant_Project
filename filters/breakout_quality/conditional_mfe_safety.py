@@ -39,6 +39,63 @@ class ConditionalMfeSafetyTargets:
         ).astype(np.float32, copy=False)
 
 
+def build_same_date_residual_percentile(
+    condition_percentile: np.ndarray,
+    response_percentile: np.ndarray,
+    valid_mask: np.ndarray,
+    dates,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return deterministic same-date OLS residual and its average-rank percentile.
+
+    This helper centralizes the exact conditional-ranking transform used by MR-13P
+    and newer controlled conditional models.  It is supervision-only; callers own
+    the semantics/provenance of both input percentiles.
+    """
+
+    condition = np.asarray(condition_percentile, dtype=np.float64)
+    response = np.asarray(response_percentile, dtype=np.float64)
+    valid = np.asarray(valid_mask, dtype=bool)
+    if condition.shape != valid.shape or response.shape != valid.shape:
+        raise ValueError("same-date residual percentile input shape不一致")
+    if bool(np.any(valid & (~np.isfinite(condition) | ~np.isfinite(response)))):
+        raise ValueError("same-date residual percentile valid row缺少finite condition/response")
+    if bool(np.any(valid & ((condition < 0.0) | (condition > 1.0)))):
+        raise ValueError("same-date residual percentile condition超出[0,1]")
+    if bool(np.any(valid & ((response < 0.0) | (response > 1.0)))):
+        raise ValueError("same-date residual percentile response超出[0,1]")
+
+    normalized_dates = pd.to_datetime(pd.Series(dates), errors="raise").dt.normalize()
+    if len(normalized_dates) != len(valid):
+        raise ValueError("same-date residual percentile dates長度不一致")
+    residual = np.full(len(valid), np.nan, dtype=np.float64)
+    work = pd.DataFrame(
+        {
+            "date": normalized_dates,
+            "condition": condition,
+            "response": response,
+            "group_index": np.arange(len(valid), dtype=np.int64),
+        }
+    )
+    work = work[valid].copy()
+    for _date, day in work.groupby("date", sort=True):
+        positions = day["group_index"].to_numpy(dtype=np.int64)
+        x = day["condition"].to_numpy(dtype=np.float64)
+        y = day["response"].to_numpy(dtype=np.float64)
+        x_centered = x - float(np.mean(x))
+        y_mean = float(np.mean(y))
+        denominator = float(np.dot(x_centered, x_centered))
+        if denominator <= np.finfo(np.float64).eps:
+            fitted = np.full_like(y, y_mean)
+        else:
+            slope = float(np.dot(x_centered, y - y_mean) / denominator)
+            fitted = y_mean + slope * x_centered
+        residual[positions] = y - fitted
+    if bool(np.any(valid & ~np.isfinite(residual))):
+        raise ValueError("same-date residual percentile產生non-finite residual")
+    percentile = build_same_date_percentile_targets(residual, valid, normalized_dates)
+    return residual.astype(np.float32), np.asarray(percentile, dtype=np.float32)
+
+
 def build_conditional_mfe_safety_targets(
     group_table: pd.DataFrame,
     valid_mask: np.ndarray,
@@ -99,34 +156,9 @@ def build_conditional_mfe_safety_targets(
         dates,
     )
 
-    residual = np.full(len(group_table), np.nan, dtype=np.float64)
-    work = pd.DataFrame(
-        {
-            "date": dates,
-            "u": mfe_percentile.astype(np.float64),
-            "s": low_adverse_percentile.astype(np.float64),
-            "group_index": np.arange(len(group_table), dtype=np.int64),
-        }
-    )
-    work = work[valid].copy()
-    for _date, day in work.groupby("date", sort=True):
-        positions = day["group_index"].to_numpy(dtype=np.int64)
-        u = day["u"].to_numpy(dtype=np.float64)
-        s = day["s"].to_numpy(dtype=np.float64)
-        u_centered = u - float(np.mean(u))
-        s_mean = float(np.mean(s))
-        denominator = float(np.dot(u_centered, u_centered))
-        if denominator <= np.finfo(np.float64).eps:
-            fitted = np.full_like(s, s_mean)
-        else:
-            slope = float(np.dot(u_centered, s - s_mean) / denominator)
-            fitted = s_mean + slope * u_centered
-        residual[positions] = s - fitted
-
-    if bool(np.any(valid & ~np.isfinite(residual))):
-        raise ValueError("conditional MFE-safety residual產生non-finite value")
-    conditional_percentile = build_same_date_percentile_targets(
-        residual,
+    residual, conditional_percentile = build_same_date_residual_percentile(
+        mfe_percentile,
+        low_adverse_percentile,
         valid,
         dates,
     )
@@ -150,4 +182,5 @@ def build_conditional_mfe_safety_targets(
 __all__ = [
     "ConditionalMfeSafetyTargets",
     "build_conditional_mfe_safety_targets",
+    "build_same_date_residual_percentile",
 ]

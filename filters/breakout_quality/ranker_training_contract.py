@@ -26,6 +26,10 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     get_continuous_ranker_execution_recipe,
 )
+from filters.breakout_quality.predicted_upside_context import (
+    PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
+    predicted_upside_context_contract,
+)
 
 
 PAIRWISE_TRAINING_CONTRACT = {
@@ -329,6 +333,8 @@ def training_semantics(profile) -> dict[str, Any]:
         recipe = get_continuous_ranker_execution_recipe(profile.name)
         pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
         pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
+        if str(profile.continuous_target_id or "") == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
+            pairwise_contract["predicted_upside_context_contract"] = predicted_upside_context_contract()
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
             pairwise_contract.update({
                 "pair_scope": "same_date_strict_pareto_dominance_pairs",

@@ -98,17 +98,6 @@ def get_audit_method(method_id: str) -> AuditMethodEntry:
 
 
 AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
-    "mr13ab_survival_increment": AuditCatalogEntry(
-        audit_type="mr13ab_survival_increment",
-        domain="breakout_quality",
-        module="services.audit.mr13ab_survival_increment",
-        mode="formal",
-        description="只讀MR-13AB frozen OOS與內嵌MR-13K reference target的changed-row/conflict-pair survival increment",
-        read_only=True,
-        method_id="opportunity_selection_attribution",
-        status_function="collect_status",
-        run_function="run_formal_audit",
-    ),
     # Only genuinely supported diagnostic commands belong here.  Canonical
     # Dataset/Target/PIT builders live in services/ and are not research Audits.
     "regime": AuditCatalogEntry(

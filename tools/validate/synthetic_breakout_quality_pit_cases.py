@@ -927,8 +927,8 @@ def validate_breakout_quality_pit_training_performance_semantics_case(_base_para
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config.breakout_quality import (
-        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
         BREAKOUT_QUALITY_PIT_EPOCH_SELECTION_LIGHTWEIGHT_METRICS,
+        DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         get_breakout_quality_experiment_profile,
         get_breakout_quality_workflow_settings,
     )
@@ -1021,7 +1021,7 @@ def validate_breakout_quality_pit_training_performance_semantics_case(_base_para
         ),
     )
 
-    profile_name = BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE
+    profile_name = DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
     profile = get_breakout_quality_experiment_profile(profile_name)
     resolved_workflow = get_breakout_quality_workflow_settings(experiment_profile=profile_name)
     args = parse_ranker_args(

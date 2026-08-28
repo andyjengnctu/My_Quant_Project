@@ -47,6 +47,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_workflow_settings,
+    get_continuous_ranker_research_spec,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
@@ -1842,15 +1843,33 @@ def _snapshot_superseded_point_in_time_aggregate(
     return snapshot_dir
 
 
-def _run_point_in_time_scores(args: argparse.Namespace) -> int:
+def _run_point_in_time_scores(
+    args: argparse.Namespace,
+    *,
+    authorization_mode: str = "rolling",
+) -> int:
     _validate_args(args)
     settings = get_breakout_quality_workflow_settings(
         experiment_profile=str(args.experiment_profile)
     )
-    if not settings.rolling_authorized:
-        raise ValueError(
-            f"目前profile未授權Rolling PIT scores: {args.experiment_profile}"
+    mode = str(authorization_mode).strip().lower()
+    if mode == "rolling":
+        if not settings.rolling_authorized:
+            raise ValueError(
+                f"目前profile未授權Rolling PIT scores: {args.experiment_profile}"
+            )
+    elif mode == "stacking_context":
+        research_spec = get_continuous_ranker_research_spec(
+            str(args.experiment_profile)
         )
+        if not bool(research_spec.selection_pit_authorized):
+            raise ValueError(
+                "stacking context只允許已有historical PIT authorization的Stage-1 profile"
+            )
+        if not str(getattr(args, "point_in_time_dir_override", "") or "").strip():
+            raise ValueError("stacking context必須使用isolated point_in_time_dir_override")
+    else:
+        raise ValueError(f"未知PIT authorization mode: {authorization_mode!r}")
     started = time.perf_counter()
     color_enabled = console_color_enabled()
     data_started = time.perf_counter()
@@ -2433,6 +2452,7 @@ def build_selection_point_in_time_scores(
     checkpoint_cache_root: str | None = None,
     allow_stale_source: bool = False,
     single_score_block: bool = False,
+    _authorization_mode: str = "rolling",
 ) -> int:
     """Programmatic PIT producer used by formal workflows.
 
@@ -2474,7 +2494,23 @@ def build_selection_point_in_time_scores(
         argv.extend(["--checkpoint-cache-root", str(checkpoint_cache_root)])
     if allow_stale_source:
         argv.append("--allow-stale-source")
-    return _run_point_in_time_scores(parse_args(argv))
+    return _run_point_in_time_scores(
+        parse_args(argv), authorization_mode=str(_authorization_mode)
+    )
+
+
+def build_cross_fitted_context_scores(**kwargs) -> int:
+    """Build isolated Stage-1 scores for stacked research without authorizing current Rolling.
+
+    The source profile must already carry historical/selection PIT authorization.
+    Callers must provide an isolated ``point_in_time_dir_override``; this producer
+    never changes the source profile's UI/current-time validation authorization.
+    """
+
+    if not str(kwargs.get("point_in_time_dir_override") or "").strip():
+        raise ValueError("stacking context必須指定point_in_time_dir_override")
+    kwargs["_authorization_mode"] = "stacking_context"
+    return build_selection_point_in_time_scores(**kwargs)
 
 
 def main(argv=None) -> int:
@@ -2485,6 +2521,7 @@ __all__ = [
     "FOLD_MANIFEST_FILENAME",
     "FOLD_SCORE_FILENAME",
     "POINT_IN_TIME_SCHEMA_VERSION",
+    "build_cross_fitted_context_scores",
     "build_selection_point_in_time_scores",
     "fold_training_identity",
     "main",

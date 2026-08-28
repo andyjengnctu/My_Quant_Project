@@ -10513,3 +10513,28 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - MR-13AB target、MR-13K historical target、training、frozen score、Standard Model SOP、PIT與Strategy Compare均不修改；因此既有Forward與Target-comparison scientific results不需重訓或重算。
 - Status：**AUDIT_IMPLEMENTATION_FIX / SCIENTIFIC_RESULT_UNCHANGED / SURVIVAL_INCREMENT_RESULT_PENDING**。
 
+### 2026-08-28 — MR-13AB Final Survival Increment Audit：conflict ordering明確偏向full-horizon Pure-MFE，Model Gate FAIL
+
+- Baseline：`test-branch-1_20260828_194453_50fa5a89.zip`，SHA256 `28706cd37b3495d267441b35c6c86fa94b41b54ee7253ee69af53ca8a3a5de4d`。
+- `AUD-mr13ab-survival-increment`最終成功執行；Common OOS=`608,204`。
+- Frozen score aggregate：對MR-13AB first-breach Pure-MFE truth的Mean Daily rho=`0.3062`；對MR-13K full-horizon Pure-MFE reference truth=`0.3782`；兩Target本身Daily rho=`0.9119`。
+- OOS changed rows=`43,487 (7.15%)`，其中survival-demotion rows=`43,373`、empty-prebreach zero-floor rows=`114 (0.02%)`；mean target correction=`1.2809R`。
+- changed rows的mean percentile：MR-13K reference truth=`0.6161`、MR-13AB first-breach truth=`0.2887`，應有rank correction=`-0.3274`；但MR-13AB frozen score percentile反而=`0.6768`，score residual vs reference rank=`+0.0607`。Reference-only top-10% rows=`6,754`，仍有`33.37%`被MR-13AB score留在top-10%。
+- 最具判別力的target-order conflict control：same-date strict conflict pairs=`7,889,338`，涵蓋`1,198` dates。MR-13AB frozen score對AB survival truth concordance=`26.51%`，對K full-horizon truth=`73.49%`，AB-truth advantage=`-46.99pp`；mean daily AB-truth concordance=`23.52%`，只有`1.59%` conflict dates高於50% natural null。
+- 因此MR-13AB雖有`LEARNABILITY_PASS`與`TARGET_GEOMETRY_PASS`，且幾乎保留MR-13K upside ranking能力，但**沒有把first-passage correction學進ranking**；在真正需要二選一的conflict pairs上反而強烈遵循full-horizon Pure-MFE ordering。這否決「sparse first-breach scalar correction可在不犧牲upside learnability下自然加入survival ordering」的假說。
+- Final Decision：`NO_SURVIVAL_INCREMENT / FULL_HORIZON_ORDERING_DOMINATES_CONFLICTS / MODEL_GATE_FAIL / NO_PIT / NO_STRATEGY_CONVERSION / NO_ROBUSTNESS / STOP`。
+- 依事前stop rule，不再做MR-13AB PIT、Strategy arm、Multi-seed、Fixed Window，也不展開first-passage barrier/lambda/threshold/calibration/backbone/aggregation sweep。下一個尚未實作的model問題改為Plan C-M：PIT-safe predicted-upside context下的Conditional Low-Adverse；其目的不是再壓一個global scalar，而是測path-risk residual在upside context條件化後是否成為可辨識訊號。未開始實作前不預占新的MR identity。
+- `AUD-mr13ab-survival-increment`已完成唯一decision question；依最小必要Audit與disposable lifecycle，formal config/catalog/implementation/dedicated synthetic退役，歷史identity與以上結果永久保留。
+
+### 2026-08-28 — MR-13AC Plan C-M實作：PIT-safe predicted-upside context → Conditional Low-Adverse Model Gate
+
+- Registry分配下一個合法model identity=`MR-13AC`；profile=`daily_universal_predicted_upside_conditional_low_adverse_full_list_ndcg_pairwise`，target=`daily_predicted_upside_conditional_low_adverse_v1`，architecture identity=`ARCH-inception_time_predicted_upside_context_v1` / runtime string=`inception_time_predicted_upside_context_v1`。
+- Scientific question承接MR-13AB STOP：不再把sparse first-passage correction壓進global upside scalar，而改問「在模型已預測的upside context條件下，Low-Adverse/path-risk residual是否可形成獨立且可泛化的ranking訊號」。
+- Stage-1固定MR-13K Pure-MFE scientific identity與Seed42。Selection context只允許expanding cross-fitted/PIT-safe Stage-1 prediction，轉為same-day predicted-upside percentile；禁止full-fit Selection score回灌Stage-2 fitting。Stage-2 Selection training universe因此只使用已有合法PIT context覆蓋的rows，較早無context rows不得以前視或future fit補值。
+- Forward 2021+ context固定用單一pre-2021 Stage-1 fit對整段Forward block scoring；OOS期間不得annual refit、不得用OOS label/statistics更新context。Selection/Forward context artifacts綁定dataset identity、Stage-1 score/PIT manifest與SHA，reuse不只檢查檔案存在。
+- Stage-2固定MR-13M的daily-universal InceptionTime、300×10 raw input、full-list ΔNDCG pairwise、Adam、Seed42、split與`mean_daily_spearman` epoch selection；architecture唯一新增1個predicted-upside percentile scalar，直接concat到global-average pooled latent後進單一2-logit head，不新增context MLP、多head、gate或attention。
+- Stage-2 truth：先由canonical adverse component形成same-day Low-Adverse percentile，再以含intercept OLS對PIT-safe predicted-upside percentile做同日residual，最後將residual再轉same-day percentile作正式ranking target；raw residual只保留diagnostic，不作訓練target。
+- 禁止portfolio state、breakout/cash/K/R0、threshold、lambda、score fusion/product、backbone tuning與OOS-driven calibration。MR-13AC目前`selection_pit_authorized=False`、`current_time_validation_authorized=False`；只授權Seed42 Standard Model SOP Model Gate，不建立Strategy arm、Multi-seed或Fixed Window。
+- Stop rule：若MR-13AC仍不能形成獨立conditional path-risk增量，停止conditional model line並轉既有MR-13P primary-preserving runtime fallback；只有Model Gate GO後才另行決定是否授權PIT/strategy conversion。
+- Standard Model SOP 1～6與approved persistent report fingerprint `2b372bd465258234`完全不變。
+- Status：**MR13AB_CLOSED / MR13AC_IMPLEMENTED / MODEL_GATE_RESULT_PENDING / PIT_SAFE_STACKING_CONTEXT / NO_PIT / NO_STRATEGY_CONVERSION**。
