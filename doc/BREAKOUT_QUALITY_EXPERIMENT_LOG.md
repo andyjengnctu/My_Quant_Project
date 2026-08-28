@@ -10504,3 +10504,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 因此最後不確定性可在不需要MR-13K model的情況下直接回答：只看same-date target-order conflict pairs（兩個target要求相反strict ordering，且至少一row為changed），量測MR-13AB frozen score對AB first-breach truth與K full-horizon truth的pair concordance。50%為自然無偏null；另保留changed-row target-rank correction與frozen-score residual alignment，判斷7.63% sparse correction是否真的進入ranking。
 - Audit改為**AB-only / reference-target-controlled / read-only**；MR-13K只保留semantic reference identity，不再要求任何historical score/checkpoint。上一版專為不存在checkpoint新增的`frozen_daily_ranker_score_rebuild.py`退役，避免留下無用producer。仍不training、不重建Target、不PIT、不strategy replay、不產生任何可回流fitting的threshold/weight。
 - Scientific stopping rule不變：一次結果後直接`SURVIVAL_INCREMENT_CONFIRMED → MODEL_GATE_PASS`或`NO_INCREMENT → STOP`，不再新增Audit或展開target/backbone sweep。
+
+### 2026-08-28 — AUD-mr13ab target-order invariant correction：first-bar empty-prebreach 0R 可合法高於 historical negative Pure-MFE
+
+- 使用者第三次執行`AUD-mr13ab-survival-increment`時，preflight已READY，但run handler以「MR-13AB first-breach target不得大於MR-13K full-horizon Pure-MFE」作全域fail-fast，遇到合法row後中止。
+- 根因不是MR-13AB target producer錯誤，而是Audit invariant過強。MR-13K historical `daily_full_horizon_pure_mfe_r_v1`定義為40D future high最大return除以R，**未做0R floor**；若第一根future bar即risk breach且其後40D所有high仍低於anchor，MR-13AB依既定`first-bar breach = empty pre-breach path = 0R`語意輸出`0R`，而MR-13K reference可為負R，因此會合法出現`AB > K`。
+- 修正只改一次性Audit：允許且只允許`AB≈0R`且`K<0R`的zero-floor edge；任何其他`AB > K`仍fail-closed。`target_changed`改與正式Daily Target Comparison一致，以`abs(AB-K)>tol`定義，避免漏掉這批合法changed rows；報表另揭露survival-demotion row count與zero-floor exception row count。
+- MR-13AB target、MR-13K historical target、training、frozen score、Standard Model SOP、PIT與Strategy Compare均不修改；因此既有Forward與Target-comparison scientific results不需重訓或重算。
+- Status：**AUDIT_IMPLEMENTATION_FIX / SCIENTIFIC_RESULT_UNCHANGED / SURVIVAL_INCREMENT_RESULT_PENDING**。
+

@@ -206,12 +206,29 @@ def analyze_candidate_score_frame(
 
     candidate_target = frame["candidate_target_r"].to_numpy(dtype=np.float64)
     reference_target = frame["reference_target_r"].to_numpy(dtype=np.float64)
-    if bool(np.any(candidate_target > reference_target + max(tolerance, 2e-6))):
-        raise ValueError("MR-13AB first-breach target出現大於full-horizon Pure-MFE的非法row")
+    contract_tolerance = max(tolerance, 2e-6)
+
+    # Historical MR-13K Pure-MFE is max(future high / anchor - 1) / R and is not
+    # floored at zero. MR-13AB intentionally defines an empty pre-breach path
+    # (first-bar breach) as 0R. Therefore AB may exceed K only in the narrow
+    # zero-floor case: AB ~= 0R while the historical K reference is negative.
+    exceeds_reference = candidate_target > reference_target + contract_tolerance
+    legal_zero_floor_exception = (
+        exceeds_reference
+        & (np.abs(candidate_target) <= contract_tolerance)
+        & (reference_target < -contract_tolerance)
+    )
+    illegal_exceeds_reference = exceeds_reference & ~legal_zero_floor_exception
+    if bool(np.any(illegal_exceeds_reference)):
+        raise ValueError(
+            "MR-13AB first-breach target大於full-horizon Pure-MFE，且不符合"
+            "first-bar empty-prebreach=0R / historical negative Pure-MFE例外"
+        )
 
     correction = reference_target - candidate_target
     frame["target_correction_r"] = correction
-    frame["target_changed"] = correction > tolerance
+    frame["target_changed"] = np.abs(correction) > tolerance
+    frame["zero_floor_exception"] = legal_zero_floor_exception
 
     _add_daily_percentile(frame, "candidate_score", "candidate_score_percentile")
     _add_daily_percentile(frame, "candidate_target_r", "candidate_target_percentile")
@@ -237,6 +254,10 @@ def analyze_candidate_score_frame(
 
     changed_rows = frame.loc[frame["target_changed"]].copy()
     unchanged_rows = frame.loc[~frame["target_changed"]].copy()
+    zero_floor_rows = frame.loc[frame["zero_floor_exception"]].copy()
+    demoted_rows = frame.loc[
+        frame["target_changed"] & (frame["candidate_target_r"] < frame["reference_target_r"] - tolerance)
+    ].copy()
     top_cutoff = 1.0 - float(top_fraction)
     reference_only_top = (
         (changed_rows["reference_target_percentile"] >= top_cutoff)
@@ -288,6 +309,9 @@ def analyze_candidate_score_frame(
             if reference_only_top_count
             else None
         ),
+        "survival_demotion_row_count": int(len(demoted_rows)),
+        "zero_floor_exception_row_count": int(len(zero_floor_rows)),
+        "zero_floor_exception_row_rate": float(len(zero_floor_rows) / len(frame)),
     }
     unchanged_summary = {
         "row_count": int(len(unchanged_rows)),
@@ -349,7 +373,13 @@ def analyze_candidate_score_frame(
     metrics = {
         "common_oos_rows": int(len(frame)),
         "target_contract": {
-            "candidate_never_exceeds_reference": True,
+            "candidate_never_exceeds_reference_except_empty_prebreach_zero_floor": True,
+            "historical_reference_pure_mfe_has_zero_floor": False,
+            "legal_zero_floor_exception": (
+                "candidate~=0R and reference<0R only; this is first-bar empty-prebreach "
+                "semantics versus historical MR-13K unfloored Pure-MFE"
+            ),
+            "zero_floor_exception_row_count": int(len(zero_floor_rows)),
             "reference_truth_source": "MR-13AB frozen OOS embedded reference_target_raw_r",
             "tolerance_r": tolerance,
         },
@@ -579,7 +609,9 @@ def render_result(result: Mapping[str, Any]) -> str:
         "2. Changed-row correction",
         "-------------------------",
         f"Changed rows                              ：{int(changed.get('row_count', 0)):,} ({_pct(changed.get('row_rate'))})",
-        f"Mean target correction                    ：{_fmt(changed.get('mean_target_correction_r'))}R",
+        f"Survival-demotion rows                    ：{int(changed.get('survival_demotion_row_count', 0)):,}",
+        f"Empty-prebreach zero-floor rows           ：{int(changed.get('zero_floor_exception_row_count', 0)):,} ({_pct(changed.get('zero_floor_exception_row_rate'))})",
+        f"Mean target correction (K - AB)           ：{_fmt(changed.get('mean_target_correction_r'))}R",
         f"Mean reference-target percentile          ：{_fmt(changed.get('mean_reference_target_percentile'))}",
         f"Mean first-breach-target percentile       ：{_fmt(changed.get('mean_candidate_target_percentile'))}",
         f"Mean frozen-score percentile              ：{_fmt(changed.get('mean_candidate_score_percentile'))}",
@@ -599,6 +631,7 @@ def render_result(result: Mapping[str, Any]) -> str:
         f"Mean daily concordance vs AB truth        ：{_pct(conflict.get('mean_daily_candidate_truth_concordance'))}",
         f"Conflict dates > 50% AB-truth concordance ：{_pct(conflict.get('date_share_candidate_truth_above_half'))}",
         "",
+        "Target edge：historical MR-13K Pure-MFE不做0R floor；first-bar breach使AB empty-prebreach=0R時，AB可合法高於負值K reference。",
         "Natural null：在兩Target要求相反排序的pair上，50%表示frozen score沒有偏向first-breach或full-horizon ordering。",
         "Decision boundary：只判斷MR-13AB frozen score是否在target真正改寫／ordering衝突處呈現first-passage survival ordering；",
         "本Audit不產生barrier、loss、threshold、architecture、portfolio rule或任何可回流fitting的參數。",

@@ -4893,6 +4893,27 @@ def validate_breakout_quality_mr13ab_first_breach_pure_mfe_contract_case(_base_p
         ),
     )
 
+    negative_high = np.asarray([99.0] * horizon)
+    negative_low = np.asarray([89.0] + [88.0] * (horizon - 1))
+    immediate_zero_floor = daily_first_risk_breach_pure_mfe_target_from_cached_path(
+        negative_high, negative_low,
+        anchor_price=100.0, available_bars=horizon, spec=spec,
+    )
+    historical_unfloored = daily_full_horizon_pure_mfe_target_from_cached_path(
+        negative_high, negative_low,
+        anchor_price=100.0, available_bars=horizon, spec=spec,
+    )
+    check_true(
+        "mr13ab_first_bar_empty_prebreach_zero_can_exceed_historical_unfloored_negative_mr13k_pure_mfe",
+        bool(
+            immediate_zero_floor.valid
+            and historical_unfloored.valid
+            and float(immediate_zero_floor.target_raw_r) == 0.0
+            and float(historical_unfloored.target_raw_r) < 0.0
+            and float(immediate_zero_floor.target_raw_r) > float(historical_unfloored.target_raw_r)
+        ),
+    )
+
     frame = pd.DataFrame(
         {
             "Close": np.asarray([100.0] + [100.0] * horizon),

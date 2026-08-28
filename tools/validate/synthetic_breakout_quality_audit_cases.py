@@ -168,16 +168,32 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         ),
     )
 
+    legal_zero_floor = candidate_fixture.copy()
+    legal_zero_floor.loc[0, "target_raw_r"] = 0.0
+    legal_zero_floor.loc[0, "reference_target_raw_r"] = -0.25
+    zero_floor_metrics, zero_floor_changed, _ = analyze_candidate_score_frame(
+        legal_zero_floor
+    )
+    check_true(
+        "mr13ab_survival_increment_allows_only_empty_prebreach_zero_floor_over_negative_historical_pure_mfe",
+        bool(
+            zero_floor_metrics["target_contract"]["zero_floor_exception_row_count"] == 1
+            and zero_floor_metrics["changed_rows"]["zero_floor_exception_row_count"] == 1
+            and len(zero_floor_changed) >= 1
+            and bool(zero_floor_changed["zero_floor_exception"].any())
+        ),
+    )
+
     invalid_candidate = candidate_fixture.copy()
     invalid_candidate.loc[0, "target_raw_r"] = 3.5
     try:
         analyze_candidate_score_frame(invalid_candidate)
     except ValueError as exc:
-        invalid_target_blocked = "大於full-horizon Pure-MFE" in str(exc)
+        invalid_target_blocked = "不符合" in str(exc) and "historical negative Pure-MFE" in str(exc)
     else:
         invalid_target_blocked = False
     check_true(
-        "mr13ab_survival_increment_fail_closes_when_first_breach_target_exceeds_reference_truth",
+        "mr13ab_survival_increment_fail_closes_on_non_zero_floor_candidate_above_reference_truth",
         invalid_target_blocked,
     )
 
