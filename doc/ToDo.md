@@ -9,6 +9,7 @@
 
 - imrove DL module
     - attention (temperal / cross-secction)
+    - self-learned history and L lengths
     - hihger weight for high mfe or high safety   
     - retrain min parameters
     - simply label

@@ -930,6 +930,7 @@ def validate_breakout_quality_pit_training_performance_semantics_case(_base_para
         BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
         BREAKOUT_QUALITY_PIT_EPOCH_SELECTION_LIGHTWEIGHT_METRICS,
         get_breakout_quality_experiment_profile,
+        get_breakout_quality_workflow_settings,
     )
     from filters.breakout_quality.features import (
         normalize_ohlcv_array_window,
@@ -1022,12 +1023,13 @@ def validate_breakout_quality_pit_training_performance_semantics_case(_base_para
 
     profile_name = BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE
     profile = get_breakout_quality_experiment_profile(profile_name)
+    resolved_workflow = get_breakout_quality_workflow_settings(experiment_profile=profile_name)
     args = parse_ranker_args(
         [
             "--experiment-profile",
             profile_name,
             "--model-architecture",
-            profile.model_architecture,
+            resolved_workflow.model_architecture,
             "--epochs",
             "1",
             "--batch-size",

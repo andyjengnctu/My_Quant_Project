@@ -4527,7 +4527,6 @@ def validate_breakout_quality_mr13aa_patch_transformer_h_target_contract_case(_b
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     from config.breakout_quality import (
-        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
         DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_PATCH_TRANSFORMER_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_PATCH_TRANSFORMER_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -4564,9 +4563,8 @@ def validate_breakout_quality_mr13aa_patch_transformer_h_target_contract_case(_b
     )
 
     check(
-        "mr13aa_is_current_model_research_architecture_only_h_target_control",
+        "mr13aa_remains_registered_architecture_only_h_target_control",
         (
-            profile.name,
             "MR-13AA",
             TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
             "daily_full_horizon_opportunity_r_v1",
@@ -4574,7 +4572,6 @@ def validate_breakout_quality_mr13aa_patch_transformer_h_target_contract_case(_b
             "mean_daily_spearman",
         ),
         (
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
             research_spec.model_research_id,
             profile.training_objective,
             profile.continuous_target_id,
@@ -4737,6 +4734,231 @@ def validate_breakout_quality_mr13aa_patch_transformer_h_target_contract_case(_b
     summary["training_performed"] = False
     return results, summary
 
+
+
+def validate_breakout_quality_mr13ab_first_breach_pure_mfe_contract_case(_base_params):
+    """Protect MR-13AB as the missing Pure-MFE × first-risk-breach target cell."""
+
+    case_id = "BREAKOUT_QUALITY_MR13AB_FIRST_BREACH_PURE_MFE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    import numpy as np
+    import pandas as pd
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_breakout_quality_model_research_settings,
+        get_continuous_ranker_execution_recipe,
+        get_continuous_ranker_research_spec,
+    )
+    from core.research_report_contract import (
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
+        persistent_report_contract_fingerprint,
+    )
+    from filters.breakout_quality.continuous_target import (
+        DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
+        StrategyAlignedContinuousTargetSpec,
+        build_daily_first_risk_breach_pure_mfe_contract,
+        daily_first_risk_breach_pure_mfe_target_from_cached_path,
+        daily_full_horizon_pure_mfe_target_from_cached_path,
+    )
+    from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
+    from filters.breakout_quality.daily_ranker_data import compute_daily_opportunity_target_batch
+    from services.breakout_quality.daily_target_comparison import _controlled_change_contract
+
+    control = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    research_spec = get_continuous_ranker_research_spec(profile.name)
+    settings = get_breakout_quality_model_research_settings()
+
+    check(
+        "mr13ab_is_current_inceptiontime_first_breach_pure_mfe_model_gate",
+        (
+            profile.name,
+            "MR-13AB",
+            TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+            DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
+            "inception_time_v1",
+            "mean_daily_spearman",
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            research_spec.model_research_id,
+            profile.training_objective,
+            profile.continuous_target_id,
+            settings.model_architecture,
+            profile.epoch_selection_metric,
+        ),
+    )
+    check_true(
+        "mr13ab_keeps_mr13k_training_universe_loss_and_recipe_exact",
+        profile.optimizer_name == control.optimizer_name
+        and profile.lr_schedule_name == control.lr_schedule_name
+        and profile.augmentation_name == control.augmentation_name
+        and profile.training_sampling_mode == control.training_sampling_mode
+        and profile.training_objective == control.training_objective
+        and profile.loss_name == control.loss_name
+        and profile.epoch_selection_metric == control.epoch_selection_metric
+        and profile.training_label_scope == control.training_label_scope
+        and profile.training_sample_scope == control.training_sample_scope
+        and profile.model_architecture == control.model_architecture
+        and profile.continuous_target_id != control.continuous_target_id
+        and get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction
+        == get_continuous_ranker_execution_recipe(control.name).pairwise_reduction,
+    )
+    check_true(
+        "mr13ab_model_gate_only_has_no_pit_or_current_strategy_authorization",
+        research_spec.reference_profile_name == control.name
+        and not bool(research_spec.selection_pit_authorized)
+        and not bool(research_spec.current_time_validation_authorized),
+    )
+
+    spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
+    horizon = int(spec.horizon_bars)
+    no_breach_high = np.asarray([101.0, 102.0, 103.0, 104.0] + [104.0] * (horizon - 4))
+    no_breach_low = np.asarray([99.0] * horizon)
+    candidate_no_breach = daily_first_risk_breach_pure_mfe_target_from_cached_path(
+        no_breach_high, no_breach_low,
+        anchor_price=100.0, available_bars=horizon, spec=spec,
+    )
+    control_no_breach = daily_full_horizon_pure_mfe_target_from_cached_path(
+        no_breach_high, no_breach_low,
+        anchor_price=100.0, available_bars=horizon, spec=spec,
+    )
+    check(
+        "mr13ab_no_breach_path_is_exact_mr13k_pure_mfe",
+        (
+            control_no_breach.valid,
+            control_no_breach.target_raw_r,
+            control_no_breach.favorable_return,
+            control_no_breach.adverse_return_to_peak,
+            control_no_breach.opportunity_bar,
+            control_no_breach.first_risk_breach_bar,
+        ),
+        (
+            candidate_no_breach.valid,
+            candidate_no_breach.target_raw_r,
+            candidate_no_breach.favorable_return,
+            candidate_no_breach.adverse_return_to_peak,
+            candidate_no_breach.opportunity_bar,
+            candidate_no_breach.first_risk_breach_bar,
+        ),
+    )
+
+    breach_high = np.asarray([102.0, 103.0, 150.0] + [160.0] * (horizon - 3))
+    breach_low = np.asarray([99.0, 98.0, 89.0] + [88.0] * (horizon - 3))
+    breached = daily_first_risk_breach_pure_mfe_target_from_cached_path(
+        breach_high, breach_low,
+        anchor_price=100.0, available_bars=horizon, spec=spec,
+    )
+    check(
+        "mr13ab_same_bar_adverse_first_excludes_breach_day_high_and_post_breach_upside",
+        (True, 3, 2, 0.03, 0.30, 0.02),
+        (
+            bool(breached.valid),
+            int(breached.first_risk_breach_bar),
+            int(breached.opportunity_bar),
+            round(float(breached.favorable_return), 8),
+            round(float(breached.target_raw_r), 8),
+            round(float(breached.adverse_return_to_peak), 8),
+        ),
+    )
+
+    immediate_high = np.asarray([150.0] + [160.0] * (horizon - 1))
+    immediate_low = np.asarray([89.0] + [88.0] * (horizon - 1))
+    immediate = daily_first_risk_breach_pure_mfe_target_from_cached_path(
+        immediate_high, immediate_low,
+        anchor_price=100.0, available_bars=horizon, spec=spec,
+    )
+    check(
+        "mr13ab_first_bar_breach_has_zero_usable_mfe_not_minus_one_r",
+        (True, 1, 1, 0.0, 0.0, round(float(spec.risk_budget_return), 8)),
+        (
+            bool(immediate.valid),
+            int(immediate.first_risk_breach_bar),
+            int(immediate.opportunity_bar),
+            round(float(immediate.favorable_return), 8),
+            round(float(immediate.target_raw_r), 8),
+            round(float(immediate.adverse_return_to_peak), 8),
+        ),
+    )
+
+    frame = pd.DataFrame(
+        {
+            "Close": np.asarray([100.0] + [100.0] * horizon),
+            "High": np.asarray([100.0] + breach_high.tolist()),
+            "Low": np.asarray([100.0] + breach_low.tolist()),
+        }
+    )
+    batch = compute_daily_opportunity_target_batch(
+        frame,
+        np.asarray([0], dtype=np.int64),
+        spec=spec,
+        target_id=DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
+    )
+    check(
+        "mr13ab_vectorized_daily_builder_matches_scalar_first_passage_semantics",
+        (
+            np.float32(breached.target_raw_r),
+            np.float32(breached.favorable_return),
+            np.float32(breached.adverse_return_to_peak),
+            np.int16(breached.opportunity_bar),
+            np.int16(breached.first_risk_breach_bar),
+        ),
+        (
+            batch.target_raw_r[0],
+            batch.favorable_return[0],
+            batch.adverse_return_to_peak[0],
+            batch.opportunity_bar[0],
+            batch.first_risk_breach_bar[0],
+        ),
+    )
+
+    contract = build_daily_first_risk_breach_pure_mfe_contract(DEFAULT_LABEL_POLICY)
+    check_true(
+        "mr13ab_target_contract_discloses_first_passage_without_adverse_magnitude_penalty",
+        contract["target_id"] == DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID
+        and contract["risk_rule"] == "same-bar adverse-first; barrier-day high is excluded"
+        and contract["adverse_penalty_included"] is False
+        and contract["no_safe_bar_rule"] == "target=0R when the risk barrier is touched on the first bar"
+        and "favorable_return_before_first_risk_breach" in str(contract["formula"]),
+    )
+    change = _controlled_change_contract(
+        DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
+        str(control.continuous_target_id),
+    )
+    check_true(
+        "mr13ab_reference_comparison_is_target_only_against_mr13k",
+        change["change_id"] == "add_first_risk_breach_path_truncation_to_pure_mfe_only"
+        and bool(change["enforce_no_breach_invariant"])
+        and not bool(change["enforce_same_peak_components"]),
+    )
+    check(
+        "mr13ab_keeps_user_approved_standard_model_sop_fingerprint",
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
+        persistent_report_contract_fingerprint("model.standard_sop"),
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
+    check_true(
+        "mr13ab_has_no_strategy_conversion_or_runtime_source",
+        "daily_universal_first_risk_breach_pure_mfe_full_list_ndcg_pairwise" not in strategy_source
+        and "MR-13AB" not in strategy_source,
+    )
+
+    summary["training_performed"] = False
+    return results, summary
 
 def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_params):
     """Pin the profile-driven continuous-ranker boundary before adding new Daily MR variants."""

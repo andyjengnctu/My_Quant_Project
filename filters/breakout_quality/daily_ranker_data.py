@@ -22,12 +22,14 @@ from filters.breakout_quality.continuous_ranker_data import (
 from filters.breakout_quality.continuous_target import (
     DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
     DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
     DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
     DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
     StrategyAlignedContinuousTargetSpec,
     build_daily_full_horizon_opportunity_contract,
     build_daily_full_horizon_pure_mfe_contract,
+    build_daily_first_risk_breach_pure_mfe_contract,
     build_daily_full_horizon_low_adverse_contract,
     build_daily_full_horizon_equal_rank_mfe_low_adverse_contract,
     build_daily_opportunity_no_time_contract,
@@ -329,6 +331,8 @@ def compute_daily_opportunity_target_batch(
     same horizon/R scale/adverse-to-peak semantics but treats a barrier touch as
     diagnostic only. ``daily_full_horizon_pure_mfe_r_v1`` keeps the same full
     horizon and selected peak but does not deduct adverse-to-peak from target R.
+    ``daily_first_risk_breach_pure_mfe_r_v1`` keeps MR-13E first-breach path
+    selection but likewise removes the adverse-to-peak deduction.
     ``daily_full_horizon_low_adverse_r_v1`` keeps that same selected peak but
     ranks only negative adverse-to-peak R, so higher means a safer path.
     """
@@ -351,6 +355,7 @@ def compute_daily_opportunity_target_batch(
         DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
         DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
         DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
         DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     }:
         raise ValueError(f"不支援的daily opportunity target: {target_id}")
@@ -407,7 +412,7 @@ def compute_daily_opportunity_target_batch(
     minimum_low_return_valid = np.min(l, axis=1) / a - 1.0
     favorable_matrix = h / a[:, None] - 1.0
 
-    if target_id == DAILY_OPPORTUNITY_NO_TIME_TARGET_ID:
+    if target_id in {DAILY_OPPORTUNITY_NO_TIME_TARGET_ID, DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID}:
         bar_index = np.arange(horizon, dtype=np.int64)[None, :]
         safe = bar_index < first_breach_zero[:, None]
         safe_favorable = np.where(safe, favorable_matrix, -np.inf)
@@ -430,7 +435,7 @@ def compute_daily_opportunity_target_batch(
         )
         selected_opportunity = best_zero + 1
 
-    if target_id == DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID:
+    if target_id in {DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID, DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID}:
         selected_target = selected_favorable / risk_budget
     elif target_id == DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID:
         selected_target = -selected_adverse / risk_budget
@@ -537,6 +542,7 @@ def load_daily_universal_ranker_data(
         DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
         DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
         DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
         DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
         DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
         DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
@@ -681,6 +687,7 @@ def load_daily_universal_ranker_data(
             DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
             DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
             DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
             DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
             DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
         }:
@@ -988,6 +995,8 @@ def load_daily_universal_ranker_data(
         target_contract = build_daily_full_horizon_opportunity_contract(DEFAULT_LABEL_POLICY)
     elif target_id == DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID:
         target_contract = build_daily_full_horizon_pure_mfe_contract(DEFAULT_LABEL_POLICY)
+    elif target_id == DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID:
+        target_contract = build_daily_first_risk_breach_pure_mfe_contract(DEFAULT_LABEL_POLICY)
     elif target_id == DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID:
         target_contract = build_daily_full_horizon_low_adverse_contract(DEFAULT_LABEL_POLICY)
     elif target_id == DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID:

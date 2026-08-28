@@ -22,6 +22,7 @@ from filters.breakout_quality.daily_ranker_data import load_daily_universal_rank
 from filters.breakout_quality.continuous_target import (
     DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
     DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
     DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
 )
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
@@ -98,6 +99,13 @@ def _controlled_change_contract(candidate_target_id: str, reference_target_id: s
             "description": "只移除 adverse-to-peak 的Target扣分；完整40D、earliest max-high、breach diagnostics、R scale與training profile固定。",
             "enforce_no_breach_invariant": False,
             "enforce_same_peak_components": True,
+        }
+    if pair == (DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID, DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID):
+        return {
+            "change_id": "add_first_risk_breach_path_truncation_to_pure_mfe_only",
+            "description": "只把Pure-MFE future path改為MR-13E既有first-risk-breach截斷；same-bar adverse-first、40D、R scale與training profile固定，adverse magnitude仍不扣分。",
+            "enforce_no_breach_invariant": True,
+            "enforce_same_peak_components": False,
         }
     raise ValueError(
         "daily target comparison尚未註冊此受控Target pair: "
