@@ -188,8 +188,8 @@ def collect_audit_preparation_plan(
         definition = definitions[str(row["audit_id"])]
         spec = get_audit_handler(definition)
         ready = str(row.get("status") or "").upper() == "READY"
-        has_preparer = bool(spec.preparation_function)
         source = dict(row.get("source") or {})
+        has_preparer = bool(spec.preparation_function) and bool(source.get("preparable", True))
         raw_path = source.get("path")
         source_path = None if raw_path in (None, "") else Path(str(raw_path))
         if source_path is not None and not source_path.is_absolute():

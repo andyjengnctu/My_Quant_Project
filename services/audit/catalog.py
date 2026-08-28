@@ -108,6 +108,7 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         method_id="opportunity_selection_attribution",
         status_function="collect_status",
         run_function="run_formal_audit",
+        preparation_function="prepare_reference_frozen_scores",
     ),
     # Only genuinely supported diagnostic commands belong here.  Canonical
     # Dataset/Target/PIT builders live in services/ and are not research Audits.

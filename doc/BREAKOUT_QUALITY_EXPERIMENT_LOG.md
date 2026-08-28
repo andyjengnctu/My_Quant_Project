@@ -10486,3 +10486,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 分配一次性Audit identity=`AUD-mr13ab-survival-increment`。Audit只讀兩個canonical `daily_ranker_oos_scores.csv.gz`與各自`continuous_ranker_report.json`，不重建Target、不訓練、不建PIT、不Replay。Evidence固定為：(1) 2×2 frozen model×target Daily rho；(2) changed-row同日score percentile demotion與correction magnitude relation；(3) target-order conflict-pair concordance。
 - Stopping rule：一次Audit足以決定`SURVIVAL_INCREMENT_CONFIRMED / MODEL_GATE_PASS → PIT-safe Extending-Window`，或`NO_INCREMENT / STOP`；不得由結果展開barrier、lambda、threshold、calibration、backbone或target-family sweep。
 - Status：**MR13AB_LEARNABILITY_PASS / TARGET_GEOMETRY_PASS / AUDIT_IMPLEMENTED / SURVIVAL_INCREMENT_RESULT_PENDING / NO_PIT / NO_STRATEGY_CONVERSION**。
+
+### 2026-08-28 — AUD-mr13ab source-preparation correction：historical MR-13K score缺失時只重建 frozen inference，不重訓
+
+- 使用者首次執行`AUD-mr13ab-survival-increment`時，preflight因`outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise/daily_ranker_oos_scores.csv.gz`已不存在而BLOCKED。這是historical row-level score retention缺口，不是MR-13AB scientific failure。
+- 修正不改Audit decision question與metrics：仍比較MR-13AB/MR-13K frozen model在changed rows、target-order conflict pairs與2×2 cross-target Daily rho。
+- 依Research dependency orchestration既有`preparation_function`契約，新增model-domain inference-only producer：只有MR-13AB candidate score/report與MR-13K frozen checkpoint/manifest/report identity完整時，才可從**既有MR-13K frozen checkpoint**對MR-13AB OOS exact keys做deterministic score reconstruction；canonical MR-13K target必須與MR-13AB artifact內嵌reference target逐row一致，否則fail-closed。
+- Derived score只寫`outputs/audit/.../source_cache`，manifest綁定candidate score、MR-13K model、model manifest與historical report SHA；不修改MR-13K historical report、不fit參數、不重建Target、不建立PIT、不做strategy replay。若frozen checkpoint lineage也缺失，仍BLOCKED，不允許Audit自動重訓historical MR-13K。
+- `services/audit/runner.py`的preparer availability同步支援source-level `preparable` fact：只有真正可由既有producer補足的缺件才映射BUILD，避免任何帶preparer的Audit在不可重建來源時誤顯示PREPARABLE。
+

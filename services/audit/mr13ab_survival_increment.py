@@ -5,9 +5,11 @@ training on Pure-MFE before the first canonical risk breach add a measurable
 first-passage survival ordering, or did the frozen model remain effectively the
 same Pure-MFE ranker because most target rows are unchanged?
 
-The Audit consumes only the two canonical Forward-OOS score artifacts and their
-continuous-ranker reports. It never rebuilds targets, trains models, creates PIT
-scores, or replays a strategy.
+The Audit consumes the canonical MR-13AB Forward-OOS score plus the MR-13K frozen
+Forward score.  If the historical MR-13K score CSV was pruned, the shared Research
+dependency layer may deterministically reconstruct only those scores from the existing
+MR-13K frozen checkpoint before this read-only Audit runs.  It never fits parameters,
+rebuilds targets, creates PIT scores, or replays a strategy.
 """
 
 from __future__ import annotations
@@ -25,7 +27,14 @@ import pandas as pd
 from config.audit import AUDIT_OUTPUT_ROOT, AuditDefinition
 from core.path_utils import project_relative_display_path
 from filters.breakout_quality.artifacts import compute_file_sha256
+from filters.breakout_quality.paths import (
+    resolve_filter_artifact_paths,
+    resolve_filter_model_output_dir,
+)
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
+from services.breakout_quality.frozen_daily_ranker_score_rebuild import (
+    rebuild_frozen_daily_ranker_scores_for_keys,
+)
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
     resolve_continuous_ranker_oos_score_path,
@@ -401,6 +410,181 @@ def _validate_profile_artifacts(
     }
 
 
+
+def _reference_cache_paths(definition: AuditDefinition, root: Path) -> tuple[Path, Path]:
+    base = Path(root) / AUDIT_OUTPUT_ROOT / definition.output_subdir / "source_cache"
+    return base / "mr13k_frozen_oos_scores.csv.gz", base / "mr13k_frozen_oos_scores_manifest.json"
+
+
+def _validate_reference_model_artifacts(
+    *,
+    root: Path,
+    filter_id: str,
+    architecture: str,
+    profile_id: str,
+    research_id: str,
+    target_id: str,
+    seed: int,
+) -> dict[str, Any]:
+    artifacts = resolve_filter_artifact_paths(root, filter_id, architecture, profile_id)
+    report_path = resolve_filter_model_output_dir(root, filter_id, architecture, profile_id) / CONTINUOUS_RANKER_REPORT_FILENAME
+    for label, path in (("frozen model", artifacts.model_path), ("model manifest", artifacts.manifest_path), ("continuous ranker report", report_path)):
+        if not path.is_file():
+            raise FileNotFoundError(f"MR-13K缺少{label}，Audit不得以重新訓練取代: {_relative(path, root)}")
+    report = _read_report(report_path)
+    manifest = _read_report(artifacts.manifest_path)
+    expected = {
+        "filter_id": filter_id,
+        "model_architecture": architecture,
+        "experiment_profile": profile_id,
+        "model_research_id": research_id,
+    }
+    for field, value in expected.items():
+        if str(report.get(field) or "") != str(value):
+            raise ValueError(f"{research_id} report {field}不一致")
+    for field, value in {
+        "filter_id": filter_id,
+        "model_architecture": architecture,
+        "experiment_profile": profile_id,
+    }.items():
+        if str(manifest.get(field) or "") != str(value):
+            raise ValueError(f"{research_id} manifest {field}不一致")
+    if str(manifest.get("continuous_target_id") or "") != str(target_id):
+        raise ValueError(f"{research_id} manifest continuous_target_id不一致")
+    training = dict(report.get("training") or {})
+    if str(training.get("target") or "") != target_id:
+        raise ValueError(f"{research_id} report target不一致")
+    if int(training.get("seed", -1)) != int(seed):
+        raise ValueError(f"{research_id} report seed不一致")
+    model_hash = compute_file_sha256(artifacts.model_path).lower()
+    recorded_model = dict((report.get("artifacts") or {}).get("model") or {})
+    if recorded_model:
+        if str(recorded_model.get("filename") or "") != artifacts.model_path.name:
+            raise ValueError(f"{research_id} report model filename不一致")
+        if str(recorded_model.get("sha256") or "").lower() != model_hash:
+            raise ValueError(f"{research_id} frozen model SHA256與report不一致")
+    manifest_model = dict(manifest.get("model") or {})
+    if manifest_model:
+        if str(manifest_model.get("filename") or "") != artifacts.model_path.name:
+            raise ValueError(f"{research_id} manifest model filename不一致")
+        if str(manifest_model.get("sha256") or "").lower() != model_hash:
+            raise ValueError(f"{research_id} frozen model SHA256與manifest不一致")
+    return {
+        "model_path": artifacts.model_path,
+        "manifest_path": artifacts.manifest_path,
+        "report_path": report_path,
+        "model_sha256": model_hash,
+        "manifest_sha256": compute_file_sha256(artifacts.manifest_path).lower(),
+        "report_sha256": compute_file_sha256(report_path).lower(),
+        "report": report,
+    }
+
+
+def _load_valid_reference_cache(
+    *,
+    definition: AuditDefinition,
+    root: Path,
+    candidate: Mapping[str, Any],
+    reference_meta: Mapping[str, Any],
+) -> dict[str, Any]:
+    score_path, cache_manifest_path = _reference_cache_paths(definition, root)
+    if not score_path.is_file() or not cache_manifest_path.is_file():
+        raise FileNotFoundError(
+            "缺少MR-13K frozen score derived cache；可由既有frozen checkpoint做deterministic inference建立: "
+            + _relative(score_path, root)
+        )
+    cache = _read_report(cache_manifest_path)
+    expected_sources = {
+        "candidate_score_sha256": str(candidate["score_sha256"]),
+        "reference_model_sha256": str(reference_meta["model_sha256"]),
+        "reference_manifest_sha256": str(reference_meta["manifest_sha256"]),
+        "reference_report_sha256": str(reference_meta["report_sha256"]),
+    }
+    for field, expected in expected_sources.items():
+        if str(cache.get(field) or "").lower() != str(expected).lower():
+            raise ValueError(f"MR-13K derived score cache source identity stale: {field}")
+    actual_hash = compute_file_sha256(score_path).lower()
+    if str(cache.get("score_sha256") or "").lower() != actual_hash:
+        raise ValueError("MR-13K derived score cache SHA256不一致")
+    return {
+        "score_path": score_path,
+        "report_path": Path(reference_meta["report_path"]),
+        "score_sha256": actual_hash,
+        "report": reference_meta["report"],
+        "derived_from_frozen_checkpoint": True,
+        "cache_manifest_path": cache_manifest_path,
+    }
+
+
+def prepare_reference_frozen_scores(definition: AuditDefinition, *, project_root: Path) -> int:
+    """Build only a missing MR-13K row-level score cache from its frozen checkpoint."""
+
+    root = Path(project_root).resolve()
+    source = definition.source
+    filter_id = str(source.get("filter_id") or "").strip()
+    architecture = str(source.get("model_architecture") or "").strip()
+    candidate_profile = str(source.get("candidate_profile_id") or "").strip()
+    reference_profile = str(source.get("reference_profile_id") or "").strip()
+    seed = int(source.get("seed", 42))
+    candidate = _validate_profile_artifacts(
+        root=root,
+        filter_id=filter_id,
+        architecture=architecture,
+        profile_id=candidate_profile,
+        research_id=str(source.get("candidate_research_id") or ""),
+        target_id=str(source.get("candidate_target_id") or ""),
+        seed=seed,
+        expected_reference_profile=reference_profile,
+    )
+    reference_meta = _validate_reference_model_artifacts(
+        root=root,
+        filter_id=filter_id,
+        architecture=architecture,
+        profile_id=reference_profile,
+        research_id=str(source.get("reference_research_id") or ""),
+        target_id=str(source.get("reference_target_id") or ""),
+        seed=seed,
+    )
+    candidate_frame = read_breakout_quality_csv(candidate["score_path"])
+    required = ["ticker", "date", "group_index", "target_raw_r", "reference_target_raw_r", "model_score"]
+    missing = [name for name in required if name not in candidate_frame.columns]
+    if missing:
+        raise ValueError(f"MR-13AB OOS score缺少欄位: {missing}")
+    numeric = candidate_frame.copy()
+    for col in ("target_raw_r", "reference_target_raw_r", "model_score"):
+        numeric[col] = pd.to_numeric(numeric[col], errors="coerce")
+    numeric = numeric.loc[
+        np.isfinite(numeric["target_raw_r"])
+        & np.isfinite(numeric["reference_target_raw_r"])
+        & np.isfinite(numeric["model_score"])
+    ].copy()
+    score_path, cache_manifest_path = _reference_cache_paths(definition, root)
+    rebuilt = rebuild_frozen_daily_ranker_scores_for_keys(
+        project_root=root,
+        filter_id=filter_id,
+        model_architecture=architecture,
+        experiment_profile=reference_profile,
+        key_frame=numeric[["ticker", "date", "group_index"]],
+        output_path=score_path,
+        expected_target_raw_r=numeric["reference_target_raw_r"].to_numpy(dtype=np.float64),
+        target_tolerance_r=max(float(definition.dimensions.get("changed_tolerance_r", 1e-6)), 2e-6),
+    )
+    cache_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_manifest_path.write_text(json.dumps({
+        "schema_version": 1,
+        "artifact_type": "mr13k_frozen_forward_score_reconstruction_for_mr13ab_audit",
+        "candidate_score_sha256": candidate["score_sha256"],
+        "reference_model_sha256": reference_meta["model_sha256"],
+        "reference_manifest_sha256": reference_meta["manifest_sha256"],
+        "reference_report_sha256": reference_meta["report_sha256"],
+        "score_sha256": str(rebuilt["score_artifact"]["sha256"]).lower(),
+        "row_count": int(rebuilt["row_count"]),
+        "scientific_semantics": "inference_only_from_existing_frozen_checkpoint_no_fit_no_target_rebuild",
+        "torch_execution": rebuilt["torch_execution"],
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    return 0
+
+
 def _source_contract(definition: AuditDefinition, *, project_root: Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     source = definition.source
@@ -432,11 +616,25 @@ def _source_contract(definition: AuditDefinition, *, project_root: Path) -> dict
         target_id=candidate_target_id, seed=seed,
         expected_reference_profile=reference_profile,
     )
-    reference = _validate_profile_artifacts(
-        root=root, filter_id=filter_id, architecture=architecture,
-        profile_id=reference_profile, research_id=reference_research_id,
-        target_id=reference_target_id, seed=seed,
-    )
+    try:
+        reference = _validate_profile_artifacts(
+            root=root, filter_id=filter_id, architecture=architecture,
+            profile_id=reference_profile, research_id=reference_research_id,
+            target_id=reference_target_id, seed=seed,
+        )
+        reference["derived_from_frozen_checkpoint"] = False
+    except FileNotFoundError as original_score_error:
+        reference_meta = _validate_reference_model_artifacts(
+            root=root, filter_id=filter_id, architecture=architecture,
+            profile_id=reference_profile, research_id=reference_research_id,
+            target_id=reference_target_id, seed=seed,
+        )
+        try:
+            reference = _load_valid_reference_cache(
+                definition=definition, root=root, candidate=candidate, reference_meta=reference_meta
+            )
+        except FileNotFoundError as cache_error:
+            raise FileNotFoundError(f"{original_score_error}; {cache_error}") from cache_error
     return {
         **required,
         "seed": seed,
@@ -450,7 +648,39 @@ def preflight(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
     try:
         contract = _source_contract(definition, project_root=root)
     except (ValueError, OSError, FileNotFoundError) as exc:
-        return {"status": "BLOCKED", "blockers": [str(exc)], "source_paths": []}
+        cache_score_path, _cache_manifest_path = _reference_cache_paths(definition, root)
+        preparable = False
+        try:
+            source = definition.source
+            candidate = _validate_profile_artifacts(
+                root=root,
+                filter_id=str(source.get("filter_id") or "").strip(),
+                architecture=str(source.get("model_architecture") or "").strip(),
+                profile_id=str(source.get("candidate_profile_id") or "").strip(),
+                research_id=str(source.get("candidate_research_id") or "").strip(),
+                target_id=str(source.get("candidate_target_id") or "").strip(),
+                seed=int(source.get("seed", 42)),
+                expected_reference_profile=str(source.get("reference_profile_id") or "").strip(),
+            )
+            _validate_reference_model_artifacts(
+                root=root,
+                filter_id=str(source.get("filter_id") or "").strip(),
+                architecture=str(source.get("model_architecture") or "").strip(),
+                profile_id=str(source.get("reference_profile_id") or "").strip(),
+                research_id=str(source.get("reference_research_id") or "").strip(),
+                target_id=str(source.get("reference_target_id") or "").strip(),
+                seed=int(source.get("seed", 42)),
+            )
+            preparable = bool(candidate)
+        except (ValueError, OSError, FileNotFoundError):
+            preparable = False
+        return {
+            "status": "BLOCKED",
+            "blockers": [str(exc)],
+            "source_paths": [],
+            "source_path": _relative(cache_score_path, root),
+            "preparable": preparable,
+        }
     return {
         "status": "READY",
         "blockers": [],
@@ -460,6 +690,8 @@ def preflight(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
             _relative(Path(contract["reference"]["score_path"]), root),
             _relative(Path(contract["reference"]["report_path"]), root),
         ],
+        "source_path": _relative(Path(contract["reference"]["score_path"]), root),
+        "preparable": False,
     }
 
 
@@ -469,8 +701,10 @@ def collect_status(definition: AuditDefinition, *, project_root: Path) -> dict[s
         "status": str(state.get("status") or "BLOCKED"),
         "reason": "；".join(str(v) for v in state.get("blockers", ())),
         "source": {
-            "display": "MR-13AB + MR-13K frozen Forward OOS scores/reports only",
+            "display": "MR-13AB frozen OOS + MR-13K frozen checkpoint/score (missing score可inference-only derive)",
+            "path": str(state.get("source_path") or ""),
             "paths": list(state.get("source_paths", ())),
+            "preparable": bool(state.get("preparable", False)),
         },
     }
 
@@ -480,6 +714,7 @@ def _fingerprint(definition: AuditDefinition, contract: Mapping[str, Any]) -> st
         "audit": definition.as_dict(),
         "candidate_score_sha256": contract["candidate"]["score_sha256"],
         "reference_score_sha256": contract["reference"]["score_sha256"],
+        "reference_score_derived_from_frozen_checkpoint": bool(contract["reference"].get("derived_from_frozen_checkpoint", False)),
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
@@ -635,6 +870,7 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
             "reference_score": {
                 "path": _relative(contract["reference"]["score_path"], root),
                 "sha256": contract["reference"]["score_sha256"],
+                "derived_from_frozen_checkpoint": bool(contract["reference"].get("derived_from_frozen_checkpoint", False)),
             },
         },
         "artifacts": result["artifacts"],
@@ -674,6 +910,7 @@ __all__ = [
     "SUPPORTED_AUDIT_TYPE",
     "analyze_frozen_score_frames",
     "collect_status",
+    "prepare_reference_frozen_scores",
     "preflight",
     "render_result",
     "run_audit",

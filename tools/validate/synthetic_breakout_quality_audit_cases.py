@@ -5,6 +5,7 @@ import json
 from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
@@ -97,11 +98,49 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and survival_defs[0].enabled
             and survival_entry.formal
             and survival_entry.read_only
+            and survival_entry.preparation_function == "prepare_reference_frozen_scores"
             and survival_defs[0].source.get("candidate_research_id") == "MR-13AB"
             and survival_defs[0].source.get("reference_research_id") == "MR-13K"
             and survival_defs[0].source.get("seed") == 42
             and survival_defs[0].dimensions.get("percentile_method") == "average_zero_based"
         ),
+    )
+
+    from services.audit.runner import collect_audit_preparation_plan
+    with TemporaryDirectory() as temp_dir:
+        base_snapshot = {
+            "module_id": "breakout_quality",
+            "method_id": None,
+            "audit_id": "AUD-mr13ab-survival-increment",
+            "overall_status": "BLOCKED",
+            "rows": [{
+                "enabled": True,
+                "audit_id": "AUD-mr13ab-survival-increment",
+                "audit_type": "mr13ab_survival_increment",
+                "method_id": "opportunity_selection_attribution",
+                "description": "fixture",
+                "status": "BLOCKED",
+                "reason": "missing derived score",
+                "source": {"path": "outputs/audit/fixture.csv.gz", "preparable": True},
+            }],
+            "statuses": {},
+        }
+        preparable_plan = collect_audit_preparation_plan(
+            "breakout_quality", project_root=Path(temp_dir),
+            audit_id="AUD-mr13ab-survival-increment", status_snapshot=base_snapshot,
+        )
+        blocked_snapshot = json.loads(json.dumps(base_snapshot))
+        blocked_snapshot["rows"][0]["source"]["preparable"] = False
+        blocked_plan = collect_audit_preparation_plan(
+            "breakout_quality", project_root=Path(temp_dir),
+            audit_id="AUD-mr13ab-survival-increment", status_snapshot=blocked_snapshot,
+        )
+    check_true(
+        "mr13ab_source_preparer_builds_only_when_frozen_lineage_is_preparable",
+        preparable_plan.overall_status == "PREPARABLE"
+        and preparable_plan.actions[0].action == "BUILD"
+        and blocked_plan.overall_status == "BLOCKED"
+        and blocked_plan.actions[0].action == "BLOCKED",
     )
 
     from services.audit.mr13ab_survival_increment import analyze_frozen_score_frames
@@ -142,6 +181,83 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and len(survival_changed) == 2
             and int(survival_conflict["pair_count"].sum()) == 3
         ),
+    )
+
+    from services.breakout_quality.frozen_daily_ranker_score_rebuild import (
+        rebuild_frozen_daily_ranker_scores_for_keys,
+    )
+    with TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        model_path = temp_root / "model.pt"
+        manifest_path = temp_root / "manifest.json"
+        model_path.write_bytes(b"model")
+        manifest_path.write_text("{}", encoding="utf-8")
+        fake_profile = SimpleNamespace(
+            training_objective="daily_pairwise_ranking",
+            as_manifest_payload=lambda: {"profile": "fixture"},
+        )
+        fake_spec = SimpleNamespace(as_manifest_payload=lambda: {"architecture": "inception_time_v1"})
+        fake_bundle = SimpleNamespace(
+            group_table=pd.DataFrame({
+                "ticker": ["A", "B"],
+                "date": ["2025-01-02", "2025-01-02"],
+                "group_index": [10, 11],
+            }),
+            raw_target=pd.Series([1.25, 2.5]).to_numpy(dtype=float),
+            feature_bank=SimpleNamespace(),
+            group_context=SimpleNamespace(),
+            profile=fake_profile,
+            model_spec=fake_spec,
+        )
+        class FakeModel:
+            def load_state_dict(self, _state): return None
+            def to(self, _device): return self
+            def eval(self): return self
+        fake_plan = SimpleNamespace(device="cpu", as_manifest_payload=lambda: {"device": "cpu"})
+        fake_torch = SimpleNamespace(load=lambda *_a, **_k: {
+            "experiment_profile": "ref",
+            "training_objective": "daily_pairwise_ranking",
+            "experiment_settings": {"profile": "fixture"},
+            "model_spec": {"architecture": "inception_time_v1"},
+            "feature_count": 10,
+            "context_count": 0,
+            "model_state_dict": {},
+        })
+        output_path = temp_root / "rebuilt.csv.gz"
+        with patch("services.breakout_quality.frozen_daily_ranker_score_rebuild.get_breakout_quality_experiment_profile", return_value=fake_profile), patch(
+            "services.breakout_quality.frozen_daily_ranker_score_rebuild.resolve_filter_artifact_paths",
+            return_value=SimpleNamespace(model_path=model_path, manifest_path=manifest_path),
+        ), patch(
+            "services.breakout_quality.frozen_daily_ranker_score_rebuild.load_daily_universal_ranker_data",
+            return_value=fake_bundle,
+        ), patch(
+            "services.breakout_quality.frozen_daily_ranker_score_rebuild.require_torch",
+            return_value=(fake_torch, None),
+        ), patch(
+            "services.breakout_quality.frozen_daily_ranker_score_rebuild.resolve_torch_execution_plan",
+            return_value=fake_plan,
+        ), patch(
+            "services.breakout_quality.frozen_daily_ranker_score_rebuild.build_model",
+            return_value=FakeModel(),
+        ), patch(
+            "services.breakout_quality.frozen_daily_ranker_score_rebuild.ranker_api.predict_scores",
+            return_value=pd.Series([0.2, 0.8]).to_numpy(dtype=float),
+        ):
+            rebuilt = rebuild_frozen_daily_ranker_scores_for_keys(
+                project_root=temp_root, filter_id="f", model_architecture="inception_time_v1",
+                experiment_profile="ref",
+                key_frame=pd.DataFrame({
+                    "ticker": ["B", "A"], "date": ["2025-01-02", "2025-01-02"], "group_index": [11, 10],
+                }),
+                output_path=output_path, expected_target_raw_r=pd.Series([2.5, 1.25]).to_numpy(dtype=float),
+            )
+        rebuilt_frame = pd.read_csv(output_path)
+    check_true(
+        "frozen_daily_ranker_score_rebuild_is_exact_key_inference_only_and_preserves_requested_order",
+        rebuilt["row_count"] == 2
+        and rebuilt_frame["ticker"].tolist() == ["B", "A"]
+        and rebuilt_frame["target_raw_r"].tolist() == [2.5, 1.25]
+        and len(rebuilt["score_artifact"].get("sha256", "")) == 64,
     )
 
     invalid_candidate = candidate_fixture.copy()
@@ -593,7 +709,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         ),
     )
 
-    from types import SimpleNamespace
     import filters.breakout_quality.strategy_compare_diagnostics as strategy_diag
     with TemporaryDirectory() as geometry_temp_text:
         geometry_root = Path(geometry_temp_text)
