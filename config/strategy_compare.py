@@ -47,7 +47,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 61
+STRATEGY_COMPARE_SCHEMA_VERSION = 62
 
 # =============================================================================
 # 1. 常用設定
@@ -171,12 +171,13 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_RAW_SAFETY_GATE_50_NO_K_NO_R0
 STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_RAW_SAFETY_GATE_60_NO_K_NO_R0 = "Min MR-13R Conditional-MFE Raw-Safety P60 No-K No-R0"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_RAW_SAFETY_GATE_70_NO_K_NO_R0 = "Min MR-13R Conditional-MFE Raw-Safety P70 No-K No-R0"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13R_SAFETY_MFE_PRODUCT_NO_K_NO_R0 = "Min MR-13R Raw-Safety × Conditional-MFE Product No-K No-R0"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13Z_JOINT_MIN_NO_K_NO_R0 = "Min MR-13Z Joint-Min No-K No-R0"
 
 # Current Compare Suite是「比較誰／比較哪些差」的唯一真理來源。
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
 STRATEGY_COMPARE_SUITES = {
     "extending_current": {
-        "arm_ids": ("C61", "C58", "C59", "C64", "C66", "C71", "C72", "C73", "C74"),
+        "arm_ids": ("C61", "C58", "C59", "C64", "C66", "C71", "C72", "C73", "C74", "C75"),
         "contrast_ids": (
             "C61-C58",
             "C59-C58", "C59-C61",
@@ -188,6 +189,7 @@ STRATEGY_COMPARE_SUITES = {
             "C73-C66", "C73-C64",
             "C74-C71", "C74-C72", "C74-C73",
             "C74-C66", "C74-C64",
+            "C75-C74", "C75-C71",
         ),
         "display_name_bases": {
             "C61": "Full Base-Finalist-Best",
@@ -199,6 +201,7 @@ STRATEGY_COMPARE_SUITES = {
             "C72": "Min MR-13R Conditional-MFE Raw-Safety P60 No-K No-R0",
             "C73": "Min MR-13R Conditional-MFE Raw-Safety P70 No-K No-R0",
             "C74": "Min MR-13R Raw-Safety × Conditional-MFE Product No-K No-R0",
+            "C75": "Min MR-13Z Joint-Min No-K No-R0",
         },
     },
 }
@@ -262,6 +265,7 @@ STRATEGY_COMPARE_PROFILES = {
             "C72": "min_oos",
             "C73": "min_oos",
             "C74": "min_oos",
+            "C75": "min_oos",
         },
     },
     "extending_window_rolling": {
@@ -588,6 +592,22 @@ STRATEGY_DL_SOURCES = {
             "options": {"resume": True, "allow_stale_source": False},
         },
     },
+    "CONT13Z_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "patch_token_transformer_safety_raw_mfe_joint_attn_mlp_v1",
+        "experiment_profile": "daily_universal_safety_raw_mfe_joint_min_patch_transformer_attn_pool_mlp_head_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": (
+            "MR-13Z Patch Transformer Joint-Min PIT-safe tri-head score；"
+            "Strategy C75明確消費joint_min_score，不把Raw-MFE breakout_quality_score偷換語意。"
+        ),
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
 
 
 }
@@ -788,6 +808,29 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C75": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13Z_JOINT_MIN_NO_K_NO_R0,
+        "description": (
+            "MR-13Z Model-Gate通過後的第一個PIT-safe conversion arm；Min base-finalist-best、all-off、"
+            "No-K/No-R0、canonical sizing/cash/orderability/execution與C74一致。"
+            "唯一selector score直接使用同一CONT13Z_ROLL PIT artifact的joint_min_score descending；"
+            "不加Safety gate、threshold、percentile product、fitted weight或calibration。"
+        ),
+        "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13Z_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False,
+            "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "primary_score_column": "joint_min_score",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
 }
 
 # =============================================================================
@@ -815,6 +858,8 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C74-C73": {"left": "C74", "right": "C73", "description": "Safety×Conditional-MFE percentile product相對P70 hard-gate reference"},
     "C74-C66": {"left": "C74", "right": "C66", "description": "Safety×Conditional-MFE percentile product No-K/No-R0相對原MR-13R fixed-K/R0 C66 reference"},
     "C74-C64": {"left": "C74", "right": "C64", "description": "Safety×Conditional-MFE percentile product相對MR-13P Conditional Safety reference"},
+    "C75-C74": {"left": "C75", "right": "C74", "description": "同為Min/all-off/No-K/No-R0，MR-13Z learned Joint-Min direct score相對MR-13R手工Safety×Conditional-MFE percentile product；primary conversion contrast"},
+    "C75-C71": {"left": "C75", "right": "C71", "description": "MR-13Z learned Joint-Min direct score相對MR-13R P50 Raw-Safety gate + Conditional-MFE ranking；secondary conversion reference"},
 }
 
 def _merge_compatibility_catalog(

@@ -280,6 +280,28 @@ def predict_safety_conditional_mfe_scores(
     )
 
 
+def predict_safety_raw_mfe_joint_min_scores(
+    torch,
+    model,
+    bundle: ContinuousRankerDataBundle,
+    group_ids: np.ndarray,
+    *,
+    batch_size: int,
+    plan,
+) -> dict[str, np.ndarray]:
+    """Return Raw Safety / Raw-MFE / Joint-Min heads from one shared pass."""
+
+    return ranker_api.predict_safety_raw_mfe_joint_min_scores(
+        torch,
+        model,
+        bundle.feature_bank,
+        bundle.group_context,
+        np.asarray(group_ids, dtype=np.int64),
+        batch_size=int(batch_size),
+        plan=plan,
+    )
+
+
 def build_checkpoint_payload(
     model,
     bundle: ContinuousRankerDataBundle,
@@ -323,6 +345,7 @@ __all__ = [
     "load_continuous_ranker_data",
     "predict_conditional_mfe_safety_scores",
     "predict_safety_conditional_mfe_scores",
+    "predict_safety_raw_mfe_joint_min_scores",
     "predict_scores",
     "primary_audit_metric_scope",
     "resolve_ranker_execution_plan",

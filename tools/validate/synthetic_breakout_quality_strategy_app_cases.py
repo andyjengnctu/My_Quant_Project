@@ -227,7 +227,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         set(strategy_config.STRATEGY_PARAM_SOURCES)
         == {"full_oos", "min_oos", "full_rolling", "min_rolling"}
         and set(strategy_config.STRATEGY_DL_SOURCES)
-        == {"CONT13E_ROLL", "CONT13K_ROLL", "CONT13M_ROLL", "CONT13P_ROLL", "CONT13Q_ROLL", "CONT13R_ROLL"}
+        == {"CONT13E_ROLL", "CONT13K_ROLL", "CONT13M_ROLL", "CONT13P_ROLL", "CONT13Q_ROLL", "CONT13R_ROLL", "CONT13Z_ROLL"}
         and set(strategy_config.STRATEGY_COMPARE_ARMS) == set(expected_arm_ids)
         and set(strategy_config.STRATEGY_COMPARE_CONTRASTS) == set(expected_contrast_ids)
         and {"full_roos", "min_roos", "selection_min_roos", "selection_full_roos"}
@@ -468,9 +468,49 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "c74_is_parameter_free_same_source_safety_x_conditional_mfe_product_no_k_no_r0",
         bool(joint_product_checks) and all(joint_product_checks),
     )
+    c75_checks = []
+    for current_settings in settings_by_mode.values():
+        c75 = current_settings.arms["C75"]
+        options = dict(c75.dl_runtime_options or {})
+        source = current_settings.dl_sources[c75.dl_id]
+        c75_checks.append(
+            c75.dl_id == "CONT13Z_ROLL"
+            and resolve_arm_runtime_dl_source_ids(current_settings, c75) == ("CONT13Z_ROLL",)
+            and source.score_source == "selection_point_in_time"
+            and source.model_architecture == "patch_token_transformer_safety_raw_mfe_joint_attn_mlp_v1"
+            and source.experiment_profile
+            == "daily_universal_safety_raw_mfe_joint_min_patch_transformer_attn_pool_mlp_head_full_list_ndcg_pairwise"
+            and c75.dl_runtime_mode == "resource-aware-continuous-score-no-k-no-r0"
+            and options.get("preserve_k") is False
+            and options.get("preserve_r0") is False
+            and options.get("selection_order") == "model_score_desc_then_canonical_tie_v1"
+            and options.get("primary_score_column") == "joint_min_score"
+            and options.get("selection_only") is True
+        )
     check_true(
-        "current_suite_keeps_safety_curve_and_adds_c74_joint_product",
-        expected_arm_ids == ("C61", "C58", "C59", "C64", "C66", "C71", "C72", "C73", "C74")
+        "c75_is_mr13z_direct_joint_min_pit_no_k_no_r0_without_selector_arithmetic",
+        bool(c75_checks) and all(c75_checks),
+    )
+    from filters.breakout_quality.strategy_score_projection import (
+        runtime_score_projection_requirements,
+    )
+    projection_checks = []
+    for current_settings in settings_by_mode.values():
+        c75 = current_settings.arms["C75"]
+        projection_checks.append(
+            runtime_score_projection_requirements(
+                settings_payload=current_settings.as_dict(),
+                on_arm_payload=c75.as_dict(),
+            )
+            == {"CONT13Z_ROLL": ("joint_min_score",)}
+        )
+    check_true(
+        "c75_cache_identity_hashes_joint_min_projection_not_legacy_raw_mfe_primary",
+        bool(projection_checks) and all(projection_checks),
+    )
+    check_true(
+        "current_suite_keeps_prior_mechanism_arms_and_adds_c75_learned_joint_min",
+        expected_arm_ids == ("C61", "C58", "C59", "C64", "C66", "C71", "C72", "C73", "C74", "C75")
         and "C72-C71" in expected_contrast_ids
         and "C73-C72" in expected_contrast_ids
         and "C73-C66" in expected_contrast_ids
@@ -480,6 +520,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "C74-C73" in expected_contrast_ids
         and "C74-C66" in expected_contrast_ids
         and "C74-C64" in expected_contrast_ids
+        and "C75-C74" in expected_contrast_ids
+        and "C75-C71" in expected_contrast_ids
         and all(arm_id not in expected_arm_ids for arm_id in ("C70", "C62", "C63", "C68", "C69", "C60", "C65")),
     )
 
@@ -998,6 +1040,117 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         }
     )
     return results, summary
+
+def validate_mr13z_c75_conversion_contract_case(_base_params):
+    """Protect the first PIT-safe direct Joint-Min strategy conversion after MR-13Z GO."""
+
+    case_id = "MR13Z_C75_CONVERSION_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    from config.breakout_quality import (
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_PATCH_TRANSFORMER_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        get_continuous_ranker_research_spec,
+    )
+    from config.strategy_compare import (
+        STRATEGY_COMPARE_ARMS,
+        STRATEGY_COMPARE_CONTRASTS,
+        STRATEGY_DL_SOURCES,
+        STRATEGY_COMPARE_SCHEMA_VERSION,
+        get_strategy_compare_suite,
+    )
+    from filters.breakout_quality.ranking_score_store import PIT_OPTIONAL_SCORE_COLUMNS
+    from filters.breakout_quality.strategy_score_projection import runtime_score_projection_requirements
+
+    profile_name = DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_PATCH_TRANSFORMER_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    spec = get_continuous_ranker_research_spec(profile_name)
+    check(
+        "mr13z_conversion_authorization_is_research_only",
+        ("MR-13Z", True, True),
+        (spec.model_research_id, spec.selection_pit_authorized, spec.current_time_validation_authorized),
+    )
+
+    source = dict(STRATEGY_DL_SOURCES.get("CONT13Z_ROLL") or {})
+    check(
+        "cont13z_roll_is_mr13z_selection_pit_source",
+        (profile_name, "patch_token_transformer_safety_raw_mfe_joint_attn_mlp_v1", "selection_point_in_time"),
+        (source.get("experiment_profile"), source.get("model_architecture"), source.get("score_source")),
+    )
+    builder = dict(source.get("forward_scores_builder") or {})
+    check_true(
+        "strategy_compare_cannot_train_missing_mr13z_folds",
+        builder.get("enabled") is True
+        and builder.get("builder_type") == "selection_pit_from_existing_folds",
+    )
+
+    check_true(
+        "mr13z_pit_contract_can_preserve_raw_mfe_primary_and_joint_min_auxiliary",
+        "raw_safety_score" in PIT_OPTIONAL_SCORE_COLUMNS
+        and "raw_mfe_score" in PIT_OPTIONAL_SCORE_COLUMNS
+        and "joint_min_score" in PIT_OPTIONAL_SCORE_COLUMNS,
+    )
+
+    c75 = dict(STRATEGY_COMPARE_ARMS.get("C75") or {})
+    options = dict(c75.get("dl_runtime_options") or {})
+    check(
+        "c75_is_direct_joint_min_no_k_no_r0_selection_only",
+        (
+            "CONT13Z_ROLL",
+            "resource-aware-continuous-score-no-k-no-r0",
+            False, False,
+            "model_score_desc_then_canonical_tie_v1",
+            "joint_min_score",
+            True,
+        ),
+        (
+            c75.get("dl_id"), c75.get("dl_runtime_mode"),
+            options.get("preserve_k"), options.get("preserve_r0"),
+            options.get("selection_order"), options.get("primary_score_column"),
+            options.get("selection_only"),
+        ),
+    )
+    check_true(
+        "c75_has_no_threshold_product_or_calibration_treatment",
+        "safety_gate" not in options
+        and "safety_percentile_cutoff" not in options
+        and "joint_score_transform" not in options
+        and "calibration" not in options
+        and "score_weight" not in options,
+    )
+
+    suite = get_strategy_compare_suite("extending_current")
+    check(
+        "current_suite_schema62_contains_c75_once",
+        (62, 1, 10),
+        (int(STRATEGY_COMPARE_SCHEMA_VERSION), tuple(suite.get("arm_ids") or ()).count("C75"), len(tuple(suite.get("arm_ids") or ()))),
+    )
+    check_true(
+        "c75_primary_and_secondary_contrasts_are_registered",
+        dict(STRATEGY_COMPARE_CONTRASTS.get("C75-C74") or {}).get("left") == "C75"
+        and dict(STRATEGY_COMPARE_CONTRASTS.get("C75-C74") or {}).get("right") == "C74"
+        and dict(STRATEGY_COMPARE_CONTRASTS.get("C75-C71") or {}).get("left") == "C75"
+        and dict(STRATEGY_COMPARE_CONTRASTS.get("C75-C71") or {}).get("right") == "C71",
+    )
+
+    requirements = runtime_score_projection_requirements(
+        settings_payload={"dl_sources": STRATEGY_DL_SOURCES},
+        on_arm_payload=c75,
+    )
+    check(
+        "c75_cache_projection_hashes_only_consumed_joint_min_score",
+        {"CONT13Z_ROLL": ("joint_min_score",)},
+        requirements,
+    )
+    check_true(
+        "c75_is_not_robustness_or_production_promotion",
+        c75.get("robustness_role") == "off"
+        and source.get("score_source") == "selection_point_in_time",
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+
 
 def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_DAILY_PIT_STRATEGY_RUNTIME"

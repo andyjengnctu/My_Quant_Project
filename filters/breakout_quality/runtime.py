@@ -334,6 +334,10 @@ def resolve_breakout_quality_candidate_rank(
         SCORE_SOURCE_SELECTION_POINT_IN_TIME,
         SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     }:
+        options = dict(context.ranking_options or {})
+        primary_score_column = str(
+            options.get("primary_score_column") or ""
+        ).strip() or None
         lookup_date = signal_date
         if breakout_quality_ranking_uses_daily_information_date():
             if information_date is None:
@@ -351,6 +355,7 @@ def resolve_breakout_quality_candidate_rank(
                 experiment_profile=str(context.experiment_profile),
                 score_path_override=context.score_path_override,
                 manifest_path_override=context.score_manifest_path_override,
+                score_column=primary_score_column,
             )
         else:
             payload = lookup_continuous_ranker_oos_candidate_score(
@@ -361,8 +366,8 @@ def resolve_breakout_quality_candidate_rank(
                 model_architecture=str(context.model_architecture),
                 experiment_profile=str(context.experiment_profile),
                 score_path_override=context.score_path_override,
+                score_column=primary_score_column,
             )
-        options = dict(context.ranking_options or {})
         safety_dl_id = str(options.get("safety_dl_id") or "").strip()
         safety_filter_id = str(options.get("safety_filter_id") or "").strip()
         safety_profile = str(options.get("safety_experiment_profile") or "").strip()

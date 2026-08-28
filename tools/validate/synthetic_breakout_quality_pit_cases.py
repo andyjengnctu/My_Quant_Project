@@ -478,6 +478,62 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         and bool(raw_safety_lookup["available"]),
     )
 
+    from filters.breakout_quality.runtime import (
+        breakout_quality_ranking_source_context,
+        resolve_breakout_quality_candidate_rank,
+    )
+    with tempfile.TemporaryDirectory(prefix="mr13z_joint_min_pit_") as temp_dir:
+        score_path = Path(temp_dir) / "selection_point_in_time_scores.csv"
+        manifest_path = Path(temp_dir) / "selection_point_in_time_manifest.json"
+        pd.DataFrame([
+            {
+                "ticker": "2330",
+                "date": "2021-01-04",
+                "group_index": 1,
+                "breakout_quality_score": 0.31,
+                "raw_safety_score": 0.82,
+                "raw_mfe_score": 0.31,
+                "joint_min_score": 0.67,
+                "fold_id": "fold_20210101_20211231",
+                "model_information_cutoff": "2020-12-31",
+            }
+        ]).to_csv(score_path, index=False, encoding="utf-8-sig")
+        manifest_path.write_text(json.dumps({
+            "score_period": {"start": "2021-01-01", "end": "2021-12-31"},
+            "coverage": {"scored_group_count": 1},
+            "score_columns": {
+                "primary": "breakout_quality_score",
+                "raw_safety": "raw_safety_score",
+                "raw_mfe": "raw_mfe_score",
+                "joint_min": "joint_min_score",
+            },
+        }), encoding="utf-8")
+        joint_table = load_selection_point_in_time_score_table_from_path(
+            str(score_path), manifest_path=str(manifest_path)
+        )
+        with breakout_quality_ranking_source_context(
+            score_source="selection_point_in_time",
+            model_architecture="patch_token_transformer_safety_raw_mfe_joint_attn_mlp_v1",
+            experiment_profile="daily_universal_safety_raw_mfe_joint_min_patch_transformer_attn_pool_mlp_head_full_list_ndcg_pairwise",
+            ranking_options={"primary_score_column": "joint_min_score"},
+            score_path_override=str(score_path),
+            score_manifest_path_override=str(manifest_path),
+        ):
+            joint_runtime = resolve_breakout_quality_candidate_rank(
+                ticker="2330",
+                signal_date="2021-01-05",
+                information_date="2021-01-04",
+                high_len=275,
+                project_root=str(Path(__file__).resolve().parents[2]),
+            )
+    check_true(
+        "mr13z_pit_preserves_all_three_heads_and_runtime_primary_explicitly_consumes_joint_min",
+        {"raw_safety_score", "raw_mfe_score", "joint_min_score"}.issubset(joint_table.columns)
+        and abs(float(joint_table.iloc[0]["breakout_quality_score"]) - 0.31) < 1e-12
+        and abs(float(joint_runtime["score"]) - 0.67) < 1e-12
+        and bool(joint_runtime["available"]),
+    )
+
     summary.update({
         "profile": settings.experiment_profile,
         "oos_fold_count": len(oos),

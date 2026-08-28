@@ -43,14 +43,15 @@ def runtime_score_projection_requirements(
 
     dl_sources = dict(settings_payload.get("dl_sources") or {})
     requirements: dict[str, set[str]] = {}
+    options = dict(on_arm_payload.get("dl_runtime_options") or {})
     dl_id = str(on_arm_payload.get("dl_id") or "").strip()
     if dl_id:
         source = dict(dl_sources.get(dl_id) or {})
         requirements.setdefault(dl_id, set()).add(
-            primary_score_column_for_source(str(source.get("score_source") or ""))
+            str(options.get("primary_score_column") or "").strip()
+            or primary_score_column_for_source(str(source.get("score_source") or ""))
         )
 
-    options = dict(on_arm_payload.get("dl_runtime_options") or {})
     safety_dl_id = str(options.get("safety_dl_id") or "").strip()
     safety_score_column = str(options.get("safety_score_column") or "").strip()
     if safety_dl_id and safety_score_column:

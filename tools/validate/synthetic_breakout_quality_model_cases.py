@@ -79,6 +79,22 @@ from .synthetic_breakout_quality_support import (
 
 from .source_index import read_source_ast, read_source_text
 
+
+def _strategy_c75_uses_experiment_profile(profile_name: str) -> bool:
+    """Return whether the current C75 conversion is sourced from this model profile.
+
+    Historical model-only validators must remain valid after a later scientific
+    identity legitimately receives a strategy arm.  The invariant is that the
+    historical profile itself is not silently reused as C75's source, not that
+    the symbol C75 can never exist in the repository.
+    """
+
+    from config.strategy_compare import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
+
+    arm = dict(STRATEGY_COMPARE_ARMS.get("C75") or {})
+    source = dict(STRATEGY_DL_SOURCES.get(str(arm.get("dl_id") or "")) or {})
+    return str(source.get("experiment_profile") or "") == str(profile_name)
+
 def validate_breakout_quality_continuous_target_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_CONTINUOUS_TARGET"
     results = []
@@ -2809,10 +2825,9 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
     )
 
     project_root = Path(__file__).resolve().parents[2]
-    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
     check_true(
-        "mr13s_model_only_delivery_does_not_create_c75_strategy_arm",
-        '"C75"' not in strategy_source and "'C75'" not in strategy_source,
+        "mr13s_historical_model_remains_not_c75_source_after_mr13z_conversion",
+        not _strategy_c75_uses_experiment_profile(profile.name),
     )
     report_source = (
         project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
@@ -3116,10 +3131,9 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
         and "Model-specific Extension" in app_source
         and "標準模型 SOP｜3. Direct HM/HS Joint Retrieval" not in app_source,
     )
-    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
     check_true(
-        "mr13t_remains_model_only_without_new_strategy_arm",
-        '"C75"' not in strategy_source and "'C75'" not in strategy_source,
+        "mr13t_historical_model_remains_not_c75_source_after_mr13z_conversion",
+        not _strategy_c75_uses_experiment_profile(profile.name),
     )
 
     summary["training_performed"] = False
@@ -3306,10 +3320,9 @@ def validate_breakout_quality_hmhs_single_head_contract_case(_base_params):
         and "標準模型 SOP｜3. Direct HM/HS H-only Learnability" not in app_source
         and '"Δ HM/HS Pair", "Δ PR-AUC", "Δ Top10×"' not in app_source,
     )
-    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
     check_true(
-        "mr13u_remains_model_only_without_strategy_conversion",
-        '"C75"' not in strategy_source and "'C75'" not in strategy_source,
+        "mr13u_historical_model_remains_not_c75_source_after_mr13z_conversion",
+        not _strategy_c75_uses_experiment_profile(profile.name),
     )
 
     summary["training_performed"] = False
@@ -3529,10 +3542,9 @@ def validate_breakout_quality_nonlinear_hmhs_head_contract_case(_base_params):
         and "標準模型 SOP｜6. Evidence Coverage" in standard_titles,
     )
 
-    strategy_source = (Path(__file__).resolve().parents[2] / "config" / "strategy_compare.py").read_text(encoding="utf-8")
     check_true(
-        "mr13v_remains_model_only_without_strategy_conversion",
-        '"C75"' not in strategy_source and "'C75'" not in strategy_source,
+        "mr13v_historical_model_remains_not_c75_source_after_mr13z_conversion",
+        not _strategy_c75_uses_experiment_profile(profile.name),
     )
 
     summary["training_performed"] = False
@@ -3753,10 +3765,9 @@ def validate_breakout_quality_joint_min_target_contract_case(_base_params):
         'oos_frame["target_joint_min"]' in daily_source
         and 'oos_frame["joint_min_score"]' in daily_source,
     )
-    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
     check_true(
-        "mr13w_remains_model_only_without_strategy_conversion",
-        '"C75"' not in strategy_source and "'C75'" not in strategy_source,
+        "mr13w_historical_model_remains_not_c75_source_after_mr13z_conversion",
+        not _strategy_c75_uses_experiment_profile(profile.name),
     )
 
     summary["training_performed"] = False
@@ -3985,10 +3996,9 @@ def validate_breakout_quality_joint_attention_pool_contract_case(_base_params):
     )
 
     project_root = Path(__file__).resolve().parents[2]
-    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
     check_true(
-        "mr13x_remains_model_only_without_strategy_conversion",
-        '"C75"' not in strategy_source and "'C75'" not in strategy_source,
+        "mr13x_historical_model_remains_not_c75_source_after_mr13z_conversion",
+        not _strategy_c75_uses_experiment_profile(profile.name),
     )
 
     summary["training_performed"] = False
@@ -4232,10 +4242,9 @@ def validate_breakout_quality_modern_tcn_joint_min_contract_case(_base_params):
     )
 
     project_root = Path(__file__).resolve().parents[2]
-    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
     check_true(
-        "mr13y_remains_model_only_without_strategy_conversion",
-        '"C75"' not in strategy_source and "'C75'" not in strategy_source,
+        "mr13y_historical_model_remains_not_c75_source_after_mr13z_conversion",
+        not _strategy_c75_uses_experiment_profile(profile.name),
     )
 
     summary["training_performed"] = False
@@ -4291,8 +4300,6 @@ def validate_breakout_quality_patch_transformer_joint_min_contract_case(_base_pa
             TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
             PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
             "raw_mfe_mean_daily_spearman",
-            False,
-            False,
         ),
         (
             BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
@@ -4300,8 +4307,6 @@ def validate_breakout_quality_patch_transformer_joint_min_contract_case(_base_pa
             profile.training_objective,
             profile.model_architecture,
             profile.epoch_selection_metric,
-            spec.selection_pit_authorized,
-            spec.current_time_validation_authorized,
         ),
     )
     check_true(
@@ -4504,8 +4509,12 @@ def validate_breakout_quality_patch_transformer_joint_min_contract_case(_base_pa
     project_root = Path(__file__).resolve().parents[2]
     strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
     check_true(
-        "mr13z_remains_model_only_without_strategy_conversion",
-        '"C75"' not in strategy_source and "'C75'" not in strategy_source,
+        "mr13z_model_gate_pass_authorizes_pit_and_c75_without_runtime_promotion",
+        bool(spec.selection_pit_authorized)
+        and bool(spec.current_time_validation_authorized)
+        and '"C75"' in strategy_source
+        and '"CONT13Z_ROLL"' in strategy_source
+        and '"joint_min_score"' in strategy_source,
     )
 
     summary["training_performed"] = False

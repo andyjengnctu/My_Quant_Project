@@ -23,6 +23,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
@@ -104,6 +105,8 @@ PIT_OPTIONAL_SCORE_COLUMNS = (
     "primary_mfe_score",
     "conditional_safety_score",
     "raw_safety_score",
+    "raw_mfe_score",
+    "joint_min_score",
 )
 
 
@@ -256,6 +259,22 @@ def _validate_score_eligibility_contract(
             raise ValueError(
                 "Safety→Conditional-MFE PIT artifact缺少Raw Safety score contract；"
                 "請以既有MR-13R fold checkpoint重建PIT scores與audit（不需重訓）"
+            )
+    if (
+        str(profile.training_objective)
+        == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING
+    ):
+        score_columns = dict(manifest.get("score_columns") or {})
+        expected_columns = {
+            "primary": "breakout_quality_score",
+            "raw_safety": "raw_safety_score",
+            "raw_mfe": "raw_mfe_score",
+            "joint_min": "joint_min_score",
+        }
+        if score_columns != expected_columns:
+            raise ValueError(
+                "Joint-Min PIT artifact缺少tri-head score contract；"
+                "請以目前producer建立/重建PIT Scores與audit"
             )
 
 
