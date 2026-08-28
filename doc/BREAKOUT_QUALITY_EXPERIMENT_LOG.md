@@ -10679,3 +10679,24 @@ Decision：`STANDALONE_CONVERSION_FAIL / MODEL_GATE_RETAINED`。不得以C78 FAI
 - Stop rule：只先跑single-seed OOS + Rolling。若C79仍只降低Adverse但Full-MFE/EV/Return/RoMD無法保留，不做Multi-seed/Fixed，停止AC direct replacement；若兩mode出現有決策價值的path/performance改善，再另行決定robustness。
 - Decision=`C79_AUTHORIZED / DL_SOURCE_ONLY_CONTROL / C76_RETIRED_TO_HISTORY / RESULT_PENDING / NO_ROBUSTNESS_YET`。
 
+
+## 2026-08-29 — C79 single-seed OOS + Rolling：MR-13AC constrained conversion確認Safety增益，但存在upside regret
+
+- Controlled contract成立：C79逐欄複製C59的Min/all-off/K/R0/exact branch-and-bound portfolio construction，唯一scientific treatment=`CONT13E_ROLL → CONT13AC_ROLL`，因此`C79-C59`可解讀為DL-source-only effect。
+- OOS：C59 Return/MDD/RoMD/EV/Exposure=`166.49%/15.92%/10.45/1.24R/90.85%`；C79=`116.80%/12.60%/9.27/0.65R/90.24%`。C79降低MDD但Return/EV/RoMD較弱。
+- Rolling：C59=`201.10%/15.92%/12.63/1.11R/93.28%`；C79=`181.60%/12.63%/14.37/1.05R/93.14%`。C79 Return略低，但MDD與RoMD較佳且Exposure幾乎完全一致，排除先前direct allocator的capital-deployment confound。
+- Filled truth：C79 High-Safety OOS/Rolling=`72.67/75.99%`高於C59=`62.33/62.68%`；Adverse=`0.19/0.18R`低於C59=`0.23/0.27R`。代價是Full-MFE=`0.82/0.87R`低於C59=`0.98/1.04R`。C79 OOS/Rolling selection target percentile=`0.657/0.674`，證明conditional safety ordering確實被exact constrained portfolio使用。
+- First-Passage並非全面改善：C79 OOS `+2R/+3R`前initial-stop=`39.13/25.00%`高於C59=`8.82/5.00%`；Rolling `+1R/+2R/+3R`=`20.45/25.00/10.00%` vs C59=`14.71/14.63/12.50%`。因此「低Adverse」不等價於「更好的高R path survival」，不得只以MDD/Safety宣稱clean dominance。
+- Decision=`CONTROLLED_CONVERSION_SIGNAL_CONFIRMED / SAFETY_GAIN_CONFIRMED / UPSIDE_REGRET_PRESENT / OOS_ROLLING_TRADEOFF / ROBUSTNESS_DEFERRED_FOR_MR13AD / NOT_PROMOTED`。C79具robustness資訊價值，但使用者選擇先補完全對稱的reverse conditional model cell，以更完整比較upside/downside/learnability/conversion。
+
+## 2026-08-29 — MR-13AD authorized/implemented：Predicted-Safety → Conditional-MFE PIT-safe reverse control
+
+- 使用者明確修正研究目標：重點不是single-head本身，而是同時考慮**上漲、下跌、可學性、策略轉化率**。在MR-13AC/C79已證明「Predicted-Upside → Conditional Safety」可降低Adverse但犧牲部分MFE後，下一個最小必要cell改為完整反向控制。
+- 新model identity=`MR-13AD`；profile=`daily_universal_predicted_safety_conditional_mfe_full_list_ndcg_pairwise`；target=`daily_predicted_safety_conditional_mfe_v1`；architecture identity=`ARCH-inception_time_predicted_safety_context_v1`，runtime string=`inception_time_predicted_safety_context_v1`。
+- Stage-1固定MR-13M Low-Adverse ranker / `inception_time_v1` / Seed42。Selection context只使用expanding cross-fitted/PIT-safe Stage-1 predictions轉same-date average-rank percentile；Forward context只使用單一pre-2021 Stage-1 fit，禁止full-fit Selection backfill與OOS statistics。
+- Stage-2固定MR-13K的InceptionTime/full-list Delta-NDCG/Seed42/split/optimizer/epoch-selection/training scope，只在GAP latent後直接concat **1個 predicted-safety percentile scalar**；不加context MLP/gate/attention/multihead。
+- Stage-2 response先取same-date Pure-MFE percentile；正式target為該response對predicted-safety percentile做same-date OLS（含intercept）residual，再把residual轉same-date percentile。Target builder不讀`target_adverse_r`，true future Safety不得作conditioning feature。
+- AC/AD共用一個generic predicted-context PIT producer，避免複製Selection cross-fit / fixed-forward / manifest與ticker dtype logic；兩者仍各自使用隔離的upstream artifact directory與scientific manifest contract。
+- Authorization目前只到Model Gate：`selection_pit_authorized=False`、`current_time_validation_authorized=False`；不建立`CONT13AD_ROLL`或Strategy arm，不改production C42/C44。Standard Model SOP與persistent report fingerprint不變。
+- Gate問題：AD是否在較長右尾的MFE response上保留更高learnability/upside，同時因predicted Safety context改善downside information；不能只看own-target rho。若Model Gate GO，才另配下一個合法SR-C*，完整複製C59/C79 exact K/R0 constrained contract，只換DL source做conversion。
+- Decision=`MR13AD_IMPLEMENTED / MODEL_GATE_RESULT_PENDING / NO_PIT / NO_STRATEGY_CONVERSION / NOT_PROMOTED`。

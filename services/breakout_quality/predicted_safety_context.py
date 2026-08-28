@@ -1,19 +1,19 @@
-"""Build the isolated PIT-safe Stage-1 upside context required by MR-13AC."""
+"""Build the isolated PIT-safe Stage-1 safety context required by MR-13AD."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from filters.breakout_quality.predicted_upside_context import (
+from filters.breakout_quality.predicted_safety_context import (
     CONTEXT_COLUMN,
-    PREDICTED_UPSIDE_CONTEXT_FILENAME,
-    PREDICTED_UPSIDE_CONTEXT_MANIFEST_FILENAME,
+    PREDICTED_SAFETY_CONTEXT_FILENAME,
+    PREDICTED_SAFETY_CONTEXT_MANIFEST_FILENAME,
     STAGE1_ARCHITECTURE,
     STAGE1_PROFILE,
     STAGE1_RESEARCH_ID,
     STAGE1_SEED,
-    predicted_upside_context_contract,
-    resolve_predicted_upside_context_dir,
+    predicted_safety_context_contract,
+    resolve_predicted_safety_context_dir,
 )
 from services.breakout_quality.predicted_context import (
     build_predicted_context,
@@ -22,18 +22,16 @@ from services.breakout_quality.predicted_context import (
 
 
 def _load_stage1_scores(path: Path, *, phase: str):
-    """Compatibility wrapper retained for MR-13AC tests/callers."""
-
     return load_stage1_context_scores(
         path,
         phase=phase,
-        predicted_score_column="predicted_upside_score",
+        predicted_score_column="predicted_safety_score",
         context_column=CONTEXT_COLUMN,
-        context_label="predicted-upside",
+        context_label="predicted-safety",
     )
 
 
-def build_predicted_upside_context(
+def build_predicted_safety_context(
     *,
     project_root: str | Path,
     filter_id: str,
@@ -42,7 +40,7 @@ def build_predicted_upside_context(
     dataset: str,
     max_tickers: int = 0,
 ) -> Path:
-    """Build/rebuild MR-13AC Selection cross-fit + fixed pre-OOS upside context."""
+    """Build/rebuild MR-13AD Selection cross-fit + fixed pre-OOS safety context."""
 
     return build_predicted_context(
         project_root=project_root,
@@ -55,14 +53,14 @@ def build_predicted_upside_context(
         stage1_architecture=STAGE1_ARCHITECTURE,
         stage1_research_id=STAGE1_RESEARCH_ID,
         stage1_seed=STAGE1_SEED,
-        context_dir_resolver=resolve_predicted_upside_context_dir,
-        context_filename=PREDICTED_UPSIDE_CONTEXT_FILENAME,
-        context_manifest_filename=PREDICTED_UPSIDE_CONTEXT_MANIFEST_FILENAME,
-        predicted_score_column="predicted_upside_score",
+        context_dir_resolver=resolve_predicted_safety_context_dir,
+        context_filename=PREDICTED_SAFETY_CONTEXT_FILENAME,
+        context_manifest_filename=PREDICTED_SAFETY_CONTEXT_MANIFEST_FILENAME,
+        predicted_score_column="predicted_safety_score",
         context_column=CONTEXT_COLUMN,
-        context_contract=predicted_upside_context_contract(),
-        context_label="MR-13AC predicted-upside",
+        context_contract=predicted_safety_context_contract(),
+        context_label="MR-13AD predicted-safety",
     )
 
 
-__all__ = ["_load_stage1_scores", "build_predicted_upside_context"]
+__all__ = ["_load_stage1_scores", "build_predicted_safety_context"]

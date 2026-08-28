@@ -35,10 +35,17 @@ from filters.breakout_quality.predicted_upside_context import (
     load_validated_predicted_upside_context,
     resolve_predicted_upside_context_dir,
 )
+from filters.breakout_quality.predicted_safety_context import (
+    PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
+    PREDICTED_SAFETY_CONTEXT_MANIFEST_FILENAME,
+    load_validated_predicted_safety_context,
+    resolve_predicted_safety_context_dir,
+)
 
 ARTIFACT_DATASET_CORE = "dataset_core"
 ARTIFACT_CONTINUOUS_TARGET = "continuous_target"
 ARTIFACT_PREDICTED_UPSIDE_CONTEXT = "predicted_upside_context"
+ARTIFACT_PREDICTED_SAFETY_CONTEXT = "predicted_safety_context"
 ARTIFACT_MODEL_CHECKPOINT = "model_checkpoint"
 ARTIFACT_FORWARD_SCORE = "forward_score"
 ARTIFACT_SELECTION_PIT_SCORE = "selection_pit_score"
@@ -70,6 +77,11 @@ ARTIFACT_DEPENDENCY_REGISTRY: dict[str, ArtifactDependencySpec] = {
     ),
     ARTIFACT_PREDICTED_UPSIDE_CONTEXT: ArtifactDependencySpec(
         artifact_type=ARTIFACT_PREDICTED_UPSIDE_CONTEXT,
+        dependencies=(ARTIFACT_DATASET_CORE,),
+        producer_work_type=PRODUCER_MODEL_TRAINING,
+    ),
+    ARTIFACT_PREDICTED_SAFETY_CONTEXT: ArtifactDependencySpec(
+        artifact_type=ARTIFACT_PREDICTED_SAFETY_CONTEXT,
         dependencies=(ARTIFACT_DATASET_CORE,),
         producer_work_type=PRODUCER_MODEL_TRAINING,
     ),
@@ -130,8 +142,11 @@ def required_upstream_artifact_types(experiment_profile: str) -> tuple[str, ...]
     profile = get_breakout_quality_experiment_profile(str(experiment_profile))
     if str(profile.training_sample_scope) == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS:
         return (ARTIFACT_DATASET_CORE, ARTIFACT_CONTINUOUS_TARGET)
-    if str(profile.continuous_target_id or "") == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
+    target_id = str(profile.continuous_target_id or "")
+    if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
         return (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_UPSIDE_CONTEXT)
+    if target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID:
+        return (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_SAFETY_CONTEXT)
     return (ARTIFACT_DATASET_CORE,)
 
 
@@ -290,6 +305,49 @@ def collect_model_upstream_readiness(
                 ),
             )
         )
+    if str(profile.continuous_target_id or "") == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID:
+        context_dir = resolve_predicted_safety_context_dir(
+            root,
+            filter_id=str(filter_id),
+            model_architecture=str(model_architecture),
+            experiment_profile=str(experiment_profile),
+        )
+        context_manifest = context_dir / PREDICTED_SAFETY_CONTEXT_MANIFEST_FILENAME
+        context_ready = False
+        context_error: Exception | None = None
+        if dataset_ready:
+            try:
+                load_validated_predicted_safety_context(
+                    root,
+                    filter_id=str(filter_id),
+                    model_architecture=str(model_architecture),
+                    experiment_profile=str(experiment_profile),
+                    expected_dataset_policy=(dataset_readiness.summary or {}).get("policy"),
+                    expected_dataset_artifacts=(dataset_readiness.summary or {}).get("dataset_artifacts"),
+                )
+                context_ready = True
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                context_error = exc
+        rows.append(
+            ArtifactReadiness(
+                artifact_type=ARTIFACT_PREDICTED_SAFETY_CONTEXT,
+                ready=context_ready,
+                status=("READY" if context_ready else "PREDICTED_SAFETY_CONTEXT_MISSING_OR_INVALID"),
+                path=context_manifest,
+                dependencies=(ARTIFACT_DATASET_CORE,),
+                producer_work_type=(
+                    PRODUCER_EXISTING_ARTIFACT if context_ready else PRODUCER_MODEL_TRAINING
+                ),
+                description=(
+                    "重用MR-13AD PIT-safe predicted-safety context"
+                    if context_ready
+                    else "canonical Dataset未就緒，predicted-safety context不可建立"
+                    if not dataset_ready
+                    else "缺少或無效的MR-13AD PIT-safe predicted-safety context："
+                    + (f"{type(context_error).__name__}: {context_error}" if context_error else "unknown")
+                ),
+            )
+        )
     return tuple(rows)
 
 
@@ -319,11 +377,12 @@ def collect_model_upstream_preparation_plan(
         max_tickers=int(max_tickers),
     )
     actions: list[ResearchArtifactAction] = []
-    priority = {ARTIFACT_DATASET_CORE: 10, ARTIFACT_CONTINUOUS_TARGET: 20, ARTIFACT_PREDICTED_UPSIDE_CONTEXT: 30}
+    priority = {ARTIFACT_DATASET_CORE: 10, ARTIFACT_CONTINUOUS_TARGET: 20, ARTIFACT_PREDICTED_UPSIDE_CONTEXT: 30, ARTIFACT_PREDICTED_SAFETY_CONTEXT: 30}
     builder = {
         ARTIFACT_DATASET_CORE: "breakout_quality_dataset",
         ARTIFACT_CONTINUOUS_TARGET: "breakout_quality_continuous_target",
         ARTIFACT_PREDICTED_UPSIDE_CONTEXT: "breakout_quality_predicted_upside_context",
+        ARTIFACT_PREDICTED_SAFETY_CONTEXT: "breakout_quality_predicted_safety_context",
     }
     policy = get_research_artifact_preparation_policy()
     for item in readiness:

@@ -2758,6 +2758,24 @@ def _prepare_continuous_research_inputs(
                 max_tickers=resolved_max_tickers,
             )
             return
+        if action.builder_type == "breakout_quality_predicted_safety_context":
+            from services.breakout_quality.predicted_safety_context import (
+                build_predicted_safety_context,
+            )
+
+            print(
+                paint("[Predicted Safety Context]", "cyan", enabled=color_enabled, bold=True)
+                + " 建立MR-13M PIT-safe Selection cross-fit + fixed pre-OOS context"
+            )
+            build_predicted_safety_context(
+                project_root=PROJECT_ROOT,
+                filter_id=str(settings.filter_id),
+                model_architecture=str(settings.model_architecture),
+                experiment_profile=str(settings.experiment_profile),
+                dataset=resolved_dataset_profile,
+                max_tickers=resolved_max_tickers,
+            )
+            return
         raise RuntimeError(f"不支援的model upstream builder: {action.builder_type}")
 
     try:

@@ -42,6 +42,13 @@ from filters.breakout_quality.predicted_upside_context import (
     load_validated_predicted_upside_context,
     predicted_upside_context_contract,
 )
+from filters.breakout_quality.predicted_safety_context import (
+    CONTEXT_COLUMN as PREDICTED_SAFETY_CONTEXT_COLUMN,
+    PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
+    build_predicted_safety_conditional_mfe_targets,
+    load_validated_predicted_safety_context,
+    predicted_safety_context_contract,
+)
 from filters.breakout_quality.risk_normalized_target import (
     DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
     RISK_GEOMETRY_CONTEXT_FEATURES,
@@ -553,6 +560,7 @@ def load_daily_universal_ranker_data(
         DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
         DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
         PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
+        PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
         DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
     }:
         raise ValueError(f"daily universal ranker target identity不一致: {target_id!r}")
@@ -563,17 +571,26 @@ def load_daily_universal_ranker_data(
     use_predicted_upside_context = (
         str(model_spec.architecture) == "inception_time_predicted_upside_context_v1"
     )
+    use_predicted_safety_context = (
+        str(model_spec.architecture) == "inception_time_predicted_safety_context_v1"
+    )
+    use_predicted_scalar_context = bool(
+        use_predicted_upside_context or use_predicted_safety_context
+    )
     if bool(model_spec.use_dataset_context) != bool(
-        use_risk_context or use_predicted_upside_context
+        use_risk_context or use_predicted_scalar_context
     ):
         raise ValueError("daily universal ranker architecture/context contract不一致")
     if use_risk_context and target_id != DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID:
         raise ValueError("risk-context architecture只允許MR-13I/J同源risk-normalized target")
-    if (
-        use_predicted_upside_context
-        != (target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID)
+    if use_predicted_upside_context != (
+        target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID
     ):
         raise ValueError("MR-13AC predicted-upside architecture與conditional low-adverse target必須成對")
+    if use_predicted_safety_context != (
+        target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID
+    ):
+        raise ValueError("MR-13AD predicted-safety architecture與conditional MFE target必須成對")
 
     # The existing official event dataset remains the source-selection/inventory truth.
     summary, _indexed_features, _context, _labels, event_rows = load_validated_dataset_bundle(
@@ -698,7 +715,7 @@ def load_daily_universal_ranker_data(
             len(RISK_GEOMETRY_CONTEXT_FEATURES)
             if use_risk_context
             else 1
-            if use_predicted_upside_context
+            if use_predicted_scalar_context
             else 0
         )
         local_context = np.full(
@@ -717,6 +734,7 @@ def load_daily_universal_ranker_data(
             DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
             DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
             PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
+            PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
         }:
             local_targets = np.full(len(local_positions), np.nan, dtype=np.float32)
             local_target_valid = np.zeros(len(local_positions), dtype=bool)
@@ -727,6 +745,8 @@ def load_daily_universal_ranker_data(
                     if target_id == DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID
                     else DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID
                     if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID
+                    else DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID
+                    if target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID
                     else target_id
                 )
                 completed_batch = compute_daily_opportunity_target_batch(
@@ -920,7 +940,7 @@ def load_daily_universal_ranker_data(
         len(RISK_GEOMETRY_CONTEXT_FEATURES)
         if use_risk_context
         else 1
-        if use_predicted_upside_context
+        if use_predicted_scalar_context
         else 0
     )
     valid_context = np.concatenate(valid_context_chunks, axis=0)
@@ -1015,18 +1035,37 @@ def load_daily_universal_ranker_data(
             ]
         )
         group_table["target_equal_rank_composite"] = raw_target
-    if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
-        context_frame, context_manifest = load_validated_predicted_upside_context(
-            root,
-            filter_id=filter_id,
-            model_architecture=model_architecture,
-            experiment_profile=experiment_profile,
-            expected_dataset_policy=summary.get("policy"),
-            expected_dataset_artifacts=summary.get("dataset_artifacts"),
-        )
-        context_lookup = context_frame[[
-            "ticker", "date", PREDICTED_UPSIDE_CONTEXT_COLUMN
-        ]].copy()
+    context_manifest = None
+    predicted_context_manifest_key = None
+    if target_id in {
+        PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
+        PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
+    }:
+        if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
+            context_frame, context_manifest = load_validated_predicted_upside_context(
+                root,
+                filter_id=filter_id,
+                model_architecture=model_architecture,
+                experiment_profile=experiment_profile,
+                expected_dataset_policy=summary.get("policy"),
+                expected_dataset_artifacts=summary.get("dataset_artifacts"),
+            )
+            context_column = PREDICTED_UPSIDE_CONTEXT_COLUMN
+            context_name = "upside"
+            predicted_context_manifest_key = "predicted_upside_context_manifest"
+        else:
+            context_frame, context_manifest = load_validated_predicted_safety_context(
+                root,
+                filter_id=filter_id,
+                model_architecture=model_architecture,
+                experiment_profile=experiment_profile,
+                expected_dataset_policy=summary.get("policy"),
+                expected_dataset_artifacts=summary.get("dataset_artifacts"),
+            )
+            context_column = PREDICTED_SAFETY_CONTEXT_COLUMN
+            context_name = "safety"
+            predicted_context_manifest_key = "predicted_safety_context_manifest"
+        context_lookup = context_frame[["ticker", "date", context_column]].copy()
         group_keys = group_table[["ticker", "date"]].copy()
         group_keys["ticker"] = group_keys["ticker"].astype(str)
         group_keys["date"] = pd.to_datetime(group_keys["date"], errors="raise").dt.normalize()
@@ -1034,7 +1073,7 @@ def load_daily_universal_ranker_data(
             context_lookup, on=["ticker", "date"], how="left", validate="one_to_one"
         )
         context_values = pd.to_numeric(
-            merged_context[PREDICTED_UPSIDE_CONTEXT_COLUMN], errors="coerce"
+            merged_context[context_column], errors="coerce"
         ).to_numpy(dtype=np.float32)
         context_available = np.isfinite(context_values)
         component_valid = np.asarray(target_valid, dtype=bool).copy()
@@ -1046,33 +1085,38 @@ def load_daily_universal_ranker_data(
         if bool(np.any(oos_component_valid & ~context_available)):
             missing_count = int(np.count_nonzero(oos_component_valid & ~context_available))
             raise ValueError(
-                f"MR-13AC Forward OOS target-valid rows缺少fixed pre-OOS upside context: {missing_count}"
+                f"MR-13{'AC' if context_name == 'upside' else 'AD'} Forward OOS target-valid rows缺少fixed pre-OOS {context_name} context: {missing_count}"
             )
         target_valid = component_valid & context_available
         group_context = np.where(
             context_available[:, None], context_values[:, None], 0.5
         ).astype(np.float32)
-        conditional = build_predicted_upside_conditional_low_adverse_targets(
-            group_table, target_valid, context_values
-        )
+        if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
+            conditional = build_predicted_upside_conditional_low_adverse_targets(
+                group_table, target_valid, context_values
+            )
+            group_table["predicted_upside_percentile"] = context_values
+            group_table["target_low_adverse_daily_percentile"] = conditional.low_adverse_percentile
+            group_table["target_conditional_low_adverse_residual"] = conditional.residual
+            group_table["target_conditional_low_adverse_percentile"] = conditional.residual_percentile
+        else:
+            conditional = build_predicted_safety_conditional_mfe_targets(
+                group_table, target_valid, context_values
+            )
+            group_table["predicted_safety_percentile"] = context_values
+            group_table["target_mfe_daily_percentile"] = conditional.pure_mfe_percentile
+            group_table["target_conditional_mfe_residual"] = conditional.residual
+            group_table["target_conditional_mfe_percentile"] = conditional.residual_percentile
         raw_target = np.asarray(conditional.training_target, dtype=np.float32)
         raw_target[~target_valid] = np.nan
-        group_table["predicted_upside_percentile"] = context_values
-        group_table["target_low_adverse_daily_percentile"] = (
-            conditional.low_adverse_percentile
-        )
-        group_table["target_conditional_low_adverse_residual"] = conditional.residual
-        group_table["target_conditional_low_adverse_percentile"] = (
-            conditional.residual_percentile
-        )
         target_valid_count = int(np.count_nonzero(target_valid))
         inference_only_count = int(group_count - target_valid_count)
         if target_valid_count < 1:
-            raise ValueError("MR-13AC沒有任何PIT-safe context-covered target-valid sample")
+            raise ValueError(
+                f"MR-13{'AC' if context_name == 'upside' else 'AD'}沒有任何PIT-safe context-covered target-valid sample"
+            )
         training_start = pd.Timestamp(group_table.loc[target_valid, "date"].min()).normalize()
         sample_start = training_start
-    else:
-        context_manifest = None
 
     feature_bank = LazyDailyFeatureBank(
         frames=tuple(frames),
@@ -1099,6 +1143,8 @@ def load_daily_universal_ranker_data(
         )
     elif target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
         target_contract = predicted_upside_context_contract()
+    elif target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID:
+        target_contract = predicted_safety_context_contract()
     else:
         target_contract = build_risk_target_contract(
             horizon_bars=int(spec.horizon_bars),
@@ -1121,15 +1167,24 @@ def load_daily_universal_ranker_data(
         "context_features": (
             list(RISK_GEOMETRY_CONTEXT_FEATURES)
             if use_risk_context
-            else [PREDICTED_UPSIDE_CONTEXT_COLUMN]
-            if use_predicted_upside_context
+            else [
+                PREDICTED_UPSIDE_CONTEXT_COLUMN
+                if use_predicted_upside_context
+                else PREDICTED_SAFETY_CONTEXT_COLUMN
+            ]
+            if use_predicted_scalar_context
             else []
         ),
         "risk_param_coverage_start": (
             None if risk_schedule is None else min(item.start_date for item in risk_schedule).date().isoformat()
         ),
         "training_universe_start_date": str(pd.Timestamp(sample_start).date()),
-        "predicted_upside_context_manifest": context_manifest,
+        "predicted_upside_context_manifest": (
+            context_manifest if predicted_context_manifest_key == "predicted_upside_context_manifest" else None
+        ),
+        "predicted_safety_context_manifest": (
+            context_manifest if predicted_context_manifest_key == "predicted_safety_context_manifest" else None
+        ),
     }
     daily_summary = {
         "filter_id": filter_id,
@@ -1149,8 +1204,12 @@ def load_daily_universal_ranker_data(
         "context_features": (
             list(RISK_GEOMETRY_CONTEXT_FEATURES)
             if use_risk_context
-            else [PREDICTED_UPSIDE_CONTEXT_COLUMN]
-            if use_predicted_upside_context
+            else [
+                PREDICTED_UPSIDE_CONTEXT_COLUMN
+                if use_predicted_upside_context
+                else PREDICTED_SAFETY_CONTEXT_COLUMN
+            ]
+            if use_predicted_scalar_context
             else []
         ),
         "risk_param_coverage_start": (
