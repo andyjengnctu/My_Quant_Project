@@ -92,13 +92,13 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     survival_defs = [item for item in definitions if item.audit_id == "AUD-mr13ab-survival-increment"]
     survival_entry = get_audit_entry("mr13ab_survival_increment")
     check_true(
-        "mr13ab_survival_increment_audit_is_enabled_read_only_and_exact_frozen_pair_scoped",
+        "mr13ab_survival_increment_audit_is_enabled_read_only_and_reference_target_controlled",
         bool(
             len(survival_defs) == 1
             and survival_defs[0].enabled
             and survival_entry.formal
             and survival_entry.read_only
-            and survival_entry.preparation_function == "prepare_reference_frozen_scores"
+            and survival_entry.preparation_function is None
             and survival_defs[0].source.get("candidate_research_id") == "MR-13AB"
             and survival_defs[0].source.get("reference_research_id") == "MR-13K"
             and survival_defs[0].source.get("seed") == 42
@@ -108,7 +108,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
 
     from services.audit.runner import collect_audit_preparation_plan
     with TemporaryDirectory() as temp_dir:
-        base_snapshot = {
+        blocked_snapshot = {
             "module_id": "breakout_quality",
             "method_id": None,
             "audit_id": "AUD-mr13ab-survival-increment",
@@ -120,30 +120,22 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 "method_id": "opportunity_selection_attribution",
                 "description": "fixture",
                 "status": "BLOCKED",
-                "reason": "missing derived score",
-                "source": {"path": "outputs/audit/fixture.csv.gz", "preparable": True},
+                "reason": "missing candidate score",
+                "source": {"path": "outputs/audit/fixture.csv.gz", "preparable": False},
             }],
             "statuses": {},
         }
-        preparable_plan = collect_audit_preparation_plan(
-            "breakout_quality", project_root=Path(temp_dir),
-            audit_id="AUD-mr13ab-survival-increment", status_snapshot=base_snapshot,
-        )
-        blocked_snapshot = json.loads(json.dumps(base_snapshot))
-        blocked_snapshot["rows"][0]["source"]["preparable"] = False
         blocked_plan = collect_audit_preparation_plan(
             "breakout_quality", project_root=Path(temp_dir),
             audit_id="AUD-mr13ab-survival-increment", status_snapshot=blocked_snapshot,
         )
     check_true(
-        "mr13ab_source_preparer_builds_only_when_frozen_lineage_is_preparable",
-        preparable_plan.overall_status == "PREPARABLE"
-        and preparable_plan.actions[0].action == "BUILD"
-        and blocked_plan.overall_status == "BLOCKED"
+        "mr13ab_audit_has_no_historical_model_preparer_and_missing_candidate_truth_stays_blocked",
+        blocked_plan.overall_status == "BLOCKED"
         and blocked_plan.actions[0].action == "BLOCKED",
     )
 
-    from services.audit.mr13ab_survival_increment import analyze_frozen_score_frames
+    from services.audit.mr13ab_survival_increment import analyze_candidate_score_frame
 
     candidate_fixture = pd.DataFrame({
         "ticker": list("ABCDEFGH"),
@@ -153,124 +145,40 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "reference_target_raw_r": [3.0, 2.0, 1.0, 0.0, 3.0, 2.0, 1.0, 0.0],
         "model_score": [0.7, 0.9, 0.8, 0.6, 0.8, 0.9, 0.7, 0.6],
     })
-    reference_fixture = pd.DataFrame({
-        "ticker": list("ABCDEFGH"),
-        "date": ["2025-01-02"] * 4 + ["2025-01-03"] * 4,
-        "group_index": list(range(8)),
-        "target_raw_r": [3.0, 2.0, 1.0, 0.0, 3.0, 2.0, 1.0, 0.0],
-        "model_score": [0.9, 0.8, 0.7, 0.6, 0.9, 0.8, 0.7, 0.6],
-    })
-    survival_metrics, survival_changed, survival_conflict = analyze_frozen_score_frames(
-        candidate_fixture, reference_fixture, tolerance_r=1e-6, top_fraction=0.25
+    survival_metrics, survival_changed, survival_conflict = analyze_candidate_score_frame(
+        candidate_fixture, tolerance_r=1e-6, top_fraction=0.25
     )
     conflict = survival_metrics["conflict_pairs"]
     changed = survival_metrics["changed_rows"]
     cross = survival_metrics["cross_target_daily_spearman"]
     check_true(
-        "mr13ab_survival_increment_isolates_changed_rows_and_opposite_target_order_pairs_without_fit",
+        "mr13ab_survival_increment_isolates_changed_rows_and_opposite_target_order_without_reference_model",
         bool(
             survival_metrics["common_oos_rows"] == 8
             and changed["row_count"] == 2
             and abs(changed["mean_target_correction_r"] - 2.0) < 1e-12
-            and changed["mean_candidate_minus_reference_score_percentile"] < 0.0
             and conflict["pair_count"] == 3
             and abs(conflict["candidate_model_candidate_truth_concordance"] - 1.0) < 1e-12
-            and abs(conflict["reference_model_candidate_truth_concordance"] - 0.0) < 1e-12
+            and abs(conflict["candidate_model_reference_truth_concordance"] - 0.0) < 1e-12
+            and abs(conflict["candidate_truth_advantage"] - 1.0) < 1e-12
             and cross["candidate_model_vs_candidate_target"]["mean_daily_spearman"]
-            > cross["reference_model_vs_candidate_target"]["mean_daily_spearman"]
+            > cross["candidate_model_vs_reference_target"]["mean_daily_spearman"]
             and len(survival_changed) == 2
             and int(survival_conflict["pair_count"].sum()) == 3
         ),
     )
 
-    from services.breakout_quality.frozen_daily_ranker_score_rebuild import (
-        rebuild_frozen_daily_ranker_scores_for_keys,
-    )
-    with TemporaryDirectory() as temp_dir:
-        temp_root = Path(temp_dir)
-        model_path = temp_root / "model.pt"
-        manifest_path = temp_root / "manifest.json"
-        model_path.write_bytes(b"model")
-        manifest_path.write_text("{}", encoding="utf-8")
-        fake_profile = SimpleNamespace(
-            training_objective="daily_pairwise_ranking",
-            as_manifest_payload=lambda: {"profile": "fixture"},
-        )
-        fake_spec = SimpleNamespace(as_manifest_payload=lambda: {"architecture": "inception_time_v1"})
-        fake_bundle = SimpleNamespace(
-            group_table=pd.DataFrame({
-                "ticker": ["A", "B"],
-                "date": ["2025-01-02", "2025-01-02"],
-                "group_index": [10, 11],
-            }),
-            raw_target=pd.Series([1.25, 2.5]).to_numpy(dtype=float),
-            feature_bank=SimpleNamespace(),
-            group_context=SimpleNamespace(),
-            profile=fake_profile,
-            model_spec=fake_spec,
-        )
-        class FakeModel:
-            def load_state_dict(self, _state): return None
-            def to(self, _device): return self
-            def eval(self): return self
-        fake_plan = SimpleNamespace(device="cpu", as_manifest_payload=lambda: {"device": "cpu"})
-        fake_torch = SimpleNamespace(load=lambda *_a, **_k: {
-            "experiment_profile": "ref",
-            "training_objective": "daily_pairwise_ranking",
-            "experiment_settings": {"profile": "fixture"},
-            "model_spec": {"architecture": "inception_time_v1"},
-            "feature_count": 10,
-            "context_count": 0,
-            "model_state_dict": {},
-        })
-        output_path = temp_root / "rebuilt.csv.gz"
-        with patch("services.breakout_quality.frozen_daily_ranker_score_rebuild.get_breakout_quality_experiment_profile", return_value=fake_profile), patch(
-            "services.breakout_quality.frozen_daily_ranker_score_rebuild.resolve_filter_artifact_paths",
-            return_value=SimpleNamespace(model_path=model_path, manifest_path=manifest_path),
-        ), patch(
-            "services.breakout_quality.frozen_daily_ranker_score_rebuild.load_daily_universal_ranker_data",
-            return_value=fake_bundle,
-        ), patch(
-            "services.breakout_quality.frozen_daily_ranker_score_rebuild.require_torch",
-            return_value=(fake_torch, None),
-        ), patch(
-            "services.breakout_quality.frozen_daily_ranker_score_rebuild.resolve_torch_execution_plan",
-            return_value=fake_plan,
-        ), patch(
-            "services.breakout_quality.frozen_daily_ranker_score_rebuild.build_model",
-            return_value=FakeModel(),
-        ), patch(
-            "services.breakout_quality.frozen_daily_ranker_score_rebuild.ranker_api.predict_scores",
-            return_value=pd.Series([0.2, 0.8]).to_numpy(dtype=float),
-        ):
-            rebuilt = rebuild_frozen_daily_ranker_scores_for_keys(
-                project_root=temp_root, filter_id="f", model_architecture="inception_time_v1",
-                experiment_profile="ref",
-                key_frame=pd.DataFrame({
-                    "ticker": ["B", "A"], "date": ["2025-01-02", "2025-01-02"], "group_index": [11, 10],
-                }),
-                output_path=output_path, expected_target_raw_r=pd.Series([2.5, 1.25]).to_numpy(dtype=float),
-            )
-        rebuilt_frame = pd.read_csv(output_path)
-    check_true(
-        "frozen_daily_ranker_score_rebuild_is_exact_key_inference_only_and_preserves_requested_order",
-        rebuilt["row_count"] == 2
-        and rebuilt_frame["ticker"].tolist() == ["B", "A"]
-        and rebuilt_frame["target_raw_r"].tolist() == [2.5, 1.25]
-        and len(rebuilt["score_artifact"].get("sha256", "")) == 64,
-    )
-
     invalid_candidate = candidate_fixture.copy()
-    invalid_candidate.loc[0, "reference_target_raw_r"] = 2.5
+    invalid_candidate.loc[0, "target_raw_r"] = 3.5
     try:
-        analyze_frozen_score_frames(invalid_candidate, reference_fixture)
+        analyze_candidate_score_frame(invalid_candidate)
     except ValueError as exc:
-        invalid_reference_blocked = "內嵌reference target" in str(exc)
+        invalid_target_blocked = "大於full-horizon Pure-MFE" in str(exc)
     else:
-        invalid_reference_blocked = False
+        invalid_target_blocked = False
     check_true(
-        "mr13ab_survival_increment_fail_closes_on_nonidentical_embedded_reference_truth",
-        invalid_reference_blocked,
+        "mr13ab_survival_increment_fail_closes_when_first_breach_target_exceeds_reference_truth",
+        invalid_target_blocked,
     )
 
     import apps.research as research_app

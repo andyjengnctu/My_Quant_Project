@@ -103,12 +103,11 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         domain="breakout_quality",
         module="services.audit.mr13ab_survival_increment",
         mode="formal",
-        description="只讀MR-13AB/MR-13K frozen OOS changed-row與conflict-pair survival increment",
+        description="只讀MR-13AB frozen OOS與內嵌MR-13K reference target的changed-row/conflict-pair survival increment",
         read_only=True,
         method_id="opportunity_selection_attribution",
         status_function="collect_status",
         run_function="run_formal_audit",
-        preparation_function="prepare_reference_frozen_scores",
     ),
     # Only genuinely supported diagnostic commands belong here.  Canonical
     # Dataset/Target/PIT builders live in services/ and are not research Audits.

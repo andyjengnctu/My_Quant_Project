@@ -10495,3 +10495,12 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Derived score只寫`outputs/audit/.../source_cache`，manifest綁定candidate score、MR-13K model、model manifest與historical report SHA；不修改MR-13K historical report、不fit參數、不重建Target、不建立PIT、不做strategy replay。若frozen checkpoint lineage也缺失，仍BLOCKED，不允許Audit自動重訓historical MR-13K。
 - `services/audit/runner.py`的preparer availability同步支援source-level `preparable` fact：只有真正可由既有producer補足的缺件才映射BUILD，避免任何帶preparer的Audit在不可重建來源時誤顯示PREPARABLE。
 
+
+
+### 2026-08-28 — AUD-mr13ab dependency correction：historical MR-13K checkpoint亦已清理，改用AB frozen score內嵌reference truth完成最小survival control
+
+- 使用者第二次執行`AUD-mr13ab-survival-increment`確認MR-13K historical `daily_ranker_oos_scores.csv.gz`與`model.pt`均已不存在；因此上一版「缺score時由frozen MR-13K checkpoint做inference-only reconstruction」在實際retention state不可行。這是historical artifact retention事實，不是MR-13AB scientific failure。
+- 不重新訓練MR-13K，也不以新fit冒充historical frozen control。重新檢查MR-13AB canonical Forward OOS score contract後，確認同一row已保存`target_raw_r=MR-13AB first-breach Pure-MFE`與`reference_target_raw_r=MR-13K full-horizon Pure-MFE`；其正式report同時綁定reference profile/target，且明確記錄reference只在checkpoint完成後evaluation、不參與training或epoch selection。
+- 因此最後不確定性可在不需要MR-13K model的情況下直接回答：只看same-date target-order conflict pairs（兩個target要求相反strict ordering，且至少一row為changed），量測MR-13AB frozen score對AB first-breach truth與K full-horizon truth的pair concordance。50%為自然無偏null；另保留changed-row target-rank correction與frozen-score residual alignment，判斷7.63% sparse correction是否真的進入ranking。
+- Audit改為**AB-only / reference-target-controlled / read-only**；MR-13K只保留semantic reference identity，不再要求任何historical score/checkpoint。上一版專為不存在checkpoint新增的`frozen_daily_ranker_score_rebuild.py`退役，避免留下無用producer。仍不training、不重建Target、不PIT、不strategy replay、不產生任何可回流fitting的threshold/weight。
+- Scientific stopping rule不變：一次結果後直接`SURVIVAL_INCREMENT_CONFIRMED → MODEL_GATE_PASS`或`NO_INCREMENT → STOP`，不再新增Audit或展開target/backbone sweep。

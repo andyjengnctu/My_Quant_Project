@@ -1,15 +1,17 @@
-"""Read-only MR-13AB vs MR-13K frozen-score survival-increment control.
+"""Read-only MR-13AB frozen-score survival-increment control.
 
-This one-shot Audit answers the final Model-Gate uncertainty for MR-13AB: did
-training on Pure-MFE before the first canonical risk breach add a measurable
-first-passage survival ordering, or did the frozen model remain effectively the
-same Pure-MFE ranker because most target rows are unchanged?
+This one-shot Audit answers the final MR-13AB Model-Gate uncertainty without
+requiring a historical MR-13K checkpoint.  MR-13AB's canonical Forward-OOS score
+artifact already stores both truths for the exact same stock-day rows:
 
-The Audit consumes the canonical MR-13AB Forward-OOS score plus the MR-13K frozen
-Forward score.  If the historical MR-13K score CSV was pruned, the shared Research
-dependency layer may deterministically reconstruct only those scores from the existing
-MR-13K frozen checkpoint before this read-only Audit runs.  It never fits parameters,
-rebuilds targets, creates PIT scores, or replays a strategy.
+* target_raw_r: first-risk-breach Pure-MFE (MR-13AB)
+* reference_target_raw_r: full-horizon Pure-MFE (MR-13K target semantics)
+
+The Audit therefore isolates rows whose target was actually corrected and
+same-date pairs where those two target definitions demand opposite ordering.
+It then asks whether the frozen MR-13AB score follows the first-breach ordering
+rather than the full-horizon ordering.  No fitting, target rebuild, PIT score,
+historical-model reconstruction, or strategy replay is performed.
 """
 
 from __future__ import annotations
@@ -27,14 +29,7 @@ import pandas as pd
 from config.audit import AUDIT_OUTPUT_ROOT, AuditDefinition
 from core.path_utils import project_relative_display_path
 from filters.breakout_quality.artifacts import compute_file_sha256
-from filters.breakout_quality.paths import (
-    resolve_filter_artifact_paths,
-    resolve_filter_model_output_dir,
-)
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
-from services.breakout_quality.frozen_daily_ranker_score_rebuild import (
-    rebuild_frozen_daily_ranker_scores_for_keys,
-)
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
     resolve_continuous_ranker_oos_score_path,
@@ -101,9 +96,10 @@ def _pair_concordance(score_diff: np.ndarray, target_diff: np.ndarray) -> tuple[
 
 
 def _conflict_pair_metrics(day: pd.DataFrame, *, tolerance_r: float) -> dict[str, Any]:
-    changed = day["target_changed"].to_numpy(dtype=bool)
-    changed_idx = np.flatnonzero(changed)
-    unchanged_idx = np.flatnonzero(~changed)
+    """Measure only pairs where MR-13AB and MR-13K target semantics disagree in sign."""
+
+    changed_idx = np.flatnonzero(day["target_changed"].to_numpy(dtype=bool))
+    unchanged_idx = np.flatnonzero(~day["target_changed"].to_numpy(dtype=bool))
     if len(changed_idx) == 0:
         return {"pair_count": 0}
 
@@ -124,7 +120,7 @@ def _conflict_pair_metrics(day: pd.DataFrame, *, tolerance_r: float) -> dict[str
     candidate_target = day["candidate_target_r"].to_numpy(dtype=np.float64)
     reference_target = day["reference_target_r"].to_numpy(dtype=np.float64)
     candidate_score = day["candidate_score"].to_numpy(dtype=np.float64)
-    reference_score = day["reference_score"].to_numpy(dtype=np.float64)
+
     candidate_diff = candidate_target[i] - candidate_target[j]
     reference_diff = reference_target[i] - reference_target[j]
     conflict = (
@@ -134,31 +130,33 @@ def _conflict_pair_metrics(day: pd.DataFrame, *, tolerance_r: float) -> dict[str
     if not bool(conflict.any()):
         return {"pair_count": 0}
 
-    candidate_diff = candidate_diff[conflict]
-    reference_diff = reference_diff[conflict]
     i = i[conflict]
     j = j[conflict]
-    candidate_conc, pair_count = _pair_concordance(candidate_score[i] - candidate_score[j], candidate_diff)
-    reference_conc, _ = _pair_concordance(reference_score[i] - reference_score[j], candidate_diff)
-    candidate_ref_truth, _ = _pair_concordance(candidate_score[i] - candidate_score[j], reference_diff)
-    reference_ref_truth, _ = _pair_concordance(reference_score[i] - reference_score[j], reference_diff)
+    candidate_diff = candidate_diff[conflict]
+    reference_diff = reference_diff[conflict]
+    score_diff = candidate_score[i] - candidate_score[j]
+
+    candidate_truth_conc, pair_count = _pair_concordance(score_diff, candidate_diff)
+    reference_truth_conc, _ = _pair_concordance(score_diff, reference_diff)
     return {
         "pair_count": int(pair_count),
-        "candidate_model_candidate_truth_concordance": candidate_conc,
-        "reference_model_candidate_truth_concordance": reference_conc,
-        "candidate_model_reference_truth_concordance": candidate_ref_truth,
-        "reference_model_reference_truth_concordance": reference_ref_truth,
+        "candidate_model_candidate_truth_concordance": candidate_truth_conc,
+        "candidate_model_reference_truth_concordance": reference_truth_conc,
+        "candidate_truth_advantage": (
+            float(candidate_truth_conc - reference_truth_conc)
+            if math.isfinite(candidate_truth_conc) and math.isfinite(reference_truth_conc)
+            else None
+        ),
     }
 
 
-def analyze_frozen_score_frames(
+def analyze_candidate_score_frame(
     candidate_frame: pd.DataFrame,
-    reference_frame: pd.DataFrame,
     *,
     tolerance_r: float = 1e-6,
     top_fraction: float = 0.10,
 ) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
-    """Return exact changed-row/conflict-pair evidence from two frozen OOS score tables."""
+    """Return survival-correction evidence from MR-13AB's frozen OOS score artifact only."""
 
     if not (0.0 < float(top_fraction) < 1.0):
         raise ValueError("top_fraction必須介於0與1")
@@ -166,173 +164,193 @@ def analyze_frozen_score_frames(
     if not math.isfinite(tolerance) or tolerance < 0.0:
         raise ValueError("tolerance_r必須是有限非負數")
 
-    candidate_required = {
-        "ticker", "date", "group_index", "target_raw_r", "reference_target_raw_r", "model_score"
+    required = {
+        "ticker",
+        "date",
+        "group_index",
+        "target_raw_r",
+        "reference_target_raw_r",
+        "model_score",
     }
-    reference_required = {"ticker", "date", "group_index", "target_raw_r", "model_score"}
-    missing_candidate = sorted(candidate_required - set(candidate_frame.columns))
-    missing_reference = sorted(reference_required - set(reference_frame.columns))
-    if missing_candidate:
-        raise ValueError(f"MR-13AB OOS score缺少欄位: {missing_candidate}")
-    if missing_reference:
-        raise ValueError(f"MR-13K OOS score缺少欄位: {missing_reference}")
+    missing = sorted(required - set(candidate_frame.columns))
+    if missing:
+        raise ValueError(f"MR-13AB OOS score缺少欄位: {missing}")
 
-    candidate = candidate_frame[list(candidate_required)].copy()
-    reference = reference_frame[list(reference_required)].copy()
-    candidate["date"] = pd.to_datetime(candidate["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    reference["date"] = pd.to_datetime(reference["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    for table, label in ((candidate, "MR-13AB"), (reference, "MR-13K")):
-        if bool(table["date"].isna().any()):
-            raise ValueError(f"{label} OOS score含無效date")
-        table["ticker"] = table["ticker"].astype(str).str.strip()
-        table["group_index"] = pd.to_numeric(table["group_index"], errors="coerce")
-        if bool(table["group_index"].isna().any()):
-            raise ValueError(f"{label} OOS score含無效group_index")
-        table["group_index"] = table["group_index"].astype(np.int64)
+    frame = candidate_frame[list(required)].copy()
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    if bool(frame["date"].isna().any()):
+        raise ValueError("MR-13AB OOS score含無效date")
+    frame["ticker"] = frame["ticker"].astype(str).str.strip()
+    frame["group_index"] = pd.to_numeric(frame["group_index"], errors="coerce")
+    if bool(frame["group_index"].isna().any()):
+        raise ValueError("MR-13AB OOS score含無效group_index")
+    frame["group_index"] = frame["group_index"].astype(np.int64)
+    if bool(frame.duplicated(["ticker", "date", "group_index"]).any()):
+        raise ValueError("MR-13AB OOS evaluable identity不唯一")
 
     for column in ("target_raw_r", "reference_target_raw_r", "model_score"):
-        candidate[column] = pd.to_numeric(candidate[column], errors="coerce")
-    for column in ("target_raw_r", "model_score"):
-        reference[column] = pd.to_numeric(reference[column], errors="coerce")
-
-    candidate = candidate.loc[
-        np.isfinite(candidate["target_raw_r"])
-        & np.isfinite(candidate["reference_target_raw_r"])
-        & np.isfinite(candidate["model_score"])
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame = frame.loc[
+        np.isfinite(frame["target_raw_r"])
+        & np.isfinite(frame["reference_target_raw_r"])
+        & np.isfinite(frame["model_score"])
     ].copy()
-    reference = reference.loc[
-        np.isfinite(reference["target_raw_r"])
-        & np.isfinite(reference["model_score"])
-    ].copy()
-    keys = ["ticker", "date", "group_index"]
-    for table, label in ((candidate, "MR-13AB"), (reference, "MR-13K")):
-        if bool(table.duplicated(keys).any()):
-            raise ValueError(f"{label} OOS evaluable identity不唯一")
-    if len(candidate) != len(reference):
-        raise ValueError(
-            f"MR-13AB/MR-13K OOS evaluable row數不一致: {len(candidate)} != {len(reference)}"
-        )
+    if frame.empty:
+        raise ValueError("MR-13AB OOS score沒有可評估row")
 
-    joined = candidate.merge(reference, on=keys, how="inner", validate="one_to_one", suffixes=("__ab", "__k"))
-    if len(joined) != len(candidate):
-        raise ValueError("MR-13AB/MR-13K OOS evaluable identity集合不一致")
-    joined = joined.rename(columns={
-        "target_raw_r__ab": "candidate_target_r",
-        "reference_target_raw_r": "embedded_reference_target_r",
-        "model_score__ab": "candidate_score",
-        "target_raw_r__k": "reference_target_r",
-        "model_score__k": "reference_score",
+    frame = frame.rename(columns={
+        "target_raw_r": "candidate_target_r",
+        "reference_target_raw_r": "reference_target_r",
+        "model_score": "candidate_score",
     }).sort_values(["date", "ticker", "group_index"], kind="stable").reset_index(drop=True)
 
-    embedded = joined["embedded_reference_target_r"].to_numpy(dtype=np.float64)
-    reference_target = joined["reference_target_r"].to_numpy(dtype=np.float64)
-    if not np.allclose(embedded, reference_target, rtol=0.0, atol=max(tolerance, 2e-6), equal_nan=False):
-        max_delta = float(np.max(np.abs(embedded - reference_target)))
-        raise ValueError(f"MR-13AB內嵌reference target與MR-13K target不一致: max_abs_delta={max_delta:.8g}R")
-
-    candidate_target = joined["candidate_target_r"].to_numpy(dtype=np.float64)
+    candidate_target = frame["candidate_target_r"].to_numpy(dtype=np.float64)
+    reference_target = frame["reference_target_r"].to_numpy(dtype=np.float64)
     if bool(np.any(candidate_target > reference_target + max(tolerance, 2e-6))):
         raise ValueError("MR-13AB first-breach target出現大於full-horizon Pure-MFE的非法row")
-    correction = reference_target - candidate_target
-    changed = correction > tolerance
-    joined["target_correction_r"] = correction
-    joined["target_changed"] = changed
 
-    _add_daily_percentile(joined, "candidate_score", "candidate_score_percentile")
-    _add_daily_percentile(joined, "reference_score", "reference_score_percentile")
-    joined["candidate_minus_reference_score_percentile"] = (
-        joined["candidate_score_percentile"] - joined["reference_score_percentile"]
+    correction = reference_target - candidate_target
+    frame["target_correction_r"] = correction
+    frame["target_changed"] = correction > tolerance
+
+    _add_daily_percentile(frame, "candidate_score", "candidate_score_percentile")
+    _add_daily_percentile(frame, "candidate_target_r", "candidate_target_percentile")
+    _add_daily_percentile(frame, "reference_target_r", "reference_target_percentile")
+    frame["target_rank_correction"] = (
+        frame["candidate_target_percentile"] - frame["reference_target_percentile"]
+    )
+    frame["score_minus_reference_rank"] = (
+        frame["candidate_score_percentile"] - frame["reference_target_percentile"]
     )
 
     cross_target = {
-        "candidate_model_vs_candidate_target": _mean_daily_spearman(joined, "candidate_score", "candidate_target_r"),
-        "reference_model_vs_candidate_target": _mean_daily_spearman(joined, "reference_score", "candidate_target_r"),
-        "candidate_model_vs_reference_target": _mean_daily_spearman(joined, "candidate_score", "reference_target_r"),
-        "reference_model_vs_reference_target": _mean_daily_spearman(joined, "reference_score", "reference_target_r"),
+        "candidate_model_vs_candidate_target": _mean_daily_spearman(
+            frame, "candidate_score", "candidate_target_r"
+        ),
+        "candidate_model_vs_reference_target": _mean_daily_spearman(
+            frame, "candidate_score", "reference_target_r"
+        ),
+        "candidate_target_vs_reference_target": _mean_daily_spearman(
+            frame, "candidate_target_r", "reference_target_r"
+        ),
     }
 
-    changed_rows = joined.loc[joined["target_changed"]].copy()
-    unchanged_rows = joined.loc[~joined["target_changed"]].copy()
+    changed_rows = frame.loc[frame["target_changed"]].copy()
+    unchanged_rows = frame.loc[~frame["target_changed"]].copy()
     top_cutoff = 1.0 - float(top_fraction)
-    changed_k_top = changed_rows["reference_score_percentile"] >= top_cutoff
-    changed_ab_top = changed_rows["candidate_score_percentile"] >= top_cutoff
-    changed_top_reference_count = int(changed_k_top.sum())
-    changed_top_retained_count = int((changed_k_top & changed_ab_top).sum())
+    reference_only_top = (
+        (changed_rows["reference_target_percentile"] >= top_cutoff)
+        & (changed_rows["candidate_target_percentile"] < top_cutoff)
+    )
+    reference_only_top_count = int(reference_only_top.sum())
+    model_retains_reference_only_top = (
+        reference_only_top & (changed_rows["candidate_score_percentile"] >= top_cutoff)
+    )
 
     changed_summary = {
         "row_count": int(len(changed_rows)),
-        "row_rate": float(len(changed_rows) / len(joined)) if len(joined) else None,
-        "mean_target_correction_r": float(changed_rows["target_correction_r"].mean()) if len(changed_rows) else None,
-        "median_target_correction_r": float(changed_rows["target_correction_r"].median()) if len(changed_rows) else None,
-        "mean_candidate_score_percentile": float(changed_rows["candidate_score_percentile"].mean()) if len(changed_rows) else None,
-        "mean_reference_score_percentile": float(changed_rows["reference_score_percentile"].mean()) if len(changed_rows) else None,
-        "mean_candidate_minus_reference_score_percentile": float(changed_rows["candidate_minus_reference_score_percentile"].mean()) if len(changed_rows) else None,
-        "median_candidate_minus_reference_score_percentile": float(changed_rows["candidate_minus_reference_score_percentile"].median()) if len(changed_rows) else None,
-        "correction_vs_reference_minus_candidate_percentile_spearman": _safe_spearman(
-            changed_rows["target_correction_r"].to_numpy(dtype=np.float64),
-            (changed_rows["reference_score_percentile"] - changed_rows["candidate_score_percentile"]).to_numpy(dtype=np.float64),
-        ) if len(changed_rows) else None,
-        "reference_model_top_fraction_changed_rows": changed_top_reference_count,
-        "candidate_model_top_fraction_changed_rows": int(changed_ab_top.sum()),
-        "reference_top_changed_retention_rate_under_candidate": (
-            float(changed_top_retained_count / changed_top_reference_count)
-            if changed_top_reference_count else None
+        "row_rate": float(len(changed_rows) / len(frame)),
+        "mean_target_correction_r": (
+            float(changed_rows["target_correction_r"].mean()) if len(changed_rows) else None
+        ),
+        "median_target_correction_r": (
+            float(changed_rows["target_correction_r"].median()) if len(changed_rows) else None
+        ),
+        "mean_candidate_score_percentile": (
+            float(changed_rows["candidate_score_percentile"].mean()) if len(changed_rows) else None
+        ),
+        "mean_candidate_target_percentile": (
+            float(changed_rows["candidate_target_percentile"].mean()) if len(changed_rows) else None
+        ),
+        "mean_reference_target_percentile": (
+            float(changed_rows["reference_target_percentile"].mean()) if len(changed_rows) else None
+        ),
+        "mean_target_rank_correction": (
+            float(changed_rows["target_rank_correction"].mean()) if len(changed_rows) else None
+        ),
+        "mean_score_minus_reference_rank": (
+            float(changed_rows["score_minus_reference_rank"].mean()) if len(changed_rows) else None
+        ),
+        "rank_correction_alignment_spearman": (
+            _safe_spearman(
+                changed_rows["target_rank_correction"].to_numpy(dtype=np.float64),
+                changed_rows["score_minus_reference_rank"].to_numpy(dtype=np.float64),
+            )
+            if len(changed_rows)
+            else None
+        ),
+        "reference_only_top_fraction_rows": reference_only_top_count,
+        "candidate_model_retains_reference_only_top_fraction_rows": int(
+            model_retains_reference_only_top.sum()
+        ),
+        "reference_only_top_retention_rate_under_candidate_model": (
+            float(model_retains_reference_only_top.sum() / reference_only_top_count)
+            if reference_only_top_count
+            else None
         ),
     }
     unchanged_summary = {
         "row_count": int(len(unchanged_rows)),
-        "mean_candidate_minus_reference_score_percentile": (
-            float(unchanged_rows["candidate_minus_reference_score_percentile"].mean())
-            if len(unchanged_rows) else None
+        "mean_candidate_score_percentile": (
+            float(unchanged_rows["candidate_score_percentile"].mean())
+            if len(unchanged_rows)
+            else None
         ),
     }
 
     conflict_rows: list[dict[str, Any]] = []
     total_pairs = 0
-    candidate_concordant_weight = 0.0
-    reference_concordant_weight = 0.0
-    candidate_reference_truth_weight = 0.0
-    reference_reference_truth_weight = 0.0
-    for date_value, day in joined.groupby("date", sort=True):
-        metrics = _conflict_pair_metrics(day, tolerance_r=tolerance)
-        pair_count = int(metrics.get("pair_count", 0) or 0)
+    candidate_truth_weight = 0.0
+    reference_truth_weight = 0.0
+    daily_candidate_truth: list[float] = []
+    for date_value, day in frame.groupby("date", sort=True):
+        day_metrics = _conflict_pair_metrics(day, tolerance_r=tolerance)
+        pair_count = int(day_metrics.get("pair_count", 0) or 0)
         if pair_count <= 0:
             continue
-        row = {"date": str(date_value), **metrics}
-        conflict_rows.append(row)
+        conflict_rows.append({"date": str(date_value), **day_metrics})
         total_pairs += pair_count
-        candidate_concordant_weight += float(metrics["candidate_model_candidate_truth_concordance"]) * pair_count
-        reference_concordant_weight += float(metrics["reference_model_candidate_truth_concordance"]) * pair_count
-        candidate_reference_truth_weight += float(metrics["candidate_model_reference_truth_concordance"]) * pair_count
-        reference_reference_truth_weight += float(metrics["reference_model_reference_truth_concordance"]) * pair_count
+        candidate_conc = float(day_metrics["candidate_model_candidate_truth_concordance"])
+        reference_conc = float(day_metrics["candidate_model_reference_truth_concordance"])
+        candidate_truth_weight += candidate_conc * pair_count
+        reference_truth_weight += reference_conc * pair_count
+        daily_candidate_truth.append(candidate_conc)
 
     conflict_by_date = pd.DataFrame(conflict_rows)
     if total_pairs:
-        candidate_candidate = candidate_concordant_weight / total_pairs
-        reference_candidate = reference_concordant_weight / total_pairs
-        candidate_reference = candidate_reference_truth_weight / total_pairs
-        reference_reference = reference_reference_truth_weight / total_pairs
+        pooled_candidate = candidate_truth_weight / total_pairs
+        pooled_reference = reference_truth_weight / total_pairs
+        conflict_summary = {
+            "pair_count": int(total_pairs),
+            "date_count": int(len(conflict_rows)),
+            "candidate_model_candidate_truth_concordance": float(pooled_candidate),
+            "candidate_model_reference_truth_concordance": float(pooled_reference),
+            "candidate_truth_advantage": float(pooled_candidate - pooled_reference),
+            "mean_daily_candidate_truth_concordance": float(np.mean(daily_candidate_truth)),
+            "median_daily_candidate_truth_concordance": float(np.median(daily_candidate_truth)),
+            "date_share_candidate_truth_above_half": float(
+                np.mean(np.asarray(daily_candidate_truth, dtype=np.float64) > 0.5)
+            ),
+            "natural_null_concordance": 0.5,
+        }
     else:
-        candidate_candidate = reference_candidate = candidate_reference = reference_reference = None
-    conflict_summary = {
-        "pair_count": int(total_pairs),
-        "date_count": int(len(conflict_by_date)),
-        "candidate_model_candidate_truth_concordance": candidate_candidate,
-        "reference_model_candidate_truth_concordance": reference_candidate,
-        "candidate_minus_reference_candidate_truth_concordance": (
-            float(candidate_candidate - reference_candidate)
-            if candidate_candidate is not None and reference_candidate is not None else None
-        ),
-        "candidate_model_reference_truth_concordance": candidate_reference,
-        "reference_model_reference_truth_concordance": reference_reference,
-    }
+        conflict_summary = {
+            "pair_count": 0,
+            "date_count": 0,
+            "candidate_model_candidate_truth_concordance": None,
+            "candidate_model_reference_truth_concordance": None,
+            "candidate_truth_advantage": None,
+            "mean_daily_candidate_truth_concordance": None,
+            "median_daily_candidate_truth_concordance": None,
+            "date_share_candidate_truth_above_half": None,
+            "natural_null_concordance": 0.5,
+        }
 
     metrics = {
-        "common_oos_rows": int(len(joined)),
-        "date_count": int(joined["date"].nunique()),
-        "target_invariant": {
+        "common_oos_rows": int(len(frame)),
+        "target_contract": {
             "candidate_never_exceeds_reference": True,
-            "embedded_reference_matches_reference_model_target": True,
+            "reference_truth_source": "MR-13AB frozen OOS embedded reference_target_raw_r",
             "tolerance_r": tolerance,
         },
         "cross_target_daily_spearman": cross_target,
@@ -340,7 +358,7 @@ def analyze_frozen_score_frames(
         "unchanged_rows": unchanged_summary,
         "conflict_pairs": conflict_summary,
         "top_fraction": float(top_fraction),
-        "percentile_method": "same_date_average_zero_based_rank_over_common_oos",
+        "percentile_method": "same_date_average_zero_based_rank_over_candidate_oos",
     }
     return metrics, changed_rows, conflict_by_date
 
@@ -349,13 +367,15 @@ def _read_report(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"無法讀取continuous ranker report: {path.name}; {type(exc).__name__}: {exc}") from exc
+        raise ValueError(
+            f"無法讀取continuous ranker report: {path.name}; {type(exc).__name__}: {exc}"
+        ) from exc
     if not isinstance(payload, dict):
         raise ValueError(f"continuous ranker report根節點必須是object: {path.name}")
     return payload
 
 
-def _validate_profile_artifacts(
+def _validate_candidate_artifacts(
     *,
     root: Path,
     filter_id: str,
@@ -364,14 +384,18 @@ def _validate_profile_artifacts(
     research_id: str,
     target_id: str,
     seed: int,
-    expected_reference_profile: str | None = None,
+    expected_reference_profile: str,
+    expected_reference_target: str,
 ) -> dict[str, Any]:
-    score_path = resolve_continuous_ranker_oos_score_path(root, filter_id, architecture, profile_id)
+    score_path = resolve_continuous_ranker_oos_score_path(
+        root, filter_id, architecture, profile_id
+    )
     report_path = score_path.parent / CONTINUOUS_RANKER_REPORT_FILENAME
     if not score_path.is_file():
-        raise FileNotFoundError("缺少frozen Forward OOS score: " + _relative(score_path, root))
+        raise FileNotFoundError("缺少MR-13AB frozen Forward OOS score: " + _relative(score_path, root))
     if not report_path.is_file():
-        raise FileNotFoundError("缺少continuous ranker report: " + _relative(report_path, root))
+        raise FileNotFoundError("缺少MR-13AB continuous ranker report: " + _relative(report_path, root))
+
     report = _read_report(report_path)
     expected = {
         "filter_id": filter_id,
@@ -387,6 +411,17 @@ def _validate_profile_artifacts(
         raise ValueError(f"{research_id} report target不一致")
     if int(training.get("seed", -1)) != int(seed):
         raise ValueError(f"{research_id} report seed不一致")
+
+    reference_eval = dict(report.get("reference_target_evaluation") or {})
+    if not bool(reference_eval.get("available", False)):
+        raise ValueError(f"{research_id} report缺少reference target evaluation")
+    if str(reference_eval.get("reference_profile") or "") != str(expected_reference_profile):
+        raise ValueError(f"{research_id} report reference profile不一致")
+    if str(reference_eval.get("reference_target_id") or "") != str(expected_reference_target):
+        raise ValueError(f"{research_id} report reference target不一致")
+    if bool(reference_eval.get("used_for_training_or_epoch_selection", True)):
+        raise ValueError(f"{research_id} reference target不得參與training/epoch selection")
+
     artifact = dict(dict(report.get("artifacts") or {}).get("oos_scores_gzip") or {})
     if str(artifact.get("filename") or "") != score_path.name:
         raise ValueError(f"{research_id} report OOS score filename不一致")
@@ -394,195 +429,13 @@ def _validate_profile_artifacts(
     actual_hash = compute_file_sha256(score_path).lower()
     if not expected_hash or expected_hash != actual_hash:
         raise ValueError(f"{research_id} frozen OOS score SHA256與report不一致")
-    if expected_reference_profile is not None:
-        reference_eval = dict(report.get("reference_target_evaluation") or {})
-        if not bool(reference_eval.get("available", False)):
-            raise ValueError(f"{research_id} report缺少reference target evaluation")
-        if str(reference_eval.get("reference_profile") or "") != str(expected_reference_profile):
-            raise ValueError(f"{research_id} report reference profile不一致")
-        if bool(reference_eval.get("used_for_training_or_epoch_selection", True)):
-            raise ValueError(f"{research_id} reference target不得參與training/epoch selection")
     return {
         "score_path": score_path,
         "report_path": report_path,
         "score_sha256": actual_hash,
-        "report": report,
-    }
-
-
-
-def _reference_cache_paths(definition: AuditDefinition, root: Path) -> tuple[Path, Path]:
-    base = Path(root) / AUDIT_OUTPUT_ROOT / definition.output_subdir / "source_cache"
-    return base / "mr13k_frozen_oos_scores.csv.gz", base / "mr13k_frozen_oos_scores_manifest.json"
-
-
-def _validate_reference_model_artifacts(
-    *,
-    root: Path,
-    filter_id: str,
-    architecture: str,
-    profile_id: str,
-    research_id: str,
-    target_id: str,
-    seed: int,
-) -> dict[str, Any]:
-    artifacts = resolve_filter_artifact_paths(root, filter_id, architecture, profile_id)
-    report_path = resolve_filter_model_output_dir(root, filter_id, architecture, profile_id) / CONTINUOUS_RANKER_REPORT_FILENAME
-    for label, path in (("frozen model", artifacts.model_path), ("model manifest", artifacts.manifest_path), ("continuous ranker report", report_path)):
-        if not path.is_file():
-            raise FileNotFoundError(f"MR-13K缺少{label}，Audit不得以重新訓練取代: {_relative(path, root)}")
-    report = _read_report(report_path)
-    manifest = _read_report(artifacts.manifest_path)
-    expected = {
-        "filter_id": filter_id,
-        "model_architecture": architecture,
-        "experiment_profile": profile_id,
-        "model_research_id": research_id,
-    }
-    for field, value in expected.items():
-        if str(report.get(field) or "") != str(value):
-            raise ValueError(f"{research_id} report {field}不一致")
-    for field, value in {
-        "filter_id": filter_id,
-        "model_architecture": architecture,
-        "experiment_profile": profile_id,
-    }.items():
-        if str(manifest.get(field) or "") != str(value):
-            raise ValueError(f"{research_id} manifest {field}不一致")
-    if str(manifest.get("continuous_target_id") or "") != str(target_id):
-        raise ValueError(f"{research_id} manifest continuous_target_id不一致")
-    training = dict(report.get("training") or {})
-    if str(training.get("target") or "") != target_id:
-        raise ValueError(f"{research_id} report target不一致")
-    if int(training.get("seed", -1)) != int(seed):
-        raise ValueError(f"{research_id} report seed不一致")
-    model_hash = compute_file_sha256(artifacts.model_path).lower()
-    recorded_model = dict((report.get("artifacts") or {}).get("model") or {})
-    if recorded_model:
-        if str(recorded_model.get("filename") or "") != artifacts.model_path.name:
-            raise ValueError(f"{research_id} report model filename不一致")
-        if str(recorded_model.get("sha256") or "").lower() != model_hash:
-            raise ValueError(f"{research_id} frozen model SHA256與report不一致")
-    manifest_model = dict(manifest.get("model") or {})
-    if manifest_model:
-        if str(manifest_model.get("filename") or "") != artifacts.model_path.name:
-            raise ValueError(f"{research_id} manifest model filename不一致")
-        if str(manifest_model.get("sha256") or "").lower() != model_hash:
-            raise ValueError(f"{research_id} frozen model SHA256與manifest不一致")
-    return {
-        "model_path": artifacts.model_path,
-        "manifest_path": artifacts.manifest_path,
-        "report_path": report_path,
-        "model_sha256": model_hash,
-        "manifest_sha256": compute_file_sha256(artifacts.manifest_path).lower(),
         "report_sha256": compute_file_sha256(report_path).lower(),
         "report": report,
     }
-
-
-def _load_valid_reference_cache(
-    *,
-    definition: AuditDefinition,
-    root: Path,
-    candidate: Mapping[str, Any],
-    reference_meta: Mapping[str, Any],
-) -> dict[str, Any]:
-    score_path, cache_manifest_path = _reference_cache_paths(definition, root)
-    if not score_path.is_file() or not cache_manifest_path.is_file():
-        raise FileNotFoundError(
-            "缺少MR-13K frozen score derived cache；可由既有frozen checkpoint做deterministic inference建立: "
-            + _relative(score_path, root)
-        )
-    cache = _read_report(cache_manifest_path)
-    expected_sources = {
-        "candidate_score_sha256": str(candidate["score_sha256"]),
-        "reference_model_sha256": str(reference_meta["model_sha256"]),
-        "reference_manifest_sha256": str(reference_meta["manifest_sha256"]),
-        "reference_report_sha256": str(reference_meta["report_sha256"]),
-    }
-    for field, expected in expected_sources.items():
-        if str(cache.get(field) or "").lower() != str(expected).lower():
-            raise ValueError(f"MR-13K derived score cache source identity stale: {field}")
-    actual_hash = compute_file_sha256(score_path).lower()
-    if str(cache.get("score_sha256") or "").lower() != actual_hash:
-        raise ValueError("MR-13K derived score cache SHA256不一致")
-    return {
-        "score_path": score_path,
-        "report_path": Path(reference_meta["report_path"]),
-        "score_sha256": actual_hash,
-        "report": reference_meta["report"],
-        "derived_from_frozen_checkpoint": True,
-        "cache_manifest_path": cache_manifest_path,
-    }
-
-
-def prepare_reference_frozen_scores(definition: AuditDefinition, *, project_root: Path) -> int:
-    """Build only a missing MR-13K row-level score cache from its frozen checkpoint."""
-
-    root = Path(project_root).resolve()
-    source = definition.source
-    filter_id = str(source.get("filter_id") or "").strip()
-    architecture = str(source.get("model_architecture") or "").strip()
-    candidate_profile = str(source.get("candidate_profile_id") or "").strip()
-    reference_profile = str(source.get("reference_profile_id") or "").strip()
-    seed = int(source.get("seed", 42))
-    candidate = _validate_profile_artifacts(
-        root=root,
-        filter_id=filter_id,
-        architecture=architecture,
-        profile_id=candidate_profile,
-        research_id=str(source.get("candidate_research_id") or ""),
-        target_id=str(source.get("candidate_target_id") or ""),
-        seed=seed,
-        expected_reference_profile=reference_profile,
-    )
-    reference_meta = _validate_reference_model_artifacts(
-        root=root,
-        filter_id=filter_id,
-        architecture=architecture,
-        profile_id=reference_profile,
-        research_id=str(source.get("reference_research_id") or ""),
-        target_id=str(source.get("reference_target_id") or ""),
-        seed=seed,
-    )
-    candidate_frame = read_breakout_quality_csv(candidate["score_path"])
-    required = ["ticker", "date", "group_index", "target_raw_r", "reference_target_raw_r", "model_score"]
-    missing = [name for name in required if name not in candidate_frame.columns]
-    if missing:
-        raise ValueError(f"MR-13AB OOS score缺少欄位: {missing}")
-    numeric = candidate_frame.copy()
-    for col in ("target_raw_r", "reference_target_raw_r", "model_score"):
-        numeric[col] = pd.to_numeric(numeric[col], errors="coerce")
-    numeric = numeric.loc[
-        np.isfinite(numeric["target_raw_r"])
-        & np.isfinite(numeric["reference_target_raw_r"])
-        & np.isfinite(numeric["model_score"])
-    ].copy()
-    score_path, cache_manifest_path = _reference_cache_paths(definition, root)
-    rebuilt = rebuild_frozen_daily_ranker_scores_for_keys(
-        project_root=root,
-        filter_id=filter_id,
-        model_architecture=architecture,
-        experiment_profile=reference_profile,
-        key_frame=numeric[["ticker", "date", "group_index"]],
-        output_path=score_path,
-        expected_target_raw_r=numeric["reference_target_raw_r"].to_numpy(dtype=np.float64),
-        target_tolerance_r=max(float(definition.dimensions.get("changed_tolerance_r", 1e-6)), 2e-6),
-    )
-    cache_manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_manifest_path.write_text(json.dumps({
-        "schema_version": 1,
-        "artifact_type": "mr13k_frozen_forward_score_reconstruction_for_mr13ab_audit",
-        "candidate_score_sha256": candidate["score_sha256"],
-        "reference_model_sha256": reference_meta["model_sha256"],
-        "reference_manifest_sha256": reference_meta["manifest_sha256"],
-        "reference_report_sha256": reference_meta["report_sha256"],
-        "score_sha256": str(rebuilt["score_artifact"]["sha256"]).lower(),
-        "row_count": int(rebuilt["row_count"]),
-        "scientific_semantics": "inference_only_from_existing_frozen_checkpoint_no_fit_no_target_rebuild",
-        "torch_execution": rebuilt["torch_execution"],
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-    return 0
 
 
 def _source_contract(definition: AuditDefinition, *, project_root: Path) -> dict[str, Any]:
@@ -610,37 +463,19 @@ def _source_contract(definition: AuditDefinition, *, project_root: Path) -> dict
     missing = [key for key, value in required.items() if not value]
     if missing:
         raise ValueError(f"{definition.audit_id} source contract缺少: {missing}")
-    candidate = _validate_profile_artifacts(
-        root=root, filter_id=filter_id, architecture=architecture,
-        profile_id=candidate_profile, research_id=candidate_research_id,
-        target_id=candidate_target_id, seed=seed,
+
+    candidate = _validate_candidate_artifacts(
+        root=root,
+        filter_id=filter_id,
+        architecture=architecture,
+        profile_id=candidate_profile,
+        research_id=candidate_research_id,
+        target_id=candidate_target_id,
+        seed=seed,
         expected_reference_profile=reference_profile,
+        expected_reference_target=reference_target_id,
     )
-    try:
-        reference = _validate_profile_artifacts(
-            root=root, filter_id=filter_id, architecture=architecture,
-            profile_id=reference_profile, research_id=reference_research_id,
-            target_id=reference_target_id, seed=seed,
-        )
-        reference["derived_from_frozen_checkpoint"] = False
-    except FileNotFoundError as original_score_error:
-        reference_meta = _validate_reference_model_artifacts(
-            root=root, filter_id=filter_id, architecture=architecture,
-            profile_id=reference_profile, research_id=reference_research_id,
-            target_id=reference_target_id, seed=seed,
-        )
-        try:
-            reference = _load_valid_reference_cache(
-                definition=definition, root=root, candidate=candidate, reference_meta=reference_meta
-            )
-        except FileNotFoundError as cache_error:
-            raise FileNotFoundError(f"{original_score_error}; {cache_error}") from cache_error
-    return {
-        **required,
-        "seed": seed,
-        "candidate": candidate,
-        "reference": reference,
-    }
+    return {**required, "seed": seed, "candidate": candidate}
 
 
 def preflight(definition: AuditDefinition, *, project_root: Path) -> dict[str, Any]:
@@ -648,38 +483,19 @@ def preflight(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
     try:
         contract = _source_contract(definition, project_root=root)
     except (ValueError, OSError, FileNotFoundError) as exc:
-        cache_score_path, _cache_manifest_path = _reference_cache_paths(definition, root)
-        preparable = False
-        try:
-            source = definition.source
-            candidate = _validate_profile_artifacts(
-                root=root,
-                filter_id=str(source.get("filter_id") or "").strip(),
-                architecture=str(source.get("model_architecture") or "").strip(),
-                profile_id=str(source.get("candidate_profile_id") or "").strip(),
-                research_id=str(source.get("candidate_research_id") or "").strip(),
-                target_id=str(source.get("candidate_target_id") or "").strip(),
-                seed=int(source.get("seed", 42)),
-                expected_reference_profile=str(source.get("reference_profile_id") or "").strip(),
-            )
-            _validate_reference_model_artifacts(
-                root=root,
-                filter_id=str(source.get("filter_id") or "").strip(),
-                architecture=str(source.get("model_architecture") or "").strip(),
-                profile_id=str(source.get("reference_profile_id") or "").strip(),
-                research_id=str(source.get("reference_research_id") or "").strip(),
-                target_id=str(source.get("reference_target_id") or "").strip(),
-                seed=int(source.get("seed", 42)),
-            )
-            preparable = bool(candidate)
-        except (ValueError, OSError, FileNotFoundError):
-            preparable = False
+        source = definition.source
+        score_path = resolve_continuous_ranker_oos_score_path(
+            root,
+            str(source.get("filter_id") or "").strip(),
+            str(source.get("model_architecture") or "").strip(),
+            str(source.get("candidate_profile_id") or "").strip(),
+        )
         return {
             "status": "BLOCKED",
             "blockers": [str(exc)],
             "source_paths": [],
-            "source_path": _relative(cache_score_path, root),
-            "preparable": preparable,
+            "source_path": _relative(score_path, root),
+            "preparable": False,
         }
     return {
         "status": "READY",
@@ -687,10 +503,8 @@ def preflight(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
         "source_paths": [
             _relative(Path(contract["candidate"]["score_path"]), root),
             _relative(Path(contract["candidate"]["report_path"]), root),
-            _relative(Path(contract["reference"]["score_path"]), root),
-            _relative(Path(contract["reference"]["report_path"]), root),
         ],
-        "source_path": _relative(Path(contract["reference"]["score_path"]), root),
+        "source_path": _relative(Path(contract["candidate"]["score_path"]), root),
         "preparable": False,
     }
 
@@ -701,10 +515,10 @@ def collect_status(definition: AuditDefinition, *, project_root: Path) -> dict[s
         "status": str(state.get("status") or "BLOCKED"),
         "reason": "；".join(str(v) for v in state.get("blockers", ())),
         "source": {
-            "display": "MR-13AB frozen OOS + MR-13K frozen checkpoint/score (missing score可inference-only derive)",
+            "display": "MR-13AB frozen OOS score/report + embedded MR-13K reference target truth",
             "path": str(state.get("source_path") or ""),
             "paths": list(state.get("source_paths", ())),
-            "preparable": bool(state.get("preparable", False)),
+            "preparable": False,
         },
     }
 
@@ -713,8 +527,7 @@ def _fingerprint(definition: AuditDefinition, contract: Mapping[str, Any]) -> st
     payload = {
         "audit": definition.as_dict(),
         "candidate_score_sha256": contract["candidate"]["score_sha256"],
-        "reference_score_sha256": contract["reference"]["score_sha256"],
-        "reference_score_derived_from_frozen_checkpoint": bool(contract["reference"].get("derived_from_frozen_checkpoint", False)),
+        "candidate_report_sha256": contract["candidate"]["report_sha256"],
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
@@ -743,45 +556,52 @@ def render_result(result: Mapping[str, Any]) -> str:
     conflict = dict(metrics.get("conflict_pairs") or {})
     lines = [
         "=" * 100,
-        " MR-13AB Survival Increment｜Frozen Model Control",
+        " MR-13AB Survival Increment｜Reference-Target Controlled Frozen Score Audit",
         "=" * 100,
         f"Audit     ：{result.get('audit_id', '')}",
-        "Contract  ：READ ONLY / frozen Forward OOS artifacts only / no training / no PIT / no replay",
+        "Contract  ：READ ONLY / MR-13AB frozen Forward OOS only / embedded MR-13K target truth / no training / no PIT / no replay",
         f"Common OOS：{int(metrics.get('common_oos_rows', 0)):,}",
         "",
-        "1. Cross-target Daily rho",
-        "-------------------------",
-        "Model      MR-13AB first-breach target   MR-13K full-horizon target",
-        "---------  ----------------------------  --------------------------",
-        "MR-13AB    {:>28}  {:>26}".format(
-            _fmt(dict(cross.get("candidate_model_vs_candidate_target") or {}).get("mean_daily_spearman")),
-            _fmt(dict(cross.get("candidate_model_vs_reference_target") or {}).get("mean_daily_spearman")),
+        "1. Frozen score vs two target truths",
+        "------------------------------------",
+        "Truth target                     Mean Daily rho",
+        "-------------------------------  --------------",
+        "MR-13AB first-breach Pure-MFE    {:>14}".format(
+            _fmt(dict(cross.get("candidate_model_vs_candidate_target") or {}).get("mean_daily_spearman"))
         ),
-        "MR-13K     {:>28}  {:>26}".format(
-            _fmt(dict(cross.get("reference_model_vs_candidate_target") or {}).get("mean_daily_spearman")),
-            _fmt(dict(cross.get("reference_model_vs_reference_target") or {}).get("mean_daily_spearman")),
+        "MR-13K full-horizon Pure-MFE     {:>14}".format(
+            _fmt(dict(cross.get("candidate_model_vs_reference_target") or {}).get("mean_daily_spearman"))
+        ),
+        "Target↔Target                    {:>14}".format(
+            _fmt(dict(cross.get("candidate_target_vs_reference_target") or {}).get("mean_daily_spearman"))
         ),
         "",
-        "2. Changed-row demotion",
-        "------------------------",
-        f"Changed rows                         ：{int(changed.get('row_count', 0)):,} ({_pct(changed.get('row_rate'))})",
-        f"Mean target correction               ：{_fmt(changed.get('mean_target_correction_r'))}R",
-        f"Mean score percentile｜MR-13K        ：{_fmt(changed.get('mean_reference_score_percentile'))}",
-        f"Mean score percentile｜MR-13AB       ：{_fmt(changed.get('mean_candidate_score_percentile'))}",
-        f"AB − K percentile                    ：{_fmt(changed.get('mean_candidate_minus_reference_score_percentile'))}",
-        f"Correction ↔ (K−AB percentile) rho   ：{_fmt(changed.get('correction_vs_reference_minus_candidate_percentile_spearman'))}",
-        f"K top-{metrics.get('top_fraction', 0.1):.0%} changed retained by AB ：{_pct(changed.get('reference_top_changed_retention_rate_under_candidate'))}",
+        "2. Changed-row correction",
+        "-------------------------",
+        f"Changed rows                              ：{int(changed.get('row_count', 0)):,} ({_pct(changed.get('row_rate'))})",
+        f"Mean target correction                    ：{_fmt(changed.get('mean_target_correction_r'))}R",
+        f"Mean reference-target percentile          ：{_fmt(changed.get('mean_reference_target_percentile'))}",
+        f"Mean first-breach-target percentile       ：{_fmt(changed.get('mean_candidate_target_percentile'))}",
+        f"Mean frozen-score percentile              ：{_fmt(changed.get('mean_candidate_score_percentile'))}",
+        f"Mean target rank correction               ：{_fmt(changed.get('mean_target_rank_correction'))}",
+        f"Score residual vs reference-target rank   ：{_fmt(changed.get('mean_score_minus_reference_rank'))}",
+        f"Rank-correction alignment rho             ：{_fmt(changed.get('rank_correction_alignment_spearman'))}",
+        f"Reference-only top-{metrics.get('top_fraction', 0.1):.0%} rows          ：{int(changed.get('reference_only_top_fraction_rows', 0)):,}",
+        f"Still top-{metrics.get('top_fraction', 0.1):.0%} under MR-13AB score      ：{_pct(changed.get('reference_only_top_retention_rate_under_candidate_model'))}",
         "",
         "3. Target-order conflict pairs",
         "------------------------------",
-        f"Conflict pairs                       ：{int(conflict.get('pair_count', 0)):,}",
-        f"Conflict dates                       ：{int(conflict.get('date_count', 0)):,}",
-        f"MR-13AB concordance vs AB target     ：{_pct(conflict.get('candidate_model_candidate_truth_concordance'))}",
-        f"MR-13K concordance vs AB target      ：{_pct(conflict.get('reference_model_candidate_truth_concordance'))}",
-        f"AB − K                               ：{_pct(conflict.get('candidate_minus_reference_candidate_truth_concordance'))}",
+        f"Conflict pairs                            ：{int(conflict.get('pair_count', 0)):,}",
+        f"Conflict dates                            ：{int(conflict.get('date_count', 0)):,}",
+        f"MR-13AB score concordance vs AB truth     ：{_pct(conflict.get('candidate_model_candidate_truth_concordance'))}",
+        f"MR-13AB score concordance vs K truth      ：{_pct(conflict.get('candidate_model_reference_truth_concordance'))}",
+        f"AB-truth advantage                        ：{_pct(conflict.get('candidate_truth_advantage'))}",
+        f"Mean daily concordance vs AB truth        ：{_pct(conflict.get('mean_daily_candidate_truth_concordance'))}",
+        f"Conflict dates > 50% AB-truth concordance ：{_pct(conflict.get('date_share_candidate_truth_above_half'))}",
         "",
-        "Decision boundary：只判斷MR-13AB是否在target真正改寫／ordering衝突處增加survival ordering；",
-        "不以本Audit結果調barrier、loss、threshold、architecture或portfolio rule。",
+        "Natural null：在兩Target要求相反排序的pair上，50%表示frozen score沒有偏向first-breach或full-horizon ordering。",
+        "Decision boundary：只判斷MR-13AB frozen score是否在target真正改寫／ordering衝突處呈現first-passage survival ordering；",
+        "本Audit不產生barrier、loss、threshold、architecture、portfolio rule或任何可回流fitting的參數。",
     ]
     return "\n".join(lines)
 
@@ -794,11 +614,10 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
     root = Path(project_root).resolve()
     contract = _source_contract(definition, project_root=root)
     candidate_frame = read_breakout_quality_csv(contract["candidate"]["score_path"])
-    reference_frame = read_breakout_quality_csv(contract["reference"]["score_path"])
     tolerance = float(definition.dimensions.get("changed_tolerance_r", 1e-6))
     top_fraction = float(definition.dimensions.get("top_fraction", 0.10))
-    metrics, changed_rows, conflict_by_date = analyze_frozen_score_frames(
-        candidate_frame, reference_frame, tolerance_r=tolerance, top_fraction=top_fraction
+    metrics, changed_rows, conflict_by_date = analyze_candidate_score_frame(
+        candidate_frame, tolerance_r=tolerance, top_fraction=top_fraction
     )
 
     fingerprint = _fingerprint(definition, contract)
@@ -813,7 +632,7 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
     manifest_path = run_dir / "manifest.json"
 
     result: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "RESULT_AVAILABLE_PENDING_REVIEW",
         "module_id": definition.module_id,
         "audit_id": definition.audit_id,
@@ -832,12 +651,14 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
             "reference_target_id": contract["reference_target_id"],
             "model_architecture": contract["model_architecture"],
             "seed": int(contract["seed"]),
+            "reference_artifact_requirement": "none; reference truth is embedded in candidate frozen score",
         },
         "metrics": metrics,
         "interpretation_boundary": {
-            "changed_rows": "Only rows whose MR-13AB first-breach target is strictly below MR-13K full-horizon Pure-MFE target.",
+            "changed_rows": "Only rows whose MR-13AB first-breach target is strictly below its embedded MR-13K full-horizon Pure-MFE reference target.",
             "conflict_pairs": "Only same-date pairs where the two target definitions demand opposite strict ordering; at least one row must be changed.",
-            "causality": "Frozen-score diagnostic supports or rejects incremental survival ordering; it is not a strategy-performance claim.",
+            "increment_test": "On conflict pairs, concordance above the natural 50% null indicates the MR-13AB frozen score follows first-breach ordering more often than full-horizon ordering.",
+            "causality": "This frozen-score diagnostic is evidence of learned survival ordering; it is not a strategy-performance claim.",
             "future_use": "No audit-derived threshold, weight, calibration or fitted coefficient may enter training/PIT/runtime.",
         },
         "artifacts": {
@@ -851,15 +672,23 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
     json_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     report_path.write_text(_render_markdown(result), encoding="utf-8")
     changed_export = changed_rows[[
-        "ticker", "date", "group_index", "candidate_target_r", "reference_target_r",
-        "target_correction_r", "candidate_score", "reference_score",
-        "candidate_score_percentile", "reference_score_percentile",
-        "candidate_minus_reference_score_percentile",
+        "ticker",
+        "date",
+        "group_index",
+        "candidate_target_r",
+        "reference_target_r",
+        "target_correction_r",
+        "candidate_score",
+        "candidate_score_percentile",
+        "candidate_target_percentile",
+        "reference_target_percentile",
+        "target_rank_correction",
+        "score_minus_reference_rank",
     ]].copy()
     changed_export.to_csv(changed_path, index=False, encoding="utf-8-sig", compression="gzip")
     conflict_by_date.to_csv(conflict_path, index=False, encoding="utf-8-sig")
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "audit_definition": definition.as_dict(),
         "config_fingerprint": fingerprint,
         "source_refs": {
@@ -867,10 +696,15 @@ def run_audit(definition: AuditDefinition, *, project_root: Path) -> dict[str, A
                 "path": _relative(contract["candidate"]["score_path"], root),
                 "sha256": contract["candidate"]["score_sha256"],
             },
-            "reference_score": {
-                "path": _relative(contract["reference"]["score_path"], root),
-                "sha256": contract["reference"]["score_sha256"],
-                "derived_from_frozen_checkpoint": bool(contract["reference"].get("derived_from_frozen_checkpoint", False)),
+            "candidate_report": {
+                "path": _relative(contract["candidate"]["report_path"], root),
+                "sha256": contract["candidate"]["report_sha256"],
+            },
+            "reference_truth": {
+                "research_id": contract["reference_research_id"],
+                "profile_id": contract["reference_profile_id"],
+                "target_id": contract["reference_target_id"],
+                "storage": "candidate_score.reference_target_raw_r",
             },
         },
         "artifacts": result["artifacts"],
@@ -908,9 +742,8 @@ def run_formal_audit(
 
 __all__ = [
     "SUPPORTED_AUDIT_TYPE",
-    "analyze_frozen_score_frames",
+    "analyze_candidate_score_frame",
     "collect_status",
-    "prepare_reference_frozen_scores",
     "preflight",
     "render_result",
     "run_audit",

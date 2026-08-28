@@ -167,8 +167,9 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 "enabled": True,
                 "audit_type": "mr13ab_survival_increment",
                 "description": (
-                    "只讀MR-13AB與MR-13K frozen Forward OOS score/report；只在first-breach target真正改寫"
-                    "的rows與兩Target要求相反排序的same-date pairs上，檢驗MR-13AB是否新增survival ordering。"
+                    "只讀MR-13AB frozen Forward OOS score/report與其內嵌MR-13K full-horizon reference target；"
+                    "只在first-breach target真正改寫的rows與兩Target要求相反排序的same-date pairs上，"
+                    "檢驗MR-13AB frozen score是否呈現survival ordering。"
                 ),
                 "source": {
                     "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
@@ -188,15 +189,16 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 },
                 "outcomes": {
                     "decision_question": (
-                        "MR-13AB相對MR-13K是否在first-breach改寫rows／conflict pairs上真正增加survival ordering，"
+                        "MR-13AB frozen score是否在first-breach改寫rows／conflict pairs上真正遵循survival-adjusted ordering，"
                         "同時保留既有Pure-MFE ranking能力？"
                     ),
                     "critical_uncertainty": (
                         "MR-13AB aggregate learnability可能只由92%+未改Target rows支撐；必須隔離7.63% changed rows與"
-                        "target-order conflict pairs，直接比較兩個frozen model。"
+                        "target-order conflict pairs，直接檢查同一frozen score在AB truth與K reference truth衝突處偏向哪一方。"
                     ),
                     "stopping_condition": (
-                        "一次 frozen-model control 足以決定 SURVIVAL_INCREMENT_CONFIRMED → Model Gate PASS/進PIT-safe Rolling，"
+                        "一次 reference-target-controlled frozen-score Audit 足以決定 "
+                        "SURVIVAL_INCREMENT_CONFIRMED → Model Gate PASS/進PIT-safe Rolling，"
                         "或 NO_INCREMENT → STOP；不得延伸barrier/lambda/threshold/backbone sweep。"
                     ),
                 },
