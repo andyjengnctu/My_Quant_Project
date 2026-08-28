@@ -10475,3 +10475,14 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Primary historical reference固定MR-13K Forward=`rho 0.3833 / Pair 63.19% / Top-K Lift +1.6401R`，Breakout=`rho 0.3621 / Pair 64.09%`。MR-13AB先只回答三件事：(1) first-passage constraint使learnability損失多少；(2) high-score ranking是否仍保留明確upside separation；(3) survival資訊能否用比MR-13E/H composite magnitude更低的learnability成本嵌入single scalar。若learnability直接退回約MR-13E/H水準而無新的可決策evidence，停止first-passage scalar target方向；若仍保留顯著Pure-MFE learnability且path-survival constraint有價值，才另行決定是否建立strategy conversion，不預先授權。
 - Standard Model SOP 1～6與approved persistent report fingerprint `2b372bd465258234`完全不變。
 - Status：**MR13AA_CLOSED / MR13AB_IMPLEMENTED / RESULT_PENDING / PURE_MFE_FIRST_PASSAGE_TARGET_ONLY / INCEPTIONTIME / MODEL_GATE_ONLY / NO_PIT / NO_STRATEGY_CONVERSION**。
+
+
+### 2026-08-28 — MR-13AB Forward learnability／Target geometry PASS；啟動一次性 frozen survival-increment Audit
+
+- MR-13AB Seed42正式Standard Model SOP完成：selected epoch=`1`；Validation post-refit Daily rho=`0.3439`。Forward OOS self-target Daily rho/Pair/Top-K Lift=`0.3062 / 60.63% / +0.8959R`；Breakout candidate slice=`0.2570 / 60.58% / +0.4262R`。相對MR-13K historical Forward `0.3833 / 63.19% / +1.6401R`，first-passage constraint降低部分self-target learnability，但仍顯著高於MR-13E/H約0.21～0.23的economic-scalar水準。
+- 同一MR-13AB frozen score對MR-13K full-horizon Pure-MFE reference仍有Forward Daily rho/Pair=`0.3782 / 63.04%`，只比MR-13K historical `0.3833 / 63.19%`低`0.0051 / 0.15pp`；因此upside ranking能力幾乎完整保留。
+- 正式Target comparison完成：common stock-days=`2,052,791`；40D risk breach=`33.56%`；first-breach truncation真正改變target=`7.63%`；candidate/reference mean daily rank correlation=`0.9059`；Top-10 overlap=`88.39%`；mean absolute delta=`0.1007R`。這表示first-breach target是sparse但具經濟幅度的path correction，而不是全面重寫Pure-MFE。
+- 目前不能僅由aggregate rho宣告完整Model Gate PASS：92%+ rows target未改，故MR-13AB可能主要複製MR-13K ranking。最後的關鍵不確定性收斂為「在7.63% changed rows與兩Target要求相反排序的same-date conflict pairs上，MR-13AB frozen model是否相對MR-13K frozen model增加survival ordering」。
+- 分配一次性Audit identity=`AUD-mr13ab-survival-increment`。Audit只讀兩個canonical `daily_ranker_oos_scores.csv.gz`與各自`continuous_ranker_report.json`，不重建Target、不訓練、不建PIT、不Replay。Evidence固定為：(1) 2×2 frozen model×target Daily rho；(2) changed-row同日score percentile demotion與correction magnitude relation；(3) target-order conflict-pair concordance。
+- Stopping rule：一次Audit足以決定`SURVIVAL_INCREMENT_CONFIRMED / MODEL_GATE_PASS → PIT-safe Extending-Window`，或`NO_INCREMENT / STOP`；不得由結果展開barrier、lambda、threshold、calibration、backbone或target-family sweep。
+- Status：**MR13AB_LEARNABILITY_PASS / TARGET_GEOMETRY_PASS / AUDIT_IMPLEMENTED / SURVIVAL_INCREMENT_RESULT_PENDING / NO_PIT / NO_STRATEGY_CONVERSION**。

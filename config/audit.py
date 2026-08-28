@@ -14,15 +14,17 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
     BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
     DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+    DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
 )
 from filters.breakout_quality.continuous_target import (
     DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
 )
 from pathlib import Path
 from typing import Any, Mapping
 
-AUDIT_SCHEMA_VERSION = 14
+AUDIT_SCHEMA_VERSION = 15
 AUDIT_OUTPUT_ROOT = "outputs/audit"
 AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
 
@@ -161,6 +163,45 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
     "breakout_quality": {
         "enabled": True,
         "audits": {
+            "AUD-mr13ab-survival-increment": {
+                "enabled": True,
+                "audit_type": "mr13ab_survival_increment",
+                "description": (
+                    "只讀MR-13AB與MR-13K frozen Forward OOS score/report；只在first-breach target真正改寫"
+                    "的rows與兩Target要求相反排序的same-date pairs上，檢驗MR-13AB是否新增survival ordering。"
+                ),
+                "source": {
+                    "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
+                    "model_architecture": "inception_time_v1",
+                    "candidate_profile_id": DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                    "candidate_research_id": "MR-13AB",
+                    "candidate_target_id": DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
+                    "reference_profile_id": DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                    "reference_research_id": "MR-13K",
+                    "reference_target_id": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                    "seed": 42,
+                },
+                "dimensions": {
+                    "changed_tolerance_r": 1e-6,
+                    "top_fraction": 0.10,
+                    "percentile_method": "average_zero_based",
+                },
+                "outcomes": {
+                    "decision_question": (
+                        "MR-13AB相對MR-13K是否在first-breach改寫rows／conflict pairs上真正增加survival ordering，"
+                        "同時保留既有Pure-MFE ranking能力？"
+                    ),
+                    "critical_uncertainty": (
+                        "MR-13AB aggregate learnability可能只由92%+未改Target rows支撐；必須隔離7.63% changed rows與"
+                        "target-order conflict pairs，直接比較兩個frozen model。"
+                    ),
+                    "stopping_condition": (
+                        "一次 frozen-model control 足以決定 SURVIVAL_INCREMENT_CONFIRMED → Model Gate PASS/進PIT-safe Rolling，"
+                        "或 NO_INCREMENT → STOP；不得延伸barrier/lambda/threshold/backbone sweep。"
+                    ),
+                },
+                "output_subdir": "breakout_quality/mr13ab_survival_increment",
+            },
             # Retained while the K/R0 mechanism remains an active research question.
             "AUD-selection-k-r0-attribution": {
                 "enabled": True,

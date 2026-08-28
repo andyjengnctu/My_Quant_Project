@@ -88,6 +88,75 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         ),
     )
 
+    survival_defs = [item for item in definitions if item.audit_id == "AUD-mr13ab-survival-increment"]
+    survival_entry = get_audit_entry("mr13ab_survival_increment")
+    check_true(
+        "mr13ab_survival_increment_audit_is_enabled_read_only_and_exact_frozen_pair_scoped",
+        bool(
+            len(survival_defs) == 1
+            and survival_defs[0].enabled
+            and survival_entry.formal
+            and survival_entry.read_only
+            and survival_defs[0].source.get("candidate_research_id") == "MR-13AB"
+            and survival_defs[0].source.get("reference_research_id") == "MR-13K"
+            and survival_defs[0].source.get("seed") == 42
+            and survival_defs[0].dimensions.get("percentile_method") == "average_zero_based"
+        ),
+    )
+
+    from services.audit.mr13ab_survival_increment import analyze_frozen_score_frames
+
+    candidate_fixture = pd.DataFrame({
+        "ticker": list("ABCDEFGH"),
+        "date": ["2025-01-02"] * 4 + ["2025-01-03"] * 4,
+        "group_index": list(range(8)),
+        "target_raw_r": [0.5, 2.0, 1.0, 0.0, 1.5, 2.0, 1.0, 0.0],
+        "reference_target_raw_r": [3.0, 2.0, 1.0, 0.0, 3.0, 2.0, 1.0, 0.0],
+        "model_score": [0.7, 0.9, 0.8, 0.6, 0.8, 0.9, 0.7, 0.6],
+    })
+    reference_fixture = pd.DataFrame({
+        "ticker": list("ABCDEFGH"),
+        "date": ["2025-01-02"] * 4 + ["2025-01-03"] * 4,
+        "group_index": list(range(8)),
+        "target_raw_r": [3.0, 2.0, 1.0, 0.0, 3.0, 2.0, 1.0, 0.0],
+        "model_score": [0.9, 0.8, 0.7, 0.6, 0.9, 0.8, 0.7, 0.6],
+    })
+    survival_metrics, survival_changed, survival_conflict = analyze_frozen_score_frames(
+        candidate_fixture, reference_fixture, tolerance_r=1e-6, top_fraction=0.25
+    )
+    conflict = survival_metrics["conflict_pairs"]
+    changed = survival_metrics["changed_rows"]
+    cross = survival_metrics["cross_target_daily_spearman"]
+    check_true(
+        "mr13ab_survival_increment_isolates_changed_rows_and_opposite_target_order_pairs_without_fit",
+        bool(
+            survival_metrics["common_oos_rows"] == 8
+            and changed["row_count"] == 2
+            and abs(changed["mean_target_correction_r"] - 2.0) < 1e-12
+            and changed["mean_candidate_minus_reference_score_percentile"] < 0.0
+            and conflict["pair_count"] == 3
+            and abs(conflict["candidate_model_candidate_truth_concordance"] - 1.0) < 1e-12
+            and abs(conflict["reference_model_candidate_truth_concordance"] - 0.0) < 1e-12
+            and cross["candidate_model_vs_candidate_target"]["mean_daily_spearman"]
+            > cross["reference_model_vs_candidate_target"]["mean_daily_spearman"]
+            and len(survival_changed) == 2
+            and int(survival_conflict["pair_count"].sum()) == 3
+        ),
+    )
+
+    invalid_candidate = candidate_fixture.copy()
+    invalid_candidate.loc[0, "reference_target_raw_r"] = 2.5
+    try:
+        analyze_frozen_score_frames(invalid_candidate, reference_fixture)
+    except ValueError as exc:
+        invalid_reference_blocked = "內嵌reference target" in str(exc)
+    else:
+        invalid_reference_blocked = False
+    check_true(
+        "mr13ab_survival_increment_fail_closes_on_nonidentical_embedded_reference_truth",
+        invalid_reference_blocked,
+    )
+
     import apps.research as research_app
 
     import services.audit.runner as audit_runner
