@@ -60,6 +60,9 @@ INCEPTION_TIME_MARKET_SET_CANDIDATE_V1 = "inception_time_market_set_candidate_v1
 INCEPTION_TIME_GROUP_NORM_V1 = "inception_time_group_norm_v1"
 MODERN_TCN_V1 = "modern_tcn_v1"
 MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1 = "modern_tcn_safety_raw_mfe_joint_attn_mlp_v1"
+PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1 = (
+    "patch_token_transformer_safety_raw_mfe_joint_attn_mlp_v1"
+)
 MANTIS_V2_FROZEN_LINEAR_V1 = "mantis_v2_frozen_linear_v1"
 MOMENT_1_BASE_FROZEN_LINEAR_V1 = "moment_1_base_frozen_linear_v1"
 PATCH_TRANSFORMER_V1 = "patch_transformer_v1"
@@ -90,6 +93,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     INCEPTION_TIME_GROUP_NORM_V1,
     MODERN_TCN_V1,
     MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
+    PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
     MANTIS_V2_FROZEN_LINEAR_V1,
     MOMENT_1_BASE_FROZEN_LINEAR_V1,
     PATCH_TRANSFORMER_V1,
@@ -105,6 +109,7 @@ ACTIVE_MODEL_ARCHITECTURES = (
     INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_MLP_V1,
     INCEPTION_TIME_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
     MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
+    PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
 )
 LEGACY_MODEL_ARCHITECTURES = tuple(
@@ -668,6 +673,44 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             modern_tcn_expansion_ratio=expansion_ratio,
         )
 
+    if normalized == PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1:
+        # Reuse the historical 9F supervised Patch Transformer recipe exactly;
+        # only the current Joint-Min tri-head surface differs from legacy 9F.
+        patch_size = 10
+        embedding_dim = 128
+        depth = 3
+        heads = 4
+        mlp_dim = 256
+        return BreakoutQualityModelSpec(
+            architecture=normalized,
+            family="patch_token_transformer_safety_raw_mfe_joint_attn_mlp",
+            channels=embedding_dim,
+            kernel_size=patch_size,
+            dilations=(),
+            convolutions_per_block=1,
+            pooling=(
+                "patch_token_global_average_for_marginal_heads",
+                "raw_safety_head",
+                "safety_conditioned_raw_mfe_head",
+                "joint_scalar_attention_pool_over_patch_tokens",
+                "joint_mlp_head",
+            ),
+            dropout=0.10,
+            receptive_field_bars=300,
+            normalization="layer_norm",
+            head_width=embedding_dim,
+            use_dataset_context=False,
+            sequence_input_paths=("raw_level_temporal_nonoverlap_patches",),
+            patch_transformer_patch_size=patch_size,
+            patch_transformer_patch_stride=patch_size,
+            patch_transformer_embedding_dim=embedding_dim,
+            patch_transformer_depth=depth,
+            patch_transformer_heads=heads,
+            patch_transformer_mlp_dim=mlp_dim,
+            patch_transformer_pooling="mean",
+            patch_transformer_positional_encoding="sinusoidal",
+        )
+
     if normalized in {
         INCEPTION_TIME_MARKET_SET_V1,
         INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
@@ -1003,11 +1046,17 @@ def validate_model_sequence_length(
                 "Market Set 第一版要求 candidate sequence_length 與 market history 一致: "
                 f"candidate={normalized_length}, market={market_history}"
             )
-    if model_spec.family != "patch_transformer":
+    if model_spec.family not in {
+        "patch_transformer",
+        "patch_token_transformer_safety_raw_mfe_joint_attn_mlp",
+    }:
         return
     if normalized_length < 1:
         raise ValueError("Patch Transformer sequence_length 必須 >= 1")
-    if model_spec.family == "patch_transformer":
+    if model_spec.family in {
+        "patch_transformer",
+        "patch_token_transformer_safety_raw_mfe_joint_attn_mlp",
+    }:
         patch_size = int(model_spec.patch_transformer_patch_size or 0)
         patch_stride = int(model_spec.patch_transformer_patch_stride or 0)
         if patch_size < 1 or patch_stride != patch_size:
@@ -1060,6 +1109,7 @@ __all__ = [
     "MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1",
     "MODERN_TCN_V1",
     "MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1",
+    "PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1",
     "MANTIS_V2_FROZEN_LINEAR_V1",
     "MOMENT_1_BASE_FROZEN_LINEAR_V1",
     "PATCH_TRANSFORMER_V1",

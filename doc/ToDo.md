@@ -1,20 +1,14 @@
-常駐aduit 報表也要有文字顏色增加可讀性
 
-表格間要空一行增加可讀性
-
-表單選項文字固字但可以透過變數顯示已設定的對像，例如 [1]  Strategy Pair／Portfolio Attribution  [已設定: MR-13R ]  (Enter)
 - bug fix
-    - remove |buy list|= k constrain 
     - epoch performance inconsistat in [1][3]
 
-- trading
-    - add a buy list to decide the stop prices using full roos base-fanlist-best
-    - frozen 2026/3/2 data for research purpose, latest for trading
+
 
 - restreucture
-    - color template file to consist rule
+    - centralized color template file to consist rule
 
 - imrove DL module
+    - select HM/LS (higher learnability) as candidates with iniital stop pre-emption 
     - hihger weight for high mfe or high safety   
     - retrain min parameters
     - simply label
@@ -25,8 +19,9 @@
     - non breakout strategy
     - 三大法人籌碼資訊/ EPS財報/ 基本面 
 
-
-
+- trading
+    - add a buy list to decide the stop prices using full roos base-fanlist-best
+    - frozen 2026/3/2 data for research purpose, latest for trading
 
 
 ## To do

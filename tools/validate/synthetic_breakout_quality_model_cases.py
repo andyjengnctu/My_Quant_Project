@@ -4036,9 +4036,8 @@ def validate_breakout_quality_modern_tcn_joint_min_contract_case(_base_params):
     )
     spec = get_continuous_ranker_research_spec(profile.name)
     check(
-        "mr13y_is_active_joint_min_modern_tcn_architecture_family_contrast",
+        "mr13y_historical_joint_min_modern_tcn_architecture_family_contrast_remains_registered",
         (
-            profile.name,
             "MR-13Y",
             TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
             MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
@@ -4047,7 +4046,6 @@ def validate_breakout_quality_modern_tcn_joint_min_contract_case(_base_params):
             False,
         ),
         (
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
             spec.model_research_id,
             profile.training_objective,
             profile.model_architecture,
@@ -4237,6 +4235,276 @@ def validate_breakout_quality_modern_tcn_joint_min_contract_case(_base_params):
     strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
     check_true(
         "mr13y_remains_model_only_without_strategy_conversion",
+        '"C75"' not in strategy_source and "'C75'" not in strategy_source,
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+
+
+def validate_breakout_quality_patch_transformer_joint_min_contract_case(_base_params):
+    """Protect MR-13Z as the frozen-recipe Patch-Transformer family comparison."""
+
+    case_id = "BREAKOUT_QUALITY_PATCH_TRANSFORMER_JOINT_MIN"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_PATCH_TRANSFORMER_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_execution_recipe,
+        get_continuous_ranker_research_spec,
+    )
+    from core.research_report_contract import (
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
+        persistent_report_contract_fingerprint,
+    )
+    from filters.breakout_quality.contract import FEATURE_COLUMNS
+    from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.models.factory import build_model
+    from filters.breakout_quality.models.runtime import require_torch
+    from filters.breakout_quality.models.spec import (
+        ACTIVE_MODEL_ARCHITECTURES,
+        PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
+        PATCH_TRANSFORMER_V1,
+        get_model_spec,
+        validate_model_sequence_length,
+    )
+    from services.research import breakout_quality_application as research_app
+
+    control = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_PATCH_TRANSFORMER_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    spec = get_continuous_ranker_research_spec(profile.name)
+    check(
+        "mr13z_is_active_joint_min_patch_transformer_architecture_family_contrast",
+        (
+            profile.name,
+            "MR-13Z",
+            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
+            PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
+            "raw_mfe_mean_daily_spearman",
+            False,
+            False,
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            spec.model_research_id,
+            profile.training_objective,
+            profile.model_architecture,
+            profile.epoch_selection_metric,
+            spec.selection_pit_authorized,
+            spec.current_time_validation_authorized,
+        ),
+    )
+    check_true(
+        "mr13z_keeps_mr13x_target_loss_epoch_and_pairwise_reduction",
+        profile.training_objective == control.training_objective
+        == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING
+        and profile.loss_name == control.loss_name
+        and profile.epoch_selection_metric == control.epoch_selection_metric
+        and get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction
+        == get_continuous_ranker_execution_recipe(control.name).pairwise_reduction,
+    )
+
+    patch_spec = get_model_spec(profile.model_architecture)
+    legacy_spec = get_model_spec(PATCH_TRANSFORMER_V1)
+    check_true(
+        "mr13z_uses_new_active_architecture_identity_while_historical_9f_stays_legacy",
+        PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1
+        in ACTIVE_MODEL_ARCHITECTURES
+        and PATCH_TRANSFORMER_V1 not in ACTIVE_MODEL_ARCHITECTURES
+        and patch_spec.architecture != legacy_spec.architecture
+        and patch_spec.family
+        == "patch_token_transformer_safety_raw_mfe_joint_attn_mlp",
+    )
+    check(
+        "mr13z_reuses_historical_9f_patch_transformer_recipe_without_hyperparameter_sweep",
+        (10, 10, 128, 3, 4, 256, "mean", "sinusoidal", "layer_norm", 0.10, 300, False),
+        (
+            patch_spec.patch_transformer_patch_size,
+            patch_spec.patch_transformer_patch_stride,
+            patch_spec.patch_transformer_embedding_dim,
+            patch_spec.patch_transformer_depth,
+            patch_spec.patch_transformer_heads,
+            patch_spec.patch_transformer_mlp_dim,
+            patch_spec.patch_transformer_pooling,
+            patch_spec.patch_transformer_positional_encoding,
+            patch_spec.normalization,
+            patch_spec.dropout,
+            patch_spec.receptive_field_bars,
+            bool(patch_spec.use_dataset_context),
+        ),
+    )
+    check_true(
+        "mr13z_preserves_joint_min_head_semantics_at_128d_patch_token_latent",
+        len(FEATURE_COLUMNS) == 10
+        and int(patch_spec.head_width or 0) == 128
+        and tuple(patch_spec.pooling)
+        == (
+            "patch_token_global_average_for_marginal_heads",
+            "raw_safety_head",
+            "safety_conditioned_raw_mfe_head",
+            "joint_scalar_attention_pool_over_patch_tokens",
+            "joint_mlp_head",
+        ),
+    )
+    validate_model_sequence_length(patch_spec, 300)
+    invalid_sequence_rejected = False
+    try:
+        validate_model_sequence_length(patch_spec, 295)
+    except ValueError:
+        invalid_sequence_rejected = True
+    check_true(
+        "mr13z_patch_sequence_contract_requires_historical_nonoverlap_divisibility",
+        invalid_sequence_rejected,
+    )
+
+    torch, nn = require_torch()
+    torch.manual_seed(42)
+    legacy_model = build_model(
+        feature_count=len(FEATURE_COLUMNS), context_count=0,
+        architecture=PATCH_TRANSFORMER_V1,
+    )
+    torch.manual_seed(42)
+    model = build_active_model(
+        feature_count=len(FEATURE_COLUMNS), context_count=0,
+        architecture=profile.model_architecture,
+    )
+    legacy_state = legacy_model.state_dict()
+    state = model.state_dict()
+    trunk_prefixes = (
+        "patch_projection.",
+        "patch_normalization.",
+        "encoder.",
+        "output_normalization.",
+    )
+    trunk_keys = sorted(key for key in legacy_state if key.startswith(trunk_prefixes))
+    check_true(
+        "mr13z_same_seed_reconstructs_historical_9f_patch_transformer_trunk_exactly",
+        bool(trunk_keys)
+        and all(key in state and torch.equal(legacy_state[key], state[key]) for key in trunk_keys),
+    )
+    check_true(
+        "mr13z_head_and_attention_topology_matches_mr13x_semantics_at_128d_latent",
+        isinstance(model.raw_safety_classifier, nn.Linear)
+        and int(model.raw_safety_classifier.in_features) == 128
+        and int(model.raw_safety_classifier.out_features) == 2
+        and isinstance(model.conditional_mfe_classifier, nn.Linear)
+        and int(model.conditional_mfe_classifier.in_features) == 129
+        and int(model.conditional_mfe_classifier.out_features) == 2
+        and isinstance(model.joint_hmhs_classifier, nn.Sequential)
+        and len(model.joint_hmhs_classifier) == 3
+        and int(model.joint_hmhs_classifier[0].in_features) == 128
+        and int(model.joint_hmhs_classifier[0].out_features) == 128
+        and isinstance(model.joint_hmhs_classifier[1], nn.ReLU)
+        and int(model.joint_hmhs_classifier[2].in_features) == 128
+        and int(model.joint_hmhs_classifier[2].out_features) == 2
+        and isinstance(model.joint_attention_scorer, nn.Conv1d)
+        and int(model.joint_attention_scorer.in_channels) == 128
+        and int(model.joint_attention_scorer.out_channels) == 1
+        and tuple(model.joint_attention_scorer.kernel_size) == (1,),
+    )
+
+    torch.manual_seed(19)
+    x = torch.randn(4, 300, len(FEATURE_COLUMNS))
+    context = torch.empty(4, 0)
+    model.eval()
+    with torch.no_grad():
+        token_map = model.encode_token_map(x)
+        weights = model.joint_attention_weights(x)
+        heads = model.forward_safety_raw_mfe_hmhs_heads(x, context)
+        tri_logits = model.forward_output_head(x, context, "tri_head")
+    check_true(
+        "mr13z_patch_token_attention_softmax_and_tri_head_output_surface_match_production_contract",
+        tuple(token_map.shape) == (4, 30, 128)
+        and tuple(weights.shape) == (4, 30)
+        and torch.all(weights >= 0)
+        and torch.allclose(weights.float().sum(dim=1), torch.ones(4), atol=1e-6)
+        and tuple(heads[0].shape) == (4, 2)
+        and tuple(heads[1].shape) == (4, 2)
+        and tuple(heads[2].shape) == (4, 2)
+        and tuple(tri_logits.shape) == (4, 6),
+    )
+
+    model.zero_grad(set_to_none=True)
+    model.forward_safety_raw_mfe_hmhs_heads(x, context)[2].sum().backward()
+    shared_parameter = model.patch_projection.weight
+    check_true(
+        "mr13z_joint_loss_updates_patch_trunk_attention_and_joint_mlp_not_marginal_classifiers",
+        model.joint_attention_scorer.weight.grad is not None
+        and model.joint_attention_scorer.bias.grad is not None
+        and all(parameter.grad is not None for parameter in model.joint_hmhs_classifier.parameters())
+        and shared_parameter.grad is not None
+        and model.raw_safety_classifier.weight.grad is None
+        and model.conditional_mfe_classifier.weight.grad is None,
+    )
+
+    check(
+        "mr13z_keeps_user_approved_standard_model_sop_fingerprint",
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
+        persistent_report_contract_fingerprint("model.standard_sop"),
+    )
+    base_metric = {
+        "group_count": 10,
+        "mean_daily_spearman": 0.30,
+        "global_spearman_vs_raw_target": 0.31,
+        "pairwise_concordance": 0.60,
+        "top_score_decile_raw_target_mean": 1.2,
+        "bottom_score_decile_raw_target_mean": 0.3,
+    }
+    joint_min = {
+        "population_joint_min_mean": 0.33,
+        "mean_daily_spearman": 0.41,
+        "pairwise_concordance": 0.63,
+        "top_10pct": {
+            "mean_joint_min": 0.61,
+            "mean_safety": 0.72,
+            "mean_mfe": 0.74,
+            "hmhs_pct": 62.0,
+            "hmhs_enrichment": 2.7,
+        },
+        "top_20pct": {"mean_joint_min": 0.55, "hmhs_enrichment": 2.1},
+    }
+    payload = {
+        "model_research_id": "MR-13Z",
+        "training": {"objective": profile.training_objective},
+        "split_metrics": {
+            "validation": dict(base_metric),
+            "oos": dict(base_metric),
+            "breakout_candidate_oos": dict(base_metric),
+        },
+        "safety_raw_mfe_joint_min_evaluation": {
+            "validation": {
+                "raw_safety": dict(base_metric),
+                "raw_mfe": dict(base_metric),
+                "joint_min": joint_min,
+            }
+        },
+    }
+    rendered = research_app._render_continuous_ranker_simple_console(payload)
+    standard_titles = "\n".join(
+        line for line in rendered.splitlines() if line.startswith("標準模型 SOP｜")
+    )
+    check_true(
+        "mr13z_reuses_joint_min_model_extension_without_standard_schema_drift",
+        "Model-specific Extension｜MR-13Z｜Continuous Joint-Min Retrieval" in rendered
+        and "Joint-Min" not in standard_titles
+        and "標準模型 SOP｜1. Learnability" in standard_titles
+        and "標準模型 SOP｜6. Evidence Coverage" in standard_titles,
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
+    check_true(
+        "mr13z_remains_model_only_without_strategy_conversion",
         '"C75"' not in strategy_source and "'C75'" not in strategy_source,
     )
 

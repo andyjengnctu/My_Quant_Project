@@ -7,6 +7,7 @@ from typing import Mapping
 from filters.breakout_quality.models.inception_time import build_inception_time
 from filters.breakout_quality.models.large_kernel_tcn_joint_min import build_modern_tcn_joint_min
 from filters.breakout_quality.models.multiscale_cnn import build_multiscale_cnn
+from filters.breakout_quality.models.patch_token_joint_min import build_patch_token_joint_min
 from filters.breakout_quality.models.runtime import (
     count_trainable_parameters,
     require_torch,
@@ -21,6 +22,7 @@ from filters.breakout_quality.models.spec import (
     INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_MLP_V1,
     INCEPTION_TIME_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
     MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
+    PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
     get_model_spec,
     model_spec_from_manifest,
@@ -89,6 +91,14 @@ def build_active_model(
         )
     if spec.architecture == MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1:
         return build_modern_tcn_joint_min(
+            nn,
+            torch,
+            feature_count=int(feature_count),
+            context_count=int(context_count),
+            spec=spec,
+        )
+    if spec.architecture == PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1:
+        return build_patch_token_joint_min(
             nn,
             torch,
             feature_count=int(feature_count),
