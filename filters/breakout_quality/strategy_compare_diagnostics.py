@@ -14,6 +14,7 @@ from typing import Any
 import pandas as pd
 
 from config.breakout_quality import (
+    BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
     BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
     get_breakout_quality_experiment_profile,
@@ -140,10 +141,22 @@ def _full_horizon_path_lookup_cached(
     project_root_text: str, filter_id: str, architecture: str
 ) -> pd.DataFrame:
     root = Path(project_root_text).resolve()
+    # ``architecture`` is the active strategy arm architecture and is intentionally
+    # not the owner of this offline path diagnostic.  Upside Survival is defined by
+    # the explicit canonical Pure-MFE diagnostic profile.  Most historical arms use
+    # inception_time_v1 so the two happened to match; MR-13AC uses a context
+    # architecture, exposing the latent ownership bug.  Resolve the diagnostic
+    # provider architecture from its own profile/default instead of the active arm.
+    del architecture
+    diagnostic_profile = _pure_mfe_diagnostic_profile()
+    diagnostic_spec = get_breakout_quality_experiment_profile(diagnostic_profile)
+    diagnostic_architecture = str(
+        diagnostic_spec.model_architecture or BREAKOUT_QUALITY_MODEL_ARCHITECTURE
+    )
     bundle = load_profile_continuous_ranker_data(
         filter_id=str(filter_id),
-        model_architecture=str(architecture),
-        experiment_profile=_pure_mfe_diagnostic_profile(),
+        model_architecture=diagnostic_architecture,
+        experiment_profile=diagnostic_profile,
         preload_feature_bank=False,
         allow_stale_source=False,
         project_root=root,

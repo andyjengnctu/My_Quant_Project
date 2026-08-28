@@ -10570,3 +10570,101 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Checklist補回B292-B295 historical DONE main rows與T409-T411 DONE summary，使main table、T summary與convergence G records重新一致；不復活已退役MR-13AB Audit implementation。
 - Scientific status不變：current matrix仍**恰為C61/C58/C59/C76/C77/C78**；C58 untouched，C59 constrained，C76/C77/C78 No-K/No-R0；MR-13AC Model Gate GO不變，production C42/C44不變。
 
+
+---
+
+## 2026-08-29 — C76/C77/C78 direct No-K/No-R0 OOS + Rolling：MR-13H無穩定優勢，MR-13AC standalone FAIL；C76-C59純K/R0解讀撤回
+
+### 狀態
+
+`RESULT_AVAILABLE / DIRECT_CONVERSION_GATE_CLOSED / NO_ROBUSTNESS / NOT_PROMOTED`
+
+### 程式基準
+
+- 使用者最新 baseline ZIP：`test-branch-1_20260828_232818_55c1bd80.zip`
+- SHA256：`033151effee508946ed0a71d5d252b84a39c4443acf450c6d039ec2d0c2666db`
+- Strategy Compare period：`2021-01-01 ～ 2026-03-02`
+- Current matrix：`C61/C58/C59/C76/C77/C78`
+- C58：Min DL-off baseline，原樣保留。
+- C59：MR-13E exact K/R0 constrained reference。
+- C76/C77/C78：同一 `resource-aware-continuous-score-no-k-no-r0` direct allocator；分別使用MR-13E / MR-13H / MR-13AC score。
+- Production C42/C44不變。
+
+### Model/PIT evidence
+
+MR-13H current PIT：
+
+- OOS：Daily rho=`0.2310`，Global rho=`0.1745`；Breakout Daily rho=`0.2211`。
+- Rolling：Daily rho=`0.2295`，Global rho=`0.1702`；Breakout Daily rho=`0.2156`。
+
+MR-13AC current PIT：
+
+- OOS：Daily rho=`0.1650`，Global rho=`0.1486`；Breakout Daily rho=`0.1900`。
+- Rolling：Daily rho=`0.1823`，Global rho=`0.1352`；Breakout Daily rho=`0.2064`。
+
+兩者Rolling learnability均維持正向；後續strategy失敗不能歸因為model score完全失去ordering signal。
+
+### Strategy core performance
+
+| Arm | OOS Return | OOS MDD | OOS RoMD | OOS EV | OOS Exposure | Rolling Return | Rolling MDD | Rolling RoMD | Rolling EV | Rolling Exposure |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| C58 Min baseline | 136.47% | 12.52% | 10.90 | 0.74R | 90.14% | 101.60% | 13.12% | 7.74 | 1.02R | 92.24% |
+| C59 MR-13E exact K/R0 | 166.49% | 15.92% | 10.45 | 1.24R | 90.85% | 201.10% | 15.92% | 12.63 | 1.11R | 93.28% |
+| C76 MR-13E direct No-K/No-R0 | 103.47% | 28.64% | 3.61 | 0.40R | 53.66% | 73.94% | 36.82% | 2.01 | 0.31R | 57.99% |
+| C77 MR-13H direct No-K/No-R0 | 79.62% | 29.32% | 2.72 | 0.25R | 55.42% | 87.66% | 29.96% | 2.93 | 0.51R | 57.19% |
+| C78 MR-13AC direct No-K/No-R0 | 83.35% | 12.09% | 6.89 | 0.43R | 86.05% | 77.01% | 15.07% | 5.11 | 0.54R | 88.53% |
+
+### MR-13H vs MR-13E direct same-allocator interpretation
+
+`C77-C76`是本輪最乾淨的single-head economic score contrast，因兩者allocator/cash/sizing/orderability/execution完全相同，只換score source。
+
+- OOS：H Return=`79.62%` < E=`103.47%`；RoMD=`2.72 < 3.61`；EV=`0.25R < 0.40R`；`+2R`前initial-stop=`12.00% > 9.26%`；Full-MFE=`1.78R < 1.85R`。
+- Rolling：H Return=`87.66%` > E=`73.94%`；RoMD=`2.93 > 2.01`；EV=`0.51R > 0.31R`；`+2R`前initial-stop=`7.69% < 11.86%`；Full-MFE=`1.90R > 1.85R`。
+
+方向在OOS與Rolling反轉，沒有形成MR-13H對MR-13E的stable strategy dominance。兩者又都明顯低於C58 RoMD，因此不值得再投入Multi-seed或Fixed。這與historical MR-13H constrained 16-seed「Selection略優、Forward略輸、無穩定promotion」結論一致。
+
+### Direct No-K/No-R0 deployment evidence
+
+C76/C77雖把Filled High-MFE提高到：
+
+- C76 OOS/Rolling=`59.20% / 57.34%`
+- C77 OOS/Rolling=`56.46% / 58.58%`
+
+且Full-MFE約=`1.78～1.90R`，但平均曝險只剩約`53～58%`，Adverse約=`0.45～0.51R`，Realized EV只=`0.25～0.51R`。這是「ranking找得到upside，但capital/path conversion失敗」，不是模型完全沒有upside signal。
+
+此現象與historical C46 exact No-R0（Exposure=`56.76%`且selection target quality反而更強）以及C70 direct No-K/No-R0的deployment collapse一致；R0確實深度改變capital deployment。不能只把R0視為無關的報表限制。
+
+### C76-C59 interpretation correction
+
+原Registry/Compare description曾把`C76-C59`稱為「同一MR-13E score下移除K/R0的resource-contract淨效果」。正式結果複查程式後確認此描述不成立：
+
+- C59 runtime=`resource-aware-continuous-score-constrained-optimal`，使用`exact_branch_and_bound_v1`、固定baseline K並保留R0。
+- C76 runtime=`resource-aware-continuous-score-no-k-no-r0`，使用`model_score desc` direct order後的canonical greedy reservation，沒有exact basket search。
+
+因此C76-C59同時改變`K / R0 / allocator / solver`，不得再被引用為pure K/R0 ablation。純R0 controlled evidence仍是historical C46；K-Flex/R0-preserved exact C67則因large-K exact certification COMPUTE_BLOCKED，不能把timeout解讀成策略結果。
+
+### MR-13AC standalone diagnostic
+
+C78沒有upside reward，結果符合其signal語意：
+
+- Filled High-Safety：OOS=`71.31%`、Rolling=`69.58%`，高於C58=`68.09/67.72%`。
+- OOS MDD=`12.09%`略優於C58=`12.52%`，但Return/RoMD=`83.35%/6.89`明顯低於`136.47%/10.90`。
+- Rolling Return/MDD/RoMD=`77.01%/15.07%/5.11`，亦低於C58=`101.60%/13.12%/7.74`。
+
+Decision：`STANDALONE_CONVERSION_FAIL / MODEL_GATE_RETAINED`。不得以C78 FAIL反向否定MR-13AC conditional residual learnability。
+
+### C78 First-Passage reporting bug
+
+本輪OOS/Rolling C78 Upside Survival顯示：
+
+`UNAVAILABLE | ValueError: MR-13AC predicted-upside architecture與conditional low-adverse target必須成對`
+
+根因是Strategy Compare offline Upside Survival雖明確宣告Pure-MFE diagnostic profile owner，實作卻把active strategy arm的`model_architecture`傳入Pure-MFE sample provider。C59/C76/C77均為`inception_time_v1`所以未暴露；C78使用`inception_time_predicted_upside_context_v1`才觸發profile/architecture pairing guard。
+
+工程修正：Pure-MFE path diagnostics現在從其**自己的explicit diagnostic profile + canonical default architecture**解析provider，不再繼承active arm architecture。這只影響read-only post-replay diagnostics；strategy replay、score、selection、accounting與Model SOP均不變。既有C78結果可在REUSE時backfill，不需重跑策略或重訓模型。
+
+### Final decision
+
+`MR13H_DIRECT_NO_STABLE_GAIN / MR13AC_STANDALONE_FAIL / DIRECT_NO_K_NO_R0_DEPLOYMENT_COLLAPSE / C76_C59_PURE_KR0_INTERPRETATION_RETRACTED / NO_ROBUSTNESS / STOP`
+
+下一步不自動做Multi-seed／Fixed，也不因本結果修改MR-13AC Model Gate。若使用者仍要研究單一head「漲多跌少」，應重新定義下一個joint economic target問題；若要研究K/R0本身，必須另建只改constraint、且明確固定allocator/solver semantics的新strategy identity，不得覆寫C76-C78。

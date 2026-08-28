@@ -574,7 +574,7 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C59": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED,
-        "description": "既有MR-13E exact K/R0 constrained reference；保留用來直接量測同一13E score在C76拿掉K/R0後的resource-contract差異。",
+        "description": "既有MR-13E exact K/R0 constrained reference；保留作C76 direct No-K/No-R0 allocator的歷史對照。C76同時改變K/R0與allocator/solver semantics，因此C76-C59不得解讀為純K/R0 ablation。",
         "param_source": "min_rolling",
         "param_policy": "base-finalist-best",
         "rule_policy": "all_off",
@@ -660,7 +660,7 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C61-C58": {"left": "C61", "right": "C58", "description": "Full相對Min的整體策略體系reference；不是單一DL效果"},
     "C59-C58": {"left": "C59", "right": "C58", "description": "既有MR-13E K/R0 constrained相對Min baseline"},
     "C76-C58": {"left": "C76", "right": "C58", "description": "MR-13E No-K/No-R0 direct score相對正確Min DL-off baseline"},
-    "C76-C59": {"left": "C76", "right": "C59", "description": "完全相同MR-13E source下，移除K/R0的resource-contract淨效果"},
+    "C76-C59": {"left": "C76", "right": "C59", "description": "同一MR-13E source下 direct No-K/No-R0 allocator vs exact K/R0 constrained reference；同時含allocator/solver差異，不是純K/R0 ablation"},
     "C77-C58": {"left": "C77", "right": "C58", "description": "MR-13H No-K/No-R0 single-head economic score相對Min baseline"},
     "C77-C76": {"left": "C77", "right": "C76", "description": "同一No-K/No-R0 contract下MR-13H full-horizon economic score相對MR-13E"},
     "C78-C58": {"left": "C78", "right": "C58", "description": "MR-13AC No-K/No-R0 conditional-safety standalone diagnostic相對Min baseline"},

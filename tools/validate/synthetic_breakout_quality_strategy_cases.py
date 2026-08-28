@@ -2468,10 +2468,16 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     with patch(
         "filters.breakout_quality.strategy_compare_diagnostics.load_profile_continuous_ranker_data",
         return_value=pure_mfe_bundle,
-    ):
+    ) as path_loader:
         path_lookup = _full_horizon_path_lookup_cached.__wrapped__(
-            ".", "breakout_quality_v1", "inception_time_v1"
+            ".", "breakout_quality_v1", "inception_time_predicted_upside_context_v1"
         )
+    path_loader_kwargs = dict(path_loader.call_args.kwargs)
+    check_true(
+        "upside_path_lookup_uses_canonical_pure_mfe_architecture_not_active_arm_architecture",
+        path_loader_kwargs.get("experiment_profile") == diagnostic_owner
+        and path_loader_kwargs.get("model_architecture") == "inception_time_v1",
+    )
     check_true(
         "upside_path_lookup_consumes_canonical_daily_provider_without_nonexistent_persisted_component_bundle",
         len(path_lookup) == 2
