@@ -627,6 +627,69 @@ def split_metrics(
     }
 
 
+def epoch_selection_metrics(
+    group_ids: np.ndarray,
+    group_table: pd.DataFrame,
+    raw_target: np.ndarray,
+    percentile_target: np.ndarray,
+    scores: np.ndarray,
+) -> dict[str, Any]:
+    """Return only the metrics that can affect ordinary Spearman epoch selection.
+
+    PIT folds do not need pair concordance, Top-K, PR-AUC, 5x5 geometry, or other
+    descriptive diagnostics after every epoch.  Those metrics are still computed
+    from the final frozen fold score artifact.  This helper deliberately preserves
+    the exact canonical mean-daily-Spearman and percentile-MSE definitions used by
+    :func:`split_metrics` while avoiding its O(N^2) pair diagnostics.
+    """
+
+    ids = np.asarray(group_ids, dtype=np.int64)
+    score_values = np.asarray(scores, dtype=np.float64)
+    raw_values = np.asarray(raw_target[ids], dtype=np.float64)
+    pct_values = np.asarray(percentile_target[ids], dtype=np.float64)
+    if len(score_values) != len(ids):
+        raise ValueError("epoch-selection score/group長度不一致")
+    dates = pd.to_datetime(group_table.iloc[ids]["date"], errors="raise")
+    frame = pd.DataFrame(
+        {
+            "date": dates.to_numpy(),
+            "score": score_values,
+            "target": raw_values,
+        }
+    )
+    daily_spearman: list[float] = []
+    for _date, day in frame.groupby("date", sort=True):
+        corr = calculate_spearman(
+            day["score"].to_numpy(dtype=np.float64),
+            day["target"].to_numpy(dtype=np.float64),
+        )
+        if corr is not None:
+            daily_spearman.append(float(corr))
+    finite_percentile = np.isfinite(pct_values) & np.isfinite(score_values)
+    return {
+        "group_count": int(len(ids)),
+        "percentile_target_count": int(finite_percentile.sum()),
+        "mse_vs_daily_percentile": (
+            float(
+                np.mean(
+                    (score_values[finite_percentile] - pct_values[finite_percentile])
+                    ** 2
+                )
+            )
+            if bool(finite_percentile.any())
+            else None
+        ),
+        "rankable_date_count": int(len(daily_spearman)),
+        "mean_daily_spearman": (
+            float(np.mean(daily_spearman)) if daily_spearman else None
+        ),
+        "median_daily_spearman": (
+            float(np.median(daily_spearman)) if daily_spearman else None
+        ),
+        "metric_detail": "epoch_selection_only_no_pair_or_geometry",
+    }
+
+
 def _new_model_and_optimizer(torch, *, feature_count: int, context_count: int, args, plan):
     seed_torch(torch, seed=int(args.seed), plan=plan)
     model = build_model(
@@ -2268,6 +2331,7 @@ def select_epoch(
     args,
     plan,
     evaluate_train_metrics: bool = True,
+    selection_metrics_only: bool = False,
 ) -> dict[str, Any]:
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
@@ -2384,6 +2448,7 @@ def select_epoch(
         validation_safety_raw_mfe_hmhs_metrics = None
         validation_safety_raw_mfe_joint_min_metrics = None
         validation_direct_hmhs_metrics = None
+        validation_used_selection_only_metrics = False
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING:
             validation_scores = predict_scores(
                 torch, model, feature_bank, group_context, validation_ids,
@@ -2395,15 +2460,39 @@ def select_epoch(
             )
             validation_metrics = validation_direct_hmhs_metrics
         elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING:
-            validation_head_scores = predict_safety_raw_mfe_joint_min_scores(
-                torch, model, feature_bank, group_context, validation_ids,
-                batch_size=int(args.evaluation_batch_size), plan=plan,
-            )
-            validation_safety_raw_mfe_joint_min_metrics = safety_raw_mfe_joint_min_metrics(
-                validation_ids, group_table, conditional_mfe_targets, validation_head_scores
-            )
-            validation_scores = validation_head_scores["raw_mfe"]
-            validation_metrics = validation_safety_raw_mfe_joint_min_metrics["raw_mfe"]
+            if bool(selection_metrics_only):
+                # PIT checkpoint selection is defined only by Raw-MFE Validation
+                # mean Daily Spearman with percentile-MSE tie-break.  Use the
+                # model's canonical Raw-MFE output directly and defer Joint/5x5/
+                # pair diagnostics to the frozen fold score artifact.
+                validation_scores = predict_scores(
+                    torch,
+                    model,
+                    feature_bank,
+                    group_context,
+                    validation_ids,
+                    batch_size=int(args.evaluation_batch_size),
+                    plan=plan,
+                    training_objective=profile.training_objective,
+                )
+                validation_metrics = epoch_selection_metrics(
+                    validation_ids,
+                    group_table,
+                    raw_target,
+                    percentile_target,
+                    validation_scores,
+                )
+                validation_used_selection_only_metrics = True
+            else:
+                validation_head_scores = predict_safety_raw_mfe_joint_min_scores(
+                    torch, model, feature_bank, group_context, validation_ids,
+                    batch_size=int(args.evaluation_batch_size), plan=plan,
+                )
+                validation_safety_raw_mfe_joint_min_metrics = safety_raw_mfe_joint_min_metrics(
+                    validation_ids, group_table, conditional_mfe_targets, validation_head_scores
+                )
+                validation_scores = validation_head_scores["raw_mfe"]
+                validation_metrics = validation_safety_raw_mfe_joint_min_metrics["raw_mfe"]
         elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING:
             validation_head_scores = predict_safety_raw_mfe_hmhs_scores(
                 torch, model, feature_bank, group_context, validation_ids,
@@ -2576,7 +2665,11 @@ def select_epoch(
                     "epoch selection仍只依完整validation metric"
                 ),
             }
-        if validation_direct_hmhs_metrics is not None:
+        if validation_used_selection_only_metrics:
+            primary_daily_spearman = None
+            daily_spearman = validation_metrics.get("mean_daily_spearman")
+            validation_mse = float(validation_metrics["mse_vs_daily_percentile"])
+        elif validation_direct_hmhs_metrics is not None:
             primary_daily_spearman = validation_direct_hmhs_metrics.get("mean_daily_spearman")
             daily_spearman = primary_daily_spearman
             validation_mse = float(validation_direct_hmhs_metrics["mse_vs_daily_percentile"])
@@ -2739,6 +2832,11 @@ def select_epoch(
             "inner_validation_safety_raw_mfe_joint_min_metrics": validation_safety_raw_mfe_joint_min_metrics,
             "inner_validation_direct_hmhs_metrics": validation_direct_hmhs_metrics,
             "inner_validation_pareto_metrics": validation_pareto_metrics,
+            "validation_metric_detail": (
+                "selection_only"
+                if validation_used_selection_only_metrics
+                else "full_diagnostics"
+            ),
             "elapsed_sec": round(float(elapsed), 3),
             "is_best_epoch": bool(improved),
         })
@@ -2768,15 +2866,22 @@ def select_epoch(
                     f"| {elapsed:.1f}s{marker}"
                 )
             elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING:
-                joint = dict(validation_safety_raw_mfe_joint_min_metrics.get("joint_min") or {})
-                print(
-                    f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
-                    f"| Val Raw-MFE rho {float(daily_spearman):.4f} "
-                    f"| Val Safety rho {float(primary_daily_spearman):.4f} "
-                    f"| Val Joint-Min rho {float(joint.get('mean_daily_spearman') or 0.0):.4f} "
-                    f"| Val Joint-Min Pair {float(joint.get('pairwise_concordance') or 0.0):.4f} "
-                    f"| {elapsed:.1f}s{marker}"
-                )
+                if validation_used_selection_only_metrics:
+                    print(
+                        f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
+                        f"| Val Raw-MFE rho {float(daily_spearman):.4f} "
+                        f"| PIT selection-only metrics | {elapsed:.1f}s{marker}"
+                    )
+                else:
+                    joint = dict(validation_safety_raw_mfe_joint_min_metrics.get("joint_min") or {})
+                    print(
+                        f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
+                        f"| Val Raw-MFE rho {float(daily_spearman):.4f} "
+                        f"| Val Safety rho {float(primary_daily_spearman):.4f} "
+                        f"| Val Joint-Min rho {float(joint.get('mean_daily_spearman') or 0.0):.4f} "
+                        f"| Val Joint-Min Pair {float(joint.get('pairwise_concordance') or 0.0):.4f} "
+                        f"| {elapsed:.1f}s{marker}"
+                    )
             elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING:
                 joint = dict(validation_safety_raw_mfe_hmhs_metrics.get("joint_hmhs") or {})
                 print(
@@ -2883,6 +2988,7 @@ def select_epoch(
             None if not math.isfinite(best_global_pareto_concordance) else float(best_global_pareto_concordance)
         ),
         "best_validation_mse": float(best_validation_mse),
+        "selection_metrics_only": bool(selection_metrics_only),
         "best_validation_huber_raw_r": (
             None if not math.isfinite(best_validation_huber) else float(best_validation_huber)
         ),

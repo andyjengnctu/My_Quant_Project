@@ -117,12 +117,59 @@ def normalize_ohlcv_array_window(values: np.ndarray, anchor_close: float) -> np.
     array = np.asarray(values, dtype=np.float64)
     if array.ndim != 2 or array.shape[1] != 5:
         raise ValueError("OHLCV array window必須是 [bars, 5]")
-    open_norm = array[:, 0] / anchor_close - 1.0
-    high_norm = array[:, 1] / anchor_close - 1.0
-    low_norm = array[:, 2] / anchor_close - 1.0
-    close_norm = array[:, 3] / anchor_close - 1.0
-    volume_norm = _normalize_volume_window(array[:, 4])
-    return np.column_stack([open_norm, high_norm, low_norm, close_norm, volume_norm]).astype(np.float32)
+    return normalize_ohlcv_array_windows(
+        array[None, :, :],
+        np.asarray([anchor_close], dtype=np.float64),
+    )[0]
+
+
+def normalize_ohlcv_array_windows(
+    values: np.ndarray,
+    anchor_closes: np.ndarray,
+) -> np.ndarray:
+    """Vectorized canonical OHLCV normalization for a batch of windows.
+
+    The numerical definition is identical to :func:`normalize_ohlcv_array_window`:
+    prices are expressed relative to each row's anchor close and volume is
+    log1p/median/IQR normalized within that same window.  The batched form exists
+    only to remove Python-per-stock normalization overhead from the lazy daily
+    feature provider; it does not alter feature membership, ordering, or values.
+    """
+
+    array = np.asarray(values, dtype=np.float64)
+    anchors = np.asarray(anchor_closes, dtype=np.float64).reshape(-1)
+    if array.ndim != 3 or array.shape[2] != 5:
+        raise ValueError("OHLCV array windows必須是 [batch, bars, 5]")
+    if len(array) != len(anchors):
+        raise ValueError("OHLCV array windows與anchor_closes長度不一致")
+    if bool(np.any(~np.isfinite(anchors))) or bool(np.any(anchors <= 0.0)):
+        raise ValueError("anchor_close 必須是有限正數")
+    if len(array) == 0:
+        return np.empty((0, int(array.shape[1]), 5), dtype=np.float32)
+
+    output = np.empty(array.shape, dtype=np.float32)
+    output[:, :, :4] = array[:, :, :4] / anchors[:, None, None] - 1.0
+
+    volume = np.log1p(np.maximum(array[:, :, 4], 0.0))
+    finite_rows = np.all(np.isfinite(volume), axis=1)
+    if bool(np.any(finite_rows)):
+        finite_volume = volume[finite_rows]
+        median = np.median(finite_volume, axis=1)
+        q75, q25 = np.percentile(finite_volume, [75, 25], axis=1)
+        iqr = q75 - q25
+        iqr = np.where(np.isfinite(iqr) & (iqr > 0.0), iqr, 1.0)
+        output[finite_rows, :, 4] = (
+            (finite_volume - median[:, None]) / iqr[:, None]
+        ).astype(np.float32)
+
+    # Historical generic helpers allow non-finite volume rows.  Keep that exact
+    # fallback semantics while leaving the canonical sanitized-data hot path
+    # fully vectorized.
+    for row_index in np.flatnonzero(~finite_rows):
+        output[int(row_index), :, 4] = _normalize_volume_window(
+            array[int(row_index), :, 4]
+        )
+    return output
 
 
 def _build_breakout_quality_sequence_feature_with_reason(

@@ -175,6 +175,7 @@ def select_epoch(
     *,
     args,
     plan,
+    selection_metrics_only: bool = False,
 ) -> dict[str, Any]:
     evaluate_train_metrics = (
         bundle.profile.training_sample_scope
@@ -192,6 +193,7 @@ def select_epoch(
         args=args,
         plan=plan,
         evaluate_train_metrics=evaluate_train_metrics,
+        selection_metrics_only=bool(selection_metrics_only),
     )
 
 

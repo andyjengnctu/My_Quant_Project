@@ -36,6 +36,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
     BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
+    BREAKOUT_QUALITY_PIT_EPOCH_SELECTION_LIGHTWEIGHT_METRICS,
     BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
     BREAKOUT_QUALITY_TORCH_DEVICE,
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
@@ -1536,6 +1537,9 @@ def _train_fold(
         ids["validation_ids"],
         args=args,
         plan=plan,
+        selection_metrics_only=bool(
+            BREAKOUT_QUALITY_PIT_EPOCH_SELECTION_LIGHTWEIGHT_METRICS
+        ),
     )
     selected_epoch = int(epoch_selection["best_epoch"])
     model, final_history = fit_final(

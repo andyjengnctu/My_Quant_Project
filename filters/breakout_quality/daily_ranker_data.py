@@ -40,7 +40,10 @@ from filters.breakout_quality.risk_normalized_target import (
     compute_targets_and_context_for_positions,
     load_min_roos_risk_schedule,
 )
-from filters.breakout_quality.features import normalize_ohlcv_array_window
+from filters.breakout_quality.features import (
+    normalize_ohlcv_array_window,
+    normalize_ohlcv_array_windows,
+)
 from filters.breakout_quality.models.spec import get_model_spec, validate_model_sequence_length
 from filters.breakout_quality.splits import resolve_breakout_quality_outer_policy
 from filters.breakout_quality.workflow_io import (
@@ -240,19 +243,48 @@ class LazyDailyFeatureBank:
         if bool(np.any(ids < -len(self))) or bool(np.any(ids >= len(self))):
             raise IndexError("daily feature group index超出範圍")
         ids = np.where(ids < 0, ids + len(self), ids)
+        feature_window = int(self._policy.feature_window_bars)
         output = np.empty(
-            (len(ids), int(self._policy.feature_window_bars), len(FEATURE_COLUMNS)),
+            (len(ids), feature_window, len(FEATURE_COLUMNS)),
             dtype=np.float32,
         )
-        for out_index, group_id in enumerate(ids.tolist()):
-            ticker_id = int(self._ticker_ids[group_id])
-            source_pos = int(self._source_positions[group_id])
-            benchmark_pos = int(self._benchmark_positions[group_id])
-            output[out_index, :, :5] = self._normalized_window(
-                self._frame_arrays[ticker_id],
-                source_pos,
-            )
-            output[out_index, :, 5:] = self._benchmark_feature(benchmark_pos)
+        if len(ids) == 0:
+            return output[0] if scalar else output
+
+        ticker_ids = self._ticker_ids[ids].astype(np.int64, copy=False)
+        source_positions = self._source_positions[ids].astype(np.int64, copy=False)
+        benchmark_positions = self._benchmark_positions[ids].astype(np.int64, copy=False)
+
+        # Materialize raw stock windows first, then normalize the complete batch
+        # in one canonical vectorized operation.  This preserves the exact
+        # per-stock 300-bar feature contract while removing hundreds of tiny
+        # median/percentile calls from every training batch.
+        stock_windows = np.empty((len(ids), feature_window, 5), dtype=np.float64)
+        anchors = np.empty(len(ids), dtype=np.float64)
+        for out_index, (ticker_id, source_pos) in enumerate(
+            zip(ticker_ids.tolist(), source_positions.tolist())
+        ):
+            frame = self._frame_arrays[int(ticker_id)]
+            start_pos = int(source_pos) - feature_window + 1
+            if start_pos < 0 or int(source_pos) >= len(frame):
+                raise RuntimeError("daily feature source position沒有足夠history")
+            window = frame[start_pos : int(source_pos) + 1]
+            if len(window) != feature_window:
+                raise RuntimeError("daily feature window長度與policy不一致")
+            stock_windows[out_index] = window
+            anchors[out_index] = frame[int(source_pos), 3]
+
+        stock_features = normalize_ohlcv_array_windows(stock_windows, anchors)
+        if not bool(np.isfinite(stock_features).all()):
+            raise RuntimeError("daily feature window產生non-finite value")
+        output[:, :, :5] = stock_features
+
+        # Ranking batches are date-coherent, so benchmark positions usually
+        # collapse to a single cached feature.  Assign by unique position rather
+        # than repeating the Python cache lookup for every stock-day.
+        for benchmark_pos in np.unique(benchmark_positions):
+            local = np.flatnonzero(benchmark_positions == int(benchmark_pos))
+            output[local, :, 5:] = self._benchmark_feature(int(benchmark_pos))
         return output[0] if scalar else output
 
 

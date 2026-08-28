@@ -916,3 +916,231 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
     summary["score_contract"] = "future_target_excluded"
     summary["strategy_score_sort"] = "missing_fallback_original_buy_sort"
     return results, summary
+
+
+def validate_breakout_quality_pit_training_performance_semantics_case(_base_params):
+    """Protect PIT feeding/selection optimizations as execution-only semantics."""
+
+    case_id = "BREAKOUT_QUALITY_PIT_TRAINING_PERFORMANCE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        BREAKOUT_QUALITY_PIT_EPOCH_SELECTION_LIGHTWEIGHT_METRICS,
+        get_breakout_quality_experiment_profile,
+    )
+    from filters.breakout_quality.features import (
+        normalize_ohlcv_array_window,
+        normalize_ohlcv_array_windows,
+    )
+    from filters.breakout_quality.models.runtime import require_torch
+    from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
+    from services.breakout_quality.train_continuous_ranker import (
+        epoch_selection_metrics,
+        parse_args as parse_ranker_args,
+        select_epoch as select_ranker_epoch,
+        split_metrics,
+    )
+
+    windows = np.asarray(
+        [
+            [
+                [10.0, 11.0, 9.0, 10.0, 100.0],
+                [11.0, 12.0, 10.0, 11.0, 200.0],
+                [12.0, 13.0, 11.0, 12.0, 300.0],
+                [13.0, 14.0, 12.0, 13.0, 400.0],
+            ],
+            [
+                [20.0, 21.0, 19.0, 20.0, 50.0],
+                [19.0, 20.0, 18.0, 19.0, 50.0],
+                [18.0, 19.0, 17.0, 18.0, 50.0],
+                [17.0, 18.0, 16.0, 17.0, 50.0],
+            ],
+        ],
+        dtype=np.float64,
+    )
+    anchors = np.asarray([13.0, 17.0], dtype=np.float64)
+    batch_features = normalize_ohlcv_array_windows(windows, anchors)
+    scalar_features = np.stack(
+        [
+            normalize_ohlcv_array_window(windows[index], float(anchors[index]))
+            for index in range(len(windows))
+        ]
+    )
+    check_true(
+        "pit_vectorized_ohlcv_normalization_is_byte_exact_to_scalar_contract",
+        np.array_equal(batch_features, scalar_features),
+    )
+
+    days = 6
+    per_day = 12
+    count = days * per_day
+    rng = np.random.default_rng(20260828)
+    dates = np.repeat(
+        pd.date_range("2025-01-01", periods=days, freq="D").to_numpy(),
+        per_day,
+    )
+    raw = rng.normal(size=count).astype(np.float32)
+    scores = (0.20 * raw + rng.normal(size=count)).astype(np.float32)
+    percentile = np.empty(count, dtype=np.float32)
+    for day_index in range(days):
+        start = day_index * per_day
+        stop = start + per_day
+        percentile[start:stop] = (
+            pd.Series(raw[start:stop])
+            .rank(method="average", pct=True)
+            .to_numpy(dtype=np.float32)
+        )
+    group_ids = np.arange(count, dtype=np.int64)
+    group_table = pd.DataFrame(
+        {
+            "date": dates,
+            "label": rng.integers(0, 2, size=count),
+        }
+    )
+    full = split_metrics(group_ids, group_table, raw, percentile, scores)
+    light = epoch_selection_metrics(
+        group_ids, group_table, raw, percentile, scores
+    )
+    check(
+        "pit_lightweight_epoch_metrics_preserve_exact_selection_values",
+        (
+            full["mean_daily_spearman"],
+            full["median_daily_spearman"],
+            full["rankable_date_count"],
+            full["mse_vs_daily_percentile"],
+        ),
+        (
+            light["mean_daily_spearman"],
+            light["median_daily_spearman"],
+            light["rankable_date_count"],
+            light["mse_vs_daily_percentile"],
+        ),
+    )
+
+    profile_name = BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE
+    profile = get_breakout_quality_experiment_profile(profile_name)
+    args = parse_ranker_args(
+        [
+            "--experiment-profile",
+            profile_name,
+            "--model-architecture",
+            profile.model_architecture,
+            "--epochs",
+            "1",
+            "--batch-size",
+            "128",
+            "--evaluation-batch-size",
+            "64",
+            "--device",
+            "cpu",
+            "--no-mixed-precision",
+            "--train-prefetch-batches",
+            "0",
+        ]
+    )
+    torch, _nn = require_torch()
+    torch.set_num_threads(1)
+    plan = resolve_torch_execution_plan(
+        torch,
+        requested_device="cpu",
+        mixed_precision=False,
+        mixed_precision_dtype="auto",
+        deterministic_algorithms=True,
+        allow_tf32=False,
+    )
+    model_days = 4
+    model_per_day = 8
+    model_count = model_days * model_per_day
+    model_rng = np.random.default_rng(20260829)
+    features = model_rng.normal(size=(model_count, 300, 10)).astype(np.float32)
+    context = np.empty((model_count, 0), dtype=np.float32)
+    model_dates = np.repeat(
+        pd.date_range("2025-02-01", periods=model_days, freq="D").to_numpy(),
+        model_per_day,
+    )
+    favorable = model_rng.normal(2.0, 1.0, size=model_count).astype(np.float32)
+    adverse = np.abs(model_rng.normal(0.5, 0.2, size=model_count)).astype(np.float32)
+    model_table = pd.DataFrame(
+        {
+            "date": model_dates,
+            "target_favorable_r": favorable,
+            "target_adverse_r": adverse,
+            "label": model_rng.integers(0, 2, size=model_count),
+        }
+    )
+    model_pct = np.empty(model_count, dtype=np.float32)
+    for day_index in range(model_days):
+        start = day_index * model_per_day
+        stop = start + model_per_day
+        model_pct[start:stop] = (
+            pd.Series(favorable[start:stop])
+            .rank(method="average", pct=True)
+            .to_numpy(dtype=np.float32)
+        )
+    train_ids = np.arange(0, 3 * model_per_day, dtype=np.int64)
+    validation_ids = np.arange(3 * model_per_day, model_count, dtype=np.int64)
+    full_selection = select_ranker_epoch(
+        torch,
+        features,
+        context,
+        model_table,
+        favorable,
+        model_pct,
+        train_ids,
+        validation_ids,
+        args=args,
+        plan=plan,
+        evaluate_train_metrics=False,
+        selection_metrics_only=False,
+    )
+    lightweight_selection = select_ranker_epoch(
+        torch,
+        features,
+        context,
+        model_table,
+        favorable,
+        model_pct,
+        train_ids,
+        validation_ids,
+        args=args,
+        plan=plan,
+        evaluate_train_metrics=False,
+        selection_metrics_only=True,
+    )
+    check(
+        "pit_lightweight_selection_preserves_optimizer_loss_epoch_and_gate_metric",
+        (
+            full_selection["best_epoch"],
+            full_selection["best_validation_mean_daily_spearman"],
+            full_selection["best_validation_mse"],
+            [row["batch_loss"] for row in full_selection["history"]],
+        ),
+        (
+            lightweight_selection["best_epoch"],
+            lightweight_selection["best_validation_mean_daily_spearman"],
+            lightweight_selection["best_validation_mse"],
+            [row["batch_loss"] for row in lightweight_selection["history"]],
+        ),
+    )
+    check_true(
+        "pit_lightweight_selection_is_config_driven_execution_only",
+        isinstance(BREAKOUT_QUALITY_PIT_EPOCH_SELECTION_LIGHTWEIGHT_METRICS, bool)
+        and lightweight_selection.get("selection_metrics_only") is True,
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    pit_source = (
+        project_root / "services" / "breakout_quality" / "point_in_time_scores.py"
+    ).read_text(encoding="utf-8")
+    check_true(
+        "pit_builder_routes_configured_lightweight_metrics_without_training_semantic_change",
+        "BREAKOUT_QUALITY_PIT_EPOCH_SELECTION_LIGHTWEIGHT_METRICS" in pit_source
+        and "selection_metrics_only=bool(" in pit_source,
+    )
+
+    summary["workflow"] = "pit_execution_performance"
+    summary["scientific_change"] = False
+    return results, summary
