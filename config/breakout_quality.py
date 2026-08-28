@@ -64,13 +64,14 @@ from config.execution_policy import (
 # - MR-13V MR-13T control + nonlinear Direct HM/HS MLP head: "daily_universal_safety_raw_mfe_hmhs_mlp_head_full_list_ndcg_pairwise"
 # - MR-13W MR-13V architecture + continuous joint-min target: "daily_universal_safety_raw_mfe_joint_min_mlp_head_full_list_ndcg_pairwise"
 # - MR-13X MR-13W target + Joint-Min learned temporal attention pooling: "daily_universal_safety_raw_mfe_joint_min_attn_pool_mlp_head_full_list_ndcg_pairwise"
+# - MR-13Y Joint-Min ModernTCN raw-data architecture comparison: "daily_universal_safety_raw_mfe_joint_min_modern_tcn_attn_pool_mlp_head_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_safety_raw_mfe_joint_min_attn_pool_mlp_head_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_safety_raw_mfe_joint_min_modern_tcn_attn_pool_mlp_head_full_list_ndcg_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = RESEARCH_SINGLE_SEED
@@ -404,6 +405,9 @@ DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFIL
 )
 DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_safety_raw_mfe_joint_min_attn_pool_mlp_head_full_list_ndcg_pairwise"
+)
+DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MODERN_TCN_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_safety_raw_mfe_joint_min_modern_tcn_attn_pool_mlp_head_full_list_ndcg_pairwise"
 )
 DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_context_net_full_list_ndcg_pairwise"
@@ -1196,6 +1200,18 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_safety_raw_mfe_joint_attn_mlp_v1",
     ),
+    DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MODERN_TCN_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MODERN_TCN_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="tri_head_pairwise_logistic",
+        epoch_selection_metric="raw_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="modern_tcn_safety_raw_mfe_joint_attn_mlp_v1",
+    ),
     DAILY_UNIVERSAL_HMHS_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_HMHS_SINGLE_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         optimizer_name="adam",
@@ -1876,6 +1892,31 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
             "不加positional encoding/multi-head attention/dropout/temperature/attention-width sweep；marginal heads仍只讀原global mean。"
         ),
         metric_scope="all_stock_days_safety_raw_mfe_joint_min_attention_pool",
+        score_semantic_id="daily_safety_raw_mfe_joint_min_research",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MODERN_TCN_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MODERN_TCN_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13Y",
+        experiment_name="MR-13Y Joint-Min ModernTCN Raw-data Architecture Comparison",
+        phase="13Y",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_low_adverse_safety_percentile; "
+            "head2=same_date_pure_mfe_percentile; "
+            "head3=min(same_date_low_adverse_safety_percentile,same_date_pure_mfe_percentile)"
+        ),
+        objective_description=(
+            "MR-13X strict raw-data architecture-family contrast：canonical raw 300×10、S/U/Jmin targets、"
+            "Safety/Raw-MFE marginal global-average semantics、Joint scalar temporal attention pooling、latent-width→latent-width→2 ReLU joint MLP、"
+            "Seed42、split、optimizer、full-list Delta-NDCG、三head固定等權loss與Raw-MFE Validation epoch selection全部不變；"
+            "唯一research dimension是temporal trunk由InceptionTime換成ModernTCN。ModernTCN固定沿用historical 9B未調參recipe："
+            "6 blocks、96 channels、kernel51 depthwise temporal conv、4x pointwise expansion、BatchNorm、dropout0.10；"
+            "head/attention widths僅隨trunk latent width自然為96，不另加adapter或capacity sweep。historical modern_tcn_v1仍維持legacy read-only。"
+        ),
+        metric_scope="all_stock_days_safety_raw_mfe_joint_min_modern_tcn_attention_pool",
         score_semantic_id="daily_safety_raw_mfe_joint_min_research",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         selection_pit_authorized=False,

@@ -59,6 +59,7 @@ INCEPTION_TIME_MARKET_SET_V1 = "inception_time_market_set_v1"
 INCEPTION_TIME_MARKET_SET_CANDIDATE_V1 = "inception_time_market_set_candidate_v1"
 INCEPTION_TIME_GROUP_NORM_V1 = "inception_time_group_norm_v1"
 MODERN_TCN_V1 = "modern_tcn_v1"
+MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1 = "modern_tcn_safety_raw_mfe_joint_attn_mlp_v1"
 MANTIS_V2_FROZEN_LINEAR_V1 = "mantis_v2_frozen_linear_v1"
 MOMENT_1_BASE_FROZEN_LINEAR_V1 = "moment_1_base_frozen_linear_v1"
 PATCH_TRANSFORMER_V1 = "patch_transformer_v1"
@@ -88,6 +89,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
     INCEPTION_TIME_GROUP_NORM_V1,
     MODERN_TCN_V1,
+    MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
     MANTIS_V2_FROZEN_LINEAR_V1,
     MOMENT_1_BASE_FROZEN_LINEAR_V1,
     PATCH_TRANSFORMER_V1,
@@ -102,6 +104,7 @@ ACTIVE_MODEL_ARCHITECTURES = (
     INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1,
     INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_MLP_V1,
     INCEPTION_TIME_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
+    MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
 )
 LEGACY_MODEL_ARCHITECTURES = tuple(
@@ -631,6 +634,40 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             modern_tcn_expansion_ratio=expansion_ratio,
         )
 
+    if normalized == MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1:
+        # Reuse the historical 9B ModernTCN trunk recipe exactly so this new
+        # research identity tests representation family under the current
+        # Joint-Min objective rather than tuning ModernTCN hyperparameters.
+        depth = 6
+        channels = 96
+        kernel_size = 51
+        expansion_ratio = 4
+        return BreakoutQualityModelSpec(
+            architecture=normalized,
+            family="modern_tcn_safety_raw_mfe_joint_attn_mlp",
+            channels=channels,
+            kernel_size=kernel_size,
+            dilations=(),
+            convolutions_per_block=1,
+            pooling=(
+                "global_average_for_marginal_heads",
+                "raw_safety_head",
+                "safety_conditioned_raw_mfe_head",
+                "joint_scalar_attention_pool",
+                "joint_mlp_head",
+            ),
+            dropout=0.10,
+            receptive_field_bars=1 + depth * (kernel_size - 1),
+            normalization="batch_norm",
+            head_width=channels,
+            use_dataset_context=False,
+            sequence_input_paths=("raw_level",),
+            modern_tcn_depth=depth,
+            modern_tcn_channels=channels,
+            modern_tcn_kernel_size=kernel_size,
+            modern_tcn_expansion_ratio=expansion_ratio,
+        )
+
     if normalized in {
         INCEPTION_TIME_MARKET_SET_V1,
         INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
@@ -1022,6 +1059,7 @@ __all__ = [
     "MULTISCALE_CNN_SEQUENCE_ONLY_V1",
     "MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1",
     "MODERN_TCN_V1",
+    "MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1",
     "MANTIS_V2_FROZEN_LINEAR_V1",
     "MOMENT_1_BASE_FROZEN_LINEAR_V1",
     "PATCH_TRANSFORMER_V1",
