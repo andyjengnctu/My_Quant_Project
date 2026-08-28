@@ -35,7 +35,9 @@ from services.breakout_quality.point_in_time_scores import build_cross_fitted_co
 def _load_stage1_scores(path: Path, *, phase: str) -> pd.DataFrame:
     if not path.is_file():
         raise FileNotFoundError(f"Stage-1 predicted-upside score不存在: {path}")
-    frame = pd.read_csv(path, encoding="utf-8-sig")
+    frame = pd.read_csv(
+        path, encoding="utf-8-sig", dtype={"ticker": "string"}, low_memory=False
+    )
     required = {
         "ticker", "date", "breakout_quality_score", "fold_id", "model_information_cutoff"
     }

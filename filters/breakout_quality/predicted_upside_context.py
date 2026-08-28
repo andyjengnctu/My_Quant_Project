@@ -149,7 +149,9 @@ def load_validated_predicted_upside_context(
             raise ValueError(f"predicted-upside context source_stage1 {key} size不一致")
         if str(record.get("sha256") or "").lower() != _sha256(path).lower():
             raise ValueError(f"predicted-upside context source_stage1 {key} SHA256不一致")
-    frame = pd.read_csv(score_path, encoding="utf-8-sig")
+    frame = pd.read_csv(
+        score_path, encoding="utf-8-sig", dtype={"ticker": "string"}, low_memory=False
+    )
     required = {
         "ticker", "date", "predicted_upside_score", CONTEXT_COLUMN,
         "context_phase", "fold_id", "model_information_cutoff",

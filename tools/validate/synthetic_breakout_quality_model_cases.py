@@ -5019,6 +5019,7 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
     from filters.breakout_quality.models.active import build_active_model
     from filters.breakout_quality.models.runtime import require_torch
     from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.daily_ranker_data import build_daily_ranker_split
     from filters.breakout_quality.predicted_upside_context import (
         PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
         STAGE1_ARCHITECTURE,
@@ -5033,6 +5034,7 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
         build_cross_fitted_context_scores,
     )
     from services.breakout_quality.predicted_upside_context import (
+        _load_stage1_scores,
         build_predicted_upside_context,
     )
 
@@ -5161,6 +5163,62 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
         "mr13ac_selection_stage2_universe_is_only_pit_context_covered_rows",
         "pit_context_covered_rows_only",
         context_contract.get("selection_training_universe"),
+    )
+
+    # Date membership alone must never re-admit rows whose Stage-1 context is missing.
+    # This is the exact runtime failure caught by the first formal MR-13AC execution.
+    split_dates = pd.to_datetime(
+        [f"2018-01-{day:02d}" for day in range(1, 26)]
+        + [f"2019-01-{day:02d}" for day in range(1, 26)]
+        + [f"2021-01-{day:02d}" for day in range(1, 26)]
+    )
+    split_table = pd.DataFrame(
+        {
+            "date": split_dates,
+            "label_eval_end_date": split_dates + pd.Timedelta(days=40),
+        }
+    )
+    split_target_valid = np.ones(len(split_table), dtype=bool)
+    split_target_valid[[0, 25, 50]] = False
+    split_bundle = SimpleNamespace(
+        group_table=split_table,
+        target_valid=split_target_valid,
+        summary={"training_universe_start_date": "2018-01-01"},
+        outer_policy={
+            "selection_end_date": "2020-12-31",
+            "oos_start_date": "2021-01-01",
+            "effective_oos_end_date": "2021-12-31",
+        },
+    )
+    split = build_daily_ranker_split(split_bundle, inner_validation_months=24)
+    invalid_ids = {0, 25, 50}
+    check_true(
+        "mr13ac_daily_split_excludes_target_invalid_context_missing_rows_before_percentile_build",
+        invalid_ids.isdisjoint(set(split.selection_ids.tolist()))
+        and invalid_ids.isdisjoint(set(split.inner_train_ids.tolist()))
+        and invalid_ids.isdisjoint(set(split.validation_ids.tolist()))
+        and invalid_ids.isdisjoint(set(split.oos_ids.tolist()))
+        and bool(split.report.get("target_valid_filter_applied")),
+    )
+
+    # Stage-1 score ingestion must preserve leading-zero / alphanumeric ticker identity
+    # instead of letting pandas' mixed-type inference mutate join keys.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        stage1_path = Path(temp_dir) / "stage1.csv"
+        pd.DataFrame(
+            {
+                "ticker": ["0050", "2330", "00632R"],
+                "date": ["2020-01-02"] * 3,
+                "breakout_quality_score": [0.1, 0.5, 0.9],
+                "fold_id": ["fold"] * 3,
+                "model_information_cutoff": ["2019-12-31"] * 3,
+            }
+        ).to_csv(stage1_path, index=False, encoding="utf-8-sig")
+        loaded_stage1 = _load_stage1_scores(stage1_path, phase="selection_crossfit")
+    check(
+        "mr13ac_stage1_csv_loader_preserves_ticker_identity_without_mixed_dtype_inference",
+        ["0050", "2330", "00632R"],
+        loaded_stage1["ticker"].tolist(),
     )
 
     # Refactoring MR-13P onto the shared residual helper must preserve its exact transform.

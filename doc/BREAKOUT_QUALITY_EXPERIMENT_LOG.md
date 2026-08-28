@@ -10538,3 +10538,15 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Stop rule：若MR-13AC仍不能形成獨立conditional path-risk增量，停止conditional model line並轉既有MR-13P primary-preserving runtime fallback；只有Model Gate GO後才另行決定是否授權PIT/strategy conversion。
 - Standard Model SOP 1～6與approved persistent report fingerprint `2b372bd465258234`完全不變。
 - Status：**MR13AB_CLOSED / MR13AC_IMPLEMENTED / MODEL_GATE_RESULT_PENDING / PIT_SAFE_STACKING_CONTEXT / NO_PIT / NO_STRATEGY_CONVERSION**。
+
+### 2026-08-28 — MR-13AC 首次正式執行修正：Stage-2 split漏套`target_valid`，非scientific failure
+
+- 使用者首次由`apps/research.py`執行MR-13AC Model Gate時，Stage-1 predicted-upside context canonical producer已完整成功：Selection建立10個2011～2020 expanding cross-fitted/PIT-safe folds，總score groups=`970,145`、coverage=`100%`；Forward建立單一`fold_20210101_20260302` fixed pre-OOS block，score groups=`630,589`、coverage=`100%`。因此Stage-1 PIT-safe stacking design與producer本身沒有失敗。
+- 真正中止點發生於Stage-2 daily target/index完成後、Torch training開始前：`ValueError: valid target無法建立same-date percentile`。根因為`build_daily_ranker_split()`沿用舊Daily Universal date/label-end split，只按日期與label completion取Selection/OOS membership，未再與`bundle.target_valid`取交集。
+- MR-13AC scientific contract本來就規定`selection_training_universe=pit_context_covered_rows_only`；context-missing row會保留正常date/label metadata與score eligibility，但其conditional `raw_target=NaN`、`target_valid=False`。舊split卻會把這些rows重新放進Selection percentile mask，導致canonical same-date percentile helper正確fail-fast。這是consumer split沒有忠實採用既有target-valid SSOT，不是target formula、Stage-1 context、loss或model learnability問題。
+- 修正：Daily Universal split的`inner_train / validation / selection / oos`一律加入canonical `bundle.target_valid` filter；Forward score eligibility仍由既有`resolve_forward_oos_score_group_ids()`獨立管理，因此不會因target completeness截短合法inference universe。這個修正對所有Daily Universal profile都是正式語意修正，不新增MR-13AC專屬第二套split。
+- 同時修正Stage-1/context CSV ingestion：`ticker`明確以string dtype讀取並`low_memory=False`，避免pandas mixed-type inference造成`DtypeWarning`及`0050`／`00632R`等join key被型別化。此變更不改scientific identity、context manifest schema或artifact contract，因此使用者已完成的10+1 Stage-1 context folds可直接REUSE，不需重訓。
+- Regression：MR-13AC dedicated synthetic新增兩個直接事故保護：(1) date合法但`target_valid=False` rows不得重新進任何Stage-2 train/validation/OOS target split；(2) Stage-1 CSV loader必須byte-semantically保留leading-zero/alphanumeric ticker identity。Dedicated=`18/18 PASS`；MR-13P、generic architecture、PIT builder/performance、Audit framework、Registry/Checklist、persistent report freeze與import-resolution同鏈合計=`1682/1682 PASS`。
+- Standard Model SOP 1～6、approved fingerprint=`2b372bd465258234`、MR-13AC target/architecture/loss/Seed42、Stage-1 10+1 folding與stop rule全部不變。
+- Status：**IMPLEMENTATION_BUG_FIXED / STAGE1_CONTEXT_REUSABLE / MODEL_GATE_RESULT_PENDING / SCIENTIFIC_IDENTITY_UNCHANGED / NO_PIT / NO_STRATEGY_CONVERSION**。
+

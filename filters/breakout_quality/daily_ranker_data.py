@@ -1253,10 +1253,35 @@ def build_daily_ranker_split(bundle: ContinuousRankerDataBundle, *, inner_valida
     if not selection_start < validation_start <= selection_end:
         raise ValueError("daily ranker inner validation期間不合法")
 
-    selection_mask = (dates >= selection_start) & (dates <= selection_end) & (label_end < oos_start)
-    inner_train_mask = selection_mask & (dates < validation_start) & (label_end < validation_start)
+    target_valid = np.asarray(bundle.target_valid, dtype=bool)
+    if target_valid.ndim != 1 or len(target_valid) != len(bundle.group_table):
+        raise ValueError("daily ranker target_valid shape不一致")
+
+    # Split membership is an evaluable-target contract, not date membership alone.
+    # MR-13AC makes this visible because Selection intentionally excludes rows that
+    # do not yet have a legal Stage-1 PIT context.  Those rows retain their normal
+    # date/label metadata for score eligibility, but must never enter training or
+    # same-date target-percentile transforms with raw_target=NaN.  The same rule is
+    # correct for every Daily Universal profile: Forward score eligibility is handled
+    # separately by resolve_forward_oos_score_group_ids().
+    selection_mask = (
+        (dates >= selection_start)
+        & (dates <= selection_end)
+        & (label_end < oos_start)
+        & target_valid
+    )
+    inner_train_mask = (
+        selection_mask
+        & (dates < validation_start)
+        & (label_end < validation_start)
+    )
     validation_mask = selection_mask & (dates >= validation_start)
-    oos_mask = (dates >= oos_start) & (dates <= oos_end) & (label_end <= oos_end)
+    oos_mask = (
+        (dates >= oos_start)
+        & (dates <= oos_end)
+        & (label_end <= oos_end)
+        & target_valid
+    )
 
     def ids(mask) -> np.ndarray:
         return np.flatnonzero(np.asarray(mask, dtype=bool)).astype(np.int64)
@@ -1295,6 +1320,7 @@ def build_daily_ranker_split(bundle: ContinuousRankerDataBundle, *, inner_valida
             "selection_label_end_before_oos": True,
             "inner_train_label_end_before_validation": True,
             "oos_label_end_within_oos": True,
+            "target_valid_filter_applied": True,
         },
     )
 
