@@ -117,10 +117,8 @@ def _tracking_id_sort_key(item_id: str) -> tuple[str, int, str]:
     return (match.group(1), int(match.group(2)), match.group(3))
 
 
-def _convergence_row_sort_key(row: List[str]) -> tuple[str, tuple[str, int, str]]:
-    date_value = row[0].strip() if len(row) > 0 else ""
-    item_id = row[1].strip() if len(row) > 1 else ""
-    return (date_value, _tracking_id_sort_key(item_id))
+def _convergence_row_date_key(row: List[str]) -> str:
+    return row[0].strip() if len(row) > 0 else ""
 
 
 def _find_invalid_summary_table_order(rows: List[List[str]], *, id_col_idx: int, table_name: str) -> List[Dict[str, str]]:
@@ -377,18 +375,18 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         summarize_result(
             "checklist_g_notes_are_non_blocking_governance_context",
             True,
-            detail="G note content is informational only; formal blockers cover structure, status transitions, and ordering.",
+            detail="G note content is informational only; formal blockers cover structure, status transitions, and chronological date order.",
             extra={"sample_note_rows": governance_note_examples},
         )
     )
 
-    invalid_g_order_rows = []
-    previous_sort_key = None
+    invalid_g_date_rows = []
+    previous_date_key = None
     previous_row = None
     for row in tables["G"]:
-        current_key = _convergence_row_sort_key(row)
-        if previous_sort_key is not None and current_key < previous_sort_key:
-            invalid_g_order_rows.append(
+        current_date_key = _convergence_row_date_key(row)
+        if previous_date_key is not None and current_date_key < previous_date_key:
+            invalid_g_date_rows.append(
                 {
                     "previous": {
                         "date": previous_row[0].strip() if previous_row and len(previous_row) > 0 else "",
@@ -401,14 +399,14 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
                 }
             )
             break
-        previous_sort_key = current_key
+        previous_date_key = current_date_key
         previous_row = row
     results.append(
         summarize_result(
-            "checklist_g_rows_sorted_by_date_then_id",
-            not invalid_g_order_rows,
-            detail=f"invalid={invalid_g_order_rows}",
-            extra={"invalid_order_rows": invalid_g_order_rows},
+            "checklist_g_dates_non_decreasing",
+            not invalid_g_date_rows,
+            detail=f"invalid={invalid_g_date_rows}",
+            extra={"invalid_date_rows": invalid_g_date_rows},
         )
     )
 

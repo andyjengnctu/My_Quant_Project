@@ -1459,16 +1459,34 @@ def validate_checklist_g_ordering_case(_base_params):
             consistency = meta_quality_module._summarize_checklist_consistency()
 
     result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    g_order_result = result_by_name.get("checklist_g_rows_sorted_by_date_then_id", {})
-    invalid_rows = g_order_result.get("invalid_order_rows")
+    g_order_result = result_by_name.get("checklist_g_dates_non_decreasing", {})
+    invalid_rows = g_order_result.get("invalid_date_rows")
     if invalid_rows is None:
-        invalid_rows = _read_summary_value(g_order_result, "invalid_order_rows", [])
+        invalid_rows = _read_summary_value(g_order_result, "invalid_date_rows", [])
 
-    add_check(results, "meta_checklist", case_id, "mutated_g_order_guard_fails", "FAIL", g_order_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_g_order_reports_invalid_pair", True, bool(invalid_rows))
+    add_check(results, "meta_checklist", case_id, "mutated_g_chronology_guard_fails", "FAIL", g_order_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_g_chronology_reports_invalid_pair", True, bool(invalid_rows))
+
+    same_day_reordered_text = _swap_markdown_table_rows(
+        original_text,
+        heading="G. 逐項收斂紀錄",
+        row_id_a="T01",
+        row_id_b="T02",
+        id_col_idx=1,
+    )
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_same_day_") as temp_dir:
+        same_day_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        same_day_path.write_text(same_day_reordered_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", same_day_path):
+            same_day_consistency = meta_quality_module._summarize_checklist_consistency()
+    same_day_result = {item.get("name"): item for item in same_day_consistency.get("results", [])}.get(
+        "checklist_g_dates_non_decreasing", {}
+    )
+    add_check(results, "meta_checklist", case_id, "same_day_tracking_id_reorder_is_non_blocking", "PASS", same_day_result.get("status"))
 
     summary["guard_status"] = g_order_result.get("status")
-    summary["invalid_order_rows"] = invalid_rows
+    summary["invalid_date_rows"] = invalid_rows
+    summary["same_day_guard_status"] = same_day_result.get("status")
     return results, summary
 
 

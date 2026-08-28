@@ -15,7 +15,7 @@
 維護規則：
 1. 同步順序固定為主表 → `T` / `G` → `E`。
 2. `T` 只留最小索引；每列一個 `Txx` 與一個測試入口，依 ID 升冪排序。
-3. `G` 只記錄實際狀態變更；依日期升冪、同日再依 tracking ID 排序；`NEW -> *` 只能出現在首筆，且不得出現 no-op transition。
+3. `G` 是 append-only chronological event log，只記錄實際狀態變更；新事件一律追加在表尾，日期必須非遞減，同日不再依 tracking ID 重排；`NEW -> *` 只能出現在首筆，且不得出現 no-op transition。
 4. `G` 備註欄只作最小必要的收斂索引與人工說明；formal blocker 不檢查其文字 hygiene，日期只記於 `G`。
 5. 其餘文字只保留最小必要；會隨實作變動的細節由主表、formal contract 與收斂紀錄承接。
 
@@ -61,7 +61,7 @@
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已補 synthetic 主入口遺漏註冊案例，並新增 imported / defined `validate_*` case、formal pipeline registry / formal-entry / run_all / preflight / test_suite 一致性 formal guard；`T` 摘要只要求每列維持單一 shipped formal entry，formal step 單一真理來源維持在 `tools/local_regression/formal_pipeline.py`，不再把 command string 的逐字記錄形式上升為獨立 release blocker；另補 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard；DONE主表列在「建議落點」宣告的所有Python路徑都必須逐一存在，不得只驗第一個path | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
-| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `T` / `G` 收斂紀錄完整同步 formal guard；正式 blocker 只保留 checklist 結構可解析、主表 / `E` / `T` 摘要同步、`T` 每列單一 shipped formal entry，以及 `G` 合法狀態轉移 / 首次 `NEW` / 狀態鏈連續 / 非 no-op / 日期與 tracking ID 排序；`G` 備註欄只作治理索引與人工說明，不再承擔 release-blocking formal contract | `tools/local_regression/run_meta_quality.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
+| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `T` / `G` 收斂紀錄完整同步 formal guard；正式 blocker 只保留 checklist 結構可解析、主表 / `E` / `T` 摘要同步、`T` 每列單一 shipped formal entry，以及 `G` 合法狀態轉移 / 首次 `NEW` / 狀態鏈連續 / 非 no-op / chronological 日期非遞減；`G` 採 append-only event log，同日不再依 tracking ID 做無語意的實體重排，備註欄只作治理索引與人工說明 | `tools/local_regression/run_meta_quality.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B27 | P1 | Meta | 禁止循環依賴（module dependency cycle） | DONE | 已補完整 project import graph cycle guard，直接掃描 `apps/` / `config/` / `core/` / `filters/` / `services/` / `strategies/` / `tools/`；絕對 import、相對 import 與函式內 lazy import 都必須納入 dependency graph。2026-08-12 完整檢查並修正曾因 module index 漏掃 `services/filters/config/strategies` 而未檢出的 continuous/daily ranker service cycle；不得以延遲載入或漏掃正式 layer 規避架構 guard | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `core/portfolio_fast_access.py`, `core/portfolio_fast_data.py`, `core/breakout_reentry.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_contract_cases.py`, `tools/optimizer/static_ensemble_dashboard.py`, `tools/optimizer/session_factory.py`, `tools/optimizer/callbacks.py`, `tools/optimizer/main.py`, `tools/optimizer/outer_rolling_oos.py`, `services/breakout_quality/ranker_cli.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/train_daily_ranker.py`, `services/breakout_quality/ranker_training.py` |
 | B28 | P1 | 覆蓋率 | key coverage targets 應包含核心交易模組（已併入 B22） | N/A | 已併入 B22 的正式 coverage 邊界；保留 ID 只作歷史索引，不再作獨立 formal blocker | `validate_core_trading_modules_in_coverage_targets_case`, `tools/local_regression/run_meta_quality.py` |
 | B29 | P1 | 覆蓋率 | critical files 應具備 per-file line / branch minimum gate（已併入 B22） | N/A | 已併入 B22 的正式 coverage 邊界；保留 ID 只作歷史索引，不再作獨立 formal blocker | `validate_critical_file_coverage_minimum_gate_case`, `tools/local_regression/run_meta_quality.py` |
@@ -684,7 +684,7 @@
 | T403 | `validate_mr13z_c75_conversion_contract_case` | B286 |
 ## G. 逐項收斂紀錄
 
-使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。G 只記錄實際狀態變更；不得寫 `DONE -> DONE`、`PARTIAL -> PARTIAL`、`TODO -> TODO` 等 no-op transition。同日同 ID 若有多筆狀態變更，必須依實際演進排序；`NEW -> *` 只能出現在該 ID 首筆，且 `NEW -> PARTIAL` / `NEW -> DONE` 必須排在後續 `PARTIAL -> DONE` 或 `DONE -> PARTIAL` 之前。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄僅作最小必要的治理索引與人工說明。
+使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。G 是 append-only chronological event log：每個新狀態事件只追加在表尾，不回插、不重排既有歷史列；日期代表該狀態事件的記錄日，必須由上到下非遞減，同日事件保留實際寫入／演進順序，不再依 tracking ID 排序。G 只記錄實際狀態變更；不得寫 `DONE -> DONE`、`PARTIAL -> PARTIAL`、`TODO -> TODO` 等 no-op transition。同一 ID 若有多筆狀態變更，必須維持實際演進鏈；`NEW -> *` 只能出現在該 ID 首筆，且其後每筆 `from` 必須承接前一筆 `to`。若在較晚日期才發現歷史事件或缺口，應以當日新增 transition 記錄修正，不得回填舊日期而破壞 event chronology。交付前只需機械核對日期未倒退與既有 transition-chain / NEW / no-op / summary sync 契約；備註欄僅作最小必要的治理索引與人工說明。
 
 | 日期 | 項目 ID | 動作 | 狀態變更 | 備註 |
 |---|---|---|---|---|
@@ -2658,3 +2658,7 @@
 | 2026-08-28 | T401 | 新增MR-13Y synthetic：same-objective ModernTCN architecture family、legacy 9B trunk tensor exact-equal、tri-head attention/output/gradient與persistent report freeze | NEW -> DONE | `validate_breakout_quality_modern_tcn_joint_min_contract_case` |
 | 2026-08-28 | T402 | 新增MR-13Z synthetic：same-objective Patch Transformer family、legacy 9F trunk tensor exact-equal、30-token tri-head attention/output/gradient與persistent report freeze | NEW -> DONE | `validate_breakout_quality_patch_transformer_joint_min_contract_case` |
 | 2026-08-28 | T403 | 新增MR-13Z→C75 conversion regression：PIT/current research authorization、`CONT13Z_ROLL` Selection PIT、C75 direct `joint_min_score` No-K/No-R0、schema62 suite/contrasts、score-projection與no-production-promotion | NEW -> DONE | `validate_mr13z_c75_conversion_contract_case` |
+| 2026-08-28 | B26 | 將 G 從 date／tracking-ID 排序表改為 append-only chronological event log，移除同日 ID 實體重排 requirement，正式 chronology 只要求日期非遞減 | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md`, `tools/local_regression/run_meta_quality.py` |
+| 2026-08-28 | T124 | 將既有 ordering mutation case 改為日期倒退 mutation，驗證 append-only chronology 對跨日期逆序仍 fail-fast、同日任意 tracking-ID 次序不再形成 blocker | DONE -> PARTIAL | `validate_checklist_g_ordering_case`, `checklist_g_dates_non_decreasing` |
+| 2026-08-28 | B26 | append-only G 契約、chronological validator、既有 transition／NEW／no-op／summary sync 同鏈核對完成後重新收斂 | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py`, `doc/TEST_SUITE_CHECKLIST.md` |
+| 2026-08-28 | T124 | chronology mutation 與同日非 ID 排序合法性驗證完成，T124 重新收斂 | PARTIAL -> DONE | `validate_checklist_g_ordering_case`, `checklist_g_dates_non_decreasing` |
