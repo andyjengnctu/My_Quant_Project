@@ -5047,14 +5047,14 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
     research_spec = get_continuous_ranker_research_spec(profile.name)
     settings = get_breakout_quality_model_research_settings()
     check(
-        "mr13ac_current_identity_target_architecture_and_model_gate_only",
+        "mr13ac_current_identity_target_architecture_and_current_conversion_authorization",
         (
             profile.name,
             "MR-13AC",
             PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
             "inception_time_predicted_upside_context_v1",
-            False,
-            False,
+            True,
+            True,
         ),
         (
             BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
@@ -5305,11 +5305,24 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
         persistent_report_contract_fingerprint("model.standard_sop"),
     )
 
-    project_root = Path(__file__).resolve().parents[2]
-    strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
+    from config.strategy_compare import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
+    ac_source = dict(STRATEGY_DL_SOURCES.get("CONT13AC_ROLL") or {})
+    c78 = dict(STRATEGY_COMPARE_ARMS.get("C78") or {})
+    c78_options = dict(c78.get("dl_runtime_options") or {})
     check_true(
-        "mr13ac_has_no_strategy_conversion_or_runtime_source",
-        profile.name not in strategy_source and "MR-13AC" not in strategy_source,
+        "mr13ac_strategy_conversion_is_direct_no_k_no_r0_research_only",
+        ac_source.get("experiment_profile") == profile.name
+        and ac_source.get("model_architecture") == "inception_time_predicted_upside_context_v1"
+        and ac_source.get("score_source") == "selection_point_in_time"
+        and c78.get("dl_id") == "CONT13AC_ROLL"
+        and c78.get("dl_runtime_mode") == "resource-aware-continuous-score-no-k-no-r0"
+        and c78_options.get("preserve_k") is False
+        and c78_options.get("preserve_r0") is False
+        and c78_options.get("selection_order") == "model_score_desc_then_canonical_tie_v1"
+        and c78_options.get("selection_only") is True
+        and "safety_gate" not in c78_options
+        and "score_weight" not in c78_options
+        and "joint_score_transform" not in c78_options,
     )
 
     summary["training_performed"] = False

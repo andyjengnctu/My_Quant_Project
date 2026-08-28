@@ -10550,3 +10550,14 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Standard Model SOP 1～6、approved fingerprint=`2b372bd465258234`、MR-13AC target/architecture/loss/Seed42、Stage-1 10+1 folding與stop rule全部不變。
 - Status：**IMPLEMENTATION_BUG_FIXED / STAGE1_CONTEXT_REUSABLE / MODEL_GATE_RESULT_PENDING / SCIENTIFIC_IDENTITY_UNCHANGED / NO_PIT / NO_STRATEGY_CONVERSION**。
 
+### 2026-08-28 — MR-13AC Model Gate GO後先做actual conversion：current matrix收斂為C61/C58/C59/C76/C77/C78
+
+- MR-13AC正式Seed42 Model Gate結果：selected epoch=`2`；Validation/OOS/Breakout Daily rho=`0.2278/0.1650/0.1900`，Global rho=`0.2190/0.1486/0.1857`，Pair=`57.85/55.50/56.60%`，Top-Bottom target spread=`+0.2271/+0.1513/+0.1942`。OOS→Breakout rho=`+0.0251`、Pair=`+1.10pp`，故Decision=`CONDITIONAL_PATH_RISK_LEARNABILITY_CONFIRMED / FORWARD_MODEL_GATE_GO`。
+- 使用者重新確認研究終局偏好：希望一個head直接表示「漲多跌少」；13系列中同時把upside/downside放進單head的target普遍較難學，但MR-13H smooth full-horizon economic scalar仍有Forward rho=`0.2332`與歷史接近MR-13E的16-seed portfolio evidence。因此在開新的joint-head model之前，先用current corrected portfolio contract重測MR-13H actual conversion，並同時量MR-13AC standalone residual-safety actual performance。
+- 使用者明確指出：C58本身就是正確Min DL-off baseline，不需重建；K限制已知有問題，R0亦已被resource attribution證明會實質改寫DL main indicator/basket membership。因此新的direct-score comparison不得再把K/R0綁進C76/C77/C78。C59則刻意保留舊MR-13E K/R0 constrained reference，用`C76-C59`量同一13E score下移除K/R0的淨效果。
+- Current Strategy Compare schema=`63`，active arms收斂為6組：`C61` Full broad reference、`C58` Min DL-off causal baseline、`C59` MR-13E K/R0 constrained、`C76` MR-13E No-K/No-R0、`C77` MR-13H No-K/No-R0、`C78` MR-13AC No-K/No-R0。C76/C77/C78共用Min `base-finalist-best`、all-off、physical max positions=10、canonical sizing/cash/orderability/execution與同一`resource-aware-continuous-score-no-k-no-r0` runtime；唯一差異為DL source。
+- Current sources：`CONT13E_ROLL`保留；新增`CONT13H_ROLL`與`CONT13AC_ROLL`。MR-13H與MR-13AC正式授權current research OOS/Rolling PIT source，不代表production promotion。MR-13AC Rolling只refit Stage-2 ranker；Stage-1 predicted-upside context仍固定既有Selection cross-fit + fixed-pre-OOS scientific contract，strategy結果不得回流改Stage-1或target。
+- C64/C66/C71/C72/C73/C74/C75及其舊sources/contrasts全部退出active catalog並進`config/compatibility/strategy_compare_history.py`；歷史ID、結果、Audit可讀性完整保留，不刪證據。
+- Primary contrasts：`C76-C58`=13E direct score增量、`C76-C59`=同13E source拿掉K/R0的resource effect、`C77-C58`與`C77-C76`=MR-13H single-head economic score actual value、`C78-C58/C76/C77`=MR-13AC standalone conditional-safety diagnostic。C78績效FAIL不得反向推翻MR-13AC Model Gate。
+- Execution gate：只先跑single-seed Extending OOS + Rolling。未看到結果前不做Multi-seed、Fixed、不改target/architecture、不新增MR-13AD，不改production C42/C44。
+- Decision：**SIX_ARM_DIRECT_CONVERSION_MATRIX_IMPLEMENTED / C58_UNCHANGED / K_R0_REMOVED_FOR_C76_C77_C78 / MR13H_PRIMARY_COMPARISON / MR13AC_DIAGNOSTIC / RESULT_PENDING / NO_ROBUSTNESS_YET**。

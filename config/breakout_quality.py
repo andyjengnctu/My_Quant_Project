@@ -1691,6 +1691,7 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         reference_profile_name=DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         selection_pit_authorized=True,
+        current_time_validation_authorized=True,
     ),
     DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_PATCH_TRANSFORMER_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_PATCH_TRANSFORMER_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -1772,8 +1773,8 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_context_covered_stock_days",
         score_semantic_id="daily_predicted_upside_conditional_low_adverse_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-        selection_pit_authorized=False,
-        current_time_validation_authorized=False,
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
     ),
     DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
