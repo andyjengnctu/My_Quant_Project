@@ -2296,20 +2296,6 @@ def _training_target_for_profile(
     percentile_target: np.ndarray,
     group_table: pd.DataFrame,
 ) -> np.ndarray:
-    recipe = get_continuous_ranker_execution_recipe(profile.name)
-    if str(recipe.pairwise_reduction) == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
-        if "predicted_safety_percentile" not in group_table.columns:
-            raise ValueError("MR-13AF training缺少PIT-safe predicted_safety_percentile")
-        safety = pd.to_numeric(
-            group_table["predicted_safety_percentile"], errors="coerce"
-        ).to_numpy(dtype=np.float32)
-        valid_safety = safety[np.isfinite(safety)]
-        if len(valid_safety) and (float(valid_safety.min()) < 0.0 or float(valid_safety.max()) > 1.0):
-            raise ValueError("MR-13AF predicted-Safety必須為0～1 same-date percentile")
-        return np.column_stack([
-            np.asarray(percentile_target, dtype=np.float32),
-            safety,
-        ]).astype(np.float32, copy=False)
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
         return build_conditional_targets(group_table, percentile_target).training_target
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING:
@@ -2358,6 +2344,21 @@ def _training_target_for_profile(
                 "dual-component target-valid universe與composite raw target不一致"
             )
         return targets
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
+        recipe = get_continuous_ranker_execution_recipe(profile.name)
+        if str(recipe.pairwise_reduction) == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
+            if "predicted_safety_percentile" not in group_table.columns:
+                raise ValueError("MR-13AF training缺少PIT-safe predicted_safety_percentile")
+            safety = pd.to_numeric(
+                group_table["predicted_safety_percentile"], errors="coerce"
+            ).to_numpy(dtype=np.float32)
+            valid_safety = safety[np.isfinite(safety)]
+            if len(valid_safety) and (float(valid_safety.min()) < 0.0 or float(valid_safety.max()) > 1.0):
+                raise ValueError("MR-13AF predicted-Safety必須為0～1 same-date percentile")
+            return np.column_stack([
+                np.asarray(percentile_target, dtype=np.float32),
+                safety,
+            ]).astype(np.float32, copy=False)
     return np.asarray(percentile_target, dtype=np.float32)
 
 
