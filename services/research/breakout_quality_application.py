@@ -3360,6 +3360,11 @@ def _run_strategy_compare_model_build_subprocess(
         registry=active_processes,
         registry_lock=active_processes_lock,
         registry_key=str(job["dl_id"]),
+        strategy_compare_profile_id=(
+            None
+            if job.get("strategy_compare_profile_id") in (None, "")
+            else str(job["strategy_compare_profile_id"])
+        ),
         failure_prefix=(
             f"Strategy Compare canonical模型訓練失敗: dl_id={job['dl_id']}"
             + (
@@ -3547,6 +3552,7 @@ def _prepare_strategy_compare_model_artifacts(
                 "comparison_end": None,
                 "log_path": log_root / f"{source_index:02d}_{dl_id}.log",
                 "preflight_reuse_validation_error": reuse_validation_error,
+                "strategy_compare_profile_id": str(comparison.profile_id),
             }
             jobs.append(job)
 

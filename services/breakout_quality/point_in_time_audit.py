@@ -1279,14 +1279,40 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _run_point_in_time_scores_audit(args: argparse.Namespace) -> int:
+def _run_point_in_time_scores_audit(
+    args: argparse.Namespace,
+    *,
+    authorization_mode: str = "rolling",
+    strategy_compare_profile_id: str | None = None,
+    strategy_compare_source_id: str | None = None,
+    strategy_compare_seed: int | None = None,
+) -> int:
     settings = get_breakout_quality_workflow_settings(
         experiment_profile=str(args.experiment_profile)
     )
-    if not settings.rolling_authorized:
-        raise ValueError(
-            f"目前profile未授權Rolling PIT scores: {args.experiment_profile}"
+    mode = str(authorization_mode).strip().lower()
+    if mode == "rolling":
+        if not settings.rolling_authorized:
+            raise ValueError(
+                f"目前profile未授權Rolling PIT scores: {args.experiment_profile}"
+            )
+    elif mode == "strategy_compare":
+        from config.strategy_compare import (
+            validate_single_seed_strategy_conversion_authorization,
         )
+
+        if strategy_compare_seed is None:
+            raise ValueError("Strategy Compare PIT audit缺少canonical seed")
+        validate_single_seed_strategy_conversion_authorization(
+            strategy_profile_id=str(strategy_compare_profile_id or ""),
+            dl_id=str(strategy_compare_source_id or ""),
+            filter_id=str(args.filter_id),
+            model_architecture=str(args.model_architecture),
+            experiment_profile=str(args.experiment_profile),
+            seed=int(strategy_compare_seed),
+        )
+    else:
+        raise ValueError(f"未知PIT audit authorization mode: {authorization_mode!r}")
     score_frame, manifest = _validate_score_artifacts(args)
     bundle = load_continuous_ranker_data(
         filter_id=args.filter_id,
@@ -1520,6 +1546,9 @@ def audit_selection_point_in_time_scores(
     orderable_candidates: str | None = None,
     point_in_time_dir_override: str | None = None,
     allow_stale_source: bool = False,
+    strategy_compare_profile_id: str | None = None,
+    strategy_compare_source_id: str | None = None,
+    strategy_compare_seed: int | None = None,
 ) -> int:
     """Programmatic PIT audit service used by formal artifact workflows."""
 
@@ -1534,7 +1563,21 @@ def audit_selection_point_in_time_scores(
         argv.extend(["--point-in-time-dir-override", str(point_in_time_dir_override)])
     if allow_stale_source:
         argv.append("--allow-stale-source")
-    return _run_point_in_time_scores_audit(parse_args(argv))
+    strategy_scoped = bool(
+        str(strategy_compare_profile_id or "").strip()
+        and str(strategy_compare_source_id or "").strip()
+    )
+    if strategy_scoped != (strategy_compare_seed is not None):
+        raise ValueError(
+            "Strategy Compare PIT audit authorization必須同時提供profile/source/seed"
+        )
+    return _run_point_in_time_scores_audit(
+        parse_args(argv),
+        authorization_mode=("strategy_compare" if strategy_scoped else "rolling"),
+        strategy_compare_profile_id=strategy_compare_profile_id,
+        strategy_compare_source_id=strategy_compare_source_id,
+        strategy_compare_seed=strategy_compare_seed,
+    )
 
 
 def main(argv=None) -> int:

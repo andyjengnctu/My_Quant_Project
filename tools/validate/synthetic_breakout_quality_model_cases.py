@@ -2597,9 +2597,11 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
 
 
     # Execution recipe is derived from canonical profile/spec but intentionally omits
-    # MR identity.  Current OOS/Rolling authorization is fail-closed and must match
-    # the model dependencies of the config-driven current Strategy Compare modes.
+    # MR identity.  Generic model Rolling authorization remains fail-closed.  A current
+    # Strategy Compare source may instead carry a narrow single-seed-only conversion
+    # authorization; that exception must live on the source, not reopen the model recipe.
     current_required_profiles = set()
+    current_strategy_scoped_profiles = set()
     for mode in get_strategy_rolling_test_modes():
         mode_settings = get_strategy_comparison_settings(str(mode["profile_id"]))
         for arm in mode_settings.enabled_arms:
@@ -2613,7 +2615,11 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             for dl_id in required_dl_ids:
                 source = mode_settings.dl_sources[dl_id]
                 profile_name = str(source.experiment_profile)
-                if profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+                if profile_name not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+                    continue
+                if bool(source.single_seed_strategy_conversion_authorized):
+                    current_strategy_scoped_profiles.add(profile_name)
+                else:
                     current_required_profiles.add(profile_name)
 
     current_authorized_profiles = {
@@ -2624,9 +2630,11 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         ).current_time_validation_authorized
     }
     check_true(
-        "current_compare_dependencies_are_current_time_validation_authorized",
+        "current_compare_dependencies_use_model_auth_except_explicit_single_seed_sources",
         bool(current_required_profiles)
-        and current_required_profiles.issubset(current_authorized_profiles),
+        and current_required_profiles.issubset(current_authorized_profiles)
+        and bool(current_strategy_scoped_profiles)
+        and current_strategy_scoped_profiles.isdisjoint(current_authorized_profiles),
     )
 
     recipe_keys = set(

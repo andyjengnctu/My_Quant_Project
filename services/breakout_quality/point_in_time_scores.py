@@ -275,12 +275,32 @@ def parse_args(argv=None) -> argparse.Namespace:
         action="store_true",
         help="只供離線重現；預設要求來源CSV inventory與dataset一致",
     )
+    parser.add_argument(
+        "--strategy-compare-profile-id",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--strategy-compare-source-id",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     return parser.parse_args(argv)
 
 
 def _validate_args(args: argparse.Namespace) -> None:
     # Explicit CLI overrides are supported for reproducible research.  The loaded experiment
     # profile and model spec are validated by the shared continuous-ranker pipeline.
+    strategy_profile_id = str(
+        getattr(args, "strategy_compare_profile_id", "") or ""
+    ).strip()
+    strategy_source_id = str(
+        getattr(args, "strategy_compare_source_id", "") or ""
+    ).strip()
+    if bool(strategy_profile_id) != bool(strategy_source_id):
+        raise ValueError(
+            "strategy-compare-profile-id與strategy-compare-source-id必須同時設定"
+        )
     if int(args.fold_months) < 1 or int(args.inner_validation_months) < 1:
         raise ValueError("fold-months與inner-validation-months必須>=1")
     if args.fold_anchor_date not in (None, ""):
@@ -1858,6 +1878,32 @@ def _run_point_in_time_scores(
             raise ValueError(
                 f"目前profile未授權Rolling PIT scores: {args.experiment_profile}"
             )
+    elif mode == "strategy_compare":
+        from config.strategy_compare import (
+            validate_single_seed_strategy_conversion_pit_scope,
+        )
+
+        validate_single_seed_strategy_conversion_pit_scope(
+            strategy_profile_id=str(args.strategy_compare_profile_id),
+            dl_id=str(args.strategy_compare_source_id),
+            filter_id=str(args.filter_id),
+            model_architecture=str(args.model_architecture),
+            experiment_profile=str(args.experiment_profile),
+            seed=int(args.seed),
+            score_start_date=str(args.score_start_date),
+            score_end_date=(
+                None if args.score_end_date in (None, "") else str(args.score_end_date)
+            ),
+            fold_months=int(args.fold_months),
+            fold_anchor_date=(
+                None if args.fold_anchor_date in (None, "") else str(args.fold_anchor_date)
+            ),
+            single_score_block=bool(args.single_score_block),
+            inner_validation_months=int(args.inner_validation_months),
+            train_window_months=(
+                None if args.train_window_months is None else int(args.train_window_months)
+            ),
+        )
     elif mode == "stacking_context":
         research_spec = get_continuous_ranker_research_spec(
             str(args.experiment_profile)
@@ -2514,7 +2560,15 @@ def build_cross_fitted_context_scores(**kwargs) -> int:
 
 
 def main(argv=None) -> int:
-    return _run_point_in_time_scores(parse_args(argv))
+    args = parse_args(argv)
+    strategy_scoped = bool(
+        str(getattr(args, "strategy_compare_profile_id", "") or "").strip()
+        and str(getattr(args, "strategy_compare_source_id", "") or "").strip()
+    )
+    return _run_point_in_time_scores(
+        args,
+        authorization_mode=("strategy_compare" if strategy_scoped else "rolling"),
+    )
 
 
 __all__ = [

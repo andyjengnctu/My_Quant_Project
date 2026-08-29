@@ -47,7 +47,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 65
+STRATEGY_COMPARE_SCHEMA_VERSION = 66
 
 # =============================================================================
 # 1. 常用設定
@@ -553,6 +553,7 @@ STRATEGY_DL_SOURCES = {
         "experiment_profile": "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise",
         "threshold": None,
         "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
         "description": (
             "MR-13AH user-authorized Seed42 OOS/Rolling conversion source；"
             "Stage-1 canonical PIT-safe predicted-Safety context不變，Stage-2依evaluation mode合法refit。"
@@ -831,16 +832,28 @@ def _derived_robustness_membership(
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     """Derive current robustness roles from the shared Compare Suite.
 
-    Current robustness is exactly the single-seed Compare Suite repeated for every
-    benchmark seed.  Therefore every enabled suite arm is strategy-seed-sensitive;
-    only arms with DL dependencies additionally retrain model sources with that seed.
+    Current robustness repeats only the subset of the single-seed Compare Suite that
+    is explicitly robustness-eligible.  Sources carrying a single-seed-only strategy
+    conversion authorization are excluded until a later effect-size decision promotes
+    them to robustness; all remaining enabled arms are strategy-seed-sensitive.
     The first tuple is intentionally empty and exists only for the legacy fixed-arm
     compatibility shape used by disabled historical robustness profiles.
     """
-    benchmark = tuple(arm.arm_id for arm in profile_settings.enabled_arms)
+    robustness_eligible = tuple(
+        arm
+        for arm in profile_settings.enabled_arms
+        if not (
+            arm.dl_enabled
+            and str(arm.dl_id or "").strip()
+            and bool(
+                profile_settings.dl_sources[str(arm.dl_id)].single_seed_strategy_conversion_authorized
+            )
+        )
+    )
+    benchmark = tuple(arm.arm_id for arm in robustness_eligible)
     model_sensitive = tuple(
         arm.arm_id
-        for arm in profile_settings.enabled_arms
+        for arm in robustness_eligible
         if _arm_has_seed_sensitive_model_dependency(arm)
     )
     if not benchmark or not model_sensitive:
@@ -1289,6 +1302,9 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
             threshold=(None if raw.get("threshold") in (None, "") else float(raw.get("threshold"))),
             description=str(raw.get("description") or "").strip(),
             score_source=str(raw.get("score_source") or "canonical_runtime").strip(),
+            single_seed_strategy_conversion_authorized=bool(
+                raw.get("single_seed_strategy_conversion_authorized", False)
+            ),
             forward_scores_builder=_builder(raw.get("forward_scores_builder")),
             point_in_time_score_start_date=(
                 profile_pit_score_start_date
@@ -1430,6 +1446,145 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
     return settings
 
 
+def validate_single_seed_strategy_conversion_authorization(
+    *,
+    strategy_profile_id: str,
+    dl_id: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    seed: int,
+) -> StrategyDLSource:
+    """Validate the narrow Strategy Compare exception for one canonical single seed.
+
+    This is deliberately separate from the model research authorization.  It cannot be
+    used by generic PIT/Rolling/Fixed workflows or multi-seed robustness.
+    """
+
+    profile_id = str(strategy_profile_id or "").strip()
+    if profile_id not in STRATEGY_COMPARE_MENU_PROFILE_IDS:
+        raise ValueError(
+            "single-seed strategy conversion只允許current OOS/Rolling Strategy Compare profile"
+        )
+    settings = get_strategy_comparison_settings(profile_id)
+    source_id = str(dl_id or "").strip()
+    source = settings.dl_sources.get(source_id)
+    if source is None:
+        raise ValueError(f"Strategy Compare conversion source不存在: {source_id!r}")
+    if not bool(source.single_seed_strategy_conversion_authorized):
+        raise ValueError(
+            f"Strategy Compare source未授權single-seed conversion: {source_id}"
+        )
+    if not any(
+        arm.enabled and arm.dl_enabled and str(arm.dl_id or "") == source_id
+        for arm in settings.arms.values()
+    ):
+        raise ValueError(
+            f"Strategy Compare source未被目前single-seed suite引用: {source_id}"
+        )
+    actual_identity = (
+        str(source.filter_id),
+        str(source.model_architecture),
+        str(source.experiment_profile),
+    )
+    expected_identity = (
+        str(filter_id),
+        str(model_architecture),
+        str(experiment_profile),
+    )
+    if actual_identity != expected_identity:
+        raise ValueError(
+            "Strategy Compare conversion source identity不一致: "
+            f"source={actual_identity}, requested={expected_identity}"
+        )
+    workflow = get_breakout_quality_workflow_settings(
+        experiment_profile=str(source.experiment_profile)
+    )
+    if int(seed) != int(workflow.seed):
+        raise ValueError(
+            "single-seed strategy conversion只允許canonical workflow seed: "
+            f"expected={int(workflow.seed)}, actual={int(seed)}"
+        )
+    return source
+
+
+def validate_single_seed_strategy_conversion_pit_scope(
+    *,
+    strategy_profile_id: str,
+    dl_id: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    seed: int,
+    score_start_date: str,
+    score_end_date: str | None,
+    fold_months: int,
+    fold_anchor_date: str | None,
+    single_score_block: bool,
+    inner_validation_months: int,
+    train_window_months: int | None,
+) -> StrategyDLSource:
+    """Validate the exact PIT build scope of a single-seed strategy exception.
+
+    The source-scoped exception authorizes only the canonical OOS/Rolling PIT plan
+    owned by the selected Strategy Compare profile.  It must not be reusable as a
+    hidden escape hatch for Fixed-Window or arbitrary date/fold PIT builds.
+    """
+
+    source = validate_single_seed_strategy_conversion_authorization(
+        strategy_profile_id=strategy_profile_id,
+        dl_id=dl_id,
+        filter_id=filter_id,
+        model_architecture=model_architecture,
+        experiment_profile=experiment_profile,
+        seed=seed,
+    )
+    if train_window_months is not None:
+        raise ValueError(
+            "single-seed Strategy Compare conversion只授權canonical OOS/Rolling；"
+            "Fixed-Window PIT不得使用此例外"
+        )
+    workflow = get_breakout_quality_workflow_settings(
+        experiment_profile=str(source.experiment_profile)
+    )
+    expected = {
+        "score_start_date": str(source.point_in_time_score_start_date or "").strip(),
+        "score_end_date": (
+            None
+            if source.point_in_time_score_end_date in (None, "")
+            else str(source.point_in_time_score_end_date).strip()
+        ),
+        "fold_months": int(source.point_in_time_fold_months or workflow.point_in_time_fold_months),
+        "fold_anchor_date": (
+            None
+            if source.point_in_time_fold_anchor_date in (None, "")
+            else str(source.point_in_time_fold_anchor_date).strip()
+        ),
+        "single_score_block": bool(source.point_in_time_single_score_block),
+        "inner_validation_months": int(workflow.point_in_time_inner_validation_months),
+    }
+    actual = {
+        "score_start_date": str(score_start_date or "").strip(),
+        "score_end_date": (
+            None if score_end_date in (None, "") else str(score_end_date).strip()
+        ),
+        "fold_months": int(fold_months),
+        "fold_anchor_date": (
+            None
+            if fold_anchor_date in (None, "")
+            else str(fold_anchor_date).strip()
+        ),
+        "single_score_block": bool(single_score_block),
+        "inner_validation_months": int(inner_validation_months),
+    }
+    if actual != expected:
+        raise ValueError(
+            "single-seed Strategy Compare conversion PIT scope不一致: "
+            f"expected={expected}, actual={actual}"
+        )
+    return source
+
+
 __all__ = [
     "STRATEGY_COMPARE_ARMS",
     "STRATEGY_COMPARE_CONTRASTS",
@@ -1455,4 +1610,6 @@ __all__ = [
     "get_strategy_multi_seed_robustness_settings",
     "get_strategy_runtime_integration_settings",
     "get_strategy_comparison_settings",
+    "validate_single_seed_strategy_conversion_authorization",
+    "validate_single_seed_strategy_conversion_pit_scope",
 ]

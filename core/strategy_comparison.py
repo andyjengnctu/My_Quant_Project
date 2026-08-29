@@ -180,6 +180,7 @@ class StrategyDLSource:
     threshold: float | None
     description: str
     score_source: str = "canonical_runtime"
+    single_seed_strategy_conversion_authorized: bool = False
     forward_scores_builder: StrategyArtifactBuilder | None = None
     point_in_time_score_start_date: str | None = None
     point_in_time_score_end_date: str | None = None
@@ -197,6 +198,9 @@ class StrategyDLSource:
             "threshold": None if self.threshold is None else float(self.threshold),
             "description": self.description,
             "score_source": self.score_source,
+            "single_seed_strategy_conversion_authorized": bool(
+                self.single_seed_strategy_conversion_authorized
+            ),
             "forward_scores_builder": (
                 None
                 if self.forward_scores_builder is None
@@ -878,8 +882,25 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 raise ValueError(
                     f"Selection PIT只允許以既有fold/checkpoint重建推論工件，不得訓練模型: {key}"
                 )
+            if (
+                source.single_seed_strategy_conversion_authorized
+                and (
+                    source.forward_scores_builder is None
+                    or not bool(source.forward_scores_builder.enabled)
+                )
+            ):
+                raise ValueError(
+                    f"single-seed strategy conversion source必須有啟用的PIT builder: {key}"
+                )
         else:
             raise ValueError(f"DL source score_source不支援: {key}/{source.score_source}")
+        if (
+            source.single_seed_strategy_conversion_authorized
+            and source.score_source != "selection_point_in_time"
+        ):
+            raise ValueError(
+                f"single-seed strategy conversion只允許Selection PIT source: {key}"
+            )
         if source.score_source != "selection_point_in_time" and (
             source.point_in_time_score_start_date not in (None, "")
             or source.point_in_time_score_end_date not in (None, "")

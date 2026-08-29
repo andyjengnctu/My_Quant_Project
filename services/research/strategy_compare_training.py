@@ -51,6 +51,7 @@ def build_strategy_compare_trainer_command(
     checkpoint_cache_root: str | Path | None = None,
     model_output_dir: str | Path | None = None,
     research_output_dir: str | Path | None = None,
+    strategy_compare_profile_id: str | None = None,
     resume: bool = True,
 ) -> tuple[list[str], list[str], dict[str, object]]:
     """Build one canonical trainer command for any Strategy Compare seed."""
@@ -132,6 +133,19 @@ def build_strategy_compare_trainer_command(
         args.extend([
             "--checkpoint-cache-root",
             str(Path(checkpoint_cache_root).resolve()),
+        ])
+    if bool(getattr(source, "single_seed_strategy_conversion_authorized", False)):
+        profile_id = str(strategy_compare_profile_id or "").strip()
+        if not profile_id:
+            raise ValueError(
+                "此DL source只授權single-seed Strategy Compare conversion；"
+                "generic PIT／multi-seed／Fixed不得使用"
+            )
+        args.extend([
+            "--strategy-compare-profile-id",
+            profile_id,
+            "--strategy-compare-source-id",
+            str(source.dl_id),
         ])
     return (
         [
@@ -326,6 +340,7 @@ def run_strategy_compare_training_unit(
     registry: dict[str, Any] | None = None,
     registry_lock: Any = None,
     registry_key: str | None = None,
+    strategy_compare_profile_id: str | None = None,
     failure_prefix: str = "Strategy Compare模型訓練失敗",
     resume: bool = True,
 ) -> dict[str, Any]:
@@ -347,6 +362,7 @@ def run_strategy_compare_training_unit(
         checkpoint_cache_root=checkpoint_cache_root,
         model_output_dir=model_output_dir,
         research_output_dir=research_output_dir,
+        strategy_compare_profile_id=strategy_compare_profile_id,
         resume=bool(resume),
     )
     process_result = run_logged_training_process(
@@ -367,6 +383,9 @@ def run_strategy_compare_training_unit(
         )
 
         audit_started = time.perf_counter()
+        strategy_scoped = bool(
+            getattr(source, "single_seed_strategy_conversion_authorized", False)
+        )
         code = audit_selection_point_in_time_scores(
             filter_id=str(source.filter_id),
             model_architecture=str(source.model_architecture),
@@ -376,6 +395,15 @@ def run_strategy_compare_training_unit(
                 if point_in_time_dir_override in (None, "")
                 else str(Path(point_in_time_dir_override).resolve())
             ),
+            strategy_compare_profile_id=(
+                str(strategy_compare_profile_id)
+                if strategy_scoped and strategy_compare_profile_id not in (None, "")
+                else None
+            ),
+            strategy_compare_source_id=(
+                str(source.dl_id) if strategy_scoped else None
+            ),
+            strategy_compare_seed=(int(seed) if strategy_scoped else None),
         )
         audit_elapsed_sec = time.perf_counter() - audit_started
         if int(code) != 0:

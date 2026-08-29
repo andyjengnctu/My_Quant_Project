@@ -10960,3 +10960,15 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - Compare Suite schema=`65`，current arms=`C61/C58/C59/C77/C78/C79/C80/C81`。既有六arms及其contract不改；只新增AH source與兩arms。
 - 本輪只授權**single-seed Seed42 OOS + Rolling**。Multi-seed/Fixed仍依effect-size gate延後；只有single-seed RoMD/EV/MFE×Safety形成足夠大的實務差異才值得再投入robustness。Production C42/C44不變。
 
+
+## 2026-08-29 — MR-13AH C80/C81 strategy-scoped authorization correction
+
+- **Status**：`IMPLEMENTED / AUTHORIZATION_SCOPE_CORRECTED / MODEL_GATE_FAIL_UNCHANGED / SINGLE_SEED_OOS_ROLLING_ONLY`。本輪不改MR-13AH target、architecture、pair-weight、Seed、模型結果、C80/C81 allocator contract或production；只修正downstream strategy conversion的授權邊界。
+- **程式基準**：使用者提供 `test-branch-1_20260829_175324_b3e53db8.zip`，SHA256=`b414cc428612fda5ee935b6977a024f31404960be36cd25987f4363524ab8625`。
+- **觸發原因**：先前C80/C81 patch為取得PIT artifact，直接把MR-13AH research spec的`selection_pit_authorized/current_time_validation_authorized`翻成`True/True`。這會讓generic model PIT、Extending/Fixed Rolling等入口誤以為AH整體已通過current authorization，與「Model Gate FAIL維持、只授權C80/C81 Seed42 OOS+Rolling、Multi-seed/Fixed延後」的scientific decision不一致。
+- **修正**：MR-13AH model-level authorization恢復`False/False`。`StrategyDLSource`新增`single_seed_strategy_conversion_authorized` capability；只有`CONT13AH_ROLL`設為True。Strategy Compare single-seed producer會帶hidden profile/source scope進PIT builder與audit；generic model PIT/Rolling、無scope呼叫與noncanonical Seed均fail-closed。
+- **Exact PIT scope**：source-scoped例外只能使用所選current Strategy Compare profile宣告的canonical `score_start/end`、fold months/anchor、single-score-block、inner-validation months，且`train_window_months`必須為None；因此Fixed-Window或任意日期/fold無法藉hidden scope繞過model-level authorization。
+- **Robustness boundary**：current multi-seed robustness membership由Compare Suite自動排除`single_seed_strategy_conversion_authorized` source arms，因此C80/C81不進Multi-seed；若single-seed效果達使用者effect-size gate，必須另行明確promotion/authorization，不能沿用本例外。
+- **Strategy schema**：current Strategy Compare schema由65升為66；arms與scientific contrasts仍為`C61/C58/C59/C77/C78/C79/C80/C81`及既有15 contrasts，只有authorization metadata/derived robustness membership改變。
+- **Governance**：Registry、Research Queue與Checklist B306/T423更新為source-scoped truth；舊Experiment Log與Checklist G歷史紀錄保留原始schema65/全域authorization變更事實，再以本entry與後續G correction row追記，不重寫歷史。
+- **獨立驗證**：targeted Strategy Compare contract=`74/74 PASS`、generic continuous-ranker contract=`37/37 PASS`；完整synthetic consistency=`4,637 checks / 244 cases / 0 FAIL`；Checklist meta consistency=`25/25 PASS`；source-root `compileall` PASS。正式 `apps/run_bundle.py` / `apps/test_suite.py`依治理規則留給使用者本機double check。

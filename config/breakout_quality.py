@@ -2167,10 +2167,11 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         score_semantic_id="daily_safety_product_weighted_pure_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
-        # User-authorized downstream conversion exception: model gate remains FAIL,
-        # but Seed42 PIT-safe OOS/Rolling strategy conversion is explicitly allowed.
-        selection_pit_authorized=True,
-        current_time_validation_authorized=True,
+        # Model-level authorization remains closed after the failed Forward Model Gate.
+        # The user-authorized C80/C81 exception is owned by Strategy Compare's
+        # CONT13AH_ROLL source and must not open generic PIT/Rolling/Fixed workflows.
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
     ),
     DAILY_UNIVERSAL_PREDICTED_SAFETY_CONFLICT_DISCOUNTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_PREDICTED_SAFETY_CONFLICT_DISCOUNTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
