@@ -2063,7 +2063,10 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         SUPPORTED_MODEL_ARCHITECTURES,
         INCEPTION_TIME_RISK_CONTEXT_V1,
         INCEPTION_TIME_V1,
+        get_model_spec,
+        model_spec_from_manifest,
     )
+    from filters.breakout_quality.models.spec_registry import MODEL_SPEC_BUILDERS
     from filters.breakout_quality.ranker_training_contract import training_semantics
     from filters.breakout_quality.risk_normalized_target import (
         RISK_GEOMETRY_CONTEXT_FEATURES,
@@ -2477,6 +2480,25 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             set(ACTIVE_MODEL_ARCHITECTURES).intersection(LEGACY_MODEL_ARCHITECTURES),
             set(ACTIVE_MODEL_ARCHITECTURES).union(LEGACY_MODEL_ARCHITECTURES),
         ),
+    )
+
+    check(
+        "model_spec_registry_is_exhaustive_without_second_architecture_matrix",
+        set(SUPPORTED_MODEL_ARCHITECTURES),
+        set(MODEL_SPEC_BUILDERS),
+    )
+    model_spec_roundtrip_mismatches = []
+    for architecture in SUPPORTED_MODEL_ARCHITECTURES:
+        spec = get_model_spec(architecture)
+        if MODEL_SPEC_BUILDERS[architecture](architecture).as_manifest_payload() != spec.as_manifest_payload():
+            model_spec_roundtrip_mismatches.append(f"builder:{architecture}")
+            continue
+        if model_spec_from_manifest(spec.as_manifest_payload()) != spec:
+            model_spec_roundtrip_mismatches.append(f"manifest:{architecture}")
+    check(
+        "model_spec_registry_builders_roundtrip_all_supported_architectures",
+        [],
+        model_spec_roundtrip_mismatches,
     )
 
     summary["components"] = (

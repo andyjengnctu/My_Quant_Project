@@ -1333,6 +1333,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     multi_seed_source = (
         project_root / "services/research/strategy_multi_seed_robustness.py"
     ).read_text(encoding="utf-8")
+    multi_seed_reporting_source = (
+        project_root / "services/research/strategy_multi_seed_reporting.py"
+    ).read_text(encoding="utf-8")
     continuous_ranker_source = (
         project_root / "services/breakout_quality/train_continuous_ranker.py"
     ).read_text(encoding="utf-8")
@@ -2187,10 +2190,10 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
 
     check_true(
         "robustness_report_surfaces_run_pinned_seed_and_optimizer_budget_identity",
-        '("Benchmark ID", str(contract.get("benchmark_id") or "-"))' in multi_seed_source
-        and '("Strategy trials/fold", str(contract.get("strategy_trials_per_fold") or "-"))' in multi_seed_source
-        and '("Seed generator", str(contract.get("seed_generator_seed") or "-"))' in multi_seed_source
-        and "非same-seed配對勝率" in multi_seed_source,
+        '("Benchmark ID", str(contract.get("benchmark_id") or "-"))' in multi_seed_reporting_source
+        and '("Strategy trials/fold", str(contract.get("strategy_trials_per_fold") or "-"))' in multi_seed_reporting_source
+        and '("Seed generator", str(contract.get("seed_generator_seed") or "-"))' in multi_seed_reporting_source
+        and "非same-seed配對勝率" in multi_seed_reporting_source,
     )
 
     oos_robustness = get_strategy_multi_seed_robustness_settings("extending_window_oos")
@@ -2240,11 +2243,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
 
     check_true(
         "multi_seed_robustness_reuses_strategy_compare_canonical_report_renderers_and_keeps_seed_extensions_separate",
-        "render_strategy_aggregate_report" in multi_seed_source
-                and "common_strategy_report" in multi_seed_source
-                and "RoMD完整統計" in multi_seed_source
-                and "設定中的同seed contrasts" in multi_seed_source
-                and "歷年報酬跨seed完整統計" in multi_seed_source
+        "render_multi_seed_robustness_report" in multi_seed_source
+                and "render_strategy_aggregate_report" in multi_seed_reporting_source
+                and "common_strategy_report" in multi_seed_reporting_source
+                and "RoMD完整統計" in multi_seed_reporting_source
+                and "設定中的同seed contrasts" in multi_seed_reporting_source
+                and "歷年報酬跨seed完整統計" in multi_seed_reporting_source
                 and "_upgrade_derived_report_summary" in multi_seed_source
                 and "report_refreshed_at_utc" in multi_seed_source,
     )

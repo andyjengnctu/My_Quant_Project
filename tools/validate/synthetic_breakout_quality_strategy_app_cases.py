@@ -126,6 +126,10 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
         project_root
         / "services" / "research" / "strategy_compare_engine.py"
     ).read_text(encoding="utf-8")
+    strategy_compare_runtime_contract_source = (
+        project_root
+        / "services" / "research" / "strategy_compare_runtime_contract.py"
+    ).read_text(encoding="utf-8")
     from config.research import get_active_model_research_provider
 
     provider = get_active_model_research_provider()
@@ -144,13 +148,14 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
 
     check_true(
         "single_seed_contract_strategy_gate_rejects_seed_mismatch",
-        all(
-                    token in strategy_compare_source
-                    for token in (
-                        "int(pit_contract.seed) != int(workflow_settings.seed)",
-                        "Selection PIT工件seed與目前workflow不一致",
-                    )
-                ),
+        "resolve_strategy_compare_runtime_contract" in strategy_compare_source
+        and all(
+            token in strategy_compare_runtime_contract_source
+            for token in (
+                "int(pit_contract.seed) != int(workflow_settings.seed)",
+                "Selection PIT工件seed與目前workflow不一致",
+            )
+        ),
     )
 
     summary["seed_source"] = "config.research.RESEARCH_SINGLE_SEED"
