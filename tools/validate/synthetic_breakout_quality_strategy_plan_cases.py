@@ -12,7 +12,7 @@ import pandas as pd
 
 from config.strategy_compare import get_strategy_comparison_settings
 from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
-from filters.breakout_quality import strategy_comparison as strategy_comparison_module
+from services.research import strategy_comparison as strategy_comparison_module
 from filters.breakout_quality.strategy_compare_plan import ResolvedComparisonPlan
 from .synthetic_breakout_quality_support import add_check, replace
 

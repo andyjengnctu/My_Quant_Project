@@ -156,7 +156,7 @@ def validate_local_regression_cli_contract_case(_base_params):
     app_package_zip = importlib.import_module("apps.package_zip")
     app_smart_downloader = importlib.import_module("apps.smart_downloader")
     export_requirements_lock = importlib.import_module("requirements.export_requirements_lock")
-    downloader_main_module = importlib.import_module("tools.downloader.main")
+    downloader_main_module = importlib.import_module("services.downloader.main")
     run_all = importlib.import_module("tools.local_regression.run_all")
     run_chain_checks = importlib.import_module("tools.local_regression.run_chain_checks")
     run_meta_quality = importlib.import_module("tools.local_regression.run_meta_quality")
@@ -199,7 +199,7 @@ def validate_local_regression_cli_contract_case(_base_params):
         ("tools/local_regression/run_meta_quality.py", run_meta_quality.main),
         ("tools/local_regression/run_quick_gate.py", run_quick_gate.main),
         ("apps/smart_downloader.py", app_smart_downloader.main),
-        ("tools/downloader/main.py", downloader_main_module.main),
+        ("services/downloader/main.py", downloader_main_module.main),
     ]
     for program, main_func in no_arg_cases:
         metric_prefix = program.replace("/", "_").replace(".", "_")
@@ -895,14 +895,14 @@ def validate_extended_tool_cli_contract_case(_base_params):
     app_test_suite = importlib.import_module("apps.test_suite")
     app_workbench = importlib.import_module("apps.workbench")
     optimizer_main = importlib.import_module("tools.optimizer.main")
-    portfolio_sim_main = importlib.import_module("tools.portfolio_sim.main")
-    scan_runner = importlib.import_module("tools.scanner.scan_runner")
+    portfolio_sim_main = importlib.import_module("services.portfolio_sim.main")
+    scan_runner = importlib.import_module("services.scanner.scan_runner")
     validate_main = importlib.import_module("tools.validate.main")
 
     dataset_cases = [
         ("tools/optimizer/main.py", optimizer_main.main, "environ", {}),
-        ("tools/portfolio_sim/main.py", portfolio_sim_main.main, "env", {"V16_AUTO_OPEN_BROWSER": "0"}),
-        ("tools/scanner/scan_runner.py", scan_runner.main, "env", {"TEST": "1"}),
+        ("services/portfolio_sim/main.py", portfolio_sim_main.main, "env", {"V16_AUTO_OPEN_BROWSER": "0"}),
+        ("services/scanner/scan_runner.py", scan_runner.main, "env", {"TEST": "1"}),
         ("tools/validate/main.py", validate_main.main, "environ", {}),
     ]
 

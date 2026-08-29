@@ -16,7 +16,7 @@ def main(argv=None):
     if cli_info["help"]:
         return 0
 
-    from tools.workbench_ui.workbench import launch_workbench
+    from services.workbench_ui.workbench import launch_workbench
 
     launch_workbench()
     return 0

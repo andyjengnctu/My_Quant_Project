@@ -20,14 +20,14 @@ from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_PORTFOLIO_MAX_PO
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.console_report import project_relative_display_path
-from tools.workbench_ui.param_sources import DEFAULT_PARAM_SOURCE_LABEL, build_workbench_param_source_options
+from services.workbench_ui.param_sources import DEFAULT_PARAM_SOURCE_LABEL, build_workbench_param_source_options
 from core.entry_plans import build_position_from_entry_fill
 from core.portfolio_fast_data import get_fast_close, get_fast_dates, get_fast_pos, get_fast_value
 from core.runtime_utils import parse_float_strict, parse_int_strict
 from core.log_utils import write_issue_log
 from core.walk_forward_policy import load_walk_forward_policy
-from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
-from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params
+from services.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
+from services.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params
 from core.params_io import build_params_from_mapping
 from core.portfolio_param_runtime import build_params_schedule_rows_from_payload
 from core.rolling_oos_params import build_active_param_schedule, format_rolling_oos_summary_lines, get_active_param_date_range, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
@@ -38,7 +38,7 @@ from core.active_param_ensemble import (
     is_active_param_ensemble_file,
     load_active_param_ensemble_set,
 )
-from tools.trade_analysis.trade_log import run_ticker_analysis
+from services.trade_analysis.trade_log import run_ticker_analysis
 from services.portfolio_replay import (
     PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
     load_portfolio_market_context,
@@ -46,7 +46,7 @@ from services.portfolio_replay import (
     run_portfolio_simulation_with_param_ensemble,
     run_portfolio_simulation_with_param_schedule,
 )
-from tools.trade_analysis.charting import (
+from services.trade_analysis.charting import (
     bind_matplotlib_chart_navigation,
     build_chart_hover_snapshot,
     build_debug_chart_payload,
@@ -65,7 +65,7 @@ from tools.trade_analysis.charting import (
     scroll_chart_to_adjacent_trade,
     scroll_chart_to_latest,
 )
-from tools.workbench_ui.workbench import (
+from services.workbench_ui.workbench import (
     WorkbenchConsoleWriter,
     WorkbenchInspectorSharedMixin,
     build_workbench_chart_overlay_checkbutton,

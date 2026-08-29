@@ -38,8 +38,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 from core.portfolio_fast_data import prep_stock_data_and_trades, build_trade_stats_index
 from core.exact_accounting import calc_entry_total_cost
 from core.price_utils import calc_reference_candidate_qty, calc_entry_price
-from tools.scanner.stock_processor import build_scanner_response_from_stats
-from tools.trade_analysis.charting import (
+from services.scanner.stock_processor import build_scanner_response_from_stats
+from services.trade_analysis.charting import (
     bind_matplotlib_chart_navigation,
     build_debug_chart_payload,
     normalize_chart_payload_contract,
@@ -51,9 +51,9 @@ from tools.trade_analysis.charting import (
     set_chart_status_box,
     set_chart_summary_box,
 )
-from tools.trade_analysis.backtest import _record_buy_signal_annotation
-from tools.trade_analysis.entry_flow import _record_entry_plan_marker
-from tools.trade_analysis.exit_flow import append_debug_forced_closeout
+from services.trade_analysis.backtest import _record_buy_signal_annotation
+from services.trade_analysis.entry_flow import _record_entry_plan_marker
+from services.trade_analysis.exit_flow import append_debug_forced_closeout
 
 from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check, run_scanner_reference_check_on_clean_df
 from .synthetic_case_builders import build_synthetic_competing_candidates_case
@@ -1727,7 +1727,7 @@ def validate_debug_chart_payload_without_html_export_contract_case(base_params):
     min_rows_needed = get_required_min_rows(case["params"])
     clean_df, _sanitize_stats = sanitize_ohlcv_dataframe(frame.copy(), ticker, min_rows=min_rows_needed)
 
-    debug_module = importlib.import_module("tools.trade_analysis.trade_log")
+    debug_module = importlib.import_module("services.trade_analysis.trade_log")
     with tempfile.TemporaryDirectory(prefix="debug_chart_payload_contract_") as temp_dir:
         analysis_result = debug_module.run_debug_analysis(
             clean_df.copy(),
@@ -1761,7 +1761,7 @@ def validate_debug_empty_price_df_chart_payload_contract_case(base_params):
     params = case["params"]
     empty_df = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
     with tempfile.TemporaryDirectory(prefix="debug_empty_price_df_chart_payload_contract_") as temp_dir:
-        analysis_result = importlib.import_module("tools.trade_analysis.trade_log").run_debug_analysis(
+        analysis_result = importlib.import_module("services.trade_analysis.trade_log").run_debug_analysis(
             empty_df.copy(),
             "EMPTY",
             params,
@@ -1787,9 +1787,9 @@ def validate_gui_embedded_chart_contract_case(base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    workbench_spec = importlib.import_module("tools.workbench_ui").build_workbench_spec()
+    workbench_spec = importlib.import_module("services.workbench_ui").build_workbench_spec()
     panel_spec = workbench_spec.get("panels", [])[0]
-    add_check(results, "output_contract", case_id, "gui_embedded_chart_backend", "tools.trade_analysis.charting.create_matplotlib_trade_chart_figure", panel_spec.get("inline_chart_backend"))
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_backend", "services.trade_analysis.charting.create_matplotlib_trade_chart_figure", panel_spec.get("inline_chart_backend"))
     add_check(results, "output_contract", case_id, "gui_embedded_chart_default_show_volume", False, panel_spec.get("default_show_volume"))
 
     case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
@@ -1798,7 +1798,7 @@ def validate_gui_embedded_chart_contract_case(base_params):
     min_rows_needed = get_required_min_rows(case["params"])
     clean_df, _sanitize_stats = sanitize_ohlcv_dataframe(frame.copy(), ticker, min_rows=min_rows_needed)
 
-    debug_module = importlib.import_module("tools.trade_analysis.trade_log")
+    debug_module = importlib.import_module("services.trade_analysis.trade_log")
     with tempfile.TemporaryDirectory(prefix="gui_embedded_chart_contract_") as temp_dir:
         analysis_result = debug_module.run_debug_analysis(
             clean_df.copy(),
@@ -1921,11 +1921,11 @@ def validate_gui_mouse_navigation_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
-    portfolio_inspector_source = build_project_absolute_path("tools", "workbench_ui", "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
+    inspector_source = build_project_absolute_path("services", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    portfolio_inspector_source = build_project_absolute_path("services", "workbench_ui", "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
     portfolio_engine_source = build_project_absolute_path("core", "portfolio_engine.py").read_text(encoding="utf-8")
     portfolio_entries_source = build_project_absolute_path("core", "portfolio_entries.py").read_text(encoding="utf-8")
-    charting_source = build_project_absolute_path("tools", "trade_analysis", "charting.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("services", "trade_analysis", "charting.py").read_text(encoding="utf-8")
     marker_price_block = portfolio_inspector_source.split("def _resolve_marker_price", 1)[1].split("def _is_buy_trade_row", 1)[0]
 
     add_check(results, "output_contract", case_id, "gui_chart_does_not_require_navigation_toolbar", True, "NavigationToolbar2Tk" not in inspector_source)
@@ -2024,9 +2024,9 @@ def validate_gui_dark_theme_and_keyboard_pan_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    workbench_source = build_project_absolute_path("tools", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
-    charting_source = build_project_absolute_path("tools", "trade_analysis", "charting.py").read_text(encoding="utf-8")
-    workbench_spec = importlib.import_module("tools.workbench_ui").build_workbench_spec()
+    workbench_source = build_project_absolute_path("services", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("services", "trade_analysis", "charting.py").read_text(encoding="utf-8")
+    workbench_spec = importlib.import_module("services.workbench_ui").build_workbench_spec()
 
     add_check(results, "output_contract", case_id, "gui_workbench_declares_deep_dark_theme", True, workbench_spec.get("ui_theme") == "deep_dark")
     add_check(results, "output_contract", case_id, "gui_workbench_configures_dark_ttk_theme", True, "def configure_workbench_theme(root):" in workbench_source and 'style.theme_use("clam")' in workbench_source)
@@ -2073,14 +2073,14 @@ def validate_gui_chart_workspace_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    inspector_source = build_project_absolute_path("services", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
     add_check(results, "output_contract", case_id, "gui_chart_workspace_uses_notebook_tabs", True, 'ttk.Notebook(self, style="Workbench.TNotebook")' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_chart_workspace_omits_summary_tab", False, 'text="執行摘要"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_chart_workspace_has_trade_detail_tab", True, 'text="交易明細"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_chart_workspace_default_volume_hidden", True, 'self._show_volume_var = tk.BooleanVar(value=False)' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_chart_workspace_volume_toggle_rerenders_chart", True, 'show_volume=bool(self._show_volume_var.get())' in inspector_source)
 
-    workbench_spec = importlib.import_module("tools.workbench_ui").build_workbench_spec()
+    workbench_spec = importlib.import_module("services.workbench_ui").build_workbench_spec()
     panel_spec = workbench_spec.get("panels", [])[0]
     add_check(results, "output_contract", case_id, "gui_chart_workspace_panel_default_show_volume", False, panel_spec.get("default_show_volume"))
     add_check(results, "output_contract", case_id, "gui_chart_workspace_startup_window_mode", "maximized", workbench_spec.get("startup_window_mode"))
@@ -2152,9 +2152,9 @@ def validate_workbench_theme_accent_symbol_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    import tools.workbench_ui.workbench as workbench_module
+    import services.workbench_ui.workbench as workbench_module
 
-    workbench_source = build_project_absolute_path("tools", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
+    workbench_source = build_project_absolute_path("services", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
     add_check(results, "output_contract", case_id, "workbench_declares_accent_constant", True, hasattr(workbench_module, "WORKBENCH_ACCENT"))
     add_check(results, "output_contract", case_id, "workbench_accent_constant_is_hex_string", True, isinstance(getattr(workbench_module, "WORKBENCH_ACCENT", None), str) and str(getattr(workbench_module, "WORKBENCH_ACCENT", "")).startswith("#"))
     add_check(results, "output_contract", case_id, "workbench_theme_references_declared_accent_constant", True, "WORKBENCH_ACCENT" in workbench_source)
@@ -2166,10 +2166,10 @@ def validate_gui_scanner_console_and_latest_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
-    charting_source = build_project_absolute_path("tools", "trade_analysis", "charting.py").read_text(encoding="utf-8")
-    scanner_source = build_project_absolute_path("tools", "scanner", "scan_runner.py").read_text(encoding="utf-8")
-    stock_processor_source = build_project_absolute_path("tools", "scanner", "stock_processor.py").read_text(encoding="utf-8")
+    inspector_source = build_project_absolute_path("services", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("services", "trade_analysis", "charting.py").read_text(encoding="utf-8")
+    scanner_source = build_project_absolute_path("services", "scanner", "scan_runner.py").read_text(encoding="utf-8")
+    stock_processor_source = build_project_absolute_path("services", "scanner", "stock_processor.py").read_text(encoding="utf-8")
     scanner_display_source = build_project_absolute_path("core", "scanner_display.py").read_text(encoding="utf-8")
 
     add_check(results, "output_contract", case_id, "gui_panel_uses_full_dataset_only", False, 'text="資料集"' in inspector_source)
@@ -2197,9 +2197,9 @@ def validate_gui_sidebar_latest_preview_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
-    charting_source = build_project_absolute_path("tools", "trade_analysis", "charting.py").read_text(encoding="utf-8")
-    backtest_source = build_project_absolute_path("tools", "trade_analysis", "backtest.py").read_text(encoding="utf-8")
+    inspector_source = build_project_absolute_path("services", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("services", "trade_analysis", "charting.py").read_text(encoding="utf-8")
+    backtest_source = build_project_absolute_path("services", "trade_analysis", "backtest.py").read_text(encoding="utf-8")
 
     add_check(results, "output_contract", case_id, "gui_panel_removes_execute_button", False, 'text="執行回測"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_runs_backtest_on_enter", True, 'ticker_entry.bind("<Return>"' in inspector_source)
@@ -2219,10 +2219,10 @@ def validate_gui_single_stock_refined_visual_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
-    charting_source = build_project_absolute_path("tools", "trade_analysis", "charting.py").read_text(encoding="utf-8")
-    entry_flow_source = build_project_absolute_path("tools", "trade_analysis", "entry_flow.py").read_text(encoding="utf-8")
-    workbench_source = build_project_absolute_path("tools", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
+    inspector_source = build_project_absolute_path("services", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("services", "trade_analysis", "charting.py").read_text(encoding="utf-8")
+    entry_flow_source = build_project_absolute_path("services", "trade_analysis", "entry_flow.py").read_text(encoding="utf-8")
+    workbench_source = build_project_absolute_path("services", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
 
     add_check(results, "output_contract", case_id, "single_stock_chart_uses_pure_black_bg", True, 'MATPLOTLIB_DARK_BG = "#000000"' in charting_source)
     add_check(results, "output_contract", case_id, "single_stock_sidebar_signal_chip_uses_fixed_text", True, 'self._sidebar_signal_var = tk.StringVar(value=SIDEBAR_SIGNAL_CHIP_TEXT)' in inspector_source or 'self._sidebar_signal_var = tk.StringVar(value="出現買入訊號")' in inspector_source)
@@ -2241,8 +2241,8 @@ def validate_gui_extended_preview_continuity_contract_case(base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
-    entry_flow_source = build_project_absolute_path("tools", "trade_analysis", "entry_flow.py").read_text(encoding="utf-8")
+    inspector_source = build_project_absolute_path("services", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    entry_flow_source = build_project_absolute_path("services", "trade_analysis", "entry_flow.py").read_text(encoding="utf-8")
 
     add_check(results, "output_contract", case_id, "single_stock_signal_chip_runtime_text_stays_fixed", True, 'self._sidebar_signal_var.set(SIDEBAR_SIGNAL_CHIP_TEXT)' in inspector_source and 'self._sidebar_signal_var.set(signal_text)' not in inspector_source)
     add_check(results, "output_contract", case_id, "single_stock_history_chip_runtime_text_stays_fixed", True, 'self._sidebar_history_var.set(SIDEBAR_HISTORY_CHIP_TEXT)' in inspector_source and 'self._sidebar_history_var.set(history_text)' not in inspector_source)
@@ -2271,7 +2271,7 @@ def validate_gui_extended_preview_continuity_contract_case(base_params):
         np.array([np.nan, 10.50, np.nan, np.nan, np.nan, np.nan, np.nan], dtype=np.float64),
     )
 
-    debug_module = importlib.import_module("tools.trade_analysis.trade_log")
+    debug_module = importlib.import_module("services.trade_analysis.trade_log")
     with tempfile.TemporaryDirectory(prefix="gui_extended_preview_continuity_contract_") as temp_dir:
         analysis_result = debug_module.run_debug_analysis(
             frame.copy(),
@@ -2304,8 +2304,8 @@ def validate_gui_signal_annotation_and_forced_close_visual_contract_case(_base_p
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    charting_source = build_project_absolute_path("tools", "trade_analysis", "charting.py").read_text(encoding="utf-8")
-    backtest_source = build_project_absolute_path("tools", "trade_analysis", "backtest.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("services", "trade_analysis", "charting.py").read_text(encoding="utf-8")
+    backtest_source = build_project_absolute_path("services", "trade_analysis", "backtest.py").read_text(encoding="utf-8")
 
     sell_fn_start = backtest_source.index('def _record_sell_signal_annotation(')
     sell_fn_end = backtest_source.index('\n\ndef _apply_chart_sidebars', sell_fn_start)
@@ -2353,8 +2353,8 @@ def validate_gui_buy_signal_annotation_anchor_price_contract_case(base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    backtest_source = build_project_absolute_path("tools", "trade_analysis", "backtest.py").read_text(encoding="utf-8")
-    entry_flow_source = build_project_absolute_path("tools", "trade_analysis", "entry_flow.py").read_text(encoding="utf-8")
+    backtest_source = build_project_absolute_path("services", "trade_analysis", "backtest.py").read_text(encoding="utf-8")
+    entry_flow_source = build_project_absolute_path("services", "trade_analysis", "entry_flow.py").read_text(encoding="utf-8")
     add_check(results, "output_contract", case_id, "buy_signal_annotation_anchor_keeps_signal_low_even_when_entry_plan_exists", True, "anchor_price = float(signal_low)" in backtest_source and "anchor_price = float(entry_plan['limit_price'])" not in backtest_source)
     add_check(results, "output_contract", case_id, "buy_trade_marker_uses_fill_price", True, 'action="買進"' in entry_flow_source and "price=entry_result['buy_price']" in entry_flow_source)
 
@@ -2381,7 +2381,7 @@ def validate_gui_buy_signal_annotation_anchor_price_contract_case(base_params):
     add_check(results, "output_contract", case_id, "buy_signal_annotation_anchor_matches_signal_low", expected_signal_low, None if annotation is None else float(annotation.get("anchor_price")))
     add_check(results, "output_contract", case_id, "buy_signal_annotation_meta_keeps_entry_price_preview", float(entry_plan["limit_price"]), None if annotation is None else float((annotation.get("meta") or {}).get("entry_price", np.nan)))
 
-    from tools.trade_analysis.charting import record_trade_marker
+    from services.trade_analysis.charting import record_trade_marker
     fill_price = 21.85
     record_trade_marker(
         chart_context,
@@ -2415,9 +2415,9 @@ def validate_gui_trade_marker_and_tp_visual_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    charting_source = build_project_absolute_path("tools", "trade_analysis", "charting.py").read_text(encoding="utf-8")
-    exit_flow_source = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py").read_text(encoding="utf-8")
-    backtest_source = build_project_absolute_path("tools", "trade_analysis", "backtest.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("services", "trade_analysis", "charting.py").read_text(encoding="utf-8")
+    exit_flow_source = build_project_absolute_path("services", "trade_analysis", "exit_flow.py").read_text(encoding="utf-8")
+    backtest_source = build_project_absolute_path("services", "trade_analysis", "backtest.py").read_text(encoding="utf-8")
 
     add_check(results, "output_contract", case_id, "indicator_sell_marker_uses_green_horizontal_line", True, '"指標賣出": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_INDICATOR_SELL_COLOR}' in charting_source)
     add_check(results, "output_contract", case_id, "tp_visual_uses_yellow_color", True, 'MATPLOTLIB_TP_COLOR = "#facc15"' in charting_source)
@@ -2470,19 +2470,19 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    charting_source = build_project_absolute_path("tools", "trade_analysis", "charting.py").read_text(encoding="utf-8")
-    backtest_source = build_project_absolute_path("tools", "trade_analysis", "backtest.py").read_text(encoding="utf-8")
-    exit_flow_source = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py").read_text(encoding="utf-8")
-    trade_log_source = build_project_absolute_path("tools", "trade_analysis", "trade_log.py").read_text(encoding="utf-8")
-    entry_flow_source = build_project_absolute_path("tools", "trade_analysis", "entry_flow.py").read_text(encoding="utf-8")
-    inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
-    workbench_source = build_project_absolute_path("tools", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("services", "trade_analysis", "charting.py").read_text(encoding="utf-8")
+    backtest_source = build_project_absolute_path("services", "trade_analysis", "backtest.py").read_text(encoding="utf-8")
+    exit_flow_source = build_project_absolute_path("services", "trade_analysis", "exit_flow.py").read_text(encoding="utf-8")
+    trade_log_source = build_project_absolute_path("services", "trade_analysis", "trade_log.py").read_text(encoding="utf-8")
+    entry_flow_source = build_project_absolute_path("services", "trade_analysis", "entry_flow.py").read_text(encoding="utf-8")
+    inspector_source = build_project_absolute_path("services", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    workbench_source = build_project_absolute_path("services", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
 
     add_check(results, "output_contract", case_id, "debug_view_initial_capital_uses_scanner_live_capital_basis", True, 'cloned_params.initial_capital = resolve_scanner_live_capital(cloned_params)' in trade_log_source)
     add_check(results, "output_contract", case_id, "buy_signal_annotation_includes_current_capital_and_reserved_capital", True, '資金:' in backtest_source and '預留:' in backtest_source)
     add_check(results, "output_contract", case_id, "final_exit_marker_uses_completed_snapshot_after_same_day_exits", True, 'include_current_date_exits=True' in exit_flow_source)
 
-    charting_module = importlib.import_module("tools.trade_analysis.charting")
+    charting_module = importlib.import_module("services.trade_analysis.charting")
     build_trade_label_text = getattr(charting_module, "_build_trade_label_text")
 
     buy_label_text = build_trade_label_text(
@@ -2553,15 +2553,15 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
-    portfolio_inspector_source = build_project_absolute_path("tools", "workbench_ui", "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
+    inspector_source = build_project_absolute_path("services", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    portfolio_inspector_source = build_project_absolute_path("services", "workbench_ui", "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
     portfolio_engine_source = build_project_absolute_path("core", "portfolio_engine.py").read_text(encoding="utf-8")
     portfolio_entries_source = build_project_absolute_path("core", "portfolio_entries.py").read_text(encoding="utf-8")
     portfolio_exits_source = build_project_absolute_path("core", "portfolio_exits.py").read_text(encoding="utf-8")
-    portfolio_reporting_source = build_project_absolute_path("tools", "portfolio_sim", "reporting.py").read_text(encoding="utf-8")
-    workbench_source = build_project_absolute_path("tools", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
-    charting_source = build_project_absolute_path("tools", "trade_analysis", "charting.py").read_text(encoding="utf-8")
-    exit_flow_source = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py").read_text(encoding="utf-8")
+    portfolio_reporting_source = build_project_absolute_path("services", "portfolio_sim", "reporting.py").read_text(encoding="utf-8")
+    workbench_source = build_project_absolute_path("services", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("services", "trade_analysis", "charting.py").read_text(encoding="utf-8")
+    exit_flow_source = build_project_absolute_path("services", "trade_analysis", "exit_flow.py").read_text(encoding="utf-8")
     marker_price_block = portfolio_inspector_source.split("def _resolve_marker_price", 1)[1].split("def _is_buy_trade_row", 1)[0]
     add_check(results, "output_contract", case_id, "single_stock_sidebar_declares_trade_info_block", True, 'text="交易資訊"' in inspector_source and '_selected_tp_var' in inspector_source and '_selected_entry_var' in inspector_source and '_selected_stop_var' in inspector_source and '_selected_capital_var' in inspector_source and 'def _update_selected_value_sidebar' in workbench_source and 'set_workbench_capital_display_text(' in workbench_source)
     add_check(results, "output_contract", case_id, "single_stock_sidebar_omits_buy_signal_info_block", True, 'text="買訊資訊"' not in inspector_source and '_selected_reserved_var' not in inspector_source and '_selected_signal_capital_var' not in inspector_source)
@@ -2642,7 +2642,7 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
     add_check(results, "output_contract", case_id, "final_exit_trade_count_uses_completed_round_trip_index", expected_trade_count, forced_close_meta.get("trade_count"))
     add_check(results, "output_contract", case_id, "final_exit_marker_action_is_forced_close", "強制結算", forced_close_marker.get("trace_name"))
 
-    charting_module = importlib.import_module("tools.trade_analysis.charting")
+    charting_module = importlib.import_module("services.trade_analysis.charting")
     build_trade_label_text = getattr(charting_module, "_build_trade_label_text")
     exit_label_text = build_trade_label_text(
         "停損賣出",
@@ -2676,8 +2676,8 @@ def validate_gui_chart_margin_and_latest_extended_preview_contract_case(base_par
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    charting_source = build_project_absolute_path("tools", "trade_analysis", "charting.py").read_text(encoding="utf-8")
-    backtest_source = build_project_absolute_path("tools", "trade_analysis", "backtest.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("services", "trade_analysis", "charting.py").read_text(encoding="utf-8")
+    backtest_source = build_project_absolute_path("services", "trade_analysis", "backtest.py").read_text(encoding="utf-8")
 
     add_check(results, "output_contract", case_id, "single_stock_chart_tightens_left_bottom_margins_for_more_candle_space", True, 'MATPLOTLIB_SUBPLOT_LEFT = 0.046' in charting_source and 'MATPLOTLIB_SUBPLOT_BOTTOM = 0.058' in charting_source and 'axis_price.tick_params(axis="y", colors=MATPLOTLIB_TEXT_COLOR, labelsize=11, pad=6)' in charting_source)
     add_check(results, "output_contract", case_id, "single_stock_legend_keeps_small_inset_gap_from_top_left_boundary", True, 'bbox_to_anchor=(0.012, 1.012)' in charting_source and 'MATPLOTLIB_SUBPLOT_TOP = 0.986' in charting_source)
@@ -2704,8 +2704,8 @@ def validate_gui_chart_margin_and_latest_extended_preview_contract_case(base_par
         np.array([np.nan, 10.50, np.nan, np.nan, np.nan, np.nan, np.nan], dtype=np.float64),
     )
 
-    debug_module = importlib.import_module("tools.trade_analysis.trade_log")
-    backtest_module = importlib.import_module("tools.trade_analysis.backtest")
+    debug_module = importlib.import_module("services.trade_analysis.trade_log")
+    backtest_module = importlib.import_module("services.trade_analysis.backtest")
     forced_history_snapshot = {
         'trade_count': 12,
         'win_rate': 58.0,
@@ -2752,7 +2752,7 @@ def validate_gui_latest_raw_signal_preview_helper_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    backtest_path = build_project_absolute_path("tools", "trade_analysis", "backtest.py")
+    backtest_path = build_project_absolute_path("services", "trade_analysis", "backtest.py")
     backtest_source = backtest_path.read_text(encoding="utf-8")
     backtest_ast = ast.parse(backtest_source)
 
@@ -2775,9 +2775,9 @@ def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
-    workbench_source = build_project_absolute_path("tools", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
-    charting_source = build_project_absolute_path("tools", "trade_analysis", "charting.py").read_text(encoding="utf-8")
+    inspector_source = build_project_absolute_path("services", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    workbench_source = build_project_absolute_path("services", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("services", "trade_analysis", "charting.py").read_text(encoding="utf-8")
 
     add_check(
         results,
@@ -2834,7 +2834,7 @@ def validate_gui_chart_recent_view_signal_overlay_contract_case(base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    inspector_source = build_project_absolute_path("services", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
     add_check(results, "output_contract", case_id, "gui_inline_chart_skips_html_export_by_default", True, "export_chart=False" in inspector_source and "return_chart_payload=True" in inspector_source)
 
     large_dates = pd.date_range("2018-01-01", periods=1800, freq="B")
@@ -2894,7 +2894,7 @@ def validate_gui_chart_recent_view_signal_overlay_contract_case(base_params):
         np.array([False, False, False, True, False, False], dtype=bool),
         np.array([np.nan, 10.9, np.nan, np.nan, np.nan, np.nan], dtype=np.float64),
     )
-    debug_module = importlib.import_module("tools.trade_analysis.trade_log")
+    debug_module = importlib.import_module("services.trade_analysis.trade_log")
     with tempfile.TemporaryDirectory(prefix="gui_chart_signal_overlay_contract_") as temp_dir:
         analysis_result = debug_module.run_debug_analysis(
             signal_frame.copy(),
@@ -2959,7 +2959,7 @@ def validate_gui_workbench_contract_case(base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     apps_gui = importlib.import_module("apps.workbench")
-    tools_gui = importlib.import_module("tools.workbench_ui")
+    tools_gui = importlib.import_module("services.workbench_ui")
     workbench_spec = tools_gui.build_workbench_spec()
 
     add_check(results, "output_contract", case_id, "gui_app_thin_entry_main", apps_gui.main, tools_gui.main)
@@ -2973,9 +2973,9 @@ def validate_gui_workbench_contract_case(base_params):
     if panel_specs:
         panel_spec = panel_specs[0]
         add_check(results, "output_contract", case_id, "gui_workbench_panel_tab_label", "單股回測檢視", panel_spec.get("tab_label"))
-        add_check(results, "output_contract", case_id, "gui_workbench_backend_runner", "tools.trade_analysis.trade_log.run_ticker_analysis", panel_spec.get("backend_runner"))
+        add_check(results, "output_contract", case_id, "gui_workbench_backend_runner", "services.trade_analysis.trade_log.run_ticker_analysis", panel_spec.get("backend_runner"))
         add_check(results, "output_contract", case_id, "gui_workbench_artifact_keys", ["excel_path"], panel_spec.get("artifact_keys"))
-        add_check(results, "output_contract", case_id, "gui_workbench_inline_chart_backend", "tools.trade_analysis.charting.create_matplotlib_trade_chart_figure", panel_spec.get("inline_chart_backend"))
+        add_check(results, "output_contract", case_id, "gui_workbench_inline_chart_backend", "services.trade_analysis.charting.create_matplotlib_trade_chart_figure", panel_spec.get("inline_chart_backend"))
         add_check(results, "output_contract", case_id, "gui_workbench_default_show_volume", False, panel_spec.get("default_show_volume"))
         add_check(results, "output_contract", case_id, "gui_workbench_single_jump_to_trade_enabled", True, panel_spec.get("jump_to_trade_enabled"))
 
@@ -2986,15 +2986,15 @@ def validate_gui_workbench_contract_case(base_params):
         add_check(results, "output_contract", case_id, "gui_workbench_portfolio_artifact_keys", ["dashboard_html_path", "report_xlsx_path"], portfolio_panel_spec.get("artifact_keys"))
         add_check(results, "output_contract", case_id, "gui_workbench_portfolio_jump_to_trade_enabled", True, portfolio_panel_spec.get("jump_to_trade_enabled"))
 
-    inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
-    portfolio_inspector_source = build_project_absolute_path("tools", "workbench_ui", "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
+    inspector_source = build_project_absolute_path("services", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    portfolio_inspector_source = build_project_absolute_path("services", "workbench_ui", "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
     portfolio_runner_source = build_project_absolute_path("services", "portfolio_replay.py").read_text(encoding="utf-8")
-    workbench_source = build_project_absolute_path("tools", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
+    workbench_source = build_project_absolute_path("services", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
     meta_quality_coverage_source = build_project_absolute_path("tools", "local_regression", "meta_quality_coverage.py").read_text(encoding="utf-8")
     validate_main_source = build_project_absolute_path("tools", "validate", "main.py").read_text(encoding="utf-8")
-    charting_source = build_project_absolute_path("tools", "trade_analysis", "charting.py").read_text(encoding="utf-8")
-    add_check(results, "output_contract", case_id, "gui_workbench_registry_lazy_panel_imports", True, "from tools.workbench_ui.single_stock_inspector import" not in workbench_source and "from tools.workbench_ui.portfolio_backtest_inspector import" not in workbench_source)
-    add_check(results, "output_contract", case_id, "gui_headless_coverage_omits_runtime_ui_files", True, "HEADLESS_COVERAGE_OMIT_PATTERNS" in meta_quality_coverage_source and "tools\" / \"workbench_ui\" / \"*.py\"" in meta_quality_coverage_source)
+    charting_source = build_project_absolute_path("services", "trade_analysis", "charting.py").read_text(encoding="utf-8")
+    add_check(results, "output_contract", case_id, "gui_workbench_registry_lazy_panel_imports", True, "from services.workbench_ui.single_stock_inspector import" not in workbench_source and "from services.workbench_ui.portfolio_backtest_inspector import" not in workbench_source)
+    add_check(results, "output_contract", case_id, "gui_headless_coverage_omits_runtime_ui_files", True, "HEADLESS_COVERAGE_OMIT_PATTERNS" in meta_quality_coverage_source and "services\" / \"workbench_ui\" / \"*.py\"" in meta_quality_coverage_source)
     add_check(results, "output_contract", case_id, "gui_validate_coverage_omits_runtime_ui_files", True, "HEADLESS_COVERAGE_OMIT_PATTERNS" in validate_main_source and "workbench_ui" in validate_main_source and "omit=HEADLESS_COVERAGE_OMIT_PATTERNS" in validate_main_source)
     add_check(results, "output_contract", case_id, "coverage_omits_torch_generated_remote_module_sources", True, 'PROJECT_ROOT / "_remote_module_*"' in meta_quality_coverage_source and 'os.path.join(PROJECT_ROOT, "_remote_module_*")' in validate_main_source)
     add_check(results, "output_contract", case_id, "gui_trade_navigation_forces_immediate_redraw", True, "figure.canvas.draw()" in charting_source and "figure.canvas.flush_events()" in charting_source)
@@ -3057,8 +3057,8 @@ def validate_gui_workbench_contract_case(base_params):
     min_rows_needed = get_required_min_rows(case["params"])
     clean_df, _sanitize_stats = sanitize_ohlcv_dataframe(frame.copy(), ticker, min_rows=min_rows_needed)
 
-    debug_module = importlib.import_module("tools.trade_analysis.trade_log")
-    charting_module = importlib.import_module("tools.trade_analysis.charting")
+    debug_module = importlib.import_module("services.trade_analysis.trade_log")
+    charting_module = importlib.import_module("services.trade_analysis.charting")
     add_check(results, "output_contract", case_id, "trade_log_exposes_canonical_trade_analysis_data_dir_helper", True, hasattr(debug_module, "resolve_trade_analysis_data_dir"))
     add_check(results, "output_contract", case_id, "charting_exposes_canonical_trade_chart_alias", True, hasattr(charting_module, "create_matplotlib_trade_chart_figure"))
     add_check(results, "output_contract", case_id, "charting_exposes_index_navigation_helper", True, hasattr(charting_module, "scroll_chart_to_index"))
@@ -3129,7 +3129,7 @@ def validate_debug_trade_log_chart_context_optional_case(base_params):
     result_df, module_path = run_debug_trade_log_check(ticker, clean_df, case["params"])
     records = _normalize_nan_records(result_df)
 
-    add_check(results, "output_contract", case_id, "debug_chart_context_optional_module_path", "tools/trade_analysis/trade_log.py", module_path)
+    add_check(results, "output_contract", case_id, "debug_chart_context_optional_module_path", "services/trade_analysis/trade_log.py", module_path)
     add_check(results, "output_contract", case_id, "debug_chart_context_optional_has_rows", True, bool(records))
     add_check(results, "output_contract", case_id, "debug_chart_context_optional_has_buy_row", True, any(str(row.get("動作", "")).startswith("買進") for row in records))
     return results, summary
@@ -3141,11 +3141,11 @@ def validate_tool_module_path_normalization_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    abs_debug_path = build_project_absolute_path("tools", "trade_analysis", "trade_log.py")
+    abs_debug_path = build_project_absolute_path("services", "trade_analysis", "trade_log.py")
     backslash_debug_path = str(abs_debug_path).replace("/", "\\")
 
-    add_check(results, "output_contract", case_id, "normalize_module_path_from_absolute", "tools/trade_analysis/trade_log.py", normalize_project_relative_path(abs_debug_path))
-    add_check(results, "output_contract", case_id, "normalize_module_path_from_backslash_absolute", "tools/trade_analysis/trade_log.py", normalize_project_relative_path(backslash_debug_path))
+    add_check(results, "output_contract", case_id, "normalize_module_path_from_absolute", "services/trade_analysis/trade_log.py", normalize_project_relative_path(abs_debug_path))
+    add_check(results, "output_contract", case_id, "normalize_module_path_from_backslash_absolute", "services/trade_analysis/trade_log.py", normalize_project_relative_path(backslash_debug_path))
     add_check(results, "output_contract", case_id, "normalize_module_path_relative_passthrough", "apps/workbench.py", normalize_project_relative_path("apps/workbench.py"))
     return results, summary
 
@@ -3156,10 +3156,10 @@ def validate_module_path_normalizer_accepts_path_objects_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    debug_path = build_project_absolute_path("tools", "trade_analysis", "trade_log.py")
+    debug_path = build_project_absolute_path("services", "trade_analysis", "trade_log.py")
     gui_path = build_project_absolute_path("apps", "workbench.py")
 
-    add_check(results, "output_contract", case_id, "normalize_module_path_from_path_object_debug", "tools/trade_analysis/trade_log.py", normalize_project_relative_path(debug_path))
+    add_check(results, "output_contract", case_id, "normalize_module_path_from_path_object_debug", "services/trade_analysis/trade_log.py", normalize_project_relative_path(debug_path))
     add_check(results, "output_contract", case_id, "normalize_module_path_from_path_object_gui", "apps/workbench.py", normalize_project_relative_path(gui_path))
     return results, summary
 
@@ -3173,10 +3173,10 @@ def validate_module_loader_project_root_string_patch_case(_base_params):
     with tempfile.TemporaryDirectory(prefix="v16_module_loader_root_patch_") as tmp_dir:
         runtime_root = Path(tmp_dir)
         with patch.object(module_loader_module, "PROJECT_ROOT", str(runtime_root)):
-            patched_abs_path = module_loader_module.build_project_absolute_path("tools", "trade_analysis", "trade_log.py")
-            add_check(results, "output_contract", case_id, "build_project_absolute_path_accepts_string_project_root", str(runtime_root / "tools" / "trade_analysis" / "trade_log.py"), str(patched_abs_path))
-            add_check(results, "output_contract", case_id, "normalize_module_path_under_string_project_root", "tools/trade_analysis/trade_log.py", module_loader_module.normalize_project_relative_path(patched_abs_path))
-            add_check(results, "output_contract", case_id, "normalize_absolute_string_path_under_string_project_root", "tools/trade_analysis/trade_log.py", module_loader_module.normalize_project_relative_path(str(runtime_root / "tools" / "trade_analysis" / "trade_log.py")))
+            patched_abs_path = module_loader_module.build_project_absolute_path("services", "trade_analysis", "trade_log.py")
+            add_check(results, "output_contract", case_id, "build_project_absolute_path_accepts_string_project_root", str(runtime_root / "services" / "trade_analysis" / "trade_log.py"), str(patched_abs_path))
+            add_check(results, "output_contract", case_id, "normalize_module_path_under_string_project_root", "services/trade_analysis/trade_log.py", module_loader_module.normalize_project_relative_path(patched_abs_path))
+            add_check(results, "output_contract", case_id, "normalize_absolute_string_path_under_string_project_root", "services/trade_analysis/trade_log.py", module_loader_module.normalize_project_relative_path(str(runtime_root / "services" / "trade_analysis" / "trade_log.py")))
     return results, summary
 
 def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):

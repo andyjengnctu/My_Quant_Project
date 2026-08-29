@@ -362,7 +362,7 @@ from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 from filters.breakout_quality import workflow_io as breakout_quality_common
 from tools.filters.breakout_quality import evaluate as breakout_quality_evaluate
-from filters.breakout_quality import export_scores as breakout_quality_export_scores
+from services.breakout_quality import export_scores as breakout_quality_export_scores
 from tools.filters.breakout_quality import train as breakout_quality_train
 from tools.filters.breakout_quality.report import (
     build_report_payload,
@@ -375,7 +375,7 @@ from tools.audit.breakout_quality.regime import (
     derive_benchmark_regime_features,
     render_regime_audit_markdown,
 )
-from filters.breakout_quality.strategy_compare_engine import (
+from services.research.strategy_compare_engine import (
     COMPARISON_MODE_HARD_FILTER,
     COMPARISON_MODE_SCORE_RANKING,
     OPTIONAL_ENTRY_FILTER_FIELDS,

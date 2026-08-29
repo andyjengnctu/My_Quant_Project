@@ -12,9 +12,9 @@ _RUNTIME_EXPORT_NAMES = {"SAVE_DIR", "FINMIND_PRICE_DATASET", "dl", "time"}
 
 
 def _get_downloader_modules():
-    rt = importlib.import_module("tools.downloader.runtime")
-    sync_runtime = importlib.import_module("tools.downloader.sync")
-    universe_module = importlib.import_module("tools.downloader.universe")
+    rt = importlib.import_module("services.downloader.runtime")
+    sync_runtime = importlib.import_module("services.downloader.sync")
+    universe_module = importlib.import_module("services.downloader.universe")
 
     return rt, sync_runtime, universe_module.get_market_last_date, universe_module.get_or_update_universe
 
@@ -47,7 +47,7 @@ def main(argv=None):
     argv = sys.argv if argv is None else argv
     validate_cli_args(argv)
     if has_help_flag(argv):
-        program_name = resolve_cli_program_name(argv, "tools/downloader/main.py")
+        program_name = resolve_cli_program_name(argv, "services/downloader/main.py")
         print(f"用法: python {program_name}")
         print("說明: 下載或更新完整資料集到預設 full dataset 路徑。")
         return 0

@@ -160,7 +160,7 @@ from core.console_report import (
 COMMAND_MODULES = {
     "build-dataset": "services.breakout_quality.dataset_builder",
     "train": "services.breakout_quality.train",
-    "export-scores": "filters.breakout_quality.export_scores",
+    "export-scores": "services.breakout_quality.export_scores",
     "report": "services.breakout_quality.report",
     "evaluate": "services.breakout_quality.evaluate",
     "prepare-continuous-target": "services.breakout_quality.continuous_target_preparation",

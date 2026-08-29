@@ -70,7 +70,7 @@ from filters.breakout_quality.strategy_compare_reporting import (
     render_strategy_pair_markdown,
     render_strategy_pair_simple_report,
 )
-from filters.breakout_quality.strategy_compare_replay import (
+from services.research.strategy_compare_replay import (
     _load_reusable_no_filter_baseline,
     _resolve_comparison_period,
     _run_scenario,

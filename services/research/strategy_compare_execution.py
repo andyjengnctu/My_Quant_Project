@@ -29,8 +29,8 @@ from filters.breakout_quality.ranking_score_store import (
 from filters.breakout_quality.strategy_compare_pit_contract import (
     resolve_strategy_compare_selection_pit_bundle_dir,
 )
-from filters.breakout_quality.strategy_compare_engine import run_comparison
-from filters.breakout_quality.strategy_compare_replay import run_standalone_baseline
+from services.research.strategy_compare_engine import run_comparison
+from services.research.strategy_compare_replay import run_standalone_baseline
 from filters.breakout_quality.strategy_compare_runtime import _arm_runtime_spec
 from filters.breakout_quality.strategy_compare_sources import (
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,

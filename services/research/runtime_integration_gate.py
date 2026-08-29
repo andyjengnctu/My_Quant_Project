@@ -35,7 +35,7 @@ from core.strategy_comparison import (
     StrategyComparisonArm,
     StrategyComparisonSettings,
 )
-from filters.breakout_quality.strategy_comparison import collect_artifact_status
+from services.research.strategy_comparison import collect_artifact_status
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 GATE_SCHEMA_VERSION = 2
@@ -508,7 +508,7 @@ def _robustness_checks(
     """
 
     from config.training_policy import resolve_robustness_benchmark_seeds
-    from filters.breakout_quality.strategy_multi_seed_robustness import SUMMARY_FILENAME
+    from services.research.strategy_multi_seed_robustness import SUMMARY_FILENAME
 
     cfg = get_strategy_multi_seed_robustness_settings(robustness_id)
     settings = get_strategy_comparison_settings(cfg.profile_id)

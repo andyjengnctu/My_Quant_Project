@@ -22,16 +22,16 @@ def append_completed_pair_score_reuse_contract_checks(
     """Validate archived frozen-score provenance independently of profile membership."""
 
     from config import strategy_compare as strategy_config
-    from filters.breakout_quality import strategy_comparison as score_reuse_module
+    from services.research import strategy_comparison as score_reuse_module
 
     reuse_source = (
-        project_root / "filters" / "breakout_quality" / "strategy_compare_reuse.py"
+        project_root / "services" / "research" / "strategy_compare_reuse.py"
     ).read_text(encoding="utf-8")
     orchestration_source = (
-        project_root / "filters" / "breakout_quality" / "strategy_comparison.py"
+        project_root / "services" / "research" / "strategy_comparison.py"
     ).read_text(encoding="utf-8")
     engine_source = (
-        project_root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
+        project_root / "services" / "research" / "strategy_compare_engine.py"
     ).read_text(encoding="utf-8")
 
     add_check(
@@ -508,7 +508,7 @@ def append_completed_pair_cache_contract_checks(
 ) -> None:
     """Validate completed-pair cache identity, output completeness, and matrix reuse."""
 
-    from filters.breakout_quality import strategy_comparison as strategy_comparison_module
+    from services.research import strategy_comparison as strategy_comparison_module
     from filters.breakout_quality.strategy_compare_sources import (
         resolve_strategy_param_evaluation_identity_sha256,
     )

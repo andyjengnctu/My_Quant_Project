@@ -569,7 +569,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
         get_breakout_quality_ranking_source_context,
         resolve_breakout_quality_candidate_rank,
     )
-    from filters.breakout_quality.strategy_compare_engine import (
+    from services.research.strategy_compare_engine import (
         _strategy_selection_diagnostics,
     )
 

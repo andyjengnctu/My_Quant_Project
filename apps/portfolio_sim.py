@@ -30,12 +30,12 @@ def main(argv=None, env=None):
         print(HELP_DESCRIPTION)
         return 0
 
-    from tools.portfolio_sim import main as portfolio_main
+    from services.portfolio_sim import main as portfolio_main
 
     exit_code = portfolio_main(argv=argv, env=env)
     if exit_code == 0:
         try:
-            from tools.portfolio_sim.reporting import DASHBOARD_HTML_PATH
+            from services.portfolio_sim.reporting import DASHBOARD_HTML_PATH
 
             if os.path.exists(DASHBOARD_HTML_PATH) and should_auto_open_browser(os.environ if env is None else env):
                 webbrowser.open('file://' + os.path.realpath(DASHBOARD_HTML_PATH))
@@ -48,7 +48,7 @@ def __getattr__(name):
     if name == "main":
         return main
     if name in LAZY_EXPORTS:
-        from tools import portfolio_sim as portfolio_module
+        from services import portfolio_sim as portfolio_module
 
         value = getattr(portfolio_module, name)
         globals()[name] = value

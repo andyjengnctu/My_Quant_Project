@@ -36,7 +36,7 @@ SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV = _optimizer_search_space_default("min_histor
 SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE = _optimizer_search_space_default("min_history_win_rate")
 HEADLESS_COVERAGE_OMIT_PATTERNS = [
     str(PROJECT_ROOT / "apps" / "workbench.py"),
-    str(PROJECT_ROOT / "tools" / "workbench_ui" / "*.py"),
+    str(PROJECT_ROOT / "services" / "workbench_ui" / "*.py"),
     str(PROJECT_ROOT / "_remote_module_*"),
 ]
 
@@ -97,7 +97,7 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
     from tools.local_regression import run_all as run_all_module
     from tools.local_regression import run_chain_checks as chain_checks_module
     from tools.local_regression import run_ml_smoke as ml_smoke_module
-    from tools.portfolio_sim import reporting as portfolio_reporting
+    from services.portfolio_sim import reporting as portfolio_reporting
     from tools.validate.reporting import print_console_summary
 
     probe_dir = coverage_dir / "formal_helper_probe"

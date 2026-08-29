@@ -44,7 +44,7 @@ def run_scanner_tool_check(ticker, file_path, params, *, prepared_df=None, sanit
 def run_downloader_tool_check(ticker):
     module, module_path = load_module_from_candidates(
         "vip_downloader_module",
-        ["tools/downloader/main.py"],
+        ["services/downloader/main.py"],
         required_attrs=["smart_download_vip_data"],
     )
 
@@ -98,7 +98,7 @@ def run_downloader_tool_check(ticker):
 def run_debug_trade_log_check(ticker, df, params, *, prepared_df=None):
     module, module_path = load_module_from_candidates(
         "debug_trade_log_module",
-        ["tools/trade_analysis/trade_log.py"],
+        ["services/trade_analysis/trade_log.py"],
         required_attrs=["run_debug_backtest"],
     )
     runner = getattr(module, "run_debug_prepared_backtest", None) if prepared_df is not None else None

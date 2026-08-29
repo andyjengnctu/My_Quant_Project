@@ -769,9 +769,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     app_source = app_path.read_text(encoding="utf-8")
     export_source = (
         Path(__file__).resolve().parents[2]
-        / "filters"
-        / "breakout_quality"
-        / "export_scores.py"
+        / "services" / "breakout_quality" / "export_scores.py"
     ).read_text(encoding="utf-8")
     check(
         "continuous_ranker_is_cli_only_and_does_not_pollute_interactive_menu",
@@ -862,7 +860,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     )
 
     from filters.breakout_quality.contract import RUNTIME_SCOPE_WORKFLOW
-    from filters.breakout_quality.export_scores import _run_daily_continuous_workflow_export
+    from services.breakout_quality.export_scores import _run_daily_continuous_workflow_export
     from filters.breakout_quality.daily_ranker_data import load_daily_universal_ranker_data
 
     # Regression guard for the Round-2 execution-recipe migration: the daily loader returns

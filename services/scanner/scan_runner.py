@@ -226,7 +226,7 @@ def main(argv=None, env=None):
     env = os.environ if env is None else env
     validate_cli_args(argv, value_options=("--dataset",))
     if has_help_flag(argv):
-        program_name = resolve_cli_program_name(argv, "tools/scanner/scan_runner.py")
+        program_name = resolve_cli_program_name(argv, "services/scanner/scan_runner.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
         print("說明: 預設資料集為完整；縮減資料集路徑為 <repo>/data/tw_stock_data_vip_reduced。")
         return 0

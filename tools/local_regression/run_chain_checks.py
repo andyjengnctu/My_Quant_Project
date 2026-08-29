@@ -22,7 +22,7 @@ from core.model_paths import resolve_default_primary_param_source_path
 from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_fast_data import build_trade_stats_index, get_pit_stats_from_index, pack_prepared_stock_data, prep_stock_data_and_trades
-from tools.scanner.stock_processor import process_prepared_stock
+from services.scanner.stock_processor import process_prepared_stock
 from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from tools.local_regression.common import PROJECT_ROOT, ensure_reduced_dataset, load_manifest, resolve_run_dir, write_csv, write_json, write_text
 from tools.local_regression.shared_prep_cache import load_shared_prep_cache_entry

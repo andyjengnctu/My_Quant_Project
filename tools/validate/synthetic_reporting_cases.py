@@ -13,7 +13,7 @@ from core.display_common import _strip_ansi
 from core.test_suite_reporting import TEST_SUITE_STEP_LABELS, print_test_suite_human_summary
 from tools.local_regression.formal_pipeline import DATASET_REQUIRED_STEPS, FORMAL_STEP_ORDER
 from tools.local_regression.meta_quality_targets import COVERAGE_BRANCH_MIN_FLOOR, COVERAGE_LINE_MIN_FLOOR
-from tools.portfolio_sim import reporting as portfolio_reporting
+from services.portfolio_sim import reporting as portfolio_reporting
 from tools.validate.reporting import print_console_summary
 
 from .checks import add_check

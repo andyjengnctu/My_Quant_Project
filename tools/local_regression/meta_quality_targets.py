@@ -78,7 +78,7 @@ COVERAGE_TARGETS = list(dict.fromkeys([
     *FORMAL_STEP_IMPLEMENTATION_COVERAGE_TARGETS,
     *TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS,
     "tools/validate/reporting.py",
-    "tools/portfolio_sim/reporting.py",
+    "services/portfolio_sim/reporting.py",
     "core/scanner_display.py",
     "core/strategy_dashboard.py",
     "core/display_common.py",

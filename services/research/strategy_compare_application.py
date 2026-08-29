@@ -232,7 +232,7 @@ def materialize_strategy_oos_rolling_consistency(
 def resolve_strategy_comparison_execution(profile_id: str):
     """Resolve one comparison profile and its auditable dependency plan."""
 
-    from filters.breakout_quality.strategy_comparison import (
+    from services.research.strategy_comparison import (
         render_execution_plan,
         resolve_comparison_plan,
     )
@@ -254,7 +254,7 @@ def execute_strategy_comparison(
 ) -> dict:
     """Execute an already-resolved comparison through the canonical engine."""
 
-    from filters.breakout_quality.strategy_comparison import run_strategy_comparison
+    from services.research.strategy_comparison import run_strategy_comparison
 
     return run_strategy_comparison(
         resolved_plan=resolved_plan,
@@ -268,7 +268,7 @@ def execute_strategy_comparison(
 def show_strategy_comparison_profile_status(*, profile_id: str) -> None:
     """Render readiness for one configured Strategy Compare profile."""
 
-    from filters.breakout_quality.strategy_comparison import show_strategy_comparison_status
+    from services.research.strategy_comparison import show_strategy_comparison_status
 
     settings = get_strategy_comparison_settings(str(profile_id))
     show_strategy_comparison_status(settings=settings)
@@ -282,7 +282,7 @@ def run_strategy_multi_seed_robustness(
 ) -> dict:
     """Run one configured robustness profile through its canonical implementation."""
 
-    from filters.breakout_quality.strategy_multi_seed_robustness import run_multi_seed_robustness
+    from services.research.strategy_multi_seed_robustness import run_multi_seed_robustness
 
     return run_multi_seed_robustness(
         robustness_id=str(robustness_id),
@@ -292,7 +292,7 @@ def run_strategy_multi_seed_robustness(
 
 
 def show_strategy_multi_seed_robustness_status(*, robustness_id: str) -> None:
-    from filters.breakout_quality.strategy_multi_seed_robustness import (
+    from services.research.strategy_multi_seed_robustness import (
         show_multi_seed_robustness_status,
     )
 
@@ -300,7 +300,7 @@ def show_strategy_multi_seed_robustness_status(*, robustness_id: str) -> None:
 
 
 def show_latest_strategy_multi_seed_robustness_report(*, robustness_id: str) -> None:
-    from filters.breakout_quality.strategy_multi_seed_robustness import (
+    from services.research.strategy_multi_seed_robustness import (
         show_latest_multi_seed_robustness_report,
     )
 
@@ -350,7 +350,7 @@ def dispatch_runtime_integration_action(action: str) -> None:
             "historical compatibility只允許status/latest唯讀檢視。"
         )
 
-    from filters.breakout_quality.runtime_integration_gate import (
+    from services.research.runtime_integration_gate import (
         run_runtime_integration_gate,
         show_latest_runtime_integration_report,
         show_runtime_integration_status,

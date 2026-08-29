@@ -19,7 +19,7 @@ def main(argv=None):
         print(HELP_DESCRIPTION)
         return 0
 
-    from tools.downloader import main as downloader_main
+    from services.downloader import main as downloader_main
 
     return downloader_main(argv=argv)
 
@@ -28,7 +28,7 @@ def __getattr__(name):
     if name == "main":
         return main
     if name == "smart_download_vip_data":
-        from tools import downloader as downloader_module
+        from services import downloader as downloader_module
 
         value = getattr(downloader_module, name)
         globals()[name] = value

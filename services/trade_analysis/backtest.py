@@ -16,7 +16,7 @@ from core.exact_accounting import (
 )
 from core.portfolio_fast_data import build_trade_stats_index
 from core.signal_utils import extract_precomputed_signals as _extract_precomputed_signals, generate_signals, unpack_precomputed_signals
-from tools.trade_analysis.charting import (
+from services.trade_analysis.charting import (
     create_debug_chart_context,
     record_active_levels,
     record_signal_annotation,
@@ -26,10 +26,10 @@ from tools.trade_analysis.charting import (
     set_chart_summary_box,
     set_chart_future_preview,
 )
-from tools.trade_analysis.entry_flow import process_debug_entry_for_day
-from tools.trade_analysis.exit_flow import append_debug_forced_closeout, process_debug_position_step
-from tools.trade_analysis.history_snapshot import build_pit_history_snapshot
-from tools.trade_analysis.reporting import finalize_debug_analysis
+from services.trade_analysis.entry_flow import process_debug_entry_for_day
+from services.trade_analysis.exit_flow import append_debug_forced_closeout, process_debug_position_step
+from services.trade_analysis.history_snapshot import build_pit_history_snapshot
+from services.trade_analysis.reporting import finalize_debug_analysis
 
 
 # 保留 stable patch seam 供 synthetic contract / GUI coverage 路徑覆寫 PIT history snapshot。

@@ -6,7 +6,7 @@ from core.display_common import _strip_ansi
 from core import display as display_module
 from core.scanner_display import print_scanner_header
 from core.strategy_dashboard import print_strategy_dashboard
-from tools.scanner.reporting import print_scanner_start_banner, print_scanner_summary
+from services.scanner.reporting import print_scanner_start_banner, print_scanner_summary
 
 from .checks import add_check
 

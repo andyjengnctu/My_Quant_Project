@@ -26,11 +26,11 @@ from core.raw_universe_contract import (
 from core.strategy_params import V16StrategyParams
 
 from tools.optimizer.raw_cache import load_all_raw_data
-from tools.portfolio_sim.simulation_runner import (
+from services.portfolio_sim.simulation_runner import (
     _build_in_memory_raw_context_source,
     _build_portfolio_prepared_cache_paths,
 )
-from tools.scanner.stock_processor import process_single_stock
+from services.scanner.stock_processor import process_single_stock
 from tools.validate.scanner_expectations import normalize_scanner_result
 
 from .checks import add_check
@@ -104,8 +104,8 @@ def validate_scanner_worker_repeatability_case(base_params):
             "max_drawdown": 7.5,
             "extended_candidate_today": None,
         }
-        with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
-            "tools.scanner.stock_processor.run_v16_backtest", return_value=repeated_stats
+        with patch("services.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
+            "services.scanner.stock_processor.run_v16_backtest", return_value=repeated_stats
         ):
             first_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", base_params))
             second_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", base_params))
@@ -223,7 +223,7 @@ def validate_optimizer_replay_raw_universe_contract_case(_base_params):
         _build_raw_universe_contract_ohlcv_df(stable_rows).to_csv(data_dir / "0050.csv", index=False)
         _build_raw_universe_contract_ohlcv_df(boundary_rows).to_csv(data_dir / "BOUNDARY.csv", index=False)
 
-        with patch("tools.portfolio_sim.simulation_runner.OUTPUT_DIR", str(output_dir)):
+        with patch("services.portfolio_sim.simulation_runner.OUTPUT_DIR", str(output_dir)):
             with contextlib.redirect_stdout(io.StringIO()):
                 legacy_source = _build_in_memory_raw_context_source(str(data_dir), [params], verbose=False)
                 contracted_source = _build_in_memory_raw_context_source(
@@ -321,7 +321,7 @@ def validate_scan_runner_repeatability_case(base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    from tools.scanner import scan_runner
+    from services.scanner import scan_runner
 
     class _FakeParams:
         def __init__(self, max_workers=2):
@@ -346,17 +346,17 @@ def validate_scan_runner_repeatability_case(base_params):
             collected.append(_normalize_scan_summary_payload(kwargs))
 
         with patch('core.data_utils.discover_unique_csv_inputs', return_value=(csv_inputs, ['dup.csv'])), \
-             patch('tools.scanner.scan_runner.ensure_runtime_dirs', return_value=None), \
-             patch('tools.scanner.scan_runner.resolve_scanner_max_workers', return_value=2), \
-             patch('tools.scanner.scan_runner.get_process_pool_executor_kwargs', return_value=({}, 'spawn')), \
-             patch('tools.scanner.scan_runner.ProcessPoolExecutor', _FakeExecutor), \
-             patch('tools.scanner.scan_runner.as_completed', side_effect=lambda futures: list(reversed(list(futures)))), \
-             patch('tools.scanner.scan_runner.print_scanner_start_banner', return_value=None), \
-             patch('tools.scanner.scan_runner.print_scanner_header', return_value=None), \
-             patch('tools.scanner.scan_runner.write_issue_log', return_value=str(Path(tmp_dir) / 'scanner_issues.log')), \
-             patch('tools.scanner.scan_runner.print_scanner_summary', side_effect=_fake_summary), \
-             patch('tools.scanner.scan_runner.time.time', side_effect=[100.0, 103.5, 200.0, 203.5]), \
-             patch('tools.scanner.stock_processor.process_single_stock', side_effect=_fake_process_single_stock):
+             patch('services.scanner.scan_runner.ensure_runtime_dirs', return_value=None), \
+             patch('services.scanner.scan_runner.resolve_scanner_max_workers', return_value=2), \
+             patch('services.scanner.scan_runner.get_process_pool_executor_kwargs', return_value=({}, 'spawn')), \
+             patch('services.scanner.scan_runner.ProcessPoolExecutor', _FakeExecutor), \
+             patch('services.scanner.scan_runner.as_completed', side_effect=lambda futures: list(reversed(list(futures)))), \
+             patch('services.scanner.scan_runner.print_scanner_start_banner', return_value=None), \
+             patch('services.scanner.scan_runner.print_scanner_header', return_value=None), \
+             patch('services.scanner.scan_runner.write_issue_log', return_value=str(Path(tmp_dir) / 'scanner_issues.log')), \
+             patch('services.scanner.scan_runner.print_scanner_summary', side_effect=_fake_summary), \
+             patch('services.scanner.scan_runner.time.time', side_effect=[100.0, 103.5, 200.0, 203.5]), \
+             patch('services.scanner.stock_processor.process_single_stock', side_effect=_fake_process_single_stock):
             with contextlib.redirect_stdout(io.StringIO()):
                 scan_runner.run_daily_scanner(tmp_dir, _FakeParams())
                 scan_runner.run_daily_scanner(tmp_dir, _FakeParams())

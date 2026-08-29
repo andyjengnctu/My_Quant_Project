@@ -12,18 +12,18 @@ def main(argv=None, env=None):
     argv = sys.argv if argv is None else argv
     validate_cli_args(argv, value_options=("--dataset",))
     if has_help_flag(argv):
-        program_name = resolve_cli_program_name(argv, "tools/scanner/main.py")
+        program_name = resolve_cli_program_name(argv, "services/scanner/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
         print("說明: 預設資料集為完整；縮減資料集路徑為 <repo>/data/tw_stock_data_vip_reduced。")
         return 0
 
-    from tools.scanner.scan_runner import main as scanner_main
+    from services.scanner.scan_runner import main as scanner_main
 
     return scanner_main(argv=argv, env=env)
 
 
 def run_daily_scanner(*args, **kwargs):
-    from tools.scanner.scan_runner import run_daily_scanner as _run_daily_scanner
+    from services.scanner.scan_runner import run_daily_scanner as _run_daily_scanner
 
     return _run_daily_scanner(*args, **kwargs)
 

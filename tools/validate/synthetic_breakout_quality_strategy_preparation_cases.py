@@ -134,7 +134,7 @@ def append_strategy_compare_preparation_contract_checks(
         resolve_selection_point_in_time_audit_json_path,
         resolve_selection_point_in_time_score_path,
     )
-    from filters.breakout_quality.strategy_compare_execution import selection_pit_mode_paths
+    from services.research.strategy_compare_execution import selection_pit_mode_paths
     from filters.breakout_quality.strategy_compare_pit_contract import (
         resolve_strategy_compare_selection_pit_bundle_dir,
         resolve_strategy_compare_selection_pit_contract_override,
@@ -185,7 +185,7 @@ def append_strategy_compare_preparation_contract_checks(
         project_root / "services" / "research" / "breakout_quality_application.py"
     ).read_text(encoding="utf-8")
     robustness_source = (
-        project_root / "filters" / "breakout_quality" / "strategy_multi_seed_robustness.py"
+        project_root / "services" / "research" / "strategy_multi_seed_robustness.py"
     ).read_text(encoding="utf-8")
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -238,7 +238,7 @@ def append_strategy_compare_preparation_contract_checks(
         (default_mode_paths["score"], default_mode_paths["manifest"]),
     )
 
-    from filters.breakout_quality import strategy_compare_execution as execution_module
+    from services.research import strategy_compare_execution as execution_module
     captured_replay_kwargs: list[dict[str, Any]] = []
     with patch.object(
         execution_module,
@@ -283,7 +283,7 @@ def append_strategy_compare_preparation_contract_checks(
         and not c64_options.get("safety_residualization"),
     )
 
-    from filters.breakout_quality import strategy_compare_preparation as preparation_module
+    from services.research import strategy_compare_preparation as preparation_module
     score_action = StrategyPreparationAction(
         action_id="dl:TP1:forward_scores",
         artifact_key="dl:TP1:forward_scores",
@@ -471,12 +471,12 @@ def append_strategy_compare_preparation_contract_checks(
         ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
         get_active_param_ensemble_date_range,
     )
-    from filters.breakout_quality.strategy_compare_preparation_status import (
+    from services.research.strategy_compare_preparation_status import (
         _validate_param_artifact,
         _validate_param_training_identity,
         resolve_param_source_path,
     )
-    from filters.breakout_quality.strategy_param_training import (
+    from services.optimizer.strategy_param_training import (
         FULL_ROOS_SEARCH_FIELDS,
         MIN_ROOS_SEARCH_FIELDS,
         prepare_extending_full_roos_params,
@@ -819,7 +819,7 @@ def append_strategy_compare_preparation_contract_checks(
 
 
     from config.strategy_compare import get_strategy_comparison_settings
-    from filters.breakout_quality import strategy_param_training as param_training_module
+    from services.optimizer import strategy_param_training as param_training_module
 
     selection_settings = get_strategy_comparison_settings("selection_pit")
     auto_settings = replace(selection_settings, start_date=None, end_date=None)

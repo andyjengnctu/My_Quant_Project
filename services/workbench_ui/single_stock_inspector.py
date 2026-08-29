@@ -29,8 +29,8 @@ from core.output_paths import ensure_output_dir
 from core.runtime_utils import parse_float_strict
 from core.buy_sort import format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method, sort_candidate_rows
 from core.scanner_display import build_scanner_sort_probe_text
-from tools.workbench_ui.param_sources import DEFAULT_PARAM_SOURCE_LABEL, build_workbench_param_source_options
-from tools.trade_analysis.charting import (
+from services.workbench_ui.param_sources import DEFAULT_PARAM_SOURCE_LABEL, build_workbench_param_source_options
+from services.trade_analysis.charting import (
     bind_matplotlib_chart_navigation,
     build_chart_hover_snapshot,
     capture_chart_view_state,
@@ -41,9 +41,9 @@ from tools.trade_analysis.charting import (
     scroll_chart_to_adjacent_trade,
     scroll_chart_to_latest,
 )
-from tools.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
-from tools.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
-from tools.workbench_ui.workbench import (
+from services.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
+from services.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
+from services.workbench_ui.workbench import (
     WorkbenchConsoleWriter,
     WorkbenchInspectorSharedMixin,
     build_workbench_chart_overlay_checkbutton,

@@ -40,7 +40,7 @@ def main(argv=None, env=None):
     validate_cli_args(argv, value_options=("--dataset",))
 
     if has_help_flag(argv):
-        program_name = resolve_cli_program_name(argv, "tools/portfolio_sim/main.py")
+        program_name = resolve_cli_program_name(argv, "services/portfolio_sim/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
         print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；參數來源可選 canonical Trade active（預設）、candidate_best，或 Rolling active-param replay 參數組；大盤比較固定使用 0050；開始回測年份預設取自目前資料集的 OOS 起始日期。")
         return 0
@@ -170,8 +170,8 @@ def main(argv=None, env=None):
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         return 1
 
-    from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
-    from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
+    from services.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
+    from services.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
     from services.portfolio_replay import run_portfolio_simulation_with_param_schedule
 
     params = None

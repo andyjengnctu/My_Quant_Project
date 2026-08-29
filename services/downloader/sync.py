@@ -1,7 +1,7 @@
 import pandas as pd
 
 from core.console_report import project_relative_display_path
-from tools.downloader import runtime as rt
+from services.downloader import runtime as rt
 
 
 def smart_download_vip_data(tickers, market_last_date, verbose=True):

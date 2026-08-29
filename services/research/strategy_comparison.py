@@ -88,7 +88,7 @@ from filters.breakout_quality.strategy_compare_reporting import (
     materialize_strategy_pair_readable_report,
     render_strategy_pair_simple_report,
 )
-from filters.breakout_quality.strategy_compare_execution import (
+from services.research.strategy_compare_execution import (
     run_strategy_compare_active_arm,
     run_strategy_compare_baseline_arm,
 )
@@ -102,7 +102,7 @@ from filters.breakout_quality.strategy_compare_runtime import (
     _execution_pairs,
     _standalone_baseline_arms,
 )
-from filters.breakout_quality.strategy_compare_reuse import (
+from services.research.strategy_compare_reuse import (
     _apply_completed_pair_dependency_waivers,
     _apply_completed_pair_frozen_score_reuse,
     _artifact_identity_sha,
@@ -134,11 +134,11 @@ from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 from filters.breakout_quality.strategy_rule_policies import (
     ALL_RULE_FILTERS_OFF_OVERRIDES,
 )
-from filters.breakout_quality.strategy_compare_preparation import (
+from services.research.strategy_compare_preparation import (
     collect_preparation_status,
     prepare_strategy_comparison_artifacts,
 )
-from filters.breakout_quality.strategy_compare_preparation_status import (
+from services.research.strategy_compare_preparation_status import (
     resolve_arm_parameter_evaluation_identities,
 )
 

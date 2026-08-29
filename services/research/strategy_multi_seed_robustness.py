@@ -132,10 +132,10 @@ from filters.breakout_quality.strategy_result_state import (
     resolve_strategy_result_state,
 )
 from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_SCORE_RANKING
-from filters.breakout_quality.strategy_compare_replay import (
+from services.research.strategy_compare_replay import (
     _load_reusable_no_filter_baseline,
 )
-from filters.breakout_quality.strategy_compare_execution import (
+from services.research.strategy_compare_execution import (
     run_strategy_compare_active_arm,
     run_strategy_compare_baseline_arm,
 )
@@ -166,22 +166,22 @@ from core.report_style import (
     finite_number as _finite_or_none,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
-from filters.breakout_quality.strategy_comparison import (
+from services.research.strategy_comparison import (
     _load_direct_selection_r,
     collect_artifact_status,
     render_strategy_aggregate_report,
     render_strategy_execution_plan_surface,
 )
-from filters.breakout_quality.strategy_compare_reuse import (
+from services.research.strategy_compare_reuse import (
     _find_reusable_baseline_source,
 )
 from filters.breakout_quality.strategy_compare_runtime import _arm_runtime_spec
 from filters.breakout_quality.strategy_compare_reporting import capacity_summary
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
-from filters.breakout_quality.strategy_compare_preparation_status import (
+from services.research.strategy_compare_preparation_status import (
     collect_preparation_status,
 )
-from filters.breakout_quality.strategy_compare_preparation import (
+from services.research.strategy_compare_preparation import (
     prepare_strategy_parameter_artifacts,
 )
 

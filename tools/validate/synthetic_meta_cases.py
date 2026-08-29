@@ -31,6 +31,7 @@ from .meta_contracts import (
     load_imported_validate_names_from_synthetic_main_entry,
     load_synthetic_registry_entries_from_source,
     summarize_critical_helper_single_source_contract,
+    summarize_dependency_direction_contract,
     summarize_legacy_app_entry_doc_reference_contract,
     summarize_no_reverse_app_import_contract,
     summarize_no_top_level_import_cycles_contract,
@@ -307,7 +308,7 @@ def validate_gui_workbench_documentation_sync_case(_base_params):
 
     cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
     architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
-    inspector_source = (PROJECT_ROOT / "tools" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
+    inspector_source = (PROJECT_ROOT / "services" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
 
     cmd_required_fragment = "交易明細與 Console 為獨立分頁"
     cmd_forbidden_fragment = "執行摘要、交易明細與 Console 為獨立分頁"
@@ -357,7 +358,7 @@ def validate_architecture_workbench_entry_file_tree_sync_case(_base_params):
         True,
         any(fragment in architecture_text for fragment in workbench_entry_fragments),
     )
-    add_check(results, "meta_architecture_contract", case_id, "workbench_app_remains_thin_gui_entry", True, "from tools.workbench_ui import main" in workbench_source and '__all__ = ["main"]' in workbench_source)
+    add_check(results, "meta_architecture_contract", case_id, "workbench_app_remains_thin_gui_entry", True, "from services.workbench_ui import main" in workbench_source and '__all__ = ["main"]' in workbench_source)
 
     summary["required_tree_fragment"] = required_tree_fragment
     summary["source_paths"] = ["doc/ARCHITECTURE.md", "apps/workbench.py"]
@@ -508,7 +509,7 @@ def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_para
 
     cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
     architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
-    trade_log_text = (PROJECT_ROOT / "tools" / "trade_analysis" / "trade_log.py").read_text(encoding="utf-8")
+    trade_log_text = (PROJECT_ROOT / "services" / "trade_analysis" / "trade_log.py").read_text(encoding="utf-8")
 
     cmd_has_legacy_debug_labels = all(fragment in cmd_text for fragment in ("legacy `run_debug_*`", "`debug_trade_log`"))
     architecture_has_legacy_debug_labels = all(fragment in architecture_text for fragment in ("legacy `run_debug_*`", "`debug_trade_log`"))
@@ -516,19 +517,19 @@ def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_para
     architecture_formal_entry_section = architecture_text.split("## 正式入口", 1)[1].split("## ", 1)[0] if "## 正式入口" in architecture_text else ""
 
     add_check(results, "meta_cmd_contract", case_id, "cmd_workbench_is_single_user_entry_for_trade_analysis", True, "`apps/workbench.py` 為 GUI 正式入口，也是單股 trade-analysis 的單一使用者入口" in cmd_text)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_helper_described_as_backend_not_formal_entry", True, "`tools/trade_analysis/trade_log.py` 提供單股 trade-analysis 共用 backend / 開發輔助 CLI；正式使用者入口仍為 `apps/workbench.py`" in cmd_text)
+    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_helper_described_as_backend_not_formal_entry", True, "`services/trade_analysis/trade_log.py` 提供單股 trade-analysis 共用 backend / 開發輔助 CLI；正式使用者入口仍為 `apps/workbench.py`" in cmd_text)
     add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_mentions_legacy_debug_api_labels", True, cmd_has_legacy_debug_labels)
     add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_output_dir_explicitly_marked_legacy", True, "`outputs/debug_trade_log/`：`trade_analysis` 單股分析輸出；為維持既有工具鏈相容，暫沿用 legacy 目錄名 `debug_trade_log`" in cmd_text)
     add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_retention_section_marks_legacy_output_dir", True, "`outputs/debug_trade_log/`（trade_analysis legacy output dir）" in cmd_text)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_has_no_trade_log_formal_entry_label", False, "`tools/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口" in cmd_text)
+    add_check(results, "meta_cmd_contract", case_id, "cmd_has_no_trade_log_formal_entry_label", False, "`services/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口" in cmd_text)
     add_check(results, "meta_cmd_contract", case_id, "cmd_has_no_stale_debug_formal_entry_label", False, "為 debug 正式入口" in cmd_text)
 
-    add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_described_as_subsystem", True, "- `tools/trade_analysis/`：單股 trade-analysis 子系統；" in architecture_text)
-    add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_bound_to_workbench_entry", True, "由 `apps/workbench.py` 經 `tools/workbench_ui/` 觸發" in architecture_text and "提供共用 backend / 開發輔助 CLI" in architecture_text)
+    add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_described_as_subsystem", True, "- `services/trade_analysis/`：單股 trade-analysis 子系統；" in architecture_text)
+    add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_bound_to_workbench_entry", True, "由 `apps/workbench.py` 經 `services/workbench_ui/` 觸發" in architecture_text and "提供共用 backend / 開發輔助 CLI" in architecture_text)
     add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_mentions_legacy_debug_api_labels", True, architecture_has_legacy_debug_labels and architecture_marks_legacy_as_compatibility)
     add_check(results, "meta_architecture_contract", case_id, "architecture_output_section_marks_legacy_output_dir", True, "`outputs/debug_trade_log/`（trade_analysis legacy output dir）" in architecture_text)
-    add_check(results, "meta_architecture_contract", case_id, "architecture_has_no_trade_log_formal_entry_label", False, "`tools/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口" in architecture_text)
-    add_check(results, "meta_architecture_contract", case_id, "architecture_formal_entry_section_excludes_trade_log_helper", False, "`tools/trade_analysis/trade_log.py`" in architecture_formal_entry_section)
+    add_check(results, "meta_architecture_contract", case_id, "architecture_has_no_trade_log_formal_entry_label", False, "`services/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口" in architecture_text)
+    add_check(results, "meta_architecture_contract", case_id, "architecture_formal_entry_section_excludes_trade_log_helper", False, "`services/trade_analysis/trade_log.py`" in architecture_formal_entry_section)
     add_check(results, "meta_architecture_contract", case_id, "architecture_has_no_stale_debug_subsystem_label", False, "交易除錯子系統" in architecture_text)
 
     add_check(results, "meta_trade_analysis_cli_contract", case_id, "trade_log_prompt_uses_analysis_wording", True, "請輸入要分析的股票代號" in trade_log_text)
@@ -536,7 +537,7 @@ def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_para
     add_check(results, "meta_trade_analysis_cli_contract", case_id, "trade_log_help_marks_workbench_as_formal_user_entry", True, "正式使用者入口為 apps/workbench.py" in trade_log_text)
     add_check(results, "meta_trade_analysis_cli_contract", case_id, "trade_log_has_no_stale_debug_prompt_or_banner", False, ("請輸入要除錯的股票代號" in trade_log_text) or ("交易明細除錯工具" in trade_log_text))
 
-    summary["source_paths"] = ["doc/CMD.md", "doc/ARCHITECTURE.md", "tools/trade_analysis/trade_log.py"]
+    summary["source_paths"] = ["doc/CMD.md", "doc/ARCHITECTURE.md", "services/trade_analysis/trade_log.py"]
     summary["architecture_has_legacy_debug_labels"] = architecture_has_legacy_debug_labels
     summary["architecture_marks_legacy_as_compatibility"] = architecture_marks_legacy_as_compatibility
     return results, summary
@@ -578,8 +579,8 @@ def validate_trade_analysis_canonical_alias_export_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    package_text = (PROJECT_ROOT / "tools" / "trade_analysis" / "__init__.py").read_text(encoding="utf-8")
-    trade_log_text = (PROJECT_ROOT / "tools" / "trade_analysis" / "trade_log.py").read_text(encoding="utf-8")
+    package_text = (PROJECT_ROOT / "services" / "trade_analysis" / "__init__.py").read_text(encoding="utf-8")
+    trade_log_text = (PROJECT_ROOT / "services" / "trade_analysis" / "trade_log.py").read_text(encoding="utf-8")
 
     canonical_aliases = [
         "run_trade_analysis",
@@ -613,15 +614,21 @@ def validate_no_reverse_app_layer_dependencies_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    contract = summarize_no_reverse_app_import_contract(PROJECT_ROOT)
-    violations = [
+    reverse_contract = summarize_no_reverse_app_import_contract(PROJECT_ROOT)
+    reverse_violations = [
         f"{item['path']}:{item['lineno']} -> {item['module']}"
-        for item in contract["violations"]
+        for item in reverse_contract["violations"]
     ]
-    add_check(results, "meta_entry_contract", case_id, "core_and_tools_do_not_import_apps", [], violations)
+    direction_contract = summarize_dependency_direction_contract(PROJECT_ROOT)
+    direction_violations = [
+        f"{item['path']}:{item['lineno']} -> {item['module']}"
+        for item in direction_contract["violations"]
+    ]
+    add_check(results, "meta_entry_contract", case_id, "core_filters_services_and_tools_do_not_import_apps_or_tools_upward", [], reverse_violations)
+    add_check(results, "meta_entry_contract", case_id, "formal_apps_do_not_depend_on_runtime_tools_and_filters_do_not_depend_on_services", [], direction_violations)
 
-    summary["violation_count"] = len(violations)
-    summary["violations"] = violations
+    summary["violation_count"] = len(reverse_violations) + len(direction_violations)
+    summary["violations"] = [*reverse_violations, *direction_violations]
     return results, summary
 
 
@@ -801,20 +808,20 @@ def _exception_traceability_result(case_id, paths, accepted_names, parse_metric,
     return results, summary
 
 def validate_gui_tcl_fallback_traceability_contract_case(_base_params):
-    paths = sorted((PROJECT_ROOT / "tools" / "workbench_ui").rglob("*.py"))
+    paths = sorted((PROJECT_ROOT / "services" / "workbench_ui").rglob("*.py"))
     results, summary = _exception_traceability_result(
         "META_GUI_TCL_FALLBACK_TRACEABILITY_CONTRACT", paths, {"TclError"},
         "gui_tcl_fallback_handler_files_parse", "gui_tcl_fallbacks_bind_and_trace_or_reraise",
         target_metric="gui_tcl_fallback_scan_targets_present",
     )
-    summary["scan_root"] = "tools/workbench_ui"
+    summary["scan_root"] = "services/workbench_ui"
     return results, summary
 
 
 def validate_optional_dependency_fallback_traceability_contract_case(_base_params):
     paths = [PROJECT_ROOT / rel for rel in (
-        "tools/trade_analysis/charting.py", "tools/downloader/runtime.py",
-        "tools/workbench_ui/single_stock_inspector.py", "tools/validate/main.py",
+        "services/trade_analysis/charting.py", "services/downloader/runtime.py",
+        "services/workbench_ui/single_stock_inspector.py", "tools/validate/main.py",
     )]
     return _exception_traceability_result(
         "META_OPTIONAL_DEPENDENCY_FALLBACK_TRACEABILITY_CONTRACT", paths, {"ImportError", "ModuleNotFoundError"},
@@ -1103,7 +1110,7 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
         "tools/optimizer/param_cache.py",
         "tools/optimizer/profile.py",
         "tools/optimizer/trial_inputs.py",
-        "tools/portfolio_sim/runtime_common.py",
+        "services/portfolio_sim/runtime_common.py",
     )
     resurrected_retired_paths = [
         rel_path
@@ -2190,8 +2197,8 @@ def validate_debug_backtest_entry_cash_path_contract_case(_base_params):
                 return source_path, func_source
         return source_path, ""
 
-    debug_backtest_path, debug_backtest_source = _get_function_source("tools/trade_analysis/backtest.py", "run_debug_analysis")
-    debug_entry_path, debug_entry_source = _get_function_source("tools/trade_analysis/entry_flow.py", "process_debug_entry_for_day")
+    debug_backtest_path, debug_backtest_source = _get_function_source("services/trade_analysis/backtest.py", "run_debug_analysis")
+    debug_entry_path, debug_entry_source = _get_function_source("services/trade_analysis/entry_flow.py", "process_debug_entry_for_day")
 
     add_check(results, "meta_contract", case_id, "debug_backtest_entry_flow_returns_spent_cash", True, "position, active_extended_signal, spent_cash = process_debug_entry_for_day(" in debug_backtest_source)
     add_check(results, "meta_contract", case_id, "debug_backtest_entry_cash_subtracts_spent_cash", True, "current_capital -= spent_cash" in debug_backtest_source)
@@ -2236,7 +2243,7 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     fast_data_source = fast_data_path.read_text(encoding="utf-8")
     entry_plans_path = build_project_absolute_path("core", "entry_plans.py")
     entry_plans_source = entry_plans_path.read_text(encoding="utf-8")
-    scanner_processor_path = build_project_absolute_path("tools", "scanner", "stock_processor.py")
+    scanner_processor_path = build_project_absolute_path("services", "scanner", "stock_processor.py")
     scanner_processor_source = scanner_processor_path.read_text(encoding="utf-8")
     position_step_path = build_project_absolute_path("core", "position_step.py")
     position_step_source = position_step_path.read_text(encoding="utf-8")

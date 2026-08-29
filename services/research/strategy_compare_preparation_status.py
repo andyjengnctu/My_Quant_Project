@@ -87,7 +87,7 @@ from filters.breakout_quality.strategy_compare_sources import (
     _validate_requested_param_policy,
     resolve_strategy_param_evaluation_identity_sha256,
 )
-from filters.breakout_quality.strategy_param_training import (
+from services.optimizer.strategy_param_training import (
     FULL_ROOS_SEARCH_FIELDS,
     MIN_ROOS_SEARCH_FIELDS,
 )

@@ -380,7 +380,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    import filters.breakout_quality.strategy_param_training as compatibility_training
+    import services.optimizer.strategy_param_training as compatibility_training
     import services.optimizer.strategy_param_training as canonical_training
     from config.breakout_quality import get_breakout_quality_workflow_settings
     from filters.breakout_quality.binary_pit_score_store import (
@@ -579,7 +579,7 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         build_trade_path_excluded_event_update,
         simulate_realized_trade_path_label,
     )
-    from filters.breakout_quality.strategy_param_training import (
+    from services.optimizer.strategy_param_training import (
         validate_selection_historical_baseline_period,
     )
     from tools.filters.breakout_quality.build_trade_path_labels import (
@@ -1136,8 +1136,8 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
     check("retired_research_cli_audit_and_temp_output_are_absent", tuple(True for _ in retired_paths), retired_absent)
 
     current_paths = (
-        "filters/breakout_quality/strategy_comparison.py",
-        "filters/breakout_quality/strategy_param_training.py",
+        "services/research/strategy_comparison.py",
+        "services/optimizer/strategy_param_training.py",
         "services/breakout_quality/trade_path_label_builder.py",
         "services/breakout_quality/train.py",
         "services/audit/catalog.py",
@@ -1277,7 +1277,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         ),
         (
             "strategy_compare_multi_arm",
-            project_root / "filters/breakout_quality/strategy_comparison.py",
+            project_root / "services/research/strategy_comparison.py",
             "strategy_comparison.md",
             "render_strategy_aggregate_report",
         ),
@@ -1309,7 +1309,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     )
 
     comparison_source = (
-        project_root / "filters/breakout_quality/strategy_comparison.py"
+        project_root / "services/research/strategy_comparison.py"
     ).read_text(encoding="utf-8")
     reporting_source = (
         project_root / "filters/breakout_quality/strategy_compare_reporting.py"
@@ -1331,7 +1331,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         project_root / "services/breakout_quality/point_in_time_audit.py"
     ).read_text(encoding="utf-8")
     multi_seed_source = (
-        project_root / "filters/breakout_quality/strategy_multi_seed_robustness.py"
+        project_root / "services/research/strategy_multi_seed_robustness.py"
     ).read_text(encoding="utf-8")
     continuous_ranker_source = (
         project_root / "services/breakout_quality/train_continuous_ranker.py"
@@ -1346,13 +1346,13 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         project_root / "services/research/breakout_quality_application.py"
     ).read_text(encoding="utf-8")
     strategy_reuse_source = (
-        project_root / "filters/breakout_quality/strategy_compare_reuse.py"
+        project_root / "services/research/strategy_compare_reuse.py"
     ).read_text(encoding="utf-8")
     strategy_replay_source = (
-        project_root / "filters/breakout_quality/strategy_compare_replay.py"
+        project_root / "services/research/strategy_compare_replay.py"
     ).read_text(encoding="utf-8")
     strategy_engine_source = (
-        project_root / "filters/breakout_quality/strategy_compare_engine.py"
+        project_root / "services/research/strategy_compare_engine.py"
     ).read_text(encoding="utf-8")
     model_report_source = (
         project_root / "services/breakout_quality/report.py"
@@ -1426,7 +1426,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         project_root / "services/breakout_quality/point_in_time_scores.py"
     ).read_text(encoding="utf-8")
     from config.strategy_compare import get_strategy_multi_seed_robustness_settings
-    from filters.breakout_quality.strategy_multi_seed_robustness import (
+    from services.research.strategy_multi_seed_robustness import (
         _benchmark_identity_payload,
         _scientific_benchmark_parameter_identities,
         _build_durable_result_artifacts,
@@ -2660,7 +2660,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
 
     from dataclasses import replace
     from config.strategy_compare import get_strategy_comparison_settings
-    from filters.breakout_quality.strategy_comparison import render_safety_gate_sensitivity_table
+    from services.research.strategy_comparison import render_safety_gate_sensitivity_table
 
     # C71-C73 are historical-only now.  Keep testing the reusable sensitivity renderer
     # with a deliberate historical fixture instead of requiring retired arms in current.
@@ -2717,9 +2717,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "C64/C66" in sensitivity_text,
     )
 
-    from filters.breakout_quality.strategy_compare_reuse import _pair_group_id
+    from services.research.strategy_compare_reuse import _pair_group_id
     from filters.breakout_quality.strategy_compare_runtime import _execution_pairs, _arm_runtime_spec
-    from filters.breakout_quality.strategy_comparison import _scenario_payloads
+    from services.research.strategy_comparison import _scenario_payloads
 
     sensitivity_pairs = [
         row for row in _execution_pairs(sensitivity_settings)

@@ -47,7 +47,7 @@ from filters.breakout_quality.strategy_score_projection import (
     runtime_score_projection_requirements,
 )
 from filters.breakout_quality.strategy_result_state import resolve_strategy_result_state
-from filters.breakout_quality.strategy_compare_preparation import resolve_comparison_period
+from services.research.strategy_compare_preparation import resolve_comparison_period
 from filters.breakout_quality.strategy_compare_runtime import (
     _arm_runtime_spec,
     _execution_pairs,

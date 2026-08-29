@@ -124,9 +124,7 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
 
     strategy_compare_source = (
         project_root
-        / "filters"
-        / "breakout_quality"
-        / "strategy_compare_engine.py"
+        / "services" / "research" / "strategy_compare_engine.py"
     ).read_text(encoding="utf-8")
     from config.research import get_active_model_research_provider
 
@@ -138,8 +136,8 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
         and "from services.optimizer.application import main" in research_shell_source
         and "from services.audit.runner import" in research_shell_source
         and "from services.research.strategy_compare_application import" in research_shell_source
-        and "from filters.breakout_quality.strategy_comparison" not in research_shell_source
-        and "from filters.breakout_quality.strategy_multi_seed_robustness" not in research_shell_source
+        and "from services.research.strategy_comparison" not in research_shell_source
+        and "from services.research.strategy_multi_seed_robustness" not in research_shell_source
         and "from tools.optimizer" not in research_shell_source
         and "from tools.audit" not in research_shell_source,
     )
@@ -524,10 +522,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         project_root=project_root,
         settings=settings,
         preparation_source=read_source_text(
-            project_root / "filters" / "breakout_quality" / "strategy_compare_preparation.py"
+            project_root / "services" / "research" / "strategy_compare_preparation.py"
         ),
         orchestration_source=read_source_text(
-            project_root / "filters" / "breakout_quality" / "strategy_comparison.py"
+            project_root / "services" / "research" / "strategy_comparison.py"
         ),
     )
 
@@ -543,7 +541,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     from core.training_scheduler import pop_next_seed_diverse_unit
     from services.research import breakout_quality_application as model_application
     from services.research import strategy_compare_training as training_runtime
-    from filters.breakout_quality import strategy_multi_seed_robustness as robustness_runtime
+    from services.research import strategy_multi_seed_robustness as robustness_runtime
     from config.research import get_active_model_research_provider
 
     resume_fixture_arm = settings.enabled_arms[0]
@@ -604,7 +602,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         project_root / "services" / "research" / "breakout_quality_application.py"
     )
     robustness_source = read_source_text(
-        project_root / "filters" / "breakout_quality" / "strategy_multi_seed_robustness.py"
+        project_root / "services" / "research" / "strategy_multi_seed_robustness.py"
     )
     research_entry_source = read_source_text(project_root / "apps" / "research.py")
     training_contract_source = read_source_text(
@@ -614,10 +612,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         project_root / "services" / "research" / "training_process.py"
     )
     execution_contract_source = read_source_text(
-        project_root / "filters" / "breakout_quality" / "strategy_compare_execution.py"
+        project_root / "services" / "research" / "strategy_compare_execution.py"
     )
     orchestration_source = read_source_text(
-        project_root / "filters" / "breakout_quality" / "strategy_comparison.py"
+        project_root / "services" / "research" / "strategy_comparison.py"
     )
     dl_artifact_source = read_source_text(
         project_root / "filters" / "breakout_quality" / "strategy_compare_dl_artifacts.py"
@@ -632,7 +630,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         project_root / "services" / "breakout_quality" / "point_in_time_scores.py"
     )
     runtime_gate_source = read_source_text(
-        project_root / "filters" / "breakout_quality" / "runtime_integration_gate.py"
+        project_root / "services" / "research" / "runtime_integration_gate.py"
     )
     provider = get_active_model_research_provider()
     check_true(
@@ -728,7 +726,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "run_standalone_baseline(" in execution_contract_source,
     )
 
-    from filters.breakout_quality.strategy_compare_execution import (
+    from services.research.strategy_compare_execution import (
         resolve_strategy_compare_ranking_options,
     )
 
@@ -824,10 +822,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     preparation_status_source = read_source_text(
-        project_root / "filters" / "breakout_quality" / "strategy_compare_preparation_status.py"
+        project_root / "services" / "research" / "strategy_compare_preparation_status.py"
     )
     comparison_source = read_source_text(
-        project_root / "filters" / "breakout_quality" / "strategy_comparison.py"
+        project_root / "services" / "research" / "strategy_comparison.py"
     )
     check_true(
         "single_and_multi_seed_share_upstream_then_params_then_models_dependency_semantics",
@@ -848,7 +846,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "resolve_robustness_benchmark_seeds(" in robustness_source
         and "random.Random(" not in robustness_source
         and "resolve_robustness_benchmark_seeds(" in runtime_gate_source
-        and "from filters.breakout_quality.strategy_multi_seed_robustness import (" not in runtime_gate_source,
+        and "from services.research.strategy_multi_seed_robustness import (" not in runtime_gate_source,
     )
     check_true(
         "single_and_multi_seed_share_arm_model_dependency_resolver",
@@ -1606,7 +1604,7 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
     from core.strategy_comparison import (
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
     )
-    from filters.breakout_quality.runtime_integration_gate import (
+    from services.research.runtime_integration_gate import (
         _exact_certificate_status,
         _overall_decision,
         resolve_runtime_candidate_contract,
@@ -1664,7 +1662,7 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
                     and runtime_context.ranking_policy == workflow.runtime_ranking_policy
                     and dict(runtime_context.ranking_options or {}) == dict(workflow.runtime_ranking_options),
     )
-    from filters.breakout_quality.export_scores import parse_args as parse_score_export_args
+    from services.breakout_quality.export_scores import parse_args as parse_score_export_args
 
     parsed_runtime_export = parse_score_export_args(
         [
@@ -1680,10 +1678,10 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
         (parsed_runtime_export.experiment_profile, parsed_runtime_export.scope),
     )
 
-    from filters.breakout_quality.export_scores import run_export as run_score_export
+    from services.breakout_quality.export_scores import run_export as run_score_export
 
     with patch(
-        "filters.breakout_quality.export_scores._run_daily_continuous_workflow_export",
+        "services.breakout_quality.export_scores._run_daily_continuous_workflow_export",
         return_value=0,
     ) as daily_export:
         dispatch_rc = run_score_export(
@@ -1702,7 +1700,7 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
 
     export_source = (
         Path(__file__).resolve().parents[2]
-        / "filters" / "breakout_quality" / "export_scores.py"
+        / "services" / "breakout_quality" / "export_scores.py"
     ).read_text(encoding="utf-8")
     check_true(
         "workflow_runtime_scores_are_separate_from_forward_oos_canonical_scores",
@@ -1912,7 +1910,7 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
 
     gate_source = (
         Path(__file__).resolve().parents[2]
-        / "filters" / "breakout_quality" / "runtime_integration_gate.py"
+        / "services" / "research" / "runtime_integration_gate.py"
     ).read_text(encoding="utf-8")
     check_true(
         "runtime_integration_reuses_historical_outputs_without_mutating_runtime_default",

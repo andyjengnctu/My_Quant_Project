@@ -137,6 +137,46 @@ def _load_named_string_dict_keys(module_path: Path, constant_name: str) -> List[
     return []
 
 
+def summarize_dependency_direction_contract(project_root: Path) -> Dict[str, Any]:
+    """Return forbidden cross-layer imports for stable runtime boundaries.
+
+    Formal apps may depend on services/core/config, but only the internal formal
+    test runner may depend on tools.local_regression.  Filters are lower-level
+    domain primitives and must never depend upward on services.
+    """
+
+    violations: List[Dict[str, Any]] = []
+    scan_roots = ("apps", "filters")
+    for rel_dir in scan_roots:
+        for path in sorted((project_root / rel_dir).rglob("*.py")):
+            tree = _read_python_ast(path)
+            rel_path = str(path.relative_to(project_root)).replace("\\", "/")
+            for node in ast.walk(tree):
+                modules: List[str] = []
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    modules = [node.module]
+                elif isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                for module_name in modules:
+                    forbidden = False
+                    if rel_dir == "filters":
+                        forbidden = module_name == "services" or module_name.startswith("services.")
+                    elif rel_dir == "apps":
+                        if module_name == "tools" or module_name.startswith("tools."):
+                            allowed_formal_test_tool = (
+                                rel_path == "apps/test_suite.py"
+                                and module_name.startswith("tools.local_regression")
+                            )
+                            forbidden = not allowed_formal_test_tool
+                    if forbidden:
+                        violations.append({
+                            "path": rel_path,
+                            "lineno": getattr(node, "lineno", 0),
+                            "module": module_name,
+                        })
+    return {"violations": violations}
+
+
 def summarize_no_reverse_app_import_contract(project_root: Path) -> Dict[str, Any]:
     violations: List[Dict[str, Any]] = []
     for rel_dir in ("config", "core", "filters", "services", "strategies"):

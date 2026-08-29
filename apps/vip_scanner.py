@@ -29,7 +29,7 @@ def main(argv=None, env=None):
         print(HELP_DESCRIPTION)
         return 0
 
-    from tools.scanner import main as scanner_main
+    from services.scanner import main as scanner_main
 
     return scanner_main(argv=argv, env=env)
 
@@ -38,7 +38,7 @@ def __getattr__(name):
     if name == "main":
         return main
     if name in LAZY_EXPORTS:
-        from tools import scanner as scanner_module
+        from services import scanner as scanner_module
 
         value = getattr(scanner_module, name)
         globals()[name] = value

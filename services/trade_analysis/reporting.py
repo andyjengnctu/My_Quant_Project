@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.console_report import project_relative_display_path
-from tools.trade_analysis.charting import build_debug_chart_payload, create_debug_chart_context, export_debug_chart_html
+from services.trade_analysis.charting import build_debug_chart_payload, create_debug_chart_context, export_debug_chart_html
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

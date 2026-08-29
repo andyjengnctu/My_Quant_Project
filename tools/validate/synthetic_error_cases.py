@@ -178,7 +178,7 @@ def validate_preflight_error_path_case(base_params):
 
 
 def validate_downloader_market_date_fallback_case(base_params):
-    from tools.downloader import universe
+    from services.downloader import universe
 
     case_id = "DOWNLOADER_MARKET_DATE_FALLBACK"
     results = []
@@ -217,7 +217,7 @@ def validate_downloader_market_date_fallback_case(base_params):
 
 
 def validate_downloader_sync_error_path_case(base_params):
-    from tools.downloader import sync
+    from services.downloader import sync
 
     case_id = "DOWNLOADER_SYNC_ERROR_PATHS"
     results = []
@@ -256,7 +256,7 @@ def validate_downloader_sync_error_path_case(base_params):
 
 def validate_downloader_main_error_path_case(base_params):
     import importlib
-    downloader_main = importlib.import_module("tools.downloader.main")
+    downloader_main = importlib.import_module("services.downloader.main")
 
     case_id = "DOWNLOADER_MAIN_ERROR_PATHS"
     results = []
@@ -277,7 +277,7 @@ def validate_downloader_main_error_path_case(base_params):
              "issue_log_path": "outputs/smart_downloader/downloader_issues_20260402.log",
          }):
         with contextlib.redirect_stderr(stderr):
-            rc = downloader_main.main(["tools/downloader/main.py"])
+            rc = downloader_main.main(["services/downloader/main.py"])
 
     err = stderr.getvalue()
     add_check(results, "synthetic_error_paths", case_id, "downloader_main_returns_failure", 1, rc)
@@ -289,7 +289,7 @@ def validate_downloader_main_error_path_case(base_params):
 
 
 def validate_downloader_universe_fetch_error_path_case(base_params):
-    from tools.downloader import universe
+    from services.downloader import universe
 
     case_id = "DOWNLOADER_UNIVERSE_FETCH_ERROR_PATHS"
     results = []
@@ -316,7 +316,7 @@ def validate_downloader_universe_fetch_error_path_case(base_params):
 
 
 def validate_downloader_universe_screening_init_error_path_case(base_params):
-    from tools.downloader import universe
+    from services.downloader import universe
 
     case_id = "DOWNLOADER_UNIVERSE_SCREENING_INIT_ERROR_PATHS"
     results = []

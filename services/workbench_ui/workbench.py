@@ -10,7 +10,7 @@ from tkinter import ttk
 
 import pandas as pd
 
-from tools.workbench_ui.param_sources import build_workbench_param_source_options
+from services.workbench_ui.param_sources import build_workbench_param_source_options
 
 
 WORKBENCH_TITLE = "股票工具工作台"
@@ -79,22 +79,22 @@ PANEL_SPECS = (
     {
         "panel_id": "single_stock_backtest_inspector",
         "tab_label": "單股回測檢視",
-        "backend_runner": "tools.trade_analysis.trade_log.run_ticker_analysis",
+        "backend_runner": "services.trade_analysis.trade_log.run_ticker_analysis",
         "artifact_keys": ("excel_path",),
-        "inline_chart_backend": "tools.trade_analysis.charting.create_matplotlib_trade_chart_figure",
+        "inline_chart_backend": "services.trade_analysis.charting.create_matplotlib_trade_chart_figure",
         "default_show_volume": False,
         "jump_to_trade_enabled": True,
-        "panel_factory_path": "tools.workbench_ui.single_stock_inspector:SingleStockBacktestInspectorPanel",
+        "panel_factory_path": "services.workbench_ui.single_stock_inspector:SingleStockBacktestInspectorPanel",
     },
     {
         "panel_id": "portfolio_backtest_inspector",
         "tab_label": "投組回測檢視",
         "backend_runner": "services.portfolio_replay.run_portfolio_simulation_prepared",
         "artifact_keys": ("dashboard_html_path", "report_xlsx_path"),
-        "inline_chart_backend": "tools.trade_analysis.charting.create_matplotlib_trade_chart_figure",
+        "inline_chart_backend": "services.trade_analysis.charting.create_matplotlib_trade_chart_figure",
         "default_show_volume": False,
         "jump_to_trade_enabled": True,
-        "panel_factory_path": "tools.workbench_ui.portfolio_backtest_inspector:PortfolioBacktestInspectorPanel",
+        "panel_factory_path": "services.workbench_ui.portfolio_backtest_inspector:PortfolioBacktestInspectorPanel",
     },
 )
 

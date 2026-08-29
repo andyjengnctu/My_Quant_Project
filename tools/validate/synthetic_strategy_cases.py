@@ -33,7 +33,7 @@ from core.portfolio_stats import calc_plain_romd, calc_portfolio_score, calc_sco
 from services.optimizer.objective_runner import run_optimizer_objective
 from tools.optimizer.session import OptimizerSession
 from tools.optimizer import callbacks as optimizer_callbacks, study_utils
-from tools.portfolio_sim.reporting import print_yearly_return_report
+from services.portfolio_sim.reporting import print_yearly_return_report
 from tools.optimizer.runtime import export_best_params_if_requested
 from tools.optimizer.score_display import format_optimizer_score_for_display
 from tools.optimizer.study_utils import (
@@ -44,8 +44,8 @@ from tools.optimizer.study_utils import (
     build_best_params_payload_from_trial,
     build_optimizer_trial_params,
 )
-from tools.scanner.reporting import print_scanner_summary
-from tools.scanner.stock_processor import process_single_stock
+from services.scanner.reporting import print_scanner_summary
+from services.scanner.stock_processor import process_single_stock
 from tools.validate.scanner_expectations import normalize_scanner_result
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 
@@ -516,8 +516,8 @@ def validate_model_io_schema_case(base_params):
         }
         skip_exc = ValueError("有效資料不足: 2330")
 
-        with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
-            "tools.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
+        with patch("services.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
+            "services.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
         ):
             buy_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
 
@@ -530,8 +530,8 @@ def validate_model_io_schema_case(base_params):
         add_check(results, "strategy_schema", case_id, "scanner_buy_message_contains_ticker", True, "2330" in str(buy_result["message"]))
         add_check(results, "strategy_schema", case_id, "scanner_buy_sanitize_issue_nullable", True, buy_result["sanitize_issue"] is None or isinstance(buy_result["sanitize_issue"], str))
 
-        with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
-            "tools.scanner.stock_processor.run_v16_backtest", return_value=candidate_stats
+        with patch("services.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
+            "services.scanner.stock_processor.run_v16_backtest", return_value=candidate_stats
         ):
             candidate_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
         add_check(results, "strategy_schema", case_id, "scanner_candidate_status", "candidate", candidate_result["status"])
@@ -539,7 +539,7 @@ def validate_model_io_schema_case(base_params):
         add_check(results, "strategy_schema", case_id, "scanner_candidate_expected_value_none", None, candidate_result["expected_value"])
         add_check(results, "strategy_schema", case_id, "scanner_candidate_sort_value_none", None, candidate_result["sort_value"])
 
-        with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", side_effect=skip_exc):
+        with patch("services.scanner.stock_processor.sanitize_ohlcv_dataframe", side_effect=skip_exc):
             skip_result = process_single_stock(str(file_path), "2330", params)
         normalized_skip = normalize_scanner_result(skip_result)
         add_check(results, "strategy_schema", case_id, "scanner_skip_status", "skip_insufficient", normalized_skip["status"])
@@ -667,8 +667,8 @@ def validate_ranking_scoring_sanity_case(base_params):
             "max_drawdown": 9.5,
             "extended_candidate_today": None,
         }
-        with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
-            "tools.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
+        with patch("services.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
+            "services.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
         ):
             buy_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
         from core.config import get_buy_sort_method
@@ -956,8 +956,8 @@ def validate_strategy_repeatability_case(base_params):
             "max_drawdown": 9.5,
             "extended_candidate_today": None,
         }
-        with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
-            "tools.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
+        with patch("services.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
+            "services.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
         ):
             scanner_result_1 = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
             scanner_result_2 = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
@@ -1041,8 +1041,8 @@ def validate_strategy_minimum_viability_case(base_params):
             "max_drawdown": 9.5,
             "extended_candidate_today": None,
         }
-        with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
-            "tools.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
+        with patch("services.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
+            "services.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
         ):
             scanner_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
     add_check(results, "strategy_viability", case_id, "scanner_smoke_status", "buy", scanner_result["status"])
@@ -1181,8 +1181,8 @@ def validate_strategy_reporting_schema_compatibility_case(base_params):
             "max_drawdown": 9.5,
             "extended_candidate_today": None,
         }
-        with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
-            "tools.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
+        with patch("services.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
+            "services.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
         ):
             scanner_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
 

@@ -42,10 +42,10 @@ HELP_TARGETS = [
     ([sys.executable, "apps/test_suite.py", "--help"], "python apps/test_suite.py"),
     ([sys.executable, "apps/vip_scanner.py", "--help"], "python apps/vip_scanner.py"),
     ([sys.executable, "requirements/export_requirements_lock.py", "--help"], "python requirements/export_requirements_lock.py"),
-    ([sys.executable, "tools/downloader/main.py", "--help"], "python tools/downloader/main.py"),
+    ([sys.executable, "services/downloader/main.py", "--help"], "python services/downloader/main.py"),
     ([sys.executable, "tools/filters/breakout_quality/build_dataset.py", "--help"], "python tools/filters/breakout_quality/build_dataset.py"),
     ([sys.executable, "tools/filters/breakout_quality/evaluate.py", "--help"], "python tools/filters/breakout_quality/evaluate.py"),
-    ([sys.executable, "filters/breakout_quality/export_scores.py", "--help"], "python filters/breakout_quality/export_scores.py"),
+    ([sys.executable, "services/breakout_quality/export_scores.py", "--help"], "python services/breakout_quality/export_scores.py"),
     ([sys.executable, "tools/filters/breakout_quality/report.py", "--help"], "python tools/filters/breakout_quality/report.py"),
     ([sys.executable, "tools/filters/breakout_quality/train.py", "--help"], "python tools/filters/breakout_quality/train.py"),
     ([sys.executable, "tools/local_regression/run_all.py", "--help"], "python tools/local_regression/run_all.py"),
@@ -54,8 +54,8 @@ HELP_TARGETS = [
     ([sys.executable, "tools/local_regression/run_meta_quality.py", "--help"], "python tools/local_regression/run_meta_quality.py"),
     ([sys.executable, "tools/local_regression/run_quick_gate.py", "--help"], "python tools/local_regression/run_quick_gate.py"),
     ([sys.executable, "tools/optimizer/main.py", "--help"], "python tools/optimizer/main.py"),
-    ([sys.executable, "tools/portfolio_sim/main.py", "--help"], "python tools/portfolio_sim/main.py"),
-    ([sys.executable, "tools/scanner/main.py", "--help"], "python tools/scanner/main.py"),
+    ([sys.executable, "services/portfolio_sim/main.py", "--help"], "python services/portfolio_sim/main.py"),
+    ([sys.executable, "services/scanner/main.py", "--help"], "python services/scanner/main.py"),
     ([sys.executable, "tools/validate/cli.py", "--help"], "python tools/validate/cli.py"),
     ([sys.executable, "tools/validate/main.py", "--help"], "python tools/validate/main.py"),
     ([sys.executable, "tools/validate/preflight_env.py", "--help"], "python tools/validate/preflight_env.py"),
@@ -84,10 +84,10 @@ INLINE_CLI_TARGETS = {
     "apps/test_suite.py",
     "apps/vip_scanner.py",
     "requirements/export_requirements_lock.py",
-    "tools/downloader/main.py",
+    "services/downloader/main.py",
     "tools/filters/breakout_quality/build_dataset.py",
     "tools/filters/breakout_quality/evaluate.py",
-    "filters/breakout_quality/export_scores.py",
+    "services/breakout_quality/export_scores.py",
     "tools/filters/breakout_quality/report.py",
     "tools/filters/breakout_quality/train.py",
     "tools/local_regression/run_all.py",
@@ -96,8 +96,8 @@ INLINE_CLI_TARGETS = {
     "tools/local_regression/run_meta_quality.py",
     "tools/local_regression/run_quick_gate.py",
     "tools/optimizer/main.py",
-    "tools/portfolio_sim/main.py",
-    "tools/scanner/main.py",
+    "services/portfolio_sim/main.py",
+    "services/scanner/main.py",
     "tools/validate/cli.py",
     "tools/validate/main.py",
     "tools/validate/preflight_env.py",
@@ -840,8 +840,8 @@ def check_dataset_runtime_error_paths() -> List[Dict[str, Any]]:
     params = V16StrategyParams()
 
     from tools.optimizer.raw_cache import load_all_raw_data
-    from tools.portfolio_sim.simulation_runner import run_portfolio_simulation
-    from tools.scanner.scan_runner import run_daily_scanner
+    from services.portfolio_sim.simulation_runner import run_portfolio_simulation
+    from services.scanner.scan_runner import run_daily_scanner
 
     runtime_cases = [
         (

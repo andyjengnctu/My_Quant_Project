@@ -733,7 +733,7 @@ def _canonical_schedule_build_contract(
         DEFAULT_PORTFOLIO_ROTATION,
     )
     from core.dataset_profiles import DEFAULT_DATASET_PROFILE
-    from filters.breakout_quality.strategy_param_training import (
+    from services.optimizer.strategy_param_training import (
         FULL_ROOS_SEARCH_FIELDS,
         MIN_ROOS_SEARCH_FIELDS,
     )
