@@ -1482,17 +1482,23 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
             synthetic_case_budget_result.get("status"),
         )
 
-        strict_memory_manifest = dict(manifest)
-        strict_memory_manifest["performance_peak_process_memory_mb"] = 50
-        with patch.dict(os.environ, {LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)}):
-            strict_memory_perf = build_performance_summary(
-                run_dir,
-                strict_memory_manifest,
-                current_meta_quality_duration_sec=1.25,
-                current_meta_quality_peak_process_memory_mb=40.0,
-            )
-        memory_budget_result = next(row for row in strict_memory_perf.get("results", []) if row.get("name") == "performance_process_peak_memory_within_budget")
-        add_check(results, "output_contract", case_id, "performance_process_memory_budget_is_actually_enforced", "FAIL", memory_budget_result.get("status"))
+        performance_result_names = {str(row.get("name") or "") for row in perf.get("results", [])}
+        add_check(
+            results,
+            "output_contract",
+            case_id,
+            "performance_process_memory_is_telemetry_not_absolute_blocker",
+            False,
+            "performance_process_peak_memory_within_budget" in performance_result_names,
+        )
+        add_check(
+            results,
+            "output_contract",
+            case_id,
+            "performance_manifest_has_no_platform_specific_absolute_memory_budget",
+            False,
+            "performance_peak_process_memory_mb" in local_common.MANIFEST_DEFAULTS,
+        )
 
         (run_dir / "validate_consistency_summary.json").unlink()
         with patch.dict(os.environ, {LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)}):

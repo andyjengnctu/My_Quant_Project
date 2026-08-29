@@ -18,7 +18,6 @@
   "performance_meta_quality_max_sec": 30,
   "performance_ml_smoke_max_sec": 45,
   "performance_optimizer_trial_avg_max_sec": 15,
-  "performance_peak_process_memory_mb": 2048,
   "performance_quick_gate_max_sec": 45,
   "performance_critical_path_max_sec": 110,
   "portfolio_enable_rotation": false,

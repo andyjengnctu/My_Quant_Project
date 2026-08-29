@@ -233,16 +233,6 @@ def build_performance_summary(
         max([float(current_meta_quality_peak_process_memory_mb)] + [float(value) for value in step_peak_process_memory_mb.values()]),
         3,
     )
-    memory_budget_mb = float(manifest["performance_peak_process_memory_mb"])
-    results.append(
-        summarize_result(
-            "performance_process_peak_memory_within_budget",
-            max_step_peak_memory_mb <= memory_budget_mb,
-            detail=f"peak={max_step_peak_memory_mb:.3f}MB | budget={memory_budget_mb:.3f}MB",
-            extra={"peak_memory_mb": max_step_peak_memory_mb, "budget_mb": memory_budget_mb},
-        )
-    )
-
     return {
         "ok": all(item["status"] == "PASS" for item in results),
         "skipped": False,
