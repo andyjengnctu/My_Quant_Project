@@ -245,10 +245,11 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     ]
     check_true(
         "current_time_validation_authorization_is_explicit_and_fail_closed",
-        bool(authorized)
+        all(isinstance(recipe.current_time_validation_authorized, bool) for recipe in recipes)
         and all(
-            cfg.get_continuous_ranker_execution_recipe(profile).current_time_validation_authorized
-            for profile in authorized
+            (not recipe.current_time_validation_authorized)
+            or recipe.historical_pit_authorized
+            for recipe in recipes
         ),
     )
 

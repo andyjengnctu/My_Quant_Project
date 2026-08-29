@@ -2813,6 +2813,7 @@ def validate_research_report_contract_freeze_case(_base_params):
     from core.research_report_contract import (
         APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
         MODEL_STANDARD_SOP,
+        extension_contract,
         persistent_report_contract_fingerprints,
         validate_approved_persistent_report_contracts,
     )
@@ -2883,10 +2884,10 @@ def validate_research_report_contract_freeze_case(_base_params):
             "split_metrics": json.loads(json.dumps(base_metrics)),
         }
 
-    mr13s = payload("MR-13S", TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING)
-    mr13t = payload("MR-13T", TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING)
-    mr13u = payload("MR-13U", TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING)
-    mr13t["safety_raw_mfe_hmhs_evaluation"] = {
+    control_payload = payload("MODEL-CONTROL", TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING)
+    joint_payload = payload("MODEL-JOINT", TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING)
+    h_only_payload = payload("MODEL-HONLY", TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING)
+    joint_payload["safety_raw_mfe_hmhs_evaluation"] = {
         "validation": {
             "joint_hmhs": {"population_hmhs_pct": 22.0, "pairwise_concordance": 0.57, "global_average_precision": 0.25, "top_10pct": {"hmhs_pct": 26.0, "hmhs_enrichment": 1.18}},
             "joint_product_control": {"pairwise_concordance": 0.56, "global_average_precision": 0.24, "top_10pct": {"hmhs_pct": 25.0, "hmhs_enrichment": 1.12}},
@@ -2897,7 +2898,7 @@ def validate_research_report_contract_freeze_case(_base_params):
         ("oos", 22.0, 0.54, 0.23, 0.22, 1.11, 1.08),
         ("breakout_candidate_oos", 24.0, 0.50, 0.24, 0.23, 1.03, 1.02),
     ):
-        mr13u["split_metrics"][key].update({
+        h_only_payload["split_metrics"][key].update({
             "population_hmhs_pct": pct,
             "global_average_precision": ap,
             "mean_daily_average_precision": daily_ap,
@@ -2907,9 +2908,9 @@ def validate_research_report_contract_freeze_case(_base_params):
         })
 
     rendered = {
-        "S": app._render_continuous_ranker_simple_console(mr13s),
-        "T": app._render_continuous_ranker_simple_console(mr13t),
-        "U": app._render_continuous_ranker_simple_console(mr13u),
+        "control": app._render_continuous_ranker_simple_console(control_payload),
+        "joint": app._render_continuous_ranker_simple_console(joint_payload),
+        "h_only": app._render_continuous_ranker_simple_console(h_only_payload),
     }
     standard_lines = {
         key: "\n".join(
@@ -2917,20 +2918,22 @@ def validate_research_report_contract_freeze_case(_base_params):
         )
         for key, text in rendered.items()
     }
+    joint_extension_title = extension_contract("direct_hmhs_joint_retrieval").title
+    h_only_extension_title = extension_contract("direct_hmhs_h_only").title
     check_true(
-        "mr13t_u_cannot_mutate_standard_model_sop_namespace",
+        "model_extensions_cannot_mutate_standard_model_sop_namespace",
         all("Direct HM/HS" not in text for text in standard_lines.values())
-        and "Model-specific Extension｜MR-13T｜Direct HM/HS Joint Retrieval" in rendered["T"]
-        and "Model-specific Extension｜MR-13U｜Direct HM/HS H-only Learnability" in rendered["U"]
-        and "Δ HM/HS Pair" not in standard_lines["U"],
+        and f"Model-specific Extension｜MODEL-JOINT｜{joint_extension_title}" in rendered["joint"]
+        and f"Model-specific Extension｜MODEL-HONLY｜{h_only_extension_title}" in rendered["h_only"]
+        and "Δ HM/HS Pair" not in standard_lines["h_only"],
     )
     standard_generalization_header = ("Comparison", "Δ Daily rho", "Δ Pair", "Δ Top-Bottom")
     check_true(
         "cross_profile_standard_generalization_schema_is_invariant",
         all(header in app.table_contract("model.standard_sop", "generalization", "generalization").headers for header in standard_generalization_header)
-        and "Δ Daily rho" in rendered["S"]
-        and "Δ Daily rho" in rendered["T"]
-        and "Δ Daily rho" in rendered["U"],
+        and "Δ Daily rho" in rendered["control"]
+        and "Δ Daily rho" in rendered["joint"]
+        and "Δ Daily rho" in rendered["h_only"],
     )
 
     return results, {"ticker": case_id, "synthetic": True, "training_performed": False}

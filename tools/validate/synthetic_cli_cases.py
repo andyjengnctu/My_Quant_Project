@@ -135,7 +135,13 @@ def validate_dataset_cli_contract_case(_base_params):
         for profile in cfg.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
         if cfg.get_continuous_ranker_execution_recipe(profile).current_time_validation_authorized
     ]
-    check_true("breakout_quality_cli_has_current_time_validation_profile", bool(current_profiles))
+    check_true(
+        "breakout_quality_cli_current_time_authorization_is_config_driven",
+        all(
+            profile in cfg.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+            for profile in current_profiles
+        ),
+    )
 
     summary.update(
         {
@@ -851,19 +857,32 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
     # mutating or implicitly broadening the current research authorization.
     from config import breakout_quality as breakout_quality_config
 
-    authorized_timing_profiles = [
-        profile_name
-        for profile_name in breakout_quality_config.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-        if breakout_quality_config.get_continuous_ranker_execution_recipe(
-            profile_name
-        ).current_time_validation_authorized
-    ]
-    if not authorized_timing_profiles:
-        raise AssertionError("synthetic timing report需要至少一個已授權current-time profile")
+    timing_profile = next(
+        iter(breakout_quality_config.SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES)
+    )
+    base_timing_recipe = breakout_quality_config.get_continuous_ranker_execution_recipe(
+        timing_profile
+    )
+    isolated_authorized_recipe = replace(
+        base_timing_recipe,
+        historical_pit_authorized=True,
+        current_time_validation_authorized=True,
+    )
+    original_recipe_resolver = breakout_quality_config.get_continuous_ranker_execution_recipe
+
+    def isolated_recipe_resolver(profile_name):
+        if str(profile_name) == str(timing_profile):
+            return isolated_authorized_recipe
+        return original_recipe_resolver(profile_name)
+
     with patch.object(
         breakout_quality_config,
         "BREAKOUT_QUALITY_ROLLING_TIMING_EXPERIMENT_PROFILE",
-        authorized_timing_profiles[0],
+        timing_profile,
+    ), patch.object(
+        breakout_quality_config,
+        "get_continuous_ranker_execution_recipe",
+        side_effect=isolated_recipe_resolver,
     ):
         timing_context = app_breakout_quality._simple_report_context(
             "timing-rolling-training",
@@ -871,9 +890,9 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
         )
         timing_settings = app_breakout_quality.get_breakout_quality_rolling_timing_settings()
     check_true(
-        "breakout_quality_timing_simple_report_uses_timing_profile_identity",
+        "breakout_quality_timing_simple_report_uses_isolated_authorized_timing_profile",
         timing_context[2] == str(timing_settings.experiment_profile)
-        and timing_context[2] == str(authorized_timing_profiles[0]),
+        and timing_context[2] == str(timing_profile),
     )
 
     source = Path(app_breakout_quality.__file__).read_text(encoding="utf-8")

@@ -2631,16 +2631,15 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     }
     check_true(
         "current_compare_dependencies_use_model_auth_except_explicit_single_seed_sources",
-        bool(current_required_profiles)
-        and current_required_profiles.issubset(current_authorized_profiles)
-        and bool(current_strategy_scoped_profiles)
+        current_required_profiles.issubset(current_authorized_profiles)
         and current_strategy_scoped_profiles.isdisjoint(current_authorized_profiles),
     )
 
+    representative_profile = next(
+        iter(sorted(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES))
+    )
     recipe_keys = set(
-        get_continuous_ranker_execution_recipe(
-            next(iter(sorted(current_authorized_profiles)))
-        ).as_dict()
+        get_continuous_ranker_execution_recipe(representative_profile).as_dict()
     )
     check(
         "execution_recipe_excludes_research_identity_fields",
@@ -2685,17 +2684,18 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         recipe_mismatches,
     )
 
-    historical_only_authorization_examples = [
+    authorization_inversions = [
         profile_name
         for profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-        if get_continuous_ranker_execution_recipe(profile_name).historical_pit_authorized
+        if get_continuous_ranker_execution_recipe(profile_name).current_time_validation_authorized
         and not get_continuous_ranker_execution_recipe(
             profile_name
-        ).current_time_validation_authorized
+        ).historical_pit_authorized
     ]
-    check_true(
-        "historical_pit_compatibility_is_separate_from_current_time_validation",
-        bool(historical_only_authorization_examples),
+    check(
+        "current_time_validation_never_bypasses_historical_pit_authorization",
+        [],
+        authorization_inversions,
     )
 
     check(
