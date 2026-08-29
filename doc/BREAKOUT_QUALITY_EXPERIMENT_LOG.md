@@ -10934,3 +10934,10 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - 首次本機執行Phase-0在讀MR-13AF `daily_ranker_oos_scores.csv.gz`時因要求不存在的`split`欄而停止。canonical daily-ranker writer本來就不輸出per-row `split`；該檔本身即為Forward-score artifact，且target尚不可得的forward rows以NaN target保留供score coverage。
 - 修正Phase-0 loader：以canonical `target_raw_r`＋`target_daily_percentile`＋`model_score` finite rows取得target-evaluable Forward OOS，並額外要求row count精確等於frozen continuous-ranker report的OOS `group_count`，不放寬universe contract、不改MR-13AI selection semantics。
 - T421 synthetic新增真實schema regression：fixture刻意不含`split`，同時驗證frozen-report count mismatch仍fail-fast。Scientific identity、no-lookahead boundary formula、AF source與Phase-0 authorization均不變。
+
+## 2026-08-29 — MR-13AI Phase-0 canonical Pure-MFE raw-target identity fix
+
+- 第二次本機執行已通過Forward-OOS score schema／universe guard，但Phase-0又以`target_raw_r == target_favorable_r`的`atol=1e-6`做artifact identity檢查而停止。這兩欄雖語意同為Pure-MFE R，producer路徑不同：`target_raw_r`由canonical target builder直接寫入`bundle.raw_target`，`target_favorable_r`則由已float32化的`favorable_return / risk_budget`重建；float32 rounding可自然產生數個`1e-6`差異，因此不得以重建欄位作bit-level identity truth。
+- 修正Phase-0：frozen AF score artifact的`target_raw_r`與`target_daily_percentile`成為Phase-0 realized MFE canonical truth；仍以`group_index`逐row驗證embedded `target_raw_r` float32-exact等於同一AF bundle的`bundle.raw_target`，並從embedded raw target重算same-date percentile驗證score artifact內部一致。daily bundle只補`target_adverse_r`、actual Low-Adverse percentile與PIT-safe predicted-Safety context，不再用重建`target_favorable_r`／`target_mfe_daily_percentile`反向定義artifact合法性。
+- T421新增float32 rounding regression，明確保護「canonical producer output優先於等價重建欄位」；MR-13AI formula、K/K+1 decision、no-lookahead、AF source與Phase-0 authorization均不變。
+

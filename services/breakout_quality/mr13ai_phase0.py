@@ -35,6 +35,7 @@ from core.console_report import (
     render_table,
     render_title,
 )
+from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
 from filters.breakout_quality.continuous_ranker_quality import daily_top_k_metrics
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
 from filters.breakout_quality.daily_ranker_data import load_official_breakout_candidate_keys
@@ -72,6 +73,12 @@ _REQUIRED_TRUTH_COLUMNS = (
     "target_favorable_r",
     "target_adverse_r",
     "target_mfe_daily_percentile",
+    "target_low_adverse_daily_percentile",
+    "predicted_safety_percentile",
+)
+
+_BUNDLE_SUPPLEMENTAL_TRUTH_COLUMNS = (
+    "target_adverse_r",
     "target_low_adverse_daily_percentile",
     "predicted_safety_percentile",
 )
@@ -469,7 +476,58 @@ def _select_target_evaluable_oos_score_rows(
             "MR-13AF OOS score target-evaluable universe與frozen report不一致: "
             f"score={len(selected)}, report={int(expected_group_count)}"
         )
+
+    # The score artifact is the canonical producer output for the model target.
+    # Recompute only its same-date percentile from that exact embedded raw target
+    # to verify the CSV pair is internally coherent; do not compare against a
+    # separately rounded favorable-return reconstruction from the daily bundle.
+    recomputed_percentile = build_same_date_percentile_targets(
+        selected["target_raw_r"].to_numpy(dtype=np.float32),
+        np.ones(len(selected), dtype=bool),
+        selected["date"],
+    )
+    if not np.array_equal(
+        np.asarray(recomputed_percentile, dtype=np.float32),
+        selected["target_daily_percentile"].to_numpy(dtype=np.float32),
+    ):
+        raise ValueError(
+            "MR-13AF OOS score embedded raw target與daily percentile不一致"
+        )
     return selected
+
+
+def _attach_canonical_pure_mfe_score_truth(
+    frame: pd.DataFrame,
+    *,
+    bundle_raw_target: np.ndarray,
+) -> pd.DataFrame:
+    """Attach canonical Pure-MFE truth from the frozen AF score artifact.
+
+    ``target_raw_r`` was written directly from ``bundle.raw_target`` by the AF
+    producer.  The daily bundle also exposes ``target_favorable_r`` by dividing
+    a separately float32-rounded favorable-return column by the risk budget; that
+    reconstruction is scientifically equivalent but not bit-identical and must
+    not be used as an artifact-identity equality check.
+    """
+
+    result = frame.copy()
+    group_ids = pd.to_numeric(result["group_index"], errors="raise").to_numpy(dtype=np.int64)
+    source_raw = np.asarray(bundle_raw_target, dtype=np.float32)
+    if bool(np.any(group_ids < 0)) or bool(np.any(group_ids >= len(source_raw))):
+        raise ValueError("MR-13AI AF score group_index超出canonical raw target範圍")
+    embedded_raw = result["target_raw_r"].to_numpy(dtype=np.float32)
+    canonical_raw = source_raw[group_ids]
+    if not np.array_equal(embedded_raw, canonical_raw):
+        raise ValueError("MR-13AI AF score raw target與canonical bundle.raw_target不一致")
+
+    # For MR-13AF the validated artifact contract already fixes the target ID to
+    # daily_full_horizon_pure_mfe_r_v1, so these two embedded producer columns are
+    # the authoritative realized MFE truth used by the Phase-0 evaluation.
+    result["target_favorable_r"] = result["target_raw_r"].to_numpy(dtype=np.float64)
+    result["target_mfe_daily_percentile"] = result[
+        "target_daily_percentile"
+    ].to_numpy(dtype=np.float64)
+    return result
 
 
 def _load_forward_oos_frame(
@@ -503,12 +561,14 @@ def _load_forward_oos_frame(
         project_root=project_root,
     )
     groups = bundle.group_table.copy()
-    missing_truth = sorted(set(_REQUIRED_TRUTH_COLUMNS) - set(groups.columns))
+    missing_truth = sorted(set(_BUNDLE_SUPPLEMENTAL_TRUTH_COLUMNS) - set(groups.columns))
     if missing_truth:
         raise ValueError(f"MR-13AF canonical daily bundle缺少Phase-0 truth/context欄位: {missing_truth}")
     groups["ticker"] = groups["ticker"].astype(str)
     groups["date"] = pd.to_datetime(groups["date"], errors="raise").dt.normalize()
-    truth = groups[["ticker", "date", "group_index", *_REQUIRED_TRUTH_COLUMNS]].copy()
+    truth = groups[
+        ["ticker", "date", "group_index", *_BUNDLE_SUPPLEMENTAL_TRUTH_COLUMNS]
+    ].copy()
     merged = score_frame.merge(
         truth,
         on=["ticker", "date", "group_index"],
@@ -520,20 +580,10 @@ def _load_forward_oos_frame(
             "MR-13AI AF score與canonical daily bundle universe不一致: "
             f"score={len(score_frame)}, merged={len(merged)}"
         )
-    if not np.allclose(
-        merged["target_raw_r"].to_numpy(dtype=np.float64),
-        merged["target_favorable_r"].to_numpy(dtype=np.float64),
-        rtol=0.0,
-        atol=1e-6,
-    ):
-        raise ValueError("MR-13AI AF score raw target與canonical Pure-MFE truth不一致")
-    if not np.allclose(
-        merged["target_daily_percentile"].to_numpy(dtype=np.float64),
-        merged["target_mfe_daily_percentile"].to_numpy(dtype=np.float64),
-        rtol=0.0,
-        atol=1e-6,
-    ):
-        raise ValueError("MR-13AI AF score percentile target與canonical MFE percentile不一致")
+    merged = _attach_canonical_pure_mfe_score_truth(
+        merged,
+        bundle_raw_target=bundle.raw_target,
+    )
     source = {
         "model_research_id": str(spec.model_research_id),
         "profile": SOURCE_PROFILE,

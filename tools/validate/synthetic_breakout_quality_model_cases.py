@@ -6610,6 +6610,7 @@ def validate_breakout_quality_mr13ai_phase0_local_conflict_contract_case(_base_p
         boundary_decision,
         boundary_preference_margin,
         evaluate_phase0_frame,
+        _attach_canonical_pure_mfe_score_truth,
         _select_target_evaluable_oos_score_rows,
     )
     from config.breakout_quality import (
@@ -6635,7 +6636,7 @@ def validate_breakout_quality_mr13ai_phase0_local_conflict_contract_case(_base_p
             "date": ["2025-01-02", "2025-01-02", "2026-03-03"],
             "group_index": [1, 2, 3],
             "target_raw_r": [1.0, 2.0, np.nan],
-            "target_daily_percentile": [0.25, 0.75, np.nan],
+            "target_daily_percentile": [0.0, 1.0, np.nan],
             "model_score": [0.4, 0.8, 0.6],
         }
     )
@@ -6657,6 +6658,36 @@ def validate_breakout_quality_mr13ai_phase0_local_conflict_contract_case(_base_p
     check_true(
         "mr13ai_phase0_target_evaluable_oos_universe_is_guarded_by_frozen_report_count",
         universe_guarded,
+    )
+
+    rounding_fixture = pd.DataFrame(
+        {
+            "group_index": [0, 1],
+            "target_raw_r": np.asarray([45.67891, 99.99999], dtype=np.float32),
+            "target_daily_percentile": np.asarray([0.0, 1.0], dtype=np.float32),
+        }
+    )
+    attached = _attach_canonical_pure_mfe_score_truth(
+        rounding_fixture,
+        bundle_raw_target=np.asarray([45.67891, 99.99999], dtype=np.float32),
+    )
+    separately_reconstructed_favorable = np.asarray(
+        [0.45678912, 0.99999994], dtype=np.float32
+    ) / 0.01
+    check_true(
+        "mr13ai_phase0_uses_frozen_score_raw_target_not_float32_reconstructed_favorable_r",
+        not np.array_equal(
+            rounding_fixture["target_raw_r"].to_numpy(dtype=np.float32),
+            separately_reconstructed_favorable.astype(np.float32),
+        )
+        and np.array_equal(
+            attached["target_favorable_r"].to_numpy(dtype=np.float32),
+            rounding_fixture["target_raw_r"].to_numpy(dtype=np.float32),
+        )
+        and np.array_equal(
+            attached["target_mfe_daily_percentile"].to_numpy(dtype=np.float32),
+            rounding_fixture["target_daily_percentile"].to_numpy(dtype=np.float32),
+        ),
     )
 
     check_true(
