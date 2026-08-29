@@ -77,6 +77,7 @@ CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE = "none"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY = "min_predicted_safety"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY = "mfe_winner_predicted_safety"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY = "product_predicted_safety"
+CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_CONFLICT_UNSAFE_WINNER_PREDICTED_SAFETY = "conflict_unsafe_winner_predicted_safety"
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,17 @@ def _mfe_winner_predicted_safety_pair_weight(torch, target_diff, left_safety, ri
 
 def _product_predicted_safety_pair_weight(torch, _target_diff, left_safety, right_safety):
     return left_safety * right_safety
+
+
+def _conflict_unsafe_winner_predicted_safety_pair_weight(
+    torch, target_diff, left_safety, right_safety
+):
+    """Discount only MFE/Safety conflict pairs by the unsafe MFE winner's Safety."""
+
+    winner_safety = torch.where(target_diff > 0, left_safety, right_safety)
+    safety_diff = left_safety - right_safety
+    aligned_or_tied = (target_diff * safety_diff) >= 0
+    return torch.where(aligned_or_tied, torch.ones_like(winner_safety), winner_safety)
 
 
 _CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_REGISTRY: dict[str, ContinuousRankerPairWeightPolicy] = {
@@ -170,6 +182,28 @@ _CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_REGISTRY: dict[str, ContinuousRankerPairWe
         report_second_note=(
             "- Actual Safety/MFE metrics只作checkpoint寫入後診斷；epoch selection仍固定Pure-MFE "
             "Validation Daily rho；無bucket/cutoff/lambda/exponent/temperature。"
+        ),
+    ),
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_CONFLICT_UNSAFE_WINNER_PREDICTED_SAFETY: ContinuousRankerPairWeightPolicy(
+        policy_id=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_CONFLICT_UNSAFE_WINNER_PREDICTED_SAFETY,
+        context_source=CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+        compatible_reductions=(CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,),
+        multiplier=_conflict_unsafe_winner_predicted_safety_pair_weight,
+        contract_pair_safety_weight=(
+            "1_if_mfe_and_predicted_safety_order_agree_or_tie_else_"
+            "predicted_safety_percentile_of_mfe_winner"
+        ),
+        contract_pair_weight_combination=(
+            "delta_ndcg_times_conflict_only_unsafe_mfe_winner_predicted_safety"
+        ),
+        report_extension_title="Pure-MFE × Conflict-Only Unsafe-Winner Discount",
+        report_first_note=(
+            "- Target/order與MR-13K相同；Predicted Safety不進network。MFE與Safety ordering一致或Safety tie時保留完整MR-13K ΔNDCG；"
+            "只有MFE winner較不安全的conflict pair才乘該winner的PIT-safe Safety percentile。"
+        ),
+        report_second_note=(
+            "- Pair truth永不因Safety反轉；此cell保留aligned MFE supervision，僅削弱unsafe-winner conflict pressure；"
+            "epoch selection仍固定Pure-MFE Validation Daily rho，無bucket/cutoff/lambda/exponent/temperature。"
         ),
     ),
 }
@@ -874,6 +908,7 @@ __all__ = (
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY",
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY",
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY",
+    "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_CONFLICT_UNSAFE_WINNER_PREDICTED_SAFETY",
     "SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES",
     "PREDICTED_SAFETY_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES",
     "ContinuousRankerPairWeightPolicy",

@@ -63,6 +63,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_CONFLICT_UNSAFE_WINNER_PREDICTED_SAFETY,
     SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES,
     get_continuous_ranker_pair_weight_policy,
     CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR,
@@ -178,13 +179,14 @@ from config.breakout_quality_runtime import (
 # - MR-13AF PIT-safe high-Safety-weighted canonical Pure-MFE ranker: "daily_universal_predicted_safety_weighted_pure_mfe_full_list_ndcg_pairwise"
 # - MR-13AG PIT-safe MFE-winner-Safety-weighted canonical Pure-MFE ranker: "daily_universal_predicted_safety_winner_weighted_pure_mfe_full_list_ndcg_pairwise"
 # - MR-13AH PIT-safe Safety-product-weighted canonical Pure-MFE ranker: "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"
+# - MR-13AJ PIT-safe conflict-only unsafe-winner-discounted Pure-MFE ranker: "daily_universal_predicted_safety_conflict_discounted_pure_mfe_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_predicted_safety_conflict_discounted_pure_mfe_full_list_ndcg_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = RESEARCH_SINGLE_SEED
@@ -501,6 +503,9 @@ DAILY_UNIVERSAL_PREDICTED_SAFETY_WINNER_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWIS
 )
 DAILY_UNIVERSAL_PREDICTED_SAFETY_PRODUCT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"
+)
+DAILY_UNIVERSAL_PREDICTED_SAFETY_CONFLICT_DISCOUNTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_predicted_safety_conflict_discounted_pure_mfe_full_list_ndcg_pairwise"
 )
 
 PREDICTED_UPSIDE_CONTEXT_SCHEMA_VERSION = 1
@@ -1416,6 +1421,18 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
     ),
+    DAILY_UNIVERSAL_PREDICTED_SAFETY_CONFLICT_DISCOUNTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_PREDICTED_SAFETY_CONFLICT_DISCOUNTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+    ),
     DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
         optimizer_name="adam",
@@ -2150,6 +2167,28 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         score_semantic_id="daily_safety_product_weighted_pure_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_PREDICTED_SAFETY_CONFLICT_DISCOUNTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_PREDICTED_SAFETY_CONFLICT_DISCOUNTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13AJ",
+        experiment_name="MR-13AJ PIT-safe Conflict-Only Unsafe-Winner-Discounted Pure-MFE Ranker",
+        phase="13AJ",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="exact_MR-13K_full_horizon_Pure-MFE_order_with_conflict_only_unsafe_winner_predicted_safety_discount",
+        objective_description=(
+            "AF/AG/AH follow-up：Stage-1仍完全重用MR-13M/Seed42 PIT-safe predicted-Safety context；Stage-2固定MR-13K inception_time_v1、"
+            "Pure-MFE target/order、full-list Delta-NDCG、split、optimizer與epoch selection。Safety不進network，pair truth永不反轉。"
+            "若MFE ordering與predicted-Safety ordering一致或Safety tie，保留完整MR-13K pair weight=Delta-NDCG；"
+            "只有MFE winner較不安全的conflict pair才乘該winner的Safety percentile。"
+            "此設計保留AG遺失的aligned MFE supervision，同時比AF更精準地只削弱unsafe-high-MFE conflict pressure；"
+            "沒有bucket、cutoff、lambda、exponent、temperature、joint head、residual target、portfolio state或OOS fitting。"
+        ),
+        metric_scope="all_context_covered_stock_days",
+        score_semantic_id="daily_conflict_discounted_pure_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_CONFLICT_UNSAFE_WINNER_PREDICTED_SAFETY,
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),
@@ -3531,6 +3570,7 @@ __all__ = [
     'DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_PREDICTED_SAFETY_WINNER_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_PREDICTED_SAFETY_PRODUCT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_PREDICTED_SAFETY_CONFLICT_DISCOUNTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID',
     'PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID',
     'PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID',
