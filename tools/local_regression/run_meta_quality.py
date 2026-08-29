@@ -56,13 +56,11 @@ from tools.local_regression.checklist_contract import (
 from tools.local_regression.meta_quality_coverage import build_coverage_summary as _shared_build_coverage_summary
 from tools.validate.transient_code_maintenance import summarize_transient_code_maintenance
 from tools.local_regression.meta_quality_performance import (
-    DEFAULT_PERFORMANCE_MANIFEST_KEYS,
     DEFAULT_PERFORMANCE_STEP_FILES,
     build_performance_summary as _shared_build_performance_summary,
 )
 REQUIRED_META_IDS = ("B22", "B23", "B24", "B25", "B26")
 PERFORMANCE_STEP_FILES = DEFAULT_PERFORMANCE_STEP_FILES
-PERFORMANCE_MANIFEST_KEYS = DEFAULT_PERFORMANCE_MANIFEST_KEYS
 
 
 
@@ -576,7 +574,6 @@ def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, curre
         current_meta_quality_duration_sec=current_meta_quality_duration_sec,
         current_meta_quality_peak_process_memory_mb=current_meta_quality_peak_process_memory_mb,
         performance_step_files=PERFORMANCE_STEP_FILES,
-        performance_manifest_keys=PERFORMANCE_MANIFEST_KEYS,
     )
 
 def main(argv=None) -> int:
@@ -659,6 +656,8 @@ def main(argv=None) -> int:
             "total_duration_sec": performance_summary["total_duration_sec"],
             "critical_path_duration_sec": performance_summary["critical_path_duration_sec"],
             "aggregate_step_duration_sec": performance_summary["aggregate_step_duration_sec"],
+            "formal_wall_time_source": performance_summary["formal_wall_time_source"],
+            "meta_quality_internal_duration_sec": performance_summary["meta_quality_internal_duration_sec"],
             "step_peak_process_memory_mb": performance_summary["step_peak_process_memory_mb"],
             "max_step_peak_process_memory_mb": performance_summary["max_step_peak_process_memory_mb"],
             "meta_quality_peak_process_memory_mb": performance_summary["meta_quality_peak_process_memory_mb"],
@@ -700,8 +699,9 @@ def main(argv=None) -> int:
         f"todo_ids      : {', '.join(checklist_summary['todo_ids']) if checklist_summary['todo_ids'] else '(none)'}",
         f"done_ids      : {', '.join(checklist_summary['done_ids']) if checklist_summary['done_ids'] else '(none)'}",
         f"performance_ok: {performance_summary['ok']}",
-        f"perf_critical : {performance_summary['critical_path_duration_sec']:.3f}s",
-        f"perf_aggregate: {performance_summary['aggregate_step_duration_sec']:.3f}s",
+        "perf_critical : pending(run_all parent wall time)",
+        "perf_aggregate: pending(run_all parent wall time)",
+        f"perf_meta_inner: {performance_summary['meta_quality_internal_duration_sec']:.3f}s",
         f"perf_peak_mem : {performance_summary['max_step_peak_process_memory_mb']:.3f}MB",
         (
             f"perf_opt_trial: {performance_summary['optimizer_trial_avg_objective_wall_sec']:.3f}s"

@@ -43,6 +43,7 @@ TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS = [
     "tools/local_regression/common.py",
     "tools/local_regression/checklist_contract.py",
     "tools/local_regression/formal_pipeline.py",
+    "tools/local_regression/formal_wall_time.py",
     "tools/local_regression/meta_quality_targets.py",
     "tools/local_regression/meta_quality_coverage.py",
     "tools/local_regression/run_meta_quality.py",

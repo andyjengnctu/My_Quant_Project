@@ -23,6 +23,10 @@ from core.params_io import params_to_json_dict
 from core.strategy_params import V16StrategyParams
 from core.runtime_utils import has_help_flag, resolve_cli_program_name, run_cli_entrypoint
 from tools.local_regression.formal_pipeline import DATASET_REQUIRED_STEPS, FORMAL_COMMAND_ORDER, FORMAL_STEP_ORDER
+from tools.local_regression.formal_wall_time import (
+    build_parent_wall_time_summary,
+    merge_parent_wall_time_into_meta_quality_summary,
+)
 from tools.validate.preflight_env import REQUIREMENTS_PATH, format_preflight_summary, run_preflight
 from tools.local_regression.common import (
     archive_bundle_history,
@@ -60,7 +64,6 @@ ProgressCallback = Callable[[str, Dict[str, Any]], None]
 
 
 FORMAL_PRIMARY_PARAM_FILENAME = "formal_primary_params.json"
-
 
 def _write_isolated_formal_primary_param_source(run_dir: Path) -> Path:
     """Write the formal suite's deterministic param source inside its staging run.
@@ -803,7 +806,7 @@ def _run_script(
     major_total: int,
     execution_mode: str = "serial",
 ) -> Dict[str, Any]:
-    started = time.time()
+    started = time.perf_counter()
     process = None
     returncode = 1
     timed_out = False
@@ -835,7 +838,7 @@ def _run_script(
 
             while process is not None:
                 returncode = process.poll()
-                elapsed_sec = round(time.time() - started, 1)
+                elapsed_sec = round(time.perf_counter() - started, 1)
                 if returncode is not None:
                     break
                 if elapsed_sec >= timeout_sec:
@@ -873,7 +876,7 @@ def _run_script(
                     log_file.write(f"[test_suite] final_wait_failed: {type(exc).__name__}: {exc}\n")
                     log_file.flush()
 
-    duration_sec = round(time.time() - started, 3)
+    duration_sec = round(time.perf_counter() - started, 3)
     return {
         "returncode": returncode,
         "duration_sec": duration_sec,
@@ -1089,6 +1092,7 @@ def execute_all(
         selected_script_order = [item for item in SCRIPT_ORDER if item[0] in selected_step_names]
         parallel_workers = _determine_parallel_worker_count(selected_script_order)
         script_summaries_by_name: Dict[str, Dict[str, Any]] = {}
+        parent_wall_summary: Optional[Dict[str, Any]] = None
         overall_ok = True
 
         parallel_specs: List[tuple[int, str, str, str, int]] = []
@@ -1203,6 +1207,21 @@ def execute_all(
                 major_total=major_total,
                 execution_mode="serial",
             )
+            if name == "meta_quality":
+                provisional_meta_summary = {
+                    "name": name,
+                    "duration_sec": run_result["duration_sec"],
+                }
+                parent_timing_inputs = dict(script_summaries_by_name)
+                parent_timing_inputs[name] = provisional_meta_summary
+                parent_wall_summary = build_parent_wall_time_summary(
+                    script_summaries_by_name=parent_timing_inputs,
+                    selected_step_names=selected_step_names,
+                    parallel_step_names=PARALLEL_STEP_NAMES,
+                    manifest=manifest,
+                )
+                merge_parent_wall_time_into_meta_quality_summary(run_dir, parent_wall_summary)
+
             script_summary = _build_script_summary(
                 run_dir=run_dir,
                 name=name,
@@ -1219,6 +1238,22 @@ def execute_all(
                 "major_total": major_total,
                 "execution_mode": "serial",
             })
+
+        if parent_wall_summary is None:
+            parent_wall_summary = build_parent_wall_time_summary(
+                script_summaries_by_name=script_summaries_by_name,
+                selected_step_names=selected_step_names,
+                parallel_step_names=PARALLEL_STEP_NAMES,
+                manifest=manifest,
+            )
+        for failed_step_name in parent_wall_summary.get("failed_budget_steps", []):
+            prior = script_summaries_by_name.get(failed_step_name)
+            if prior is not None:
+                prior["status"] = "FAIL"
+                if "parent_wall_time_budget_exceeded" not in prior.setdefault("failure_reasons", []):
+                    prior["failure_reasons"].append("parent_wall_time_budget_exceeded")
+        if not parent_wall_summary.get("ok", False):
+            overall_ok = False
 
         script_summaries = [script_summaries_by_name[name] for name, _relative_script, _summary_name in selected_script_order]
 
@@ -1254,6 +1289,7 @@ def execute_all(
             "timestamp": taipei_now().isoformat(),
             "git_commit": resolve_git_commit(),
             "scripts": script_summaries,
+            "formal_wall_time": parent_wall_summary,
             "selected_steps": selected_step_names,
             "failures": len(failed_step_names),
             "preflight": step_payloads["preflight"],
@@ -1293,6 +1329,7 @@ def execute_all(
             "bundle_mode": bundle_mode,
             "bundle_entries": [str(path.relative_to(run_dir)).replace("\\", "/") for path in bundle_paths],
             "scripts": script_summaries,
+            "formal_wall_time": parent_wall_summary,
             "step_payloads": step_payloads,
             "failures": master_summary["failures"],
             "retention": {

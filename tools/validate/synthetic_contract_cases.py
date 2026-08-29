@@ -23,6 +23,7 @@ from core.strategy_params import V16StrategyParams
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from tools.local_regression import common as local_common
 from tools.local_regression import run_all as run_all_module
+from tools.local_regression import formal_wall_time as formal_wall_time_module
 from tools.local_regression import run_quick_gate as run_quick_gate_module
 from tools.local_regression.meta_quality_coverage import build_coverage_summary
 from tools.local_regression.meta_quality_performance import build_performance_summary
@@ -1183,6 +1184,7 @@ def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
                 rc = run_all_module.main(["run_all.py"])
 
         master_summary = json.loads((run_dir / "master_summary.json").read_text(encoding="utf-8"))
+        meta_quality_summary = json.loads((run_dir / "meta_quality_summary.json").read_text(encoding="utf-8"))
         dataset_prepare_summary = json.loads((run_dir / "dataset_prepare_summary.json").read_text(encoding="utf-8"))
         formal_param_path = run_dir / run_all_module.FORMAL_PRIMARY_PARAM_FILENAME
         formal_param_exists = formal_param_path.is_file()
@@ -1211,6 +1213,10 @@ def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "run_all_main_dataset_prepare_payload_status", "PASS", master_summary.get("dataset_prepare", {}).get("status"))
     add_check(results, "output_contract", case_id, "run_all_main_dataset_prepare_not_run_steps_empty", [], master_summary.get("not_run_step_names", []))
     add_check(results, "output_contract", case_id, "run_all_main_dataset_prepare_selected_steps", list(run_all_module.STEP_NAMES), master_summary.get("selected_steps"))
+    add_check(results, "output_contract", case_id, "run_all_parent_wall_time_source_is_persisted", formal_wall_time_module.FORMAL_WALL_TIME_SOURCE, master_summary.get("formal_wall_time", {}).get("source"))
+    add_check(results, "output_contract", case_id, "run_all_parent_wall_time_critical_path_uses_outer_durations", 0.04, master_summary.get("formal_wall_time", {}).get("critical_path_duration_sec"))
+    add_check(results, "output_contract", case_id, "meta_quality_receives_parent_wall_time_source", formal_wall_time_module.FORMAL_WALL_TIME_SOURCE, meta_quality_summary.get("performance", {}).get("formal_wall_time_source"))
+    add_check(results, "output_contract", case_id, "meta_quality_receives_parent_wall_time_critical_path", 0.04, meta_quality_summary.get("performance", {}).get("critical_path_duration_sec"))
     add_check(results, "output_contract", case_id, "run_all_formal_primary_param_file_exists", True, formal_param_exists)
     add_check(results, "output_contract", case_id, "run_all_formal_primary_param_uses_current_config_defaults", params_to_json_dict(V16StrategyParams()), formal_param_payload)
     add_check(results, "output_contract", case_id, "run_all_all_child_steps_receive_isolated_param_override", [str(formal_param_path)] * len(child_param_paths), child_param_paths)
@@ -1444,20 +1450,71 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
         add_check(results, "output_contract", case_id, "performance_step_peak_memory_keys", ["chain_checks", "consistency", "ml_smoke", "quick_gate"], sorted(perf.get("step_peak_process_memory_mb", {}).keys()))
         add_check(results, "output_contract", case_id, "performance_max_peak_memory_value", 64.0, perf.get("max_step_peak_process_memory_mb"))
         add_check(results, "output_contract", case_id, "performance_meta_quality_peak_memory_value", 40.0, perf.get("meta_quality_peak_process_memory_mb"))
-        add_check(results, "output_contract", case_id, "performance_parallel_critical_path_uses_max_not_sum", 5.25, perf.get("critical_path_duration_sec"))
-        add_check(results, "output_contract", case_id, "performance_aggregate_duration_retained_for_diagnostics", 11.25, perf.get("aggregate_step_duration_sec"))
+        add_check(results, "output_contract", case_id, "performance_child_does_not_claim_formal_wall_time", None, perf.get("formal_wall_time_source"))
+
+        parent_script_summaries = {
+            "quick_gate": {"duration_sec": 1.0},
+            "consistency": {"duration_sec": 2.0},
+            "chain_checks": {"duration_sec": 3.0},
+            "ml_smoke": {"duration_sec": 4.0},
+            "meta_quality": {"duration_sec": 1.25},
+        }
+        parent_wall = formal_wall_time_module.build_parent_wall_time_summary(
+            script_summaries_by_name=parent_script_summaries,
+            selected_step_names=["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+            parallel_step_names=run_all_module.PARALLEL_STEP_NAMES,
+            manifest=manifest,
+        )
+        add_check(results, "output_contract", case_id, "performance_parallel_critical_path_uses_parent_wall_max_not_sum", 5.25, parent_wall.get("critical_path_duration_sec"))
+        add_check(results, "output_contract", case_id, "performance_parent_aggregate_duration_retained_for_diagnostics", 11.25, parent_wall.get("aggregate_step_duration_sec"))
+        add_check(results, "output_contract", case_id, "performance_parent_wall_time_is_canonical_source", formal_wall_time_module.FORMAL_WALL_TIME_SOURCE, parent_wall.get("source"))
 
         strict_time_manifest = dict(manifest)
         strict_time_manifest["performance_critical_path_max_sec"] = 5
-        with patch.dict(os.environ, {LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)}):
-            strict_time_perf = build_performance_summary(
-                run_dir,
-                strict_time_manifest,
-                current_meta_quality_duration_sec=1.25,
-                current_meta_quality_peak_process_memory_mb=40.0,
-            )
-        total_budget_result = next(row for row in strict_time_perf.get("results", []) if row.get("name") == "performance_formal_critical_path_within_budget")
-        add_check(results, "output_contract", case_id, "performance_total_budget_is_actually_enforced", "FAIL", total_budget_result.get("status"))
+        strict_parent_wall = formal_wall_time_module.build_parent_wall_time_summary(
+            script_summaries_by_name=parent_script_summaries,
+            selected_step_names=["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+            parallel_step_names=run_all_module.PARALLEL_STEP_NAMES,
+            manifest=strict_time_manifest,
+        )
+        total_budget_result = next(row for row in strict_parent_wall.get("results", []) if row.get("name") == "performance_formal_critical_path_within_budget")
+        add_check(results, "output_contract", case_id, "performance_total_budget_is_actually_enforced_by_parent_wall_time", "FAIL", total_budget_result.get("status"))
+
+        strict_consistency_manifest = dict(manifest)
+        strict_consistency_manifest["performance_consistency_max_sec"] = 1
+        strict_consistency_wall = formal_wall_time_module.build_parent_wall_time_summary(
+            script_summaries_by_name=parent_script_summaries,
+            selected_step_names=["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+            parallel_step_names=run_all_module.PARALLEL_STEP_NAMES,
+            manifest=strict_consistency_manifest,
+        )
+        consistency_budget_result = next(row for row in strict_consistency_wall.get("results", []) if row.get("name") == "performance_consistency_within_budget")
+        add_check(results, "output_contract", case_id, "performance_consistency_budget_uses_parent_wall_time", "FAIL", consistency_budget_result.get("status"))
+
+        merge_dir = run_dir / "parent_merge"
+        merge_dir.mkdir(parents=True, exist_ok=True)
+        write_json(
+            merge_dir / "meta_quality_summary.json",
+            {
+                "status": "PASS",
+                "failures": [],
+                "fail_count": 0,
+                "blocked": [],
+                "blocked_count": 0,
+                "performance": {"ok": True},
+                "results": [{"name": "base_meta_check", "status": "PASS", "detail": "ok"}],
+            },
+        )
+        write_text(
+            merge_dir / "meta_quality_summary.txt",
+            "status        : PASS\nfail_count    : 0\nblocked_count : 0\nperformance_ok: True\n"
+            "perf_critical : pending(run_all parent wall time)\nperf_aggregate: pending(run_all parent wall time)\n",
+        )
+        formal_wall_time_module.merge_parent_wall_time_into_meta_quality_summary(merge_dir, strict_consistency_wall)
+        merged_meta = json.loads((merge_dir / "meta_quality_summary.json").read_text(encoding="utf-8"))
+        add_check(results, "output_contract", case_id, "performance_parent_wall_merge_updates_meta_status", "FAIL", merged_meta.get("status"))
+        add_check(results, "output_contract", case_id, "performance_parent_wall_merge_updates_meta_source", formal_wall_time_module.FORMAL_WALL_TIME_SOURCE, merged_meta.get("performance", {}).get("formal_wall_time_source"))
+        add_check(results, "output_contract", case_id, "performance_parent_wall_merge_preserves_failed_step_reason", True, "performance_consistency_within_budget" in merged_meta.get("failures", []))
 
         strict_case_manifest = dict(manifest)
         strict_case_manifest["performance_synthetic_case_max_sec"] = 0

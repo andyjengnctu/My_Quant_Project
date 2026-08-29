@@ -11,13 +11,6 @@ DEFAULT_PERFORMANCE_STEP_FILES = {
     "chain_checks": ("chain_summary.json", "chain_checks_summary.json"),
     "ml_smoke": ("ml_smoke_summary.json",),
 }
-DEFAULT_PERFORMANCE_MANIFEST_KEYS = {
-    "quick_gate": "performance_quick_gate_max_sec",
-    "consistency": "performance_consistency_max_sec",
-    "chain_checks": "performance_chain_checks_max_sec",
-    "ml_smoke": "performance_ml_smoke_max_sec",
-}
-
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, summarize_blocked_result, summarize_result
 
 
@@ -28,12 +21,9 @@ def build_performance_summary(
     current_meta_quality_duration_sec: float,
     current_meta_quality_peak_process_memory_mb: float,
     performance_step_files: Mapping[str, Sequence[str]] | None = None,
-    performance_manifest_keys: Mapping[str, str] | None = None,
 ) -> Dict[str, Any]:
     if performance_step_files is None:
         performance_step_files = DEFAULT_PERFORMANCE_STEP_FILES
-    if performance_manifest_keys is None:
-        performance_manifest_keys = DEFAULT_PERFORMANCE_MANIFEST_KEYS
     has_shared_run_dir = bool(os.environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip())
     available_step_files = {
         name: next((run_dir / file_name for file_name in file_names if (run_dir / file_name).exists()), run_dir / file_names[0])
@@ -55,15 +45,16 @@ def build_performance_summary(
             "step_peak_process_memory_mb": {},
             "optimizer_trial_avg_objective_wall_sec": None,
             "optimizer_profile_trial_count": 0,
-            "total_duration_sec": current_meta_quality_duration_sec,
-            "critical_path_duration_sec": current_meta_quality_duration_sec,
-            "aggregate_step_duration_sec": current_meta_quality_duration_sec,
+            "total_duration_sec": None,
+            "critical_path_duration_sec": None,
+            "aggregate_step_duration_sec": None,
+            "formal_wall_time_source": None,
+            "meta_quality_internal_duration_sec": round(float(current_meta_quality_duration_sec), 3),
             "max_step_peak_process_memory_mb": round(float(current_meta_quality_peak_process_memory_mb), 3),
             "meta_quality_peak_process_memory_mb": round(float(current_meta_quality_peak_process_memory_mb), 3),
         }
 
     results: List[Dict[str, Any]] = []
-    step_durations: Dict[str, float] = {}
     step_peak_process_memory_mb: Dict[str, float] = {}
     missing_step_files: List[str] = []
     missing_memory_steps: List[str] = []
@@ -74,12 +65,6 @@ def build_performance_summary(
             missing_step_files.append(step_name)
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
-        duration_value = payload.get("duration_sec")
-        if duration_value in (None, ""):
-            duration_value = payload.get("elapsed_time_sec")
-        if duration_value in (None, ""):
-            duration_value = payload.get("duration_seconds")
-        step_durations[step_name] = round(float(duration_value or 0.0), 3)
         peak_memory_mb = payload.get("peak_process_memory_mb")
         if peak_memory_mb in (None, ""):
             missing_memory_steps.append(step_name)
@@ -154,28 +139,6 @@ def build_performance_summary(
                 )
             )
 
-    for step_name, duration_sec in step_durations.items():
-        budget_key = performance_manifest_keys[step_name]
-        budget_sec = float(manifest[budget_key])
-        results.append(
-            summarize_result(
-                f"performance_{step_name}_within_budget",
-                duration_sec <= budget_sec,
-                detail=f"duration={duration_sec:.3f}s | budget={budget_sec:.3f}s",
-                extra={"duration_sec": duration_sec, "budget_sec": budget_sec},
-            )
-        )
-
-    meta_quality_budget_sec = float(manifest["performance_meta_quality_max_sec"])
-    results.append(
-        summarize_result(
-            "performance_meta_quality_within_budget",
-            float(current_meta_quality_duration_sec) <= meta_quality_budget_sec,
-            detail=f"duration={float(current_meta_quality_duration_sec):.3f}s | budget={meta_quality_budget_sec:.3f}s",
-            extra={"duration_sec": float(current_meta_quality_duration_sec), "budget_sec": meta_quality_budget_sec},
-        )
-    )
-
     profile_file = run_dir / "optimizer_profile_summary.json"
     optimizer_trial_avg_objective_wall_sec = None
     optimizer_profile_trial_count = 0
@@ -214,21 +177,6 @@ def build_performance_summary(
                     )
                 )
 
-    aggregate_step_duration_sec = round(sum(step_durations.values()) + float(current_meta_quality_duration_sec), 3)
-    critical_path_duration_sec = round(
-        (max(step_durations.values()) if step_durations else 0.0) + float(current_meta_quality_duration_sec),
-        3,
-    )
-    total_budget_sec = float(manifest["performance_critical_path_max_sec"])
-    results.append(
-        summarize_result(
-            "performance_formal_critical_path_within_budget",
-            critical_path_duration_sec <= total_budget_sec,
-            detail=f"critical_path={critical_path_duration_sec:.3f}s | budget={total_budget_sec:.3f}s",
-            extra={"duration_sec": critical_path_duration_sec, "budget_sec": total_budget_sec},
-        )
-    )
-
     max_step_peak_memory_mb = round(
         max([float(current_meta_quality_peak_process_memory_mb)] + [float(value) for value in step_peak_process_memory_mb.values()]),
         3,
@@ -237,14 +185,16 @@ def build_performance_summary(
         "ok": all(item["status"] == "PASS" for item in results),
         "skipped": False,
         "results": results,
-        "step_durations": step_durations,
+        "step_durations": {},
         "step_peak_process_memory_mb": step_peak_process_memory_mb,
         "consistency_synthetic_slowest_cases": consistency_synthetic_slowest_cases,
         "optimizer_trial_avg_objective_wall_sec": optimizer_trial_avg_objective_wall_sec,
         "optimizer_profile_trial_count": optimizer_profile_trial_count,
-        "total_duration_sec": aggregate_step_duration_sec,
-        "critical_path_duration_sec": critical_path_duration_sec,
-        "aggregate_step_duration_sec": aggregate_step_duration_sec,
+        "total_duration_sec": None,
+        "critical_path_duration_sec": None,
+        "aggregate_step_duration_sec": None,
+        "formal_wall_time_source": None,
+        "meta_quality_internal_duration_sec": round(float(current_meta_quality_duration_sec), 3),
         "max_step_peak_process_memory_mb": max_step_peak_memory_mb,
         "meta_quality_peak_process_memory_mb": round(float(current_meta_quality_peak_process_memory_mb), 3),
     }
