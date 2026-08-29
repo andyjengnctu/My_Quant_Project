@@ -1862,8 +1862,8 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
 
     from config.breakout_quality import (
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+        CONTINUOUS_RANKER_SEMANTICS_DUAL_COMPONENT_R,
         SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
-        TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
         get_breakout_quality_experiment_profile,
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
@@ -1901,14 +1901,19 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     from services.breakout_quality import ranker_training as ranker_api
     from services.breakout_quality import train_continuous_ranker as training_module
 
-    # Dual-component regression is a reusable learning formulation: two physical-R
-    # outputs, equal primary MSE, and a fixed favorable-minus-adverse runtime score.
-    dual_profile = SimpleNamespace(
-        name="synthetic_dual_component",
-        training_objective=TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
-        loss_name="dual_mse_raw_r",
-        raw_r_huber_delta_r=None,
+    # Dual-component regression is a reusable learning formulation. Resolve the
+    # registered capability owner dynamically instead of inventing a fake experiment
+    # identity, so the generic engine remains strict about canonical profiles.
+    dual_profile_name = next(
+        profile_name
+        for profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+        if (
+            get_continuous_ranker_execution_recipe(profile_name)
+            .training_policy.semantics_contract_key
+            == CONTINUOUS_RANKER_SEMANTICS_DUAL_COMPONENT_R
+        )
     )
+    dual_profile = get_breakout_quality_experiment_profile(dual_profile_name)
     dual_contract = dict(
         training_semantics(dual_profile).get("dual_component_r_regression_contract") or {}
     )
