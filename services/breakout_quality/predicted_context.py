@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import partial
 import json
 from pathlib import Path
 from typing import Any, Callable
@@ -14,6 +15,10 @@ from config.breakout_quality import get_breakout_quality_workflow_settings
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
 from filters.breakout_quality.dataset_readiness import collect_dataset_readiness
+from filters.breakout_quality.predicted_context_artifact import (
+    get_predicted_context_artifact_spec,
+    resolve_predicted_context_dir,
+)
 from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
     SELECTION_POINT_IN_TIME_SCORE_FILENAME,
@@ -221,4 +226,40 @@ def build_predicted_context(
     return score_path
 
 
-__all__ = ["build_predicted_context", "load_stage1_context_scores"]
+def build_registered_predicted_context(
+    source: str,
+    *,
+    project_root: str | Path,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    dataset: str,
+    max_tickers: int = 0,
+) -> Path:
+    """Build one registered predicted-context capability without consumer branching."""
+
+    spec = get_predicted_context_artifact_spec(source)
+    owner_architecture = spec.resolve_owner_architecture(model_architecture)
+    owner_profile = spec.resolve_owner_profile(experiment_profile)
+    return build_predicted_context(
+        project_root=project_root,
+        filter_id=filter_id,
+        model_architecture=owner_architecture,
+        experiment_profile=owner_profile,
+        dataset=dataset,
+        max_tickers=max_tickers,
+        stage1_profile=spec.stage1_profile,
+        stage1_architecture=spec.stage1_architecture,
+        stage1_research_id=spec.stage1_research_id,
+        stage1_seed=spec.stage1_seed,
+        context_dir_resolver=partial(resolve_predicted_context_dir, spec.source),
+        context_filename=spec.filename,
+        context_manifest_filename=spec.manifest_filename,
+        predicted_score_column=spec.predicted_score_column,
+        context_column=spec.context_column,
+        context_contract=spec.contract(),
+        context_label=spec.producer_label,
+    )
+
+
+__all__ = ["build_predicted_context", "build_registered_predicted_context", "load_stage1_context_scores"]

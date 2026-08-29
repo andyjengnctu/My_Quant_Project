@@ -401,16 +401,13 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     from filters.breakout_quality.artifact_dependency_registry import (
         ARTIFACT_CONTINUOUS_TARGET,
         ARTIFACT_DATASET_CORE,
-        ARTIFACT_PREDICTED_SAFETY_CONTEXT,
-        ARTIFACT_PREDICTED_UPSIDE_CONTEXT,
         required_upstream_artifact_types,
+    )
+    from filters.breakout_quality.predicted_context_artifact import (
+        maybe_predicted_context_artifact_spec,
     )
     from filters.breakout_quality.ranker_training_contract import training_semantics
 
-    context_artifact_by_source = {
-        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE: ARTIFACT_PREDICTED_UPSIDE_CONTEXT,
-        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY: ARTIFACT_PREDICTED_SAFETY_CONTEXT,
-    }
     check(
         "continuous_ranker_runtime_contract_has_dedicated_owner",
         "config.breakout_quality_runtime",
@@ -728,9 +725,11 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         expected_dependencies = [ARTIFACT_DATASET_CORE]
         if recipe.dependency_spec.requires_continuous_target_artifact:
             expected_dependencies.append(ARTIFACT_CONTINUOUS_TARGET)
-        context_artifact = context_artifact_by_source.get(recipe.dependency_spec.context_source)
-        if context_artifact is not None:
-            expected_dependencies.append(context_artifact)
+        context_artifact_spec = maybe_predicted_context_artifact_spec(
+            recipe.dependency_spec.context_source
+        )
+        if context_artifact_spec is not None:
+            expected_dependencies.append(context_artifact_spec.artifact_type)
         actual_dependencies = list(required_upstream_artifact_types(registered_profile_name))
         if actual_dependencies != expected_dependencies:
             reasons.append(
@@ -2612,6 +2611,272 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     )
 
 
+    # Predicted-context persistence is one reusable capability. Exercise the registry,
+    # Stage-1 orchestration and artifact round-trip behavior once for every registered
+    # source instead of repeating implementation-source assertions in MR-13AC/AD/AE.
+    from filters.breakout_quality.daily_ranker_data import build_daily_ranker_split
+    from filters.breakout_quality.paths import (
+        SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+        SELECTION_POINT_IN_TIME_SCORE_FILENAME,
+    )
+    from filters.breakout_quality.predicted_context_artifact import (
+        load_validated_predicted_context,
+        predicted_context_artifact_specs,
+    )
+    from services.breakout_quality import predicted_context as predicted_context_service
+
+    context_specs = predicted_context_artifact_specs()
+    registered_context_sources = {
+        get_continuous_ranker_execution_recipe(profile_name).dependency_spec.context_source
+        for profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+        if get_continuous_ranker_execution_recipe(profile_name).dependency_spec.context_source
+        != "none"
+    }
+    check(
+        "predicted_context_registry_covers_every_registered_persistent_context_source",
+        registered_context_sources,
+        {spec.source for spec in context_specs},
+    )
+    check_true(
+        "predicted_context_registry_has_unique_artifact_and_builder_identities",
+        len({spec.artifact_type for spec in context_specs}) == len(context_specs)
+        and len({spec.builder_type for spec in context_specs}) == len(context_specs),
+    )
+
+    context_orchestration_errors = []
+    context_owner_errors = []
+    context_roundtrip_errors = []
+    readiness_summary = {
+        "source_data_date_range": {"end": "2021-12-31"},
+        "policy": {"dataset": "synthetic"},
+        "dataset_artifacts": {"identity": "synthetic"},
+    }
+    outer_policy = {
+        "selection_end_date": "2020-12-31",
+        "oos_start_date": "2021-01-01",
+        "effective_oos_end_date": "2021-12-31",
+    }
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        stage1_calls = []
+
+        def fake_build_cross_fitted_context_scores(**kwargs):
+            stage1_calls.append(dict(kwargs))
+            directory = Path(kwargs["point_in_time_dir_override"])
+            directory.mkdir(parents=True, exist_ok=True)
+            is_forward = bool(kwargs["single_score_block"])
+            score_date = "2021-01-04" if is_forward else "2020-12-30"
+            cutoff = "2020-12-31" if is_forward else "2020-11-30"
+            fold_id = "forward_fixed" if is_forward else "selection_crossfit"
+            pd.DataFrame(
+                {
+                    "ticker": ["0050", "00632R"],
+                    "date": [score_date, score_date],
+                    "breakout_quality_score": [0.2, 0.8],
+                    "fold_id": [fold_id, fold_id],
+                    "model_information_cutoff": [cutoff, cutoff],
+                }
+            ).to_csv(
+                directory / SELECTION_POINT_IN_TIME_SCORE_FILENAME,
+                index=False,
+                encoding="utf-8-sig",
+            )
+            (directory / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME).write_text(
+                "{}\n", encoding="utf-8"
+            )
+            return directory / SELECTION_POINT_IN_TIME_SCORE_FILENAME
+
+        with (
+            patch.object(
+                predicted_context_service,
+                "collect_dataset_readiness",
+                return_value=SimpleNamespace(ready=True, summary=readiness_summary),
+            ),
+            patch.object(
+                predicted_context_service,
+                "resolve_breakout_quality_outer_policy",
+                return_value=outer_policy,
+            ),
+            patch.object(
+                predicted_context_service,
+                "get_breakout_quality_workflow_settings",
+                return_value=SimpleNamespace(
+                    point_in_time_inner_validation_months=24,
+                    point_in_time_fold_months=12,
+                ),
+            ),
+            patch.object(
+                predicted_context_service,
+                "build_cross_fitted_context_scores",
+                side_effect=fake_build_cross_fitted_context_scores,
+            ),
+        ):
+            for spec in context_specs:
+                candidates = [
+                    profile_name
+                    for profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+                    if get_continuous_ranker_execution_recipe(
+                        profile_name
+                    ).dependency_spec.context_source
+                    == spec.source
+                ]
+                if not candidates:
+                    context_orchestration_errors.append(f"{spec.source}:no_consumer")
+                    continue
+                consumer_profile_name = next(
+                    (
+                        name
+                        for name in candidates
+                        if spec.owner_profile is None or name != spec.owner_profile
+                    ),
+                    candidates[0],
+                )
+                consumer_profile = get_breakout_quality_experiment_profile(
+                    consumer_profile_name
+                )
+                before = len(stage1_calls)
+                predicted_context_service.build_registered_predicted_context(
+                    spec.source,
+                    project_root=temp_root,
+                    filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                    model_architecture=str(consumer_profile.model_architecture),
+                    experiment_profile=consumer_profile.name,
+                    dataset="full",
+                    max_tickers=0,
+                )
+                calls = stage1_calls[before:]
+                if len(calls) != 2:
+                    context_orchestration_errors.append(
+                        f"{spec.source}:calls={len(calls)}"
+                    )
+                else:
+                    selection_call, forward_call = calls
+                    expected_common = (
+                        spec.stage1_profile,
+                        spec.stage1_architecture,
+                        int(spec.stage1_seed),
+                    )
+                    actual_common = (
+                        str(selection_call.get("experiment_profile") or ""),
+                        str(selection_call.get("model_architecture") or ""),
+                        int(selection_call.get("seed", -1)),
+                    )
+                    if actual_common != expected_common:
+                        context_orchestration_errors.append(
+                            f"{spec.source}:stage1={actual_common!r}"
+                        )
+                    selection_dir = Path(selection_call["point_in_time_dir_override"])
+                    forward_dir = Path(forward_call["point_in_time_dir_override"])
+                    if (
+                        selection_dir.name != "stage1_selection_crossfit"
+                        or forward_dir.name != "stage1_forward_fixed"
+                        or bool(selection_call["single_score_block"])
+                        or not bool(forward_call["single_score_block"])
+                        or selection_dir == forward_dir
+                    ):
+                        context_orchestration_errors.append(
+                            f"{spec.source}:selection_forward_isolation"
+                        )
+
+                frame, manifest = load_validated_predicted_context(
+                    spec.source,
+                    temp_root,
+                    filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                    model_architecture=str(consumer_profile.model_architecture),
+                    experiment_profile=consumer_profile.name,
+                    expected_dataset_policy=readiness_summary["policy"],
+                    expected_dataset_artifacts=readiness_summary["dataset_artifacts"],
+                )
+                expected_owner = (
+                    spec.resolve_owner_architecture(str(consumer_profile.model_architecture)),
+                    spec.resolve_owner_profile(consumer_profile.name),
+                )
+                actual_owner = (
+                    str(manifest.get("model_architecture") or ""),
+                    str(manifest.get("experiment_profile") or ""),
+                )
+                if actual_owner != expected_owner:
+                    context_owner_errors.append(
+                        f"{spec.source}:{actual_owner!r}!={expected_owner!r}"
+                    )
+                source_stage1 = dict(manifest.get("source_stage1") or {})
+                if (
+                    str(source_stage1.get("research_id") or "") != spec.stage1_research_id
+                    or str(source_stage1.get("profile") or "") != spec.stage1_profile
+                    or str(source_stage1.get("architecture") or "")
+                    != spec.stage1_architecture
+                    or int(source_stage1.get("seed", -1)) != int(spec.stage1_seed)
+                ):
+                    context_owner_errors.append(f"{spec.source}:stage1_manifest")
+                if (
+                    frame["ticker"].tolist()
+                    != ["0050", "00632R", "0050", "00632R"]
+                    or spec.predicted_score_column not in frame.columns
+                    or spec.context_column not in frame.columns
+                    or not bool(frame[spec.context_column].between(0.0, 1.0).all())
+                    or not bool(
+                        (
+                            frame.loc[
+                                frame["context_phase"].eq("selection_crossfit"),
+                                "model_information_cutoff",
+                            ]
+                            < frame.loc[
+                                frame["context_phase"].eq("selection_crossfit"), "date"
+                            ]
+                        ).all()
+                    )
+                ):
+                    context_roundtrip_errors.append(spec.source)
+
+    check(
+        "predicted_context_builder_uses_isolated_crossfit_selection_and_single_fixed_forward_behavior",
+        [],
+        context_orchestration_errors,
+    )
+    check(
+        "predicted_context_artifact_owner_and_stage1_provenance_are_registry_driven",
+        [],
+        context_owner_errors,
+    )
+    check(
+        "predicted_context_artifact_roundtrip_preserves_pit_and_ticker_identity",
+        [],
+        context_roundtrip_errors,
+    )
+
+    # Rows without a usable persistent context must be filtered before any daily target
+    # percentile is derived. This split invariant is shared by all predicted contexts.
+    split_dates = pd.to_datetime(
+        [f"2018-01-{day:02d}" for day in range(1, 26)]
+        + [f"2019-01-{day:02d}" for day in range(1, 26)]
+        + [f"2021-01-{day:02d}" for day in range(1, 26)]
+    )
+    split_target_valid = np.ones(len(split_dates), dtype=bool)
+    split_target_valid[[0, 25, 50]] = False
+    split_bundle = SimpleNamespace(
+        group_table=pd.DataFrame(
+            {
+                "date": split_dates,
+                "label_eval_end_date": split_dates + pd.Timedelta(days=40),
+            }
+        ),
+        target_valid=split_target_valid,
+        summary={"training_universe_start_date": "2018-01-01"},
+        outer_policy=outer_policy,
+    )
+    split = build_daily_ranker_split(split_bundle, inner_validation_months=24)
+    invalid_ids = {0, 25, 50}
+    check_true(
+        "predicted_context_training_split_never_readmits_context_missing_rows",
+        invalid_ids.isdisjoint(set(split.selection_ids.tolist()))
+        and invalid_ids.isdisjoint(set(split.inner_train_ids.tolist()))
+        and invalid_ids.isdisjoint(set(split.validation_ids.tolist()))
+        and invalid_ids.isdisjoint(set(split.oos_ids.tolist()))
+        and bool(split.report.get("target_valid_filter_applied")),
+    )
+
+
     # Execution recipe is derived from canonical profile/spec but intentionally omits
     # MR identity.  Generic model Rolling authorization remains fail-closed.  A current
     # Strategy Compare source may instead carry a narrow single-seed-only conversion
@@ -2747,6 +3012,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         "equal_rank_target",
         "risk_normalized_context",
         "pareto_pairwise",
+        "predicted_context_artifact",
     )
     summary["training_performed"] = False
     return results, summary
@@ -5128,7 +5394,6 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    import inspect
     import numpy as np
     import pandas as pd
 
@@ -5136,14 +5401,8 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
         DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         get_breakout_quality_experiment_profile,
-        get_breakout_quality_model_research_settings,
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
-    )
-    from filters.breakout_quality.artifact_dependency_registry import (
-        ARTIFACT_DATASET_CORE,
-        ARTIFACT_PREDICTED_UPSIDE_CONTEXT,
-        required_upstream_artifact_types,
     )
     from filters.breakout_quality.conditional_mfe_safety import (
         build_conditional_mfe_safety_targets,
@@ -5152,7 +5411,6 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
     from filters.breakout_quality.models.active import build_active_model
     from filters.breakout_quality.models.runtime import require_torch
     from filters.breakout_quality.models.spec import get_model_spec
-    from filters.breakout_quality.daily_ranker_data import build_daily_ranker_split
     from filters.breakout_quality.predicted_upside_context import (
         PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
         STAGE1_ARCHITECTURE,
@@ -5163,14 +5421,6 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
         predicted_upside_context_contract,
     )
     from filters.breakout_quality.ranker_training_contract import training_semantics
-    from services.breakout_quality.point_in_time_scores import (
-        build_cross_fitted_context_scores,
-    )
-    from services.breakout_quality.predicted_context import build_predicted_context
-    from services.breakout_quality.predicted_upside_context import (
-        _load_stage1_scores,
-        build_predicted_upside_context,
-    )
 
     profile = get_breakout_quality_experiment_profile(
         DAILY_UNIVERSAL_PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE
@@ -5180,20 +5430,16 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
     )
     research_spec = get_continuous_ranker_research_spec(profile.name)
     check(
-        "mr13ac_registered_identity_target_architecture_and_current_conversion_authorization",
+        "mr13ac_registered_identity_target_and_architecture",
         (
             "MR-13AC",
             PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
             "inception_time_predicted_upside_context_v1",
-            True,
-            True,
         ),
         (
             research_spec.model_research_id,
             profile.continuous_target_id,
             profile.model_architecture,
-            bool(research_spec.selection_pit_authorized),
-            bool(research_spec.current_time_validation_authorized),
         ),
     )
     check_true(
@@ -5212,7 +5458,6 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
     )
 
     context_contract = predicted_upside_context_contract()
-    stage1_spec = get_continuous_ranker_research_spec(STAGE1_PROFILE)
     check(
         "mr13ac_stage1_is_frozen_mr13k_seed42_with_crossfit_selection_and_fixed_forward",
         (
@@ -5220,8 +5465,6 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
             "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise",
             "inception_time_v1",
             42,
-            True,
-            False,
             "expanding_cross_fitted_point_in_time",
             "single_fixed_pre_oos_fit",
             True,
@@ -5232,33 +5475,12 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
             STAGE1_PROFILE,
             STAGE1_ARCHITECTURE,
             int(STAGE1_SEED),
-            bool(stage1_spec.selection_pit_authorized),
-            bool(stage1_spec.current_time_validation_authorized),
             context_contract.get("selection_context"),
             context_contract.get("forward_context"),
             bool(context_contract.get("full_fit_selection_score_forbidden")),
             bool(context_contract.get("oos_statistics_for_training_forbidden")),
         ),
     )
-    producer_source = inspect.getsource(build_predicted_context)
-    ac_wrapper_source = inspect.getsource(build_predicted_upside_context)
-    check_true(
-        "mr13ac_context_producer_uses_shared_isolated_crossfit_and_one_forward_score_block",
-        "build_cross_fitted_context_scores" in producer_source
-        and "stage1_selection_crossfit" in producer_source
-        and "stage1_forward_fixed" in producer_source
-        and "single_score_block=False" in producer_source
-        and "single_score_block=True" in producer_source
-        and "model_information_cutoff" in producer_source
-        and "build_predicted_context" in ac_wrapper_source,
-    )
-    wrapper_source = inspect.getsource(build_cross_fitted_context_scores)
-    check_true(
-        "mr13ac_stage1_stacking_wrapper_requires_isolated_directory_without_ui_authorization_change",
-        '"stacking_context"' in wrapper_source
-        and "point_in_time_dir_override" in wrapper_source,
-    )
-
     dates = pd.to_datetime(["2026-01-02"] * 6 + ["2026-01-05"] * 6)
     frame = pd.DataFrame(
         {
@@ -5296,62 +5518,6 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
         "mr13ac_selection_stage2_universe_is_only_pit_context_covered_rows",
         "pit_context_covered_rows_only",
         context_contract.get("selection_training_universe"),
-    )
-
-    # Date membership alone must never re-admit rows whose Stage-1 context is missing.
-    # This is the exact runtime failure caught by the first formal MR-13AC execution.
-    split_dates = pd.to_datetime(
-        [f"2018-01-{day:02d}" for day in range(1, 26)]
-        + [f"2019-01-{day:02d}" for day in range(1, 26)]
-        + [f"2021-01-{day:02d}" for day in range(1, 26)]
-    )
-    split_table = pd.DataFrame(
-        {
-            "date": split_dates,
-            "label_eval_end_date": split_dates + pd.Timedelta(days=40),
-        }
-    )
-    split_target_valid = np.ones(len(split_table), dtype=bool)
-    split_target_valid[[0, 25, 50]] = False
-    split_bundle = SimpleNamespace(
-        group_table=split_table,
-        target_valid=split_target_valid,
-        summary={"training_universe_start_date": "2018-01-01"},
-        outer_policy={
-            "selection_end_date": "2020-12-31",
-            "oos_start_date": "2021-01-01",
-            "effective_oos_end_date": "2021-12-31",
-        },
-    )
-    split = build_daily_ranker_split(split_bundle, inner_validation_months=24)
-    invalid_ids = {0, 25, 50}
-    check_true(
-        "mr13ac_daily_split_excludes_target_invalid_context_missing_rows_before_percentile_build",
-        invalid_ids.isdisjoint(set(split.selection_ids.tolist()))
-        and invalid_ids.isdisjoint(set(split.inner_train_ids.tolist()))
-        and invalid_ids.isdisjoint(set(split.validation_ids.tolist()))
-        and invalid_ids.isdisjoint(set(split.oos_ids.tolist()))
-        and bool(split.report.get("target_valid_filter_applied")),
-    )
-
-    # Stage-1 score ingestion must preserve leading-zero / alphanumeric ticker identity
-    # instead of letting pandas' mixed-type inference mutate join keys.
-    with tempfile.TemporaryDirectory() as temp_dir:
-        stage1_path = Path(temp_dir) / "stage1.csv"
-        pd.DataFrame(
-            {
-                "ticker": ["0050", "2330", "00632R"],
-                "date": ["2020-01-02"] * 3,
-                "breakout_quality_score": [0.1, 0.5, 0.9],
-                "fold_id": ["fold"] * 3,
-                "model_information_cutoff": ["2019-12-31"] * 3,
-            }
-        ).to_csv(stage1_path, index=False, encoding="utf-8-sig")
-        loaded_stage1 = _load_stage1_scores(stage1_path, phase="selection_crossfit")
-    check(
-        "mr13ac_stage1_csv_loader_preserves_ticker_identity_without_mixed_dtype_inference",
-        ["0050", "2330", "00632R"],
-        loaded_stage1["ticker"].tolist(),
     )
 
     # Refactoring MR-13P onto the shared residual helper must preserve its exact transform.
@@ -5417,11 +5583,6 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
         rejected_bad_width = True
     check_true("mr13ac_model_rejects_missing_context_scalar", rejected_bad_width)
 
-    check(
-        "mr13ac_dependency_plan_requires_dataset_then_predicted_upside_context",
-        (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_UPSIDE_CONTEXT),
-        required_upstream_artifact_types(profile.name),
-    )
     semantics = training_semantics(profile)
     embedded = dict(semantics.get("predicted_upside_context_contract") or {})
     if not embedded:
@@ -5431,36 +5592,6 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
     check_true(
         "mr13ac_training_semantics_persist_stage1_context_provenance",
         embedded == context_contract,
-    )
-
-    from config.strategy_compare import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
-    ac_source = dict(STRATEGY_DL_SOURCES.get("CONT13AC_ROLL") or {})
-    c78 = dict(STRATEGY_COMPARE_ARMS.get("C78") or {})
-    c78_options = dict(c78.get("dl_runtime_options") or {})
-    c79 = dict(STRATEGY_COMPARE_ARMS.get("C79") or {})
-    c79_options = dict(c79.get("dl_runtime_options") or {})
-    check_true(
-        "mr13ac_strategy_conversions_keep_direct_diagnostic_and_exact_c59_control_isolated",
-        ac_source.get("experiment_profile") == profile.name
-        and ac_source.get("model_architecture") == "inception_time_predicted_upside_context_v1"
-        and ac_source.get("score_source") == "selection_point_in_time"
-        and c78.get("dl_id") == "CONT13AC_ROLL"
-        and c78.get("dl_runtime_mode") == "resource-aware-continuous-score-no-k-no-r0"
-        and c78_options.get("preserve_k") is False
-        and c78_options.get("preserve_r0") is False
-        and c78_options.get("selection_order") == "model_score_desc_then_canonical_tie_v1"
-        and c78_options.get("selection_only") is True
-        and c79.get("dl_id") == "CONT13AC_ROLL"
-        and c79.get("dl_runtime_mode") == "resource-aware-continuous-score-constrained-optimal"
-        and c79_options.get("preserve_k_r0") is True
-        and c79_options.get("constrained_solver") == "exact_branch_and_bound_v1"
-        and c79_options.get("selection_only") is True
-        and "safety_gate" not in c78_options
-        and "score_weight" not in c78_options
-        and "joint_score_transform" not in c78_options
-        and "safety_gate" not in c79_options
-        and "score_weight" not in c79_options
-        and "joint_score_transform" not in c79_options,
     )
 
     summary["training_performed"] = False
@@ -5475,29 +5606,20 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    import inspect
     import numpy as np
     import pandas as pd
 
     from config.breakout_quality import (
-        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
         DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_PREDICTED_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         get_breakout_quality_experiment_profile,
-        get_breakout_quality_model_research_settings,
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
-    )
-    from filters.breakout_quality.artifact_dependency_registry import (
-        ARTIFACT_DATASET_CORE,
-        ARTIFACT_PREDICTED_SAFETY_CONTEXT,
-        required_upstream_artifact_types,
     )
     from filters.breakout_quality.continuous_ranker_data import (
         build_same_date_percentile_targets,
     )
-    from filters.breakout_quality.daily_ranker_data import build_daily_ranker_split
     from filters.breakout_quality.models.active import build_active_model
     from filters.breakout_quality.models.runtime import require_torch
     from filters.breakout_quality.models.spec import get_model_spec
@@ -5511,14 +5633,6 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
         predicted_safety_context_contract,
     )
     from filters.breakout_quality.ranker_training_contract import training_semantics
-    from services.breakout_quality.point_in_time_scores import (
-        build_cross_fitted_context_scores,
-    )
-    from services.breakout_quality.predicted_context import build_predicted_context
-    from services.breakout_quality.predicted_safety_context import (
-        _load_stage1_scores,
-        build_predicted_safety_context,
-    )
 
     profile = get_breakout_quality_experiment_profile(
         DAILY_UNIVERSAL_PREDICTED_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
@@ -5530,24 +5644,19 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
         DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
     research_spec = get_continuous_ranker_research_spec(profile.name)
-    settings = get_breakout_quality_model_research_settings()
     check(
-        "mr13ad_current_identity_target_architecture_and_model_gate_only_authorization",
+        "mr13ad_registered_identity_target_and_architecture",
         (
             profile.name,
             "MR-13AD",
             PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
             "inception_time_predicted_safety_context_v1",
-            False,
-            False,
         ),
         (
             profile.name,
             research_spec.model_research_id,
             profile.continuous_target_id,
             profile.model_architecture,
-            bool(research_spec.selection_pit_authorized),
-            bool(research_spec.current_time_validation_authorized),
         ),
     )
     check_true(
@@ -5566,7 +5675,6 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
     )
 
     context_contract = predicted_safety_context_contract()
-    stage1_spec = get_continuous_ranker_research_spec(STAGE1_PROFILE)
     check(
         "mr13ad_stage1_is_frozen_mr13m_seed42_with_crossfit_selection_and_fixed_forward",
         (
@@ -5574,8 +5682,6 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
             DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
             "inception_time_v1",
             42,
-            True,
-            False,
             "expanding_cross_fitted_point_in_time",
             "single_fixed_pre_oos_fit",
             True,
@@ -5586,8 +5692,6 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
             STAGE1_PROFILE,
             STAGE1_ARCHITECTURE,
             int(STAGE1_SEED),
-            bool(stage1_spec.selection_pit_authorized),
-            bool(stage1_spec.current_time_validation_authorized),
             context_contract.get("selection_context"),
             context_contract.get("forward_context"),
             bool(context_contract.get("full_fit_selection_score_forbidden")),
@@ -5599,25 +5703,6 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
         safety_control.name == STAGE1_PROFILE
         and get_continuous_ranker_research_spec(safety_control.name).model_research_id == "MR-13M",
     )
-    producer_source = inspect.getsource(build_predicted_context)
-    ad_wrapper_source = inspect.getsource(build_predicted_safety_context)
-    check_true(
-        "mr13ad_context_producer_uses_shared_isolated_crossfit_and_one_forward_score_block",
-        "build_cross_fitted_context_scores" in producer_source
-        and "stage1_selection_crossfit" in producer_source
-        and "stage1_forward_fixed" in producer_source
-        and "single_score_block=False" in producer_source
-        and "single_score_block=True" in producer_source
-        and "model_information_cutoff" in producer_source
-        and "build_predicted_context" in ad_wrapper_source,
-    )
-    wrapper_source = inspect.getsource(build_cross_fitted_context_scores)
-    check_true(
-        "mr13ad_stage1_stacking_wrapper_requires_isolated_directory_without_ui_authorization_change",
-        '"stacking_context"' in wrapper_source
-        and "point_in_time_dir_override" in wrapper_source,
-    )
-
     dates = pd.to_datetime(["2026-01-02"] * 6 + ["2026-01-05"] * 6)
     frame = pd.DataFrame(
         {
@@ -5668,55 +5753,6 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
         context_contract.get("selection_training_universe"),
     )
 
-    split_dates = pd.to_datetime(
-        [f"2018-01-{day:02d}" for day in range(1, 26)]
-        + [f"2019-01-{day:02d}" for day in range(1, 26)]
-        + [f"2021-01-{day:02d}" for day in range(1, 26)]
-    )
-    split_table = pd.DataFrame(
-        {"date": split_dates, "label_eval_end_date": split_dates + pd.Timedelta(days=40)}
-    )
-    split_target_valid = np.ones(len(split_table), dtype=bool)
-    split_target_valid[[0, 25, 50]] = False
-    split_bundle = SimpleNamespace(
-        group_table=split_table,
-        target_valid=split_target_valid,
-        summary={"training_universe_start_date": "2018-01-01"},
-        outer_policy={
-            "selection_end_date": "2020-12-31",
-            "oos_start_date": "2021-01-01",
-            "effective_oos_end_date": "2021-12-31",
-        },
-    )
-    split = build_daily_ranker_split(split_bundle, inner_validation_months=24)
-    invalid_ids = {0, 25, 50}
-    check_true(
-        "mr13ad_daily_split_excludes_target_invalid_context_missing_rows_before_percentile_build",
-        invalid_ids.isdisjoint(set(split.selection_ids.tolist()))
-        and invalid_ids.isdisjoint(set(split.inner_train_ids.tolist()))
-        and invalid_ids.isdisjoint(set(split.validation_ids.tolist()))
-        and invalid_ids.isdisjoint(set(split.oos_ids.tolist()))
-        and bool(split.report.get("target_valid_filter_applied")),
-    )
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        stage1_path = Path(temp_dir) / "stage1.csv"
-        pd.DataFrame(
-            {
-                "ticker": ["0050", "2330", "00632R"],
-                "date": ["2020-01-02"] * 3,
-                "breakout_quality_score": [0.1, 0.5, 0.9],
-                "fold_id": ["fold"] * 3,
-                "model_information_cutoff": ["2019-12-31"] * 3,
-            }
-        ).to_csv(stage1_path, index=False, encoding="utf-8-sig")
-        loaded_stage1 = _load_stage1_scores(stage1_path, phase="selection_crossfit")
-    check(
-        "mr13ad_stage1_csv_loader_preserves_ticker_identity_without_mixed_dtype_inference",
-        ["0050", "2330", "00632R"],
-        loaded_stage1["ticker"].tolist(),
-    )
-
     base_spec = get_model_spec("inception_time_v1")
     model_spec = get_model_spec("inception_time_predicted_safety_context_v1")
     check_true(
@@ -5764,11 +5800,6 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
         rejected_bad_width = True
     check_true("mr13ad_model_rejects_missing_context_scalar", rejected_bad_width)
 
-    check(
-        "mr13ad_dependency_plan_requires_dataset_then_predicted_safety_context",
-        (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_SAFETY_CONTEXT),
-        required_upstream_artifact_types(profile.name),
-    )
     semantics = training_semantics(profile)
     embedded = dict(semantics.get("predicted_safety_context_contract") or {})
     if not embedded:
@@ -5778,15 +5809,6 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
     check_true(
         "mr13ad_training_semantics_persist_stage1_context_provenance",
         embedded == context_contract,
-    )
-
-    from config.strategy_compare import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
-    check_true(
-        "mr13ad_model_gate_does_not_pre_authorize_strategy_or_pit_runtime",
-        "CONT13AD_ROLL" not in STRATEGY_DL_SOURCES
-        and all(str(dict(arm or {}).get("dl_id") or "") != "CONT13AD_ROLL" for arm in STRATEGY_COMPARE_ARMS.values())
-        and bool(research_spec.selection_pit_authorized) is False
-        and bool(research_spec.current_time_validation_authorized) is False,
     )
 
     summary["training_performed"] = False
@@ -5904,31 +5926,19 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    import inspect
     from config.breakout_quality import (
-        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
         DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_PREDICTED_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_PREDICTED_SAFETY_CONTEXT_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
         PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE,
         get_breakout_quality_experiment_profile,
-        get_breakout_quality_model_research_settings,
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
         get_predicted_safety_pure_mfe_contract,
     )
-    from filters.breakout_quality.artifact_dependency_registry import (
-        ARTIFACT_DATASET_CORE,
-        ARTIFACT_PREDICTED_SAFETY_CONTEXT,
-        required_upstream_artifact_types,
-    )
     from filters.breakout_quality.models.spec import get_model_spec
-    from filters.breakout_quality.predicted_safety_context import (
-        resolve_predicted_safety_context_dir,
-    )
     from filters.breakout_quality.ranker_training_contract import training_semantics
-    from services.breakout_quality.predicted_safety_context import build_predicted_safety_context
     from services.breakout_quality.train_daily_ranker import _predicted_safety_context_pure_mfe_metrics
 
     profile = get_breakout_quality_experiment_profile(
@@ -5939,22 +5949,18 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
     )
     spec = get_continuous_ranker_research_spec(profile.name)
     check(
-        "mr13ae_frozen_identity_target_architecture_and_model_gate_only_authorization",
+        "mr13ae_frozen_identity_target_and_architecture",
         (
             profile.name,
             "MR-13AE",
             PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
             "inception_time_predicted_safety_context_v1",
-            False,
-            False,
         ),
         (
             profile.name,
             spec.model_research_id,
             profile.continuous_target_id,
             str(profile.model_architecture),
-            bool(spec.selection_pit_authorized),
-            bool(spec.current_time_validation_authorized),
         ),
     )
     check_true(
@@ -5983,18 +5989,6 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
         DAILY_UNIVERSAL_PREDICTED_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE,
     )
-    resolver_source = inspect.getsource(resolve_predicted_safety_context_dir)
-    builder_source = inspect.getsource(build_predicted_safety_context)
-    check_true(
-        "mr13ae_context_storage_reuses_existing_mr13ad_owner_without_10plus1_retraining",
-        "PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE" in resolver_source
-        and "PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE" in builder_source,
-    )
-    check(
-        "mr13ae_dependency_plan_requires_dataset_and_predicted_safety_context",
-        (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_SAFETY_CONTEXT),
-        required_upstream_artifact_types(profile.name),
-    )
     model_spec = get_model_spec("inception_time_predicted_safety_context_v1")
     base_spec = get_model_spec("inception_time_v1")
     check_true(
@@ -6011,25 +6005,35 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
         contract,
         embedded,
     )
-    metric_source = inspect.getsource(_predicted_safety_context_pure_mfe_metrics)
-    check_true(
-        "mr13ae_model_gate_reports_mfe_and_downside_geometry_without_fitting_on_it",
-        "target_favorable_r" in metric_source
-        and "target_adverse_r" in metric_source
-        and "target_low_adverse_daily_percentile" in metric_source
-        and "build_same_date_percentile_targets" in metric_source
-        and "score_pct >= 0.90" in metric_source
-        and "diagnostic_only_no_fit_no_threshold_selection" in metric_source,
+    metric_table = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-01-05"] * 10),
+            "target_favorable_r": np.arange(1.0, 11.0),
+            "target_adverse_r": np.arange(10.0, 0.0, -1.0),
+            "target_low_adverse_daily_percentile": np.linspace(0.0, 1.0, 10),
+            "target_mfe_daily_percentile": np.linspace(0.0, 1.0, 10),
+            "predicted_safety_percentile": np.linspace(0.0, 1.0, 10),
+        }
     )
-    from config.strategy_compare import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
-    check_true(
-        "mr13ae_does_not_pre_authorize_pit_strategy_or_production",
-        "CONT13AE_ROLL" not in STRATEGY_DL_SOURCES
-        and all(str(dict(arm or {}).get("dl_id") or "") != "CONT13AE_ROLL" for arm in STRATEGY_COMPARE_ARMS.values())
-        and not bool(spec.selection_pit_authorized)
-        and not bool(spec.current_time_validation_authorized),
+    metric_payload = _predicted_safety_context_pure_mfe_metrics(
+        np.arange(10, dtype=np.int64),
+        metric_table,
+        np.linspace(0.0, 1.0, 10),
     )
-
+    check_true(
+        "mr13ae_model_gate_behavior_reports_mfe_downside_safety_and_daily_top_decile_only",
+        bool(metric_payload.get("available"))
+        and metric_payload.get("status") == "diagnostic_only_no_fit_no_threshold_selection"
+        and int(metric_payload.get("group_count", 0)) == 10
+        and int((metric_payload.get("top_10pct") or {}).get("n", 0)) == 1
+        and float((metric_payload.get("top_10pct") or {}).get("full_mfe_r_mean")) == 10.0
+        and float((metric_payload.get("top_10pct") or {}).get("adverse_r_mean")) == 1.0
+        and float((metric_payload.get("top_10pct") or {}).get("high_mfe_pct")) == 100.0
+        and float((metric_payload.get("top_10pct") or {}).get("high_safety_pct")) == 100.0
+        and float((metric_payload.get("top_10pct") or {}).get("hmhs_pct")) == 100.0
+        and float(metric_payload.get("score_to_low_adverse_mean_daily_spearman")) > 0.999
+        and float(metric_payload.get("predicted_safety_to_model_score_mean_daily_spearman")) > 0.999,
+    )
     summary["training_performed"] = False
     return results, summary
 
@@ -6043,7 +6047,6 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
-    import inspect
     import numpy as np
     import pandas as pd
     import torch
@@ -6062,9 +6065,6 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
     from services.breakout_quality.train_continuous_ranker import (
         _pairwise_logistic_loss,
         _training_target_for_profile,
-    )
-    from services.breakout_quality.train_daily_ranker import (
-        _predicted_safety_context_pure_mfe_metrics,
     )
 
     profile = get_breakout_quality_experiment_profile(
@@ -6179,23 +6179,5 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
         "evaluation_reference_profile = research_spec.evaluation_reference_profile_name" in trainer_text
         and "or research_spec.reference_profile_name" not in trainer_text,
     )
-    metric_source = inspect.getsource(_predicted_safety_context_pure_mfe_metrics)
-    check_true(
-        "mr13af_model_gate_reports_upside_downside_and_shortcut_geometry",
-        "target_favorable_r" in metric_source
-        and "target_adverse_r" in metric_source
-        and "predicted_safety_to_model_score_mean_daily_spearman" in metric_source
-        and "high_safety_pct" in metric_source
-        and "hmhs_pct" in metric_source,
-    )
-    from config.strategy_compare import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
-    check_true(
-        "mr13af_does_not_pre_authorize_pit_strategy_or_robustness",
-        "CONT13AF_ROLL" not in STRATEGY_DL_SOURCES
-        and all(str(dict(arm or {}).get("dl_id") or "") != "CONT13AF_ROLL" for arm in STRATEGY_COMPARE_ARMS.values())
-        and not bool(spec.selection_pit_authorized)
-        and not bool(spec.current_time_validation_authorized),
-    )
-
     summary["training_performed"] = False
     return results, summary

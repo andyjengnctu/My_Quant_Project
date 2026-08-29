@@ -53,20 +53,20 @@ from filters.breakout_quality.continuous_target import (
     build_daily_opportunity_no_time_contract,
 )
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
+from filters.breakout_quality.predicted_context_artifact import (
+    get_predicted_context_artifact_spec,
+    load_validated_predicted_context,
+    maybe_predicted_context_artifact_spec,
+    predicted_context_artifact_specs,
+)
 from filters.breakout_quality.predicted_upside_context import (
-    CONTEXT_COLUMN as PREDICTED_UPSIDE_CONTEXT_COLUMN,
     PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
     build_predicted_upside_conditional_low_adverse_targets,
-    load_validated_predicted_upside_context,
-    predicted_upside_context_contract,
 )
 from filters.breakout_quality.predicted_safety_context import (
-    CONTEXT_COLUMN as PREDICTED_SAFETY_CONTEXT_COLUMN,
     PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
     PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
     build_predicted_safety_conditional_mfe_targets,
-    load_validated_predicted_safety_context,
-    predicted_safety_context_contract,
 )
 from config.breakout_quality import get_predicted_safety_pure_mfe_contract
 from filters.breakout_quality.risk_normalized_target import (
@@ -621,10 +621,9 @@ def _build_daily_target_contract(
     builder = simple_builders.get(str(contract_kind))
     if builder is not None:
         return builder(DEFAULT_LABEL_POLICY)
-    if contract_kind == "predicted_upside_context":
-        return predicted_upside_context_contract()
-    if contract_kind == "predicted_safety_context":
-        return predicted_safety_context_contract()
+    for context_spec in predicted_context_artifact_specs():
+        if contract_kind == context_spec.target_contract_kind:
+            return context_spec.contract()
     if contract_kind == "predicted_safety_pure_mfe":
         return get_predicted_safety_pure_mfe_contract()
     if contract_kind == "risk_normalized":
@@ -647,25 +646,9 @@ def _load_predicted_context_by_capability(
     expected_dataset_policy,
     expected_dataset_artifacts,
 ):
-    loaders = {
-        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE: (
-            load_validated_predicted_upside_context,
-            PREDICTED_UPSIDE_CONTEXT_COLUMN,
-            "upside",
-            "predicted_upside_context_manifest",
-        ),
-        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY: (
-            load_validated_predicted_safety_context,
-            PREDICTED_SAFETY_CONTEXT_COLUMN,
-            "safety",
-            "predicted_safety_context_manifest",
-        ),
-    }
-    try:
-        loader, context_column, context_name, manifest_key = loaders[str(source)]
-    except KeyError as exc:
-        raise ValueError(f"不支援的predicted context capability: {source!r}") from exc
-    frame, manifest = loader(
+    spec = get_predicted_context_artifact_spec(source)
+    frame, manifest = load_validated_predicted_context(
+        spec.source,
         root,
         filter_id=filter_id,
         model_architecture=model_architecture,
@@ -673,7 +656,7 @@ def _load_predicted_context_by_capability(
         expected_dataset_policy=expected_dataset_policy,
         expected_dataset_artifacts=expected_dataset_artifacts,
     )
-    return frame, manifest, context_column, context_name, manifest_key
+    return frame, manifest, spec.context_column, spec.context_name, spec.manifest_key
 
 
 def resolve_daily_training_universe_start(
@@ -1208,10 +1191,8 @@ def load_daily_universal_ranker_data(
         group_table["target_equal_rank_composite"] = raw_target
     context_manifest = None
     predicted_context_manifest_key = None
-    if context_policy.source in {
-        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
-        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
-    }:
+    predicted_context_spec = maybe_predicted_context_artifact_spec(context_policy.source)
+    if predicted_context_spec is not None:
         (
             context_frame,
             context_manifest,
@@ -1321,17 +1302,13 @@ def load_daily_universal_ranker_data(
         "context_features": (
             list(RISK_GEOMETRY_CONTEXT_FEATURES)
             if use_risk_context
-            else [
-                PREDICTED_UPSIDE_CONTEXT_COLUMN
-                if use_predicted_upside_context
-                else PREDICTED_SAFETY_CONTEXT_COLUMN
-            ]
-            if use_predicted_scalar_context
+            else [predicted_context_spec.context_column]
+            if use_predicted_scalar_context and predicted_context_spec is not None
             else []
         ),
         "pair_weight_context_features": (
-            [PREDICTED_SAFETY_CONTEXT_COLUMN]
-            if use_predicted_safety_pair_weight_context
+            [predicted_context_spec.context_column]
+            if use_predicted_safety_pair_weight_context and predicted_context_spec is not None
             else []
         ),
         "pair_weight_context_contract": (
@@ -1368,17 +1345,13 @@ def load_daily_universal_ranker_data(
         "context_features": (
             list(RISK_GEOMETRY_CONTEXT_FEATURES)
             if use_risk_context
-            else [
-                PREDICTED_UPSIDE_CONTEXT_COLUMN
-                if use_predicted_upside_context
-                else PREDICTED_SAFETY_CONTEXT_COLUMN
-            ]
-            if use_predicted_scalar_context
+            else [predicted_context_spec.context_column]
+            if use_predicted_scalar_context and predicted_context_spec is not None
             else []
         ),
         "pair_weight_context_features": (
-            [PREDICTED_SAFETY_CONTEXT_COLUMN]
-            if use_predicted_safety_pair_weight_context
+            [predicted_context_spec.context_column]
+            if use_predicted_safety_pair_weight_context and predicted_context_spec is not None
             else []
         ),
         "risk_param_coverage_start": (

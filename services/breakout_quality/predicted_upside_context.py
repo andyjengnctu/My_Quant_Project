@@ -4,20 +4,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from filters.breakout_quality.predicted_upside_context import (
-    CONTEXT_COLUMN,
-    PREDICTED_UPSIDE_CONTEXT_FILENAME,
-    PREDICTED_UPSIDE_CONTEXT_MANIFEST_FILENAME,
-    STAGE1_ARCHITECTURE,
-    STAGE1_PROFILE,
-    STAGE1_RESEARCH_ID,
-    STAGE1_SEED,
-    predicted_upside_context_contract,
-    resolve_predicted_upside_context_dir,
+from config.breakout_quality_runtime import (
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
+)
+from filters.breakout_quality.predicted_context_artifact import (
+    get_predicted_context_artifact_spec,
 )
 from services.breakout_quality.predicted_context import (
-    build_predicted_context,
+    build_registered_predicted_context,
     load_stage1_context_scores,
+)
+
+_SPEC = get_predicted_context_artifact_spec(
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE
 )
 
 
@@ -27,8 +26,8 @@ def _load_stage1_scores(path: Path, *, phase: str):
     return load_stage1_context_scores(
         path,
         phase=phase,
-        predicted_score_column="predicted_upside_score",
-        context_column=CONTEXT_COLUMN,
+        predicted_score_column=_SPEC.predicted_score_column,
+        context_column=_SPEC.context_column,
         context_label="predicted-upside",
     )
 
@@ -44,24 +43,14 @@ def build_predicted_upside_context(
 ) -> Path:
     """Build/rebuild MR-13AC Selection cross-fit + fixed pre-OOS upside context."""
 
-    return build_predicted_context(
+    return build_registered_predicted_context(
+        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
         project_root=project_root,
         filter_id=filter_id,
         model_architecture=model_architecture,
         experiment_profile=experiment_profile,
         dataset=dataset,
         max_tickers=max_tickers,
-        stage1_profile=STAGE1_PROFILE,
-        stage1_architecture=STAGE1_ARCHITECTURE,
-        stage1_research_id=STAGE1_RESEARCH_ID,
-        stage1_seed=STAGE1_SEED,
-        context_dir_resolver=resolve_predicted_upside_context_dir,
-        context_filename=PREDICTED_UPSIDE_CONTEXT_FILENAME,
-        context_manifest_filename=PREDICTED_UPSIDE_CONTEXT_MANIFEST_FILENAME,
-        predicted_score_column="predicted_upside_score",
-        context_column=CONTEXT_COLUMN,
-        context_contract=predicted_upside_context_contract(),
-        context_label="MR-13AC predicted-upside",
     )
 
 

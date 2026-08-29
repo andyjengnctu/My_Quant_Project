@@ -15,7 +15,8 @@ from typing import Any
 from config.research import get_research_artifact_preparation_policy
 from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
-    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,)
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
+)
 from config.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
 )
@@ -34,21 +35,22 @@ from filters.breakout_quality.continuous_target import (
     resolve_continuous_target_dir,
 )
 from filters.breakout_quality.dataset_readiness import collect_dataset_readiness
-from filters.breakout_quality.predicted_upside_context import (
-    PREDICTED_UPSIDE_CONTEXT_MANIFEST_FILENAME,
-    load_validated_predicted_upside_context,
-    resolve_predicted_upside_context_dir,
-)
-from filters.breakout_quality.predicted_safety_context import (
-    PREDICTED_SAFETY_CONTEXT_MANIFEST_FILENAME,
-    load_validated_predicted_safety_context,
-    resolve_predicted_safety_context_dir,
+from filters.breakout_quality.predicted_context_artifact import (
+    get_predicted_context_artifact_spec,
+    load_validated_predicted_context,
+    maybe_predicted_context_artifact_spec,
+    predicted_context_artifact_specs,
+    resolve_predicted_context_dir,
 )
 
 ARTIFACT_DATASET_CORE = "dataset_core"
 ARTIFACT_CONTINUOUS_TARGET = "continuous_target"
-ARTIFACT_PREDICTED_UPSIDE_CONTEXT = "predicted_upside_context"
-ARTIFACT_PREDICTED_SAFETY_CONTEXT = "predicted_safety_context"
+ARTIFACT_PREDICTED_UPSIDE_CONTEXT = get_predicted_context_artifact_spec(
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE
+).artifact_type
+ARTIFACT_PREDICTED_SAFETY_CONTEXT = get_predicted_context_artifact_spec(
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
+).artifact_type
 ARTIFACT_MODEL_CHECKPOINT = "model_checkpoint"
 ARTIFACT_FORWARD_SCORE = "forward_score"
 ARTIFACT_SELECTION_PIT_SCORE = "selection_pit_score"
@@ -78,16 +80,6 @@ ARTIFACT_DEPENDENCY_REGISTRY: dict[str, ArtifactDependencySpec] = {
         dependencies=(ARTIFACT_DATASET_CORE,),
         producer_work_type=PRODUCER_MODEL_TRAINING,
     ),
-    ARTIFACT_PREDICTED_UPSIDE_CONTEXT: ArtifactDependencySpec(
-        artifact_type=ARTIFACT_PREDICTED_UPSIDE_CONTEXT,
-        dependencies=(ARTIFACT_DATASET_CORE,),
-        producer_work_type=PRODUCER_MODEL_TRAINING,
-    ),
-    ARTIFACT_PREDICTED_SAFETY_CONTEXT: ArtifactDependencySpec(
-        artifact_type=ARTIFACT_PREDICTED_SAFETY_CONTEXT,
-        dependencies=(ARTIFACT_DATASET_CORE,),
-        producer_work_type=PRODUCER_MODEL_TRAINING,
-    ),
     ARTIFACT_MODEL_CHECKPOINT: ArtifactDependencySpec(
         artifact_type=ARTIFACT_MODEL_CHECKPOINT,
         dependencies=(ARTIFACT_DATASET_CORE, ARTIFACT_CONTINUOUS_TARGET),
@@ -109,6 +101,16 @@ ARTIFACT_DEPENDENCY_REGISTRY: dict[str, ArtifactDependencySpec] = {
         producer_work_type=PRODUCER_STRATEGY_COMPARE_CHECKPOINT,
     ),
 }
+ARTIFACT_DEPENDENCY_REGISTRY.update(
+    {
+        spec.artifact_type: ArtifactDependencySpec(
+            artifact_type=spec.artifact_type,
+            dependencies=(ARTIFACT_DATASET_CORE,),
+            producer_work_type=PRODUCER_MODEL_TRAINING,
+        )
+        for spec in predicted_context_artifact_specs()
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -146,12 +148,11 @@ def required_upstream_artifact_types(experiment_profile: str) -> tuple[str, ...]
     required = [ARTIFACT_DATASET_CORE]
     if bool(recipe.dependency_spec.requires_continuous_target_artifact):
         required.append(ARTIFACT_CONTINUOUS_TARGET)
-    context_artifact = {
-        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE: ARTIFACT_PREDICTED_UPSIDE_CONTEXT,
-        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY: ARTIFACT_PREDICTED_SAFETY_CONTEXT,
-    }.get(str(recipe.dependency_spec.context_source))
-    if context_artifact is not None:
-        required.append(context_artifact)
+    context_spec = maybe_predicted_context_artifact_spec(
+        str(recipe.dependency_spec.context_source)
+    )
+    if context_spec is not None:
+        required.append(context_spec.artifact_type)
     return tuple(required)
 
 
@@ -265,19 +266,22 @@ def collect_model_upstream_readiness(
                 description=target_description,
             )
         )
-    if recipe.context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE:
-        context_dir = resolve_predicted_upside_context_dir(
+    context_spec = maybe_predicted_context_artifact_spec(recipe.context_policy.source)
+    if context_spec is not None:
+        context_dir = resolve_predicted_context_dir(
+            context_spec.source,
             root,
             filter_id=str(filter_id),
             model_architecture=str(model_architecture),
             experiment_profile=str(experiment_profile),
         )
-        context_manifest = context_dir / PREDICTED_UPSIDE_CONTEXT_MANIFEST_FILENAME
+        context_manifest = context_dir / context_spec.manifest_filename
         context_ready = False
         context_error: Exception | None = None
         if dataset_ready:
             try:
-                load_validated_predicted_upside_context(
+                load_validated_predicted_context(
+                    context_spec.source,
                     root,
                     filter_id=str(filter_id),
                     model_architecture=str(model_architecture),
@@ -290,64 +294,25 @@ def collect_model_upstream_readiness(
                 context_error = exc
         rows.append(
             ArtifactReadiness(
-                artifact_type=ARTIFACT_PREDICTED_UPSIDE_CONTEXT,
+                artifact_type=context_spec.artifact_type,
                 ready=context_ready,
-                status=("READY" if context_ready else "PREDICTED_UPSIDE_CONTEXT_MISSING_OR_INVALID"),
+                status=("READY" if context_ready else context_spec.invalid_status),
                 path=context_manifest,
                 dependencies=(ARTIFACT_DATASET_CORE,),
                 producer_work_type=(
                     PRODUCER_EXISTING_ARTIFACT if context_ready else PRODUCER_MODEL_TRAINING
                 ),
                 description=(
-                    "重用MR-13AC PIT-safe predicted-upside context"
+                    context_spec.ready_description
                     if context_ready
-                    else "canonical Dataset未就緒，predicted-upside context不可建立"
+                    else context_spec.dataset_not_ready_description
                     if not dataset_ready
-                    else "缺少或無效的MR-13AC PIT-safe predicted-upside context："
-                    + (f"{type(context_error).__name__}: {context_error}" if context_error else "unknown")
-                ),
-            )
-        )
-    if recipe.context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY:
-        context_dir = resolve_predicted_safety_context_dir(
-            root,
-            filter_id=str(filter_id),
-            model_architecture=str(model_architecture),
-            experiment_profile=str(experiment_profile),
-        )
-        context_manifest = context_dir / PREDICTED_SAFETY_CONTEXT_MANIFEST_FILENAME
-        context_ready = False
-        context_error: Exception | None = None
-        if dataset_ready:
-            try:
-                load_validated_predicted_safety_context(
-                    root,
-                    filter_id=str(filter_id),
-                    model_architecture=str(model_architecture),
-                    experiment_profile=str(experiment_profile),
-                    expected_dataset_policy=(dataset_readiness.summary or {}).get("policy"),
-                    expected_dataset_artifacts=(dataset_readiness.summary or {}).get("dataset_artifacts"),
-                )
-                context_ready = True
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                context_error = exc
-        rows.append(
-            ArtifactReadiness(
-                artifact_type=ARTIFACT_PREDICTED_SAFETY_CONTEXT,
-                ready=context_ready,
-                status=("READY" if context_ready else "PREDICTED_SAFETY_CONTEXT_MISSING_OR_INVALID"),
-                path=context_manifest,
-                dependencies=(ARTIFACT_DATASET_CORE,),
-                producer_work_type=(
-                    PRODUCER_EXISTING_ARTIFACT if context_ready else PRODUCER_MODEL_TRAINING
-                ),
-                description=(
-                    "重用canonical PIT-safe predicted-safety context"
-                    if context_ready
-                    else "canonical Dataset未就緒，predicted-safety context不可建立"
-                    if not dataset_ready
-                    else "缺少或無效的canonical PIT-safe predicted-safety context："
-                    + (f"{type(context_error).__name__}: {context_error}" if context_error else "unknown")
+                    else context_spec.invalid_description_prefix
+                    + (
+                        f"{type(context_error).__name__}: {context_error}"
+                        if context_error
+                        else "unknown"
+                    )
                 ),
             )
         )
@@ -380,13 +345,14 @@ def collect_model_upstream_preparation_plan(
         max_tickers=int(max_tickers),
     )
     actions: list[ResearchArtifactAction] = []
-    priority = {ARTIFACT_DATASET_CORE: 10, ARTIFACT_CONTINUOUS_TARGET: 20, ARTIFACT_PREDICTED_UPSIDE_CONTEXT: 30, ARTIFACT_PREDICTED_SAFETY_CONTEXT: 30}
+    priority = {ARTIFACT_DATASET_CORE: 10, ARTIFACT_CONTINUOUS_TARGET: 20}
     builder = {
         ARTIFACT_DATASET_CORE: "breakout_quality_dataset",
         ARTIFACT_CONTINUOUS_TARGET: "breakout_quality_continuous_target",
-        ARTIFACT_PREDICTED_UPSIDE_CONTEXT: "breakout_quality_predicted_upside_context",
-        ARTIFACT_PREDICTED_SAFETY_CONTEXT: "breakout_quality_predicted_safety_context",
     }
+    for context_spec in predicted_context_artifact_specs():
+        priority[context_spec.artifact_type] = 30
+        builder[context_spec.artifact_type] = context_spec.builder_type
     policy = get_research_artifact_preparation_policy()
     for item in readiness:
         configured_builder = builder.get(item.artifact_type)
