@@ -67,6 +67,8 @@ def build_performance_summary(
     step_peak_process_memory_mb: Dict[str, float] = {}
     missing_step_files: List[str] = []
     missing_memory_steps: List[str] = []
+    consistency_synthetic_slowest_cases: List[Dict[str, Any]] = []
+    consistency_synthetic_timing_present = False
     for step_name, path in available_step_files.items():
         if not path.exists():
             missing_step_files.append(step_name)
@@ -83,6 +85,13 @@ def build_performance_summary(
             missing_memory_steps.append(step_name)
         else:
             step_peak_process_memory_mb[step_name] = round(float(peak_memory_mb), 3)
+        if step_name == "consistency":
+            raw_slowest = payload.get("synthetic_slowest_cases")
+            if isinstance(raw_slowest, list):
+                consistency_synthetic_timing_present = True
+                consistency_synthetic_slowest_cases = [
+                    dict(row) for row in raw_slowest if isinstance(row, dict)
+                ]
 
     if missing_step_files:
         results.append(
@@ -110,6 +119,40 @@ def build_performance_summary(
             extra={"missing_memory_steps": missing_memory_steps},
         )
     )
+
+    if "consistency" not in missing_step_files:
+        synthetic_case_budget_sec = float(manifest["performance_synthetic_case_max_sec"])
+        if not consistency_synthetic_timing_present:
+            results.append(
+                summarize_result(
+                    "performance_consistency_synthetic_case_timings_present",
+                    False,
+                    detail="validate_consistency_summary.json 缺少 synthetic_slowest_cases",
+                )
+            )
+        else:
+            slowest_case = max(
+                consistency_synthetic_slowest_cases,
+                key=lambda row: float(row.get("duration_sec", 0.0) or 0.0),
+                default={},
+            )
+            slowest_duration_sec = round(float(slowest_case.get("duration_sec", 0.0) or 0.0), 6)
+            slowest_validator_name = str(slowest_case.get("validator_name") or "")
+            results.append(
+                summarize_result(
+                    "performance_consistency_synthetic_case_within_budget",
+                    slowest_duration_sec <= synthetic_case_budget_sec,
+                    detail=(
+                        f"slowest={slowest_validator_name or '-'}:{slowest_duration_sec:.3f}s"
+                        f" | budget={synthetic_case_budget_sec:.3f}s"
+                    ),
+                    extra={
+                        "validator_name": slowest_validator_name,
+                        "duration_sec": slowest_duration_sec,
+                        "budget_sec": synthetic_case_budget_sec,
+                    },
+                )
+            )
 
     for step_name, duration_sec in step_durations.items():
         budget_key = performance_manifest_keys[step_name]
@@ -206,6 +249,7 @@ def build_performance_summary(
         "results": results,
         "step_durations": step_durations,
         "step_peak_process_memory_mb": step_peak_process_memory_mb,
+        "consistency_synthetic_slowest_cases": consistency_synthetic_slowest_cases,
         "optimizer_trial_avg_objective_wall_sec": optimizer_trial_avg_objective_wall_sec,
         "optimizer_profile_trial_count": optimizer_profile_trial_count,
         "total_duration_sec": aggregate_step_duration_sec,

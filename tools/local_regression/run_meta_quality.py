@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
@@ -588,12 +589,12 @@ def main(argv=None) -> int:
         ensure_reduced_dataset()
         run_dir = resolve_run_dir("meta_quality")
 
-        started = os.times().elapsed
+        started = time.perf_counter()
         coverage_summary = _build_coverage_summary(run_dir, manifest)
         checklist_summary = _summarize_checklist_consistency()
         formal_entry_summary = _summarize_formal_entry_consistency()
         maintenance_summary = summarize_transient_code_maintenance(PROJECT_ROOT)
-        current_meta_quality_duration_sec = round(os.times().elapsed - started, 3)
+        current_meta_quality_duration_sec = round(time.perf_counter() - started, 3)
         current_meta_quality_peak_process_memory_mb = tracker.snapshot_peak_mb()
         performance_summary = _build_performance_summary(
             run_dir,

@@ -49,7 +49,14 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 ),
     )
 
-    status = collect_audit_status(module_id="breakout_quality")
+    # Synthetic contract checks must not read the developer's current research artifacts.
+    # Using an isolated root keeps runtime status validation deterministic and bounded even
+    # when the real project contains large Strategy Compare / Audit sidecars.
+    with TemporaryDirectory(prefix="synthetic_audit_status_") as status_root_text:
+        status = collect_audit_status(
+            module_id="breakout_quality",
+            project_root=Path(status_root_text),
+        )
     expected_overall = (
         "DISABLED"
         if not enabled

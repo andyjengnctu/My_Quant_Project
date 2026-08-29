@@ -1412,7 +1412,22 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
         run_dir = Path(temp_dir) / "run_dir"
         run_dir.mkdir(parents=True, exist_ok=True)
         write_json(run_dir / "quick_gate_summary.json", {"status": "PASS", "duration_sec": 1.0, "peak_process_memory_mb": 12.5})
-        write_json(run_dir / "validate_consistency_summary.json", {"status": "PASS", "elapsed_time_sec": 2.0, "peak_process_memory_mb": 32.5})
+        write_json(
+            run_dir / "validate_consistency_summary.json",
+            {
+                "status": "PASS",
+                "elapsed_time_sec": 2.0,
+                "peak_process_memory_mb": 32.5,
+                "synthetic_slowest_cases": [
+                    {
+                        "validator_name": "validate_fast_case",
+                        "layer": "contract",
+                        "cost_class": "cheap",
+                        "duration_sec": 0.25,
+                    }
+                ],
+            },
+        )
         write_json(run_dir / "chain_summary.json", {"status": "PASS", "duration_sec": 3.0, "peak_process_memory_mb": 64.0})
         write_json(run_dir / "ml_smoke_summary.json", {"status": "PASS", "duration_sec": 4.0, "peak_process_memory_mb": 48.0, "optimizer_profile_trial_count": 1, "optimizer_profile_avg_objective_wall_sec": 1.5})
 
@@ -1443,6 +1458,29 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
             )
         total_budget_result = next(row for row in strict_time_perf.get("results", []) if row.get("name") == "performance_formal_critical_path_within_budget")
         add_check(results, "output_contract", case_id, "performance_total_budget_is_actually_enforced", "FAIL", total_budget_result.get("status"))
+
+        strict_case_manifest = dict(manifest)
+        strict_case_manifest["performance_synthetic_case_max_sec"] = 0
+        with patch.dict(os.environ, {LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)}):
+            strict_case_perf = build_performance_summary(
+                run_dir,
+                strict_case_manifest,
+                current_meta_quality_duration_sec=1.25,
+                current_meta_quality_peak_process_memory_mb=40.0,
+            )
+        synthetic_case_budget_result = next(
+            row
+            for row in strict_case_perf.get("results", [])
+            if row.get("name") == "performance_consistency_synthetic_case_within_budget"
+        )
+        add_check(
+            results,
+            "output_contract",
+            case_id,
+            "performance_synthetic_case_budget_is_actually_enforced",
+            "FAIL",
+            synthetic_case_budget_result.get("status"),
+        )
 
         strict_memory_manifest = dict(manifest)
         strict_memory_manifest["performance_peak_process_memory_mb"] = 50
