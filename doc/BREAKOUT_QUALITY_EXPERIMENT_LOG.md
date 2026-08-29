@@ -10700,3 +10700,47 @@ Decision：`STANDALONE_CONVERSION_FAIL / MODEL_GATE_RETAINED`。不得以C78 FAI
 - Authorization目前只到Model Gate：`selection_pit_authorized=False`、`current_time_validation_authorized=False`；不建立`CONT13AD_ROLL`或Strategy arm，不改production C42/C44。Standard Model SOP與persistent report fingerprint不變。
 - Gate問題：AD是否在較長右尾的MFE response上保留更高learnability/upside，同時因predicted Safety context改善downside information；不能只看own-target rho。若Model Gate GO，才另配下一個合法SR-C*，完整複製C59/C79 exact K/R0 constrained contract，只換DL source做conversion。
 - Decision=`MR13AD_IMPLEMENTED / MODEL_GATE_RESULT_PENDING / NO_PIT / NO_STRATEGY_CONVERSION / NOT_PROMOTED`。
+
+## 2026-08-29 — MR-13AD Seed42 Forward Model Gate：reverse conditional MFE可學性不足，依事前stop rule結案
+
+### 狀態
+
+`RESULT_AVAILABLE / REVERSE_CONDITIONAL_LEARNABILITY_WEAK / FORWARD_MODEL_GATE_FAIL / NO_PIT / NO_STRATEGY_CONVERSION / STOP`
+
+### 程式基準
+
+- 使用者最新 baseline ZIP：`test-branch-1_20260829_040025_5fc44bae.zip`
+- SHA256：`5eeb85896f8b881cd3e1ea858a3ef175dcf690b2abb697885cef136575df15dc`
+- Profile：`daily_universal_predicted_safety_conditional_mfe_full_list_ndcg_pairwise`
+- Architecture：`inception_time_predicted_safety_context_v1`
+- Seed：`42`
+- Stage-1：MR-13M PIT-safe predicted-Safety context；Selection 10-fold expanding cross-fit，Forward single fixed pre-2021 fit，兩者coverage=`100%`。
+- Stage-2：MR-13K recipe + 1個direct predicted-safety percentile scalar；target=`same-date Pure-MFE percentile residual given predicted Safety percentile`再same-date percentile化。
+
+### Forward Model Gate結果
+
+- selected epoch=`1`；選模Validation rho=`0.0770`。
+- post-refit Validation：Daily/Global rho=`0.1591/0.1129`，Pair=`55.32%`，Top10/Bottom10=`0.5488/0.4213`，spread=`+0.1275`。
+- Forward OOS：Daily/Global rho=`0.0999/0.0478`，Pair=`53.39%`，Top10/Bottom10=`0.5221/0.4627`，spread=`+0.0594`。
+- Breakout OOS：Daily/Global rho=`0.0895/0.0376`，Pair=`53.46%`，Top10/Bottom10=`0.5232/0.4620`，spread=`+0.0612`。
+- OOS Ranking：NDCG@10=`0.5465`，Top-K Target=`0.5444`，Lift=`+0.0444`，Boundary=`48.14%`，Boundary gap=`-0.0159`。
+- Breakout Ranking：NDCG@10=`0.6970`，Top-K Target=`0.5251`，Lift=`+0.0187`，Boundary=`51.96%`，Boundary gap=`+0.0141`。
+- Generalization：Validation→OOS ΔDaily rho=`-0.0592`、ΔPair=`-1.93pp`；OOS→Breakout ΔDaily rho=`-0.0104`、ΔPair=`+0.07pp`，表示application slice沒有額外collapse，但基礎signal本身偏弱。
+
+### 與MR-13AC的對稱比較
+
+MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predicted-Upside→Conditional Safety；其Seed42 Validation/OOS/Breakout Daily rho=`0.2278/0.1650/0.1900`。MR-13AD反向後為`0.1591/0.0999/0.0895`，OOS與Breakout分別低`0.0651`與`0.1005`。因此「先預測Safety，再學conditional MFE residual」沒有帶來預期的learnability優勢，反而明顯弱於AC方向。
+
+### 重要解讀邊界
+
+使用者提出的原始直覺包含「Safety有下限／MFE右尾相對無上限」。MR-13AD作為**精確MR-13AC methodology reverse-control**，Stage-2在OLS residualization之前先把Pure-MFE轉成same-date percentile，因此原始MFE magnitude/right-tail已被rank normalization壓縮到`[0,1]`。所以本實驗可以否定的是：
+
+- 在相同percentile-residual methodology下，交換conditioning direction並沒有改善可學性；
+- 不應把本FAIL外推成「raw MFE magnitude/right-tail沒有研究價值」。若未來要測該假說，必須另立新的MR identity與預註冊target，不得覆寫MR-13AD。
+
+### Decision
+
+`REVERSE_CONDITIONAL_LEARNABILITY_WEAK / FORWARD_MODEL_GATE_FAIL / NO_PIT / NO_STRATEGY_CONVERSION / STOP`
+
+依事前stop rule，不建立`CONT13AD_ROLL`、不建立Strategy arm、不做MR-13AD Multi-seed或Fixed。MR-13AC/C79既有Safety conversion evidence不受本結果否定。由於C79 robustness先前只為等待MR-13AD對稱cell而延後，MR-13AD結案後，下一個最小必要證據回到**C59 vs C79 DL-source-only Extending Multi-seed robustness**；不先開新模型或Fixed。
+
