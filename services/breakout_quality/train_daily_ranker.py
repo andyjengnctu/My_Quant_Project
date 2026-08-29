@@ -1490,10 +1490,12 @@ def run(args) -> int:
         "reason": "active research profile沒有設定reference target",
     }
     reference_raw_target = None
-    evaluation_reference_profile = (
-        research_spec.evaluation_reference_profile_name
-        or research_spec.reference_profile_name
-    )
+    # `reference_profile_name` belongs only to the read-only Target-comparison
+    # workflow.  Post-checkpoint Common Target Reference diagnostics are opt-in
+    # exclusively through `evaluation_reference_profile_name`; falling back to
+    # the Target-comparison reference can incorrectly require identical target-
+    # valid universes for context-covered experiments such as MR-13AF.
+    evaluation_reference_profile = research_spec.evaluation_reference_profile_name
     if evaluation_reference_profile:
         reference_bundle = load_daily_universal_ranker_data(
             filter_id=str(args.filter_id),

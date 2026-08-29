@@ -6017,6 +6017,11 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
         and k_recipe.pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
         and recipe.pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
     )
+    check_true(
+        "mr13af_same_target_control_does_not_enable_target_reference_or_checkpoint_reference_eval",
+        spec.reference_profile_name is None
+        and spec.evaluation_reference_profile_name is None,
+    )
     contract = get_high_safety_weighted_pure_mfe_contract()
     check_true(
         "mr13af_contract_has_no_bucket_cutoff_lambda_or_model_input_safety",
@@ -6110,6 +6115,13 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
         "mr13af_training_semantics_persist_exact_pair_weight_contract",
         contract,
         embedded,
+    )
+    trainer_source = Path(__file__).resolve().parents[2] / "services" / "breakout_quality" / "train_daily_ranker.py"
+    trainer_text = trainer_source.read_text(encoding="utf-8")
+    check_true(
+        "mr13af_checkpoint_reference_eval_never_falls_back_to_target_comparison_reference",
+        "evaluation_reference_profile = research_spec.evaluation_reference_profile_name" in trainer_text
+        and "or research_spec.reference_profile_name" not in trainer_text,
     )
     metric_source = inspect.getsource(_predicted_safety_context_pure_mfe_metrics)
     check_true(

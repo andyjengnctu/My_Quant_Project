@@ -10775,3 +10775,11 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - 無bucket數量、Safety threshold、lambda、temperature、product、joint head、residual target或portfolio state。Model-specific Extension沿用actual MFE/Safety diagnostics並新增AF語意說明。
 - Authorization=`Seed42 Forward Model Gate only`；`selection_pit_authorized=False / current_time_validation_authorized=False`，不建立CONT13AF/Strategy arm/robustness/fixed。
 - Decision=`MR13AF_IMPLEMENTED / HIGH_SAFETY_PAIR_WEIGHT_ANTI_SHORTCUT / MODEL_GATE_RESULT_PENDING / NO_PIT / NO_STRATEGY_CONVERSION / NOT_PROMOTED`.
+
+## 2026-08-29 — MR-13AF first formal run post-refit blocker：Target-reference語意誤用，未形成Model Gate結果
+
+- 首次Seed42 run已完成epoch selection（best epoch=`1`，選模Validation Daily rho=`0.1924`）與Selection full refit，但在checkpoint後diagnostic階段以`ValueError: reference target與candidate target-valid universe不一致`中止；因此這次run**不是研究結果**，不得解讀AF learnability或Safety geometry。
+- 根因是AF spec誤設`reference_profile_name=MR-13K`。依`doc/ARCHITECTURE.md`既有契約，`reference_profile_name`只屬read-only Target comparison；AF與K的Target本來就是同一`daily_full_horizon_pure_mfe_r_v1`，唯一差異是pair loss weighting，所以不應建立Target-reference。AF Selection又依法只用PIT predicted-Safety context-covered rows，target-valid universe比K縮小是預期行為。
+- 工程修正：AF移除`reference_profile_name`；trainer的post-checkpoint Common Target Reference只允許顯式`evaluation_reference_profile_name`，不得fallback到Target-comparison reference。沒有改AF target、pair weighting、split、optimizer、epoch-selection、Seed或任何downstream authorization。
+- Decision維持=`MR13AF_IMPLEMENTED / MODEL_GATE_RESULT_PENDING / ENGINEERING_BLOCKER_FIXED / RERUN_SAME_SEED42_CELL / NO_PIT / NO_STRATEGY_CONVERSION / NOT_PROMOTED`。
+

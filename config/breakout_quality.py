@@ -2015,7 +2015,6 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_context_covered_stock_days",
         score_semantic_id="daily_high_safety_weighted_pure_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
-        reference_profile_name=DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),
