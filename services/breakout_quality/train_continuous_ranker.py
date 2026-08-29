@@ -24,6 +24,9 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
     CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
     CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
@@ -777,6 +780,28 @@ def _date_coherent_batches(
     return batches
 
 
+
+def _predicted_safety_pair_weights(
+    torch,
+    selected_target_diff,
+    selected_left_safety,
+    selected_right_safety,
+    *,
+    policy: str,
+):
+    """Return supervision-only Safety multipliers for already-comparable MFE pairs."""
+
+    resolved = str(policy)
+    if resolved == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY:
+        return torch.minimum(selected_left_safety, selected_right_safety)
+    if resolved == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY:
+        return torch.where(
+            selected_target_diff > 0,
+            selected_left_safety,
+            selected_right_safety,
+        )
+    raise ValueError(f"不支援的predicted-Safety pair weight policy: {policy!r}")
+
 def _pairwise_logistic_loss(
     torch,
     margins,
@@ -784,6 +809,7 @@ def _pairwise_logistic_loss(
     dates,
     *,
     reduction: str = CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    pair_weight_policy: str = CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
 ) -> tuple[Any | None, int]:
     """Return the configured RankNet loss over comparable within-day pairs.
 
@@ -801,20 +827,43 @@ def _pairwise_logistic_loss(
     and keeps only strict Pareto-dominance pairs: both component differences must have
     the same non-zero sign. Trade-off or tied pairs receive no supervision and every
     comparable pair has equal weight.
-    The high-Safety context-weighted policy receives
+    Predicted-Safety pair-weight policies receive
     ``[ranking percentile, PIT-safe predicted-Safety percentile]``. Pair direction and
-    Delta-NDCG relevance remain target-driven; relevance is multiplied by ``min(S_i,S_j)``
-    and the final loss is a normalized weighted mean. Context is supervision-only.
+    Delta-NDCG relevance remain target-driven. The context multiplier is resolved
+    independently from the base reduction: legacy MR-13AF uses ``min(S_i,S_j)`` while
+    MR-13AG uses the Safety percentile of the higher-MFE item. The final loss remains a
+    normalized weighted mean and context is supervision-only.
     """
 
     import torch.nn.functional as F
 
-    if reduction not in {
+    effective_pair_weight_policy = str(pair_weight_policy)
+    base_reduction = str(reduction)
+    if base_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
+        if effective_pair_weight_policy not in {
+            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+        }:
+            raise ValueError("legacy High-Safety min reduction不得宣告不同pair weight policy")
+        effective_pair_weight_policy = CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY
+        base_reduction = CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
+    if effective_pair_weight_policy not in {
+        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
+    }:
+        raise ValueError(f"不支援的pair weight policy: {effective_pair_weight_policy!r}")
+    if (
+        effective_pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
+        and base_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
+    ):
+        raise ValueError("predicted-Safety pair weighting只允許full-list Delta-NDCG")
+
+    if base_reduction not in {
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
     }:
         raise ValueError(f"不支援的pairwise reduction: {reduction!r}")
@@ -832,7 +881,7 @@ def _pairwise_logistic_loss(
         day_margin = margins.index_select(0, pos)
         day_target = targets.index_select(0, pos)
         margin_diff = day_margin[:, None] - day_margin[None, :]
-        if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE:
+        if base_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE:
             if day_target.ndim != 2 or int(day_target.shape[1]) != 2:
                 raise ValueError("Pareto pairwise target必須為[N,2] component percentiles")
             component_diff = day_target[:, None, :] - day_target[None, :, :]
@@ -859,9 +908,9 @@ def _pairwise_logistic_loss(
             continue
 
         day_safety = None
-        if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
+        if effective_pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE:
             if day_target.ndim != 2 or int(day_target.shape[1]) != 2:
-                raise ValueError("High-Safety weighted pairwise target必須為[N,2]=[MFE,Safety]")
+                raise ValueError("predicted-Safety weighted pairwise target必須為[N,2]=[MFE,Safety]")
             day_safety = day_target[:, 1].detach().float()
             if not bool(torch.isfinite(day_safety).all().item()):
                 raise FloatingPointError("predicted-Safety pair weight必須為有限值")
@@ -883,11 +932,11 @@ def _pairwise_logistic_loss(
         losses = F.softplus(-signs * margin_diff[comparable])
         pair_count += count
         ranked_date_count += 1
-        if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR:
+        if base_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR:
             pair_losses.append(losses)
             continue
 
-        if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED:
+        if base_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED:
             weights = torch.abs(selected_target_diff.detach())
             weight_sum = weights.sum()
             if not bool(torch.isfinite(weight_sum).item()) or float(weight_sum.detach().cpu().item()) <= 0.0:
@@ -895,7 +944,7 @@ def _pairwise_logistic_loss(
             day_losses.append((losses * weights).sum() / weight_sum)
             continue
 
-        if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE:
+        if base_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE:
             selected_left_target = day_target[:, None].expand_as(target_diff)[comparable].detach()
             selected_right_target = day_target[None, :].expand_as(target_diff)[comparable].detach()
             weights = (selected_left_target + selected_right_target) / 2.0
@@ -951,39 +1000,41 @@ def _pairwise_logistic_loss(
         selected_relevance_delta = torch.abs(selected_target_diff.detach())
         selected_discount_delta = discount_delta[comparable]
         weights = selected_relevance_delta * selected_discount_delta / ideal_dcg
-        if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
+        if effective_pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE:
             if day_safety is None:
-                raise RuntimeError("High-Safety weighted reduction缺少predicted-Safety target")
-            safety_pair_weight = torch.minimum(
-                day_safety[:, None], day_safety[None, :]
-            )[comparable]
+                raise RuntimeError("predicted-Safety pair weighting缺少Safety target")
+            selected_left_safety = day_safety[:, None].expand_as(target_diff)[comparable]
+            selected_right_safety = day_safety[None, :].expand_as(target_diff)[comparable]
+            safety_pair_weight = _predicted_safety_pair_weights(
+                torch,
+                selected_target_diff,
+                selected_left_safety,
+                selected_right_safety,
+                policy=effective_pair_weight_policy,
+            )
             weights = weights * safety_pair_weight
         if not bool(torch.isfinite(weights).all().item()):
             raise FloatingPointError("full-list Delta-NDCG pairwise weights必須為有限值")
         pair_losses.append(losses * weights)
         day_losses.append(weights)
 
-    if reduction in {
+    if base_reduction in {
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
     }:
         if not pair_losses:
             return None, 0
         return torch.cat(pair_losses).mean(), int(pair_count)
-    if reduction in {
+    if base_reduction in {
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
     }:
         if not pair_losses or not day_losses:
             return None, 0
         all_losses = torch.cat(pair_losses)
         all_weights = torch.cat(day_losses)
         weight_sum = all_weights.sum()
-        if reduction in {
-            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
-        }:
+        if base_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG:
             weight_sum_value = float(weight_sum.detach().cpu().item())
             valid_weight_sum = math.isfinite(weight_sum_value) and weight_sum_value > 0.0
         else:
@@ -994,9 +1045,9 @@ def _pairwise_logistic_loss(
         if not valid_weight_sum:
             label = (
                 "upper-tail relevance"
-                if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE
-                else "high-Safety × full-list Delta-NDCG"
-                if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG
+                if base_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE
+                else "predicted-Safety weighted full-list Delta-NDCG"
+                if effective_pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
                 else "full-list Delta-NDCG"
             )
             raise FloatingPointError(f"{label} pairwise weight sum必須為正有限值")
@@ -1210,6 +1261,7 @@ def _train_epoch(
     prefetch_batches: int = 0,
     prefetch_workers: int = 1,
     pairwise_reduction: str = CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    pair_weight_policy: str = CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
     raw_r_loss_name: str | None = None,
     raw_r_huber_delta_r: float | None = None,
 ) -> float:
@@ -1272,6 +1324,7 @@ def _train_epoch(
                         target[:, target_index],
                         batch_dates,
                         reduction=str(pairwise_reduction),
+                        pair_weight_policy=str(pair_weight_policy),
                     )
                     for target_index, margin in enumerate(margins)
                 ]
@@ -1290,10 +1343,10 @@ def _train_epoch(
                 conditional_mfe_margin = conditional_mfe_logits.float()[:, LABEL_PASS] - conditional_mfe_logits.float()[:, LABEL_REJECT]
                 batch_dates = group_dates_series.iloc[ids].to_numpy()
                 safety_loss, safety_supervision = _pairwise_logistic_loss(
-                    torch, safety_margin, target[:, 0], batch_dates, reduction=str(pairwise_reduction),
+                    torch, safety_margin, target[:, 0], batch_dates, reduction=str(pairwise_reduction), pair_weight_policy=str(pair_weight_policy),
                 )
                 conditional_mfe_loss, conditional_mfe_supervision = _pairwise_logistic_loss(
-                    torch, conditional_mfe_margin, target[:, 1], batch_dates, reduction=str(pairwise_reduction),
+                    torch, conditional_mfe_margin, target[:, 1], batch_dates, reduction=str(pairwise_reduction), pair_weight_policy=str(pair_weight_policy),
                 )
                 if safety_loss is None or conditional_mfe_loss is None:
                     continue
@@ -1363,6 +1416,7 @@ def _train_epoch(
                         target,
                         group_dates_series.iloc[ids].to_numpy(),
                         reduction=str(pairwise_reduction),
+                        pair_weight_policy=str(pair_weight_policy),
                     )
                     if loss is None:
                         continue
@@ -2460,6 +2514,7 @@ def select_epoch(
                 execution_recipe.pairwise_reduction
                 or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
             ),
+            pair_weight_policy=execution_recipe.objective_policy.pair_weight_policy,
             raw_r_loss_name=raw_r_loss_name,
             raw_r_huber_delta_r=raw_r_delta,
         )
@@ -3090,6 +3145,7 @@ def fit_final(
                 execution_recipe.pairwise_reduction
                 or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
             ),
+            pair_weight_policy=execution_recipe.objective_policy.pair_weight_policy,
             raw_r_loss_name=raw_r_loss_name,
             raw_r_huber_delta_r=raw_r_delta,
         )

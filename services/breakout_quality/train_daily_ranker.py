@@ -31,6 +31,9 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
 )
 from config.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
@@ -473,8 +476,17 @@ def _render_markdown(payload: dict) -> str:
 
     objective = str(payload["training"].get("objective") or "")
     pairwise_reduction = str(payload["training"].get("pairwise_reduction") or "")
+    pair_weight_policy = str(
+        payload["training"].get("pair_weight_policy")
+        or CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
+    )
+    if pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
+        pair_weight_policy = CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY
     high_safety_weighted_pure_mfe = (
-        pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG
+        pair_weight_policy == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY
+    )
+    winner_safety_weighted_pure_mfe = (
+        pair_weight_policy == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY
     )
     direct_r = objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
     dual_component_r = objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION
@@ -564,17 +576,23 @@ def _render_markdown(payload: dict) -> str:
     ae_eval = dict(payload.get("predicted_safety_context_pure_mfe_evaluation") or {})
     if ae_eval:
         extension_title = (
-            "Pure-MFE × High-Safety Pair Weight"
+            "Pure-MFE × MFE-Winner Safety Pair Weight"
+            if winner_safety_weighted_pure_mfe
+            else "Pure-MFE × High-Safety Pair Weight"
             if high_safety_weighted_pure_mfe
             else "Pure-MFE × Safety Context"
         )
         first_note = (
-            "- Target/order與MR-13K相同；Predicted Safety不進network，只把MR-13K full-list ΔNDCG pair weight乘上min(S_i,S_j)。"
+            "- Target/order與MR-13K相同；Predicted Safety不進network，只把MR-13K full-list ΔNDCG pair weight乘上較高Pure-MFE item本身的S_winner；pair方向永不因Safety反轉。"
+            if winner_safety_weighted_pure_mfe
+            else "- Target/order與MR-13K相同；Predicted Safety不進network，只把MR-13K full-list ΔNDCG pair weight乘上min(S_i,S_j)。"
             if high_safety_weighted_pure_mfe
             else "- Target/order與MR-13K相同；Predicted Safety只作PIT-safe input context，不參與target residualization。"
         )
         second_note = (
-            "- Actual Safety/MFE metrics只作checkpoint寫入後診斷；epoch selection仍固定Pure-MFE Validation Daily rho，無bucket/cutoff/lambda。"
+            "- Actual Safety/MFE metrics只作checkpoint寫入後診斷；epoch selection仍固定Pure-MFE Validation Daily rho；無額外mean normalization、bucket/cutoff/lambda/temperature。"
+            if winner_safety_weighted_pure_mfe
+            else "- Actual Safety/MFE metrics只作checkpoint寫入後診斷；epoch selection仍固定Pure-MFE Validation Daily rho，無bucket/cutoff/lambda。"
             if high_safety_weighted_pure_mfe
             else "- Safety metrics只作checkpoint寫入後診斷，不參與loss、epoch selection、threshold或calibration。"
         )
@@ -1681,6 +1699,7 @@ def run(args) -> int:
             "safety_raw_mfe_joint_min_tri_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_raw_mfe_joint_min_tri_head_contract"),
             "direct_hmhs_single_head_contract": ranker_api.training_semantics(bundle.profile).get("direct_hmhs_single_head_contract"),
             "pairwise_reduction": execution_recipe.pairwise_reduction,
+            "pair_weight_policy": execution_recipe.objective_policy.pair_weight_policy,
             "selected_epoch": selected_epoch,
             "epoch_selection_metric": bundle.profile.epoch_selection_metric,
             "epoch_selection": epoch_selection,

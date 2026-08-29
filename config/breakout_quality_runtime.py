@@ -75,6 +75,16 @@ CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM = "target_transform"
 CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT = "pair_weight"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE = "none"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY = "min_predicted_safety"
+CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY = "mfe_winner_predicted_safety"
+SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES = (
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
+)
+PREDICTED_SAFETY_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES = (
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
+)
 CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR = "scalar"
 CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS = "pareto_components"
 CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT = "scalar_with_context_weight"
@@ -275,10 +285,7 @@ class ContinuousRankerObjectivePolicy:
     def __post_init__(self) -> None:
         if self.pairwise_reduction is not None and self.pairwise_reduction not in SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS:
             raise ValueError(f"不支援的continuous-ranker pairwise reduction: {self.pairwise_reduction!r}")
-        if self.pair_weight_policy not in {
-            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
-            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
-        }:
+        if self.pair_weight_policy not in SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES:
             raise ValueError(f"不支援的continuous-ranker pair weight policy: {self.pair_weight_policy!r}")
         if self.pair_target_schema not in {
             CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR,
@@ -617,7 +624,7 @@ def _resolve_continuous_ranker_context_policy(
 ) -> ContinuousRankerContextPolicy:
     source = str(target_policy.context_source)
     roles = list(target_policy.context_roles)
-    if objective_policy.pair_weight_policy == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY:
+    if objective_policy.pair_weight_policy in PREDICTED_SAFETY_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES:
         if source not in {
             CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
             CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
@@ -637,16 +644,44 @@ def _resolve_continuous_ranker_context_policy(
 
 def _resolve_continuous_ranker_objective_policy(spec: Any) -> ContinuousRankerObjectivePolicy:
     reduction = spec.pairwise_reduction
+    declared_pair_weight_policy = getattr(spec, "pair_weight_policy", None)
+    pair_weight_policy = (
+        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
+        if declared_pair_weight_policy is None
+        else str(declared_pair_weight_policy)
+    )
     if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
-        return ContinuousRankerObjectivePolicy(
-            pairwise_reduction=reduction,
-            pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
-            pair_target_schema=CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
+        if pair_weight_policy not in {
+            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+        }:
+            raise ValueError(
+                "legacy High-Safety min reduction不得宣告不同pair weight policy"
+            )
+        pair_weight_policy = CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY
+    if pair_weight_policy not in SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES:
+        raise ValueError(
+            f"不支援的continuous-ranker pair weight policy: {pair_weight_policy!r}"
         )
     if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE:
+        if pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE:
+            raise ValueError("Pareto pair scope不得再疊加scalar pair weight policy")
         return ContinuousRankerObjectivePolicy(
             pairwise_reduction=reduction,
             pair_target_schema=CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS,
+        )
+    if pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE:
+        if reduction not in {
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+        }:
+            raise ValueError(
+                "predicted-Safety pair weighting目前只允許疊加full-list Delta-NDCG"
+            )
+        return ContinuousRankerObjectivePolicy(
+            pairwise_reduction=reduction,
+            pair_weight_policy=pair_weight_policy,
+            pair_target_schema=CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
         )
     return ContinuousRankerObjectivePolicy(pairwise_reduction=reduction)
 
@@ -716,6 +751,9 @@ __all__ = (
     "CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT",
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE",
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY",
+    "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY",
+    "SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES",
+    "PREDICTED_SAFETY_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES",
     "CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR",
     "CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS",
     "CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT",

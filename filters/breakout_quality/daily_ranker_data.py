@@ -31,7 +31,7 @@ from config.breakout_quality_runtime_resolver import (
 )
 from config.breakout_quality import (
     get_breakout_quality_experiment_profile,
-    get_high_safety_weighted_pure_mfe_contract,
+    get_predicted_safety_pair_weight_contract,
 )
 from filters.breakout_quality.continuous_ranker_data import (
     ContinuousRankerDataBundle,
@@ -1335,7 +1335,7 @@ def load_daily_universal_ranker_data(
             else []
         ),
         "pair_weight_context_contract": (
-            get_high_safety_weighted_pure_mfe_contract()
+            get_predicted_safety_pair_weight_contract(execution_recipe.objective_policy.pair_weight_policy)
             if use_predicted_safety_pair_weight_context
             else None
         ),

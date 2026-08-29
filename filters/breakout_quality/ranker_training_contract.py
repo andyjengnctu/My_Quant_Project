@@ -34,7 +34,7 @@ from config.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
 )
 from config.breakout_quality import (
-    get_high_safety_weighted_pure_mfe_contract,
+    get_predicted_safety_pair_weight_contract,
     get_predicted_safety_context_contract,
     get_predicted_safety_pure_mfe_contract,
     get_predicted_upside_context_contract,
@@ -226,7 +226,7 @@ def _pairwise_contract_for_recipe(recipe) -> dict[str, Any]:
         elif context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT):
             contract["predicted_safety_context_contract"] = get_predicted_safety_pure_mfe_contract()
         if context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT):
-            contract["predicted_safety_pair_weight_contract"] = get_high_safety_weighted_pure_mfe_contract()
+            contract["predicted_safety_pair_weight_contract"] = get_predicted_safety_pair_weight_contract(recipe.objective_policy.pair_weight_policy)
     if recipe.objective_policy.pair_target_schema == CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS:
         contract.update({
             "pair_scope": "same_date_strict_pareto_dominance_pairs",
