@@ -2,7 +2,7 @@
 
 用途：正式 test suite 維護清單；主表為唯一真理來源。
 
-文件分工：`TEST_SUITE_CHECKLIST.md` 只管主表、狀態、測試入口與收斂索引。
+文件分工：`TEST_SUITE_CHECKLIST.md` 只持久化主表 `B`、完成測試最小索引 `T` 與 append-only 收斂紀錄 `G`；PARTIAL／TODO／未完成測試摘要一律由 formal reporter 從 B/G 即時派生，不再維護第二份摘要表。
 
 範圍：納入長期規則與必要 formal contract；不納入暫時特例：`apps/portfolio_sim.py` 自動開瀏覽器、只使用還原價不考慮 raw。
 
@@ -13,7 +13,7 @@
 索引：`Bxx` 主表 ID；`Txx` 建議測試 ID。
 
 維護規則：
-1. 同步順序固定為主表 → `T` / `G` → `E`。
+1. Current status 只修改主表 `B`，實際 transition 追加到 `G`；完成測試索引才更新 `T`。PARTIAL／TODO／未完成測試摘要由 B/G 派生，不得人工複製。
 2. `T` 只留最小索引；每列一個 `Txx` 與一個測試入口，依 ID 升冪排序。
 3. `G` 是 append-only chronological event log，只記錄實際狀態變更；新事件一律追加在表尾，日期必須非遞減，同日不再依 tracking ID 重排；`NEW -> *` 只能出現在首筆，且不得出現 no-op transition。
 4. `G` 備註欄只作最小必要的收斂索引與人工說明；formal blocker 不檢查其文字 hygiene，日期只記於 `G`。
@@ -343,24 +343,9 @@
 | B53 | P1 | I/O | reduced dataset 契約必須依目前目錄快照動態推導，不得綁死固定成員或固定筆數 | DONE | 已將 reduced dataset contract 改為直接根據目前資料夾中的 CSV members / content 動態計算 `csv_count` 與 fingerprint；formal guard 只要求資料夾非空且 members 不重複，避免之後調整 reduced dataset 又必須回頭改程式常數 | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py`, `data/tw_stock_data_vip_reduced/` |
 
 
-## E. 未完成缺口摘要
+## E. 未完成缺口摘要（Derived）
 
-使用方式：僅在存在未完成項時填寫；平時維持空表。
-
-### E1. 目前所有 `PARTIAL` 的主表項目摘要
-
-| 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
-|---|---|---|---|---|
-
-### E2. 目前所有 `TODO` 的主表項目摘要
-
-| 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
-|---|---|---|---|---|
-
-### E3. 目前所有未完成的建議測試項目摘要
-
-| ID | 建議測試名稱 | 目前狀態 | 對應主表項目 |
-|---|---|---|---|
+本節不保存人工摘要表。`PARTIAL`／`TODO` 直接由主表 `B` 派生；未完成建議測試直接由 `G` 的 latest transition 派生。正式 `meta_quality_summary.json/.txt` 與 test-suite human summary 顯示這些 derived views。
 
 ## T. 已完成建議測試映射
 

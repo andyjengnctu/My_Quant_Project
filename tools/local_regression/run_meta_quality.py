@@ -34,7 +34,6 @@ from tools.local_regression.formal_pipeline import (
 CHECKLIST_PATH = PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md"
 CMD_PATH = PROJECT_ROOT / "doc" / "CMD.md"
 ARCHITECTURE_PATH = PROJECT_ROOT / "doc" / "ARCHITECTURE.md"
-STATUS_VALUES = {"DONE", "PARTIAL", "TODO", "N/A"}
 from tools.local_regression.meta_quality_targets import (
     CORE_TRADING_COVERAGE_TARGETS,
     COVERAGE_BRANCH_MIN_FLOOR,
@@ -46,6 +45,12 @@ from tools.local_regression.meta_quality_targets import (
     CRITICAL_COVERAGE_TARGETS,
     ENTRY_PATH_CRITICAL_COVERAGE_TARGETS,
     TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS,
+)
+from tools.local_regression.checklist_contract import (
+    STATUS_VALUES,
+    derive_checklist_state,
+    ids_from_table as _ids_from_table,
+    sorted_unique as _sorted_unique,
 )
 from tools.local_regression.meta_quality_coverage import build_coverage_summary as _shared_build_coverage_summary
 from tools.validate.transient_code_maintenance import summarize_transient_code_maintenance
@@ -59,55 +64,6 @@ PERFORMANCE_STEP_FILES = DEFAULT_PERFORMANCE_STEP_FILES
 PERFORMANCE_MANIFEST_KEYS = DEFAULT_PERFORMANCE_MANIFEST_KEYS
 PERFORMANCE_MEMORY_MANIFEST_KEY = "performance_peak_traced_memory_mb"
 
-
-
-def _load_checklist_tables() -> Dict[str, List[List[str]]]:
-    text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    return {
-        "B1": extract_markdown_table_rows(text, "B1. 長期固定核心規則（不含暫時特例）"),
-        "B2": extract_markdown_table_rows(text, "B2. 長期固定補充契約"),
-        "B3": extract_markdown_table_rows(text, "B3. 可隨策略升級調整的測試"),
-        "E1": extract_markdown_table_rows(text, "E1. 目前所有 `PARTIAL` 的主表項目摘要"),
-        "E2": extract_markdown_table_rows(text, "E2. 目前所有 `TODO` 的主表項目摘要"),
-        "E3": extract_markdown_table_rows(text, "E3. 目前所有未完成的建議測試項目摘要"),
-        "T": extract_markdown_table_rows(text, "T. 目前所有 `DONE` 的建議測試項目摘要"),
-        "G": extract_markdown_table_rows(text, "G. 逐項收斂紀錄"),
-    }
-
-
-def _load_main_statuses(tables: Dict[str, List[List[str]]]) -> Dict[str, str]:
-    statuses: Dict[str, str] = {}
-    for key, status_idx in (("B1", 3), ("B2", 4), ("B3", 4)):
-        for cols in tables[key]:
-            if len(cols) <= status_idx:
-                continue
-            statuses[cols[0]] = cols[status_idx]
-    return statuses
-
-
-def _ids_from_table(rows: List[List[str]], idx: int = 1) -> List[str]:
-    values: List[str] = []
-    for cols in rows:
-        if len(cols) > idx:
-            values.append(cols[idx])
-    return values
-
-
-def _sorted_unique(values: List[str]) -> List[str]:
-    return sorted(dict.fromkeys(values))
-
-
-def _latest_statuses_from_convergence_rows(rows: List[List[str]]) -> Dict[str, str]:
-    statuses: Dict[str, str] = {}
-    for cols in rows:
-        if len(cols) <= 3:
-            continue
-        item_id = cols[1].strip()
-        transition = cols[3].strip()
-        if not item_id or not transition:
-            continue
-        statuses[item_id] = transition.split("->")[-1].strip()
-    return statuses
 
 
 def _tracking_id_sort_key(item_id: str) -> tuple[str, int, str]:
@@ -183,8 +139,10 @@ def _extract_checklist_test_entries(entry: str) -> List[str]:
 
 
 def _summarize_checklist_consistency() -> Dict[str, Any]:
-    tables = _load_checklist_tables()
-    main_statuses = _load_main_statuses(tables)
+    state = derive_checklist_state(CHECKLIST_PATH)
+    tables = state["tables"]
+    main_statuses = state["main_statuses"]
+    convergence_statuses = state["convergence_statuses"]
     results: List[Dict[str, Any]] = []
 
     invalid_statuses = {key: value for key, value in main_statuses.items() if value not in STATUS_VALUES}
@@ -197,42 +155,19 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         )
     )
 
-    partial_ids = sorted(key for key, value in main_statuses.items() if value == "PARTIAL")
-    todo_ids = sorted(key for key, value in main_statuses.items() if value == "TODO")
-    done_ids = sorted(key for key, value in main_statuses.items() if value == "DONE")
+    partial_ids = list(state["partial_ids"])
+    todo_ids = list(state["todo_ids"])
+    done_ids = list(state["done_ids"])
 
-    e1_ids = sorted(_ids_from_table(tables["E1"]))
-    e2_ids = sorted(_ids_from_table(tables["E2"]))
-    e3_ids = sorted(_ids_from_table(tables["E3"], idx=0))
     t_rows = tables["T"]
     invalid_summary_table_orders: List[Dict[str, str]] = []
-    invalid_summary_table_orders.extend(_find_invalid_summary_table_order(tables["E1"], id_col_idx=1, table_name="E1"))
-    invalid_summary_table_orders.extend(_find_invalid_summary_table_order(tables["E2"], id_col_idx=1, table_name="E2"))
-    invalid_summary_table_orders.extend(_find_invalid_summary_table_order(tables["E3"], id_col_idx=0, table_name="E3"))
     invalid_summary_table_orders.extend(_find_invalid_summary_table_order(t_rows, id_col_idx=0, table_name="T"))
     t_ids_raw = _ids_from_table(t_rows, idx=0)
     t_ids = _sorted_unique(t_ids_raw)
-    convergence_statuses = _latest_statuses_from_convergence_rows(tables["G"])
-    g_done_test_ids = _sorted_unique([item_id for item_id, status in convergence_statuses.items() if item_id.startswith("T") and status == "DONE"])
-    g_unfinished_test_ids = sorted(item_id for item_id, status in convergence_statuses.items() if item_id.startswith("T") and status in {"PARTIAL", "TODO"})
+    g_done_test_ids = list(state["g_done_test_ids"])
+    g_unfinished_test_ids = list(state["g_unfinished_test_ids"])
     g_b_statuses = {item_id: status for item_id, status in convergence_statuses.items() if item_id.startswith("B")}
 
-    results.append(
-        summarize_result(
-            "checklist_partial_summary_matches_main_table",
-            e1_ids == partial_ids,
-            detail=f"summary={e1_ids} | main={partial_ids}",
-            extra={"summary_ids": e1_ids, "main_ids": partial_ids},
-        )
-    )
-    results.append(
-        summarize_result(
-            "checklist_todo_summary_matches_main_table",
-            e2_ids == todo_ids,
-            detail=f"summary={e2_ids} | main={todo_ids}",
-            extra={"summary_ids": e2_ids, "main_ids": todo_ids},
-        )
-    )
     results.append(
         summarize_result(
             "checklist_summary_tables_sorted_by_id",
@@ -252,22 +187,6 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             )
         )
 
-    results.append(
-        summarize_result(
-            "checklist_done_not_listed_in_todo_summary",
-            set(done_ids).isdisjoint(e2_ids),
-            detail=f"overlap={sorted(set(done_ids) & set(e2_ids))}",
-            extra={"overlap": sorted(set(done_ids) & set(e2_ids))},
-        )
-    )
-    results.append(
-        summarize_result(
-            "checklist_done_not_listed_in_partial_summary",
-            set(done_ids).isdisjoint(e1_ids),
-            detail=f"overlap={sorted(set(done_ids) & set(e1_ids))}",
-            extra={"overlap": sorted(set(done_ids) & set(e1_ids))},
-        )
-    )
     t_duplicate_ids = sorted({item_id for item_id in t_ids_raw if t_ids_raw.count(item_id) > 1})
     results.append(
         summarize_result(
@@ -419,15 +338,6 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             extra={"t_ids": t_ids, "t_ids_raw": sorted(t_ids_raw), "g_done_test_ids": g_done_test_ids},
         )
     )
-    results.append(
-        summarize_result(
-            "checklist_unfinished_test_summary_matches_convergence_unfinished_records",
-            e3_ids == g_unfinished_test_ids,
-            detail=f"e3={e3_ids} | g_unfinished={g_unfinished_test_ids}",
-            extra={"e3_ids": e3_ids, "g_unfinished_test_ids": g_unfinished_test_ids},
-        )
-    )
-
     done_test_missing_from_t = sorted(set(g_done_test_ids) - set(t_ids))
     done_test_missing_from_g = sorted(set(t_ids) - set(g_done_test_ids))
     results.append(
@@ -461,10 +371,10 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         )
     )
 
-    unfinished_test_ids = sorted(row[0] for row in tables["E3"] if len(row) > 2 and row[2] in {"PARTIAL", "TODO"})
+    unfinished_test_ids = list(g_unfinished_test_ids)
     results.append(
         summarize_result(
-            "checklist_unfinished_test_summary_nonempty_when_main_has_gaps",
+            "checklist_unfinished_test_tracking_nonempty_when_main_has_gaps",
             (len(partial_ids) + len(todo_ids) == 0) or bool(unfinished_test_ids),
             detail=f"unfinished_test={unfinished_test_ids}",
             extra={"unfinished_test_ids": unfinished_test_ids},
@@ -488,7 +398,6 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
 
 
 from tools.validate.meta_contracts import (
-    extract_markdown_table_rows,
     summarize_single_formal_test_entry_contract,
     summarize_test_suite_registry_contract,
 )

@@ -38,6 +38,14 @@ from .meta_contracts import (
     summarize_single_formal_test_entry_contract,
     summarize_synthetic_cases_import_target_resolution_contract,
 )
+from tools.local_regression.checklist_contract import (
+    load_convergence_latest_statuses,
+    load_done_b_rows,
+    load_done_test_rows,
+    load_main_catalog,
+    load_checklist_tables,
+    load_main_statuses,
+)
 from tools.local_regression.common import partition_result_statuses
 from tools.local_regression.formal_pipeline import FORMAL_STEP_SPECS
 from tools.local_regression.meta_quality_coverage import build_coverage_summary
@@ -56,98 +64,6 @@ from tools.local_regression.meta_quality_targets import (
     POLICY_CONTRACT_COVERAGE_TARGETS,
     TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS,
 )
-
-
-def _load_main_table_statuses():
-    text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    statuses = {}
-    headings = [
-        ("B1. 長期固定核心規則（不含暫時特例）", 3),
-        ("B2. 長期固定補充契約", 4),
-        ("B3. 可隨策略升級調整的測試", 4),
-    ]
-    for heading, status_idx in headings:
-        rows = extract_markdown_table_rows(text, heading)
-        for cols in rows:
-            if len(cols) > status_idx:
-                statuses[cols[0]] = cols[status_idx]
-    return statuses
-
-
-def _load_main_table_catalog():
-    text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    catalog = {}
-    for cols in extract_markdown_table_rows(text, "B1. 長期固定核心規則（不含暫時特例）"):
-        if len(cols) > 5:
-            catalog[cols[0]] = {
-                "kind": "規則",
-                "item": cols[2],
-                "entry": cols[5],
-                "status": cols[3],
-            }
-    for cols in extract_markdown_table_rows(text, "B2. 長期固定補充契約"):
-        if len(cols) > 6:
-            catalog[cols[0]] = {
-                "kind": cols[2],
-                "item": cols[3],
-                "entry": cols[6],
-                "status": cols[4],
-            }
-    for cols in extract_markdown_table_rows(text, "B3. 可隨策略升級調整的測試"):
-        if len(cols) > 6:
-            catalog[cols[0]] = {
-                "kind": cols[2],
-                "item": cols[3],
-                "entry": cols[6],
-                "status": cols[4],
-            }
-    return catalog
-
-
-def _load_done_test_rows():
-    text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    rows = extract_markdown_table_rows(text, "T. 目前所有 `DONE` 的建議測試項目摘要")
-    parsed = []
-    for cols in rows:
-        if len(cols) < 3:
-            continue
-        parsed.append(
-            {
-                "id": cols[0],
-                "name": cols[1].replace("`", "").strip(),
-                "b_id": cols[2],
-            }
-        )
-    return parsed
-
-
-def _load_done_b_rows():
-    catalog = _load_main_table_catalog()
-    return [
-        {
-            "kind": row["kind"],
-            "b_id": b_id,
-            "item": row["item"],
-            "entry": row["entry"],
-        }
-        for b_id, row in sorted(catalog.items())
-        if row.get("status") == "DONE"
-    ]
-
-
-def _load_convergence_latest_statuses():
-    text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    rows = extract_markdown_table_rows(text, "G. 逐項收斂紀錄")
-    statuses = {}
-    for cols in rows:
-        if len(cols) < 4:
-            continue
-        item_id = cols[1].strip()
-        transition = cols[3].strip()
-        if not item_id or not transition:
-            continue
-        statuses[item_id] = transition.split("->")[-1].strip()
-    return statuses
 
 
 def _extract_cmd_python_commands():
@@ -1252,7 +1168,7 @@ def validate_checklist_done_test_summary_markdown_structure_case(_base_params):
     has_separator = separator_line.startswith("|") and set(separator_line.replace("|", "").replace(" ", "").replace(":", "")) <= {"-"}
     add_check(results, "meta_checklist", case_id, "done_test_summary_table_has_markdown_separator_row", True, has_separator)
 
-    done_test_rows = _load_done_test_rows()
+    done_test_rows = load_done_test_rows(CHECKLIST_PATH)
     invalid_ids = [row["id"] for row in done_test_rows if not re.fullmatch(r"T\d+", row["id"])]
     invalid_b_ids = [row["b_id"] for row in done_test_rows if not re.fullmatch(r"B\d+", row["b_id"])]
     add_check(results, "meta_checklist", case_id, "done_test_summary_rows_use_valid_t_ids", [], invalid_ids)
@@ -1538,8 +1454,58 @@ def validate_checklist_summary_tables_sorted_by_id_case(_base_params):
         any(row.get("table") == "T" for row in invalid_rows),
     )
 
+    legacy_summary_headings = [
+        "### E1. 目前所有 `PARTIAL` 的主表項目摘要",
+        "### E2. 目前所有 `TODO` 的主表項目摘要",
+        "### E3. 目前所有未完成的建議測試項目摘要",
+    ]
+    add_check(
+        results,
+        "meta_checklist",
+        case_id,
+        "persisted_partial_todo_summary_tables_removed",
+        [],
+        [heading for heading in legacy_summary_headings if heading in original_text],
+    )
+
+    derived_text = _replace_markdown_table_row(
+        original_text,
+        heading="B2. 長期固定補充契約",
+        row_id="B22",
+        id_col_idx=0,
+        update_cols=lambda cols: cols[:4] + ["PARTIAL"] + cols[5:],
+    )
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_derived_summary_") as temp_dir:
+        derived_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        derived_path.write_text(derived_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", derived_path):
+            derived_consistency = meta_quality_module._summarize_checklist_consistency()
+    add_check(
+        results,
+        "meta_checklist",
+        case_id,
+        "partial_ids_are_derived_directly_from_main_table",
+        True,
+        "B22" in derived_consistency.get("partial_ids", []),
+    )
+    legacy_summary_checks = {
+        "checklist_partial_summary_matches_main_table",
+        "checklist_todo_summary_matches_main_table",
+        "checklist_unfinished_test_summary_matches_convergence_unfinished_records",
+    }
+    actual_result_names = {item.get("name") for item in derived_consistency.get("results", [])}
+    add_check(
+        results,
+        "meta_checklist",
+        case_id,
+        "derived_summary_contract_has_no_duplicate_table_sync_checks",
+        set(),
+        legacy_summary_checks & actual_result_names,
+    )
+
     summary["guard_status"] = order_result.get("status")
     summary["invalid_summary_table_orders"] = invalid_rows
+    summary["derived_partial_ids"] = derived_consistency.get("partial_ids", [])
     return results, summary
 
 
@@ -1610,10 +1576,10 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     validator_name_set = set(validator_names)
     imported_validate_names = load_imported_validate_names_from_synthetic_main_entry(PROJECT_ROOT)
     defined_validate_names = load_defined_validate_names_from_synthetic_case_modules(PROJECT_ROOT)
-    convergence_statuses = _load_convergence_latest_statuses()
-    done_test_rows = _load_done_test_rows()
-    done_b_rows = _load_done_b_rows()
-    main_statuses = _load_main_table_statuses()
+    convergence_statuses = load_convergence_latest_statuses(CHECKLIST_PATH)
+    done_test_rows = load_done_test_rows(CHECKLIST_PATH)
+    done_b_rows = load_done_b_rows(CHECKLIST_PATH)
+    main_statuses = load_main_statuses(load_checklist_tables(CHECKLIST_PATH))
 
     add_check(results, "meta_registry", case_id, "validator_registry_not_empty", True, len(validator_entries) > 0)
     add_check(results, "meta_registry", case_id, "validator_registry_names_unique", len(validator_names), len(validator_name_set))
@@ -2555,6 +2521,7 @@ def validate_test_suite_orchestrator_coverage_targets_case(_base_params):
 
     module_symbol_expectations = {
         "tools.local_regression.common": {"ensure_reduced_dataset", "build_artifacts_manifest", "write_json"},
+        "tools.local_regression.checklist_contract": {"derive_checklist_state", "load_checklist_tables", "load_done_test_rows"},
         "tools.local_regression.formal_pipeline": {"FORMAL_STEP_ORDER", "FORMAL_SINGLE_ENTRY"},
         "tools.local_regression.meta_quality_targets": {"COVERAGE_TARGETS", "CORE_TRADING_COVERAGE_TARGETS", "TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS"},
         "tools.local_regression.meta_quality_coverage": {"build_coverage_summary", "_coverage_threshold_policy_ok"},
