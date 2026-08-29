@@ -181,6 +181,7 @@ def collect_model_upstream_readiness(
     experiment_profile: str,
     dataset: str,
     max_tickers: int = 0,
+    include_standard_report_references: bool = False,
 ) -> tuple[ArtifactReadiness, ...]:
     """Validate canonical Dataset/Target truth with one shared implementation."""
 
@@ -266,8 +267,7 @@ def collect_model_upstream_readiness(
                 description=target_description,
             )
         )
-    context_spec = maybe_predicted_context_artifact_spec(recipe.context_policy.source)
-    if context_spec is not None:
+    def append_context_readiness(context_spec, *, standard_report_reference: bool) -> None:
         context_dir = resolve_predicted_context_dir(
             context_spec.source,
             root,
@@ -292,6 +292,14 @@ def collect_model_upstream_readiness(
                 context_ready = True
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 context_error = exc
+        if standard_report_reference:
+            ready_description = "重用Standard Model SOP canonical PIT-safe Pred-Safety reference"
+            invalid_description_prefix = "缺少或無效的Standard Model SOP Pred-Safety reference："
+            dataset_not_ready_description = "canonical Dataset未就緒，Standard Model SOP Pred-Safety reference不可建立"
+        else:
+            ready_description = context_spec.ready_description
+            invalid_description_prefix = context_spec.invalid_description_prefix
+            dataset_not_ready_description = context_spec.dataset_not_ready_description
         rows.append(
             ArtifactReadiness(
                 artifact_type=context_spec.artifact_type,
@@ -303,11 +311,11 @@ def collect_model_upstream_readiness(
                     PRODUCER_EXISTING_ARTIFACT if context_ready else PRODUCER_MODEL_TRAINING
                 ),
                 description=(
-                    context_spec.ready_description
+                    ready_description
                     if context_ready
-                    else context_spec.dataset_not_ready_description
+                    else dataset_not_ready_description
                     if not dataset_ready
-                    else context_spec.invalid_description_prefix
+                    else invalid_description_prefix
                     + (
                         f"{type(context_error).__name__}: {context_error}"
                         if context_error
@@ -316,6 +324,17 @@ def collect_model_upstream_readiness(
                 ),
             )
         )
+
+    context_spec = maybe_predicted_context_artifact_spec(recipe.context_policy.source)
+    if context_spec is not None:
+        append_context_readiness(context_spec, standard_report_reference=False)
+
+    if bool(include_standard_report_references):
+        safety_reference_spec = get_predicted_context_artifact_spec(
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
+        )
+        if context_spec is None or context_spec.artifact_type != safety_reference_spec.artifact_type:
+            append_context_readiness(safety_reference_spec, standard_report_reference=True)
     return tuple(rows)
 
 
@@ -327,6 +346,7 @@ def collect_model_upstream_preparation_plan(
     experiment_profile: str,
     dataset: str,
     max_tickers: int = 0,
+    include_standard_report_references: bool = False,
 ) -> ResearchArtifactPlan:
     """Return the canonical deterministic Dataset/Target dependency plan.
 
@@ -343,6 +363,7 @@ def collect_model_upstream_preparation_plan(
         experiment_profile=str(experiment_profile),
         dataset=str(dataset),
         max_tickers=int(max_tickers),
+        include_standard_report_references=bool(include_standard_report_references),
     )
     actions: list[ResearchArtifactAction] = []
     priority = {ARTIFACT_DATASET_CORE: 10, ARTIFACT_CONTINUOUS_TARGET: 20}

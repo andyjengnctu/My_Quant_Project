@@ -3,6 +3,7 @@ from contextlib import redirect_stdout
 import io
 from pathlib import Path
 import importlib
+import inspect
 import json
 import re
 import shlex
@@ -2858,7 +2859,7 @@ def validate_research_report_contract_freeze_case(_base_params):
         detail=str(validate_approved_persistent_report_contracts()),
     )
     check_true(
-        "standard_model_sop_skeleton_is_fixed_one_through_six",
+        "standard_model_sop_skeleton_is_user_approved_one_through_eight",
         [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         == [
             (1, "Learnability"),
@@ -2867,6 +2868,8 @@ def validate_research_report_contract_freeze_case(_base_params):
             (4, "Truth / Prediction Geometry"),
             (5, "Ranking / Boundary"),
             (6, "Evidence Coverage"),
+            (7, "Upside / Downside Alignment"),
+            (8, "Top-tail Economic Quality"),
         ],
     )
 
@@ -2898,10 +2901,53 @@ def validate_research_report_contract_freeze_case(_base_params):
     }
 
     def payload(model_id, objective):
+        common_alignment = {
+            "reference": {"available": True, "status": "AVAILABLE"},
+            "validation": {
+                "target_to_full_mfe_daily_spearman": 0.30,
+                "target_to_low_adverse_daily_spearman": 0.20,
+                "predicted_safety_to_target_daily_spearman": 0.10,
+                "score_to_full_mfe_daily_spearman": 0.28,
+                "score_to_low_adverse_daily_spearman": 0.18,
+                "predicted_safety_to_model_score_mean_daily_spearman": 0.08,
+                "top_10pct": {
+                    "n": 2, "full_mfe_r_mean": 2.1, "adverse_r_mean": 0.5,
+                    "high_mfe_pct": 80.0, "high_safety_pct": 70.0,
+                    "hmhs_pct": 60.0, "hmhs_enrichment": 1.25,
+                },
+            },
+            "oos": {
+                "target_to_full_mfe_daily_spearman": 0.27,
+                "target_to_low_adverse_daily_spearman": 0.19,
+                "predicted_safety_to_target_daily_spearman": 0.09,
+                "score_to_full_mfe_daily_spearman": 0.25,
+                "score_to_low_adverse_daily_spearman": 0.17,
+                "predicted_safety_to_model_score_mean_daily_spearman": 0.07,
+                "top_10pct": {
+                    "n": 2, "full_mfe_r_mean": 2.0, "adverse_r_mean": 0.55,
+                    "high_mfe_pct": 78.0, "high_safety_pct": 68.0,
+                    "hmhs_pct": 58.0, "hmhs_enrichment": 1.20,
+                },
+            },
+            "breakout_candidate_oos": {
+                "target_to_full_mfe_daily_spearman": 0.24,
+                "target_to_low_adverse_daily_spearman": 0.18,
+                "predicted_safety_to_target_daily_spearman": 0.08,
+                "score_to_full_mfe_daily_spearman": 0.22,
+                "score_to_low_adverse_daily_spearman": 0.16,
+                "predicted_safety_to_model_score_mean_daily_spearman": 0.06,
+                "top_10pct": {
+                    "n": 1, "full_mfe_r_mean": 1.9, "adverse_r_mean": 0.6,
+                    "high_mfe_pct": 76.0, "high_safety_pct": 66.0,
+                    "hmhs_pct": 56.0, "hmhs_enrichment": 1.15,
+                },
+            },
+        }
         return {
             "model_research_id": model_id,
             "training": {"objective": objective},
             "split_metrics": json.loads(json.dumps(base_metrics)),
+            "upside_downside_alignment_evaluation": common_alignment,
         }
 
     control_payload = payload("MODEL-CONTROL", TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING)
@@ -2998,6 +3044,55 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "Δ Daily rho" in rendered["control"]
         and "Δ Daily rho" in rendered["joint"]
         and "Δ Daily rho" in rendered["h_only"],
+    )
+    check_true(
+        "upside_downside_and_top_tail_are_standard_cross_profile_sections_not_extensions",
+        all(
+            "標準模型 SOP｜7. Upside / Downside Alignment" in text
+            and "標準模型 SOP｜8. Top-tail Economic Quality" in text
+            and "Pred-Safety→Score rho" in text
+            and "Top10 Adverse" in text
+            for text in rendered.values()
+        )
+        and all(
+            "Model-specific Extension｜" + model_id + "｜Upside / Downside Alignment" not in rendered[key]
+            for key, model_id in (("control", "MODEL-CONTROL"), ("joint", "MODEL-JOINT"), ("h_only", "MODEL-HONLY"), ("joint_min", "MODEL-JOINT-MIN"))
+        ),
+    )
+
+    captured = {}
+
+    class _Settings:
+        filter_id = "breakout_quality_v1"
+        model_architecture = "inception_time_v1"
+        experiment_profile = "synthetic_profile"
+
+    sentinel_plan = object()
+
+    def _capture_plan(*args, **kwargs):
+        captured.update(kwargs)
+        return sentinel_plan
+
+    with patch.object(app, "collect_model_upstream_preparation_plan", side_effect=_capture_plan):
+        actual_plan = app._collect_continuous_research_input_plan(_Settings())
+    check_true(
+        "interactive_model_sop_prepares_shared_predicted_safety_reporting_reference",
+        actual_plan is sentinel_plan
+        and captured.get("include_standard_report_references") is True,
+        detail=str(captured),
+    )
+
+    from filters.breakout_quality.artifact_dependency_registry import (
+        collect_model_upstream_preparation_plan,
+    )
+
+    default_parameter = inspect.signature(
+        collect_model_upstream_preparation_plan
+    ).parameters["include_standard_report_references"].default
+    check_true(
+        "shared_reporting_reference_is_opt_in_outside_interactive_model_sop",
+        default_parameter is False,
+        detail=f"default={default_parameter!r}",
     )
 
     return results, {"ticker": case_id, "synthetic": True, "training_performed": False}

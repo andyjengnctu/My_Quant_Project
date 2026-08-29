@@ -76,7 +76,7 @@ S = ReportSectionContract
 
 MODEL_STANDARD_SOP = PersistentReportContract(
     report_id="model.standard_sop",
-    version=1,
+    version=2,
     role="persistent_standard",
     menu_path=("Research", "模型訓練／驗證", "訓練目前模型 → Forward-OOS 標準模型 SOP 報表"),
     sections=(
@@ -140,6 +140,29 @@ MODEL_STANDARD_SOP = PersistentReportContract(
         S("evidence_coverage", 6, "Evidence Coverage", "all_continuous_dl", (
             T("evidence_coverage", (
                 C("evidence", "Evidence", alignment="left"), C("status", "Status", alignment="left"),
+            )),
+        )),
+        S("upside_downside_alignment", 7, "Upside / Downside Alignment", "daily_universal_mfe_adverse_truth", (
+            T("upside_downside_alignment", (
+                C("split", "Split", alignment="left"),
+                C("target_to_full_mfe_daily_spearman", "Target→MFE rho", 4, preference="higher", format_kind="number"),
+                C("target_to_low_adverse_daily_spearman", "Target→Low-Adverse rho", 4, preference="higher", format_kind="number"),
+                C("predicted_safety_to_target_daily_spearman", "Pred-Safety→Target rho", 4, preference="higher", format_kind="number"),
+                C("score_to_full_mfe_daily_spearman", "Score→MFE rho", 4, preference="higher", format_kind="number"),
+                C("score_to_low_adverse_daily_spearman", "Score→Low-Adverse rho", 4, preference="higher", format_kind="number"),
+                C("predicted_safety_to_model_score_mean_daily_spearman", "Pred-Safety→Score rho", 4, preference="higher", format_kind="number"),
+            )),
+        )),
+        S("top_tail_economic_quality", 8, "Top-tail Economic Quality", "daily_universal_mfe_adverse_truth", (
+            T("top_tail_economic_quality", (
+                C("split", "Split", alignment="left"),
+                C("top10_n", "Top10 N", 0, format_kind="int"),
+                C("top10_full_mfe_r_mean", "Top10 MFE", 4, "R", "higher", "number"),
+                C("top10_adverse_r_mean", "Top10 Adverse", 4, "R", "lower", "number"),
+                C("top10_high_mfe_pct", "High-MFE", 2, "%", "higher", "pct"),
+                C("top10_high_safety_pct", "High-Safety", 2, "%", "higher", "pct"),
+                C("top10_hmhs_pct", "HM/HS", 2, "%", "higher", "pct"),
+                C("top10_hmhs_enrichment", "HM/HS ×", 4, preference="higher", format_kind="number"),
             )),
         )),
     ),
@@ -394,7 +417,7 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_sop": "2b372bd465258234",
+    "model.standard_sop": "f220fdd4542ee32b",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",
 }

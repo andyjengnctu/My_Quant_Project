@@ -5939,7 +5939,7 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
     )
     from filters.breakout_quality.models.spec import get_model_spec
     from filters.breakout_quality.ranker_training_contract import training_semantics
-    from services.breakout_quality.train_daily_ranker import _predicted_safety_context_pure_mfe_metrics
+    from services.breakout_quality.train_daily_ranker import _upside_downside_alignment_metrics
 
     profile = get_breakout_quality_experiment_profile(
         DAILY_UNIVERSAL_PREDICTED_SAFETY_CONTEXT_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
@@ -6015,15 +6015,18 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
             "predicted_safety_percentile": np.linspace(0.0, 1.0, 10),
         }
     )
-    metric_payload = _predicted_safety_context_pure_mfe_metrics(
+    metric_payload = _upside_downside_alignment_metrics(
         np.arange(10, dtype=np.int64),
         metric_table,
+        metric_table["target_favorable_r"].to_numpy(dtype=np.float64)
+        - metric_table["target_adverse_r"].to_numpy(dtype=np.float64),
+        np.linspace(0.0, 1.0, 10),
         np.linspace(0.0, 1.0, 10),
     )
     check_true(
         "mr13ae_model_gate_behavior_reports_mfe_downside_safety_and_daily_top_decile_only",
         bool(metric_payload.get("available"))
-        and metric_payload.get("status") == "diagnostic_only_no_fit_no_threshold_selection"
+        and metric_payload.get("status") == "standard_sop_diagnostic_only_no_fit_no_selection"
         and int(metric_payload.get("group_count", 0)) == 10
         and int((metric_payload.get("top_10pct") or {}).get("n", 0)) == 1
         and float((metric_payload.get("top_10pct") or {}).get("full_mfe_r_mean")) == 10.0
@@ -6031,7 +6034,7 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
         and float((metric_payload.get("top_10pct") or {}).get("high_mfe_pct")) == 100.0
         and float((metric_payload.get("top_10pct") or {}).get("high_safety_pct")) == 100.0
         and float((metric_payload.get("top_10pct") or {}).get("hmhs_pct")) == 100.0
-        and float(metric_payload.get("score_to_low_adverse_mean_daily_spearman")) > 0.999
+        and float(metric_payload.get("score_to_low_adverse_daily_spearman")) > 0.999
         and float(metric_payload.get("predicted_safety_to_model_score_mean_daily_spearman")) > 0.999,
     )
     summary["training_performed"] = False

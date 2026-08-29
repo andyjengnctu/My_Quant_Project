@@ -10983,3 +10983,12 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Stop rule**：OOS與Rolling若能共同定位membership substitution→path conversion→drawdown contributor，即停止Audit並做下一步決策；不得為補證據重訓模型、backfill sidecar或strategy replay。
 - **GPT端工程驗證**：Audit config/catalog/handler contract PASS；`AUDIT_FRAMEWORK` dedicated synthetic=`23 checks / 0 FAIL`；新增deep first-passage/MFE×Adverse helper synthetic PASS；C80 Raw Top-K→exact K/R0 substitution synthetic PASS；drawdown quadrant key mapping PASS；修改Python檔`py_compile` PASS。使用者本機completed Strategy sidecars/market Close未包含於交付程式ZIP，因此真正Audit result仍維持`RESULT_PENDING`，不得預標機制成立。
 
+## 2026-08-29 — Standard Model SOP v2：MR-13 common MFE × Safety comparison
+
+- **Authorization**：使用者明確要求，只要是13H/13AF及後續MR-13會共同使用的漲／跌／可學性數據，就必須成為固定Standard SOP，而不是`Model-specific Extension`。這是reporting contract變更，不是新MR scientific identity。
+- **Persistent contract**：`model.standard_sop`由v1升v2；原sections 1～6保持不變，新增7 `Upside / Downside Alignment`與8 `Top-tail Economic Quality`。Approved fingerprint更新為`f220fdd4542ee32b`；其他persistent Model/Strategy/Consistency/Reusable-Audit fingerprints不變。
+- **Common metrics**：Validation／Forward OOS／Breakout slice固定輸出`Target→Full-MFE`、`Target→Low-Adverse`、`Pred-Safety→Target`、`Score→Full-MFE`、`Score→Low-Adverse`、`Pred-Safety→Score`；Top10固定輸出N、Full-MFE R mean、Adverse R mean、High-MFE%、High-Safety%、HM/HS%、HM/HS enrichment。
+- **Truth geometry**：Actual High-MFE／High-Safety仍以完整Daily Universal universe的same-date percentile為canonical truth；Breakout只filter membership，禁止subset rerank。
+- **Pred-Safety semantics**：canonical PIT-safe Pred-Safety升格為Standard reporting reference。正式`[1]→[1]` preparation會BUILD/REUSE shared owner artifact，但它不改model target/input/loss/epoch selection/final score或fitting identity；若reference缺失／失效，報表顯示N/A/PARTIAL，不得因evaluation-only reference使model fit失敗。
+- **Extension boundary**：AE/AF/AH原先共通的MFE/Safety diagnostics不再屬Model-specific Extension；Direct HM/HS、Joint-Min等真正特定head evidence仍留Extension。
+- **Scientific status**：MR-13H、MR-13AF、MR-13AJ及既有strategy/production authorization全部不因本工程變更而改變；此contract只建立未來apples-to-apples BASE comparison surface。

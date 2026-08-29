@@ -106,3 +106,9 @@
 
 本節只摘要 stop direction；正式數值與結案理由仍以 Registry／Experiment Log 為準。
 - 2026-08-25：C69 marginal Audit已取得結果：OOS/ Rolling K+1+ High-MFE=`72.41/57.14%`、HM/LS=`55.17/40.00%`、Realized EV=`-0.04/-0.05R`；因此MR-13E unrestricted K-Flex不promotion。使用者下一步決定只在目前learnability較強的MR-13R/C66上共同移除K與R0，其餘不動，建立`SR-C70`。當時Compare Suite聚焦為C61/C58/C59/C64/C66/C70；C70結果完成後current再加入C71 Raw-Safety-only treatment；舊K/R0 Audit與C69 marginal Audit結果/implementation保留。
+
+## 2026-08-29 — Standard Model SOP v2 common comparison surface ready
+
+- `[1]→[1]` Standard Model SOP已授權固定加入MFE×Safety alignment與Top-tail economic quality，不再把共用比較欄位放進Model-specific Extension。
+- 下一個BASE decision可用同一report schema直接比較MR-13H與MR-13AF：同口徑看Target/Score→Full-MFE、Low-Adverse、canonical Pred-Safety alignment與Top10 HM/HS geometry。
+- 此項只改report/preparation engineering contract；目前active MR-13AJ scientific identity與既有Model Gate／Strategy authorization不變。若要正式重跑MR-13H `[1]→[1]`，需另依研究決策將active research profile切回H，不由本reporting patch偷偷改profile。

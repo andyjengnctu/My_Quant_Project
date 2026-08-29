@@ -564,12 +564,54 @@ def _model_sop_view(payload: dict) -> dict:
                 "competition_date_count": int(quality.get("competition_date_count", quality.get("top_k_date_count", 0)) or 0),
             })
 
+    alignment_eval = dict(payload.get("upside_downside_alignment_evaluation") or {})
+    alignment_rows = []
+    top_tail_rows = []
+    for scope_label, scope_key in (
+        ("Validation", "validation"),
+        ("Forward OOS", "oos"),
+        ("Breakout slice", "breakout_candidate_oos"),
+    ):
+        row = dict(alignment_eval.get(scope_key) or {})
+        if not row:
+            continue
+        top = dict(row.get("top_10pct") or {})
+        alignment_rows.append({
+            "split": scope_label,
+            "target_to_full_mfe_daily_spearman": row.get("target_to_full_mfe_daily_spearman"),
+            "target_to_low_adverse_daily_spearman": row.get("target_to_low_adverse_daily_spearman"),
+            "predicted_safety_to_target_daily_spearman": row.get("predicted_safety_to_target_daily_spearman"),
+            "score_to_full_mfe_daily_spearman": row.get("score_to_full_mfe_daily_spearman"),
+            "score_to_low_adverse_daily_spearman": row.get("score_to_low_adverse_daily_spearman"),
+            "predicted_safety_to_model_score_mean_daily_spearman": row.get("predicted_safety_to_model_score_mean_daily_spearman"),
+        })
+        top_tail_rows.append({
+            "split": scope_label,
+            "top10_n": top.get("n"),
+            "top10_full_mfe_r_mean": top.get("full_mfe_r_mean"),
+            "top10_adverse_r_mean": top.get("adverse_r_mean"),
+            "top10_high_mfe_pct": top.get("high_mfe_pct"),
+            "top10_high_safety_pct": top.get("high_safety_pct"),
+            "top10_hmhs_pct": top.get("hmhs_pct"),
+            "top10_hmhs_enrichment": top.get("hmhs_enrichment"),
+        })
+    reference = dict(alignment_eval.get("reference") or {})
+    alignment_status = (
+        "AVAILABLE"
+        if alignment_rows and bool(reference.get("available"))
+        else "PARTIAL"
+        if alignment_rows
+        else "N/A"
+    )
+
     evidence = [
         ("Learnability", "AVAILABLE" if metrics.get("oos") else "N/A"),
         ("Generalization", "AVAILABLE" if metrics.get("validation") and metrics.get("oos") else "N/A"),
         ("Truth / Prediction Geometry", "AVAILABLE" if geometry_scopes else "N/A"),
         ("Breakout application slice", "AVAILABLE" if metrics.get("breakout_candidate_oos") else "N/A"),
         ("Ranking / Boundary", "AVAILABLE" if sample else "N/A"),
+        ("Upside / Downside Alignment", alignment_status),
+        ("Top-tail Economic Quality", "AVAILABLE" if top_tail_rows else "N/A"),
     ]
 
     extensions = []
@@ -665,6 +707,8 @@ def _model_sop_view(payload: dict) -> dict:
         "geometry": geometry_scopes,
         "ranking": ranking,
         "evidence": evidence,
+        "upside_downside_alignment": alignment_rows,
+        "top_tail_economic_quality": top_tail_rows,
         "extensions": extensions,
     }
 
@@ -820,6 +864,22 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             evidence_rows, target="console",
         ),
     ])
+    if view.get("upside_downside_alignment"):
+        lines.extend([
+            section("upside_downside_alignment"),
+            _render_model_contract_table(
+                table_contract("model.standard_sop", "upside_downside_alignment", "upside_downside_alignment"),
+                view["upside_downside_alignment"], target="console", scope_styler=scope_text,
+            ),
+        ])
+    if view.get("top_tail_economic_quality"):
+        lines.extend([
+            section("top_tail_economic_quality"),
+            _render_model_contract_table(
+                table_contract("model.standard_sop", "top_tail_economic_quality", "top_tail_economic_quality"),
+                view["top_tail_economic_quality"], target="console", scope_styler=scope_text,
+            ),
+        ])
 
     for ext in view["extensions"]:
         ext_id = str(ext["id"])
@@ -945,6 +1005,16 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
     lines.extend(["", section("evidence_coverage"), "", _render_model_contract_table(
         table_contract("model.standard_sop", "evidence_coverage", "evidence_coverage"), evidence_rows, target="markdown",
     )])
+    if view.get("upside_downside_alignment"):
+        lines.extend(["", section("upside_downside_alignment"), "", _render_model_contract_table(
+            table_contract("model.standard_sop", "upside_downside_alignment", "upside_downside_alignment"),
+            view["upside_downside_alignment"], target="markdown", scope_styler=scope_text,
+        )])
+    if view.get("top_tail_economic_quality"):
+        lines.extend(["", section("top_tail_economic_quality"), "", _render_model_contract_table(
+            table_contract("model.standard_sop", "top_tail_economic_quality", "top_tail_economic_quality"),
+            view["top_tail_economic_quality"], target="markdown", scope_styler=scope_text,
+        )])
 
     for ext in view["extensions"]:
         ext_id = str(ext["id"])
@@ -2649,6 +2719,7 @@ def _collect_continuous_research_input_plan(
         experiment_profile=str(settings.experiment_profile),
         dataset=resolved_dataset_profile,
         max_tickers=resolved_max_tickers,
+        include_standard_report_references=True,
     )
 
 
