@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import Any, Callable
 
 
 # Stable execution-capability identities live with the runtime policies that consume them.
@@ -76,15 +76,127 @@ CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT = "pair_weight"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE = "none"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY = "min_predicted_safety"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY = "mfe_winner_predicted_safety"
-SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES = (
-    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
-    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
-    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
+
+
+@dataclass(frozen=True)
+class ContinuousRankerPairWeightPolicy:
+    """First-class pair-weight plugin consumed by generic training/reporting code."""
+
+    policy_id: str
+    context_source: str
+    compatible_reductions: tuple[str, ...]
+    multiplier: Callable[[Any, Any, Any, Any], Any] | None = None
+    contract_pair_safety_weight: str | None = None
+    contract_pair_weight_combination: str | None = None
+    report_extension_title: str | None = None
+    report_first_note: str | None = None
+    report_second_note: str | None = None
+
+    @property
+    def weighted(self) -> bool:
+        return self.multiplier is not None
+
+    def apply(self, torch, target_diff, left_context, right_context):
+        if self.multiplier is None:
+            raise ValueError(f"pair weight policy不提供multiplier: {self.policy_id!r}")
+        return self.multiplier(torch, target_diff, left_context, right_context)
+
+
+def _minimum_predicted_safety_pair_weight(torch, _target_diff, left_safety, right_safety):
+    return torch.minimum(left_safety, right_safety)
+
+
+def _mfe_winner_predicted_safety_pair_weight(torch, target_diff, left_safety, right_safety):
+    return torch.where(target_diff > 0, left_safety, right_safety)
+
+
+_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_REGISTRY: dict[str, ContinuousRankerPairWeightPolicy] = {
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE: ContinuousRankerPairWeightPolicy(
+        policy_id=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+        context_source=CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
+        compatible_reductions=(),
+    ),
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY: ContinuousRankerPairWeightPolicy(
+        policy_id=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+        context_source=CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+        compatible_reductions=(CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,),
+        multiplier=_minimum_predicted_safety_pair_weight,
+        contract_pair_safety_weight="min(predicted_safety_percentile_i,predicted_safety_percentile_j)",
+        contract_pair_weight_combination="delta_ndcg_times_min_predicted_safety",
+        report_extension_title="Pure-MFE × High-Safety Pair Weight",
+        report_first_note=(
+            "- Target/order與MR-13K相同；Predicted Safety不進network，只把MR-13K full-list "
+            "ΔNDCG pair weight乘上min(S_i,S_j)。"
+        ),
+        report_second_note=(
+            "- Actual Safety/MFE metrics只作checkpoint寫入後診斷；epoch selection仍固定Pure-MFE "
+            "Validation Daily rho，無bucket/cutoff/lambda。"
+        ),
+    ),
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY: ContinuousRankerPairWeightPolicy(
+        policy_id=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
+        context_source=CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+        compatible_reductions=(CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,),
+        multiplier=_mfe_winner_predicted_safety_pair_weight,
+        contract_pair_safety_weight="predicted_safety_percentile_of_higher_pure_mfe_item",
+        contract_pair_weight_combination="delta_ndcg_times_mfe_winner_predicted_safety",
+        report_extension_title="Pure-MFE × MFE-Winner Safety Pair Weight",
+        report_first_note=(
+            "- Target/order與MR-13K相同；Predicted Safety不進network，只把MR-13K full-list "
+            "ΔNDCG pair weight乘上較高Pure-MFE item本身的S_winner；pair方向永不因Safety反轉。"
+        ),
+        report_second_note=(
+            "- Actual Safety/MFE metrics只作checkpoint寫入後診斷；epoch selection仍固定Pure-MFE "
+            "Validation Daily rho；無額外mean normalization、bucket/cutoff/lambda/temperature。"
+        ),
+    ),
+}
+
+SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES = tuple(
+    _CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_REGISTRY
 )
-PREDICTED_SAFETY_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES = (
-    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
-    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
+PREDICTED_SAFETY_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES = tuple(
+    policy_id
+    for policy_id, policy in _CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_REGISTRY.items()
+    if policy.context_source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
 )
+
+
+def get_continuous_ranker_pair_weight_policy(
+    policy: str | ContinuousRankerPairWeightPolicy | None,
+) -> ContinuousRankerPairWeightPolicy:
+    if isinstance(policy, ContinuousRankerPairWeightPolicy):
+        return policy
+    policy_id = CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE if policy is None else str(policy)
+    try:
+        return _CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_REGISTRY[policy_id]
+    except KeyError as exc:
+        raise ValueError(f"不支援的continuous-ranker pair weight policy: {policy_id!r}") from exc
+
+
+def normalize_continuous_ranker_pair_weight_configuration(
+    reduction: str | None,
+    pair_weight_policy: str | ContinuousRankerPairWeightPolicy | None,
+) -> tuple[str | None, ContinuousRankerPairWeightPolicy]:
+    """Normalize legacy combined reduction while keeping generic consumers identity-free."""
+
+    declared_policy = get_continuous_ranker_pair_weight_policy(pair_weight_policy)
+    base_reduction = reduction
+    if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
+        if declared_policy.policy_id not in {
+            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+        }:
+            raise ValueError("legacy High-Safety min reduction不得宣告不同pair weight policy")
+        declared_policy = get_continuous_ranker_pair_weight_policy(
+            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY
+        )
+        base_reduction = CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
+    if declared_policy.weighted and base_reduction not in declared_policy.compatible_reductions:
+        raise ValueError(
+            f"pair weight policy {declared_policy.policy_id!r}不支援reduction {base_reduction!r}"
+        )
+    return base_reduction, declared_policy
 CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR = "scalar"
 CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS = "pareto_components"
 CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT = "scalar_with_context_weight"
@@ -285,8 +397,7 @@ class ContinuousRankerObjectivePolicy:
     def __post_init__(self) -> None:
         if self.pairwise_reduction is not None and self.pairwise_reduction not in SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS:
             raise ValueError(f"不支援的continuous-ranker pairwise reduction: {self.pairwise_reduction!r}")
-        if self.pair_weight_policy not in SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES:
-            raise ValueError(f"不支援的continuous-ranker pair weight policy: {self.pair_weight_policy!r}")
+        get_continuous_ranker_pair_weight_policy(self.pair_weight_policy)
         if self.pair_target_schema not in {
             CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR,
             CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS,
@@ -624,15 +735,18 @@ def _resolve_continuous_ranker_context_policy(
 ) -> ContinuousRankerContextPolicy:
     source = str(target_policy.context_source)
     roles = list(target_policy.context_roles)
-    if objective_policy.pair_weight_policy in PREDICTED_SAFETY_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES:
+    pair_weight_policy = get_continuous_ranker_pair_weight_policy(
+        objective_policy.pair_weight_policy
+    )
+    if pair_weight_policy.weighted:
         if source not in {
             CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
-            CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+            pair_weight_policy.context_source,
         }:
             raise ValueError(
-                "predicted-Safety pair weighting不能與其他persistent context source併用"
+                "pair weighting不能與不同persistent context source併用"
             )
-        source = CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
+        source = pair_weight_policy.context_source
         for role in (
             CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
             CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
@@ -650,37 +764,22 @@ def _resolve_continuous_ranker_objective_policy(spec: Any) -> ContinuousRankerOb
         if declared_pair_weight_policy is None
         else str(declared_pair_weight_policy)
     )
-    if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
-        if pair_weight_policy not in {
-            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
-            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
-        }:
-            raise ValueError(
-                "legacy High-Safety min reduction不得宣告不同pair weight policy"
-            )
-        pair_weight_policy = CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY
-    if pair_weight_policy not in SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES:
-        raise ValueError(
-            f"不支援的continuous-ranker pair weight policy: {pair_weight_policy!r}"
+    _base_reduction, resolved_pair_weight_policy = (
+        normalize_continuous_ranker_pair_weight_configuration(
+            reduction, pair_weight_policy
         )
+    )
     if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE:
-        if pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE:
+        if resolved_pair_weight_policy.weighted:
             raise ValueError("Pareto pair scope不得再疊加scalar pair weight policy")
         return ContinuousRankerObjectivePolicy(
             pairwise_reduction=reduction,
             pair_target_schema=CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS,
         )
-    if pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE:
-        if reduction not in {
-            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
-        }:
-            raise ValueError(
-                "predicted-Safety pair weighting目前只允許疊加full-list Delta-NDCG"
-            )
+    if resolved_pair_weight_policy.weighted:
         return ContinuousRankerObjectivePolicy(
             pairwise_reduction=reduction,
-            pair_weight_policy=pair_weight_policy,
+            pair_weight_policy=resolved_pair_weight_policy.policy_id,
             pair_target_schema=CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
         )
     return ContinuousRankerObjectivePolicy(pairwise_reduction=reduction)
@@ -754,6 +853,9 @@ __all__ = (
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY",
     "SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES",
     "PREDICTED_SAFETY_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES",
+    "ContinuousRankerPairWeightPolicy",
+    "get_continuous_ranker_pair_weight_policy",
+    "normalize_continuous_ranker_pair_weight_configuration",
     "CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR",
     "CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS",
     "CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT",

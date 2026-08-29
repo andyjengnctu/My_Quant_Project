@@ -63,6 +63,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
     SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES,
+    get_continuous_ranker_pair_weight_policy,
     CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR,
     CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS,
     CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
@@ -590,15 +591,13 @@ def get_predicted_safety_pure_mfe_contract() -> dict[str, Any]:
 def get_predicted_safety_pair_weight_contract(pair_weight_policy: str) -> dict[str, Any]:
     """Canonical Pure-MFE pair-weight contract for PIT-safe predicted-Safety policies."""
 
-    policy = str(pair_weight_policy)
-    if policy == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY:
-        pair_safety_weight = "min(predicted_safety_percentile_i,predicted_safety_percentile_j)"
-        pair_weight_combination = "delta_ndcg_times_min_predicted_safety"
-    elif policy == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY:
-        pair_safety_weight = "predicted_safety_percentile_of_higher_pure_mfe_item"
-        pair_weight_combination = "delta_ndcg_times_mfe_winner_predicted_safety"
-    else:
-        raise ValueError(f"不支援的predicted-Safety pair weight policy: {pair_weight_policy!r}")
+    policy = get_continuous_ranker_pair_weight_policy(pair_weight_policy)
+    if policy.context_source != CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY:
+        raise ValueError(
+            f"pair weight policy不是predicted-Safety context: {pair_weight_policy!r}"
+        )
+    if not policy.contract_pair_safety_weight or not policy.contract_pair_weight_combination:
+        raise ValueError(f"pair weight policy缺少scientific contract metadata: {pair_weight_policy!r}")
 
     return {
         "schema_version": 1,
@@ -617,8 +616,8 @@ def get_predicted_safety_pair_weight_contract(pair_weight_policy: str) -> dict[s
         "stage2_target": "exact_mr13k_pure_mfe_order_no_residualization",
         "stage2_context_used_as_input": False,
         "pair_base_relevance": "mr13k_full_list_delta_ndcg",
-        "pair_safety_weight": pair_safety_weight,
-        "pair_weight_combination": pair_weight_combination,
+        "pair_safety_weight": policy.contract_pair_safety_weight,
+        "pair_weight_combination": policy.contract_pair_weight_combination,
         "pair_weight_reduction": "normalized_weighted_mean_over_comparable_same_date_pairs",
         "bucket_or_threshold": None,
         "lambda_or_temperature": None,
@@ -1746,10 +1745,7 @@ class ContinuousRankerResearchSpec:
                 raise ValueError(
                     f"非scalar pairwise profile不得指定pair weight policy: {self.profile_name}"
                 )
-            if self.pair_weight_policy not in SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES:
-                raise ValueError(
-                    f"不支援的continuous ranker pair weight policy: {self.pair_weight_policy!r}"
-                )
+            get_continuous_ranker_pair_weight_policy(self.pair_weight_policy)
             if self.pair_weight_policy == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE:
                 raise ValueError("research spec的pair_weight_policy=None即可表示未加權；不得顯式宣告none")
         for reference_field in ("reference_profile_name", "evaluation_reference_profile_name"):

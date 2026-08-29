@@ -22,11 +22,9 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
-    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
-    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
+    normalize_continuous_ranker_pair_weight_configuration,
     CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
     CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
     CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
@@ -781,27 +779,6 @@ def _date_coherent_batches(
 
 
 
-def _predicted_safety_pair_weights(
-    torch,
-    selected_target_diff,
-    selected_left_safety,
-    selected_right_safety,
-    *,
-    policy: str,
-):
-    """Return supervision-only Safety multipliers for already-comparable MFE pairs."""
-
-    resolved = str(policy)
-    if resolved == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY:
-        return torch.minimum(selected_left_safety, selected_right_safety)
-    if resolved == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY:
-        return torch.where(
-            selected_target_diff > 0,
-            selected_left_safety,
-            selected_right_safety,
-        )
-    raise ValueError(f"不支援的predicted-Safety pair weight policy: {policy!r}")
-
 def _pairwise_logistic_loss(
     torch,
     margins,
@@ -827,37 +804,18 @@ def _pairwise_logistic_loss(
     and keeps only strict Pareto-dominance pairs: both component differences must have
     the same non-zero sign. Trade-off or tied pairs receive no supervision and every
     comparable pair has equal weight.
-    Predicted-Safety pair-weight policies receive
-    ``[ranking percentile, PIT-safe predicted-Safety percentile]``. Pair direction and
-    Delta-NDCG relevance remain target-driven. The context multiplier is resolved
-    independently from the base reduction: legacy MR-13AF uses ``min(S_i,S_j)`` while
-    MR-13AG uses the Safety percentile of the higher-MFE item. The final loss remains a
-    normalized weighted mean and context is supervision-only.
+    Context-weighted pair policies receive ``[ranking percentile, context percentile]``.
+    Pair direction and Delta-NDCG relevance remain target-driven; the policy registry
+    supplies only the supervision multiplier. The final loss remains a normalized weighted
+    mean and context is supervision-only.
     """
 
     import torch.nn.functional as F
 
-    effective_pair_weight_policy = str(pair_weight_policy)
-    base_reduction = str(reduction)
-    if base_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
-        if effective_pair_weight_policy not in {
-            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
-            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
-        }:
-            raise ValueError("legacy High-Safety min reduction不得宣告不同pair weight policy")
-        effective_pair_weight_policy = CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY
-        base_reduction = CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
-    if effective_pair_weight_policy not in {
-        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
-        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
-        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
-    }:
-        raise ValueError(f"不支援的pair weight policy: {effective_pair_weight_policy!r}")
-    if (
-        effective_pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
-        and base_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
-    ):
-        raise ValueError("predicted-Safety pair weighting只允許full-list Delta-NDCG")
+    base_reduction, pair_weight_spec = normalize_continuous_ranker_pair_weight_configuration(
+        str(reduction), pair_weight_policy
+    )
+    weighted_pairwise = bool(pair_weight_spec.weighted)
 
     if base_reduction not in {
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
@@ -907,15 +865,15 @@ def _pairwise_logistic_loss(
             ranked_date_count += 1
             continue
 
-        day_safety = None
-        if effective_pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE:
+        day_context = None
+        if weighted_pairwise:
             if day_target.ndim != 2 or int(day_target.shape[1]) != 2:
-                raise ValueError("predicted-Safety weighted pairwise target必須為[N,2]=[MFE,Safety]")
-            day_safety = day_target[:, 1].detach().float()
-            if not bool(torch.isfinite(day_safety).all().item()):
-                raise FloatingPointError("predicted-Safety pair weight必須為有限值")
-            if bool((day_safety < 0.0).any().item()) or bool((day_safety > 1.0).any().item()):
-                raise ValueError("predicted-Safety pair weight只接受0～1 same-date percentile")
+                raise ValueError("context-weighted pairwise target必須為[N,2]=[rank_target,context]")
+            day_context = day_target[:, 1].detach().float()
+            if not bool(torch.isfinite(day_context).all().item()):
+                raise FloatingPointError("pair-weight context必須為有限值")
+            if bool((day_context < 0.0).any().item()) or bool((day_context > 1.0).any().item()):
+                raise ValueError("pair-weight context只接受0～1 same-date percentile")
             day_target = day_target[:, 0]
         if day_target.ndim != 1:
             raise ValueError("scalar pairwise target必須為一維")
@@ -1000,19 +958,18 @@ def _pairwise_logistic_loss(
         selected_relevance_delta = torch.abs(selected_target_diff.detach())
         selected_discount_delta = discount_delta[comparable]
         weights = selected_relevance_delta * selected_discount_delta / ideal_dcg
-        if effective_pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE:
-            if day_safety is None:
-                raise RuntimeError("predicted-Safety pair weighting缺少Safety target")
-            selected_left_safety = day_safety[:, None].expand_as(target_diff)[comparable]
-            selected_right_safety = day_safety[None, :].expand_as(target_diff)[comparable]
-            safety_pair_weight = _predicted_safety_pair_weights(
+        if weighted_pairwise:
+            if day_context is None:
+                raise RuntimeError("context-weighted pairwise objective缺少context target")
+            selected_left_context = day_context[:, None].expand_as(target_diff)[comparable]
+            selected_right_context = day_context[None, :].expand_as(target_diff)[comparable]
+            context_pair_weight = pair_weight_spec.apply(
                 torch,
                 selected_target_diff,
-                selected_left_safety,
-                selected_right_safety,
-                policy=effective_pair_weight_policy,
+                selected_left_context,
+                selected_right_context,
             )
-            weights = weights * safety_pair_weight
+            weights = weights * context_pair_weight
         if not bool(torch.isfinite(weights).all().item()):
             raise FloatingPointError("full-list Delta-NDCG pairwise weights必須為有限值")
         pair_losses.append(losses * weights)
@@ -1046,8 +1003,8 @@ def _pairwise_logistic_loss(
             label = (
                 "upper-tail relevance"
                 if base_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE
-                else "predicted-Safety weighted full-list Delta-NDCG"
-                if effective_pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
+                else "context-weighted full-list Delta-NDCG"
+                if weighted_pairwise
                 else "full-list Delta-NDCG"
             )
             raise FloatingPointError(f"{label} pairwise weight sum必須為正有限值")

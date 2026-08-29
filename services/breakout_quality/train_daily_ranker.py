@@ -30,10 +30,8 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
-    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
-    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
-    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
+    normalize_continuous_ranker_pair_weight_configuration,
 )
 from config.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
@@ -470,6 +468,23 @@ def _predicted_safety_context_pure_mfe_metrics(
         "status": "diagnostic_only_no_fit_no_threshold_selection",
     }
 
+def _pair_weight_report_extension(
+    pairwise_reduction: str, pair_weight_policy: str
+) -> tuple[str, str, str] | None:
+    """Resolve pair-weight report copy from the canonical runtime plugin metadata."""
+
+    _base_reduction, pair_weight_spec = normalize_continuous_ranker_pair_weight_configuration(
+        pairwise_reduction, pair_weight_policy
+    )
+    if not pair_weight_spec.weighted:
+        return None
+    return (
+        pair_weight_spec.report_extension_title or "Pure-MFE × Pair Weight",
+        pair_weight_spec.report_first_note or "- Pair-weight semantics由canonical runtime policy定義。",
+        pair_weight_spec.report_second_note or "- Pair weighting只作training supervision；不改target order。",
+    )
+
+
 def _render_markdown(payload: dict) -> str:
     def fmt(value, digits=4):
         return "-" if value is None else f"{float(value):.{digits}f}"
@@ -480,13 +495,8 @@ def _render_markdown(payload: dict) -> str:
         payload["training"].get("pair_weight_policy")
         or CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
     )
-    if pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
-        pair_weight_policy = CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY
-    high_safety_weighted_pure_mfe = (
-        pair_weight_policy == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY
-    )
-    winner_safety_weighted_pure_mfe = (
-        pair_weight_policy == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY
+    pair_weight_extension = _pair_weight_report_extension(
+        pairwise_reduction, pair_weight_policy
     )
     direct_r = objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
     dual_component_r = objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION
@@ -575,27 +585,12 @@ def _render_markdown(payload: dict) -> str:
         )
     ae_eval = dict(payload.get("predicted_safety_context_pure_mfe_evaluation") or {})
     if ae_eval:
-        extension_title = (
-            "Pure-MFE × MFE-Winner Safety Pair Weight"
-            if winner_safety_weighted_pure_mfe
-            else "Pure-MFE × High-Safety Pair Weight"
-            if high_safety_weighted_pure_mfe
-            else "Pure-MFE × Safety Context"
-        )
-        first_note = (
-            "- Target/order與MR-13K相同；Predicted Safety不進network，只把MR-13K full-list ΔNDCG pair weight乘上較高Pure-MFE item本身的S_winner；pair方向永不因Safety反轉。"
-            if winner_safety_weighted_pure_mfe
-            else "- Target/order與MR-13K相同；Predicted Safety不進network，只把MR-13K full-list ΔNDCG pair weight乘上min(S_i,S_j)。"
-            if high_safety_weighted_pure_mfe
-            else "- Target/order與MR-13K相同；Predicted Safety只作PIT-safe input context，不參與target residualization。"
-        )
-        second_note = (
-            "- Actual Safety/MFE metrics只作checkpoint寫入後診斷；epoch selection仍固定Pure-MFE Validation Daily rho；無額外mean normalization、bucket/cutoff/lambda/temperature。"
-            if winner_safety_weighted_pure_mfe
-            else "- Actual Safety/MFE metrics只作checkpoint寫入後診斷；epoch selection仍固定Pure-MFE Validation Daily rho，無bucket/cutoff/lambda。"
-            if high_safety_weighted_pure_mfe
-            else "- Safety metrics只作checkpoint寫入後診斷，不參與loss、epoch selection、threshold或calibration。"
-        )
+        if pair_weight_extension is not None:
+            extension_title, first_note, second_note = pair_weight_extension
+        else:
+            extension_title = "Pure-MFE × Safety Context"
+            first_note = "- Target/order與MR-13K相同；Predicted Safety只作PIT-safe input context，不參與target residualization。"
+            second_note = "- Safety metrics只作checkpoint寫入後診斷，不參與loss、epoch selection、threshold或calibration。"
         lines.extend([
             "",
             section(f"Model-specific Extension｜{payload['model_research_id']}｜{extension_title}"),
