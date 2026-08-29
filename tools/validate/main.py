@@ -23,7 +23,7 @@ from core.console_report import project_relative_display_path
 from core.log_utils import format_exception_summary
 from core.model_paths import resolve_default_primary_param_source_path
 from core.portfolio_param_runtime import load_portfolio_primary_params_from_json
-from core.runtime_utils import PeakTracedMemoryTracker, run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, resolve_cli_program_name, safe_prompt, validate_cli_args
+from core.runtime_utils import PeakProcessMemoryTracker, run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, resolve_cli_program_name, safe_prompt, validate_cli_args
 from core.output_paths import build_output_dir
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json
 from tools.local_regression.meta_quality_targets import build_coverage_include_paths
@@ -94,7 +94,7 @@ def _write_startup_failure_summary(
     dataset_profile_key: str = "",
     dataset_source: str = "",
     data_dir: str = "",
-    peak_traced_memory_mb: float = 0.0,
+    peak_process_memory_mb: float = 0.0,
 ) -> None:
     if not str(suite_run_dir).strip():
         return
@@ -113,7 +113,11 @@ def _write_startup_failure_summary(
         "pass_count": 0,
         "skip_count": 0,
         "fail_count": 1,
-        "peak_traced_memory_mb": round(float(peak_traced_memory_mb or 0.0), 3),
+        "peak_process_memory_mb": round(float(peak_process_memory_mb or 0.0), 3),
+        "memory_measurement_mode": "process_peak_rss",
+        "synthetic_case_count": 0,
+        "synthetic_duration_sec": 0.0,
+        "synthetic_slowest_cases": [],
         "startup_failure_phase": str(phase),
         "error_type": type(error).__name__,
         "error_message": str(error),
@@ -224,7 +228,7 @@ def main(argv=None, environ=None):
         print("說明: 預設資料集為縮減；reduced 測試資料路徑為 <repo>/data/tw_stock_data_vip_reduced。")
         return 0
 
-    with PeakTracedMemoryTracker() as tracker:
+    with PeakProcessMemoryTracker() as tracker:
         import pandas as pd
         from tools.validate.checks import (
             add_fail_result,
@@ -251,7 +255,7 @@ def main(argv=None, environ=None):
                 suite_run_dir,
                 phase="dataset_profile_resolution",
                 error=e,
-                peak_traced_memory_mb=tracker.snapshot_peak_mb(),
+                peak_process_memory_mb=tracker.snapshot_peak_mb(),
             )
             print(f"❌ {e}", file=sys.stderr)
             return 1
@@ -266,7 +270,7 @@ def main(argv=None, environ=None):
                 dataset_profile_key=dataset_profile_key,
                 dataset_source=dataset_source,
                 data_dir=DATA_DIR,
-                peak_traced_memory_mb=tracker.snapshot_peak_mb(),
+                peak_process_memory_mb=tracker.snapshot_peak_mb(),
             )
             print(f"❌ {e}", file=sys.stderr)
             return 1
@@ -301,6 +305,7 @@ def main(argv=None, environ=None):
             scan_stats = {"total_tickers": 0, "worker_count": 1}
 
         print("開始執行 synthetic coverage suite...")
+        synthetic_summaries = []
         try:
             synthetic_results, synthetic_summaries = _run_synthetic_suite_with_optional_coverage(
                 suite_run_dir,
@@ -431,7 +436,8 @@ def main(argv=None, environ=None):
             df_failed=df_failed,
             output_dir=output_dir,
             real_data_coverage_ok=real_data_coverage_ok,
-            peak_traced_memory_mb=tracker.snapshot_peak_mb(),
+            peak_process_memory_mb=tracker.snapshot_peak_mb(),
+            synthetic_summaries=synthetic_summaries,
         )
 
         print_console_summary(

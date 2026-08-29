@@ -23,7 +23,7 @@ from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_fast_data import build_trade_stats_index, get_pit_stats_from_index, pack_prepared_stock_data, prep_stock_data_and_trades
 from services.scanner.stock_processor import process_prepared_stock
-from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
+from core.runtime_utils import PeakProcessMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from tools.local_regression.common import PROJECT_ROOT, ensure_reduced_dataset, load_manifest, resolve_run_dir, write_csv, write_json, write_text
 from tools.local_regression.shared_prep_cache import load_shared_prep_cache_entry
 
@@ -498,7 +498,7 @@ def main(argv=None) -> int:
     if parsed["help"]:
         return 0
 
-    with PeakTracedMemoryTracker() as tracker:
+    with PeakProcessMemoryTracker() as tracker:
         started = time.perf_counter()
         manifest = load_manifest()
         run_dir = resolve_run_dir("chain_checks")
@@ -606,7 +606,7 @@ def main(argv=None) -> int:
             }
 
         summary["duration_sec"] = round(time.perf_counter() - started, 3)
-        summary["peak_traced_memory_mb"] = tracker.snapshot_peak_mb()
+        summary["peak_process_memory_mb"] = tracker.snapshot_peak_mb()
         write_json(run_dir / "chain_summary.json", summary)
         write_json(run_dir / "chain_checks_summary.json", summary)
         write_text(

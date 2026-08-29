@@ -170,7 +170,7 @@ def print_console_summary(
         print("\n失敗 synthetic/system 前覽：")
         print(failed_non_real_summary.to_string(index=False))
 
-def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_dir, csv_path, xlsx_path, elapsed_time, selected_tickers, df_results, df_failed, output_dir, real_data_coverage_ok, peak_traced_memory_mb):
+def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_dir, csv_path, xlsx_path, elapsed_time, selected_tickers, df_results, df_failed, output_dir, real_data_coverage_ok, peak_process_memory_mb, synthetic_summaries=None):
     run_dir = os.environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip()
     if not run_dir:
         return
@@ -178,6 +178,25 @@ def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_
     fail_count = int((df_results["status"] == "FAIL").sum()) if not df_results.empty else 0
     if not real_data_coverage_ok:
         fail_count += 1
+
+    timed_synthetic = [
+        row for row in (synthetic_summaries or [])
+        if isinstance(row, dict) and row.get("duration_sec") not in (None, "")
+    ]
+    slowest_synthetic = sorted(
+        (
+            {
+                "validator_name": str(row.get("validator_name", "")),
+                "layer": str(row.get("layer", "")),
+                "cost_class": str(row.get("cost_class", "")),
+                "duration_sec": round(float(row.get("duration_sec", 0.0) or 0.0), 6),
+            }
+            for row in timed_synthetic
+        ),
+        key=lambda row: row["duration_sec"],
+        reverse=True,
+    )[:10]
+    synthetic_duration_sec = round(sum(float(row.get("duration_sec", 0.0) or 0.0) for row in timed_synthetic), 3)
 
     summary = {
         "status": "PASS" if (df_failed.empty and real_data_coverage_ok) else "FAIL",
@@ -194,7 +213,11 @@ def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_
         "pass_count": int((df_results["status"] == "PASS").sum()) if not df_results.empty else 0,
         "skip_count": int((df_results["status"] == "SKIP").sum()) if not df_results.empty else 0,
         "fail_count": fail_count,
-        "peak_traced_memory_mb": round(float(peak_traced_memory_mb or 0.0), 3),
+        "peak_process_memory_mb": round(float(peak_process_memory_mb or 0.0), 3),
+        "memory_measurement_mode": "process_peak_rss",
+        "synthetic_case_count": int(len(timed_synthetic)),
+        "synthetic_duration_sec": synthetic_duration_sec,
+        "synthetic_slowest_cases": slowest_synthetic,
     }
     os.makedirs(run_dir, exist_ok=True)
     summary_path = os.path.join(run_dir, "validate_consistency_summary.json")

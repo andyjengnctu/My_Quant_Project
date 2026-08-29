@@ -2,7 +2,7 @@ import inspect
 import os
 import re
 import sys
-import tracemalloc
+import ctypes
 import warnings
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
@@ -363,35 +363,63 @@ def should_auto_open_browser(environ=None):
     return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
 
 
-# # (AI註: reduced test suite 記憶體回歸統一用 tracemalloc peak；跨平台可用，避免各工具各自量測)
-class PeakTracedMemoryTracker:
+# # (AI註: formal regression 的記憶體回歸使用 process lifetime peak RSS；避免 tracemalloc 對大型 synthetic suite 逐 allocation tracing 造成數倍 wall-time 放大。)
+def _get_process_peak_rss_bytes():
+    if os.name == "nt":
+        class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("cb", ctypes.c_ulong),
+                ("PageFaultCount", ctypes.c_ulong),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+
+        counters = PROCESS_MEMORY_COUNTERS()
+        counters.cb = ctypes.sizeof(counters)
+        kernel32 = ctypes.windll.kernel32
+        psapi = ctypes.windll.psapi
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        get_process_memory_info = psapi.GetProcessMemoryInfo
+        get_process_memory_info.argtypes = [ctypes.c_void_p, ctypes.POINTER(PROCESS_MEMORY_COUNTERS), ctypes.c_ulong]
+        get_process_memory_info.restype = ctypes.c_int
+        if not get_process_memory_info(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
+            raise OSError("GetProcessMemoryInfo failed")
+        return int(counters.PeakWorkingSetSize)
+
+    import resource
+
+    peak_rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    if sys.platform == "darwin":
+        return peak_rss
+    return peak_rss * 1024
+
+
+class PeakProcessMemoryTracker:
+    measurement_mode = "process_peak_rss"
+
     def __init__(self):
-        self._was_tracing = False
         self._peak_bytes = 0
 
     def __enter__(self):
-        self._was_tracing = tracemalloc.is_tracing()
-        if not self._was_tracing:
-            tracemalloc.start()
-        tracemalloc.reset_peak()
+        self._peak_bytes = _get_process_peak_rss_bytes()
         return self
 
     def snapshot_peak_mb(self):
-        if not tracemalloc.is_tracing():
-            return round(self._peak_bytes / (1024 * 1024), 3)
-        _current, peak = tracemalloc.get_traced_memory()
-        return round(peak / (1024 * 1024), 3)
+        self._peak_bytes = max(self._peak_bytes, _get_process_peak_rss_bytes())
+        return round(self._peak_bytes / (1024 * 1024), 3)
 
     @property
     def peak_mb(self):
         return round(self._peak_bytes / (1024 * 1024), 3)
 
     def __exit__(self, exc_type, exc, tb):
-        if tracemalloc.is_tracing():
-            _current, peak = tracemalloc.get_traced_memory()
-            self._peak_bytes = int(peak)
-        if (not self._was_tracing) and tracemalloc.is_tracing():
-            tracemalloc.stop()
+        self._peak_bytes = max(self._peak_bytes, _get_process_peak_rss_bytes())
         return False
 
 def resolve_environment_flag(environ, name: str, default: bool) -> bool:

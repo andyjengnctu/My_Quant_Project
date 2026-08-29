@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
+from core.runtime_utils import PeakProcessMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from tools.local_regression.common import (
     ensure_reduced_dataset,
     load_manifest,
@@ -62,7 +62,6 @@ from tools.local_regression.meta_quality_performance import (
 REQUIRED_META_IDS = ("B22", "B23", "B24", "B25", "B26")
 PERFORMANCE_STEP_FILES = DEFAULT_PERFORMANCE_STEP_FILES
 PERFORMANCE_MANIFEST_KEYS = DEFAULT_PERFORMANCE_MANIFEST_KEYS
-PERFORMANCE_MEMORY_MANIFEST_KEY = "performance_peak_traced_memory_mb"
 
 
 
@@ -569,12 +568,12 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
     )
 
 
-def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, current_meta_quality_duration_sec: float, current_meta_quality_peak_traced_memory_mb: float) -> Dict[str, Any]:
+def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, current_meta_quality_duration_sec: float, current_meta_quality_peak_process_memory_mb: float) -> Dict[str, Any]:
     return _shared_build_performance_summary(
         run_dir,
         manifest,
         current_meta_quality_duration_sec=current_meta_quality_duration_sec,
-        current_meta_quality_peak_traced_memory_mb=current_meta_quality_peak_traced_memory_mb,
+        current_meta_quality_peak_process_memory_mb=current_meta_quality_peak_process_memory_mb,
         performance_step_files=PERFORMANCE_STEP_FILES,
         performance_manifest_keys=PERFORMANCE_MANIFEST_KEYS,
     )
@@ -584,7 +583,7 @@ def main(argv=None) -> int:
     if cli["help"]:
         return 0
 
-    with PeakTracedMemoryTracker() as tracker:
+    with PeakProcessMemoryTracker() as tracker:
         manifest = load_manifest()
         ensure_reduced_dataset()
         run_dir = resolve_run_dir("meta_quality")
@@ -595,12 +594,12 @@ def main(argv=None) -> int:
         formal_entry_summary = _summarize_formal_entry_consistency()
         maintenance_summary = summarize_transient_code_maintenance(PROJECT_ROOT)
         current_meta_quality_duration_sec = round(os.times().elapsed - started, 3)
-        current_meta_quality_peak_traced_memory_mb = tracker.snapshot_peak_mb()
+        current_meta_quality_peak_process_memory_mb = tracker.snapshot_peak_mb()
         performance_summary = _build_performance_summary(
             run_dir,
             manifest,
             current_meta_quality_duration_sec=current_meta_quality_duration_sec,
-            current_meta_quality_peak_traced_memory_mb=current_meta_quality_peak_traced_memory_mb,
+            current_meta_quality_peak_process_memory_mb=current_meta_quality_peak_process_memory_mb,
         )
 
         all_results = [*coverage_summary["results"], *checklist_summary["results"], *formal_entry_summary["results"], *performance_summary["results"]]
@@ -657,9 +656,11 @@ def main(argv=None) -> int:
             "optimizer_profile_trial_count": performance_summary["optimizer_profile_trial_count"],
             "optimizer_trial_avg_objective_wall_sec": performance_summary["optimizer_trial_avg_objective_wall_sec"],
             "total_duration_sec": performance_summary["total_duration_sec"],
-            "step_peak_traced_memory_mb": performance_summary["step_peak_traced_memory_mb"],
-            "max_step_peak_traced_memory_mb": performance_summary["max_step_peak_traced_memory_mb"],
-            "meta_quality_peak_traced_memory_mb": performance_summary["meta_quality_peak_traced_memory_mb"],
+            "critical_path_duration_sec": performance_summary["critical_path_duration_sec"],
+            "aggregate_step_duration_sec": performance_summary["aggregate_step_duration_sec"],
+            "step_peak_process_memory_mb": performance_summary["step_peak_process_memory_mb"],
+            "max_step_peak_process_memory_mb": performance_summary["max_step_peak_process_memory_mb"],
+            "meta_quality_peak_process_memory_mb": performance_summary["meta_quality_peak_process_memory_mb"],
         },
         "results": all_results,
     }
@@ -698,8 +699,9 @@ def main(argv=None) -> int:
         f"todo_ids      : {', '.join(checklist_summary['todo_ids']) if checklist_summary['todo_ids'] else '(none)'}",
         f"done_ids      : {', '.join(checklist_summary['done_ids']) if checklist_summary['done_ids'] else '(none)'}",
         f"performance_ok: {performance_summary['ok']}",
-        f"perf_total    : {performance_summary['total_duration_sec']:.3f}s",
-        f"perf_peak_mem : {performance_summary['max_step_peak_traced_memory_mb']:.3f}MB",
+        f"perf_critical : {performance_summary['critical_path_duration_sec']:.3f}s",
+        f"perf_aggregate: {performance_summary['aggregate_step_duration_sec']:.3f}s",
+        f"perf_peak_mem : {performance_summary['max_step_peak_process_memory_mb']:.3f}MB",
         (
             f"perf_opt_trial: {performance_summary['optimizer_trial_avg_objective_wall_sec']:.3f}s"
             if performance_summary['optimizer_trial_avg_objective_wall_sec'] is not None
@@ -719,7 +721,9 @@ def main(argv=None) -> int:
         "checklist_partial_ids": checklist_summary["partial_ids"],
         "checklist_todo_ids": checklist_summary["todo_ids"],
         "performance_total_duration_sec": performance_summary["total_duration_sec"],
-        "performance_peak_traced_memory_mb": performance_summary["max_step_peak_traced_memory_mb"],
+        "performance_critical_path_duration_sec": performance_summary["critical_path_duration_sec"],
+        "performance_aggregate_step_duration_sec": performance_summary["aggregate_step_duration_sec"],
+        "performance_peak_process_memory_mb": performance_summary["max_step_peak_process_memory_mb"],
         "optimizer_trial_avg_objective_wall_sec": performance_summary["optimizer_trial_avg_objective_wall_sec"],
         "slimming_status": maintenance_summary["status"],
         "slimming_candidate_count": maintenance_summary["candidate_count"],

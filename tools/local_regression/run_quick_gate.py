@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.model_paths import MODELS_DIR_ENV_VAR, RUN_BEST_PARAMS_PATH_ENV_VAR, resolve_default_primary_param_source_path
-from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
+from core.runtime_utils import PeakProcessMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from core.config import V16StrategyParams
 from core.dataset_profiles import DATASET_PROFILE_SPECS, DEFAULT_VALIDATE_DATASET_PROFILE, normalize_dataset_profile_key
 from core.output_paths import build_output_dir
@@ -874,7 +874,7 @@ def check_dataset_runtime_error_paths() -> List[Dict[str, Any]]:
     return results
 
 
-def _build_runtime_failure_summary(*, manifest: Optional[Dict[str, Any]], dataset_info: Any, steps: List[Dict[str, Any]], exc: Exception, duration_sec: float, peak_traced_memory_mb: float) -> Dict[str, Any]:
+def _build_runtime_failure_summary(*, manifest: Optional[Dict[str, Any]], dataset_info: Any, steps: List[Dict[str, Any]], exc: Exception, duration_sec: float, peak_process_memory_mb: float) -> Dict[str, Any]:
     failed_step_names = [step["name"] for step in steps if step.get("status") != "PASS"]
     failed_steps = [*failed_step_names, "__runtime__"]
     runtime_error = f"{type(exc).__name__}: {exc}"
@@ -887,7 +887,7 @@ def _build_runtime_failure_summary(*, manifest: Optional[Dict[str, Any]], datase
         "failed_steps": failed_steps,
         "steps": steps,
         "duration_sec": duration_sec,
-        "peak_traced_memory_mb": peak_traced_memory_mb,
+        "peak_process_memory_mb": peak_process_memory_mb,
         "runtime_error": runtime_error,
         "error_type": type(exc).__name__,
         "error_message": str(exc),
@@ -910,7 +910,7 @@ def main(argv=None) -> int:
     if parsed["help"]:
         return 0
 
-    with PeakTracedMemoryTracker() as tracker:
+    with PeakProcessMemoryTracker() as tracker:
         started = time.perf_counter()
         manifest: Optional[Dict[str, Any]] = None
         dataset_info: Any = None
@@ -955,13 +955,13 @@ def main(argv=None) -> int:
                 steps=steps,
                 exc=exc,
                 duration_sec=round(time.perf_counter() - started, 3),
-                peak_traced_memory_mb=tracker.snapshot_peak_mb(),
+                peak_process_memory_mb=tracker.snapshot_peak_mb(),
             )
             exit_code = 1
         finally:
             if summary is not None:
                 summary["duration_sec"] = round(time.perf_counter() - started, 3)
-                summary["peak_traced_memory_mb"] = tracker.snapshot_peak_mb()
+                summary["peak_process_memory_mb"] = tracker.snapshot_peak_mb()
 
         if run_dir is not None and summary is not None:
             _write_quick_gate_outputs(run_dir, summary)

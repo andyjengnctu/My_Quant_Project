@@ -2176,8 +2176,8 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
     return results, summary
 
 
-def validate_peak_traced_memory_tracker_context_management_case(_base_params):
-    case_id = "META_PEAK_TRACED_MEMORY_TRACKER_CONTEXT_MANAGEMENT"
+def validate_peak_process_memory_tracker_context_management_case(_base_params):
+    case_id = "META_PEAK_PROCESS_MEMORY_TRACKER_CONTEXT_MANAGEMENT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
@@ -2208,14 +2208,32 @@ def validate_peak_traced_memory_tracker_context_management_case(_base_params):
                 manual_lifecycle_files.append(rel_path)
                 break
 
-        if "with PeakTracedMemoryTracker() as tracker:" not in source:
+        if "with PeakProcessMemoryTracker() as tracker:" not in source:
             missing_with_context_files.append(rel_path)
 
-    add_check(results, "meta_contract", case_id, "peak_traced_memory_tracker_files_parse", [], syntax_errors)
-    add_check(results, "meta_contract", case_id, "peak_traced_memory_tracker_manual_lifecycle_forbidden", [], sorted(set(manual_lifecycle_files)))
-    add_check(results, "meta_contract", case_id, "peak_traced_memory_tracker_uses_with_context", [], sorted(set(missing_with_context_files)))
+    from core.runtime_utils import PeakProcessMemoryTracker
+
+    with PeakProcessMemoryTracker() as tracker:
+        measured_peak_mb = tracker.snapshot_peak_mb()
+        measurement_mode = tracker.measurement_mode
+    runtime_utils_source = (PROJECT_ROOT / "core" / "runtime_utils.py").read_text(encoding="utf-8")
+    runtime_utils_tree = ast.parse(runtime_utils_source)
+    imports_tracemalloc = any(
+        (isinstance(node, ast.Import) and any(alias.name == "tracemalloc" for alias in node.names))
+        or (isinstance(node, ast.ImportFrom) and node.module == "tracemalloc")
+        for node in ast.walk(runtime_utils_tree)
+    )
+
+    add_check(results, "meta_contract", case_id, "peak_process_memory_tracker_files_parse", [], syntax_errors)
+    add_check(results, "meta_contract", case_id, "peak_process_memory_tracker_manual_lifecycle_forbidden", [], sorted(set(manual_lifecycle_files)))
+    add_check(results, "meta_contract", case_id, "peak_process_memory_tracker_uses_with_context", [], sorted(set(missing_with_context_files)))
+    add_check(results, "meta_contract", case_id, "peak_process_memory_tracker_reports_positive_peak", True, measured_peak_mb > 0.0)
+    add_check(results, "meta_contract", case_id, "peak_process_memory_tracker_declares_rss_mode", "process_peak_rss", measurement_mode)
+    add_check(results, "meta_contract", case_id, "formal_memory_tracker_does_not_reenable_tracemalloc", False, imports_tracemalloc)
 
     summary["tracked_files"] = scanned_files
+    summary["measurement_mode"] = measurement_mode
+    summary["measured_peak_mb"] = measured_peak_mb
     return results, summary
 
 

@@ -83,7 +83,11 @@ REQUIRED_VALIDATE_SUMMARY_KEYS = {
     "pass_count",
     "skip_count",
     "fail_count",
-    "peak_traced_memory_mb",
+    "peak_process_memory_mb",
+    "memory_measurement_mode",
+    "synthetic_case_count",
+    "synthetic_duration_sec",
+    "synthetic_slowest_cases",
 }
 
 REQUIRED_PROFILE_SUMMARY_AVG_KEYS = {
@@ -128,7 +132,7 @@ REQUIRED_CHAIN_SUMMARY_KEYS = {
     "scanner_snapshot",
     "rerun_consistency",
     "failures",
-    "peak_traced_memory_mb",
+    "peak_process_memory_mb",
 }
 
 CHAIN_SUMMARY_CSV_FIELDS = [
@@ -176,7 +180,7 @@ REQUIRED_ML_SMOKE_SUMMARY_KEYS = {
     "optimizer_profile_avg_objective_wall_sec",
     "optimizer_repro",
     "failures",
-    "peak_traced_memory_mb",
+    "peak_process_memory_mb",
 }
 
 REQUIRED_QUICK_GATE_SUMMARY_KEYS = {
@@ -188,7 +192,7 @@ REQUIRED_QUICK_GATE_SUMMARY_KEYS = {
     "failed_steps",
     "steps",
     "duration_sec",
-    "peak_traced_memory_mb",
+    "peak_process_memory_mb",
 }
 
 REQUIRED_META_QUALITY_SUMMARY_KEYS = {
@@ -289,7 +293,7 @@ def validate_output_contract_case(_base_params):
                 df_failed=df_failed,
                 output_dir="outputs/validate_consistency",
                 real_data_coverage_ok=True,
-                peak_traced_memory_mb=12.345,
+                peak_process_memory_mb=12.345,
             )
         finally:
             if prev_run_dir is None:
@@ -557,7 +561,7 @@ def validate_local_regression_summary_contract_case(_base_params):
             "scanner_snapshot": {"candidate_count": 3},
             "rerun_consistency": {"enabled": True, "run_count": 2, "all_match": True, "runs": []},
             "failures": [],
-            "peak_traced_memory_mb": 45.678,
+            "peak_process_memory_mb": 45.678,
         }
         write_json(run_dir / "chain_summary.json", chain_payload)
         write_csv(run_dir / "chain_summary.csv", [{field: "" for field in CHAIN_SUMMARY_CSV_FIELDS}], fieldnames=CHAIN_SUMMARY_CSV_FIELDS)
@@ -582,7 +586,7 @@ def validate_local_regression_summary_contract_case(_base_params):
             "optimizer_profile_avg_objective_wall_sec": 4.5,
             "optimizer_repro": {"enabled": True, "all_match": True},
             "failures": [],
-            "peak_traced_memory_mb": 23.456,
+            "peak_process_memory_mb": 23.456,
         }
         write_json(run_dir / "ml_smoke_summary.json", ml_smoke_payload)
         ml_smoke_json = json.loads((run_dir / "ml_smoke_summary.json").read_text(encoding="utf-8"))
@@ -663,7 +667,7 @@ def validate_local_regression_summary_contract_case(_base_params):
                 {"name": "bare_except_scan", "status": "PASS"},
             ],
             "duration_sec": 1.23,
-            "peak_traced_memory_mb": 12.34,
+            "peak_process_memory_mb": 12.34,
         }
         write_json(run_dir / "quick_gate_summary.json", quick_gate_payload)
         quick_gate_json = json.loads((run_dir / "quick_gate_summary.json").read_text(encoding="utf-8"))
@@ -1196,7 +1200,7 @@ def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
             dataset_profile_key="reduced",
             dataset_source="CLI",
             data_dir=str(local_common.REDUCED_DATASET_DIR),
-            peak_traced_memory_mb=1.25,
+            peak_process_memory_mb=1.25,
         )
         startup_failure_summary = json.loads(
             (startup_failure_dir / "validate_consistency_summary.json").read_text(encoding="utf-8")
@@ -1376,7 +1380,7 @@ def validate_validate_summary_atomic_write_contract_case(_base_params):
                         df_failed=df_failed,
                         output_dir="outputs/validate_consistency",
                         real_data_coverage_ok=True,
-                        peak_traced_memory_mb=9.87,
+                        peak_process_memory_mb=9.87,
                     )
                 except OSError as exc:
                     raised_exc = exc
@@ -1407,10 +1411,10 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
     with tempfile.TemporaryDirectory(prefix="meta_quality_performance_memory_contract_") as temp_dir:
         run_dir = Path(temp_dir) / "run_dir"
         run_dir.mkdir(parents=True, exist_ok=True)
-        write_json(run_dir / "quick_gate_summary.json", {"status": "PASS", "duration_sec": 1.0, "peak_traced_memory_mb": 12.5})
-        write_json(run_dir / "validate_consistency_summary.json", {"status": "PASS", "elapsed_time_sec": 2.0, "peak_traced_memory_mb": 32.5})
-        write_json(run_dir / "chain_summary.json", {"status": "PASS", "duration_sec": 3.0, "peak_traced_memory_mb": 64.0})
-        write_json(run_dir / "ml_smoke_summary.json", {"status": "PASS", "duration_sec": 4.0, "peak_traced_memory_mb": 48.0, "optimizer_profile_trial_count": 1, "optimizer_profile_avg_objective_wall_sec": 1.5})
+        write_json(run_dir / "quick_gate_summary.json", {"status": "PASS", "duration_sec": 1.0, "peak_process_memory_mb": 12.5})
+        write_json(run_dir / "validate_consistency_summary.json", {"status": "PASS", "elapsed_time_sec": 2.0, "peak_process_memory_mb": 32.5})
+        write_json(run_dir / "chain_summary.json", {"status": "PASS", "duration_sec": 3.0, "peak_process_memory_mb": 64.0})
+        write_json(run_dir / "ml_smoke_summary.json", {"status": "PASS", "duration_sec": 4.0, "peak_process_memory_mb": 48.0, "optimizer_profile_trial_count": 1, "optimizer_profile_avg_objective_wall_sec": 1.5})
 
         manifest = dict(local_common.MANIFEST_DEFAULTS)
         with patch.dict(os.environ, {LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)}):
@@ -1418,13 +1422,39 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
                 run_dir,
                 manifest,
                 current_meta_quality_duration_sec=1.25,
-                current_meta_quality_peak_traced_memory_mb=40.0,
+                current_meta_quality_peak_process_memory_mb=40.0,
             )
 
         add_check(results, "output_contract", case_id, "performance_memory_contract_ok", True, perf.get("ok"))
-        add_check(results, "output_contract", case_id, "performance_step_peak_memory_keys", ["chain_checks", "consistency", "ml_smoke", "quick_gate"], sorted(perf.get("step_peak_traced_memory_mb", {}).keys()))
-        add_check(results, "output_contract", case_id, "performance_max_peak_memory_value", 64.0, perf.get("max_step_peak_traced_memory_mb"))
-        add_check(results, "output_contract", case_id, "performance_meta_quality_peak_memory_value", 40.0, perf.get("meta_quality_peak_traced_memory_mb"))
+        add_check(results, "output_contract", case_id, "performance_step_peak_memory_keys", ["chain_checks", "consistency", "ml_smoke", "quick_gate"], sorted(perf.get("step_peak_process_memory_mb", {}).keys()))
+        add_check(results, "output_contract", case_id, "performance_max_peak_memory_value", 64.0, perf.get("max_step_peak_process_memory_mb"))
+        add_check(results, "output_contract", case_id, "performance_meta_quality_peak_memory_value", 40.0, perf.get("meta_quality_peak_process_memory_mb"))
+        add_check(results, "output_contract", case_id, "performance_parallel_critical_path_uses_max_not_sum", 5.25, perf.get("critical_path_duration_sec"))
+        add_check(results, "output_contract", case_id, "performance_aggregate_duration_retained_for_diagnostics", 11.25, perf.get("aggregate_step_duration_sec"))
+
+        strict_time_manifest = dict(manifest)
+        strict_time_manifest["performance_critical_path_max_sec"] = 5
+        with patch.dict(os.environ, {LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)}):
+            strict_time_perf = build_performance_summary(
+                run_dir,
+                strict_time_manifest,
+                current_meta_quality_duration_sec=1.25,
+                current_meta_quality_peak_process_memory_mb=40.0,
+            )
+        total_budget_result = next(row for row in strict_time_perf.get("results", []) if row.get("name") == "performance_formal_critical_path_within_budget")
+        add_check(results, "output_contract", case_id, "performance_total_budget_is_actually_enforced", "FAIL", total_budget_result.get("status"))
+
+        strict_memory_manifest = dict(manifest)
+        strict_memory_manifest["performance_peak_process_memory_mb"] = 50
+        with patch.dict(os.environ, {LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)}):
+            strict_memory_perf = build_performance_summary(
+                run_dir,
+                strict_memory_manifest,
+                current_meta_quality_duration_sec=1.25,
+                current_meta_quality_peak_process_memory_mb=40.0,
+            )
+        memory_budget_result = next(row for row in strict_memory_perf.get("results", []) if row.get("name") == "performance_process_peak_memory_within_budget")
+        add_check(results, "output_contract", case_id, "performance_process_memory_budget_is_actually_enforced", "FAIL", memory_budget_result.get("status"))
 
         (run_dir / "validate_consistency_summary.json").unlink()
         with patch.dict(os.environ, {LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)}):
@@ -1432,7 +1462,7 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
                 run_dir,
                 manifest,
                 current_meta_quality_duration_sec=1.25,
-                current_meta_quality_peak_traced_memory_mb=40.0,
+                current_meta_quality_peak_process_memory_mb=40.0,
             )
         required_summary_result = next(
             row

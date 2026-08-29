@@ -663,8 +663,8 @@ def validate_test_suite_summary_meta_quality_memory_reporting_case(_base_params)
         },
         "checklist": {"status": "DONE", "partial_ids": [], "todo_ids": [], "done_ids": ["B19"]},
         "performance": {
-            "max_step_peak_traced_memory_mb": 64.0,
-            "step_peak_traced_memory_mb": {"quick_gate": 12.5, "consistency": 32.5, "chain_checks": 64.0},
+            "max_step_peak_process_memory_mb": 64.0,
+            "step_peak_process_memory_mb": {"quick_gate": 12.5, "consistency": 32.5, "chain_checks": 64.0},
         },
     }
     result_payload = {

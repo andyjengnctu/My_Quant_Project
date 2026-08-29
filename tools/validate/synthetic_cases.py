@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import time
 from typing import Callable
 
 from .synthetic_param_cases import (
@@ -86,7 +87,7 @@ from .synthetic_meta_cases import (
     validate_app_thin_wrapper_export_contract_case,
     validate_no_reverse_app_layer_dependencies_case,
     validate_no_top_level_import_cycles_case,
-    validate_peak_traced_memory_tracker_context_management_case,
+    validate_peak_process_memory_tracker_context_management_case,
     validate_checklist_physical_trading_principles_contract_case,
     validate_specific_pass_only_exception_traceability_contract_case,
     validate_broad_exception_traceability_contract_case,
@@ -437,7 +438,7 @@ def get_synthetic_validator_entries():
         _entry(validate_coverage_threshold_floor_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_critical_coverage_threshold_floor_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_entry_path_critical_coverage_gate_case, layer="meta_contract", cost_class="fast"),
-        _entry(validate_peak_traced_memory_tracker_context_management_case, layer="meta_contract", cost_class="fast"),
+        _entry(validate_peak_process_memory_tracker_context_management_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_known_bad_fault_injection_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_cmd_document_contract_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_gui_workbench_documentation_sync_case, layer="meta_contract", cost_class="fast"),
@@ -585,8 +586,15 @@ def run_synthetic_consistency_suite(base_params):
     validator_entries = get_synthetic_validator_entries()
 
     for entry in validator_entries:
+        started = time.perf_counter()
         results, summary = entry.validator(base_params)
+        duration_sec = round(time.perf_counter() - started, 6)
         all_results.extend(results)
-        summaries.append(summary)
+        summary_payload = dict(summary)
+        summary_payload["validator_name"] = entry.name
+        summary_payload["layer"] = entry.layer
+        summary_payload["cost_class"] = entry.cost_class
+        summary_payload["duration_sec"] = duration_sec
+        summaries.append(summary_payload)
 
     return all_results, summaries

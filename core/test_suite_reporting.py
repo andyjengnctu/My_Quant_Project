@@ -302,12 +302,19 @@ def print_test_suite_human_summary(
     consistency_script = script_map.get("consistency", {})
     consistency_status, consistency_detail = _step_overview("consistency", consistency, consistency_script)
     if consistency_status == "PASS":
+        slowest_cases = consistency.get("synthetic_slowest_cases", []) or []
+        slowest_preview = "(none)"
+        if slowest_cases:
+            first_slowest = slowest_cases[0]
+            slowest_preview = f"{first_slowest.get('validator_name', '')}:{_safe_display_text(first_slowest.get('duration_sec'))}s"
         print(
             "- consistency: "
             f"total_checks={consistency.get('total_checks', 0)} | "
             f"fail_count={consistency.get('fail_count', 0)} | "
             f"skip_count={consistency.get('skip_count', 0)} | "
-            f"real_tickers={consistency.get('real_ticker_count', 0)}"
+            f"real_tickers={consistency.get('real_ticker_count', 0)} | "
+            f"synthetic={_safe_display_text(consistency.get('synthetic_duration_sec'))}s | "
+            f"slowest={slowest_preview}"
         )
     else:
         fallback = ", ".join(consistency_script.get("failure_reasons", []))
@@ -360,7 +367,7 @@ def print_test_suite_human_summary(
         performance = meta.get("performance", {})
         missing_cov = _preview_id_list(coverage.get("missing_targets", []))
         zero_cov = _preview_id_list(coverage.get("zero_covered_targets", []))
-        peak_mem_steps = performance.get("step_peak_traced_memory_mb", {})
+        peak_mem_steps = performance.get("step_peak_process_memory_mb", {})
         peak_mem_preview = _safe_display_text(
             ", ".join(f"{name}:{value}" for name, value in list(peak_mem_steps.items())[:4]) if peak_mem_steps else "(none)"
         )
@@ -380,7 +387,8 @@ def print_test_suite_human_summary(
         )
         print(
             "  performance : "
-            f"peak_mem_max_mb={_safe_display_text(performance.get('max_step_peak_traced_memory_mb'))} | "
+            f"critical_path={_safe_display_text(performance.get('critical_path_duration_sec'))}s | "
+            f"peak_mem_max_mb={_safe_display_text(performance.get('max_step_peak_process_memory_mb'))} | "
             f"peak_mem_steps={peak_mem_preview}"
         )
         print(

@@ -26,7 +26,7 @@ def build_performance_summary(
     manifest: Dict[str, Any],
     *,
     current_meta_quality_duration_sec: float,
-    current_meta_quality_peak_traced_memory_mb: float,
+    current_meta_quality_peak_process_memory_mb: float,
     performance_step_files: Mapping[str, Sequence[str]] | None = None,
     performance_manifest_keys: Mapping[str, str] | None = None,
 ) -> Dict[str, Any]:
@@ -52,17 +52,19 @@ def build_performance_summary(
             "skipped": True,
             "results": results,
             "step_durations": {},
-            "step_peak_traced_memory_mb": {},
+            "step_peak_process_memory_mb": {},
             "optimizer_trial_avg_objective_wall_sec": None,
             "optimizer_profile_trial_count": 0,
             "total_duration_sec": current_meta_quality_duration_sec,
-            "max_step_peak_traced_memory_mb": round(float(current_meta_quality_peak_traced_memory_mb), 3),
-            "meta_quality_peak_traced_memory_mb": round(float(current_meta_quality_peak_traced_memory_mb), 3),
+            "critical_path_duration_sec": current_meta_quality_duration_sec,
+            "aggregate_step_duration_sec": current_meta_quality_duration_sec,
+            "max_step_peak_process_memory_mb": round(float(current_meta_quality_peak_process_memory_mb), 3),
+            "meta_quality_peak_process_memory_mb": round(float(current_meta_quality_peak_process_memory_mb), 3),
         }
 
     results: List[Dict[str, Any]] = []
     step_durations: Dict[str, float] = {}
-    step_peak_traced_memory_mb: Dict[str, float] = {}
+    step_peak_process_memory_mb: Dict[str, float] = {}
     missing_step_files: List[str] = []
     missing_memory_steps: List[str] = []
     for step_name, path in available_step_files.items():
@@ -76,11 +78,11 @@ def build_performance_summary(
         if duration_value in (None, ""):
             duration_value = payload.get("duration_seconds")
         step_durations[step_name] = round(float(duration_value or 0.0), 3)
-        peak_memory_mb = payload.get("peak_traced_memory_mb")
+        peak_memory_mb = payload.get("peak_process_memory_mb")
         if peak_memory_mb in (None, ""):
             missing_memory_steps.append(step_name)
         else:
-            step_peak_traced_memory_mb[step_name] = round(float(peak_memory_mb), 3)
+            step_peak_process_memory_mb[step_name] = round(float(peak_memory_mb), 3)
 
     if missing_step_files:
         results.append(
@@ -121,6 +123,16 @@ def build_performance_summary(
             )
         )
 
+    meta_quality_budget_sec = float(manifest["performance_meta_quality_max_sec"])
+    results.append(
+        summarize_result(
+            "performance_meta_quality_within_budget",
+            float(current_meta_quality_duration_sec) <= meta_quality_budget_sec,
+            detail=f"duration={float(current_meta_quality_duration_sec):.3f}s | budget={meta_quality_budget_sec:.3f}s",
+            extra={"duration_sec": float(current_meta_quality_duration_sec), "budget_sec": meta_quality_budget_sec},
+        )
+    )
+
     profile_file = run_dir / "optimizer_profile_summary.json"
     optimizer_trial_avg_objective_wall_sec = None
     optimizer_profile_trial_count = 0
@@ -148,11 +160,44 @@ def build_performance_summary(
                     detail=f"trial_count={optimizer_profile_trial_count}",
                 )
             )
+            if optimizer_trial_avg_objective_wall_sec is not None:
+                optimizer_budget_sec = float(manifest["performance_optimizer_trial_avg_max_sec"])
+                results.append(
+                    summarize_result(
+                        "performance_optimizer_trial_avg_within_budget",
+                        optimizer_trial_avg_objective_wall_sec <= optimizer_budget_sec,
+                        detail=f"duration={optimizer_trial_avg_objective_wall_sec:.3f}s | budget={optimizer_budget_sec:.3f}s",
+                        extra={"duration_sec": optimizer_trial_avg_objective_wall_sec, "budget_sec": optimizer_budget_sec},
+                    )
+                )
 
-    total_duration_sec = round(sum(step_durations.values()) + float(current_meta_quality_duration_sec), 3)
-    max_step_peak_memory_mb = round(
-        max([float(current_meta_quality_peak_traced_memory_mb)] + [float(value) for value in step_peak_traced_memory_mb.values()]),
+    aggregate_step_duration_sec = round(sum(step_durations.values()) + float(current_meta_quality_duration_sec), 3)
+    critical_path_duration_sec = round(
+        (max(step_durations.values()) if step_durations else 0.0) + float(current_meta_quality_duration_sec),
         3,
+    )
+    total_budget_sec = float(manifest["performance_critical_path_max_sec"])
+    results.append(
+        summarize_result(
+            "performance_formal_critical_path_within_budget",
+            critical_path_duration_sec <= total_budget_sec,
+            detail=f"critical_path={critical_path_duration_sec:.3f}s | budget={total_budget_sec:.3f}s",
+            extra={"duration_sec": critical_path_duration_sec, "budget_sec": total_budget_sec},
+        )
+    )
+
+    max_step_peak_memory_mb = round(
+        max([float(current_meta_quality_peak_process_memory_mb)] + [float(value) for value in step_peak_process_memory_mb.values()]),
+        3,
+    )
+    memory_budget_mb = float(manifest["performance_peak_process_memory_mb"])
+    results.append(
+        summarize_result(
+            "performance_process_peak_memory_within_budget",
+            max_step_peak_memory_mb <= memory_budget_mb,
+            detail=f"peak={max_step_peak_memory_mb:.3f}MB | budget={memory_budget_mb:.3f}MB",
+            extra={"peak_memory_mb": max_step_peak_memory_mb, "budget_mb": memory_budget_mb},
+        )
     )
 
     return {
@@ -160,10 +205,12 @@ def build_performance_summary(
         "skipped": False,
         "results": results,
         "step_durations": step_durations,
-        "step_peak_traced_memory_mb": step_peak_traced_memory_mb,
+        "step_peak_process_memory_mb": step_peak_process_memory_mb,
         "optimizer_trial_avg_objective_wall_sec": optimizer_trial_avg_objective_wall_sec,
         "optimizer_profile_trial_count": optimizer_profile_trial_count,
-        "total_duration_sec": total_duration_sec,
-        "max_step_peak_traced_memory_mb": max_step_peak_memory_mb,
-        "meta_quality_peak_traced_memory_mb": round(float(current_meta_quality_peak_traced_memory_mb), 3),
+        "total_duration_sec": aggregate_step_duration_sec,
+        "critical_path_duration_sec": critical_path_duration_sec,
+        "aggregate_step_duration_sec": aggregate_step_duration_sec,
+        "max_step_peak_process_memory_mb": max_step_peak_memory_mb,
+        "meta_quality_peak_process_memory_mb": round(float(current_meta_quality_peak_process_memory_mb), 3),
     }
