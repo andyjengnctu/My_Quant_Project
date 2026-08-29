@@ -28,7 +28,9 @@ from config.breakout_quality import (
     PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
     get_predicted_upside_context_contract,
     PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
+    PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
     get_predicted_safety_context_contract,
+    get_predicted_safety_pure_mfe_contract,
 )
 
 
@@ -338,6 +340,8 @@ def training_semantics(profile) -> dict[str, Any]:
             pairwise_contract["predicted_upside_context_contract"] = get_predicted_upside_context_contract()
         if target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID:
             pairwise_contract["predicted_safety_context_contract"] = get_predicted_safety_context_contract()
+        if target_id == PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID:
+            pairwise_contract["predicted_safety_context_contract"] = get_predicted_safety_pure_mfe_contract()
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
             pairwise_contract.update({
                 "pair_scope": "same_date_strict_pareto_dominance_pairs",

@@ -1,4 +1,4 @@
-"""PIT-safe predicted-safety context and conditional MFE target contract for MR-13AD."""
+"""PIT-safe predicted-safety context shared by MR-13AD/MR-13AE consumers."""
 
 from __future__ import annotations
 
@@ -13,6 +13,9 @@ import pandas as pd
 
 from config.breakout_quality import (
     PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
+    PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
+    PREDICTED_SAFETY_CONTEXT_OWNER_ARCHITECTURE,
+    PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE,
     PREDICTED_SAFETY_CONTEXT_SCHEMA_VERSION,
     PREDICTED_SAFETY_CONTEXT_STAGE1_ARCHITECTURE,
     PREDICTED_SAFETY_CONTEXT_STAGE1_PROFILE,
@@ -55,12 +58,16 @@ def resolve_predicted_safety_context_dir(
     model_architecture: str,
     experiment_profile: str,
 ) -> Path:
+    # The context is Stage-1 MR-13M truth, not Stage-2 target truth.  Keep the
+    # already-populated MR-13AD path as canonical owner so MR-13AE can REUSE the
+    # existing 10+1 cross-fit/fixed-forward artifact without retraining.
+    del model_architecture, experiment_profile
     return (
         resolve_filter_model_dir(
             project_root,
             filter_id,
-            model_architecture,
-            experiment_profile,
+            PREDICTED_SAFETY_CONTEXT_OWNER_ARCHITECTURE,
+            PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE,
         )
         / "upstream"
         / "predicted_safety_context"
@@ -103,10 +110,10 @@ def load_validated_predicted_safety_context(
         raise ValueError("predicted-safety context schema不一致")
     if str(manifest.get("filter_id") or "") != str(filter_id):
         raise ValueError("predicted-safety context filter_id不一致")
-    if str(manifest.get("model_architecture") or "") != str(model_architecture):
-        raise ValueError("predicted-safety context model_architecture不一致")
-    if str(manifest.get("experiment_profile") or "") != str(experiment_profile):
-        raise ValueError("predicted-safety context experiment_profile不一致")
+    if str(manifest.get("model_architecture") or "") != PREDICTED_SAFETY_CONTEXT_OWNER_ARCHITECTURE:
+        raise ValueError("predicted-safety context canonical owner architecture不一致")
+    if str(manifest.get("experiment_profile") or "") != PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE:
+        raise ValueError("predicted-safety context canonical owner profile不一致")
     expected = predicted_safety_context_contract()
     if dict(manifest.get("contract") or {}) != expected:
         raise ValueError("predicted-safety context scientific contract不一致")
@@ -213,6 +220,7 @@ def build_predicted_safety_conditional_mfe_targets(
 __all__ = [
     "CONTEXT_COLUMN",
     "PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID",
+    "PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID",
     "PREDICTED_SAFETY_CONTEXT_FILENAME",
     "PREDICTED_SAFETY_CONTEXT_MANIFEST_FILENAME",
     "STAGE1_ARCHITECTURE",

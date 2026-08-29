@@ -70,13 +70,14 @@ from config.execution_policy import (
 # - MR-13AB Pure-MFE before first risk breach target control: "daily_universal_first_risk_breach_pure_mfe_full_list_ndcg_pairwise"
 # - MR-13AC PIT-safe predicted-upside conditional low-adverse ranker: "daily_universal_predicted_upside_conditional_low_adverse_full_list_ndcg_pairwise"
 # - MR-13AD PIT-safe predicted-safety conditional MFE reverse-control: "daily_universal_predicted_safety_conditional_mfe_full_list_ndcg_pairwise"
+# - MR-13AE PIT-safe predicted-safety context + canonical Pure-MFE control: "daily_universal_predicted_safety_context_pure_mfe_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_predicted_safety_conditional_mfe_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_predicted_safety_context_pure_mfe_full_list_ndcg_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = RESEARCH_SINGLE_SEED
@@ -382,12 +383,18 @@ DAILY_UNIVERSAL_PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE
 DAILY_UNIVERSAL_PREDICTED_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_predicted_safety_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_PREDICTED_SAFETY_CONTEXT_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_predicted_safety_context_pure_mfe_full_list_ndcg_pairwise"
+)
 
 PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID = (
     "daily_predicted_upside_conditional_low_adverse_v1"
 )
 PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID = (
     "daily_predicted_safety_conditional_mfe_v1"
+)
+PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID = (
+    "daily_predicted_safety_context_pure_mfe_r_v1"
 )
 PREDICTED_UPSIDE_CONTEXT_SCHEMA_VERSION = 1
 PREDICTED_UPSIDE_CONTEXT_STAGE1_PROFILE = (
@@ -444,6 +451,37 @@ def get_predicted_safety_context_contract() -> dict[str, Any]:
         "selection_training_universe": "pit_context_covered_rows_only",
         "stage2_response": "same_date_pure_mfe_percentile",
         "stage2_target": "same_date_percentile_of_pure_mfe_residual_given_predicted_safety_percentile",
+        "stage2_context_used_as_input": True,
+    }
+
+
+# Backward-compatible canonical owner of the reusable MR-13M predicted-safety PIT context.
+# MR-13AE consumes the exact same Stage-1 artifact; the owner path remains MR-13AD so the
+# already-built 10+1 fold context can be reused without retraining or copying.
+PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE = (
+    DAILY_UNIVERSAL_PREDICTED_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+)
+PREDICTED_SAFETY_CONTEXT_OWNER_ARCHITECTURE = "inception_time_predicted_safety_context_v1"
+
+
+def get_predicted_safety_pure_mfe_contract() -> dict[str, Any]:
+    """MR-13AE consumer contract: canonical Pure-MFE target plus PIT-safe safety context."""
+
+    return {
+        "schema_version": 1,
+        "stage1_profile": PREDICTED_SAFETY_CONTEXT_STAGE1_PROFILE,
+        "stage1_architecture": PREDICTED_SAFETY_CONTEXT_STAGE1_ARCHITECTURE,
+        "stage1_research_id": PREDICTED_SAFETY_CONTEXT_STAGE1_RESEARCH_ID,
+        "stage1_seed": PREDICTED_SAFETY_CONTEXT_STAGE1_SEED,
+        "context_semantic": "same_date_average_rank_percentile_of_stage1_predicted_low_adverse_safety",
+        "context_artifact_owner_profile": PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE,
+        "selection_context": "expanding_cross_fitted_point_in_time",
+        "forward_context": "single_fixed_pre_oos_fit",
+        "full_fit_selection_score_forbidden": True,
+        "oos_statistics_for_training_forbidden": True,
+        "selection_training_universe": "pit_context_covered_rows_only",
+        "stage2_response": "canonical_full_horizon_pure_mfe_r",
+        "stage2_target": "exact_mr13k_pure_mfe_order_no_residualization",
         "stage2_context_used_as_input": True,
     }
 DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE = (
@@ -1192,6 +1230,18 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_predicted_safety_context_v1",
     ),
+    DAILY_UNIVERSAL_PREDICTED_SAFETY_CONTEXT_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_PREDICTED_SAFETY_CONTEXT_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id=PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_predicted_safety_context_v1",
+    ),
     DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
         optimizer_name="adam",
@@ -1875,6 +1925,28 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         metric_scope="all_context_covered_stock_days",
         score_semantic_id="daily_predicted_safety_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_PREDICTED_SAFETY_CONTEXT_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_PREDICTED_SAFETY_CONTEXT_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13AE",
+        experiment_name="MR-13AE PIT-safe Predicted-Safety Context Pure-MFE Control",
+        phase="13AE",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="exact_MR-13K_full_horizon_Pure-MFE_order_with_PIT_safe_predicted_safety_context",
+        objective_description=(
+            "MR-13AD follow-up controlled cell：Stage-1完全重用MR-13M Low-Adverse PIT-safe predicted-safety context；"
+            "Stage-2回復MR-13K canonical full-horizon Pure-MFE target/order，不做conditional residualization。"
+            "MR-13K InceptionTime/full-list Delta-NDCG/Seed42/split/optimizer/epoch-selection/training scope全部固定，"
+            "唯一scientific change是GAP latent後direct concat 1個PIT-safe predicted-safety percentile scalar。"
+            "Selection只使用cross-fitted context-covered rows，Forward只使用single fixed pre-OOS context；"
+            "Model Gate先驗證Pure-MFE learnability是否接近MR-13K，再檢查高分股Adverse/High-Safety是否改善；"
+            "不使用portfolio state、threshold、lambda、fusion、product或OOS fitting。"
+        ),
+        metric_scope="all_context_covered_stock_days",
+        score_semantic_id="daily_predicted_safety_context_pure_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
@@ -3259,8 +3331,10 @@ __all__ = [
     'DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_PREDICTED_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_PREDICTED_SAFETY_CONTEXT_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID',
     'PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID',
+    'PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID',
     'PREDICTED_UPSIDE_CONTEXT_SCHEMA_VERSION',
     'PREDICTED_UPSIDE_CONTEXT_STAGE1_PROFILE',
     'PREDICTED_UPSIDE_CONTEXT_STAGE1_ARCHITECTURE',
@@ -3273,6 +3347,9 @@ __all__ = [
     'PREDICTED_SAFETY_CONTEXT_STAGE1_RESEARCH_ID',
     'PREDICTED_SAFETY_CONTEXT_STAGE1_SEED',
     'get_predicted_safety_context_contract',
+    'PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE',
+    'PREDICTED_SAFETY_CONTEXT_OWNER_ARCHITECTURE',
+    'get_predicted_safety_pure_mfe_contract',
     'DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE',
     'DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE',

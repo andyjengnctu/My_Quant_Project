@@ -37,6 +37,7 @@ from filters.breakout_quality.predicted_upside_context import (
 )
 from filters.breakout_quality.predicted_safety_context import (
     PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
+    PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
     PREDICTED_SAFETY_CONTEXT_MANIFEST_FILENAME,
     load_validated_predicted_safety_context,
     resolve_predicted_safety_context_dir,
@@ -145,7 +146,7 @@ def required_upstream_artifact_types(experiment_profile: str) -> tuple[str, ...]
     target_id = str(profile.continuous_target_id or "")
     if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
         return (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_UPSIDE_CONTEXT)
-    if target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID:
+    if target_id in {PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID, PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID}:
         return (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_SAFETY_CONTEXT)
     return (ARTIFACT_DATASET_CORE,)
 
@@ -305,7 +306,7 @@ def collect_model_upstream_readiness(
                 ),
             )
         )
-    if str(profile.continuous_target_id or "") == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID:
+    if str(profile.continuous_target_id or "") in {PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID, PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID}:
         context_dir = resolve_predicted_safety_context_dir(
             root,
             filter_id=str(filter_id),
@@ -339,11 +340,11 @@ def collect_model_upstream_readiness(
                     PRODUCER_EXISTING_ARTIFACT if context_ready else PRODUCER_MODEL_TRAINING
                 ),
                 description=(
-                    "重用MR-13AD PIT-safe predicted-safety context"
+                    "重用MR-13AD/AE共用PIT-safe predicted-safety context"
                     if context_ready
                     else "canonical Dataset未就緒，predicted-safety context不可建立"
                     if not dataset_ready
-                    else "缺少或無效的MR-13AD PIT-safe predicted-safety context："
+                    else "缺少或無效的MR-13AD/AE共用PIT-safe predicted-safety context："
                     + (f"{type(context_error).__name__}: {context_error}" if context_error else "unknown")
                 ),
             )

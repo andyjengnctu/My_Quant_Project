@@ -10744,3 +10744,15 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 
 依事前stop rule，不建立`CONT13AD_ROLL`、不建立Strategy arm、不做MR-13AD Multi-seed或Fixed。MR-13AC/C79既有Safety conversion evidence不受本結果否定。由於C79 robustness先前只為等待MR-13AD對稱cell而延後，MR-13AD結案後，下一個最小必要證據回到**C59 vs C79 DL-source-only Extending Multi-seed robustness**；不先開新模型或Fixed。
 
+## 2026-08-29 — MR-13AE authorized/implemented：Predicted-Safety Context + canonical Pure-MFE，保留upside supervision的最小控制
+
+- 使用者在MR-13AD reverse residual Model Gate FAIL後明確要求繼續嘗試；新的研究重點不是single-head形式，而是同時評估**上漲、下跌、可學性、策略轉化率**。MR-13AD因在residualize前先把Pure-MFE percentile化，未直接測「保留MR-13K Pure-MFE target/order，只把Safety prediction作context」這個更小的假說。
+- 新model identity=`MR-13AE`；profile=`daily_universal_predicted_safety_context_pure_mfe_full_list_ndcg_pairwise`；target=`daily_predicted_safety_context_pure_mfe_r_v1`；architecture=`inception_time_predicted_safety_context_v1`。
+- Stage-1固定MR-13M Low-Adverse / `inception_time_v1` / Seed42。MR-13AE不建立第二份Stage-1 truth：canonical predicted-safety context owner固定沿用MR-13AD，Selection直接重用expanding cross-fit/PIT-safe scores，Forward直接重用single fixed pre-2021 scores；若本機既有AD 10+1 folds有效，AE preflight應REUSE而非重訓。
+- Stage-2完整恢復MR-13K canonical full-horizon Pure-MFE target/order、InceptionTime、full-list ΔNDCG、Seed42、split、optimizer、epoch selection、training/sample scope；唯一scientific input change是在GAP latent後direct concat 1個predicted-safety percentile scalar。**不做OLS residualization、不把Safety truth寫入target、不加context MLP/gate/attention/multi-head、threshold/lambda/fusion/product或portfolio state。**
+- 重要語意：MR-13K full-list ranking本身仍依canonical same-date target transform形成pairwise supervision；AE所謂「保留Pure-MFE」是恢復MR-13K canonical target/order、移除AD conditional-residual target，而不是宣稱loss直接使用未轉換的heavy-tail magnitude。
+- Model-specific Extension只作read-only diagnostic：Validation/OOS/Breakout分別計算model score→actual Low-Adverse mean-daily Spearman、predicted-Safety→model score、same-date same-date Top-score-decile Full-MFE/Adverse與High-MFE/High-Safety/HM-HS；不得參與fit、epoch selection、threshold或strategy selection。
+- Authorization只到Seed42 Forward Model Gate：`selection_pit_authorized=False / current_time_validation_authorized=False`，不建立`CONT13AE_ROLL`、Strategy arm、Multi-seed或Fixed；production C42/C44與Standard Model SOP fingerprint=`2b372bd465258234`不變。
+- Gate：若AE相較MR-13K learnability明顯退化，或top-score downside geometry沒有實質改善，直接STOP；只有同時保留upside learnability並改善Safety evidence才另行授權strategy conversion。
+- 同時更新robustness治理：使用者指定Multi-seed只有在single-seed核心效果已明顯拉開時才做，`~1.5× RoMD`僅作代表性量級而非硬性門檻。C79 vs C59 OOS/ Rolling RoMD ratio=`0.89×/1.14×`且OOS未勝，因此C79 robustness正式不做；保留其Safety gain/upside regret evidence。
+- Decision=`MR13AE_IMPLEMENTED / MODEL_GATE_RESULT_PENDING / C79_ROBUSTNESS_EFFECT_TOO_SMALL_STOP / NO_PIT / NO_STRATEGY_CONVERSION / NOT_PROMOTED`.

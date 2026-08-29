@@ -45,10 +45,12 @@ from filters.breakout_quality.predicted_upside_context import (
 from filters.breakout_quality.predicted_safety_context import (
     CONTEXT_COLUMN as PREDICTED_SAFETY_CONTEXT_COLUMN,
     PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
+    PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
     build_predicted_safety_conditional_mfe_targets,
     load_validated_predicted_safety_context,
     predicted_safety_context_contract,
 )
+from config.breakout_quality import get_predicted_safety_pure_mfe_contract
 from filters.breakout_quality.risk_normalized_target import (
     DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
     RISK_GEOMETRY_CONTEXT_FEATURES,
@@ -561,6 +563,7 @@ def load_daily_universal_ranker_data(
         DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
         PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
         PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
+        PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
         DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
     }:
         raise ValueError(f"daily universal ranker target identity不一致: {target_id!r}")
@@ -587,10 +590,12 @@ def load_daily_universal_ranker_data(
         target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID
     ):
         raise ValueError("MR-13AC predicted-upside architecture與conditional low-adverse target必須成對")
-    if use_predicted_safety_context != (
-        target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID
-    ):
-        raise ValueError("MR-13AD predicted-safety architecture與conditional MFE target必須成對")
+    predicted_safety_target_ids = {
+        PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
+        PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
+    }
+    if use_predicted_safety_context != (target_id in predicted_safety_target_ids):
+        raise ValueError("predicted-safety architecture只允許MR-13AD/AE同源targets")
 
     # The existing official event dataset remains the source-selection/inventory truth.
     summary, _indexed_features, _context, _labels, event_rows = load_validated_dataset_bundle(
@@ -735,6 +740,7 @@ def load_daily_universal_ranker_data(
             DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
             PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
             PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
+            PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
         }:
             local_targets = np.full(len(local_positions), np.nan, dtype=np.float32)
             local_target_valid = np.zeros(len(local_positions), dtype=bool)
@@ -746,7 +752,7 @@ def load_daily_universal_ranker_data(
                     else DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID
                     if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID
                     else DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID
-                    if target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID
+                    if target_id in {PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID, PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID}
                     else target_id
                 )
                 completed_batch = compute_daily_opportunity_target_batch(
@@ -1040,6 +1046,7 @@ def load_daily_universal_ranker_data(
     if target_id in {
         PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
         PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
+        PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
     }:
         if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
             context_frame, context_manifest = load_validated_predicted_upside_context(
@@ -1085,7 +1092,7 @@ def load_daily_universal_ranker_data(
         if bool(np.any(oos_component_valid & ~context_available)):
             missing_count = int(np.count_nonzero(oos_component_valid & ~context_available))
             raise ValueError(
-                f"MR-13{'AC' if context_name == 'upside' else 'AD'} Forward OOS target-valid rows缺少fixed pre-OOS {context_name} context: {missing_count}"
+                f"predicted-context Forward OOS target-valid rows缺少fixed pre-OOS {context_name} context: {missing_count}"
             )
         target_valid = component_valid & context_available
         group_context = np.where(
@@ -1099,7 +1106,7 @@ def load_daily_universal_ranker_data(
             group_table["target_low_adverse_daily_percentile"] = conditional.low_adverse_percentile
             group_table["target_conditional_low_adverse_residual"] = conditional.residual
             group_table["target_conditional_low_adverse_percentile"] = conditional.residual_percentile
-        else:
+        elif target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID:
             conditional = build_predicted_safety_conditional_mfe_targets(
                 group_table, target_valid, context_values
             )
@@ -1107,13 +1114,24 @@ def load_daily_universal_ranker_data(
             group_table["target_mfe_daily_percentile"] = conditional.pure_mfe_percentile
             group_table["target_conditional_mfe_residual"] = conditional.residual
             group_table["target_conditional_mfe_percentile"] = conditional.residual_percentile
-        raw_target = np.asarray(conditional.training_target, dtype=np.float32)
+            raw_target = np.asarray(conditional.training_target, dtype=np.float32)
+        else:
+            # MR-13AE keeps the exact MR-13K Pure-MFE target/order.  Predicted Safety is
+            # an input context only; no residualization or target rewrite is allowed.
+            group_table["predicted_safety_percentile"] = context_values
+            group_table["target_mfe_daily_percentile"] = build_same_date_percentile_targets(
+                favorable_r, target_valid, group_table["date"]
+            )
+            group_table["target_low_adverse_daily_percentile"] = build_same_date_percentile_targets(
+                -adverse_r, target_valid, group_table["date"]
+            )
+        raw_target = np.asarray(raw_target, dtype=np.float32)
         raw_target[~target_valid] = np.nan
         target_valid_count = int(np.count_nonzero(target_valid))
         inference_only_count = int(group_count - target_valid_count)
         if target_valid_count < 1:
             raise ValueError(
-                f"MR-13{'AC' if context_name == 'upside' else 'AD'}沒有任何PIT-safe context-covered target-valid sample"
+                "predicted-context profile沒有任何PIT-safe context-covered target-valid sample"
             )
         training_start = pd.Timestamp(group_table.loc[target_valid, "date"].min()).normalize()
         sample_start = training_start
@@ -1145,6 +1163,8 @@ def load_daily_universal_ranker_data(
         target_contract = predicted_upside_context_contract()
     elif target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID:
         target_contract = predicted_safety_context_contract()
+    elif target_id == PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID:
+        target_contract = get_predicted_safety_pure_mfe_contract()
     else:
         target_contract = build_risk_target_contract(
             horizon_bars=int(spec.horizon_bars),

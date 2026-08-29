@@ -1,9 +1,13 @@
-"""Build the isolated PIT-safe Stage-1 safety context required by MR-13AD."""
+"""Build the reusable PIT-safe Stage-1 safety context for MR-13AD/MR-13AE."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from config.breakout_quality import (
+    PREDICTED_SAFETY_CONTEXT_OWNER_ARCHITECTURE,
+    PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE,
+)
 from filters.breakout_quality.predicted_safety_context import (
     CONTEXT_COLUMN,
     PREDICTED_SAFETY_CONTEXT_FILENAME,
@@ -40,13 +44,13 @@ def build_predicted_safety_context(
     dataset: str,
     max_tickers: int = 0,
 ) -> Path:
-    """Build/rebuild MR-13AD Selection cross-fit + fixed pre-OOS safety context."""
+    """Build/rebuild canonical Selection cross-fit + fixed pre-OOS safety context."""
 
     return build_predicted_context(
         project_root=project_root,
         filter_id=filter_id,
-        model_architecture=model_architecture,
-        experiment_profile=experiment_profile,
+        model_architecture=PREDICTED_SAFETY_CONTEXT_OWNER_ARCHITECTURE,
+        experiment_profile=PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE,
         dataset=dataset,
         max_tickers=max_tickers,
         stage1_profile=STAGE1_PROFILE,
@@ -59,7 +63,7 @@ def build_predicted_safety_context(
         predicted_score_column="predicted_safety_score",
         context_column=CONTEXT_COLUMN,
         context_contract=predicted_safety_context_contract(),
-        context_label="MR-13AD predicted-safety",
+        context_label="MR-13AD/MR-13AE predicted-safety",
     )
 
 

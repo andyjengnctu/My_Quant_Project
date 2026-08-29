@@ -5420,7 +5420,7 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
             False,
         ),
         (
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            profile.name,
             research_spec.model_research_id,
             profile.continuous_target_id,
             settings.model_architecture,
@@ -5777,3 +5777,151 @@ def validate_breakout_quality_multi_dl_ranker_architecture_contract_case(_base_p
     return results, summary
 
 
+
+
+def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_case(_base_params):
+    """Protect MR-13AE: exact MR-13K Pure-MFE target plus PIT-safe predicted Safety context."""
+
+    case_id = "BREAKOUT_QUALITY_MR13AE_PREDICTED_SAFETY_CONTEXT_PURE_MFE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    import inspect
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_PREDICTED_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_PREDICTED_SAFETY_CONTEXT_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
+        PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE,
+        get_breakout_quality_experiment_profile,
+        get_breakout_quality_model_research_settings,
+        get_continuous_ranker_execution_recipe,
+        get_continuous_ranker_research_spec,
+        get_predicted_safety_pure_mfe_contract,
+    )
+    from core.research_report_contract import (
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
+        persistent_report_contract_fingerprint,
+    )
+    from filters.breakout_quality.artifact_dependency_registry import (
+        ARTIFACT_DATASET_CORE,
+        ARTIFACT_PREDICTED_SAFETY_CONTEXT,
+        required_upstream_artifact_types,
+    )
+    from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.predicted_safety_context import (
+        resolve_predicted_safety_context_dir,
+    )
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality.predicted_safety_context import build_predicted_safety_context
+    from services.breakout_quality.train_daily_ranker import _predicted_safety_context_pure_mfe_metrics
+
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_PREDICTED_SAFETY_CONTEXT_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    k_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    spec = get_continuous_ranker_research_spec(profile.name)
+    settings = get_breakout_quality_model_research_settings()
+    check(
+        "mr13ae_current_identity_target_architecture_and_model_gate_only_authorization",
+        (
+            profile.name,
+            "MR-13AE",
+            PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
+            "inception_time_predicted_safety_context_v1",
+            False,
+            False,
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            spec.model_research_id,
+            profile.continuous_target_id,
+            settings.model_architecture,
+            bool(spec.selection_pit_authorized),
+            bool(spec.current_time_validation_authorized),
+        ),
+    )
+    check_true(
+        "mr13ae_keeps_exact_mr13k_training_recipe_with_only_one_context_input_change",
+        profile.optimizer_name == k_profile.optimizer_name
+        and profile.lr_schedule_name == k_profile.lr_schedule_name
+        and profile.augmentation_name == k_profile.augmentation_name
+        and profile.training_sampling_mode == k_profile.training_sampling_mode
+        and profile.training_objective == k_profile.training_objective
+        and profile.loss_name == k_profile.loss_name
+        and profile.epoch_selection_metric == k_profile.epoch_selection_metric
+        and profile.training_label_scope == k_profile.training_label_scope
+        and profile.training_sample_scope == k_profile.training_sample_scope
+        and get_continuous_ranker_execution_recipe(profile.name).pairwise_reduction
+        == get_continuous_ranker_execution_recipe(k_profile.name).pairwise_reduction,
+    )
+    contract = get_predicted_safety_pure_mfe_contract()
+    check_true(
+        "mr13ae_target_is_exact_mr13k_pure_mfe_order_without_residualization",
+        contract.get("stage2_response") == "canonical_full_horizon_pure_mfe_r"
+        and contract.get("stage2_target") == "exact_mr13k_pure_mfe_order_no_residualization"
+        and contract.get("stage2_context_used_as_input") is True,
+    )
+    check(
+        "mr13ae_reuses_mr13ad_canonical_predicted_safety_context_owner",
+        DAILY_UNIVERSAL_PREDICTED_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE,
+    )
+    resolver_source = inspect.getsource(resolve_predicted_safety_context_dir)
+    builder_source = inspect.getsource(build_predicted_safety_context)
+    check_true(
+        "mr13ae_context_storage_reuses_existing_mr13ad_owner_without_10plus1_retraining",
+        "PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE" in resolver_source
+        and "PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE" in builder_source,
+    )
+    check(
+        "mr13ae_dependency_plan_requires_dataset_and_predicted_safety_context",
+        (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_SAFETY_CONTEXT),
+        required_upstream_artifact_types(profile.name),
+    )
+    model_spec = get_model_spec("inception_time_predicted_safety_context_v1")
+    base_spec = get_model_spec("inception_time_v1")
+    check_true(
+        "mr13ae_architecture_is_mr13k_inceptiontime_plus_one_direct_predicted_safety_scalar",
+        model_spec.inception_depth == base_spec.inception_depth
+        and model_spec.inception_filters == base_spec.inception_filters
+        and model_spec.pooling == ("global_average", "predicted_safety_percentile_concat")
+        and bool(model_spec.use_dataset_context),
+    )
+    semantics = training_semantics(profile)
+    embedded = dict((semantics.get("pairwise_contract") or {}).get("predicted_safety_context_contract") or {})
+    check(
+        "mr13ae_training_semantics_persist_exact_consumer_contract",
+        contract,
+        embedded,
+    )
+    metric_source = inspect.getsource(_predicted_safety_context_pure_mfe_metrics)
+    check_true(
+        "mr13ae_model_gate_reports_mfe_and_downside_geometry_without_fitting_on_it",
+        "target_favorable_r" in metric_source
+        and "target_adverse_r" in metric_source
+        and "target_low_adverse_daily_percentile" in metric_source
+        and "build_same_date_percentile_targets" in metric_source
+        and "score_pct >= 0.90" in metric_source
+        and "diagnostic_only_no_fit_no_threshold_selection" in metric_source,
+    )
+    check(
+        "mr13ae_keeps_user_approved_standard_model_sop_fingerprint",
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
+        persistent_report_contract_fingerprint("model.standard_sop"),
+    )
+    from config.strategy_compare import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
+    check_true(
+        "mr13ae_does_not_pre_authorize_pit_strategy_or_production",
+        "CONT13AE_ROLL" not in STRATEGY_DL_SOURCES
+        and all(str(dict(arm or {}).get("dl_id") or "") != "CONT13AE_ROLL" for arm in STRATEGY_COMPARE_ARMS.values())
+        and not bool(spec.selection_pit_authorized)
+        and not bool(spec.current_time_validation_authorized),
+    )
+
+    summary["training_performed"] = False
+    return results, summary
