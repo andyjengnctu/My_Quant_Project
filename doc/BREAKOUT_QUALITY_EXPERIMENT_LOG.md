@@ -10928,3 +10928,9 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Evidence surface**：Forward OOS與Breakout各自輸出AF vs AI的MFE Daily rho/Pair、Pred-Safety→Score、Score→Low-Adverse、Top-K MFE/Adverse/High-MFE/High-Safety/HMHS/Top-K Lift，另輸出swap rate與被交換pairs的realized MFE/Adverse/HMHS conversion。realized truth只在decision後評估。
 - **Gate**：若Top-K MFE只小幅下降且Adverse/High-Safety/HMHS有實質改善，才另行定義trainable Phase-1；若zero-retrain boundary reorder都無joint gain，MR-13AI直接STOP。
 - **Implementation boundary**：一次性read-only research diagnostic；不修改Standard Model SOP fingerprint、不新增model profile、不改正式model menu、不建立PIT/Strategy arm。
+
+## 2026-08-29 — MR-13AI Phase-0 canonical Forward-OOS score-schema fix
+
+- 首次本機執行Phase-0在讀MR-13AF `daily_ranker_oos_scores.csv.gz`時因要求不存在的`split`欄而停止。canonical daily-ranker writer本來就不輸出per-row `split`；該檔本身即為Forward-score artifact，且target尚不可得的forward rows以NaN target保留供score coverage。
+- 修正Phase-0 loader：以canonical `target_raw_r`＋`target_daily_percentile`＋`model_score` finite rows取得target-evaluable Forward OOS，並額外要求row count精確等於frozen continuous-ranker report的OOS `group_count`，不放寬universe contract、不改MR-13AI selection semantics。
+- T421 synthetic新增真實schema regression：fixture刻意不含`split`，同時驗證frozen-report count mismatch仍fail-fast。Scientific identity、no-lookahead boundary formula、AF source與Phase-0 authorization均不變。

@@ -6610,6 +6610,7 @@ def validate_breakout_quality_mr13ai_phase0_local_conflict_contract_case(_base_p
         boundary_decision,
         boundary_preference_margin,
         evaluate_phase0_frame,
+        _select_target_evaluable_oos_score_rows,
     )
     from config.breakout_quality import (
         DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -6628,6 +6629,36 @@ def validate_breakout_quality_mr13ai_phase0_local_conflict_contract_case(_base_p
             bool(PHASE0_CONTRACT.get("model_artifact_written")),
         ),
     )
+    canonical_score_fixture = pd.DataFrame(
+        {
+            "ticker": ["A", "B", "C"],
+            "date": ["2025-01-02", "2025-01-02", "2026-03-03"],
+            "group_index": [1, 2, 3],
+            "target_raw_r": [1.0, 2.0, np.nan],
+            "target_daily_percentile": [0.25, 0.75, np.nan],
+            "model_score": [0.4, 0.8, 0.6],
+        }
+    )
+    selected_fixture = _select_target_evaluable_oos_score_rows(
+        canonical_score_fixture, expected_group_count=2
+    )
+    check_true(
+        "mr13ai_phase0_accepts_canonical_forward_oos_score_schema_without_split_column",
+        "split" not in canonical_score_fixture.columns
+        and selected_fixture["ticker"].tolist() == ["A", "B"],
+    )
+    universe_guarded = False
+    try:
+        _select_target_evaluable_oos_score_rows(
+            canonical_score_fixture, expected_group_count=3
+        )
+    except ValueError as exc:
+        universe_guarded = "frozen report" in str(exc)
+    check_true(
+        "mr13ai_phase0_target_evaluable_oos_universe_is_guarded_by_frozen_report_count",
+        universe_guarded,
+    )
+
     check_true(
         "mr13ai_phase0_decision_contract_is_prediction_time_only",
         PHASE0_CONTRACT.get("uses_future_target_for_selection") is False

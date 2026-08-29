@@ -421,6 +421,57 @@ def evaluate_phase0_frame(
     }
 
 
+def _select_target_evaluable_oos_score_rows(
+    score_frame: pd.DataFrame,
+    *,
+    expected_group_count: int | None,
+) -> pd.DataFrame:
+    """Select target-evaluable rows from the canonical forward-OOS score artifact.
+
+    ``daily_ranker_oos_scores.csv.gz`` is itself the frozen Forward-score artifact;
+    it intentionally has no per-row ``split`` column.  Forward rows whose realized
+    target is not yet legally available are retained for score coverage with NaN
+    targets, so target-evaluable OOS membership is exactly the finite canonical
+    target pair.  The report's frozen OOS group count is checked independently to
+    keep this a strict universe contract rather than a permissive NaN filter.
+    """
+
+    required = {
+        "ticker",
+        "date",
+        "group_index",
+        "target_raw_r",
+        "target_daily_percentile",
+        "model_score",
+    }
+    missing = sorted(required - set(score_frame.columns))
+    if missing:
+        raise ValueError(f"MR-13AF OOS score artifact缺少欄位: {missing}")
+
+    selected = score_frame.copy()
+    selected["ticker"] = selected["ticker"].astype(str)
+    selected["date"] = pd.to_datetime(selected["date"], errors="raise").dt.normalize()
+    selected["group_index"] = pd.to_numeric(
+        selected["group_index"], errors="raise"
+    ).astype(int)
+    for column in ("target_raw_r", "target_daily_percentile", "model_score"):
+        selected[column] = pd.to_numeric(selected[column], errors="coerce")
+    selected = selected.loc[
+        np.isfinite(selected["target_raw_r"].to_numpy(dtype=np.float64))
+        & np.isfinite(selected["target_daily_percentile"].to_numpy(dtype=np.float64))
+        & np.isfinite(selected["model_score"].to_numpy(dtype=np.float64))
+    ].copy()
+    if selected.empty:
+        raise ValueError("MR-13AF沒有target-evaluable Forward OOS rows")
+
+    if expected_group_count is not None and len(selected) != int(expected_group_count):
+        raise ValueError(
+            "MR-13AF OOS score target-evaluable universe與frozen report不一致: "
+            f"score={len(selected)}, report={int(expected_group_count)}"
+        )
+    return selected
+
+
 def _load_forward_oos_frame(
     *,
     project_root: Path,
@@ -433,32 +484,15 @@ def _load_forward_oos_frame(
     contract = load_continuous_ranker_oos_contract(
         str(project_root), str(filter_id), str(model_architecture), SOURCE_PROFILE
     )
-    score_frame = read_breakout_quality_csv(contract.score_path).copy()
-    required_score = {
-        "ticker",
-        "date",
-        "group_index",
-        "split",
-        "target_raw_r",
-        "target_daily_percentile",
-        "model_score",
-    }
-    missing = sorted(required_score - set(score_frame.columns))
-    if missing:
-        raise ValueError(f"MR-13AF OOS score artifact缺少欄位: {missing}")
-    score_frame = score_frame.loc[score_frame["split"].astype(str).eq("oos")].copy()
-    score_frame["ticker"] = score_frame["ticker"].astype(str)
-    score_frame["date"] = pd.to_datetime(score_frame["date"], errors="raise").dt.normalize()
-    score_frame["group_index"] = pd.to_numeric(score_frame["group_index"], errors="raise").astype(int)
-    for column in ("target_raw_r", "target_daily_percentile", "model_score"):
-        score_frame[column] = pd.to_numeric(score_frame[column], errors="coerce")
-    score_frame = score_frame.loc[
-        np.isfinite(score_frame["target_raw_r"].to_numpy(dtype=np.float64))
-        & np.isfinite(score_frame["target_daily_percentile"].to_numpy(dtype=np.float64))
-        & np.isfinite(score_frame["model_score"].to_numpy(dtype=np.float64))
-    ].copy()
-    if score_frame.empty:
-        raise ValueError("MR-13AF沒有target-evaluable Forward OOS rows")
+    raw_score_frame = read_breakout_quality_csv(contract.score_path).copy()
+    report_oos = dict((contract.report.get("split_metrics") or {}).get("oos") or {})
+    expected_oos_groups = report_oos.get("group_count")
+    score_frame = _select_target_evaluable_oos_score_rows(
+        raw_score_frame,
+        expected_group_count=(
+            None if expected_oos_groups is None else int(expected_oos_groups)
+        ),
+    )
 
     bundle = load_profile_continuous_ranker_data(
         filter_id=str(filter_id),
