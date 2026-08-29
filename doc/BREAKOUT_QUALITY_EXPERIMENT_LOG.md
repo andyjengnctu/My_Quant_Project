@@ -10949,3 +10949,14 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **唯一scientific change**：base仍為full-list ΔNDCG Pure-MFE pair loss。若MFE winner同時較安全（MFE與Safety ordering一致）或Safety tie，pair multiplier=`1`；只有MFE winner較不安全的conflict pair才 multiplier=`S_winner`。因此保留AG曾削弱的aligned MFE supervision，只降低unsafe-high-MFE conflict pressure；pair truth永不反轉。沒有bucket/cutoff/lambda/exponent/temperature/joint head/residual target/portfolio state/OOS fitting。
 - **Authorization**：只先跑Seed42 Forward Model Gate；`selection_pit_authorized=False`、`current_time_validation_authorized=False`。若MFE learnability仍大幅下降或actual Safety/HMHS沒有實質改善即STOP；不再做pair-weight strength sweep或Phase-1 Audit。
 
+## 2026-08-29 — MR-13AH user-authorized dual strategy conversion (C80/C81)
+
+- 使用者在審閱MR-13AH Model-specific Extension後明確要求：**Constrained 與 No-K/No-R0 都做實際績效測試**。此決策不撤銷AH既有`FORWARD_MODEL_GATE_FAIL / STOP_PAIR_WEIGHT_STRENGTH_FAMILY`；只授權既有frozen AH scientific identity做一次Seed42 downstream economic conversion，回答prediction-space decorrelation與仍可用MFE learnability能否在portfolio層產生價值。
+- AH anchor：Forward OOS Pure-MFE rho/Pair=`0.3522/62.13%`、Breakout=`0.3195/62.15%`；OOS `Pred-Safety→Score=-0.7189`為AE/AF/AH中目前最好，Score→Low-Adverse=`-0.2891`。雖Model Gate actual HM/HS增益有限，使用者認為這個「Safety coupling較弱且MFE rho仍不差」的Pareto點值得用真實portfolio gate確認。
+- 新source=`CONT13AH_ROLL`：profile=`daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise`、architecture=`inception_time_v1`、`score_source=selection_point_in_time`；Stage-1 canonical PIT-safe predicted-Safety context不改，Stage-2依evaluation mode合法refit。只作research conversion，不是production source。
+- `SR-C80 = Min MR-13AH Constrained`：完整複製C59 Min/base-finalist-best/all-off/exact K/R0 contract；唯一DL source由`CONT13E_ROLL`換成`CONT13AH_ROLL`。Primary contrast=`C80-C59`，另看`C80-C79`比較AH與AC在完全相同constrained allocator的score geometry。
+- `SR-C81 = Min MR-13AH No-K No-R0`：完整複製C78 Min/base-finalist-best/all-off/direct score contract；唯一DL source由`CONT13AC_ROLL`換成`CONT13AH_ROLL`。Primary contrast=`C81-C78`，另看`C81-C77`與`C81-C58`。
+- 同源allocator contrast=`C80-C81`，只回答K/R0/exact resource constraint相對direct allocator如何轉化同一AH score；不得把差異誤歸因模型。
+- Compare Suite schema=`65`，current arms=`C61/C58/C59/C77/C78/C79/C80/C81`。既有六arms及其contract不改；只新增AH source與兩arms。
+- 本輪只授權**single-seed Seed42 OOS + Rolling**。Multi-seed/Fixed仍依effect-size gate延後；只有single-seed RoMD/EV/MFE×Safety形成足夠大的實務差異才值得再投入robustness。Production C42/C44不變。
+

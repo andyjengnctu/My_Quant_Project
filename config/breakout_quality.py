@@ -2167,8 +2167,10 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         score_semantic_id="daily_safety_product_weighted_pure_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
-        selection_pit_authorized=False,
-        current_time_validation_authorized=False,
+        # User-authorized downstream conversion exception: model gate remains FAIL,
+        # but Seed42 PIT-safe OOS/Rolling strategy conversion is explicitly allowed.
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
     ),
     DAILY_UNIVERSAL_PREDICTED_SAFETY_CONFLICT_DISCOUNTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_PREDICTED_SAFETY_CONFLICT_DISCOUNTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,

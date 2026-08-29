@@ -230,7 +230,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         set(strategy_config.STRATEGY_PARAM_SOURCES)
         == {"full_oos", "min_oos", "full_rolling", "min_rolling"}
         and set(strategy_config.STRATEGY_DL_SOURCES)
-        == {"CONT13E_ROLL", "CONT13H_ROLL", "CONT13AC_ROLL"}
+        == {"CONT13E_ROLL", "CONT13H_ROLL", "CONT13AC_ROLL", "CONT13AH_ROLL"}
         and set(strategy_config.STRATEGY_COMPARE_ARMS) == set(expected_arm_ids)
         and set(strategy_config.STRATEGY_COMPARE_CONTRASTS) == set(expected_contrast_ids)
         and {"full_roos", "min_roos", "selection_min_roos", "selection_full_roos"}
@@ -414,39 +414,52 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and retired_ids.issubset(set(strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS)),
     )
 
-    # Current controlled comparison: C58 stays the untouched Min DL-off control;
-    # C59 is the exact K/R0 MR-13E reference; C79 copies the complete C59
-    # portfolio contract and changes only the DL source to MR-13AC. C77/C78 keep
-    # their already-completed direct No-K/No-R0 results as current references.
+    # Current controlled comparisons keep the existing references and add two
+    # MR-13AH arms: C80 copies C59's exact K/R0 contract; C81 copies C78's
+    # No-K/No-R0 direct allocator.  In both cases only the DL source changes.
     expected_direct = {
         "C77": ("CONT13H_ROLL", "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise", "inception_time_v1"),
         "C78": ("CONT13AC_ROLL", "daily_universal_predicted_upside_conditional_low_adverse_full_list_ndcg_pairwise", "inception_time_predicted_upside_context_v1"),
+        "C81": ("CONT13AH_ROLL", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise", "inception_time_v1"),
     }
     controlled_checks = []
     for current_settings in settings_by_mode.values():
         c58 = current_settings.arms["C58"]
         c59 = current_settings.arms["C59"]
         c79 = current_settings.arms["C79"]
+        c80 = current_settings.arms["C80"]
+        c81 = current_settings.arms["C81"]
         c59_options = dict(c59.dl_runtime_options or {})
         c79_options = dict(c79.dl_runtime_options or {})
-        ac_source = current_settings.dl_sources["CONT13AC_ROLL"]
+        c80_options = dict(c80.dl_runtime_options or {})
+        c78_options = dict(current_settings.arms["C78"].dl_runtime_options or {})
+        c81_options = dict(c81.dl_runtime_options or {})
+        ah_source = current_settings.dl_sources["CONT13AH_ROLL"]
         controlled_checks.append(
             c58.dl_enabled is False
             and c58.dl_id is None
             and c59.dl_id == "CONT13E_ROLL"
             and c79.dl_id == "CONT13AC_ROLL"
-            and c59.param_source == c79.param_source
-            and c59.param_policy == c79.param_policy == "base-finalist-best"
-            and c59.rule_policy == c79.rule_policy == "all_off"
-            and c59.dl_runtime_mode == c79.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
-            and c59_options == c79_options
-            and c79_options.get("preserve_k_r0") is True
-            and c79_options.get("constrained_solver") == "exact_branch_and_bound_v1"
-            and c79_options.get("selection_only") is True
-            and resolve_arm_runtime_dl_source_ids(current_settings, c79) == ("CONT13AC_ROLL",)
-            and ac_source.score_source == "selection_point_in_time"
-            and ac_source.experiment_profile == "daily_universal_predicted_upside_conditional_low_adverse_full_list_ndcg_pairwise"
-            and ac_source.model_architecture == "inception_time_predicted_upside_context_v1"
+            and c80.dl_id == "CONT13AH_ROLL"
+            and c59.param_source == c79.param_source == c80.param_source
+            and c59.param_policy == c79.param_policy == c80.param_policy == "base-finalist-best"
+            and c59.rule_policy == c79.rule_policy == c80.rule_policy == "all_off"
+            and c59.dl_runtime_mode == c79.dl_runtime_mode == c80.dl_runtime_mode
+            == "resource-aware-continuous-score-constrained-optimal"
+            and c59_options == c79_options == c80_options
+            and c80_options.get("preserve_k_r0") is True
+            and c80_options.get("constrained_solver") == "exact_branch_and_bound_v1"
+            and c80_options.get("selection_only") is True
+            and resolve_arm_runtime_dl_source_ids(current_settings, c80) == ("CONT13AH_ROLL",)
+            and c78_options == c81_options
+            and c81.param_source == current_settings.arms["C78"].param_source
+            and c81.param_policy == current_settings.arms["C78"].param_policy
+            and c81.rule_policy == current_settings.arms["C78"].rule_policy
+            and c81.dl_runtime_mode == current_settings.arms["C78"].dl_runtime_mode
+            and ah_source.score_source == "selection_point_in_time"
+            and ah_source.experiment_profile
+            == "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"
+            and ah_source.model_architecture == "inception_time_v1"
         )
         for arm_id, (dl_id, profile_name, architecture) in expected_direct.items():
             arm = current_settings.arms[arm_id]
@@ -465,17 +478,20 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 and source.model_architecture == architecture
             )
     check_true(
-        "c58_c59_c77_c78_c79_have_declared_controlled_contracts",
+        "current_controlled_contracts_include_ah_constrained_and_direct_arms",
         bool(controlled_checks) and all(controlled_checks),
     )
 
     check_true(
-        "current_suite_schema64_is_c79_controlled_ac_replacement_matrix",
-        expected_arm_ids == ("C61", "C58", "C59", "C77", "C78", "C79")
+        "current_suite_schema65_adds_c80_c81_ah_conversion_matrix",
+        expected_arm_ids == ("C61", "C58", "C59", "C77", "C78", "C79", "C80", "C81")
         and expected_contrast_ids == (
             "C61-C58", "C59-C58", "C77-C58",
             "C78-C58", "C78-C77",
             "C79-C58", "C79-C59", "C79-C78",
+            "C80-C58", "C80-C59", "C80-C79",
+            "C81-C58", "C81-C77", "C81-C78",
+            "C80-C81",
         ),
     )
 
@@ -489,6 +505,27 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and settings.arms["C59"].rule_policy == settings.arms["C79"].rule_policy
             and settings.arms["C59"].dl_runtime_mode == settings.arms["C79"].dl_runtime_mode
             and dict(settings.arms["C59"].dl_runtime_options or {}) == dict(settings.arms["C79"].dl_runtime_options or {})
+            for settings in settings_by_mode.values()
+        ),
+    )
+
+    check_true(
+        "c80_minus_c59_and_c81_minus_c78_are_ah_dl_source_only_controls",
+        all(
+            settings.arms["C80"].dl_id == "CONT13AH_ROLL"
+            and settings.arms["C59"].param_source == settings.arms["C80"].param_source
+            and settings.arms["C59"].param_policy == settings.arms["C80"].param_policy
+            and settings.arms["C59"].rule_policy == settings.arms["C80"].rule_policy
+            and settings.arms["C59"].dl_runtime_mode == settings.arms["C80"].dl_runtime_mode
+            and dict(settings.arms["C59"].dl_runtime_options or {})
+            == dict(settings.arms["C80"].dl_runtime_options or {})
+            and settings.arms["C81"].dl_id == "CONT13AH_ROLL"
+            and settings.arms["C78"].param_source == settings.arms["C81"].param_source
+            and settings.arms["C78"].param_policy == settings.arms["C81"].param_policy
+            and settings.arms["C78"].rule_policy == settings.arms["C81"].rule_policy
+            and settings.arms["C78"].dl_runtime_mode == settings.arms["C81"].dl_runtime_mode
+            and dict(settings.arms["C78"].dl_runtime_options or {})
+            == dict(settings.arms["C81"].dl_runtime_options or {})
             for settings in settings_by_mode.values()
         ),
     )
@@ -1091,8 +1128,8 @@ def validate_mr13z_c75_conversion_contract_case(_base_params):
 
     suite = get_strategy_compare_suite("extending_current")
     check(
-        "current_suite_schema64_retires_c75_but_keeps_history",
-        (64, 0, 6),
+        "current_suite_schema65_retires_c75_but_keeps_history",
+        (65, 0, 8),
         (int(STRATEGY_COMPARE_SCHEMA_VERSION), tuple(suite.get("arm_ids") or ()).count("C75"), len(tuple(suite.get("arm_ids") or ()))),
     )
     check_true(

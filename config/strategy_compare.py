@@ -47,7 +47,7 @@ from core.strategy_comparison import (
     validate_strategy_runtime_integration_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 64
+STRATEGY_COMPARE_SCHEMA_VERSION = 65
 
 # =============================================================================
 # 1. 常用設定
@@ -175,18 +175,23 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13Z_JOINT_MIN_NO_K_NO_R0 = "Min MR-13Z Joint-Min 
 STRATEGY_COMPARE_DISPLAY_MIN_MR13H_NO_K_NO_R0 = "Min MR-13H No-K No-R0"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13AC_NO_K_NO_R0 = "Min MR-13AC No-K No-R0"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13AC_SCORE_CONSTRAINED = "Min MR-13AC Constrained"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13AH_SCORE_CONSTRAINED = "Min MR-13AH Constrained"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13AH_NO_K_NO_R0 = "Min MR-13AH No-K No-R0"
 
 # Current Compare Suite是「比較誰／比較哪些差」的唯一真理來源。
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
 STRATEGY_COMPARE_SUITES = {
     "extending_current": {
-        "arm_ids": ("C61", "C58", "C59", "C77", "C78", "C79"),
+        "arm_ids": ("C61", "C58", "C59", "C77", "C78", "C79", "C80", "C81"),
         "contrast_ids": (
             "C61-C58",
             "C59-C58",
             "C77-C58",
             "C78-C58", "C78-C77",
             "C79-C58", "C79-C59", "C79-C78",
+            "C80-C58", "C80-C59", "C80-C79",
+            "C81-C58", "C81-C77", "C81-C78",
+            "C80-C81",
         ),
         "display_name_bases": {
             "C61": "Full Base-Finalist-Best",
@@ -195,6 +200,8 @@ STRATEGY_COMPARE_SUITES = {
             "C77": "Min MR-13H No-K No-R0",
             "C78": "Min MR-13AC No-K No-R0",
             "C79": "Min MR-13AC Constrained",
+            "C80": "Min MR-13AH Constrained",
+            "C81": "Min MR-13AH No-K No-R0",
         },
     },
 }
@@ -249,6 +256,8 @@ STRATEGY_COMPARE_PROFILES = {
             "C77": "min_oos",
             "C78": "min_oos",
             "C79": "min_oos",
+            "C80": "min_oos",
+            "C81": "min_oos",
         },
     },
     "extending_window_rolling": {
@@ -538,6 +547,23 @@ STRATEGY_DL_SOURCES = {
             "options": {"resume": True, "allow_stale_source": False},
         },
     },
+    "CONT13AH_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": (
+            "MR-13AH user-authorized Seed42 OOS/Rolling conversion source；"
+            "Stage-1 canonical PIT-safe predicted-Safety context不變，Stage-2依evaluation mode合法refit。"
+            "Model Gate仍維持FAIL；此source只授權controlled strategy conversion，不代表promotion。"
+        ),
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
 }
 
 # =============================================================================
@@ -649,6 +675,47 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C80": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13AH_SCORE_CONSTRAINED,
+        "description": (
+            "MR-13AH constrained conversion：逐欄沿用C59的Min base-finalist-best、all-off、K/R0、"
+            "resource-aware-continuous-score-constrained-optimal與exact_branch_and_bound_v1；"
+            "唯一scientific change是DL source由CONT13E_ROLL換成CONT13AH_ROLL。"
+        ),
+        "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13AH_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C81": {
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13AH_NO_K_NO_R0,
+        "description": (
+            "MR-13AH direct conversion：逐欄沿用C78的No-K/No-R0 Min direct allocator，"
+            "唯一scientific change是DL source由CONT13AC_ROLL換成CONT13AH_ROLL；"
+            "不加Safety gate、score fusion或其他runtime treatment。"
+        ),
+        "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13AH_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False,
+            "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
 }
 
 # =============================================================================
@@ -665,6 +732,13 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C79-C58": {"left": "C79", "right": "C58", "description": "MR-13AC exact K/R0 constrained相對Min DL-off baseline"},
     "C79-C59": {"left": "C79", "right": "C59", "description": "C59 portfolio contract完全不變，只把DL source由MR-13E換成MR-13AC；primary DL-source-only controlled contrast"},
     "C79-C78": {"left": "C79", "right": "C78", "description": "同一MR-13AC source下 exact K/R0 constrained相對No-K/No-R0 direct allocator；allocator/resource secondary diagnostic"},
+    "C80-C58": {"left": "C80", "right": "C58", "description": "MR-13AH exact K/R0 constrained相對Min DL-off baseline"},
+    "C80-C59": {"left": "C80", "right": "C59", "description": "C59 portfolio contract完全不變，只把DL source由MR-13E換成MR-13AH；AH constrained primary controlled contrast"},
+    "C80-C79": {"left": "C80", "right": "C79", "description": "同一exact K/R0 constrained contract下MR-13AH相對MR-13AC；upside-safety score geometry comparison"},
+    "C81-C58": {"left": "C81", "right": "C58", "description": "MR-13AH No-K/No-R0 direct conversion相對Min DL-off baseline"},
+    "C81-C77": {"left": "C81", "right": "C77", "description": "同一No-K/No-R0 direct contract下MR-13AH相對MR-13H economic score"},
+    "C81-C78": {"left": "C81", "right": "C78", "description": "C78 direct allocator contract完全不變，只把DL source由MR-13AC換成MR-13AH；AH direct primary controlled contrast"},
+    "C80-C81": {"left": "C80", "right": "C81", "description": "同一MR-13AH source下 exact K/R0 constrained相對No-K/No-R0 direct allocator；allocator/resource diagnostic"},
 }
 
 def _merge_compatibility_catalog(
