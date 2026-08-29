@@ -14,7 +14,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import get_breakout_quality_experiment_profile
+from config.breakout_quality import (
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+    get_breakout_quality_experiment_profile,
+    get_continuous_ranker_execution_recipe,
+    get_high_safety_weighted_pure_mfe_contract,
+)
 from filters.breakout_quality.continuous_ranker_data import (
     ContinuousRankerDataBundle,
     build_same_date_percentile_targets,
@@ -554,6 +559,11 @@ def load_daily_universal_ranker_data(
     root = Path(project_root)
     profile = get_breakout_quality_experiment_profile(experiment_profile)
     target_id = str(profile.continuous_target_id or "").strip()
+    execution_recipe = get_continuous_ranker_execution_recipe(experiment_profile)
+    use_predicted_safety_pair_weight_context = (
+        str(execution_recipe.pairwise_reduction)
+        == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG
+    )
     if target_id not in {
         DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
         DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
@@ -1047,7 +1057,7 @@ def load_daily_universal_ranker_data(
         PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
         PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
         PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
-    }:
+    } or use_predicted_safety_pair_weight_context:
         if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
             context_frame, context_manifest = load_validated_predicted_upside_context(
                 root,
@@ -1095,9 +1105,10 @@ def load_daily_universal_ranker_data(
                 f"predicted-context Forward OOS target-valid rows缺少fixed pre-OOS {context_name} context: {missing_count}"
             )
         target_valid = component_valid & context_available
-        group_context = np.where(
-            context_available[:, None], context_values[:, None], 0.5
-        ).astype(np.float32)
+        if use_predicted_scalar_context:
+            group_context = np.where(
+                context_available[:, None], context_values[:, None], 0.5
+            ).astype(np.float32)
         if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
             conditional = build_predicted_upside_conditional_low_adverse_targets(
                 group_table, target_valid, context_values
@@ -1116,8 +1127,9 @@ def load_daily_universal_ranker_data(
             group_table["target_conditional_mfe_percentile"] = conditional.residual_percentile
             raw_target = np.asarray(conditional.training_target, dtype=np.float32)
         else:
-            # MR-13AE keeps the exact MR-13K Pure-MFE target/order.  Predicted Safety is
-            # an input context only; no residualization or target rewrite is allowed.
+            # MR-13AE/AF keep the exact MR-13K Pure-MFE target/order.  AE uses
+            # predicted Safety as model input; AF uses it only in the pair-weight loss.
+            # Neither path residualizes or rewrites the canonical Pure-MFE target.
             group_table["predicted_safety_percentile"] = context_values
             group_table["target_mfe_daily_percentile"] = build_same_date_percentile_targets(
                 favorable_r, target_valid, group_table["date"]
@@ -1195,6 +1207,16 @@ def load_daily_universal_ranker_data(
             if use_predicted_scalar_context
             else []
         ),
+        "pair_weight_context_features": (
+            [PREDICTED_SAFETY_CONTEXT_COLUMN]
+            if use_predicted_safety_pair_weight_context
+            else []
+        ),
+        "pair_weight_context_contract": (
+            get_high_safety_weighted_pure_mfe_contract()
+            if use_predicted_safety_pair_weight_context
+            else None
+        ),
         "risk_param_coverage_start": (
             None if risk_schedule is None else min(item.start_date for item in risk_schedule).date().isoformat()
         ),
@@ -1230,6 +1252,11 @@ def load_daily_universal_ranker_data(
                 else PREDICTED_SAFETY_CONTEXT_COLUMN
             ]
             if use_predicted_scalar_context
+            else []
+        ),
+        "pair_weight_context_features": (
+            [PREDICTED_SAFETY_CONTEXT_COLUMN]
+            if use_predicted_safety_pair_weight_context
             else []
         ),
         "risk_param_coverage_start": (

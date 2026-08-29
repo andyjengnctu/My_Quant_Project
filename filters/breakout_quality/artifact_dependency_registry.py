@@ -15,6 +15,8 @@ from typing import Any
 from config.research import get_research_artifact_preparation_policy
 from config.breakout_quality import (
     TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+    get_continuous_ranker_execution_recipe,
     get_breakout_quality_experiment_profile,
 )
 from core.console_report import project_relative_display_path
@@ -147,6 +149,9 @@ def required_upstream_artifact_types(experiment_profile: str) -> tuple[str, ...]
     if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
         return (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_UPSIDE_CONTEXT)
     if target_id in {PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID, PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID}:
+        return (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_SAFETY_CONTEXT)
+    recipe = get_continuous_ranker_execution_recipe(str(experiment_profile))
+    if str(recipe.pairwise_reduction) == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
         return (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_SAFETY_CONTEXT)
     return (ARTIFACT_DATASET_CORE,)
 
@@ -306,7 +311,16 @@ def collect_model_upstream_readiness(
                 ),
             )
         )
-    if str(profile.continuous_target_id or "") in {PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID, PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID}:
+    recipe = get_continuous_ranker_execution_recipe(str(experiment_profile))
+    needs_predicted_safety_context = (
+        str(profile.continuous_target_id or "") in {
+            PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
+            PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
+        }
+        or str(recipe.pairwise_reduction)
+        == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG
+    )
+    if needs_predicted_safety_context:
         context_dir = resolve_predicted_safety_context_dir(
             root,
             filter_id=str(filter_id),
@@ -340,11 +354,11 @@ def collect_model_upstream_readiness(
                     PRODUCER_EXISTING_ARTIFACT if context_ready else PRODUCER_MODEL_TRAINING
                 ),
                 description=(
-                    "重用MR-13AD/AE共用PIT-safe predicted-safety context"
+                    "重用MR-13AD/AE/AF共用PIT-safe predicted-safety context"
                     if context_ready
                     else "canonical Dataset未就緒，predicted-safety context不可建立"
                     if not dataset_ready
-                    else "缺少或無效的MR-13AD/AE共用PIT-safe predicted-safety context："
+                    else "缺少或無效的MR-13AD/AE/AF共用PIT-safe predicted-safety context："
                     + (f"{type(context_error).__name__}: {context_error}" if context_error else "unknown")
                 ),
             )

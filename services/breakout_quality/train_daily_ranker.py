@@ -28,6 +28,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
     get_continuous_ranker_execution_recipe,
     get_continuous_ranker_research_spec,
 )
@@ -456,6 +457,10 @@ def _render_markdown(payload: dict) -> str:
         return "-" if value is None else f"{float(value):.{digits}f}"
 
     objective = str(payload["training"].get("objective") or "")
+    pairwise_reduction = str(payload["training"].get("pairwise_reduction") or "")
+    high_safety_weighted_pure_mfe = (
+        pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG
+    )
     direct_r = objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
     dual_component_r = objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION
     conditional_mfe_safety = (
@@ -543,12 +548,27 @@ def _render_markdown(payload: dict) -> str:
         )
     ae_eval = dict(payload.get("predicted_safety_context_pure_mfe_evaluation") or {})
     if ae_eval:
+        extension_title = (
+            "Pure-MFE × High-Safety Pair Weight"
+            if high_safety_weighted_pure_mfe
+            else "Pure-MFE × Safety Context"
+        )
+        first_note = (
+            "- Target/order與MR-13K相同；Predicted Safety不進network，只把MR-13K full-list ΔNDCG pair weight乘上min(S_i,S_j)。"
+            if high_safety_weighted_pure_mfe
+            else "- Target/order與MR-13K相同；Predicted Safety只作PIT-safe input context，不參與target residualization。"
+        )
+        second_note = (
+            "- Actual Safety/MFE metrics只作checkpoint寫入後診斷；epoch selection仍固定Pure-MFE Validation Daily rho，無bucket/cutoff/lambda。"
+            if high_safety_weighted_pure_mfe
+            else "- Safety metrics只作checkpoint寫入後診斷，不參與loss、epoch selection、threshold或calibration。"
+        )
         lines.extend([
             "",
-            section(f"Model-specific Extension｜{payload['model_research_id']}｜Pure-MFE × Safety Context"),
+            section(f"Model-specific Extension｜{payload['model_research_id']}｜{extension_title}"),
             "",
-            "- Target/order與MR-13K相同；Predicted Safety只作PIT-safe input context，不參與target residualization。",
-            "- Safety metrics只作checkpoint寫入後診斷，不參與loss、epoch selection、threshold或calibration。",
+            first_note,
+            second_note,
             "",
             "| Scope | Score→Low-Adverse Daily rho | Pred-Safety→Score Daily rho | Top10 MFE | Top10 Adverse | Top10 High-MFE | Top10 High-Safety | Top10 HM/HS |",
             "|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -911,6 +931,10 @@ def run(args) -> int:
         progress_callback=_daily_build_progress,
     )
     target_id = str(bundle.profile.continuous_target_id or "").strip()
+    high_safety_weighted_pure_mfe = (
+        str(execution_recipe.pairwise_reduction)
+        == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG
+    )
     if not target_id:
         raise ValueError("daily-universal continuous ranker缺少target identity")
     raw_r_loss_name = (
@@ -1415,7 +1439,7 @@ def run(args) -> int:
     )
 
     predicted_safety_context_pure_mfe_evaluation = {}
-    if target_id == PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID:
+    if target_id == PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID or high_safety_weighted_pure_mfe:
         predicted_safety_context_pure_mfe_evaluation = {
             "validation": _predicted_safety_context_pure_mfe_metrics(
                 split.validation_ids, bundle.group_table, validation_scores

@@ -12,6 +12,7 @@ from typing import Any
 
 from config.breakout_quality import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
@@ -31,6 +32,7 @@ from config.breakout_quality import (
     PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
     get_predicted_safety_context_contract,
     get_predicted_safety_pure_mfe_contract,
+    get_high_safety_weighted_pure_mfe_contract,
 )
 
 
@@ -342,6 +344,8 @@ def training_semantics(profile) -> dict[str, Any]:
             pairwise_contract["predicted_safety_context_contract"] = get_predicted_safety_context_contract()
         if target_id == PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID:
             pairwise_contract["predicted_safety_context_contract"] = get_predicted_safety_pure_mfe_contract()
+        if str(recipe.pairwise_reduction) == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
+            pairwise_contract["predicted_safety_pair_weight_contract"] = get_high_safety_weighted_pure_mfe_contract()
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
             pairwise_contract.update({
                 "pair_scope": "same_date_strict_pareto_dominance_pairs",

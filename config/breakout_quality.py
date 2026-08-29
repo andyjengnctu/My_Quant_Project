@@ -71,13 +71,14 @@ from config.execution_policy import (
 # - MR-13AC PIT-safe predicted-upside conditional low-adverse ranker: "daily_universal_predicted_upside_conditional_low_adverse_full_list_ndcg_pairwise"
 # - MR-13AD PIT-safe predicted-safety conditional MFE reverse-control: "daily_universal_predicted_safety_conditional_mfe_full_list_ndcg_pairwise"
 # - MR-13AE PIT-safe predicted-safety context + canonical Pure-MFE control: "daily_universal_predicted_safety_context_pure_mfe_full_list_ndcg_pairwise"
+# - MR-13AF PIT-safe high-Safety-weighted canonical Pure-MFE ranker: "daily_universal_predicted_safety_weighted_pure_mfe_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
 # Model-research menu may move ahead of strategy deployment. Active research profiles
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_predicted_safety_context_pure_mfe_full_list_ndcg_pairwise"
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_predicted_safety_weighted_pure_mfe_full_list_ndcg_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = RESEARCH_SINGLE_SEED
@@ -386,6 +387,9 @@ DAILY_UNIVERSAL_PREDICTED_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
 DAILY_UNIVERSAL_PREDICTED_SAFETY_CONTEXT_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_predicted_safety_context_pure_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_predicted_safety_weighted_pure_mfe_full_list_ndcg_pairwise"
+)
 
 PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID = (
     "daily_predicted_upside_conditional_low_adverse_v1"
@@ -483,6 +487,34 @@ def get_predicted_safety_pure_mfe_contract() -> dict[str, Any]:
         "stage2_response": "canonical_full_horizon_pure_mfe_r",
         "stage2_target": "exact_mr13k_pure_mfe_order_no_residualization",
         "stage2_context_used_as_input": True,
+    }
+
+
+def get_high_safety_weighted_pure_mfe_contract() -> dict[str, Any]:
+    """MR-13AF: canonical Pure-MFE ranking weighted only by PIT-safe predicted Safety."""
+
+    return {
+        "schema_version": 1,
+        "stage1_profile": PREDICTED_SAFETY_CONTEXT_STAGE1_PROFILE,
+        "stage1_architecture": PREDICTED_SAFETY_CONTEXT_STAGE1_ARCHITECTURE,
+        "stage1_research_id": PREDICTED_SAFETY_CONTEXT_STAGE1_RESEARCH_ID,
+        "stage1_seed": PREDICTED_SAFETY_CONTEXT_STAGE1_SEED,
+        "context_semantic": "same_date_average_rank_percentile_of_stage1_predicted_low_adverse_safety",
+        "context_artifact_owner_profile": PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE,
+        "selection_context": "expanding_cross_fitted_point_in_time",
+        "forward_context": "single_fixed_pre_oos_fit",
+        "full_fit_selection_score_forbidden": True,
+        "oos_statistics_for_training_forbidden": True,
+        "selection_training_universe": "pit_context_covered_rows_only",
+        "stage2_response": "canonical_full_horizon_pure_mfe_r",
+        "stage2_target": "exact_mr13k_pure_mfe_order_no_residualization",
+        "stage2_context_used_as_input": False,
+        "pair_base_relevance": "mr13k_full_list_delta_ndcg",
+        "pair_safety_weight": "min(predicted_safety_percentile_i,predicted_safety_percentile_j)",
+        "pair_weight_combination": "delta_ndcg_times_min_predicted_safety",
+        "pair_weight_reduction": "normalized_weighted_mean_over_comparable_same_date_pairs",
+        "bucket_or_threshold": None,
+        "lambda_or_temperature": None,
     }
 DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE = (
     "daily_universal_full_horizon_mfe_adverse_dual_mse"
@@ -1242,6 +1274,18 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_predicted_safety_context_v1",
     ),
+    DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+    ),
     DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
         optimizer_name="adam",
@@ -1498,12 +1542,14 @@ CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR = "equal_pair_weight"
 CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED = "target_gap_weighted_within_date"
 CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE = "upper_tail_relevance_weighted"
 CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG = "full_list_delta_ndcg_weighted"
+CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG = "full_list_delta_ndcg_times_min_predicted_safety"
 CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE = "pareto_dominance_equal_pair"
 SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS = (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
 )
 
@@ -1948,6 +1994,28 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_context_covered_stock_days",
         score_semantic_id="daily_predicted_safety_context_pure_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13AF",
+        experiment_name="MR-13AF PIT-safe High-Safety-Weighted Pure-MFE Ranker",
+        phase="13AF",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="exact_MR-13K_full_horizon_Pure-MFE_order_with_PIT_safe_predicted_safety_pair_weighting",
+        objective_description=(
+            "MR-13AE anti-shortcut controlled cell：Stage-1完全重用MR-13M Low-Adverse PIT-safe predicted-safety context；"
+            "Stage-2回復MR-13K inception_time_v1，不把Safety scalar輸入network，Pure-MFE target/order完全不變。"
+            "MR-13K full-list Delta-NDCG pair relevance乘上min(S_i,S_j)，S為同日PIT-safe predicted-Safety percentile；"
+            "最終loss以所有同日comparable pairs做normalized weighted mean，所以只改relative supervision importance、不改loss scale。"
+            "高Safety×高Safety的MFE比較保留高權重；任何含低Safety股票的pair自然降權。"
+            "沒有bucket、Safety cutoff、lambda、temperature、joint head、residual target、portfolio state或OOS fitting。"
+        ),
+        metric_scope="all_context_covered_stock_days",
+        score_semantic_id="daily_high_safety_weighted_pure_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+        reference_profile_name=DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),
@@ -3332,6 +3400,7 @@ __all__ = [
     'DAILY_UNIVERSAL_PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_PREDICTED_SAFETY_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_PREDICTED_SAFETY_CONTEXT_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID',
     'PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID',
     'PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID',
@@ -3350,6 +3419,7 @@ __all__ = [
     'PREDICTED_SAFETY_CONTEXT_OWNER_PROFILE',
     'PREDICTED_SAFETY_CONTEXT_OWNER_ARCHITECTURE',
     'get_predicted_safety_pure_mfe_contract',
+    'get_high_safety_weighted_pure_mfe_contract',
     'DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE',
     'DAILY_UNIVERSAL_FULL_HORIZON_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
@@ -3365,6 +3435,7 @@ __all__ = [
     'CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED',
     'CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE',
     'CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG',
+    'CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG',
     'CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE',
     'SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS',
     'get_continuous_ranker_research_spec',

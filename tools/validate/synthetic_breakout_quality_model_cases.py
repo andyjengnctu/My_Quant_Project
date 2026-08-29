@@ -5423,7 +5423,7 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
             profile.name,
             research_spec.model_research_id,
             profile.continuous_target_id,
-            settings.model_architecture,
+            profile.model_architecture,
             bool(research_spec.selection_pit_authorized),
             bool(research_spec.current_time_validation_authorized),
         ),
@@ -5825,9 +5825,8 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
         DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
     spec = get_continuous_ranker_research_spec(profile.name)
-    settings = get_breakout_quality_model_research_settings()
     check(
-        "mr13ae_current_identity_target_architecture_and_model_gate_only_authorization",
+        "mr13ae_frozen_identity_target_architecture_and_model_gate_only_authorization",
         (
             profile.name,
             "MR-13AE",
@@ -5837,10 +5836,10 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
             False,
         ),
         (
-            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            profile.name,
             spec.model_research_id,
             profile.continuous_target_id,
-            settings.model_architecture,
+            str(profile.model_architecture),
             bool(spec.selection_pit_authorized),
             bool(spec.current_time_validation_authorized),
         ),
@@ -5919,6 +5918,218 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
         "mr13ae_does_not_pre_authorize_pit_strategy_or_production",
         "CONT13AE_ROLL" not in STRATEGY_DL_SOURCES
         and all(str(dict(arm or {}).get("dl_id") or "") != "CONT13AE_ROLL" for arm in STRATEGY_COMPARE_ARMS.values())
+        and not bool(spec.selection_pit_authorized)
+        and not bool(spec.current_time_validation_authorized),
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+
+
+
+def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case(_base_params):
+    """Protect MR-13AF high-Safety weighted Pure-MFE anti-shortcut experiment."""
+
+    case_id = "BREAKOUT_QUALITY_MR13AF_HIGH_SAFETY_WEIGHTED_PURE_MFE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    import inspect
+    import numpy as np
+    import pandas as pd
+    import torch
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+        DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_execution_recipe,
+        get_continuous_ranker_research_spec,
+        get_high_safety_weighted_pure_mfe_contract,
+    )
+    from core.research_report_contract import (
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
+        persistent_report_contract_fingerprint,
+    )
+    from filters.breakout_quality.artifact_dependency_registry import (
+        ARTIFACT_DATASET_CORE,
+        ARTIFACT_PREDICTED_SAFETY_CONTEXT,
+        required_upstream_artifact_types,
+    )
+    from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality.train_continuous_ranker import (
+        _pairwise_logistic_loss,
+        _training_target_for_profile,
+    )
+    from services.breakout_quality.train_daily_ranker import (
+        _predicted_safety_context_pure_mfe_metrics,
+    )
+
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    k_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    spec = get_continuous_ranker_research_spec(profile.name)
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    k_recipe = get_continuous_ranker_execution_recipe(k_profile.name)
+
+    check(
+        "mr13af_current_identity_is_model_gate_only_high_safety_weighted_pure_mfe",
+        (
+            DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            "MR-13AF",
+            "daily_full_horizon_pure_mfe_r_v1",
+            "inception_time_v1",
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+            False,
+            False,
+        ),
+        (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE,
+            spec.model_research_id,
+            profile.continuous_target_id,
+            str(profile.model_architecture),
+            recipe.pairwise_reduction,
+            bool(spec.selection_pit_authorized),
+            bool(spec.current_time_validation_authorized),
+        ),
+    )
+    check_true(
+        "mr13af_keeps_mr13k_recipe_except_pair_weighting_and_context_coverage",
+        profile.optimizer_name == k_profile.optimizer_name
+        and profile.lr_schedule_name == k_profile.lr_schedule_name
+        and profile.augmentation_name == k_profile.augmentation_name
+        and profile.training_sampling_mode == k_profile.training_sampling_mode
+        and profile.training_objective == k_profile.training_objective
+        and profile.continuous_target_id == k_profile.continuous_target_id
+        and profile.loss_name == k_profile.loss_name
+        and profile.epoch_selection_metric == k_profile.epoch_selection_metric
+        and profile.training_label_scope == k_profile.training_label_scope
+        and profile.training_sample_scope == k_profile.training_sample_scope
+        and str(profile.model_architecture) == "inception_time_v1"
+        and k_recipe.pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
+        and recipe.pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+    )
+    contract = get_high_safety_weighted_pure_mfe_contract()
+    check_true(
+        "mr13af_contract_has_no_bucket_cutoff_lambda_or_model_input_safety",
+        contract.get("stage2_target") == "exact_mr13k_pure_mfe_order_no_residualization"
+        and contract.get("stage2_context_used_as_input") is False
+        and contract.get("pair_safety_weight")
+        == "min(predicted_safety_percentile_i,predicted_safety_percentile_j)"
+        and contract.get("pair_weight_combination") == "delta_ndcg_times_min_predicted_safety"
+        and contract.get("bucket_or_threshold") is None
+        and contract.get("lambda_or_temperature") is None,
+    )
+    check(
+        "mr13af_requires_dataset_plus_canonical_predicted_safety_context",
+        (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_SAFETY_CONTEXT),
+        required_upstream_artifact_types(profile.name),
+    )
+    model_spec = get_model_spec("inception_time_v1")
+    check_true(
+        "mr13af_safety_is_not_network_context",
+        not bool(model_spec.use_dataset_context)
+        and model_spec.pooling == ("global_average",),
+    )
+
+    group_table = pd.DataFrame({
+        "predicted_safety_percentile": [0.90, 0.80, 0.10],
+    })
+    mfe_percentile = np.asarray([1.0, 0.6, 0.1], dtype=np.float32)
+    training_target = _training_target_for_profile(
+        profile, mfe_percentile.copy(), mfe_percentile.copy(), group_table
+    )
+    check_true(
+        "mr13af_training_target_is_mfe_plus_predicted_safety_for_loss_only",
+        training_target.shape == (3, 2)
+        and np.allclose(training_target[:, 0], mfe_percentile)
+        and np.allclose(training_target[:, 1], [0.90, 0.80, 0.10]),
+    )
+
+    dates = np.asarray(["2021-01-04"] * 3)
+    margins = torch.tensor([0.3, 0.1, -0.2], dtype=torch.float32, requires_grad=True)
+    pure_mfe = torch.tensor(mfe_percentile, dtype=torch.float32)
+    all_safe = torch.column_stack([pure_mfe, torch.ones(3, dtype=torch.float32)])
+    k_loss, k_count = _pairwise_logistic_loss(
+        torch, margins, pure_mfe, dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+    af_all_safe_loss, af_count = _pairwise_logistic_loss(
+        torch, margins, all_safe, dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+    )
+    check_true(
+        "mr13af_exactly_collapses_to_mr13k_when_all_predicted_safety_is_one",
+        k_count == af_count
+        and torch.allclose(k_loss.detach(), af_all_safe_loss.detach(), atol=1e-7, rtol=1e-7),
+    )
+
+    shortcut_margins = torch.tensor([1.0, 0.5, 2.0], dtype=torch.float32)
+    low_unsafe = torch.column_stack([
+        pure_mfe,
+        torch.tensor([1.0, 0.9, 0.01], dtype=torch.float32),
+    ])
+    unweighted_loss, _ = _pairwise_logistic_loss(
+        torch, shortcut_margins, pure_mfe, dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+    weighted_loss, _ = _pairwise_logistic_loss(
+        torch, shortcut_margins, low_unsafe, dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+    )
+    check_true(
+        "mr13af_downweights_errors_that_depend_on_very_low_safety_items",
+        float(weighted_loss.detach()) < float(unweighted_loss.detach()),
+    )
+
+    loss_source = inspect.getsource(_pairwise_logistic_loss)
+    check_true(
+        "mr13af_loss_formula_is_delta_ndcg_times_pair_min_safety_with_normalized_weighted_mean",
+        "torch.minimum" in loss_source
+        and "weights = weights * safety_pair_weight" in loss_source
+        and "all_losses.sum() / weight_sum" in loss_source,
+    )
+    check_true(
+        "mr13af_is_not_mr13o_pareto_joint_pair_scope",
+        recipe.pairwise_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE
+        and contract.get("stage2_target") == "exact_mr13k_pure_mfe_order_no_residualization",
+    )
+    semantics = training_semantics(profile)
+    embedded = dict(
+        (semantics.get("pairwise_contract") or {}).get("predicted_safety_pair_weight_contract") or {}
+    )
+    check(
+        "mr13af_training_semantics_persist_exact_pair_weight_contract",
+        contract,
+        embedded,
+    )
+    metric_source = inspect.getsource(_predicted_safety_context_pure_mfe_metrics)
+    check_true(
+        "mr13af_model_gate_reports_upside_downside_and_shortcut_geometry",
+        "target_favorable_r" in metric_source
+        and "target_adverse_r" in metric_source
+        and "predicted_safety_to_model_score_mean_daily_spearman" in metric_source
+        and "high_safety_pct" in metric_source
+        and "hmhs_pct" in metric_source,
+    )
+    check(
+        "mr13af_keeps_user_approved_standard_model_sop_fingerprint",
+        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
+        persistent_report_contract_fingerprint("model.standard_sop"),
+    )
+    from config.strategy_compare import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
+    check_true(
+        "mr13af_does_not_pre_authorize_pit_strategy_or_robustness",
+        "CONT13AF_ROLL" not in STRATEGY_DL_SOURCES
+        and all(str(dict(arm or {}).get("dl_id") or "") != "CONT13AF_ROLL" for arm in STRATEGY_COMPARE_ARMS.values())
         and not bool(spec.selection_pit_authorized)
         and not bool(spec.current_time_validation_authorized),
     )

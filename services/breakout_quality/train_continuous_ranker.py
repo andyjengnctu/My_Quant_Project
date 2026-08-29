@@ -24,6 +24,7 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_TRAINER_EVENT,
@@ -770,6 +771,10 @@ def _pairwise_logistic_loss(
     and keeps only strict Pareto-dominance pairs: both component differences must have
     the same non-zero sign. Trade-off or tied pairs receive no supervision and every
     comparable pair has equal weight.
+    MR-13AF receives ``[Pure-MFE percentile, PIT-safe predicted-Safety percentile]``.
+    Pair direction and Delta-NDCG relevance stay exactly MR-13K Pure-MFE; the relevance
+    weight is multiplied by ``min(S_i, S_j)`` and the final loss is a normalized weighted
+    mean. Safety never enters the model input and there is no bucket/cutoff/lambda.
     """
 
     import torch.nn.functional as F
@@ -779,6 +784,7 @@ def _pairwise_logistic_loss(
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
     }:
         raise ValueError(f"不支援的pairwise reduction: {reduction!r}")
@@ -822,6 +828,16 @@ def _pairwise_logistic_loss(
             ranked_date_count += 1
             continue
 
+        day_safety = None
+        if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
+            if day_target.ndim != 2 or int(day_target.shape[1]) != 2:
+                raise ValueError("High-Safety weighted pairwise target必須為[N,2]=[MFE,Safety]")
+            day_safety = day_target[:, 1].detach().float()
+            if not bool(torch.isfinite(day_safety).all().item()):
+                raise FloatingPointError("predicted-Safety pair weight必須為有限值")
+            if bool((day_safety < 0.0).any().item()) or bool((day_safety > 1.0).any().item()):
+                raise ValueError("predicted-Safety pair weight只接受0～1 same-date percentile")
+            day_target = day_target[:, 0]
         if day_target.ndim != 1:
             raise ValueError("scalar pairwise target必須為一維")
         target_diff = day_target[:, None] - day_target[None, :]
@@ -905,6 +921,13 @@ def _pairwise_logistic_loss(
         selected_relevance_delta = torch.abs(selected_target_diff.detach())
         selected_discount_delta = discount_delta[comparable]
         weights = selected_relevance_delta * selected_discount_delta / ideal_dcg
+        if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
+            if day_safety is None:
+                raise RuntimeError("High-Safety weighted reduction缺少predicted-Safety target")
+            safety_pair_weight = torch.minimum(
+                day_safety[:, None], day_safety[None, :]
+            )[comparable]
+            weights = weights * safety_pair_weight
         if not bool(torch.isfinite(weights).all().item()):
             raise FloatingPointError("full-list Delta-NDCG pairwise weights必須為有限值")
         pair_losses.append(losses * weights)
@@ -920,13 +943,17 @@ def _pairwise_logistic_loss(
     if reduction in {
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
     }:
         if not pair_losses or not day_losses:
             return None, 0
         all_losses = torch.cat(pair_losses)
         all_weights = torch.cat(day_losses)
         weight_sum = all_weights.sum()
-        if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG:
+        if reduction in {
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+        }:
             weight_sum_value = float(weight_sum.detach().cpu().item())
             valid_weight_sum = math.isfinite(weight_sum_value) and weight_sum_value > 0.0
         else:
@@ -938,6 +965,8 @@ def _pairwise_logistic_loss(
             label = (
                 "upper-tail relevance"
                 if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE
+                else "high-Safety × full-list Delta-NDCG"
+                if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG
                 else "full-list Delta-NDCG"
             )
             raise FloatingPointError(f"{label} pairwise weight sum必須為正有限值")
@@ -2267,6 +2296,20 @@ def _training_target_for_profile(
     percentile_target: np.ndarray,
     group_table: pd.DataFrame,
 ) -> np.ndarray:
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    if str(recipe.pairwise_reduction) == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
+        if "predicted_safety_percentile" not in group_table.columns:
+            raise ValueError("MR-13AF training缺少PIT-safe predicted_safety_percentile")
+        safety = pd.to_numeric(
+            group_table["predicted_safety_percentile"], errors="coerce"
+        ).to_numpy(dtype=np.float32)
+        valid_safety = safety[np.isfinite(safety)]
+        if len(valid_safety) and (float(valid_safety.min()) < 0.0 or float(valid_safety.max()) > 1.0):
+            raise ValueError("MR-13AF predicted-Safety必須為0～1 same-date percentile")
+        return np.column_stack([
+            np.asarray(percentile_target, dtype=np.float32),
+            safety,
+        ]).astype(np.float32, copy=False)
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
         return build_conditional_targets(group_table, percentile_target).training_target
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING:

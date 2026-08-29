@@ -10756,3 +10756,22 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - Gate：若AE相較MR-13K learnability明顯退化，或top-score downside geometry沒有實質改善，直接STOP；只有同時保留upside learnability並改善Safety evidence才另行授權strategy conversion。
 - 同時更新robustness治理：使用者指定Multi-seed只有在single-seed核心效果已明顯拉開時才做，`~1.5× RoMD`僅作代表性量級而非硬性門檻。C79 vs C59 OOS/ Rolling RoMD ratio=`0.89×/1.14×`且OOS未勝，因此C79 robustness正式不做；保留其Safety gain/upside regret evidence。
 - Decision=`MR13AE_IMPLEMENTED / MODEL_GATE_RESULT_PENDING / C79_ROBUSTNESS_EFFECT_TOO_SMALL_STOP / NO_PIT / NO_STRATEGY_CONVERSION / NOT_PROMOTED`.
+
+## 2026-08-29 — MR-13AE Seed42 Model Gate：Pure-MFE learnability保留，但Safety context被主動反向利用
+
+- Seed42 selected epoch=`1`。Validation/OOS/Breakout Daily rho=`0.4225/0.3937/0.3542`；OOS/Breakout Pair=`63.60/64.05%`。相較MR-13K，Pure-MFE ordering沒有collapse，證明「Safety context + 原始Pure-MFE supervision」的learnability本身成立。
+- Model-specific geometry揭露相反機制：Validation/OOS/Breakout `Score→Low-Adverse Daily rho=-0.3091/-0.3242/-0.3083`；`Pred-Safety→Score=-0.8277/-0.8269/-0.7893`。因此Safety並非被忽略，而是被network當成「越不安全越可能高MFE」的shortcut。
+- OOS Top10 MFE/Adverse=`2.5243R/0.5959R`，High-MFE/High-Safety/HMHS=`75.66/29.01/22.07%`；Breakout=`2.9345R/0.5756R`、`75.22/31.56/25.06%`。Downside geometry與研究目的方向相反。
+- Decision=`PURE_MFE_LEARNABILITY_PRESERVED / SAFETY_CONTEXT_ACTIVELY_INVERTED / DOWNSIDE_GEOMETRY_FAIL / FORWARD_MODEL_GATE_FAIL / NO_PIT / NO_STRATEGY_CONVERSION / STOP`。不做AE Multi-seed/Fixed/Strategy。
+- 使用者再次指出joint-head/joint-target family先前已大量驗證：component heads各自可學，但HM/HS joint交集learnability差；conditional family之所以保留，是因至少仍有可學訊號。因此下一步不得回到MR-13O/MR-13Z式joint objective。
+
+## 2026-08-29 — MR-13AF authorized/implemented：High-Safety-Weighted Pure-MFE anti-shortcut control
+
+- 新identity=`MR-13AF`；profile=`daily_universal_predicted_safety_weighted_pure_mfe_full_list_ndcg_pairwise`；architecture=`inception_time_v1`；target仍為MR-13K canonical `daily_full_horizon_pure_mfe_r_v1`。
+- Stage-1固定MR-13M Low-Adverse / Seed42，直接重用MR-13AD canonical predicted-Safety Selection cross-fit與Forward fixed-pre-OOS artifact。Selection Stage-2只使用PIT context-covered target-valid rows。
+- Stage-2不把predicted Safety輸入network；模型結構回到MR-13K InceptionTime。Pure-MFE pair direction、full-list Delta-NDCG relevance、split、optimizer、epoch selection與Seed42不變。
+- 唯一scientific change：每個same-date non-tied Pure-MFE pair的MR-13K ΔNDCG weight再乘`min(S_i,S_j)`，S為PIT-safe predicted-Safety same-date percentile；batch loss以所有comparable pair的weight sum做normalized weighted mean。Safety全為1時精確退化為MR-13K loss。
+- 此設計不是Safety-similarity：`S=.1/.12`兩個都危險的pair仍只有約`.1`相對Safety權重；`S=.92/.85`的高Safety pair約`.85`。也不是joint/Pareto：所有Pure-MFE non-tied pairs仍存在，Safety只控制supervision importance。
+- 無bucket數量、Safety threshold、lambda、temperature、product、joint head、residual target或portfolio state。Model-specific Extension沿用actual MFE/Safety diagnostics並新增AF語意說明。
+- Authorization=`Seed42 Forward Model Gate only`；`selection_pit_authorized=False / current_time_validation_authorized=False`，不建立CONT13AF/Strategy arm/robustness/fixed。
+- Decision=`MR13AF_IMPLEMENTED / HIGH_SAFETY_PAIR_WEIGHT_ANTI_SHORTCUT / MODEL_GATE_RESULT_PENDING / NO_PIT / NO_STRATEGY_CONVERSION / NOT_PROMOTED`.
