@@ -5944,6 +5944,11 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+        CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+        CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
+        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+        CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
         DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         get_breakout_quality_experiment_profile,
@@ -6000,6 +6005,24 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
             bool(spec.selection_pit_authorized),
             bool(spec.current_time_validation_authorized),
         ),
+    )
+    check_true(
+        "mr13af_runtime_contract_declares_context_objective_dependency_and_output_capabilities",
+        recipe.context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
+        and recipe.context_policy.roles == (
+            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
+        )
+        and recipe.objective_policy.pair_weight_policy
+        == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY
+        and recipe.objective_policy.pair_target_schema
+        == CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT
+        and recipe.dependency_spec.context_source
+        == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
+        and not bool(recipe.dependency_spec.requires_continuous_target_artifact)
+        and recipe.output_schema.width_for("primary") == 2
+        and recipe.output_schema.width_for("both") == 4
+        and recipe.output_schema.width_for("tri_head") == 6,
     )
     check_true(
         "mr13af_keeps_mr13k_recipe_except_pair_weighting_and_context_coverage",

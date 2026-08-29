@@ -55,6 +55,11 @@
 14. Meta-quality 可執行輕量的 dead-code／research-debt 候選掃描，但其詳細掃描集合由正式 test contract 持有；此類維護訊號預設不得單獨形成 formal FAIL。
 15. Prefetch、parallelism、cache 或其他 performance optimization 只能改變 execution strategy，不得改變 sample membership／order、seed、optimizer updates、loss、determinism 或其他 scientific semantics；具體 execution knob 由 config 持有，不屬 scientific identity，performance benchmark 結果只記錄於對應實驗紀錄。
 
+16. **Declarative Experiment / Generic Engine**：研究 identity、顯示名稱與歷史敘述不得滲入正式 execution engine。Experiment／profile 必須先解析成單一 canonical runtime contract（例如 target、context、objective／loss、pair-weight、dependency、model-output schema、metric bundle、authorization），trainer、data provider、artifact planner、inference、menu 與 renderer 只能消費該 contract 或其 reusable capability，不得各自以 `MR-*`、profile name、target alias 或其他 identity 重猜相同語意。若新研究只是重新組合既有 capability，production engine 原則上只新增／修改 declarative spec；若仍需在多個 generic consumer 增加 experiment-specific `if/elif`，視為架構缺口，必須先抽成 reusable policy／capability，而不是擴散特例。
+17. **能力單一 owner 與修改半徑**：新的 target、context、objective、pair-weight、model-output、artifact dependency、metric 或 authorization semantics 必須各有唯一 owner／registry／contract；不得同時在 config、trainer、data、dependency planner、report、menu 與 tests 維護多份對照表。跨層 consumer 需要同一資訊時，必須從 owner 派生或透過 runtime contract 傳遞。若一個局部需求造成多個同層／跨層檔案同步認 identity，應優先視為 shotgun-surgery 訊號並收斂 abstraction。
+18. **避免 God module 與中央 switch 持續膨脹**：不得因新增 experiment／architecture／objective 而持續把 identity-specific branch 堆入大型 trainer、factory、application 或 config helper。拆分必須依責任與穩定 contract 邊界，不得只為降低 LOC 把一個大型模組切成多個高度互相依賴的小檔；重構的成功判準包含後續需求的修改檔案數與需理解的責任範圍下降，而不只是單檔變小。
+19. **Capability-oriented tests**：generic capability 應由參數化／registry-driven contract tests 自動覆蓋；dedicated synthetic 只用於真正新增 primitive、特殊 invariant 或歷史 bug regression。不得為每個只是既有 capability 組合的新 experiment，重複維護 `impacted_modules`、coverage target、檔名清單或第二份 experiment matrix；檔案位置重構不應被測試系統誤視為 scientific semantic 變更。
+20. **重構不得改 scientific/artifact identity**：純 architecture／code-organization refactor 必須保持既有 runtime payload、manifest／fingerprint、artifact reuse、PIT legality、seed、模型輸出與報表 contract 語意不變；若無法保持，必須把會改 identity 的部分拆成另一次明確 research／product decision，不得混在 behavior-preserving cleanup 中。
 
 ## D. 交易與策略原則
 

@@ -8,38 +8,15 @@ from typing import Any
 
 import numpy as np
 
+from config.breakout_quality import BREAKOUT_QUALITY_OUTPUT_SCHEMA
+
 from filters.breakout_quality.dataset_store import IndexedFeatureBank
 from filters.breakout_quality.market_set import IndexedMarketSetBank, MarketSetBatch
 from filters.breakout_quality.torch_runtime import TorchExecutionPlan, autocast_context
 
 
-_OUTPUT_HEAD_WIDTHS = {
-    "": 2,
-    "primary": 2,
-    "mfe": 2,
-    "primary_mfe": 2,
-    "conditional_safety": 2,
-    "safety": 2,
-    "raw_safety": 2,
-    "safety_condition": 2,
-    "conditional_mfe": 2,
-    "final": 2,
-    "joint_hmhs": 2,
-    "hmhs": 2,
-    "conditional_both": 4,
-    "both": 4,
-    "tri_head": 6,
-    "safety_raw_mfe_hmhs": 6,
-    "all_three": 6,
-}
-
-
 def _resolve_output_width(output_head: str | None) -> int:
-    head = str(output_head or "").strip().lower()
-    try:
-        return int(_OUTPUT_HEAD_WIDTHS[head])
-    except KeyError as exc:
-        raise ValueError(f"未知 breakout-quality output_head width contract: {output_head!r}") from exc
+    return BREAKOUT_QUALITY_OUTPUT_SCHEMA.width_for(output_head)
 
 
 def materialize_indexed_feature_inputs(

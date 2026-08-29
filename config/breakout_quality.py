@@ -1544,6 +1544,22 @@ CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE = "upper_tail_relevanc
 CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG = "full_list_delta_ndcg_weighted"
 CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG = "full_list_delta_ndcg_times_min_predicted_safety"
 CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE = "pareto_dominance_equal_pair"
+
+# Generic runtime capability primitives.  Scientific/research identity must not leak into
+# execution consumers; consumers resolve these policies from ContinuousRankerExecutionRecipe.
+CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE = "none"
+CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE = "predicted_upside"
+CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY = "predicted_safety"
+CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE = "coverage"
+CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT = "model_input"
+CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM = "target_transform"
+CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT = "pair_weight"
+CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE = "none"
+CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY = "min_predicted_safety"
+CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR = "scalar"
+CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS = "pareto_components"
+CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT = "scalar_with_context_weight"
+
 SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS = (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
@@ -1685,12 +1701,129 @@ class ContinuousRankerResearchSpec:
 
 
 @dataclass(frozen=True)
-class ContinuousRankerExecutionRecipe:
-    """Experiment-agnostic execution contract derived from the canonical profile/spec.
+class ContinuousRankerContextPolicy:
+    """Execution-only context capability; no MR/profile identity is allowed here."""
 
-    Services should consume this recipe for trainer/target/loss/architecture semantics.
+    source: str = CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+    roles: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        supported_sources = {
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+        }
+        supported_roles = {
+            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
+        }
+        if self.source not in supported_sources:
+            raise ValueError(f"不支援的continuous-ranker context source: {self.source!r}")
+        unknown_roles = sorted(set(self.roles) - supported_roles)
+        if unknown_roles:
+            raise ValueError(f"不支援的continuous-ranker context roles: {unknown_roles}")
+        if self.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE and self.roles:
+            raise ValueError("context source=none時不得宣告context roles")
+        if self.source != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE and CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE not in self.roles:
+            raise ValueError("persistent context source必須宣告coverage role")
+
+    def has_role(self, role: str) -> bool:
+        return str(role) in self.roles
+
+
+@dataclass(frozen=True)
+class ContinuousRankerObjectivePolicy:
+    """Executable objective semantics independent of research naming/history."""
+
+    pairwise_reduction: str | None
+    pair_weight_policy: str = CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
+    pair_target_schema: str = CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR
+
+    def __post_init__(self) -> None:
+        if self.pairwise_reduction is not None and self.pairwise_reduction not in SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS:
+            raise ValueError(f"不支援的continuous-ranker pairwise reduction: {self.pairwise_reduction!r}")
+        if self.pair_weight_policy not in {
+            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+        }:
+            raise ValueError(f"不支援的continuous-ranker pair weight policy: {self.pair_weight_policy!r}")
+        if self.pair_target_schema not in {
+            CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR,
+            CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS,
+            CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
+        }:
+            raise ValueError(f"不支援的continuous-ranker pair target schema: {self.pair_target_schema!r}")
+        weighted = self.pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
+        if weighted != (self.pair_target_schema == CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT):
+            raise ValueError("pair weight policy與pair target schema不一致")
+
+
+@dataclass(frozen=True)
+class ContinuousRankerDependencySpec:
+    """Persistent upstream requirements expressed as capabilities, not artifact paths."""
+
+    requires_continuous_target_artifact: bool
+    context_source: str = CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+
+    def __post_init__(self) -> None:
+        if self.context_source not in {
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+        }:
+            raise ValueError(
+                f"不支援的continuous-ranker dependency context source: {self.context_source!r}"
+            )
+
+
+@dataclass(frozen=True)
+class BreakoutQualityOutputSchema:
+    """Canonical model-output width contract shared by inference consumers."""
+
+    head_widths: tuple[tuple[str, int], ...]
+
+    def width_for(self, output_head: str | None) -> int:
+        head = str(output_head or "").strip().lower()
+        widths = dict(self.head_widths)
+        try:
+            return int(widths[head])
+        except KeyError as exc:
+            raise ValueError(f"未知 breakout-quality output_head width contract: {output_head!r}") from exc
+
+
+BREAKOUT_QUALITY_OUTPUT_SCHEMA = BreakoutQualityOutputSchema(
+    head_widths=(
+        ("", 2),
+        ("primary", 2),
+        ("mfe", 2),
+        ("primary_mfe", 2),
+        ("conditional_safety", 2),
+        ("safety", 2),
+        ("raw_safety", 2),
+        ("safety_condition", 2),
+        ("conditional_mfe", 2),
+        ("final", 2),
+        ("joint_hmhs", 2),
+        ("hmhs", 2),
+        ("conditional_both", 4),
+        ("both", 4),
+        ("tri_head", 6),
+        ("safety_raw_mfe_hmhs", 6),
+        ("all_three", 6),
+    )
+)
+
+
+@dataclass(frozen=True)
+class ContinuousRankerExecutionRecipe:
+    """Experiment-agnostic execution contract derived from canonical declarations.
+
+    Services consume this recipe for trainer/target/context/dependency/output semantics.
     Research identity (MR id, phase, experiment wording) remains in
-    ContinuousRankerResearchSpec for reports/history only.
+    ContinuousRankerResearchSpec for reports/history only.  Compatibility properties keep
+    existing consumers stable while Round 2 migrates them to the explicit policy objects.
     """
 
     profile_name: str
@@ -1702,11 +1835,21 @@ class ContinuousRankerExecutionRecipe:
     training_label_scope: str
     training_sample_scope: str
     score_semantic_id: str
-    pairwise_reduction: str | None
+    objective_policy: ContinuousRankerObjectivePolicy
+    context_policy: ContinuousRankerContextPolicy
+    dependency_spec: ContinuousRankerDependencySpec
+    output_schema: BreakoutQualityOutputSchema
     historical_pit_authorized: bool
     current_time_validation_authorized: bool
 
+    @property
+    def pairwise_reduction(self) -> str | None:
+        return self.objective_policy.pairwise_reduction
+
     def as_dict(self) -> dict[str, Any]:
+        # Preserve the pre-Round-1 payload exactly: this helper may participate in
+        # manifests/fingerprints outside this module and architecture refactoring must not
+        # silently create a new scientific identity.
         return {
             "profile_name": self.profile_name,
             "trainer_family": self.trainer_family,
@@ -2422,16 +2565,78 @@ def get_continuous_ranker_research_spec(
     return spec
 
 
+def _resolve_continuous_ranker_context_policy(
+    profile: BreakoutQualityExperimentProfile,
+    spec: ContinuousRankerResearchSpec,
+) -> ContinuousRankerContextPolicy:
+    target_id = str(profile.continuous_target_id or "")
+    roles: tuple[str, ...] = ()
+    source = CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+    if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
+        source = CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE
+        roles = (
+            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
+        )
+    elif target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID:
+        source = CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
+        roles = (
+            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
+        )
+    elif target_id == PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID:
+        source = CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
+        roles = (
+            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
+        )
+    elif spec.pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
+        source = CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
+        roles = (
+            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
+        )
+    return ContinuousRankerContextPolicy(source=source, roles=roles)
+
+
+def _resolve_continuous_ranker_objective_policy(
+    spec: ContinuousRankerResearchSpec,
+) -> ContinuousRankerObjectivePolicy:
+    reduction = spec.pairwise_reduction
+    if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
+        return ContinuousRankerObjectivePolicy(
+            pairwise_reduction=reduction,
+            pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+            pair_target_schema=CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
+        )
+    if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE:
+        return ContinuousRankerObjectivePolicy(
+            pairwise_reduction=reduction,
+            pair_target_schema=CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS,
+        )
+    return ContinuousRankerObjectivePolicy(pairwise_reduction=reduction)
+
+
 def get_continuous_ranker_execution_recipe(
     experiment_profile: str,
 ) -> ContinuousRankerExecutionRecipe:
-    """Resolve executable semantics without leaking research identity into services."""
+    """Resolve executable semantics once; consumers must not rediscover profile meaning."""
 
     profile_name = normalize_breakout_quality_experiment_profile(experiment_profile)
     profile = get_breakout_quality_experiment_profile(profile_name)
     spec = get_continuous_ranker_research_spec(profile_name)
     if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
         raise ValueError(f"continuous ranker recipe只接受continuous profile: {profile_name}")
+    context_policy = _resolve_continuous_ranker_context_policy(profile, spec)
+    objective_policy = _resolve_continuous_ranker_objective_policy(spec)
+    dependency_spec = ContinuousRankerDependencySpec(
+        requires_continuous_target_artifact=(
+            profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
+        ),
+        context_source=context_policy.source,
+    )
     return ContinuousRankerExecutionRecipe(
         profile_name=profile_name,
         trainer_family=spec.trainer_family,
@@ -2442,7 +2647,10 @@ def get_continuous_ranker_execution_recipe(
         training_label_scope=profile.training_label_scope,
         training_sample_scope=profile.training_sample_scope,
         score_semantic_id=spec.score_semantic_id,
-        pairwise_reduction=spec.pairwise_reduction,
+        objective_policy=objective_policy,
+        context_policy=context_policy,
+        dependency_spec=dependency_spec,
+        output_schema=BREAKOUT_QUALITY_OUTPUT_SCHEMA,
         historical_pit_authorized=bool(spec.selection_pit_authorized),
         current_time_validation_authorized=bool(
             spec.current_time_validation_authorized
@@ -3427,6 +3635,23 @@ __all__ = [
     'DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'ContinuousRankerResearchSpec',
+    'ContinuousRankerContextPolicy',
+    'ContinuousRankerObjectivePolicy',
+    'ContinuousRankerDependencySpec',
+    'BreakoutQualityOutputSchema',
+    'BREAKOUT_QUALITY_OUTPUT_SCHEMA',
+    'CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE',
+    'CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE',
+    'CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY',
+    'CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE',
+    'CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT',
+    'CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM',
+    'CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT',
+    'CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE',
+    'CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY',
+    'CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR',
+    'CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS',
+    'CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT',
     'ContinuousRankerExecutionRecipe',
     'CONTINUOUS_RANKER_TRAINER_EVENT',
     'CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL',

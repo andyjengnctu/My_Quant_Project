@@ -15,7 +15,10 @@ import numpy as np
 import pandas as pd
 
 from config.breakout_quality import (
-    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+    CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
+    CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
     get_breakout_quality_experiment_profile,
     get_continuous_ranker_execution_recipe,
     get_high_safety_weighted_pure_mfe_contract,
@@ -560,9 +563,9 @@ def load_daily_universal_ranker_data(
     profile = get_breakout_quality_experiment_profile(experiment_profile)
     target_id = str(profile.continuous_target_id or "").strip()
     execution_recipe = get_continuous_ranker_execution_recipe(experiment_profile)
-    use_predicted_safety_pair_weight_context = (
-        str(execution_recipe.pairwise_reduction)
-        == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG
+    context_policy = execution_recipe.context_policy
+    use_predicted_safety_pair_weight_context = context_policy.has_role(
+        CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT
     )
     if target_id not in {
         DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
@@ -581,11 +584,19 @@ def load_daily_universal_ranker_data(
     if bool(model_spec.requires_market_set) or bool(model_spec.derived_context_features):
         raise ValueError("daily universal ranker不支援market-set／derived-context architecture")
     use_risk_context = str(model_spec.architecture) == "inception_time_risk_context_v1"
-    use_predicted_upside_context = (
+    architecture_uses_predicted_upside_context = (
         str(model_spec.architecture) == "inception_time_predicted_upside_context_v1"
     )
-    use_predicted_safety_context = (
+    architecture_uses_predicted_safety_context = (
         str(model_spec.architecture) == "inception_time_predicted_safety_context_v1"
+    )
+    use_predicted_upside_context = bool(
+        context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE
+        and context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT)
+    )
+    use_predicted_safety_context = bool(
+        context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
+        and context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT)
     )
     use_predicted_scalar_context = bool(
         use_predicted_upside_context or use_predicted_safety_context
@@ -596,16 +607,10 @@ def load_daily_universal_ranker_data(
         raise ValueError("daily universal ranker architecture/context contract不一致")
     if use_risk_context and target_id != DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID:
         raise ValueError("risk-context architecture只允許MR-13I/J同源risk-normalized target")
-    if use_predicted_upside_context != (
-        target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID
-    ):
-        raise ValueError("MR-13AC predicted-upside architecture與conditional low-adverse target必須成對")
-    predicted_safety_target_ids = {
-        PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
-        PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
-    }
-    if use_predicted_safety_context != (target_id in predicted_safety_target_ids):
-        raise ValueError("predicted-safety architecture只允許MR-13AD/AE同源targets")
+    if architecture_uses_predicted_upside_context != use_predicted_upside_context:
+        raise ValueError("predicted-upside architecture與runtime context policy不一致")
+    if architecture_uses_predicted_safety_context != use_predicted_safety_context:
+        raise ValueError("predicted-safety architecture與runtime context policy不一致")
 
     # The existing official event dataset remains the source-selection/inventory truth.
     summary, _indexed_features, _context, _labels, event_rows = load_validated_dataset_bundle(
@@ -1053,12 +1058,11 @@ def load_daily_universal_ranker_data(
         group_table["target_equal_rank_composite"] = raw_target
     context_manifest = None
     predicted_context_manifest_key = None
-    if target_id in {
-        PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
-        PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
-        PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
-    } or use_predicted_safety_pair_weight_context:
-        if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
+    if context_policy.source in {
+        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
+        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+    }:
+        if context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE:
             context_frame, context_manifest = load_validated_predicted_upside_context(
                 root,
                 filter_id=filter_id,

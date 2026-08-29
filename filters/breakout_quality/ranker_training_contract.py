@@ -12,7 +12,11 @@ from typing import Any
 
 from config.breakout_quality import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
-    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+    CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
+    CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
+    CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
@@ -26,10 +30,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     get_continuous_ranker_execution_recipe,
-    PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
     get_predicted_upside_context_contract,
-    PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
-    PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
     get_predicted_safety_context_contract,
     get_predicted_safety_pure_mfe_contract,
     get_high_safety_weighted_pure_mfe_contract,
@@ -337,15 +338,16 @@ def training_semantics(profile) -> dict[str, Any]:
         recipe = get_continuous_ranker_execution_recipe(profile.name)
         pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
         pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        target_id = str(profile.continuous_target_id or "")
-        if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
+        context_policy = recipe.context_policy
+        if context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE:
             pairwise_contract["predicted_upside_context_contract"] = get_predicted_upside_context_contract()
-        if target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID:
-            pairwise_contract["predicted_safety_context_contract"] = get_predicted_safety_context_contract()
-        if target_id == PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID:
-            pairwise_contract["predicted_safety_context_contract"] = get_predicted_safety_pure_mfe_contract()
-        if str(recipe.pairwise_reduction) == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
-            pairwise_contract["predicted_safety_pair_weight_contract"] = get_high_safety_weighted_pure_mfe_contract()
+        if context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY:
+            if context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM):
+                pairwise_contract["predicted_safety_context_contract"] = get_predicted_safety_context_contract()
+            elif context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT):
+                pairwise_contract["predicted_safety_context_contract"] = get_predicted_safety_pure_mfe_contract()
+            if context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT):
+                pairwise_contract["predicted_safety_pair_weight_contract"] = get_high_safety_weighted_pure_mfe_contract()
         if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
             pairwise_contract.update({
                 "pair_scope": "same_date_strict_pareto_dominance_pairs",

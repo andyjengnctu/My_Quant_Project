@@ -26,6 +26,7 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+    CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
@@ -771,10 +772,10 @@ def _pairwise_logistic_loss(
     and keeps only strict Pareto-dominance pairs: both component differences must have
     the same non-zero sign. Trade-off or tied pairs receive no supervision and every
     comparable pair has equal weight.
-    MR-13AF receives ``[Pure-MFE percentile, PIT-safe predicted-Safety percentile]``.
-    Pair direction and Delta-NDCG relevance stay exactly MR-13K Pure-MFE; the relevance
-    weight is multiplied by ``min(S_i, S_j)`` and the final loss is a normalized weighted
-    mean. Safety never enters the model input and there is no bucket/cutoff/lambda.
+    The high-Safety context-weighted policy receives
+    ``[ranking percentile, PIT-safe predicted-Safety percentile]``. Pair direction and
+    Delta-NDCG relevance remain target-driven; relevance is multiplied by ``min(S_i,S_j)``
+    and the final loss is a normalized weighted mean. Context is supervision-only.
     """
 
     import torch.nn.functional as F
@@ -2346,15 +2347,18 @@ def _training_target_for_profile(
         return targets
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
         recipe = get_continuous_ranker_execution_recipe(profile.name)
-        if str(recipe.pairwise_reduction) == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
+        if (
+            recipe.objective_policy.pair_target_schema
+            == CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT
+        ):
             if "predicted_safety_percentile" not in group_table.columns:
-                raise ValueError("MR-13AF training缺少PIT-safe predicted_safety_percentile")
+                raise ValueError("context-weighted pairwise training缺少predicted_safety_percentile")
             safety = pd.to_numeric(
                 group_table["predicted_safety_percentile"], errors="coerce"
             ).to_numpy(dtype=np.float32)
             valid_safety = safety[np.isfinite(safety)]
             if len(valid_safety) and (float(valid_safety.min()) < 0.0 or float(valid_safety.max()) > 1.0):
-                raise ValueError("MR-13AF predicted-Safety必須為0～1 same-date percentile")
+                raise ValueError("predicted-Safety pair context必須為0～1 same-date percentile")
             return np.column_stack([
                 np.asarray(percentile_target, dtype=np.float32),
                 safety,

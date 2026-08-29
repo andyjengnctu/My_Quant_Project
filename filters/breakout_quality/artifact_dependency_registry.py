@@ -14,8 +14,8 @@ from typing import Any
 
 from config.research import get_research_artifact_preparation_policy
 from config.breakout_quality import (
-    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
-    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
     get_continuous_ranker_execution_recipe,
     get_breakout_quality_experiment_profile,
 )
@@ -32,14 +32,11 @@ from filters.breakout_quality.continuous_target import (
 )
 from filters.breakout_quality.dataset_readiness import collect_dataset_readiness
 from filters.breakout_quality.predicted_upside_context import (
-    PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
     PREDICTED_UPSIDE_CONTEXT_MANIFEST_FILENAME,
     load_validated_predicted_upside_context,
     resolve_predicted_upside_context_dir,
 )
 from filters.breakout_quality.predicted_safety_context import (
-    PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
-    PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
     PREDICTED_SAFETY_CONTEXT_MANIFEST_FILENAME,
     load_validated_predicted_safety_context,
     resolve_predicted_safety_context_dir,
@@ -142,18 +139,17 @@ def required_upstream_artifact_types(experiment_profile: str) -> tuple[str, ...]
     therefore do not require a persistent event-group Continuous Target artifact.
     """
 
-    profile = get_breakout_quality_experiment_profile(str(experiment_profile))
-    if str(profile.training_sample_scope) == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS:
-        return (ARTIFACT_DATASET_CORE, ARTIFACT_CONTINUOUS_TARGET)
-    target_id = str(profile.continuous_target_id or "")
-    if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
-        return (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_UPSIDE_CONTEXT)
-    if target_id in {PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID, PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID}:
-        return (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_SAFETY_CONTEXT)
     recipe = get_continuous_ranker_execution_recipe(str(experiment_profile))
-    if str(recipe.pairwise_reduction) == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
-        return (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_SAFETY_CONTEXT)
-    return (ARTIFACT_DATASET_CORE,)
+    required = [ARTIFACT_DATASET_CORE]
+    if bool(recipe.dependency_spec.requires_continuous_target_artifact):
+        required.append(ARTIFACT_CONTINUOUS_TARGET)
+    context_artifact = {
+        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE: ARTIFACT_PREDICTED_UPSIDE_CONTEXT,
+        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY: ARTIFACT_PREDICTED_SAFETY_CONTEXT,
+    }.get(str(recipe.dependency_spec.context_source))
+    if context_artifact is not None:
+        required.append(context_artifact)
+    return tuple(required)
 
 
 def dependency_types_for(
@@ -186,6 +182,7 @@ def collect_model_upstream_readiness(
 
     root = Path(project_root).resolve()
     profile = get_breakout_quality_experiment_profile(str(experiment_profile))
+    recipe = get_continuous_ranker_execution_recipe(str(experiment_profile))
     dataset_readiness = collect_dataset_readiness(
         root,
         filter_id=str(filter_id),
@@ -218,10 +215,7 @@ def collect_model_upstream_readiness(
         )
     ]
 
-    if (
-        str(profile.training_sample_scope)
-        == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
-    ):
+    if bool(recipe.dependency_spec.requires_continuous_target_artifact):
         target_id = str(profile.continuous_target_id or "")
         target_manifest = (
             resolve_continuous_target_dir(root, str(filter_id), target_id=target_id)
@@ -268,7 +262,7 @@ def collect_model_upstream_readiness(
                 description=target_description,
             )
         )
-    if str(profile.continuous_target_id or "") == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
+    if recipe.context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE:
         context_dir = resolve_predicted_upside_context_dir(
             root,
             filter_id=str(filter_id),
@@ -311,16 +305,7 @@ def collect_model_upstream_readiness(
                 ),
             )
         )
-    recipe = get_continuous_ranker_execution_recipe(str(experiment_profile))
-    needs_predicted_safety_context = (
-        str(profile.continuous_target_id or "") in {
-            PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
-            PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
-        }
-        or str(recipe.pairwise_reduction)
-        == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG
-    )
-    if needs_predicted_safety_context:
+    if recipe.context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY:
         context_dir = resolve_predicted_safety_context_dir(
             root,
             filter_id=str(filter_id),

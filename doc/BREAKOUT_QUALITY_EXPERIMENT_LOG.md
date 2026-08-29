@@ -10783,3 +10783,12 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - 工程修正：AF移除`reference_profile_name`；trainer的post-checkpoint Common Target Reference只允許顯式`evaluation_reference_profile_name`，不得fallback到Target-comparison reference。沒有改AF target、pair weighting、split、optimizer、epoch-selection、Seed或任何downstream authorization。
 - Decision維持=`MR13AF_IMPLEMENTED / MODEL_GATE_RESULT_PENDING / ENGINEERING_BLOCKER_FIXED / RERUN_SAME_SEED42_CELL / NO_PIT / NO_STRATEGY_CONVERSION / NOT_PROMOTED`。
 
+
+## 2026-08-29 — Engineering Round 1：Declarative continuous-ranker runtime contract
+
+- **Status**：`IMPLEMENTED / ENGINEERING_ONLY / BEHAVIOR_PRESERVING`；不建立新的 `MR-*`／`ARCH-*`／`SR-C*` identity，不形成任何 scientific result 或 promotion decision。
+- **程式基準**：使用者提供 `test-branch-1_20260829_112220_61490b01(1).zip`，SHA256=`627e1bf41d1f00a609d4c49fe72cb24297b1e514e7f1c0d47cb9d3b7d0c5b47b`。
+- **唯一工程變更**：既有 `ContinuousRankerExecutionRecipe` 升級為 declarative runtime contract，集中解析 `ContextPolicy / ObjectivePolicy / DependencySpec / OutputSchema`。Artifact dependency、daily-universal context loading、training semantics、context-weighted training target 與 inference output width 開始消費同一 runtime capability contract，不再各自從 MR/profile/target/reduction 重猜相同語意。
+- **Compatibility**：保留既有 `recipe.pairwise_reduction` property 與 `as_dict()` 舊 payload；MR-13AF 仍為 Pure-MFE + PIT-safe predicted-Safety `min(S_i,S_j)` pair weighting、Safety 不進 network、Selection/Current validation authorization 均維持 `False`。Existing 2/4/6-logit output widths只移至 canonical output schema，數值與模型 head contract不變。
+- **治理規範**：`doc/PROJECT_SETTINGS.md` C16～C20 新增 Declarative Experiment / Generic Engine、能力單一 owner、避免 God-module/中央 switch 膨脹、capability-oriented tests、behavior-preserving refactor 不得改 scientific/artifact identity 等長期 Code Style 原則。
+- **Research state**：`doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md` Priority 1 仍為同一 MR-13AF Model Gate；本輪沒有結果，因此 Queue／Registry scientific status 不變。
