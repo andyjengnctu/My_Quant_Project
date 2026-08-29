@@ -10992,3 +10992,12 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Pred-Safety semantics**：canonical PIT-safe Pred-Safety升格為Standard reporting reference。正式`[1]→[1]` preparation會BUILD/REUSE shared owner artifact，但它不改model target/input/loss/epoch selection/final score或fitting identity；若reference缺失／失效，報表顯示N/A/PARTIAL，不得因evaluation-only reference使model fit失敗。
 - **Extension boundary**：AE/AF/AH原先共通的MFE/Safety diagnostics不再屬Model-specific Extension；Direct HM/HS、Joint-Min等真正特定head evidence仍留Extension。
 - **Scientific status**：MR-13H、MR-13AF、MR-13AJ及既有strategy/production authorization全部不因本工程變更而改變；此contract只建立未來apples-to-apples BASE comparison surface。
+
+## 2026-08-30 — MR-13AJ Seed42 Forward Model Gate result / STOP / MR-13H Standard SOP v2 BASE comparison next
+
+- **Program basis**：使用者提供 `test-branch-1_20260829_235339_7c6dbacb.zip`；正式 `[1]→[1]` 執行MR-13AJ，Standard Model SOP v2共同MFE×Safety欄位已正常輸出。
+- **MR-13AJ primary learnability**：selected epoch=`1`；Validation/OOS/Breakout Pure-MFE Daily rho=`0.0598/-0.0633/-0.1945`、Pair=`52.11/47.94/43.54%`。OOS/Breakout Top-K Lift=`-0.2997/-0.3118R`，已低於random ordering並在Breakout顯著惡化。
+- **Standard SOP v2 mechanism evidence**：MR-13AJ target是canonical Pure-MFE，因此OOS `Target→Full-MFE rho=1.0000`；但`Score→Full-MFE=-0.0633`。同時OOS `Pred-Safety→Score=+0.2615`、`Score→Low-Adverse=+0.0994`；Breakout為`Score→Full-MFE=-0.1945`、`Pred-Safety→Score=+0.4362`、`Score→Low-Adverse=+0.1430`。Top10 OOS MFE/Adverse=`1.1883R/0.2856R`、High-MFE/High-Safety/HMHS=`47.04/57.44/26.06%`。這不是單純MFE rho小幅付費，而是score ordering由Pure-MFE方向反轉並轉向Safety。
+- **Decision**：`MFE_ORDERING_COLLAPSE / SAFETY_DIRECTION_FLIPPED_POSITIVE / FORWARD_MODEL_GATE_FAIL / STOP`。依AJ事前stop rule，不做PIT、Strategy conversion、Multi-seed、Fixed或weight-strength sweep；conflict-only unsafe-winner discount不再延伸。
+- **Next BASE decision**：使用者已要求在MR-13H與MR-13AF間選長期改善BASE，並已授權Standard SOP v2共同比較欄位。既有AF evidence保留；下一步只把Active Model Research Profile切回既有MR-13H scientific identity，正式重跑一次Seed42 `[1]→[1]`，補齊同口徑`Target/Score→MFE/Low-Adverse`、`Pred-Safety→Target/Score`與Top10 MFE/Adverse/High-MFE/High-Safety/HMHS，再做H vs AF BASE decision。此切換不是promotion，也不改production workflow anchor。
+
