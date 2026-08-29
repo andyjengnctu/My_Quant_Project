@@ -1426,6 +1426,36 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
         add_check(results, "output_contract", case_id, "performance_max_peak_memory_value", 64.0, perf.get("max_step_peak_traced_memory_mb"))
         add_check(results, "output_contract", case_id, "performance_meta_quality_peak_memory_value", 40.0, perf.get("meta_quality_peak_traced_memory_mb"))
 
+        (run_dir / "validate_consistency_summary.json").unlink()
+        with patch.dict(os.environ, {LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)}):
+            blocked_perf = build_performance_summary(
+                run_dir,
+                manifest,
+                current_meta_quality_duration_sec=1.25,
+                current_meta_quality_peak_traced_memory_mb=40.0,
+            )
+        required_summary_result = next(
+            row
+            for row in blocked_perf.get("results", [])
+            if row.get("name") == "performance_required_step_summaries_present"
+        )
+        add_check(
+            results,
+            "output_contract",
+            case_id,
+            "missing_upstream_performance_summary_is_blocked_not_secondary_fail",
+            "BLOCKED",
+            required_summary_result.get("status"),
+        )
+        add_check(
+            results,
+            "output_contract",
+            case_id,
+            "missing_upstream_performance_summary_still_blocks_meta_completion",
+            False,
+            blocked_perf.get("ok"),
+        )
+
     summary["step_peak_memory_count"] = 4
     return results, summary
 
@@ -3229,6 +3259,7 @@ def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):
             "timed_out": False,
             "synthetic_fail_count": 0,
             "synthetic_case_count": synthetic_case_count,
+            "suite_completed": True,
             "json_generated": True,
         })
 

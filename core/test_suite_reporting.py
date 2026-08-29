@@ -166,6 +166,8 @@ def print_test_suite_human_summary(
             details.append(f"summary_write_error={summary_write_error}")
         if "fail_count" in payload:
             _append_int_detail(details, key="fail_count", raw_value=payload.get("fail_count", 0))
+        if "blocked_count" in payload:
+            _append_int_detail(details, key="blocked_count", raw_value=payload.get("blocked_count", 0))
         if "failed_count" in payload:
             _append_int_detail(details, key="failed_count", raw_value=payload.get("failed_count", 0))
         return ", ".join(details)

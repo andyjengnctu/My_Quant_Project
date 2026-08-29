@@ -172,12 +172,14 @@ def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_
         "timed_out": False,
         "synthetic_fail_count": 0,
         "synthetic_case_count": 0,
+        "suite_completed": False,
         "json_generated": False,
     }
 
     try:
         cov.start()
         results, summaries = validator_runner(base_params)
+        run_info["suite_completed"] = True
         synthetic_fail_count = sum(1 for row in results if row.get("status") == "FAIL")
         run_info["returncode"] = 0 if synthetic_fail_count == 0 else 1
         run_info["synthetic_fail_count"] = int(synthetic_fail_count)

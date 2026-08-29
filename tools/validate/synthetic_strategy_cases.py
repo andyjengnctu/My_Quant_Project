@@ -8,7 +8,7 @@ import re
 import unicodedata
 from decimal import Decimal
 from pathlib import Path
-from contextlib import ExitStack, nullcontext, redirect_stderr, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -273,11 +273,21 @@ class _FakeOptunaTrial:
 
 
 class _FakeProfileRecorder:
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        output_dir=None,
+        session_ts=None,
+        enabled=False,
+        console_print=False,
+        print_every_n_trials=999999,
+    ):
         self.rows = []
-        self.enabled = False
-        self.console_print = False
-        self.print_every_n_trials = 999999
+        self.output_dir = output_dir
+        self.session_ts = session_ts
+        self.enabled = bool(enabled)
+        self.console_print = bool(console_print)
+        self.print_every_n_trials = int(print_every_n_trials)
 
     def append_row(self, row):
         self.rows.append(dict(row))
@@ -286,7 +296,26 @@ class _FakeProfileRecorder:
         return None
 
 
-class _FakeOptimizerSession:
+def _resolve_fixture_optimizer_tp_percent(trial, fixed_tp_percent):
+    if fixed_tp_percent is None:
+        return trial.suggest_float(
+            "tp_percent",
+            OPTIMIZER_TP_PERCENT_SEARCH_SPEC["low"],
+            OPTIMIZER_TP_PERCENT_SEARCH_SPEC["high"],
+            step=OPTIMIZER_TP_PERCENT_SEARCH_SPEC["step"],
+        )
+    trial.set_user_attr("fixed_tp_percent", float(fixed_tp_percent))
+    return float(fixed_tp_percent)
+
+
+class _FakeOptimizerSession(OptimizerSession):
+    """Canonical OptimizerSession-backed fixture with only test tracing added.
+
+    The fixture intentionally inherits the production session contract instead of
+    hand-copying its public methods/attributes.  This keeps synthetic tests aligned
+    when the canonical session gains new runtime hooks.
+    """
+
     def __init__(
         self,
         *,
@@ -294,49 +323,35 @@ class _FakeOptimizerSession:
         fixed_strategy_param_overrides=None,
         runtime_cache_identity=None,
     ):
-        self.raw_data_cache = {}
-        self.raw_data_cache_data_dir = None
-        self.default_max_workers = 1
-        self.static_fast_cache = {}
-        self.master_dates = set()
-        self.sorted_master_dates = []
-        self.train_start_year = 2020
-        self.search_train_end_year = 2025
-        self.objective_mode = OBJECTIVE_MODE_LEGACY_BASE_SCORE
-        self.train_max_positions = 3
-        self.train_enable_rotation = False
-        self.optimizer_fixed_tp_percent = fixed_tp_percent
-        self.fixed_strategy_param_overrides = dict(fixed_strategy_param_overrides or {})
-        self.runtime_cache_identity = runtime_cache_identity
-        self.profile_recorder = _FakeProfileRecorder()
+        super().__init__(
+            output_dir="",
+            session_ts="synthetic",
+            profile_recorder_cls=_FakeProfileRecorder,
+            build_optimizer_trial_params=build_optimizer_trial_params,
+            get_best_completed_trial_or_none=lambda study: getattr(study, "best_trial", None),
+            objective_mode=OBJECTIVE_MODE_LEGACY_BASE_SCORE,
+            search_train_end_year=2025,
+            walk_forward_policy={},
+            resolve_optimizer_tp_percent=_resolve_fixture_optimizer_tp_percent,
+            print_strategy_dashboard=print_strategy_dashboard,
+            colors={"yellow": "", "reset": ""},
+            optimizer_fixed_tp_percent=fixed_tp_percent,
+            train_max_positions=3,
+            train_start_year=2020,
+            train_enable_rotation=False,
+            default_max_workers=1,
+            enable_optimizer_profiling=False,
+            enable_profile_console_print=False,
+            profile_print_every_n_trials=999999,
+            fixed_strategy_param_overrides=fixed_strategy_param_overrides,
+            runtime_context_factory=None,
+            runtime_cache_identity=runtime_cache_identity,
+        )
         self.recorded_prep_failures = []
 
     def record_optimizer_prep_failures(self, failures):
         self.recorded_prep_failures.extend(list(failures))
-
-    def get_trial_prep_executor_bundle(self, max_workers):
-        return None
-
-    def apply_fixed_strategy_param_overrides(self, params):
-        if not self.fixed_strategy_param_overrides:
-            return params
-        payload = params_to_json_dict(params)
-        payload.update(self.fixed_strategy_param_overrides)
-        return build_params_from_mapping(payload)
-
-    def optimizer_runtime_context(self):
-        return nullcontext()
-
-    def resolve_optimizer_tp_percent(self, trial, fixed_tp_percent):
-        if fixed_tp_percent is None:
-            return trial.suggest_float(
-                "tp_percent",
-                OPTIMIZER_TP_PERCENT_SEARCH_SPEC["low"],
-                OPTIMIZER_TP_PERCENT_SEARCH_SPEC["high"],
-                step=OPTIMIZER_TP_PERCENT_SEARCH_SPEC["step"],
-            )
-        trial.set_user_attr("fixed_tp_percent", float(fixed_tp_percent))
-        return float(fixed_tp_percent)
+        super().record_optimizer_prep_failures(failures)
 
 
 class _FakeStudy:
@@ -1303,6 +1318,14 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     runtime_session = _FakeOptimizerSession(
         fixed_strategy_param_overrides={"use_breakout_quality_ranking": True},
         runtime_cache_identity="synthetic-pit-identity",
+    )
+    add_check(
+        results,
+        "strategy_contract",
+        case_id,
+        "optimizer_test_session_inherits_canonical_session_contract",
+        True,
+        isinstance(runtime_session, OptimizerSession),
     )
     overridden_params = runtime_session.apply_fixed_strategy_param_overrides(
         V16StrategyParams(use_breakout_quality_ranking=False)

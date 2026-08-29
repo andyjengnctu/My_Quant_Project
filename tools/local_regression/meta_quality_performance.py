@@ -18,7 +18,7 @@ DEFAULT_PERFORMANCE_MANIFEST_KEYS = {
     "ml_smoke": "performance_ml_smoke_max_sec",
 }
 
-from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, summarize_result
+from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, summarize_blocked_result, summarize_result
 
 
 def build_performance_summary(
@@ -82,14 +82,24 @@ def build_performance_summary(
         else:
             step_peak_traced_memory_mb[step_name] = round(float(peak_memory_mb), 3)
 
-    results.append(
-        summarize_result(
-            "performance_required_step_summaries_present",
-            not missing_step_files,
-            detail=f"missing={missing_step_files}",
-            extra={"missing_step_files": missing_step_files},
+    if missing_step_files:
+        results.append(
+            summarize_blocked_result(
+                "performance_required_step_summaries_present",
+                blocked_by="formal_step_summary_unavailable",
+                detail=f"missing={missing_step_files}",
+                extra={"missing_step_files": missing_step_files},
+            )
         )
-    )
+    else:
+        results.append(
+            summarize_result(
+                "performance_required_step_summaries_present",
+                True,
+                detail="missing=[]",
+                extra={"missing_step_files": []},
+            )
+        )
     results.append(
         summarize_result(
             "performance_required_step_peak_memory_present",

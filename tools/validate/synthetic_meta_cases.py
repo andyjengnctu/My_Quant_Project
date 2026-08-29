@@ -38,6 +38,7 @@ from .meta_contracts import (
     summarize_single_formal_test_entry_contract,
     summarize_synthetic_cases_import_target_resolution_contract,
 )
+from tools.local_regression.common import partition_result_statuses
 from tools.local_regression.formal_pipeline import FORMAL_STEP_SPECS
 from tools.local_regression.meta_quality_coverage import build_coverage_summary
 from tools.local_regression.meta_quality_targets import (
@@ -1803,6 +1804,40 @@ def _build_meta_quality_reuse_payload(*, line_percent=70.0, branch_percent=65.0,
     }
 
 
+def _write_meta_quality_coverage_reuse_artifacts(
+    coverage_dir: Path,
+    payload,
+    *,
+    returncode=0,
+    synthetic_fail_count=0,
+    synthetic_case_count=99,
+    stderr="",
+    suite_completed=True,
+):
+    (coverage_dir / "coverage_synthetic.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (coverage_dir / "coverage_run_info.json").write_text(
+        json.dumps(
+            {
+                "source": "validate_consistency",
+                "returncode": int(returncode),
+                "stdout": "cached",
+                "stderr": str(stderr),
+                "timed_out": False,
+                "synthetic_fail_count": int(synthetic_fail_count),
+                "synthetic_case_count": int(synthetic_case_count),
+                "suite_completed": bool(suite_completed),
+                "json_generated": True,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
 
 def validate_meta_quality_coverage_threshold_uses_target_scope_case(_base_params):
     case_id = "META_QUALITY_COVERAGE_THRESHOLD_USES_TARGET_SCOPE"
@@ -1828,17 +1863,7 @@ def validate_meta_quality_coverage_threshold_uses_target_scope_case(_base_params
                 "num_branches": 1000,
             }
         }
-        (coverage_dir / "coverage_synthetic.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        (coverage_dir / "coverage_run_info.json").write_text(json.dumps({
-            "source": "validate_consistency",
-            "returncode": 0,
-            "stdout": "cached",
-            "stderr": "",
-            "timed_out": False,
-            "synthetic_fail_count": 0,
-            "synthetic_case_count": 99,
-            "json_generated": True,
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_meta_quality_coverage_reuse_artifacts(coverage_dir, payload)
         manifest = {
             "coverage_line_min_percent": 55.0,
             "coverage_branch_min_percent": 50.0,
@@ -1846,6 +1871,42 @@ def validate_meta_quality_coverage_threshold_uses_target_scope_case(_base_params
             "coverage_critical_branch_min_percent": 25.0,
         }
         coverage_summary = build_coverage_summary(run_dir, manifest)
+
+    with tempfile.TemporaryDirectory(prefix="meta_cov_incomplete_suite_") as temp_dir:
+        run_dir = Path(temp_dir)
+        coverage_dir = run_dir / "coverage_artifacts"
+        coverage_dir.mkdir(parents=True, exist_ok=True)
+        incomplete_payload = {"totals": {}, "files": {}}
+        _write_meta_quality_coverage_reuse_artifacts(
+            coverage_dir,
+            incomplete_payload,
+            returncode=1,
+            synthetic_fail_count=0,
+            synthetic_case_count=0,
+            stderr="NameError: synthetic fixture aborted before suite completion",
+            suite_completed=False,
+        )
+        incomplete_summary = build_coverage_summary(run_dir, manifest)
+
+    with tempfile.TemporaryDirectory(prefix="meta_cov_completed_failure_") as temp_dir:
+        run_dir = Path(temp_dir)
+        coverage_dir = run_dir / "coverage_artifacts"
+        coverage_dir.mkdir(parents=True, exist_ok=True)
+        completed_failure_payload = _build_meta_quality_reuse_payload(
+            line_percent=72.0,
+            branch_percent=68.0,
+            critical_line_percent=80.0,
+            critical_branch_percent=70.0,
+        )
+        _write_meta_quality_coverage_reuse_artifacts(
+            coverage_dir,
+            completed_failure_payload,
+            returncode=1,
+            synthetic_fail_count=1,
+            synthetic_case_count=99,
+            suite_completed=True,
+        )
+        completed_failure_summary = build_coverage_summary(run_dir, manifest)
 
     line_gate_result = _summary_result_by_name(coverage_summary["results"], "coverage_line_percent_within_minimum")
     branch_gate_result = _summary_result_by_name(coverage_summary["results"], "coverage_branch_percent_within_minimum")
@@ -1856,6 +1917,85 @@ def validate_meta_quality_coverage_threshold_uses_target_scope_case(_base_params
     add_check(results, "meta_coverage", case_id, "coverage_target_scope_passes_branch_gate", "PASS", branch_gate_result.get("status"))
     add_check(results, "meta_coverage", case_id, "coverage_raw_payload_totals_preserved_for_diagnostics", True, totals.get("raw_project_line_percent_covered", 0.0) < 55.0 and totals.get("raw_project_branch_percent_covered", 0.0) < 50.0)
     add_check(results, "meta_coverage", case_id, "coverage_untracked_files_do_not_create_missing_targets", [], coverage_summary.get("missing_targets", []))
+
+    incomplete_results = incomplete_summary["results"]
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "coverage_incomplete_suite_is_single_root_failure",
+        "FAIL",
+        _summary_result_by_name(incomplete_results, "coverage_synthetic_suite_runs_successfully").get("status"),
+    )
+    for dependent_name in (
+        "coverage_overall_nonzero",
+        "coverage_line_percent_within_minimum",
+        "coverage_branch_percent_within_minimum",
+        "coverage_key_targets_present",
+        "coverage_key_targets_hit",
+        "coverage_critical_files_line_percent_within_minimum",
+        "coverage_critical_files_branch_percent_within_minimum",
+    ):
+        add_check(
+            results,
+            "meta_coverage",
+            case_id,
+            f"incomplete_suite_blocks_{dependent_name}",
+            "BLOCKED",
+            _summary_result_by_name(incomplete_results, dependent_name).get("status"),
+        )
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "incomplete_suite_does_not_block_static_threshold_policy",
+        "PASS",
+        _summary_result_by_name(incomplete_results, "coverage_thresholds_respect_formal_floor").get("status"),
+    )
+
+    completed_failure_results = completed_failure_summary["results"]
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "completed_failing_suite_keeps_synthetic_failure_as_root",
+        "FAIL",
+        _summary_result_by_name(completed_failure_results, "coverage_synthetic_suite_runs_successfully").get("status"),
+    )
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "completed_failing_suite_still_evaluates_line_coverage",
+        "PASS",
+        _summary_result_by_name(completed_failure_results, "coverage_line_percent_within_minimum").get("status"),
+    )
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "completed_failing_suite_still_evaluates_key_target_coverage",
+        "PASS",
+        _summary_result_by_name(completed_failure_results, "coverage_key_targets_hit").get("status"),
+    )
+
+    partitioned = partition_result_statuses(incomplete_results)
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "meta_quality_failure_count_excludes_blocked_dependents",
+        ["coverage_synthetic_suite_runs_successfully"],
+        partitioned.get("failures"),
+    )
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "meta_quality_blocked_dependents_are_reported_separately",
+        True,
+        len(partitioned.get("blocked", [])) >= 7,
+    )
 
     summary["scope"] = totals.get("scope")
     summary["target_line_percent"] = totals.get("line_percent_covered")
@@ -2462,18 +2602,7 @@ def validate_critical_file_coverage_minimum_gate_case(_base_params):
         payload["files"][CRITICAL_COVERAGE_TARGETS[0]]["summary"]["percent_covered"] = 10.0
         payload["files"][CRITICAL_COVERAGE_TARGETS[1]]["summary"]["covered_branches"] = 5
         payload["files"][CRITICAL_COVERAGE_TARGETS[1]]["summary"]["num_branches"] = 100
-        write_path = coverage_dir / "coverage_synthetic.json"
-        write_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        (coverage_dir / "coverage_run_info.json").write_text(json.dumps({
-            "source": "validate_consistency",
-            "returncode": 0,
-            "stdout": "cached",
-            "stderr": "",
-            "timed_out": False,
-            "synthetic_fail_count": 0,
-            "synthetic_case_count": 99,
-            "json_generated": True,
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_meta_quality_coverage_reuse_artifacts(coverage_dir, payload)
         manifest = {
             "coverage_line_min_percent": 55.0,
             "coverage_branch_min_percent": 50.0,
@@ -2515,17 +2644,7 @@ def validate_coverage_threshold_floor_case(_base_params):
         coverage_dir = run_dir / "coverage_artifacts"
         coverage_dir.mkdir(parents=True, exist_ok=True)
         payload = _build_meta_quality_reuse_payload()
-        (coverage_dir / "coverage_synthetic.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        (coverage_dir / "coverage_run_info.json").write_text(json.dumps({
-            "source": "validate_consistency",
-            "returncode": 0,
-            "stdout": "cached",
-            "stderr": "",
-            "timed_out": False,
-            "synthetic_fail_count": 0,
-            "synthetic_case_count": 99,
-            "json_generated": True,
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_meta_quality_coverage_reuse_artifacts(coverage_dir, payload)
         failing_manifest = {
             "coverage_line_min_percent": 50.0,
             "coverage_branch_min_percent": 45.0,
@@ -2562,17 +2681,7 @@ def validate_critical_coverage_threshold_floor_case(_base_params):
         coverage_dir = run_dir / "coverage_artifacts"
         coverage_dir.mkdir(parents=True, exist_ok=True)
         payload = _build_meta_quality_reuse_payload(line_percent=72.0, branch_percent=68.0, critical_line_percent=35.0, critical_branch_percent=30.0)
-        (coverage_dir / "coverage_synthetic.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        (coverage_dir / "coverage_run_info.json").write_text(json.dumps({
-            "source": "validate_consistency",
-            "returncode": 0,
-            "stdout": "cached",
-            "stderr": "",
-            "timed_out": False,
-            "synthetic_fail_count": 0,
-            "synthetic_case_count": 100,
-            "json_generated": True,
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_meta_quality_coverage_reuse_artifacts(coverage_dir, payload, synthetic_case_count=100)
         failing_manifest = {
             "coverage_line_min_percent": 55.0,
             "coverage_branch_min_percent": 50.0,

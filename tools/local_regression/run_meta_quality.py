@@ -16,6 +16,7 @@ from tools.local_regression.common import (
     ensure_reduced_dataset,
     load_manifest,
     LOCAL_REGRESSION_RUN_DIR_ENV,
+    partition_result_statuses,
     resolve_run_dir,
     run_command,
     summarize_result,
@@ -668,6 +669,7 @@ def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, curre
         performance_step_files=PERFORMANCE_STEP_FILES,
         performance_manifest_keys=PERFORMANCE_MANIFEST_KEYS,
     )
+
 def main(argv=None) -> int:
     cli = parse_no_arg_cli(argv, "tools/local_regression/run_meta_quality.py", description="執行 coverage baseline 與 checklist sufficiency formal check")
     if cli["help"]:
@@ -693,13 +695,18 @@ def main(argv=None) -> int:
         )
 
         all_results = [*coverage_summary["results"], *checklist_summary["results"], *formal_entry_summary["results"], *performance_summary["results"]]
-        failures = [item["name"] for item in all_results if item["status"] != "PASS"]
-        overall_status = "PASS" if not failures else "FAIL"
+        result_statuses = partition_result_statuses(all_results)
+        failures = result_statuses["failures"]
+        blocked = result_statuses["blocked"]
+        non_pass = result_statuses["non_pass"]
+        overall_status = "PASS" if not non_pass else "FAIL"
 
         summary = {
             "status": overall_status,
             "failures": failures,
             "fail_count": len(failures),
+            "blocked": blocked,
+            "blocked_count": len(blocked),
             "coverage": {
                 "ok": coverage_summary["ok"],
                 "status": "DONE" if coverage_summary["ok"] else "PARTIAL",
@@ -752,6 +759,7 @@ def main(argv=None) -> int:
     lines = [
         f"status        : {overall_status}",
         f"fail_count    : {len(failures)}",
+        f"blocked_count : {len(blocked)}",
         f"coverage_ok   : {coverage_summary['ok']}",
         f"checklist_ok  : {checklist_summary['ok']}",
         f"formal_entry_ok: {formal_entry_summary['ok']}",
@@ -791,10 +799,13 @@ def main(argv=None) -> int:
     ]
     if failures:
         lines.append("failed_checks : " + ", ".join(failures))
+    if blocked:
+        lines.append("blocked_checks: " + ", ".join(blocked))
     write_text(run_dir / "meta_quality_summary.txt", "\n".join(lines) + "\n")
     print(json.dumps({
         "status": overall_status,
         "fail_count": len(failures),
+        "blocked_count": len(blocked),
         "coverage_percent": coverage_summary["totals"]["percent_covered"],
         "checklist_partial_ids": checklist_summary["partial_ids"],
         "checklist_todo_ids": checklist_summary["todo_ids"],

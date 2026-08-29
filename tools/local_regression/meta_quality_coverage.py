@@ -7,7 +7,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
-from tools.local_regression.common import summarize_result
+from tools.local_regression.common import summarize_blocked_result, summarize_result
 from tools.local_regression.formal_pipeline import (
     DATASET_REQUIRED_STEPS as FORMAL_DATASET_REQUIRED_STEPS,
     FORMAL_STEP_ORDER,
@@ -425,16 +425,27 @@ def _load_reusable_coverage_artifacts(coverage_dir: Path) -> tuple[Dict[str, Any
     if source != "validate_consistency":
         return None, f"coverage_reuse_error=unexpected_source({source or 'missing'})"
     try:
+        synthetic_case_count = _coerce_int(run_info.get("synthetic_case_count", 0) or 0, field_name="synthetic_case_count")
+        stderr_text = str(run_info.get("stderr", "") or "")
+        suite_completed_raw = run_info.get("suite_completed")
+        if suite_completed_raw is None:
+            # Backward-compatible inference for older formal artifacts.  A non-empty
+            # completed case set with no uncaught runtime error means the validator
+            # runner returned normally even if individual synthetic cases failed.
+            suite_completed = synthetic_case_count > 0 and not stderr_text.strip()
+        else:
+            suite_completed = bool(suite_completed_raw)
         return {
             "payload": payload,
             "run_result": {
                 "returncode": _coerce_int(run_info.get("returncode", 1), field_name="returncode"),
                 "stdout": str(run_info.get("stdout", "") or ""),
-                "stderr": str(run_info.get("stderr", "") or ""),
+                "stderr": stderr_text,
                 "timed_out": bool(run_info.get("timed_out", False)),
             },
             "synthetic_fail_count": _coerce_int(run_info.get("synthetic_fail_count", 0) or 0, field_name="synthetic_fail_count"),
-            "synthetic_case_count": _coerce_int(run_info.get("synthetic_case_count", 0) or 0, field_name="synthetic_case_count"),
+            "synthetic_case_count": synthetic_case_count,
+            "suite_completed": suite_completed,
             "json_file": str(json_file),
         }, ""
     except ValueError as exc:
@@ -458,6 +469,7 @@ def build_coverage_summary(
     run_result = {"returncode": 1, "stdout": "", "stderr": "", "timed_out": False}
     payload: Dict[str, Any] = {}
     synthetic_fail_count = 0
+    synthetic_suite_completed = False
     reused_existing = False
     json_ok = False
 
@@ -467,6 +479,7 @@ def build_coverage_summary(
         payload = reusable["payload"]
         run_result = dict(reusable["run_result"])
         synthetic_fail_count = int(reusable["synthetic_fail_count"])
+        synthetic_suite_completed = bool(reusable.get("suite_completed", False))
         if formal_helper_probe and not run_result.get("stderr"):
             run_result["stdout"] = json.dumps(
                 {
@@ -495,6 +508,7 @@ def build_coverage_summary(
                 base_params = load_portfolio_primary_params_from_json(resolve_default_primary_param_source_path(PROJECT_ROOT))
                 cov.start()
                 results, summaries = suite_runner(base_params)
+                synthetic_suite_completed = True
                 synthetic_fail_count = sum(1 for row in results if row.get("status") == "FAIL")
                 run_result["returncode"] = 0 if synthetic_fail_count == 0 else 1
                 run_result["stdout"] = json.dumps({
@@ -604,20 +618,38 @@ def build_coverage_summary(
     if coverage_reuse_error:
         coverage_json_detail = f"{coverage_json_detail} | {coverage_reuse_error}" if coverage_json_detail else coverage_reuse_error
 
+    coverage_json_ready = bool(json_ok and json_file.exists())
+    coverage_measurement_ready = bool(synthetic_suite_completed and coverage_json_ready)
+    blocked_by = "coverage_synthetic_suite_runs_successfully" if not synthetic_suite_completed else "coverage_json_generated"
+
+    def _measurement_result(name: str, ok: bool, *, detail: str, extra: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        if coverage_measurement_ready:
+            return summarize_result(name, ok, detail=detail, extra=extra)
+        return summarize_blocked_result(
+            name,
+            blocked_by=blocked_by,
+            detail=f"blocked_by={blocked_by} | {detail}",
+            extra=extra,
+        )
+
     results = [
         summarize_result(
             "coverage_synthetic_suite_runs_successfully",
-            run_result["returncode"] == 0,
+            synthetic_suite_completed and run_result["returncode"] == 0,
             detail=(run_result.get("stderr", "") or run_result.get("stdout", "") or "ok").splitlines()[0],
-            extra={"returncode": run_result["returncode"], "synthetic_fail_count": synthetic_fail_count},
+            extra={
+                "returncode": run_result["returncode"],
+                "synthetic_fail_count": synthetic_fail_count,
+                "suite_completed": synthetic_suite_completed,
+            },
         ),
         summarize_result(
             "coverage_json_generated",
-            json_ok and json_file.exists(),
+            coverage_json_ready,
             detail=coverage_json_detail,
             extra={"json_file": str(json_file), "coverage_reuse_error": coverage_reuse_error},
         ),
-        summarize_result(
+        _measurement_result(
             "coverage_overall_nonzero",
             target_percent_covered > 0.0,
             detail=(
@@ -641,13 +673,13 @@ def build_coverage_summary(
                 "max_gap": COVERAGE_MAX_LINE_BRANCH_GAP,
             },
         ),
-        summarize_result(
+        _measurement_result(
             "coverage_line_percent_within_minimum",
             line_percent_covered >= line_min_percent,
             detail=f"line_percent={line_percent_covered:.2f} | min={line_min_percent:.2f}",
             extra={"line_percent_covered": line_percent_covered, "line_min_percent": line_min_percent},
         ),
-        summarize_result(
+        _measurement_result(
             "coverage_branch_percent_within_minimum",
             branch_percent_covered >= branch_min_percent,
             detail=f"branch_percent={branch_percent_covered:.2f} | min={branch_min_percent:.2f}",
@@ -659,13 +691,13 @@ def build_coverage_summary(
             detail=f"missing_core_targets={core_target_missing}",
             extra={"missing_core_targets": core_target_missing},
         ),
-        summarize_result(
+        _measurement_result(
             "coverage_key_targets_present",
             not missing_targets,
             detail=f"missing={missing_targets}",
             extra={"missing_targets": missing_targets},
         ),
-        summarize_result(
+        _measurement_result(
             "coverage_key_targets_hit",
             not zero_covered_targets,
             detail=f"zero_covered={zero_covered_targets}",
@@ -683,7 +715,7 @@ def build_coverage_summary(
                 "max_gap": COVERAGE_MAX_LINE_BRANCH_GAP,
             },
         ),
-        summarize_result(
+        _measurement_result(
             "coverage_critical_files_line_percent_within_minimum",
             not critical_under_line_targets,
             detail=f"critical_line_under={critical_under_line_targets} | min={critical_line_min_percent:.2f}",
@@ -692,7 +724,7 @@ def build_coverage_summary(
                 "critical_line_min_percent": critical_line_min_percent,
             },
         ),
-        summarize_result(
+        _measurement_result(
             "coverage_critical_files_branch_percent_within_minimum",
             not critical_under_branch_targets,
             detail=f"critical_branch_under={critical_under_branch_targets} | min={critical_branch_min_percent:.2f}",
@@ -732,6 +764,7 @@ def build_coverage_summary(
             "critical_line_min_percent": critical_line_min_percent,
             "critical_branch_min_percent": critical_branch_min_percent,
             "synthetic_fail_count": synthetic_fail_count,
+            "synthetic_suite_completed": synthetic_suite_completed,
         },
         "key_files": key_files,
         "critical_file_coverage": critical_file_coverage,

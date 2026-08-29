@@ -376,6 +376,45 @@ def summarize_result(name: str, ok: bool, *, detail: str, extra: Optional[Dict[s
     return payload
 
 
+def summarize_blocked_result(
+    name: str,
+    *,
+    blocked_by: str,
+    detail: str,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Describe a downstream check that cannot be judged after an upstream failure.
+
+    ``BLOCKED`` is intentionally distinct from ``FAIL``: the upstream check remains
+    the formal root cause, while this result records why a dependent assertion was
+    not meaningful.  Callers must still treat BLOCKED as non-PASS for overall gate
+    completion.
+    """
+
+    payload = {
+        "name": name,
+        "status": "BLOCKED",
+        "detail": detail,
+        "blocked_by": str(blocked_by),
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def partition_result_statuses(results: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """Partition formal results without turning dependent BLOCKED checks into root FAILs."""
+
+    failures = [item["name"] for item in results if item.get("status") == "FAIL"]
+    blocked = [item["name"] for item in results if item.get("status") == "BLOCKED"]
+    non_pass = [item["name"] for item in results if item.get("status") != "PASS"]
+    return {
+        "failures": failures,
+        "blocked": blocked,
+        "non_pass": non_pass,
+    }
+
+
 def resolve_run_dir(script_name: str) -> Path:
     env_run_dir = os.environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip()
     if env_run_dir:
