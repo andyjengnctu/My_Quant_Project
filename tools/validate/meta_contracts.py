@@ -365,18 +365,6 @@ def _extract_constant_string(node: ast.AST | None) -> str | None:
     return None
 
 
-def _extract_constant_string_sequence(node: ast.AST | None) -> list[str]:
-    if not isinstance(node, (ast.Tuple, ast.List)):
-        return []
-    values: list[str] = []
-    for element in node.elts:
-        value = _extract_constant_string(element)
-        if value is None:
-            return []
-        values.append(value)
-    return values
-
-
 def load_synthetic_registry_entries_from_source(project_root: Path) -> list[Dict[str, Any]]:
     source_path = project_root / "tools" / "validate" / "synthetic_cases.py"
     tree = _read_python_ast(source_path)
@@ -402,7 +390,9 @@ def load_synthetic_registry_entries_from_source(project_root: Path) -> list[Dict
             "name": node.args[0].id,
             "layer": _extract_constant_string(keyword_map.get("layer")),
             "cost_class": _extract_constant_string(keyword_map.get("cost_class")),
-            "impacted_modules": tuple(_extract_constant_string_sequence(keyword_map.get("impacted_modules"))),
+            # Compatibility only.  Per-case file ownership was removed because no
+            # execution/coverage consumer used it and it coupled tests to layout.
+            "impacted_modules": (),
         })
     return entries
 

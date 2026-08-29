@@ -930,30 +930,33 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
     invalid_names = sorted(name for name in entry_names if not name.startswith("validate_"))
     invalid_layers = sorted(entry["name"] for entry in entries if entry["layer"] not in allowed_layers)
     invalid_cost_classes = sorted(entry["name"] for entry in entries if entry["cost_class"] not in allowed_cost_classes)
-    missing_impacted_modules = sorted(entry["name"] for entry in entries if not entry["impacted_modules"])
-    invalid_impacted_modules = sorted(
-        f"{entry['name']}:{module_path}"
-        for entry in entries
-        for module_path in entry["impacted_modules"]
-        if (not module_path)
-        or (module_path.strip() != module_path)
-        or module_path.startswith("/")
-        or "\\" in module_path
-        or not module_path.endswith((".py", ".md", ".json"))
-    )
-    duplicated_impacted_modules = sorted(
-        entry["name"] for entry in entries if len(entry["impacted_modules"]) != len(set(entry["impacted_modules"]))
-    )
     duplicate_entry_names = sorted(name for name in set(entry_names) if entry_names.count(name) > 1)
+
+    registry_source = (SYNTHETIC_VALIDATE_DIR / "synthetic_cases.py").read_text(encoding="utf-8")
+    registry_tree = ast.parse(registry_source)
+    location_coupled_keywords = sorted({
+        keyword.arg
+        for node in ast.walk(registry_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_entry"
+        for keyword in node.keywords
+        if keyword.arg in {"impacted_modules", "coverage_targets", "module_paths", "file_paths"}
+    })
 
     add_check(results, "meta_registry", case_id, "registry_metadata_not_empty", True, len(entries) > 0)
     add_check(results, "meta_registry", case_id, "registry_metadata_names_unique", [], duplicate_entry_names)
     add_check(results, "meta_registry", case_id, "registry_metadata_validator_names_prefixed", [], invalid_names)
     add_check(results, "meta_registry", case_id, "registry_metadata_layers_valid", [], invalid_layers)
     add_check(results, "meta_registry", case_id, "registry_metadata_cost_classes_valid", [], invalid_cost_classes)
-    add_check(results, "meta_registry", case_id, "registry_metadata_impacted_modules_present", [], missing_impacted_modules)
-    add_check(results, "meta_registry", case_id, "registry_metadata_impacted_modules_normalized", [], invalid_impacted_modules)
-    add_check(results, "meta_registry", case_id, "registry_metadata_impacted_modules_unique_per_entry", [], duplicated_impacted_modules)
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "registry_metadata_is_location_independent",
+        [],
+        location_coupled_keywords,
+    )
 
     breakout_quality_case_modules = (
         "synthetic_breakout_quality_policy_cases",

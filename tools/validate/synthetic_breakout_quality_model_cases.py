@@ -372,6 +372,122 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
                 ),
     )
 
+    # Capability-oriented contract: every registered continuous-ranker profile is
+    # automatically checked here.  A new experiment that only recombines existing
+    # target/context/objective capabilities must not require a new synthetic case.
+    from config.breakout_quality import (
+        CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+        CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
+        CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
+        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
+        CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
+        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+        get_continuous_ranker_execution_recipe,
+    )
+    from filters.breakout_quality.artifact_dependency_registry import (
+        ARTIFACT_CONTINUOUS_TARGET,
+        ARTIFACT_DATASET_CORE,
+        ARTIFACT_PREDICTED_SAFETY_CONTEXT,
+        ARTIFACT_PREDICTED_UPSIDE_CONTEXT,
+        required_upstream_artifact_types,
+    )
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+
+    context_artifact_by_source = {
+        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE: ARTIFACT_PREDICTED_UPSIDE_CONTEXT,
+        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY: ARTIFACT_PREDICTED_SAFETY_CONTEXT,
+    }
+    registered_runtime_failures = []
+    for registered_profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+        registered_profile = get_breakout_quality_experiment_profile(registered_profile_name)
+        registered_spec = get_continuous_ranker_research_spec(registered_profile_name)
+        recipe = get_continuous_ranker_execution_recipe(registered_profile_name)
+        reasons = []
+
+        expected_direct_fields = {
+            "profile_name": registered_profile_name,
+            "trainer_family": registered_spec.trainer_family,
+            "training_objective": registered_profile.training_objective,
+            "continuous_target_id": str(registered_profile.continuous_target_id),
+            "loss_name": registered_profile.loss_name,
+            "model_architecture": registered_profile.model_architecture,
+            "training_label_scope": registered_profile.training_label_scope,
+            "training_sample_scope": registered_profile.training_sample_scope,
+            "score_semantic_id": registered_spec.score_semantic_id,
+            "historical_pit_authorized": bool(registered_spec.selection_pit_authorized),
+            "current_time_validation_authorized": bool(registered_spec.current_time_validation_authorized),
+        }
+        for field_name, expected_value in expected_direct_fields.items():
+            actual_value = getattr(recipe, field_name)
+            if actual_value != expected_value:
+                reasons.append(f"{field_name}={actual_value!r}, expected={expected_value!r}")
+
+        if recipe.dependency_spec.context_source != recipe.context_policy.source:
+            reasons.append("dependency context source differs from runtime context source")
+        if (
+            recipe.context_policy.source != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+            and CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE not in recipe.context_policy.roles
+        ):
+            reasons.append("persistent context source lacks coverage role")
+        if not set(recipe.target_policy.context_roles).issubset(set(recipe.context_policy.roles)):
+            reasons.append("target context roles are not preserved by runtime context policy")
+        if (
+            recipe.target_policy.context_source != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+            and recipe.target_policy.context_source != recipe.context_policy.source
+        ):
+            reasons.append("target context source differs from runtime context source")
+
+        weighted_pairwise = (
+            recipe.objective_policy.pair_weight_policy
+            != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
+        )
+        if weighted_pairwise != (
+            recipe.objective_policy.pair_target_schema
+            == CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT
+        ):
+            reasons.append("pair-weight policy and pair-target schema are inconsistent")
+        if (
+            weighted_pairwise
+            and CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT not in recipe.context_policy.roles
+        ):
+            reasons.append("weighted pairwise objective lacks pair-weight context role")
+        if bool(recipe.training_policy.uses_pairwise_loss) != (recipe.pairwise_reduction is not None):
+            reasons.append("training pairwise capability differs from objective reduction")
+
+        expected_dependencies = [ARTIFACT_DATASET_CORE]
+        if recipe.dependency_spec.requires_continuous_target_artifact:
+            expected_dependencies.append(ARTIFACT_CONTINUOUS_TARGET)
+        context_artifact = context_artifact_by_source.get(recipe.dependency_spec.context_source)
+        if context_artifact is not None:
+            expected_dependencies.append(context_artifact)
+        actual_dependencies = list(required_upstream_artifact_types(registered_profile_name))
+        if actual_dependencies != expected_dependencies:
+            reasons.append(
+                f"dependencies={actual_dependencies!r}, expected={expected_dependencies!r}"
+            )
+
+        try:
+            training_semantics(registered_profile)
+        except Exception as exc:
+            reasons.append(f"training_semantics failed: {type(exc).__name__}: {exc}")
+
+        if reasons:
+            registered_runtime_failures.append(
+                f"{registered_profile_name}: " + "; ".join(reasons)
+            )
+
+    check(
+        "continuous_ranker_all_registered_profiles_share_generic_runtime_contract",
+        [],
+        registered_runtime_failures,
+    )
+    check(
+        "continuous_ranker_generic_contract_covers_every_registered_profile",
+        len(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES),
+        len(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES) - len(registered_runtime_failures),
+    )
+
     raw = np.asarray([1.0, 3.0, 2.0, 5.0, 5.0, 9.0], dtype=np.float32)
     valid = np.ones((6,), dtype=bool)
     dates = pd.Series(["2020-01-02"] * 3 + ["2021-05-03"] * 3)
