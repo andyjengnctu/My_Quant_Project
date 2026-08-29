@@ -694,6 +694,15 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
 
     from filters.breakout_quality.contract import RUNTIME_SCOPE_WORKFLOW
     from filters.breakout_quality.export_scores import _run_daily_continuous_workflow_export
+    from filters.breakout_quality.daily_ranker_data import load_daily_universal_ranker_data
+
+    # Regression guard for the Round-2 execution-recipe migration: the daily loader returns
+    # the canonical profile object in ContinuousRankerDataBundle, so ``profile`` must be a
+    # bound local derived from the recipe rather than an accidental unresolved global name.
+    check_true(
+        "daily_ranker_loader_binds_bundle_profile_from_canonical_runtime_recipe",
+        "profile" in load_daily_universal_ranker_data.__code__.co_varnames,
+    )
 
     event_scope_runtime_export_rejected = False
     try:

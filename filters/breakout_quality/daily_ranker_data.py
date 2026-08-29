@@ -712,6 +712,10 @@ def load_daily_universal_ranker_data(
     del preload_feature_bank
     root = Path(project_root)
     execution_recipe = get_continuous_ranker_execution_recipe(experiment_profile)
+    # The shared bundle contract still carries the canonical profile declaration for
+    # downstream metadata/compatibility consumers.  Resolve it from the already-normalized
+    # runtime recipe; do not rediscover experiment semantics or branch on profile identity.
+    profile = get_breakout_quality_experiment_profile(execution_recipe.profile_name)
     target_id = str(execution_recipe.continuous_target_id).strip()
     target_policy = execution_recipe.target_policy
     context_policy = execution_recipe.context_policy

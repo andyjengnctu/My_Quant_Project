@@ -10811,3 +10811,12 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **獨立驗證**：單一 reusable-model-components case=`18 checks / 0 FAIL`；完整 synthetic consistency suite=`4,589 checks / 244 cases / 0 FAIL`；以正式 meta-quality coverage helper重跑同一 synthetic suite得到 `ok=True`、`missing_targets=[]`、`zero_covered_targets=[]`，且 coverage results 無 FAIL。正式 `apps/run_bundle.py`／`apps/test_suite.py` 仍依治理規則留給使用者本機 double check。
 - **Research state**：MR-13AF仍維持 `MODEL_GATE_RESULT_PENDING / NO_PIT / NO_STRATEGY_CONVERSION / NOT_PROMOTED`；Registry／Research Queue scientific state不變。
 
+
+## 2026-08-29 — Engineering Round 2 formal regression closure II：daily-universal bundle profile binding
+
+- **Status**：`IMPLEMENTED / ENGINEERING_ONLY / BEHAVIOR_PRESERVING / FORMAL_REGRESSION_FIXED`；不建立新的 `MR-*`／`ARCH-*`／`SR-C*` identity，不形成 scientific result、promotion 或 downstream authorization。
+- **程式基準**：使用者第二次正式測試後提供 `test-branch-1_20260829_120521_59066185.zip`，SHA256=`bfcb389670af9fe6e57f753635bc60f570d89f26a2576b49c32746f2db7da759`；失敗診斷來自 `to_chatgpt_bundle_20260829_120654_2a48a576.zip`。
+- **正式失敗根因**：Round 2 將 `load_daily_universal_ranker_data()` 改為先解析 `ContinuousRankerExecutionRecipe` 時，移除了舊的 `profile = get_breakout_quality_experiment_profile(...)`，但 shared `ContinuousRankerDataBundle` compatibility contract 的 return path 仍需要 `profile=profile`。一般 synthetic 沒有完整 materialize 到該 return，因此先前局部驗證漏掉；正式 consistency 在 canonical daily-universal materialization path 命中 `NameError: name 'profile' is not defined`。meta-quality 的 `coverage_synthetic_suite_runs_successfully` / `coverage_key_targets_present` 為同一 synthetic suite 中止造成的連鎖 FAIL。
+- **修正**：由已正規化的 `execution_recipe.profile_name` 解析 canonical `BreakoutQualityExperimentProfile`，只用於既有 bundle metadata/compatibility contract；不恢復任何 target/profile-specific branch，也不讓 generic data engine重新辨識 MR identity。新增 dedicated regression guard，要求 daily loader 的 bundle `profile` 必須是已綁定 local，而非 unresolved global。
+- **獨立驗證**：continuous-ranker contract case=`23 checks / 0 FAIL`；完整 synthetic consistency suite=`4,590 checks / 244 cases / 0 FAIL`；Round 2 核心模組 symbol-table undefined-global scan=`0`；全專案 `compileall` PASS。因 Linux/Pandas 無法可靠 unpickle 使用者 Windows formal shared-prep cache，本輪未以該 cache 冒充本機 formal consistency；正式 `apps/run_bundle.py`／`apps/test_suite.py` 依治理規則仍留給使用者本機 double check。
+- **Research state**：MR-13AF仍維持 `MODEL_GATE_RESULT_PENDING / NO_PIT / NO_STRATEGY_CONVERSION / NOT_PROMOTED`；target、pair weighting、architecture、split、optimizer、epoch selection、Seed、artifact identity、report schema、Registry 與 Research Queue scientific state均不變。
