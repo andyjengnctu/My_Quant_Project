@@ -2812,6 +2812,7 @@ def validate_research_report_contract_freeze_case(_base_params):
 
     from core.research_report_contract import (
         APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
+        MODEL_EXTENSION_SCHEMAS,
         MODEL_STANDARD_SOP,
         extension_contract,
         persistent_report_contract_fingerprints,
@@ -2822,6 +2823,7 @@ def validate_research_report_contract_freeze_case(_base_params):
         TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     )
 
     case_id = "RESEARCH_REPORT_CONTRACT_FREEZE"
@@ -2887,6 +2889,10 @@ def validate_research_report_contract_freeze_case(_base_params):
     control_payload = payload("MODEL-CONTROL", TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING)
     joint_payload = payload("MODEL-JOINT", TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING)
     h_only_payload = payload("MODEL-HONLY", TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING)
+    joint_min_payload = payload(
+        "MODEL-JOINT-MIN",
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
+    )
     joint_payload["safety_raw_mfe_hmhs_evaluation"] = {
         "validation": {
             "joint_hmhs": {"population_hmhs_pct": 22.0, "pairwise_concordance": 0.57, "global_average_precision": 0.25, "top_10pct": {"hmhs_pct": 26.0, "hmhs_enrichment": 1.18}},
@@ -2907,10 +2913,34 @@ def validate_research_report_contract_freeze_case(_base_params):
             "pairwise_concordance": pair,
         })
 
+    joint_min_payload["safety_raw_mfe_joint_min_evaluation"] = {
+        "validation": {
+            "raw_safety": dict(base_metrics["validation"]),
+            "raw_mfe": dict(base_metrics["validation"]),
+            "joint_min": {
+                "population_joint_min_mean": 0.33,
+                "mean_daily_spearman": 0.41,
+                "pairwise_concordance": 0.63,
+                "top_10pct": {
+                    "mean_joint_min": 0.61,
+                    "mean_safety": 0.72,
+                    "mean_mfe": 0.74,
+                    "hmhs_pct": 62.0,
+                    "hmhs_enrichment": 2.7,
+                },
+                "top_20pct": {
+                    "mean_joint_min": 0.55,
+                    "hmhs_enrichment": 2.1,
+                },
+            },
+        }
+    }
+
     rendered = {
         "control": app._render_continuous_ranker_simple_console(control_payload),
         "joint": app._render_continuous_ranker_simple_console(joint_payload),
         "h_only": app._render_continuous_ranker_simple_console(h_only_payload),
+        "joint_min": app._render_continuous_ranker_simple_console(joint_min_payload),
     }
     standard_lines = {
         key: "\n".join(
@@ -2918,13 +2948,29 @@ def validate_research_report_contract_freeze_case(_base_params):
         )
         for key, text in rendered.items()
     }
-    joint_extension_title = extension_contract("direct_hmhs_joint_retrieval").title
-    h_only_extension_title = extension_contract("direct_hmhs_h_only").title
+    extension_expectations = {
+        "direct_hmhs_joint_retrieval": ("joint", "MODEL-JOINT"),
+        "direct_hmhs_h_only": ("h_only", "MODEL-HONLY"),
+        "joint_min_retrieval": ("joint_min", "MODEL-JOINT-MIN"),
+    }
+    check_true(
+        "model_extension_registry_is_fully_covered_by_capability_payloads",
+        set(extension_expectations) == set(MODEL_EXTENSION_SCHEMAS),
+        detail=(
+            f"covered={sorted(extension_expectations)}, "
+            f"registered={sorted(MODEL_EXTENSION_SCHEMAS)}"
+        ),
+    )
     check_true(
         "model_extensions_cannot_mutate_standard_model_sop_namespace",
-        all("Direct HM/HS" not in text for text in standard_lines.values())
-        and f"Model-specific Extension｜MODEL-JOINT｜{joint_extension_title}" in rendered["joint"]
-        and f"Model-specific Extension｜MODEL-HONLY｜{h_only_extension_title}" in rendered["h_only"]
+        all(
+            extension_contract(extension_id).title not in standard_lines[render_key]
+            and (
+                f"Model-specific Extension｜{model_id}｜"
+                f"{extension_contract(extension_id).title}"
+            ) in rendered[render_key]
+            for extension_id, (render_key, model_id) in extension_expectations.items()
+        )
         and "Δ HM/HS Pair" not in standard_lines["h_only"],
     )
     standard_generalization_header = ("Comparison", "Δ Daily rho", "Δ Pair", "Δ Top-Bottom")

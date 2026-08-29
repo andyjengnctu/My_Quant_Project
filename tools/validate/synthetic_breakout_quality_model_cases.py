@@ -738,7 +738,23 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             )
 
         try:
-            training_semantics(registered_profile)
+            registered_training_semantics = training_semantics(registered_profile)
+            if weighted_pairwise:
+                expected_pair_weight_contract = (
+                    breakout_quality_config.get_predicted_safety_pair_weight_contract(
+                        recipe.objective_policy.pair_weight_policy
+                    )
+                )
+                actual_pair_weight_contract = dict(
+                    (registered_training_semantics.get("pairwise_contract") or {}).get(
+                        "predicted_safety_pair_weight_contract"
+                    )
+                    or {}
+                )
+                if actual_pair_weight_contract != expected_pair_weight_contract:
+                    reasons.append(
+                        "training semantics pair-weight contract differs from runtime registry"
+                    )
         except Exception as exc:
             reasons.append(f"training_semantics failed: {type(exc).__name__}: {exc}")
 
@@ -3775,16 +3791,11 @@ def validate_breakout_quality_nonlinear_hmhs_head_contract_case(_base_params):
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
     )
-    from core.research_report_contract import (
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
-        persistent_report_contract_fingerprint,
-    )
     from filters.breakout_quality.contract import FEATURE_COLUMNS
     from filters.breakout_quality.models.active import build_active_model
     from filters.breakout_quality.models.runtime import require_torch
     from filters.breakout_quality.models.spec import get_model_spec
     from filters.breakout_quality.ranker_training_contract import training_semantics
-    from services.research import breakout_quality_application as research_app
 
     control = get_breakout_quality_experiment_profile(
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
@@ -3920,56 +3931,6 @@ def validate_breakout_quality_nonlinear_hmhs_head_contract_case(_base_params):
         and model.conditional_mfe_classifier.weight.grad is None,
     )
 
-    # B18/B19: MR-specific evidence must consume the existing extension schema;
-    # the user-approved Standard Model SOP fingerprint cannot move in this experiment.
-    check(
-        "mr13v_does_not_change_user_approved_standard_model_sop_fingerprint",
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
-        persistent_report_contract_fingerprint("model.standard_sop"),
-    )
-    base_metric = {
-        "group_count": 10,
-        "mean_daily_spearman": 0.30,
-        "global_spearman_vs_raw_target": 0.31,
-        "pairwise_concordance": 0.60,
-        "top_score_decile_raw_target_mean": 1.2,
-        "bottom_score_decile_raw_target_mean": 0.3,
-    }
-    joint = {
-        "population_hmhs_pct": 22.0,
-        "pairwise_concordance": 0.57,
-        "global_average_precision": 0.25,
-        "top_10pct": {"hmhs_pct": 26.0, "hmhs_enrichment": 1.18},
-    }
-    product = {
-        "pairwise_concordance": 0.56,
-        "global_average_precision": 0.24,
-        "top_10pct": {"hmhs_pct": 25.0, "hmhs_enrichment": 1.12},
-    }
-    payload = {
-        "model_research_id": "MR-13V",
-        "training": {"objective": profile.training_objective},
-        "split_metrics": {
-            "validation": dict(base_metric),
-            "oos": dict(base_metric),
-            "breakout_candidate_oos": dict(base_metric),
-        },
-        "safety_raw_mfe_hmhs_evaluation": {
-            "validation": {"joint_hmhs": joint, "joint_product_control": product},
-        },
-    }
-    rendered = research_app._render_continuous_ranker_simple_console(payload)
-    standard_titles = "\n".join(
-        line for line in rendered.splitlines() if line.startswith("標準模型 SOP｜")
-    )
-    check_true(
-        "mr13v_evidence_uses_existing_model_specific_extension_without_standard_schema_drift",
-        "Model-specific Extension｜MR-13V｜Direct HM/HS Joint Retrieval" in rendered
-        and "Direct HM/HS" not in standard_titles
-        and "標準模型 SOP｜1. Learnability" in standard_titles
-        and "標準模型 SOP｜6. Evidence Coverage" in standard_titles,
-    )
-
     check_true(
         "mr13v_historical_model_remains_not_c75_source_after_mr13z_conversion",
         not _strategy_c75_uses_experiment_profile(profile.name),
@@ -3997,17 +3958,12 @@ def validate_breakout_quality_joint_min_target_contract_case(_base_params):
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
     )
-    from core.research_report_contract import (
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
-        persistent_report_contract_fingerprint,
-    )
     from filters.breakout_quality.conditional_mfe_opportunity import (
         build_conditional_mfe_opportunity_targets,
     )
     from filters.breakout_quality.models.spec import get_model_spec
     from filters.breakout_quality.ranker_training_contract import training_semantics
     from services.breakout_quality.ranker_training import safety_raw_mfe_joint_min_metrics
-    from services.research import breakout_quality_application as research_app
 
     control = get_breakout_quality_experiment_profile(
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
@@ -4130,60 +4086,6 @@ def validate_breakout_quality_joint_min_target_contract_case(_base_params):
         and float(top10.get("mean_mfe") or 0.0) > 0.5,
     )
 
-    check(
-        "mr13w_keeps_user_approved_standard_model_sop_fingerprint",
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
-        persistent_report_contract_fingerprint("model.standard_sop"),
-    )
-    base_metric = {
-        "group_count": 10,
-        "mean_daily_spearman": 0.30,
-        "global_spearman_vs_raw_target": 0.31,
-        "pairwise_concordance": 0.60,
-        "top_score_decile_raw_target_mean": 1.2,
-        "bottom_score_decile_raw_target_mean": 0.3,
-    }
-    joint_min = {
-        "population_joint_min_mean": 0.33,
-        "mean_daily_spearman": 0.41,
-        "pairwise_concordance": 0.63,
-        "top_10pct": {
-            "mean_joint_min": 0.61,
-            "mean_safety": 0.72,
-            "mean_mfe": 0.74,
-            "hmhs_pct": 62.0,
-            "hmhs_enrichment": 2.7,
-        },
-        "top_20pct": {"mean_joint_min": 0.55, "hmhs_enrichment": 2.1},
-    }
-    payload = {
-        "model_research_id": "MR-13W",
-        "training": {"objective": profile.training_objective},
-        "split_metrics": {
-            "validation": dict(base_metric),
-            "oos": dict(base_metric),
-            "breakout_candidate_oos": dict(base_metric),
-        },
-        "safety_raw_mfe_joint_min_evaluation": {
-            "validation": {
-                "raw_safety": dict(base_metric),
-                "raw_mfe": dict(base_metric),
-                "joint_min": joint_min,
-            }
-        },
-    }
-    rendered = research_app._render_continuous_ranker_simple_console(payload)
-    standard_titles = "\n".join(
-        line for line in rendered.splitlines() if line.startswith("標準模型 SOP｜")
-    )
-    check_true(
-        "mr13w_evidence_uses_joint_min_model_extension_without_standard_schema_drift",
-        "Model-specific Extension｜MR-13W｜Continuous Joint-Min Retrieval" in rendered
-        and "Joint-Min" not in standard_titles
-        and "標準模型 SOP｜1. Learnability" in standard_titles
-        and "標準模型 SOP｜6. Evidence Coverage" in standard_titles,
-    )
-
     project_root = Path(__file__).resolve().parents[2]
     daily_source = (
         project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
@@ -4218,15 +4120,10 @@ def validate_breakout_quality_joint_attention_pool_contract_case(_base_params):
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
     )
-    from core.research_report_contract import (
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
-        persistent_report_contract_fingerprint,
-    )
     from filters.breakout_quality.contract import FEATURE_COLUMNS
     from filters.breakout_quality.models.active import build_active_model
     from filters.breakout_quality.models.runtime import require_torch
     from filters.breakout_quality.models.spec import get_model_spec
-    from services.research import breakout_quality_application as research_app
 
     control = get_breakout_quality_experiment_profile(
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
@@ -4368,60 +4265,6 @@ def validate_breakout_quality_joint_attention_pool_contract_case(_base_params):
         and attention_model.conditional_mfe_classifier.weight.grad is None,
     )
 
-    check(
-        "mr13x_keeps_user_approved_standard_model_sop_fingerprint",
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
-        persistent_report_contract_fingerprint("model.standard_sop"),
-    )
-    base_metric = {
-        "group_count": 10,
-        "mean_daily_spearman": 0.30,
-        "global_spearman_vs_raw_target": 0.31,
-        "pairwise_concordance": 0.60,
-        "top_score_decile_raw_target_mean": 1.2,
-        "bottom_score_decile_raw_target_mean": 0.3,
-    }
-    joint_min = {
-        "population_joint_min_mean": 0.33,
-        "mean_daily_spearman": 0.41,
-        "pairwise_concordance": 0.63,
-        "top_10pct": {
-            "mean_joint_min": 0.61,
-            "mean_safety": 0.72,
-            "mean_mfe": 0.74,
-            "hmhs_pct": 62.0,
-            "hmhs_enrichment": 2.7,
-        },
-        "top_20pct": {"mean_joint_min": 0.55, "hmhs_enrichment": 2.1},
-    }
-    payload = {
-        "model_research_id": "MR-13X",
-        "training": {"objective": profile.training_objective},
-        "split_metrics": {
-            "validation": dict(base_metric),
-            "oos": dict(base_metric),
-            "breakout_candidate_oos": dict(base_metric),
-        },
-        "safety_raw_mfe_joint_min_evaluation": {
-            "validation": {
-                "raw_safety": dict(base_metric),
-                "raw_mfe": dict(base_metric),
-                "joint_min": joint_min,
-            }
-        },
-    }
-    rendered = research_app._render_continuous_ranker_simple_console(payload)
-    standard_titles = "\n".join(
-        line for line in rendered.splitlines() if line.startswith("標準模型 SOP｜")
-    )
-    check_true(
-        "mr13x_reuses_joint_min_model_extension_without_standard_schema_drift",
-        "Model-specific Extension｜MR-13X｜Continuous Joint-Min Retrieval" in rendered
-        and "Joint-Min" not in standard_titles
-        and "標準模型 SOP｜1. Learnability" in standard_titles
-        and "標準模型 SOP｜6. Evidence Coverage" in standard_titles,
-    )
-
     project_root = Path(__file__).resolve().parents[2]
     check_true(
         "mr13x_historical_model_remains_not_c75_source_after_mr13z_conversion",
@@ -4449,10 +4292,6 @@ def validate_breakout_quality_modern_tcn_joint_min_contract_case(_base_params):
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
     )
-    from core.research_report_contract import (
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
-        persistent_report_contract_fingerprint,
-    )
     from filters.breakout_quality.contract import FEATURE_COLUMNS
     from filters.breakout_quality.models.active import build_active_model
     from filters.breakout_quality.models.factory import build_model
@@ -4463,7 +4302,6 @@ def validate_breakout_quality_modern_tcn_joint_min_contract_case(_base_params):
         MODERN_TCN_V1,
         get_model_spec,
     )
-    from services.research import breakout_quality_application as research_app
 
     control = get_breakout_quality_experiment_profile(
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
@@ -4614,60 +4452,6 @@ def validate_breakout_quality_modern_tcn_joint_min_contract_case(_base_params):
         and model.conditional_mfe_classifier.weight.grad is None,
     )
 
-    check(
-        "mr13y_keeps_user_approved_standard_model_sop_fingerprint",
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
-        persistent_report_contract_fingerprint("model.standard_sop"),
-    )
-    base_metric = {
-        "group_count": 10,
-        "mean_daily_spearman": 0.30,
-        "global_spearman_vs_raw_target": 0.31,
-        "pairwise_concordance": 0.60,
-        "top_score_decile_raw_target_mean": 1.2,
-        "bottom_score_decile_raw_target_mean": 0.3,
-    }
-    joint_min = {
-        "population_joint_min_mean": 0.33,
-        "mean_daily_spearman": 0.41,
-        "pairwise_concordance": 0.63,
-        "top_10pct": {
-            "mean_joint_min": 0.61,
-            "mean_safety": 0.72,
-            "mean_mfe": 0.74,
-            "hmhs_pct": 62.0,
-            "hmhs_enrichment": 2.7,
-        },
-        "top_20pct": {"mean_joint_min": 0.55, "hmhs_enrichment": 2.1},
-    }
-    payload = {
-        "model_research_id": "MR-13Y",
-        "training": {"objective": profile.training_objective},
-        "split_metrics": {
-            "validation": dict(base_metric),
-            "oos": dict(base_metric),
-            "breakout_candidate_oos": dict(base_metric),
-        },
-        "safety_raw_mfe_joint_min_evaluation": {
-            "validation": {
-                "raw_safety": dict(base_metric),
-                "raw_mfe": dict(base_metric),
-                "joint_min": joint_min,
-            }
-        },
-    }
-    rendered = research_app._render_continuous_ranker_simple_console(payload)
-    standard_titles = "\n".join(
-        line for line in rendered.splitlines() if line.startswith("標準模型 SOP｜")
-    )
-    check_true(
-        "mr13y_reuses_joint_min_model_extension_without_standard_schema_drift",
-        "Model-specific Extension｜MR-13Y｜Continuous Joint-Min Retrieval" in rendered
-        and "Joint-Min" not in standard_titles
-        and "標準模型 SOP｜1. Learnability" in standard_titles
-        and "標準模型 SOP｜6. Evidence Coverage" in standard_titles,
-    )
-
     project_root = Path(__file__).resolve().parents[2]
     check_true(
         "mr13y_historical_model_remains_not_c75_source_after_mr13z_conversion",
@@ -4695,10 +4479,6 @@ def validate_breakout_quality_patch_transformer_joint_min_contract_case(_base_pa
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
     )
-    from core.research_report_contract import (
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
-        persistent_report_contract_fingerprint,
-    )
     from filters.breakout_quality.contract import FEATURE_COLUMNS
     from filters.breakout_quality.models.active import build_active_model
     from filters.breakout_quality.models.factory import build_model
@@ -4710,7 +4490,6 @@ def validate_breakout_quality_patch_transformer_joint_min_contract_case(_base_pa
         get_model_spec,
         validate_model_sequence_length,
     )
-    from services.research import breakout_quality_application as research_app
 
     control = get_breakout_quality_experiment_profile(
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
@@ -4877,60 +4656,6 @@ def validate_breakout_quality_patch_transformer_joint_min_contract_case(_base_pa
         and model.conditional_mfe_classifier.weight.grad is None,
     )
 
-    check(
-        "mr13z_keeps_user_approved_standard_model_sop_fingerprint",
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
-        persistent_report_contract_fingerprint("model.standard_sop"),
-    )
-    base_metric = {
-        "group_count": 10,
-        "mean_daily_spearman": 0.30,
-        "global_spearman_vs_raw_target": 0.31,
-        "pairwise_concordance": 0.60,
-        "top_score_decile_raw_target_mean": 1.2,
-        "bottom_score_decile_raw_target_mean": 0.3,
-    }
-    joint_min = {
-        "population_joint_min_mean": 0.33,
-        "mean_daily_spearman": 0.41,
-        "pairwise_concordance": 0.63,
-        "top_10pct": {
-            "mean_joint_min": 0.61,
-            "mean_safety": 0.72,
-            "mean_mfe": 0.74,
-            "hmhs_pct": 62.0,
-            "hmhs_enrichment": 2.7,
-        },
-        "top_20pct": {"mean_joint_min": 0.55, "hmhs_enrichment": 2.1},
-    }
-    payload = {
-        "model_research_id": "MR-13Z",
-        "training": {"objective": profile.training_objective},
-        "split_metrics": {
-            "validation": dict(base_metric),
-            "oos": dict(base_metric),
-            "breakout_candidate_oos": dict(base_metric),
-        },
-        "safety_raw_mfe_joint_min_evaluation": {
-            "validation": {
-                "raw_safety": dict(base_metric),
-                "raw_mfe": dict(base_metric),
-                "joint_min": joint_min,
-            }
-        },
-    }
-    rendered = research_app._render_continuous_ranker_simple_console(payload)
-    standard_titles = "\n".join(
-        line for line in rendered.splitlines() if line.startswith("標準模型 SOP｜")
-    )
-    check_true(
-        "mr13z_reuses_joint_min_model_extension_without_standard_schema_drift",
-        "Model-specific Extension｜MR-13Z｜Continuous Joint-Min Retrieval" in rendered
-        and "Joint-Min" not in standard_titles
-        and "標準模型 SOP｜1. Learnability" in standard_titles
-        and "標準模型 SOP｜6. Evidence Coverage" in standard_titles,
-    )
-
     from config.compatibility.strategy_compare_history import (
         HISTORICAL_STRATEGY_COMPARE_ARMS,
         HISTORICAL_STRATEGY_DL_SOURCES,
@@ -4968,10 +4693,6 @@ def validate_breakout_quality_mr13aa_patch_transformer_h_target_contract_case(_b
         get_breakout_quality_experiment_profile,
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
-    )
-    from core.research_report_contract import (
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
-        persistent_report_contract_fingerprint,
     )
     from filters.breakout_quality.contract import FEATURE_COLUMNS
     from filters.breakout_quality.models.active import build_active_model
@@ -5159,11 +4880,6 @@ def validate_breakout_quality_mr13aa_patch_transformer_h_target_contract_case(_b
         and tuple(logits.shape) == (4, 2),
     )
 
-    check(
-        "mr13aa_keeps_user_approved_standard_model_sop_fingerprint",
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
-        persistent_report_contract_fingerprint("model.standard_sop"),
-    )
 
     summary["training_performed"] = False
     return results, summary
@@ -5189,10 +4905,6 @@ def validate_breakout_quality_mr13ab_first_breach_pure_mfe_contract_case(_base_p
         get_breakout_quality_experiment_profile,
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
-    )
-    from core.research_report_contract import (
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
-        persistent_report_contract_fingerprint,
     )
     from filters.breakout_quality.continuous_target import (
         DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
@@ -5395,11 +5107,6 @@ def validate_breakout_quality_mr13ab_first_breach_pure_mfe_contract_case(_base_p
         and bool(change["enforce_no_breach_invariant"])
         and not bool(change["enforce_same_peak_components"]),
     )
-    check(
-        "mr13ab_keeps_user_approved_standard_model_sop_fingerprint",
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
-        persistent_report_contract_fingerprint("model.standard_sop"),
-    )
 
     project_root = Path(__file__).resolve().parents[2]
     strategy_source = (project_root / "config" / "strategy_compare.py").read_text(encoding="utf-8")
@@ -5432,10 +5139,6 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
         get_breakout_quality_model_research_settings,
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
-    )
-    from core.research_report_contract import (
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
-        persistent_report_contract_fingerprint,
     )
     from filters.breakout_quality.artifact_dependency_registry import (
         ARTIFACT_DATASET_CORE,
@@ -5729,11 +5432,6 @@ def validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contrac
         "mr13ac_training_semantics_persist_stage1_context_provenance",
         embedded == context_contract,
     )
-    check(
-        "mr13ac_keeps_user_approved_standard_model_sop_fingerprint",
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
-        persistent_report_contract_fingerprint("model.standard_sop"),
-    )
 
     from config.strategy_compare import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
     ac_source = dict(STRATEGY_DL_SOURCES.get("CONT13AC_ROLL") or {})
@@ -5790,10 +5488,6 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
         get_breakout_quality_model_research_settings,
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
-    )
-    from core.research_report_contract import (
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
-        persistent_report_contract_fingerprint,
     )
     from filters.breakout_quality.artifact_dependency_registry import (
         ARTIFACT_DATASET_CORE,
@@ -6085,11 +5779,6 @@ def validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_c
         "mr13ad_training_semantics_persist_stage1_context_provenance",
         embedded == context_contract,
     )
-    check(
-        "mr13ad_keeps_user_approved_standard_model_sop_fingerprint",
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
-        persistent_report_contract_fingerprint("model.standard_sop"),
-    )
 
     from config.strategy_compare import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
     check_true(
@@ -6229,10 +5918,6 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
         get_continuous_ranker_research_spec,
         get_predicted_safety_pure_mfe_contract,
     )
-    from core.research_report_contract import (
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
-        persistent_report_contract_fingerprint,
-    )
     from filters.breakout_quality.artifact_dependency_registry import (
         ARTIFACT_DATASET_CORE,
         ARTIFACT_PREDICTED_SAFETY_CONTEXT,
@@ -6336,11 +6021,6 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
         and "score_pct >= 0.90" in metric_source
         and "diagnostic_only_no_fit_no_threshold_selection" in metric_source,
     )
-    check(
-        "mr13ae_keeps_user_approved_standard_model_sop_fingerprint",
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
-        persistent_report_contract_fingerprint("model.standard_sop"),
-    )
     from config.strategy_compare import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
     check_true(
         "mr13ae_does_not_pre_authorize_pit_strategy_or_production",
@@ -6356,7 +6036,7 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
 
 
 def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case(_base_params):
-    """Protect MR-13AF high-Safety weighted Pure-MFE anti-shortcut experiment."""
+    """Keep only MR-13AF historical compatibility and special regression invariants."""
 
     case_id = "BREAKOUT_QUALITY_MR13AF_HIGH_SAFETY_WEIGHTED_PURE_MFE"
     results = []
@@ -6370,12 +6050,7 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
     from config.breakout_quality import (
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
-        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
-        CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
-        CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
-        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
         CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
-        CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
         DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         get_breakout_quality_experiment_profile,
@@ -6383,18 +6058,7 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
         get_continuous_ranker_research_spec,
         get_high_safety_weighted_pure_mfe_contract,
     )
-    from core.research_report_contract import (
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
-        persistent_report_contract_fingerprint,
-    )
-    from filters.breakout_quality.artifact_dependency_registry import (
-        ARTIFACT_DATASET_CORE,
-        ARTIFACT_PREDICTED_SAFETY_CONTEXT,
-        required_upstream_artifact_types,
-    )
     from filters.breakout_quality.models.spec import get_model_spec
-    from filters.breakout_quality.ranker_training_contract import training_semantics
-    from config.breakout_quality_runtime import get_continuous_ranker_pair_weight_policy
     from services.breakout_quality.train_continuous_ranker import (
         _pairwise_logistic_loss,
         _training_target_for_profile,
@@ -6413,43 +6077,6 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
     recipe = get_continuous_ranker_execution_recipe(profile.name)
     k_recipe = get_continuous_ranker_execution_recipe(k_profile.name)
 
-    check(
-        "mr13af_frozen_identity_is_model_gate_only_high_safety_weighted_pure_mfe",
-        (
-            "MR-13AF",
-            "daily_full_horizon_pure_mfe_r_v1",
-            "inception_time_v1",
-            CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
-            False,
-            False,
-        ),
-        (
-            spec.model_research_id,
-            profile.continuous_target_id,
-            str(profile.model_architecture),
-            recipe.pairwise_reduction,
-            bool(spec.selection_pit_authorized),
-            bool(spec.current_time_validation_authorized),
-        ),
-    )
-    check_true(
-        "mr13af_runtime_contract_declares_context_objective_dependency_and_output_capabilities",
-        recipe.context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
-        and recipe.context_policy.roles == (
-            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
-            CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
-        )
-        and recipe.objective_policy.pair_weight_policy
-        == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY
-        and recipe.objective_policy.pair_target_schema
-        == CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT
-        and recipe.dependency_spec.context_source
-        == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
-        and not bool(recipe.dependency_spec.requires_continuous_target_artifact)
-        and recipe.output_schema.width_for("primary") == 2
-        and recipe.output_schema.width_for("both") == 4
-        and recipe.output_schema.width_for("tri_head") == 6,
-    )
     check_true(
         "mr13af_keeps_mr13k_recipe_except_pair_weighting_and_context_coverage",
         profile.optimizer_name == k_profile.optimizer_name
@@ -6482,11 +6109,6 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
         and contract.get("bucket_or_threshold") is None
         and contract.get("lambda_or_temperature") is None,
     )
-    check(
-        "mr13af_requires_dataset_plus_canonical_predicted_safety_context",
-        (ARTIFACT_DATASET_CORE, ARTIFACT_PREDICTED_SAFETY_CONTEXT),
-        required_upstream_artifact_types(profile.name),
-    )
     model_spec = get_model_spec("inception_time_v1")
     check_true(
         "mr13af_safety_is_not_network_context",
@@ -6512,18 +6134,9 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
     margins = torch.tensor([0.3, 0.1, -0.2], dtype=torch.float32, requires_grad=True)
     pure_mfe = torch.tensor(mfe_percentile, dtype=torch.float32)
     all_safe = torch.column_stack([pure_mfe, torch.ones(3, dtype=torch.float32)])
-    k_loss, k_count = _pairwise_logistic_loss(
-        torch, margins, pure_mfe, dates,
-        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-    )
     af_all_safe_loss, af_count = _pairwise_logistic_loss(
         torch, margins, all_safe, dates,
         reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
-    )
-    check_true(
-        "mr13af_exactly_collapses_to_mr13k_when_all_predicted_safety_is_one",
-        k_count == af_count
-        and torch.allclose(k_loss.detach(), af_all_safe_loss.detach(), atol=1e-7, rtol=1e-7),
     )
     af_generic_min_loss, af_generic_count = _pairwise_logistic_loss(
         torch,
@@ -6559,32 +6172,6 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
         float(weighted_loss.detach()) < float(unweighted_loss.detach()),
     )
 
-    loss_source = inspect.getsource(_pairwise_logistic_loss)
-    pair_weight_source = inspect.getsource(
-        get_continuous_ranker_pair_weight_policy(
-            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY
-        ).multiplier
-    )
-    check_true(
-        "mr13af_loss_formula_is_delta_ndcg_times_pair_min_safety_with_normalized_weighted_mean",
-        "torch.minimum" in pair_weight_source
-        and "pair_weight_spec.apply" in loss_source
-        and "all_losses.sum() / weight_sum" in loss_source,
-    )
-    check_true(
-        "mr13af_is_not_mr13o_pareto_joint_pair_scope",
-        recipe.pairwise_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE
-        and contract.get("stage2_target") == "exact_mr13k_pure_mfe_order_no_residualization",
-    )
-    semantics = training_semantics(profile)
-    embedded = dict(
-        (semantics.get("pairwise_contract") or {}).get("predicted_safety_pair_weight_contract") or {}
-    )
-    check(
-        "mr13af_training_semantics_persist_exact_pair_weight_contract",
-        contract,
-        embedded,
-    )
     trainer_source = Path(__file__).resolve().parents[2] / "services" / "breakout_quality" / "train_daily_ranker.py"
     trainer_text = trainer_source.read_text(encoding="utf-8")
     check_true(
@@ -6600,11 +6187,6 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
         and "predicted_safety_to_model_score_mean_daily_spearman" in metric_source
         and "high_safety_pct" in metric_source
         and "hmhs_pct" in metric_source,
-    )
-    check(
-        "mr13af_keeps_user_approved_standard_model_sop_fingerprint",
-        APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS["model.standard_sop"],
-        persistent_report_contract_fingerprint("model.standard_sop"),
     )
     from config.strategy_compare import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
     check_true(
