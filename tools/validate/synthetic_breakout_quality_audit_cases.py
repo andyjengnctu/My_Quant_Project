@@ -89,6 +89,76 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         ),
     )
 
+    c80_c81_defs = [
+        item for item in definitions
+        if item.audit_id == "AUD-c80-c81-allocator-path-attribution"
+    ]
+    c80_c81_entry = get_audit_entry("c80_c81_allocator_path_attribution")
+    check_true(
+        "c80_c81_allocator_path_audit_is_enabled_read_only_and_pinned_to_same_source_contrast",
+        bool(
+            len(c80_c81_defs) == 1
+            and c80_c81_entry.formal
+            and c80_c81_entry.read_only
+            and c80_c81_entry.method_id == "portfolio_drawdown_attribution"
+            and c80_c81_defs[0].enabled
+            and c80_c81_defs[0].source.get("constrained_arm_id") == "C80"
+            and c80_c81_defs[0].source.get("direct_arm_id") == "C81"
+            and c80_c81_defs[0].source.get("strategy_result_fingerprints", {}).get("extending_window_oos") == "4952368ccecb"
+            and c80_c81_defs[0].source.get("strategy_result_fingerprints", {}).get("extending_window_rolling") == "927bbb373d0f"
+        ),
+    )
+
+    from services.audit.c80_c81_allocator_path import render_result as render_c80_c81_audit_result
+
+    empty_c80_c81_arm = {
+        "core": {},
+        "path": {},
+        "truth": {},
+        "capital": {},
+        "mfe_adverse_matrix": [],
+        "drawdown_summary": {},
+    }
+    c80_c81_report_text = render_c80_c81_audit_result({
+        "audit_id": "AUD-c80-c81-allocator-path-attribution",
+        "constrained_arm_id": "C80",
+        "direct_arm_id": "C81",
+        "decision_question": "synthetic renderer contract",
+        "first_passage_thresholds_r": (1.0, 2.0, 3.0),
+        "evaluation_order": ["synthetic"],
+        "evaluations": {
+            "synthetic": {
+                "display_name": "Synthetic",
+                "arms": {
+                    "C80": dict(empty_c80_c81_arm),
+                    "C81": dict(empty_c80_c81_arm),
+                },
+                "planned_membership_cohorts": {
+                    "common_c80": {},
+                    "common_c81": {},
+                    "c80_only": {},
+                    "c81_only": {},
+                },
+                "c80_internal": {
+                    "resource_contract": {},
+                    "raw_top_k": {},
+                    "planned": {},
+                    "direct_infeasible_counts": {},
+                    "direct_infeasible_cohorts": {},
+                },
+            }
+        },
+    })
+    check_true(
+        "c80_c81_allocator_path_renderer_uses_keyword_only_section_number_contract",
+        bool(
+            "1. Synthetic｜C80 vs C81 core / MFE→Realized conversion" in c80_c81_report_text
+            and "7. Synthetic｜Exact peak→trough MTM drawdown attribution" in c80_c81_report_text
+            and "8. 判讀邊界" in c80_c81_report_text
+            and "C80 / C81 Allocator + Path Attribution Audit" in c80_c81_report_text
+        ),
+    )
+
     import apps.research as research_app
 
     import services.audit.runner as audit_runner

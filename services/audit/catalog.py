@@ -129,6 +129,17 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         status_function="collect_status",
         run_function="run_formal_audit",
     ),
+    "c80_c81_allocator_path_attribution": AuditCatalogEntry(
+        audit_type="c80_c81_allocator_path_attribution",
+        domain="breakout_quality",
+        module="services.audit.c80_c81_allocator_path",
+        mode="formal",
+        description="只讀C80/C81同源allocator membership、path conversion與exact MTM drawdown attribution",
+        read_only=True,
+        method_id="portfolio_drawdown_attribution",
+        status_function="collect_status",
+        run_function="run_formal_audit",
+    ),
     "mr13r_joint_capital_drawdown": AuditCatalogEntry(
         audit_type="mr13r_joint_capital_drawdown",
         domain="breakout_quality",

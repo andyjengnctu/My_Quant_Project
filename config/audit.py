@@ -24,7 +24,7 @@ from filters.breakout_quality.continuous_target import (
 from pathlib import Path
 from typing import Any, Mapping
 
-AUDIT_SCHEMA_VERSION = 15
+AUDIT_SCHEMA_VERSION = 16
 AUDIT_OUTPUT_ROOT = "outputs/audit"
 AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
 
@@ -195,6 +195,51 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "stopping_condition": "K/R0 treatment已取得足以GO/REJECT/NEXT EXPERIMENT的跨OOS/Rolling evidence後才退役此Audit。",
                 },
                 "output_subdir": "breakout_quality/selection_k_r0_attribution",
+            },
+            "AUD-c80-c81-allocator-path-attribution": {
+                "enabled": True,
+                "audit_type": "c80_c81_allocator_path_attribution",
+                "description": (
+                    "只讀同一MR-13AH score的C80 exact K/R0 constrained與C81 No-K/No-R0 direct；"
+                    "拆解membership substitution、MFE→realized path conversion與exact MTM drawdown，"
+                    "回答為何C81 selection/MFE不差但RoMD/MDD差，以及joint K/R0 allocator為何改善。"
+                ),
+                "source": {
+                    "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
+                    "model_architecture": BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
+                    "truth_provider_profile_id": DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                    "mfe_target_id": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                    "safety_target_id": DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+                    "evaluation_profile_ids": ("extending_window_oos", "extending_window_rolling"),
+                    "strategy_result_fingerprints": {
+                        "extending_window_oos": "4952368ccecb",
+                        "extending_window_rolling": "927bbb373d0f",
+                    },
+                    "constrained_arm_id": "C80",
+                    "direct_arm_id": "C81",
+                },
+                "dimensions": {
+                    "truth_high_cutoff": 0.50,
+                    "percentile_method": "average_zero_based",
+                    "first_passage_thresholds_r": (1.0, 2.0, 3.0),
+                    "adverse_bucket_edges_r": (0.5, 1.0),
+                    "drawdown_top_n": 1,
+                },
+                "outcomes": {
+                    "decision_question": (
+                        "同一MR-13AH score下，為何C81 No-K/No-R0具有較好的selection/MFE與first-passage，"
+                        "但realized EV/RoMD/MDD較差；C80的joint K/R0/cash exact basket contract如何改善？"
+                    ),
+                    "critical_uncertainty": (
+                        "改善是否來自K/R0在raw score tail不可直接滿足resource contract時進行membership substitution，"
+                        "進而降低HM/LS/adverse/giveback與同步MTM drawdown，而非單純曝險或投入量差異。"
+                    ),
+                    "stopping_condition": (
+                        "OOS與Rolling均能定位Raw→C80 substitution、C80/C81 path conversion與最大MDD contributor後停止；"
+                        "不得在此Audit調K/R0、重訓模型或strategy replay。"
+                    ),
+                },
+                "output_subdir": "breakout_quality/c80_c81_allocator_path_attribution",
             },
             "AUD-mr13r-joint-capital-drawdown": {
                 "enabled": False,
