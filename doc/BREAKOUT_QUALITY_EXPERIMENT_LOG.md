@@ -11001,3 +11001,12 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Decision**：`MFE_ORDERING_COLLAPSE / SAFETY_DIRECTION_FLIPPED_POSITIVE / FORWARD_MODEL_GATE_FAIL / STOP`。依AJ事前stop rule，不做PIT、Strategy conversion、Multi-seed、Fixed或weight-strength sweep；conflict-only unsafe-winner discount不再延伸。
 - **Next BASE decision**：使用者已要求在MR-13H與MR-13AF間選長期改善BASE，並已授權Standard SOP v2共同比較欄位。既有AF evidence保留；下一步只把Active Model Research Profile切回既有MR-13H scientific identity，正式重跑一次Seed42 `[1]→[1]`，補齊同口徑`Target/Score→MFE/Low-Adverse`、`Pred-Safety→Target/Score`與Top10 MFE/Adverse/High-MFE/High-Safety/HMHS，再做H vs AF BASE decision。此切換不是promotion，也不改production workflow anchor。
 
+## 2026-08-30 — MR-13H Standard SOP v2 rerun / H vs AF BASE decision complete
+
+- **Program basis**：使用者提供 `test-branch-1_20260830_000548_d630bc77.zip` 與正式 `[1]→[1]` MR-13H輸出；MR-13H scientific identity未改，Standard Model SOP fingerprint=`f220fdd4542ee32b`。
+- **MR-13H rerun**：selected epoch=`1`；post-refit Validation/OOS/Breakout self-target Daily rho=`0.2659/0.2310/0.2211`，OOS/Breakout Pair=`57.93/59.32%`，Top-K Lift=`+1.1759/+0.5355R`。結果與既有H headline一致，故不是模型重訓異常。
+- **Common upside/downside evidence**：OOS `Target→MFE=0.8638`、`Target→Low-Adverse=+0.2493`，證明H truth本身確實同時含upside/downside；但frozen `Score→MFE=0.3853`、`Score→Low-Adverse=-0.3230`、`Pred-Safety→Score=-0.8193`。Breakout為`0.3581/-0.3017/-0.7646`。也就是H模型主要保留upside relation，downside relation相對target方向反轉。
+- **Top-tail geometry**：H OOS Top10 MFE/Adverse=`2.4702R/0.5729R`、High-MFE/High-Safety/HMHS=`74.25/30.22/22.40%`；Breakout=`2.9349R/0.5605R`、`74.04/30.87/24.72%`。AF OOS對照=`2.5154R/0.5818R`、`75.24/29.86/22.43%`；Breakout=`2.9144R/0.5572R`、`73.69/32.63/25.11%`。兩者actual joint tail基本同級，H沒有因downside-aware target形成可重複Safety/HMHS增量。
+- **Precommitted BASE rule application**：事前規則要求H必須在保有可接受MFE learnability時，Safety/HMHS geometry明顯優於AF才選H；若H score丟失Safety或放大unsafe bias則重新評估AF。實測H `Pred-Safety→Score` OOS比AF更負`-0.8193 vs -0.7763`，`Score→Low-Adverse`也更負`-0.3230 vs -0.3038`，HM/HS OOS近乎相同且Breakout略低。故H不符合選BASE條件。
+- **Decision**：`MR-13AF = SELECTED_LONG_TERM_RESEARCH_BASE`；`MR-13H = BASE_NOT_SELECTED`。此決策只定義後續DL改善的scientific control，不撤銷AF歷史`FORWARD_MODEL_GATE_FAIL`，不授權AF本身PIT/Strategy/robustness，不改production MR-13E。Active Model Research Profile切回既有MR-13AF；下一個改善需另建新MR identity，具體scientific design尚未授權。
+
