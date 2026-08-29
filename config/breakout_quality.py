@@ -28,6 +28,22 @@ from config.execution_policy import (
     DEFAULT_PORTFOLIO_ROTATION,
 )
 from config.breakout_quality_runtime import (
+    PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
+    PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
+    PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
+    TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+    TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
+    TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
+    TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
@@ -108,7 +124,7 @@ from config.breakout_quality_runtime import (
     BREAKOUT_QUALITY_OUTPUT_SCHEMA,
     ContinuousRankerExecutionRecipe,
     get_continuous_ranker_training_policy,
-    get_continuous_ranker_execution_recipe,
+    build_continuous_ranker_execution_recipe,
 )
 
 
@@ -475,15 +491,6 @@ DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFI
     "daily_universal_predicted_safety_weighted_pure_mfe_full_list_ndcg_pairwise"
 )
 
-PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID = (
-    "daily_predicted_upside_conditional_low_adverse_v1"
-)
-PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID = (
-    "daily_predicted_safety_conditional_mfe_v1"
-)
-PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID = (
-    "daily_predicted_safety_context_pure_mfe_r_v1"
-)
 PREDICTED_UPSIDE_CONTEXT_SCHEMA_VERSION = 1
 PREDICTED_UPSIDE_CONTEXT_STAGE1_PROFILE = (
     DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
@@ -687,19 +694,6 @@ SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLE_SCOPES = (
 )
 
 TRAINING_OBJECTIVE_BINARY_CLASSIFICATION = "binary_classification"
-TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION = "daily_percentile_regression"
-TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION = "daily_raw_r_regression"
-TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION = "daily_dual_component_r_regression"
-TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING = "daily_pairwise_ranking"
-TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING = "daily_pareto_pairwise_ranking"
-TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING = "daily_conditional_mfe_safety_pairwise_ranking"
-TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING = "daily_conditional_mfe_pairwise_ranking"
-TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING = "daily_safety_conditional_mfe_pairwise_ranking"
-TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING = "daily_safety_raw_mfe_pairwise_ranking"
-TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING = "daily_safety_raw_mfe_hmhs_pairwise_ranking"
-TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING = "daily_safety_raw_mfe_joint_min_pairwise_ranking"
-TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING = "daily_hmhs_pairwise_ranking"
-TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING = "daily_listwise_ranking"
 CONTINUOUS_RANKER_TRAINING_OBJECTIVES = (
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
@@ -2552,6 +2546,26 @@ def build_breakout_quality_inception_kernel_sizes() -> tuple[int, int, int]:
 def resolve_breakout_quality_inception_receptive_field_bars() -> int:
     kernels = build_breakout_quality_inception_kernel_sizes()
     return 1 + int(BREAKOUT_QUALITY_INCEPTION_DEPTH) * (max(kernels) - 1)
+
+def get_continuous_ranker_execution_recipe(
+    experiment_profile: str,
+) -> ContinuousRankerExecutionRecipe:
+    """Resolve declarative profile identity into the canonical runtime contract."""
+
+    profile_name = normalize_breakout_quality_experiment_profile(experiment_profile)
+    profile = get_breakout_quality_experiment_profile(profile_name)
+    spec = get_continuous_ranker_research_spec(profile_name)
+    if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
+        raise ValueError(f"continuous ranker recipe只接受continuous profile: {profile_name}")
+    return build_continuous_ranker_execution_recipe(
+        profile_name=profile_name,
+        profile=profile,
+        spec=spec,
+        requires_continuous_target_artifact=(
+            profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
+        ),
+    )
+
 
 @dataclass(frozen=True)
 class BreakoutQualityContinuousRankerComparisonSettings:

@@ -51,8 +51,10 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_TRAINER_EVENT,
-    get_continuous_ranker_execution_recipe,
     get_continuous_ranker_training_policy,
+)
+from config.breakout_quality_runtime_resolver import (
+    get_continuous_ranker_execution_recipe,
 )
 from config.breakout_quality import (
     STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,

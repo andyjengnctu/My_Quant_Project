@@ -2,8 +2,8 @@
 
 This module owns execution-only primitives used by breakout-quality consumers.
 Scientific/profile declarations and user-adjustable settings remain in
-``config.breakout_quality``.  Runtime resolution imports that module lazily so the
-configuration facade may re-export these contracts without creating an import cycle.
+``config.breakout_quality``.  This module is deliberately dependency-free from that
+scientific configuration owner; profile resolution is composed outside this module.
 
 Do not add MR/profile-specific branches here.  New behavior belongs in reusable
 target/training/context/objective capabilities and is selected declaratively.
@@ -14,6 +14,46 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
+
+
+# Stable execution-capability identities live with the runtime policies that consume them.
+# ``config.breakout_quality`` re-exports these names for backward compatibility and uses
+# them when declaring scientific profiles; there must not be a reverse runtime->config edge.
+PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID = (
+    "daily_predicted_upside_conditional_low_adverse_v1"
+)
+PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID = (
+    "daily_predicted_safety_conditional_mfe_v1"
+)
+PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID = (
+    "daily_predicted_safety_context_pure_mfe_r_v1"
+)
+
+TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION = "daily_percentile_regression"
+TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION = "daily_raw_r_regression"
+TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION = "daily_dual_component_r_regression"
+TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING = "daily_pairwise_ranking"
+TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING = "daily_pareto_pairwise_ranking"
+TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING = (
+    "daily_conditional_mfe_safety_pairwise_ranking"
+)
+TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING = (
+    "daily_conditional_mfe_pairwise_ranking"
+)
+TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING = (
+    "daily_safety_conditional_mfe_pairwise_ranking"
+)
+TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING = (
+    "daily_safety_raw_mfe_pairwise_ranking"
+)
+TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING = (
+    "daily_safety_raw_mfe_hmhs_pairwise_ranking"
+)
+TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING = (
+    "daily_safety_raw_mfe_joint_min_pairwise_ranking"
+)
+TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING = "daily_hmhs_pairwise_ranking"
+TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING = "daily_listwise_ranking"
 
 CONTINUOUS_RANKER_TRAINER_EVENT = "event"
 CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL = "daily_universal"
@@ -362,8 +402,6 @@ class ContinuousRankerExecutionRecipe:
 
 @lru_cache(maxsize=1)
 def _continuous_ranker_target_policies() -> dict[str, ContinuousRankerTargetPolicy]:
-    from config import breakout_quality as cfg
-
     return {
         "strategy_aligned_opportunity_r_v1": ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_EXTERNAL,
@@ -402,7 +440,7 @@ def _continuous_ranker_target_policies() -> dict[str, ContinuousRankerTargetPoli
             postprocess=CONTINUOUS_RANKER_TARGET_POSTPROCESS_EQUAL_RANK_MFE_LOW_ADVERSE,
             contract_kind="daily_full_horizon_equal_rank_mfe_low_adverse",
         ),
-        cfg.PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID: ContinuousRankerTargetPolicy(
+        PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
             component_target_id="daily_full_horizon_low_adverse_r_v1",
             context_source=CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
@@ -414,7 +452,7 @@ def _continuous_ranker_target_policies() -> dict[str, ContinuousRankerTargetPoli
             context_transform=CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_UPSIDE_LOW_ADVERSE,
             contract_kind="predicted_upside_context",
         ),
-        cfg.PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID: ContinuousRankerTargetPolicy(
+        PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
             component_target_id="daily_full_horizon_pure_mfe_r_v1",
             context_source=CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
@@ -426,7 +464,7 @@ def _continuous_ranker_target_policies() -> dict[str, ContinuousRankerTargetPoli
             context_transform=CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_SAFETY_MFE,
             contract_kind="predicted_safety_context",
         ),
-        cfg.PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID: ContinuousRankerTargetPolicy(
+        PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
             component_target_id="daily_full_horizon_pure_mfe_r_v1",
             context_source=CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
@@ -445,16 +483,14 @@ def _continuous_ranker_target_policies() -> dict[str, ContinuousRankerTargetPoli
 
 @lru_cache(maxsize=1)
 def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTrainingPolicy]:
-    from config import breakout_quality as cfg
-
     return {
-        cfg.TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION: ContinuousRankerTrainingPolicy(
+        TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PERCENTILE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
         ),
-        cfg.TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION: ContinuousRankerTrainingPolicy(
+        TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_RAW_R,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R,
@@ -462,7 +498,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             score_transform=CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
         ),
-        cfg.TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION: ContinuousRankerTrainingPolicy(
+        TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_DUAL_COMPONENT_R,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R,
@@ -470,27 +506,27 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             score_transform=CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
         ),
-        cfg.TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_PAIRWISE,
             uses_pairwise_loss=True,
         ),
-        cfg.TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_PAIRWISE,
             uses_pairwise_loss=True,
         ),
-        cfg.TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: ContinuousRankerTrainingPolicy(
+        TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PERCENTILE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_LISTWISE,
         ),
-        cfg.TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE,
@@ -499,7 +535,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             uses_pairwise_loss=True,
         ),
-        cfg.TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
@@ -508,7 +544,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             uses_pairwise_loss=True,
         ),
-        cfg.TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
@@ -517,7 +553,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             uses_pairwise_loss=True,
         ),
-        cfg.TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
@@ -526,7 +562,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             uses_pairwise_loss=True,
         ),
-        cfg.TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
@@ -535,7 +571,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             uses_pairwise_loss=True,
         ),
-        cfg.TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
@@ -544,7 +580,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             uses_pairwise_loss=True,
         ),
-        cfg.TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
@@ -615,18 +651,20 @@ def _resolve_continuous_ranker_objective_policy(spec: Any) -> ContinuousRankerOb
     return ContinuousRankerObjectivePolicy(pairwise_reduction=reduction)
 
 
-def get_continuous_ranker_execution_recipe(
-    experiment_profile: str,
+def build_continuous_ranker_execution_recipe(
+    *,
+    profile_name: str,
+    profile: Any,
+    spec: Any,
+    requires_continuous_target_artifact: bool,
 ) -> ContinuousRankerExecutionRecipe:
-    """Resolve executable semantics once; consumers must not rediscover profile meaning."""
+    """Build executable semantics from already-resolved declarative inputs.
 
-    from config import breakout_quality as cfg
+    This module deliberately does not import the scientific/profile configuration owner.
+    Resolution of profile identity belongs to ``config.breakout_quality``; the runtime
+    owner only turns resolved declarations into reusable execution capabilities.
+    """
 
-    profile_name = cfg.normalize_breakout_quality_experiment_profile(experiment_profile)
-    profile = cfg.get_breakout_quality_experiment_profile(profile_name)
-    spec = cfg.get_continuous_ranker_research_spec(profile_name)
-    if profile.training_objective not in cfg.CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
-        raise ValueError(f"continuous ranker recipe只接受continuous profile: {profile_name}")
     target_policy = _resolve_continuous_ranker_target_policy(profile)
     training_policy = get_continuous_ranker_training_policy(profile.training_objective)
     objective_policy = _resolve_continuous_ranker_objective_policy(spec)
@@ -634,13 +672,11 @@ def get_continuous_ranker_execution_recipe(
         target_policy, objective_policy
     )
     dependency_spec = ContinuousRankerDependencySpec(
-        requires_continuous_target_artifact=(
-            profile.training_sample_scope == cfg.TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
-        ),
+        requires_continuous_target_artifact=bool(requires_continuous_target_artifact),
         context_source=context_policy.source,
     )
     return ContinuousRankerExecutionRecipe(
-        profile_name=profile_name,
+        profile_name=str(profile_name),
         trainer_family=spec.trainer_family,
         training_objective=profile.training_objective,
         continuous_target_id=str(profile.continuous_target_id),
@@ -743,5 +779,5 @@ __all__ = (
     "BREAKOUT_QUALITY_OUTPUT_SCHEMA",
     "ContinuousRankerExecutionRecipe",
     "get_continuous_ranker_training_policy",
-    "get_continuous_ranker_execution_recipe",
+    "build_continuous_ranker_execution_recipe",
 )

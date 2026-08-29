@@ -31,6 +31,8 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+)
+from config.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
 )
 from config.breakout_quality import (

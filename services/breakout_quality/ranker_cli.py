@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+)
+from config.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
 )
 from services.breakout_quality import train_continuous_ranker as event_ranker

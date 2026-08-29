@@ -15,7 +15,8 @@ from typing import Any
 from config.research import get_research_artifact_preparation_policy
 from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
-    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,)
+from config.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
 )
 from config.breakout_quality import (

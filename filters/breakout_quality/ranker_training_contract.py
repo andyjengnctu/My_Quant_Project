@@ -29,7 +29,8 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS,
-    CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN,
+    CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN,)
+from config.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
 )
 from config.breakout_quality import (

@@ -377,6 +377,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     # target/context/objective capabilities must not require a new synthetic case.
     import config.breakout_quality as breakout_quality_config
     import config.breakout_quality_runtime as continuous_ranker_runtime
+    import config.breakout_quality_runtime_resolver as continuous_ranker_runtime_resolver
     from config.breakout_quality_runtime import (
         CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
         CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
@@ -385,6 +386,8 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
         CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
         CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+    )
+    from config.breakout_quality_runtime_resolver import (
         get_continuous_ranker_execution_recipe,
     )
     from filters.breakout_quality.artifact_dependency_registry import (
@@ -406,12 +409,12 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         continuous_ranker_runtime.ContinuousRankerExecutionRecipe.__module__,
     )
     check_true(
-        "continuous_ranker_config_facade_reexports_canonical_runtime_getter",
+        "continuous_ranker_recipe_resolver_reexports_canonical_config_resolver",
         breakout_quality_config.get_continuous_ranker_execution_recipe
-        is continuous_ranker_runtime.get_continuous_ranker_execution_recipe,
+        is continuous_ranker_runtime_resolver.get_continuous_ranker_execution_recipe,
         note=(
-            "config.breakout_quality compatibility facade must re-export the canonical "
-            "runtime getter instead of defining a second implementation"
+            "the acyclic runtime resolver gateway must forward the single canonical "
+            "profile-to-recipe resolver owned by config.breakout_quality"
         ),
     )
     runtime_public_names = set(continuous_ranker_runtime.__all__)
@@ -424,7 +427,12 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
                 if not isinstance(node, ast.ImportFrom) or node.module != "config.breakout_quality":
                     continue
                 imported_runtime_names = sorted(
-                    alias.name for alias in node.names if alias.name in runtime_public_names
+                    alias.name
+                    for alias in node.names
+                    if (
+                        alias.name in runtime_public_names
+                        or alias.name == "get_continuous_ranker_execution_recipe"
+                    )
                 )
                 if imported_runtime_names:
                     runtime_facade_bypass_imports.append(
@@ -436,8 +444,10 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         [],
         runtime_facade_bypass_imports,
         note=(
-            "filters/services generic consumers must import runtime capability names from "
-            "config.breakout_quality_runtime; config.breakout_quality is a compatibility facade"
+            "filters/services generic consumers must import capability names from "
+            "config.breakout_quality_runtime and the profile resolver from "
+            "config.breakout_quality_runtime_resolver; config.breakout_quality is not a "
+            "generic-consumer runtime import surface"
         ),
     )
 
