@@ -10917,3 +10917,14 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Executable guard**：continuous-ranker synthetic 的 pair-weight identity leakage 檢查改為直接遍歷 runtime registry 的所有 non-`none` policy IDs，掃描完整 `filters/` 與 `services/`。未來新增任何 pair-weight policy，只要 specific policy ID 滲入 generic consumer，就會自動 FAIL；不再硬編目前 AF/AG/AH policy 名單。
 - **獨立驗證**：targeted continuous-ranker contract=`35 checks / 0 FAIL`；完整 synthetic consistency=`4,616 checks / 244 cases / 0 FAIL`（formal-style isolated primary-param source）；source-root `compileall` PASS。正式 `apps/run_bundle.py`／`apps/test_suite.py`依治理規則留給使用者本機 double check。
 - **Research state**：MR-13AH 維持 `IMPLEMENTED / MODEL_GATE_RESULT_PENDING / NO_PIT / NO_STRATEGY_CONVERSION / NOT_PROMOTED`；Registry 與 Research Queue scientific state不因本工程 change 改變。
+
+
+## 2026-08-29 — MR-13AH formal Model Gate result / MR-13AI Phase-0 local-conflict follow-up
+
+- **MR-13AH result**：Seed42 selected epoch=`1`；Validation/OOS/Breakout Daily rho=`0.4451/0.3522/0.3195`，OOS/Breakout Pair=`62.13/62.15%`。OOS `Pred-Safety→Score=-0.7189`、`Score→Low-Adverse=-0.2891`、Top10 MFE/Adverse=`2.3473R/0.5773R`、High-MFE/High-Safety/HMHS=`73.92/30.29/22.48%`；Breakout=`-0.6916/-0.2902`、Top10 MFE/Adverse=`2.7127R/0.5528R`、High-MFE/High-Safety/HMHS=`71.66/32.46/24.40%`。
+- **Controlled interpretation**：相較MR-13AF，OOS `Pred-Safety→Score`改善`-0.7763→-0.7189`，但High-Safety只`29.86→30.29%`、HM/HS只`22.43→22.48%`、Adverse只`0.5818→0.5773R`；Breakout HM/HS反而`25.11→24.40%`。同時OOS MFE rho=`0.3764→0.3522`、Top-K Lift=`1.6503→1.3103R`。因此改善主要是prediction-space decorrelation，不是realized joint enrichment。
+- **Decision**：`PREDICTED_SAFETY_ANTICORRELATION_REDUCED / MFE_LEARNABILITY_COST_MATERIAL / ACTUAL_SAFETY_GAIN_MINIMAL / HMHS_NOT_IMPROVED / FORWARD_MODEL_GATE_FAIL / STOP_PAIR_WEIGHT_STRENGTH_FAMILY / NO_PIT / NO_STRATEGY / NO_ROBUSTNESS`。
+- **MR-13AI Phase-0 authorization**：不直接訓練新CNN。只讀MR-13AF frozen Forward-OOS score與canonical PIT-safe predicted-Safety，在每天canonical `K=10`邊界只比較rank K與K+1。為遵守no-lookahead，local MFE-confidence不用realized MFE gap，而用prediction-time AF score gap：`d_score=AF_score_K-AF_score_K+1`；`d_safety=S_K-S_K+1`；`g=d_score+(1-|d_score|)d_safety`；僅`g<0`交換。其餘rank完全保留AF。
+- **Evidence surface**：Forward OOS與Breakout各自輸出AF vs AI的MFE Daily rho/Pair、Pred-Safety→Score、Score→Low-Adverse、Top-K MFE/Adverse/High-MFE/High-Safety/HMHS/Top-K Lift，另輸出swap rate與被交換pairs的realized MFE/Adverse/HMHS conversion。realized truth只在decision後評估。
+- **Gate**：若Top-K MFE只小幅下降且Adverse/High-Safety/HMHS有實質改善，才另行定義trainable Phase-1；若zero-retrain boundary reorder都無joint gain，MR-13AI直接STOP。
+- **Implementation boundary**：一次性read-only research diagnostic；不修改Standard Model SOP fingerprint、不新增model profile、不改正式model menu、不建立PIT/Strategy arm。

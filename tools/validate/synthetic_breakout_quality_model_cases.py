@@ -6590,3 +6590,138 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
 
     summary["training_performed"] = False
     return results, summary
+
+
+def validate_breakout_quality_mr13ai_phase0_local_conflict_contract_case(_base_params):
+    """Protect MR-13AI Phase-0 no-lookahead K/K+1 local-conflict diagnostic."""
+
+    case_id = "BREAKOUT_QUALITY_MR13AI_PHASE0_LOCAL_CONFLICT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    import inspect
+    import numpy as np
+    import pandas as pd
+    from services.breakout_quality.mr13ai_phase0 import (
+        PHASE0_CONTRACT,
+        SOURCE_PROFILE,
+        apply_boundary_reorder,
+        boundary_decision,
+        boundary_preference_margin,
+        evaluate_phase0_frame,
+    )
+    from config.breakout_quality import (
+        DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+    )
+
+    check(
+        "mr13ai_phase0_is_frozen_af_zero_retrain_read_only_source",
+        (
+            DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            False,
+            False,
+        ),
+        (
+            SOURCE_PROFILE,
+            bool(PHASE0_CONTRACT.get("training_performed")),
+            bool(PHASE0_CONTRACT.get("model_artifact_written")),
+        ),
+    )
+    check_true(
+        "mr13ai_phase0_decision_contract_is_prediction_time_only",
+        PHASE0_CONTRACT.get("uses_future_target_for_selection") is False
+        and PHASE0_CONTRACT.get("realized_truth_role") == "evaluation_only_after_selection"
+        and PHASE0_CONTRACT.get("decision_scope") == "single_k_boundary_pair_per_date"
+        and PHASE0_CONTRACT.get("mfe_confidence_proxy") == "same_date_frozen_af_model_score_gap_in_0_1",
+    )
+    check_true(
+        "mr13ai_phase0_margin_gives_safety_zero_authority_at_max_af_gap",
+        abs(boundary_preference_margin(1.0, -1.0) - 1.0) < 1e-12,
+    )
+    check_true(
+        "mr13ai_phase0_margin_lets_safety_resolve_near_tie",
+        boundary_preference_margin(0.01, -0.90) < 0.0,
+    )
+    check_true(
+        "mr13ai_phase0_exact_af_tie_is_resolved_by_safety_sign",
+        boundary_preference_margin(0.0, -0.50) < 0.0
+        and boundary_preference_margin(0.0, 0.50) > 0.0,
+    )
+
+    day = pd.Timestamp("2025-01-02")
+    tickers = [f"T{i:02d}" for i in range(11)]
+    scores = [0.99, 0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.60, 0.500, 0.495]
+    safety = [0.7] * 9 + [0.10, 0.95]
+    frame = pd.DataFrame(
+        {
+            "ticker": tickers,
+            "date": [day] * 11,
+            "group_index": np.arange(11),
+            "model_score": scores,
+            "predicted_safety_percentile": safety,
+        }
+    )
+    ranked, pairs = apply_boundary_reorder(frame, top_k=10)
+    af_top = ranked.loc[ranked["af_rank"] <= 10, "ticker"].tolist()
+    ai_top = ranked.loc[ranked["ai_rank"] <= 10, "ticker"].tolist()
+    check_true(
+        "mr13ai_phase0_only_swaps_rank_k_and_k_plus_1_when_local_safety_overcomes_small_af_gap",
+        len(pairs) == 1
+        and bool(pairs.iloc[0]["swap"])
+        and set(af_top) - set(ai_top) == {"T09"}
+        and set(ai_top) - set(af_top) == {"T10"}
+        and ranked.loc[ranked["ticker"].isin(tickers[:9]), "af_rank"].tolist()
+        == ranked.loc[ranked["ticker"].isin(tickers[:9]), "ai_rank"].tolist(),
+    )
+
+    truth_changed = frame.copy()
+    truth_changed["target_favorable_r"] = np.linspace(100.0, -100.0, 11)
+    truth_changed["target_adverse_r"] = np.linspace(9.0, 19.0, 11)
+    truth_changed["target_mfe_daily_percentile"] = np.linspace(0.0, 1.0, 11)
+    truth_changed["target_low_adverse_daily_percentile"] = np.linspace(1.0, 0.0, 11)
+    ranked_with_truth, pairs_with_truth = apply_boundary_reorder(truth_changed, top_k=10)
+    check_true(
+        "mr13ai_phase0_realized_truth_cannot_change_boundary_decision",
+        ranked_with_truth[["ticker", "ai_rank"]].equals(ranked[["ticker", "ai_rank"]])
+        and bool(pairs_with_truth.iloc[0]["swap"]),
+    )
+
+    evaluation = frame.copy()
+    evaluation["target_favorable_r"] = [3.0] * 9 + [2.0, 1.9]
+    evaluation["target_adverse_r"] = [0.4] * 9 + [0.8, 0.1]
+    evaluation["target_mfe_daily_percentile"] = [0.8] * 9 + [0.80, 0.75]
+    evaluation["target_low_adverse_daily_percentile"] = [0.7] * 9 + [0.10, 0.95]
+    payload = evaluate_phase0_frame(evaluation, top_k=10, boundary_width=1)
+    delta = payload["comparison_ai_minus_af"]
+    swaps = payload["boundary_swaps"]
+    check_true(
+        "mr13ai_phase0_reports_joint_boundary_conversion_not_only_prediction_decorrelation",
+        swaps.get("swap_date_count") == 1
+        and float(delta.get("delta_top_k_mfe_r")) < 0.0
+        and float(delta.get("delta_top_k_adverse_r")) < 0.0
+        and float(delta.get("delta_top_k_high_safety_pp")) > 0.0
+        and float(delta.get("delta_top_k_hmhs_pp")) > 0.0,
+    )
+    check_true(
+        "mr13ai_phase0_reports_conflict_conversion_rate_and_realized_tradeoff",
+        float(swaps.get("actual_safety_improved_swap_pct")) == 100.0
+        and float(swaps.get("mfe_retained_or_improved_swap_pct")) == 0.0
+        and float(swaps.get("high_safety_delta_pp")) > 0.0
+        and float(swaps.get("hmhs_delta_pp")) > 0.0,
+    )
+
+    decision_source = inspect.getsource(boundary_decision)
+    reorder_source = inspect.getsource(apply_boundary_reorder)
+    check_true(
+        "mr13ai_phase0_boundary_decision_source_has_no_realized_target_dependency",
+        "target_favorable" not in decision_source
+        and "target_adverse" not in decision_source
+        and "target_mfe" not in decision_source
+        and "target_low_adverse" not in decision_source
+        and "model_score" in reorder_source
+        and "predicted_safety_percentile" in reorder_source,
+    )
+
+    summary["training_performed"] = False
+    return results, summary

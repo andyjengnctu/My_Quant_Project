@@ -138,6 +138,7 @@ from .synthetic_breakout_quality_model_cases import (
     validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_case,
     validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_case,
     validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case,
+    validate_breakout_quality_mr13ai_phase0_local_conflict_contract_case,
     validate_breakout_quality_multi_dl_ranker_architecture_contract_case,
 )
 from .synthetic_breakout_quality_audit_cases import (
@@ -378,6 +379,7 @@ def get_synthetic_validator_entries():
         _entry(validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case, layer="core_invariant", cost_class="fast"),
+        _entry(validate_breakout_quality_mr13ai_phase0_local_conflict_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_multi_dl_ranker_architecture_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_point_in_time_score_builder_contract_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_breakout_quality_pit_training_performance_semantics_case, layer="core_invariant", cost_class="fast"),
