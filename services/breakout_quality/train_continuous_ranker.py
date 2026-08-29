@@ -27,6 +27,30 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
     CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
+    CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
+    CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+    CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY,
+    CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R,
+    CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
+    CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+    CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
+    CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY,
+    CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE,
+    CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS,
+    CONTINUOUS_RANKER_TARGET_BUILDER_DUAL_COMPONENT_R,
+    CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS,
+    CONTINUOUS_RANKER_TARGET_BUILDER_RAW_R,
+    CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE,
+    CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
+    CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
+    CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
+    CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
@@ -48,6 +72,7 @@ from config.breakout_quality import (
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
     get_continuous_ranker_execution_recipe,
+    get_continuous_ranker_training_policy,
     get_continuous_ranker_research_spec,
     resolve_breakout_quality_random_seed,
 )
@@ -1185,39 +1210,24 @@ def _train_epoch(
     raw_r_huber_delta_r: float | None = None,
 ) -> float:
     model.train()
+    training_policy = get_continuous_ranker_training_policy(training_objective)
+    loss_handler = str(training_policy.loss_handler)
     ids_all = np.asarray(group_ids, dtype=np.int64)
     rng = np.random.default_rng(int(seed))
-    if training_objective in {
-        TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
-        TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
-        TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
-    }:
+    if training_policy.batch_mode == CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED:
         order = ids_all.copy()
         rng.shuffle(order)
         batches = [
             order[start:start + int(batch_size)]
             for start in range(0, len(order), int(batch_size))
         ]
-    elif training_objective in {
-        TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-    }:
+    else:
         batches = _date_coherent_batches(
             ids_all,
             group_dates,
             batch_size=int(batch_size),
             seed=int(seed),
         )
-    else:
-        raise ValueError(f"不支援的continuous ranker training objective: {training_objective!r}")
 
     losses: list[float] = []
     weighted_loss_sum = 0.0
@@ -1239,10 +1249,7 @@ def _train_epoch(
             continue
         optimizer.zero_grad(set_to_none=True)
         with autocast_context(torch, plan):
-            if training_objective in {
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-            }:
+            if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE:
                 if target.ndim != 2 or int(target.shape[1]) != 3:
                     raise ValueError("Safety/Raw-MFE/Joint tri-head target必須為[N,3]")
                 if not hasattr(model, "forward_safety_raw_mfe_hmhs_heads"):
@@ -1269,10 +1276,7 @@ def _train_epoch(
                 head_losses = [item[0] for item in losses_and_counts]
                 loss = sum(head_losses) / 3.0
                 loss_weight = int(max(1, sum(int(item[1]) for item in losses_and_counts)))
-            elif training_objective in {
-                TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-            }:
+            elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE:
                 if target.ndim != 2 or int(target.shape[1]) != 2:
                     raise ValueError("Safety→MFE duo-head target必須為[N,2]")
                 if not hasattr(model, "forward_safety_conditional_mfe_heads"):
@@ -1291,7 +1295,7 @@ def _train_epoch(
                     continue
                 loss = 0.5 * (safety_loss + conditional_mfe_loss)
                 loss_weight = int(max(1, safety_supervision + conditional_mfe_supervision))
-            elif training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
+            elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE:
                 if target.ndim != 2 or int(target.shape[1]) != 2:
                     raise ValueError("conditional MFE-safety target必須為[N,2]")
                 if not hasattr(model, "forward_conditional_heads"):
@@ -1322,82 +1326,60 @@ def _train_epoch(
                 loss_weight = int(max(1, primary_supervision + conditional_supervision))
             else:
                 logits = model(xb, cb)
-            if training_objective in {
-                TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-            }:
-                pass
-            elif training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
-                score = torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]
-                loss = F.mse_loss(score, target, reduction="mean")
-                loss_weight = int(len(ids))
-            elif training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
-                predicted_r = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
-                loss_name = str(raw_r_loss_name or ("huber_raw_r" if raw_r_huber_delta_r is not None else "")).strip()
-                if loss_name == "mse_raw_r":
-                    loss = F.mse_loss(predicted_r, target, reduction="mean")
-                elif loss_name == "huber_raw_r":
-                    if raw_r_huber_delta_r is None:
-                        raise ValueError("Huber direct R regression缺少Huber delta")
-                    loss = F.huber_loss(
-                        predicted_r, target, reduction="mean", delta=float(raw_r_huber_delta_r)
+                if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE:
+                    score = torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]
+                    loss = F.mse_loss(score, target, reduction="mean")
+                    loss_weight = int(len(ids))
+                elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R:
+                    predicted_r = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
+                    loss_name = str(raw_r_loss_name or ("huber_raw_r" if raw_r_huber_delta_r is not None else "")).strip()
+                    if loss_name == "mse_raw_r":
+                        loss = F.mse_loss(predicted_r, target, reduction="mean")
+                    elif loss_name == "huber_raw_r":
+                        if raw_r_huber_delta_r is None:
+                            raise ValueError("Huber direct R regression缺少Huber delta")
+                        loss = F.huber_loss(
+                            predicted_r, target, reduction="mean", delta=float(raw_r_huber_delta_r)
+                        )
+                    else:
+                        raise ValueError(f"不支援的direct R regression loss: {loss_name!r}")
+                    loss_weight = int(len(ids))
+                elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R:
+                    if target.ndim != 2 or int(target.shape[1]) != 2:
+                        raise ValueError("dual-component R regression target必須為[N,2]")
+                    # Existing two output neurons are reinterpreted only by this capability:
+                    # LABEL_REJECT -> adverse-to-peak R, LABEL_PASS -> favorable MFE R.
+                    loss = F.mse_loss(logits.float(), target, reduction="mean")
+                    loss_weight = int(len(ids))
+                elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE:
+                    margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
+                    loss, supervision_count = _pairwise_logistic_loss(
+                        torch,
+                        margins,
+                        target,
+                        group_dates_series.iloc[ids].to_numpy(),
+                        reduction=str(pairwise_reduction),
                     )
+                    if loss is None:
+                        continue
+                    loss_weight = int(supervision_count)
+                elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE:
+                    margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
+                    loss, ranked_date_count = _listnet_top_one_loss(
+                        torch,
+                        margins,
+                        target,
+                        group_dates_series.iloc[ids].to_numpy(),
+                    )
+                    if loss is None:
+                        continue
+                    loss_weight = int(ranked_date_count)
                 else:
-                    raise ValueError(f"不支援的direct R regression loss: {loss_name!r}")
-                loss_weight = int(len(ids))
-            elif training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
-                if target.ndim != 2 or int(target.shape[1]) != 2:
-                    raise ValueError("dual-component R regression target必須為[N,2]")
-                # Existing two output neurons are reinterpreted only by this profile:
-                # LABEL_REJECT -> adverse-to-peak R, LABEL_PASS -> favorable MFE R.
-                # F.mse_loss(mean) gives both physical R components equal weight
-                # without an extra lambda or auxiliary-loss coefficient.
-                loss = F.mse_loss(logits.float(), target, reduction="mean")
-                loss_weight = int(len(ids))
-            elif training_objective in {
-                TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-            }:
-                margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
-                loss, supervision_count = _pairwise_logistic_loss(
-                    torch,
-                    margins,
-                    target,
-                    group_dates_series.iloc[ids].to_numpy(),
-                    reduction=str(pairwise_reduction),
-                )
-                if loss is None:
-                    continue
-                loss_weight = int(supervision_count)
-            else:
-                margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
-                loss, ranked_date_count = _listnet_top_one_loss(
-                    torch,
-                    margins,
-                    target,
-                    group_dates_series.iloc[ids].to_numpy(),
-                )
-                if loss is None:
-                    continue
-                loss_weight = int(ranked_date_count)
+                    raise ValueError(
+                        f"不支援的continuous ranker loss capability: {loss_handler!r}"
+                    )
         reuse_loss_scalar = bool(
-            training_objective
-            in {
-                TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-            }
+            training_policy.uses_pairwise_loss
             and str(pairwise_reduction)
             == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
         )
@@ -1433,20 +1415,8 @@ def _train_epoch(
         weighted_loss_count += int(loss_weight)
     if not losses or weighted_loss_count < 1:
         raise ValueError("continuous ranker training沒有任何有效batch／ranking supervision")
-    if training_objective in {
-        TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
-        TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
-        TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
-        TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-    }:
-        # Preserve historical scalar-regression reporting semantics exactly.
-        # Multi-head ranking reports the actual equal-head mean per optimizer
-        # batch instead of inventing a cross-head pair-count weight.
+    if training_policy.epoch_loss_aggregation == CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH:
+        # Preserve historical scalar-regression and multi-head reporting exactly.
         return float(np.mean(losses))
     return float(weighted_loss_sum / float(weighted_loss_count))
 
@@ -1472,10 +1442,8 @@ def predict_scores(
         workers=1,
         execution_plan=plan,
     )
-    if training_objective in {
-        TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
-        TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
-    }:
+    training_policy = get_continuous_ranker_training_policy(training_objective)
+    if training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R:
         return (logits[:, LABEL_PASS] - logits[:, LABEL_REJECT]).astype(np.float32)
     shifted = logits.astype(np.float64) - logits.max(axis=1, keepdims=True)
     exp = np.exp(shifted)
@@ -2297,37 +2265,40 @@ def _training_target_for_profile(
     percentile_target: np.ndarray,
     group_table: pd.DataFrame,
 ) -> np.ndarray:
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    target_builder = str(recipe.training_policy.target_builder)
+
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY:
         return build_conditional_targets(group_table, percentile_target).training_target
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING:
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE:
         return build_conditional_mfe_opportunity_targets_for_training(
             group_table, percentile_target
         ).single_head_training_target
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING:
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE:
         return build_conditional_mfe_opportunity_targets_for_training(
             group_table, percentile_target
         ).duo_head_training_target
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE:
         return build_conditional_mfe_opportunity_targets_for_training(
             group_table, percentile_target
         ).safety_raw_mfe_training_target
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING:
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS:
         return build_conditional_mfe_opportunity_targets_for_training(
             group_table, percentile_target
         ).safety_raw_mfe_hmhs_training_target
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING:
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN:
         return build_conditional_mfe_opportunity_targets_for_training(
             group_table, percentile_target
         ).safety_raw_mfe_joint_min_training_target
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING:
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS:
         return build_conditional_mfe_opportunity_targets_for_training(
             group_table, percentile_target
         ).direct_hmhs_target
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS:
         return build_pareto_component_percentile_targets(group_table, raw_target)
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_RAW_R:
         return np.asarray(raw_target, dtype=np.float32)
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DUAL_COMPONENT_R:
         required = ("target_adverse_r", "target_favorable_r")
         missing = [column for column in required if column not in group_table.columns]
         if missing:
@@ -2345,8 +2316,7 @@ def _training_target_for_profile(
                 "dual-component target-valid universe與composite raw target不一致"
             )
         return targets
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
-        recipe = get_continuous_ranker_execution_recipe(profile.name)
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE:
         if (
             recipe.objective_policy.pair_target_schema
             == CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT
@@ -2357,7 +2327,9 @@ def _training_target_for_profile(
                 group_table["predicted_safety_percentile"], errors="coerce"
             ).to_numpy(dtype=np.float32)
             valid_safety = safety[np.isfinite(safety)]
-            if len(valid_safety) and (float(valid_safety.min()) < 0.0 or float(valid_safety.max()) > 1.0):
+            if len(valid_safety) and (
+                float(valid_safety.min()) < 0.0 or float(valid_safety.max()) > 1.0
+            ):
                 raise ValueError("predicted-Safety pair context必須為0～1 same-date percentile")
             return np.column_stack([
                 np.asarray(percentile_target, dtype=np.float32),
@@ -2384,21 +2356,18 @@ def select_epoch(
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
     execution_recipe = get_continuous_ranker_execution_recipe(str(args.experiment_profile))
+    training_policy = execution_recipe.training_policy
+    target_builder = str(training_policy.target_builder)
+    loss_handler = str(training_policy.loss_handler)
+    auxiliary_target_bundle = str(training_policy.auxiliary_target_bundle)
     conditional_targets = (
         build_conditional_targets(group_table, percentile_target)
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
+        if auxiliary_target_bundle == CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY
         else None
     )
     conditional_mfe_targets = (
         build_conditional_mfe_opportunity_targets_for_training(group_table, percentile_target)
-        if profile.training_objective in {
-            TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-        }
+        if auxiliary_target_bundle == CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY
         else None
     )
     training_target = _training_target_for_profile(
@@ -2406,12 +2375,12 @@ def select_epoch(
     )
     raw_r_loss_name = (
         str(profile.loss_name)
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
         else None
     )
     raw_r_delta = (
         float(profile.raw_r_huber_delta_r)
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
         and profile.raw_r_huber_delta_r is not None
         else None
     )
@@ -2444,22 +2413,22 @@ def select_epoch(
             else "Validation MSE raw R"
             if raw_r_loss_name == "mse_raw_r"
             else "Validation mean daily Pareto pair concordance"
-            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING
+            if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS
             else "Validation conditional-safety mean daily Spearman"
-            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
+            if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY
             else "Validation Conditional-MFE mean daily Spearman"
-            if profile.training_objective in {
-                TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+            if target_builder in {
+                CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE,
+                CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE,
             }
             else "Validation Raw-MFE mean daily Spearman"
-            if profile.training_objective in {
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
+            if target_builder in {
+                CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
+                CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
+                CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
             }
             else "Validation Direct HM/HS Pair concordance"
-            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING
+            if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS
             else "Validation mean daily Spearman"
         )
         print(f"\nEpoch選擇（依{label}）")
@@ -2497,7 +2466,7 @@ def select_epoch(
         validation_safety_raw_mfe_joint_min_metrics = None
         validation_direct_hmhs_metrics = None
         validation_used_selection_only_metrics = False
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING:
+        if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS:
             validation_scores = predict_scores(
                 torch, model, feature_bank, group_context, validation_ids,
                 batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -2507,7 +2476,7 @@ def select_epoch(
                 validation_ids, group_table, conditional_mfe_targets, validation_scores
             )
             validation_metrics = validation_direct_hmhs_metrics
-        elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING:
+        elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN:
             if bool(selection_metrics_only):
                 # PIT checkpoint selection is defined only by Raw-MFE Validation
                 # mean Daily Spearman with percentile-MSE tie-break.  Use the
@@ -2541,7 +2510,7 @@ def select_epoch(
                 )
                 validation_scores = validation_head_scores["raw_mfe"]
                 validation_metrics = validation_safety_raw_mfe_joint_min_metrics["raw_mfe"]
-        elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING:
+        elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS:
             validation_head_scores = predict_safety_raw_mfe_hmhs_scores(
                 torch, model, feature_bank, group_context, validation_ids,
                 batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -2551,7 +2520,7 @@ def select_epoch(
             )
             validation_scores = validation_head_scores["raw_mfe"]
             validation_metrics = validation_safety_raw_mfe_hmhs_metrics["raw_mfe"]
-        elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
+        elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE:
             validation_head_scores = predict_safety_raw_mfe_scores(
                 torch, model, feature_bank, group_context, validation_ids,
                 batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -2561,7 +2530,7 @@ def select_epoch(
             )
             validation_scores = validation_head_scores["raw_mfe"]
             validation_metrics = validation_safety_raw_mfe_metrics["raw_mfe"]
-        elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING:
+        elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE:
             validation_head_scores = predict_safety_conditional_mfe_scores(
                 torch, model, feature_bank, group_context, validation_ids,
                 batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -2571,7 +2540,7 @@ def select_epoch(
             )
             validation_scores = validation_head_scores["conditional_mfe"]
             validation_metrics = validation_reverse_conditional_metrics["conditional_mfe"]
-        elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING:
+        elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE:
             validation_scores = predict_scores(
                 torch, model, feature_bank, group_context, validation_ids,
                 batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -2621,7 +2590,7 @@ def select_epoch(
                 raw_r_huber_delta_r=raw_r_delta,
             )
         if bool(evaluate_train_metrics):
-            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING:
+            if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS:
                 train_scores = predict_scores(
                     torch, model, feature_bank, group_context, train_ids,
                     batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -2630,7 +2599,7 @@ def select_epoch(
                 train_metrics = direct_hmhs_metrics(
                     train_ids, group_table, conditional_mfe_targets, train_scores
                 )
-            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING:
+            elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN:
                 train_head_scores = predict_safety_raw_mfe_joint_min_scores(
                     torch, model, feature_bank, group_context, train_ids,
                     batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -2639,7 +2608,7 @@ def select_epoch(
                     train_ids, group_table, conditional_mfe_targets, train_head_scores
                 )
                 train_metrics = train_tri_metrics["raw_mfe"]
-            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING:
+            elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS:
                 train_head_scores = predict_safety_raw_mfe_hmhs_scores(
                     torch, model, feature_bank, group_context, train_ids,
                     batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -2648,7 +2617,7 @@ def select_epoch(
                     train_ids, group_table, conditional_mfe_targets, train_head_scores
                 )
                 train_metrics = train_tri_metrics["raw_mfe"]
-            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
+            elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE:
                 train_head_scores = predict_safety_raw_mfe_scores(
                     torch, model, feature_bank, group_context, train_ids,
                     batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -2657,7 +2626,7 @@ def select_epoch(
                     train_ids, group_table, conditional_mfe_targets, train_head_scores
                 )
                 train_metrics = train_safety_raw_mfe_metrics["raw_mfe"]
-            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING:
+            elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE:
                 train_head_scores = predict_safety_conditional_mfe_scores(
                     torch, model, feature_bank, group_context, train_ids,
                     batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -2666,7 +2635,7 @@ def select_epoch(
                     train_ids, group_table, conditional_mfe_targets, train_head_scores
                 )
                 train_metrics = train_reverse_metrics["conditional_mfe"]
-            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING:
+            elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE:
                 train_scores = predict_scores(
                     torch, model, feature_bank, group_context, train_ids,
                     batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -2750,7 +2719,7 @@ def select_epoch(
         if daily_spearman is None or not math.isfinite(float(daily_spearman)):
             raise ValueError("continuous model validation mean daily Spearman不可用")
         validation_pareto_metrics = None
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
+        if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS:
             validation_pareto_metrics = pareto_pair_concordance_metrics(
                 validation_ids, group_table, raw_target, validation_scores
             )
@@ -2765,7 +2734,7 @@ def select_epoch(
             if pareto_global is None or not math.isfinite(float(pareto_global)):
                 raise ValueError("Pareto validation global pair concordance不可用")
 
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+        if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R:
             regression = dict(validation_metrics.get("raw_r_regression") or {})
             validation_huber = regression.get("huber_loss_raw_r")
             validation_mse_raw_r = regression.get("mse_raw_r")
@@ -2795,7 +2764,7 @@ def select_epoch(
             validation_huber = None
             validation_mse_raw_r = None
             validation_mae = None
-            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING:
+            if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS:
                 hmhs_pair = validation_direct_hmhs_metrics.get("pairwise_concordance")
                 hmhs_ap = validation_direct_hmhs_metrics.get("global_average_precision")
                 if hmhs_pair is None or not math.isfinite(float(hmhs_pair)):
@@ -2813,7 +2782,7 @@ def select_epoch(
                         and float(hmhs_ap) > best_hmhs_global_average_precision
                     )
                 )
-            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
+            elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS:
                 pareto_daily = float(
                     validation_pareto_metrics["mean_daily_pareto_pair_concordance"]
                 )
@@ -2890,7 +2859,7 @@ def select_epoch(
         })
         if not compact_console:
             marker = " ★新最佳" if improved else ""
-            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+            if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R:
                 if raw_r_loss_name == "huber_raw_r":
                     loss_text = f"Train Huber {batch_loss:.6f} | Val Huber {float(validation_huber):.6f}"
                 else:
@@ -2899,21 +2868,21 @@ def select_epoch(
                     f"  Epoch {epoch:>3}/{int(args.epochs)} | {loss_text} | Val MAE {float(validation_mae):.4f}R "
                     f"| Val Daily Spearman {float(daily_spearman):.4f} | {elapsed:.1f}s{marker}"
                 )
-            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
+            elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY:
                 print(
                     f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
                     f"| Val Conditional rho {float(daily_spearman):.4f} "
                     f"| Val MFE rho {float(primary_daily_spearman):.4f} "
                     f"| {elapsed:.1f}s{marker}"
                 )
-            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING:
+            elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS:
                 print(
                     f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
                     f"| Val HM/HS Pair {float(validation_direct_hmhs_metrics['pairwise_concordance']):.4f} "
                     f"| Val PR-AUC {float(validation_direct_hmhs_metrics['global_average_precision']):.4f} "
                     f"| {elapsed:.1f}s{marker}"
                 )
-            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING:
+            elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN:
                 if validation_used_selection_only_metrics:
                     print(
                         f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
@@ -2930,7 +2899,7 @@ def select_epoch(
                         f"| Val Joint-Min Pair {float(joint.get('pairwise_concordance') or 0.0):.4f} "
                         f"| {elapsed:.1f}s{marker}"
                     )
-            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING:
+            elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS:
                 joint = dict(validation_safety_raw_mfe_hmhs_metrics.get("joint_hmhs") or {})
                 print(
                     f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
@@ -2939,21 +2908,21 @@ def select_epoch(
                     f"| Val HM/HS Pair {float(joint.get('pairwise_concordance') or 0.0):.4f} "
                     f"| {elapsed:.1f}s{marker}"
                 )
-            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
+            elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE:
                 print(
                     f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
                     f"| Val Raw-MFE rho {float(daily_spearman):.4f} "
                     f"| Val Safety rho {float(primary_daily_spearman):.4f} "
                     f"| {elapsed:.1f}s{marker}"
                 )
-            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING:
+            elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE:
                 print(
                     f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
                     f"| Val Conditional-MFE rho {float(daily_spearman):.4f} "
                     f"| Val Safety rho {float(primary_daily_spearman):.4f} "
                     f"| {elapsed:.1f}s{marker}"
                 )
-            elif profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
+            elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS:
                 print(
                     f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
                     f"| Val Pareto {float(validation_pareto_metrics['mean_daily_pareto_pair_concordance']):.4f} "
@@ -2981,45 +2950,45 @@ def select_epoch(
         "best_validation_mean_daily_spearman": float(best_daily_spearman),
         "best_validation_conditional_safety_mean_daily_spearman": (
             float(best_daily_spearman)
-            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
+            if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY
             else None
         ),
         "best_validation_conditional_mfe_mean_daily_spearman": (
             float(best_daily_spearman)
-            if profile.training_objective in {
-                TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
+            if target_builder in {
+                CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE,
+                CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE,
             }
             else None
         ),
         "best_validation_direct_hmhs_pairwise_concordance": (
             float(best_hmhs_pairwise_concordance)
-            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING
+            if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS
             and math.isfinite(best_hmhs_pairwise_concordance)
             else None
         ),
         "best_validation_direct_hmhs_global_average_precision": (
             float(best_hmhs_global_average_precision)
-            if profile.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING
+            if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS
             and math.isfinite(best_hmhs_global_average_precision)
             else None
         ),
         "best_validation_raw_mfe_mean_daily_spearman": (
             float(best_daily_spearman)
-            if profile.training_objective in {
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
+            if target_builder in {
+                CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
+                CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
+                CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
             }
             else None
         ),
         "best_validation_raw_safety_mean_daily_spearman": (
             float(best_primary_mfe_daily_spearman)
-            if profile.training_objective in {
-                TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
+            if target_builder in {
+                CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE,
+                CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
+                CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
+                CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
             }
             and math.isfinite(best_primary_mfe_daily_spearman)
             else None
@@ -3068,15 +3037,16 @@ def fit_final(
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
     execution_recipe = get_continuous_ranker_execution_recipe(str(args.experiment_profile))
+    training_policy = execution_recipe.training_policy
     training_target = _training_target_for_profile(profile, raw_target, percentile_target, group_table)
     raw_r_loss_name = (
         str(profile.loss_name)
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        if training_policy.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
         else None
     )
     raw_r_delta = (
         float(profile.raw_r_huber_delta_r)
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        if training_policy.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
         and profile.raw_r_huber_delta_r is not None
         else None
     )
@@ -3352,7 +3322,9 @@ def run(args) -> int:
     validate_args(args)
     started = time.perf_counter()
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
-    if get_continuous_ranker_execution_recipe(profile.name).trainer_family == CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL:
+    execution_recipe = get_continuous_ranker_execution_recipe(profile.name)
+    training_policy = execution_recipe.training_policy
+    if execution_recipe.trainer_family == CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL:
         raise ValueError(
             "daily-universal ranker必須由services.breakout_quality.ranker_cli dispatch，"
             "event trainer不得直接承載daily orchestration"
@@ -3557,12 +3529,12 @@ def run(args) -> int:
             include_top_k_quality=True,
             raw_r_regression_loss_name=(
                 str(profile.loss_name)
-                if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                if training_policy.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
                 else None
             ),
             raw_r_huber_delta_r=(
                 float(profile.raw_r_huber_delta_r)
-                if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                if training_policy.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
                 and profile.raw_r_huber_delta_r is not None
                 else None
             ),
@@ -3577,12 +3549,12 @@ def run(args) -> int:
             include_top_k_quality=True,
             raw_r_regression_loss_name=(
                 str(profile.loss_name)
-                if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                if training_policy.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
                 else None
             ),
             raw_r_huber_delta_r=(
                 float(profile.raw_r_huber_delta_r)
-                if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                if training_policy.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
                 and profile.raw_r_huber_delta_r is not None
                 else None
             ),
@@ -3678,7 +3650,7 @@ def run(args) -> int:
             "loss": profile.loss_name,
             "model_score": (
                 "predicted_r_two_logit_margin"
-                if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                if training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R
                 else "softmax_pass_probability"
             ),
             "batching": training_semantics(profile)["batching"],

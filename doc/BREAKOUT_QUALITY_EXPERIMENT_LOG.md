@@ -10792,3 +10792,12 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Compatibility**：保留既有 `recipe.pairwise_reduction` property 與 `as_dict()` 舊 payload；MR-13AF 仍為 Pure-MFE + PIT-safe predicted-Safety `min(S_i,S_j)` pair weighting、Safety 不進 network、Selection/Current validation authorization 均維持 `False`。Existing 2/4/6-logit output widths只移至 canonical output schema，數值與模型 head contract不變。
 - **治理規範**：`doc/PROJECT_SETTINGS.md` C16～C20 新增 Declarative Experiment / Generic Engine、能力單一 owner、避免 God-module/中央 switch 膨脹、capability-oriented tests、behavior-preserving refactor 不得改 scientific/artifact identity 等長期 Code Style 原則。
 - **Research state**：`doc/BREAKOUT_QUALITY_RESEARCH_QUEUE.md` Priority 1 仍為同一 MR-13AF Model Gate；本輪沒有結果，因此 Queue／Registry scientific status 不變。
+
+## 2026-08-29 — Engineering Round 2：continuous-ranker generic consumer branch elimination
+
+- **Status**：`IMPLEMENTED / ENGINEERING_ONLY / BEHAVIOR_PRESERVING`；不建立新的 `MR-*`／`ARCH-*`／`SR-C*` identity，不形成 scientific result、promotion 或 downstream authorization。
+- **程式基準**：使用者提供 `test-branch-1_20260829_113731_6762a00c.zip`，SHA256=`a119e85223636b043ca613d6e1a0eec86f99545ad0d7d4d034624293173ce7ce`。
+- **Target runtime SSOT**：`ContinuousRankerExecutionRecipe` 增加 identity-free `TargetPolicy` 與 `TrainingPolicy` capability。Daily target materialization、post-process、predicted-context target transform、target contract、batch mode、training target builder、loss handler、score transform、epoch-loss aggregation 與 training-semantics contract key 均由 capability registry 解析；`ExecutionRecipe.as_dict()` 舊 artifact payload保持不變。
+- **Generic consumer cleanup**：`load_daily_universal_ranker_data()` 不再依 target identity 決定 daily materialization/context transform/target contract；`training_semantics()` 不再依 training-objective identity維護長中央 switch；continuous training kernel、epoch-selection主流程與 daily-universal orchestration改為消費 `TrainingPolicy`/`TargetPolicy`。低階 target/loss/model-head primitive仍可依自己的 capability key分派，generic orchestration不得認得 MR/profile identity。
+- **Compatibility gates**：37個 supported continuous-ranker profiles 的既有 `ExecutionRecipe.as_dict()` 與 training-semantics payload逐profile比較均完全相同；upstream artifact dependency mapping完全相同；MR-13AC/AD/AE/AF dedicated synthetic共65 cases全部PASS；全專案 `compileall` PASS。
+- **Research state**：MR-13AF仍為 `MODEL_GATE_RESULT_PENDING / NO_PIT / NO_STRATEGY_CONVERSION / NOT_PROMOTED`；本輪未改 target、pair weighting、model architecture、split、optimizer、epoch selection、Seed、artifact identity、report schema或任何 Strategy/ROOS authorization。Registry／Research Queue scientific state不變。

@@ -16,10 +16,23 @@ import numpy as np
 import pandas as pd
 
 from config.breakout_quality import (
+    CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+    CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R,
+    CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R,
+    CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
+    CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY,
+    CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE,
+    CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS,
+    CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS,
+    CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE,
+    CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
+    CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
+    CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
-    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
@@ -27,8 +40,6 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-    PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
-    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
     get_continuous_ranker_execution_recipe,
     get_continuous_ranker_research_spec,
 )
@@ -896,6 +907,9 @@ def run(args) -> int:
     started = time.perf_counter()
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
     execution_recipe = get_continuous_ranker_execution_recipe(str(args.experiment_profile))
+    training_policy = execution_recipe.training_policy
+    target_builder = str(training_policy.target_builder)
+    loss_handler = str(training_policy.loss_handler)
     if execution_recipe.trainer_family != CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL:
         raise ValueError(
             "daily ranker orchestrator只接受daily_universal research spec: "
@@ -931,45 +945,26 @@ def run(args) -> int:
         progress_callback=_daily_build_progress,
     )
     target_id = str(bundle.profile.continuous_target_id or "").strip()
-    high_safety_weighted_pure_mfe = (
-        str(execution_recipe.pairwise_reduction)
-        == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG
-    )
     if not target_id:
         raise ValueError("daily-universal continuous ranker缺少target identity")
     raw_r_loss_name = (
         str(bundle.profile.loss_name)
-        if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
         else None
     )
     raw_r_huber_delta = (
         float(bundle.profile.raw_r_huber_delta_r)
-        if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+        if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
         and bundle.profile.raw_r_huber_delta_r is not None
         else None
     )
-    conditional_mfe_safety = (
-        bundle.profile.training_objective
-        == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
-    )
-    conditional_mfe_single = (
-        bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING
-    )
-    safety_conditional_mfe_duo = (
-        bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
-    )
-    safety_raw_mfe_duo = (
-        bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING
-    )
-    safety_raw_mfe_hmhs_tri = (
-        bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING
-    )
-    safety_raw_mfe_joint_min_tri = (
-        bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING
-    )
-    direct_hmhs_only = (
-        bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING
-    )
+    conditional_mfe_safety = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY
+    conditional_mfe_single = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE
+    safety_conditional_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE
+    safety_raw_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE
+    safety_raw_mfe_hmhs_tri = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS
+    safety_raw_mfe_joint_min_tri = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN
+    direct_hmhs_only = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS
     split = build_daily_ranker_split(bundle, inner_validation_months=int(args.inner_validation_months))
     forward_score_ids = resolve_forward_oos_score_group_ids(bundle)
 
@@ -1142,7 +1137,7 @@ def run(args) -> int:
         )
         validation_scores = conditional_validation_heads["primary_mfe"]
         forward_scores = conditional_forward_heads["primary_mfe"]
-    elif bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
+    elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R:
         validation_components = ranker_api.predict_dual_component_r(
             torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
             batch_size=int(args.evaluation_batch_size), plan=plan,
@@ -1439,7 +1434,10 @@ def run(args) -> int:
     )
 
     predicted_safety_context_pure_mfe_evaluation = {}
-    if target_id == PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID or high_safety_weighted_pure_mfe:
+    if (
+        execution_recipe.context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
+        and not execution_recipe.context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM)
+    ):
         predicted_safety_context_pure_mfe_evaluation = {
             "validation": _predicted_safety_context_pure_mfe_metrics(
                 split.validation_ids, bundle.group_table, validation_scores
@@ -1457,7 +1455,7 @@ def run(args) -> int:
         }
 
     pareto_pair_evaluation = {}
-    if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS:
         pareto_pair_evaluation = {
             "validation": ranker_api.pareto_pair_concordance_metrics(
                 split.validation_ids, bundle.group_table, bundle.raw_target, validation_scores
@@ -1620,7 +1618,7 @@ def run(args) -> int:
         oos_frame["predicted_favorable_r"] = forward_components["predicted_favorable_r"]
         oos_frame["predicted_adverse_r"] = forward_components["predicted_adverse_r"]
         oos_frame["predicted_composite_r"] = forward_components["model_score"]
-    if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+    if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R:
         oos_frame["predicted_r"] = forward_scores
     oos_frame.to_csv(score_path, index=False, encoding="utf-8-sig", compression="gzip")
     _date_split_frame(bundle, split, forward_score_ids=forward_score_ids).to_csv(
@@ -1655,9 +1653,10 @@ def run(args) -> int:
             "target": target_id,
             "model_score": (
                 "predicted_r_two_logit_margin"
-                if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION
+                if training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R
+                and loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
                 else "predicted_favorable_mfe_r_minus_predicted_adverse_to_peak_r"
-                if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION
+                if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R
                 else "primary_mfe_softmax_pass_probability"
                 if conditional_mfe_safety
                 else "raw_mfe_softmax_pass_probability"
@@ -1771,7 +1770,7 @@ def run(args) -> int:
         return "-" if value is None else f"{float(value):.4f}"
 
     print(f"\nDaily Universal Continuous Model完成｜{research_spec.model_research_id}")
-    if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+    if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R:
         regression = dict(oos_metrics.get("raw_r_regression") or {})
         if raw_r_loss_name == "huber_raw_r":
             primary = f"OOS Huber={_fmt_metric(regression.get('huber_loss_raw_r'))}"

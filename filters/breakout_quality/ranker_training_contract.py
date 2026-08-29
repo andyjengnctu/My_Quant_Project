@@ -11,29 +11,30 @@ from __future__ import annotations
 from typing import Any
 
 from config.breakout_quality import (
-    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
     CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
     CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
-    TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
-    TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
+    CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SAFETY,
+    CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SINGLE,
+    CONTINUOUS_RANKER_SEMANTICS_DEFAULT,
+    CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS,
+    CONTINUOUS_RANKER_SEMANTICS_DUAL_COMPONENT_R,
+    CONTINUOUS_RANKER_SEMANTICS_LISTWISE,
+    CONTINUOUS_RANKER_SEMANTICS_PAIRWISE,
+    CONTINUOUS_RANKER_SEMANTICS_RAW_R,
+    CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE,
+    CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
+    CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS,
+    CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN,
     get_continuous_ranker_execution_recipe,
-    get_predicted_upside_context_contract,
+    get_high_safety_weighted_pure_mfe_contract,
     get_predicted_safety_context_contract,
     get_predicted_safety_pure_mfe_contract,
-    get_high_safety_weighted_pure_mfe_contract,
+    get_predicted_upside_context_contract,
 )
 
 
@@ -188,223 +189,125 @@ LISTWISE_TRAINING_CONTRACT = {
 }
 
 
+_EXTENDED_SEMANTIC_KEYS = (
+    "pairwise_contract",
+    "listwise_contract",
+    "raw_r_regression_contract",
+    "dual_component_r_regression_contract",
+    "conditional_mfe_safety_contract",
+    "conditional_mfe_single_head_contract",
+    "safety_conditional_mfe_duo_head_contract",
+    "safety_raw_mfe_duo_head_contract",
+    "safety_raw_mfe_hmhs_tri_head_contract",
+    "safety_raw_mfe_joint_min_tri_head_contract",
+    "direct_hmhs_single_head_contract",
+)
+
+
+def _extended_semantics(*, batching: str, **contracts: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {"batching": str(batching)}
+    result.update({key: None for key in _EXTENDED_SEMANTIC_KEYS})
+    result.update(contracts)
+    return result
+
+
+def _pairwise_contract_for_recipe(recipe) -> dict[str, Any]:
+    contract = dict(PAIRWISE_TRAINING_CONTRACT)
+    contract["pair_weighting"] = str(recipe.pairwise_reduction)
+    context_policy = recipe.context_policy
+    if context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE:
+        contract["predicted_upside_context_contract"] = get_predicted_upside_context_contract()
+    if context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY:
+        if context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM):
+            contract["predicted_safety_context_contract"] = get_predicted_safety_context_contract()
+        elif context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT):
+            contract["predicted_safety_context_contract"] = get_predicted_safety_pure_mfe_contract()
+        if context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT):
+            contract["predicted_safety_pair_weight_contract"] = get_high_safety_weighted_pure_mfe_contract()
+    if recipe.objective_policy.pair_target_schema == CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS:
+        contract.update({
+            "pair_scope": "same_date_strict_pareto_dominance_pairs",
+            "target_components": [
+                "same_date_mfe_percentile",
+                "same_date_low_adverse_percentile",
+            ],
+            "tradeoff_pair_handling": "excluded_no_gradient",
+            "tie_handling": "excluded_no_gradient",
+            "epoch_selection": "mean_daily_pareto_pair_concordance",
+        })
+    return contract
+
+
+_PAIRWISE_SPECIALIZED_CONTRACTS = {
+    CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SAFETY: (
+        "conditional_mfe_safety_contract",
+        CONDITIONAL_MFE_SAFETY_TRAINING_CONTRACT,
+    ),
+    CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SINGLE: (
+        "conditional_mfe_single_head_contract",
+        CONDITIONAL_MFE_SINGLE_HEAD_TRAINING_CONTRACT,
+    ),
+    CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE: (
+        "safety_conditional_mfe_duo_head_contract",
+        SAFETY_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT,
+    ),
+    CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE: (
+        "safety_raw_mfe_duo_head_contract",
+        SAFETY_RAW_MFE_DUO_HEAD_TRAINING_CONTRACT,
+    ),
+    CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS: (
+        "safety_raw_mfe_hmhs_tri_head_contract",
+        SAFETY_RAW_MFE_HMHS_TRI_HEAD_TRAINING_CONTRACT,
+    ),
+    CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN: (
+        "safety_raw_mfe_joint_min_tri_head_contract",
+        SAFETY_RAW_MFE_JOINT_MIN_TRI_HEAD_TRAINING_CONTRACT,
+    ),
+    CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS: (
+        "direct_hmhs_single_head_contract",
+        DIRECT_HMHS_SINGLE_HEAD_TRAINING_CONTRACT,
+    ),
+}
+
+
 def training_semantics(profile) -> dict[str, Any]:
     """Return canonical artifact semantics for one continuous-ranker profile."""
 
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING:
-        recipe = get_continuous_ranker_execution_recipe(profile.name)
-        pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
-        pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        contract = dict(CONDITIONAL_MFE_SINGLE_HEAD_TRAINING_CONTRACT)
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    semantics_key = str(recipe.training_policy.semantics_contract_key)
+
+    if semantics_key in _PAIRWISE_SPECIALIZED_CONTRACTS:
+        slot, base_contract = _PAIRWISE_SPECIALIZED_CONTRACTS[semantics_key]
+        pairwise_contract = _pairwise_contract_for_recipe(recipe)
+        contract = dict(base_contract)
         contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        return {
-            "batching": contract["batching"],
-            "pairwise_contract": pairwise_contract,
-            "listwise_contract": None,
-            "raw_r_regression_contract": None,
-            "dual_component_r_regression_contract": None,
-            "conditional_mfe_safety_contract": None,
-            "conditional_mfe_single_head_contract": contract,
-            "safety_conditional_mfe_duo_head_contract": None,
-            "safety_raw_mfe_duo_head_contract": None,
-            "safety_raw_mfe_hmhs_tri_head_contract": None,
-            "safety_raw_mfe_joint_min_tri_head_contract": None,
-            "direct_hmhs_single_head_contract": None,
-        }
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING:
-        recipe = get_continuous_ranker_execution_recipe(profile.name)
-        pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
-        pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        contract = dict(SAFETY_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT)
-        contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        return {
-            "batching": contract["batching"],
-            "pairwise_contract": pairwise_contract,
-            "listwise_contract": None,
-            "raw_r_regression_contract": None,
-            "dual_component_r_regression_contract": None,
-            "conditional_mfe_safety_contract": None,
-            "conditional_mfe_single_head_contract": None,
-            "safety_conditional_mfe_duo_head_contract": contract,
-            "safety_raw_mfe_duo_head_contract": None,
-            "safety_raw_mfe_hmhs_tri_head_contract": None,
-            "safety_raw_mfe_joint_min_tri_head_contract": None,
-            "direct_hmhs_single_head_contract": None,
-        }
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING:
-        recipe = get_continuous_ranker_execution_recipe(profile.name)
-        pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
-        pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        contract = dict(SAFETY_RAW_MFE_DUO_HEAD_TRAINING_CONTRACT)
-        contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        return {
-            "batching": contract["batching"],
-            "pairwise_contract": pairwise_contract,
-            "listwise_contract": None,
-            "raw_r_regression_contract": None,
-            "dual_component_r_regression_contract": None,
-            "conditional_mfe_safety_contract": None,
-            "conditional_mfe_single_head_contract": None,
-            "safety_conditional_mfe_duo_head_contract": None,
-            "safety_raw_mfe_duo_head_contract": contract,
-            "safety_raw_mfe_hmhs_tri_head_contract": None,
-            "safety_raw_mfe_joint_min_tri_head_contract": None,
-            "direct_hmhs_single_head_contract": None,
-        }
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING:
-        recipe = get_continuous_ranker_execution_recipe(profile.name)
-        pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
-        pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        contract = dict(DIRECT_HMHS_SINGLE_HEAD_TRAINING_CONTRACT)
-        contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        return {
-            "batching": contract["batching"],
-            "pairwise_contract": pairwise_contract,
-            "listwise_contract": None,
-            "raw_r_regression_contract": None,
-            "dual_component_r_regression_contract": None,
-            "conditional_mfe_safety_contract": None,
-            "conditional_mfe_single_head_contract": None,
-            "safety_conditional_mfe_duo_head_contract": None,
-            "safety_raw_mfe_duo_head_contract": None,
-            "safety_raw_mfe_hmhs_tri_head_contract": None,
-            "safety_raw_mfe_joint_min_tri_head_contract": None,
-            "direct_hmhs_single_head_contract": contract,
-        }
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING:
-        recipe = get_continuous_ranker_execution_recipe(profile.name)
-        pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
-        pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        contract = dict(SAFETY_RAW_MFE_HMHS_TRI_HEAD_TRAINING_CONTRACT)
-        contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        return {
-            "batching": contract["batching"],
-            "pairwise_contract": pairwise_contract,
-            "listwise_contract": None,
-            "raw_r_regression_contract": None,
-            "dual_component_r_regression_contract": None,
-            "conditional_mfe_safety_contract": None,
-            "conditional_mfe_single_head_contract": None,
-            "safety_conditional_mfe_duo_head_contract": None,
-            "safety_raw_mfe_duo_head_contract": None,
-            "safety_raw_mfe_hmhs_tri_head_contract": contract,
-            "safety_raw_mfe_joint_min_tri_head_contract": None,
-            "direct_hmhs_single_head_contract": None,
-        }
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING:
-        recipe = get_continuous_ranker_execution_recipe(profile.name)
-        pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
-        pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        contract = dict(SAFETY_RAW_MFE_JOINT_MIN_TRI_HEAD_TRAINING_CONTRACT)
-        contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        return {
-            "batching": contract["batching"],
-            "pairwise_contract": pairwise_contract,
-            "listwise_contract": None,
-            "raw_r_regression_contract": None,
-            "dual_component_r_regression_contract": None,
-            "conditional_mfe_safety_contract": None,
-            "conditional_mfe_single_head_contract": None,
-            "safety_conditional_mfe_duo_head_contract": None,
-            "safety_raw_mfe_duo_head_contract": None,
-            "safety_raw_mfe_hmhs_tri_head_contract": None,
-            "safety_raw_mfe_joint_min_tri_head_contract": contract,
-            "direct_hmhs_single_head_contract": None,
-        }
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
-        recipe = get_continuous_ranker_execution_recipe(profile.name)
-        pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
-        pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        conditional_contract = dict(CONDITIONAL_MFE_SAFETY_TRAINING_CONTRACT)
-        conditional_contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        return {
-            "batching": conditional_contract["batching"],
-            "pairwise_contract": pairwise_contract,
-            "listwise_contract": None,
-            "raw_r_regression_contract": None,
-            "dual_component_r_regression_contract": None,
-            "conditional_mfe_safety_contract": conditional_contract,
-            "conditional_mfe_single_head_contract": None,
-            "safety_conditional_mfe_duo_head_contract": None,
-            "safety_raw_mfe_duo_head_contract": None,
-            "safety_raw_mfe_hmhs_tri_head_contract": None,
-            "safety_raw_mfe_joint_min_tri_head_contract": None,
-            "direct_hmhs_single_head_contract": None,
-        }
-    if profile.training_objective in {
-        TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
-    }:
-        recipe = get_continuous_ranker_execution_recipe(profile.name)
-        pairwise_contract = dict(PAIRWISE_TRAINING_CONTRACT)
-        pairwise_contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        context_policy = recipe.context_policy
-        if context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE:
-            pairwise_contract["predicted_upside_context_contract"] = get_predicted_upside_context_contract()
-        if context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY:
-            if context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM):
-                pairwise_contract["predicted_safety_context_contract"] = get_predicted_safety_context_contract()
-            elif context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT):
-                pairwise_contract["predicted_safety_context_contract"] = get_predicted_safety_pure_mfe_contract()
-            if context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT):
-                pairwise_contract["predicted_safety_pair_weight_contract"] = get_high_safety_weighted_pure_mfe_contract()
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING:
-            pairwise_contract.update({
-                "pair_scope": "same_date_strict_pareto_dominance_pairs",
-                "target_components": [
-                    "same_date_mfe_percentile",
-                    "same_date_low_adverse_percentile",
-                ],
-                "tradeoff_pair_handling": "excluded_no_gradient",
-                "tie_handling": "excluded_no_gradient",
-                "epoch_selection": "mean_daily_pareto_pair_concordance",
-            })
-        return {
-            "batching": pairwise_contract["batching"],
-            "pairwise_contract": pairwise_contract,
-            "listwise_contract": None,
-            "raw_r_regression_contract": None,
-            "dual_component_r_regression_contract": None,
-            "conditional_mfe_safety_contract": None,
-            "conditional_mfe_single_head_contract": None,
-            "safety_conditional_mfe_duo_head_contract": None,
-            "safety_raw_mfe_duo_head_contract": None,
-            "safety_raw_mfe_hmhs_tri_head_contract": None,
-            "safety_raw_mfe_joint_min_tri_head_contract": None,
-            "direct_hmhs_single_head_contract": None,
-        }
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING:
-        return {
-            "batching": LISTWISE_TRAINING_CONTRACT["batching"],
-            "pairwise_contract": None,
-            "listwise_contract": dict(LISTWISE_TRAINING_CONTRACT),
-            "raw_r_regression_contract": None,
-            "dual_component_r_regression_contract": None,
-            "conditional_mfe_safety_contract": None,
-            "conditional_mfe_single_head_contract": None,
-            "safety_conditional_mfe_duo_head_contract": None,
-            "safety_raw_mfe_duo_head_contract": None,
-            "safety_raw_mfe_hmhs_tri_head_contract": None,
-            "safety_raw_mfe_joint_min_tri_head_contract": None,
-            "direct_hmhs_single_head_contract": None,
-        }
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
+        return _extended_semantics(
+            batching=contract["batching"],
+            pairwise_contract=pairwise_contract,
+            **{slot: contract},
+        )
+
+    if semantics_key == CONTINUOUS_RANKER_SEMANTICS_PAIRWISE:
+        pairwise_contract = _pairwise_contract_for_recipe(recipe)
+        return _extended_semantics(
+            batching=pairwise_contract["batching"],
+            pairwise_contract=pairwise_contract,
+        )
+
+    if semantics_key == CONTINUOUS_RANKER_SEMANTICS_LISTWISE:
+        return _extended_semantics(
+            batching=LISTWISE_TRAINING_CONTRACT["batching"],
+            listwise_contract=dict(LISTWISE_TRAINING_CONTRACT),
+        )
+
+    if semantics_key == CONTINUOUS_RANKER_SEMANTICS_DUAL_COMPONENT_R:
         contract = dict(DUAL_COMPONENT_R_REGRESSION_TRAINING_CONTRACT)
-        return {
-            "batching": contract["batching"],
-            "pairwise_contract": None,
-            "listwise_contract": None,
-            "raw_r_regression_contract": None,
-            "dual_component_r_regression_contract": contract,
-            "conditional_mfe_safety_contract": None,
-            "conditional_mfe_single_head_contract": None,
-            "safety_conditional_mfe_duo_head_contract": None,
-            "safety_raw_mfe_duo_head_contract": None,
-            "safety_raw_mfe_hmhs_tri_head_contract": None,
-            "safety_raw_mfe_joint_min_tri_head_contract": None,
-            "direct_hmhs_single_head_contract": None,
-        }
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
+        return _extended_semantics(
+            batching=contract["batching"],
+            dual_component_r_regression_contract=contract,
+        )
+
+    if semantics_key == CONTINUOUS_RANKER_SEMANTICS_RAW_R:
         contract = dict(RAW_R_REGRESSION_TRAINING_CONTRACT)
         contract["loss"] = str(profile.loss_name)
         contract["huber_delta_r"] = (
@@ -412,20 +315,14 @@ def training_semantics(profile) -> dict[str, Any]:
             if profile.raw_r_huber_delta_r is None
             else float(profile.raw_r_huber_delta_r)
         )
-        return {
-            "batching": contract["batching"],
-            "pairwise_contract": None,
-            "listwise_contract": None,
-            "raw_r_regression_contract": contract,
-            "dual_component_r_regression_contract": None,
-            "conditional_mfe_safety_contract": None,
-            "conditional_mfe_single_head_contract": None,
-            "safety_conditional_mfe_duo_head_contract": None,
-            "safety_raw_mfe_duo_head_contract": None,
-            "safety_raw_mfe_hmhs_tri_head_contract": None,
-            "safety_raw_mfe_joint_min_tri_head_contract": None,
-            "direct_hmhs_single_head_contract": None,
-        }
+        return _extended_semantics(
+            batching=contract["batching"],
+            raw_r_regression_contract=contract,
+        )
+
+    if semantics_key != CONTINUOUS_RANKER_SEMANTICS_DEFAULT:
+        raise ValueError(f"unsupported continuous-ranker semantics capability: {semantics_key}")
+    # Preserve the historical compact payload for percentile regression profiles.
     return {
         "batching": "shuffled_unique_group_batches",
         "pairwise_contract": None,

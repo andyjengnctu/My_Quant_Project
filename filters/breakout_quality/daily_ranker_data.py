@@ -19,6 +19,13 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
+    CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE,
+    CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_SAFETY_MFE,
+    CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_UPSIDE_LOW_ADVERSE,
+    CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PRESERVE_PURE_MFE,
+    CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+    CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED,
+    CONTINUOUS_RANKER_TARGET_POSTPROCESS_EQUAL_RANK_MFE_LOW_ADVERSE,
     get_breakout_quality_experiment_profile,
     get_continuous_ranker_execution_recipe,
     get_high_safety_weighted_pure_mfe_contract,
@@ -522,6 +529,150 @@ def build_equal_rank_mfe_low_adverse_target(
     return composite, mfe_percentile, low_adverse_percentile
 
 
+
+def _apply_predicted_upside_low_adverse_transform(
+    group_table: pd.DataFrame,
+    target_valid: np.ndarray,
+    context_values: np.ndarray,
+    raw_target: np.ndarray,
+    favorable_r: np.ndarray,
+    adverse_r: np.ndarray,
+) -> np.ndarray:
+    del favorable_r, adverse_r
+    conditional = build_predicted_upside_conditional_low_adverse_targets(
+        group_table, target_valid, context_values
+    )
+    group_table["predicted_upside_percentile"] = context_values
+    group_table["target_low_adverse_daily_percentile"] = conditional.low_adverse_percentile
+    group_table["target_conditional_low_adverse_residual"] = conditional.residual
+    group_table["target_conditional_low_adverse_percentile"] = conditional.residual_percentile
+    return np.asarray(raw_target, dtype=np.float32)
+
+
+def _apply_predicted_safety_mfe_transform(
+    group_table: pd.DataFrame,
+    target_valid: np.ndarray,
+    context_values: np.ndarray,
+    raw_target: np.ndarray,
+    favorable_r: np.ndarray,
+    adverse_r: np.ndarray,
+) -> np.ndarray:
+    del raw_target, favorable_r, adverse_r
+    conditional = build_predicted_safety_conditional_mfe_targets(
+        group_table, target_valid, context_values
+    )
+    group_table["predicted_safety_percentile"] = context_values
+    group_table["target_mfe_daily_percentile"] = conditional.pure_mfe_percentile
+    group_table["target_conditional_mfe_residual"] = conditional.residual
+    group_table["target_conditional_mfe_percentile"] = conditional.residual_percentile
+    return np.asarray(conditional.training_target, dtype=np.float32)
+
+
+def _apply_preserve_pure_mfe_transform(
+    group_table: pd.DataFrame,
+    target_valid: np.ndarray,
+    context_values: np.ndarray,
+    raw_target: np.ndarray,
+    favorable_r: np.ndarray,
+    adverse_r: np.ndarray,
+) -> np.ndarray:
+    group_table["predicted_safety_percentile"] = context_values
+    group_table["target_mfe_daily_percentile"] = build_same_date_percentile_targets(
+        favorable_r, target_valid, group_table["date"]
+    )
+    group_table["target_low_adverse_daily_percentile"] = build_same_date_percentile_targets(
+        -adverse_r, target_valid, group_table["date"]
+    )
+    return np.asarray(raw_target, dtype=np.float32)
+
+
+_CONTEXT_TARGET_TRANSFORMERS = {
+    CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_UPSIDE_LOW_ADVERSE: (
+        _apply_predicted_upside_low_adverse_transform
+    ),
+    CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_SAFETY_MFE: (
+        _apply_predicted_safety_mfe_transform
+    ),
+    CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PRESERVE_PURE_MFE: (
+        _apply_preserve_pure_mfe_transform
+    ),
+}
+
+
+def _build_daily_target_contract(
+    contract_kind: str,
+    *,
+    spec: StrategyAlignedContinuousTargetSpec,
+    risk_param_policy: str | None,
+) -> dict[str, Any]:
+    simple_builders = {
+        "daily_opportunity_no_time": build_daily_opportunity_no_time_contract,
+        "daily_full_horizon_opportunity": build_daily_full_horizon_opportunity_contract,
+        "daily_full_horizon_pure_mfe": build_daily_full_horizon_pure_mfe_contract,
+        "daily_first_risk_breach_pure_mfe": build_daily_first_risk_breach_pure_mfe_contract,
+        "daily_full_horizon_low_adverse": build_daily_full_horizon_low_adverse_contract,
+        "daily_full_horizon_equal_rank_mfe_low_adverse": (
+            build_daily_full_horizon_equal_rank_mfe_low_adverse_contract
+        ),
+    }
+    builder = simple_builders.get(str(contract_kind))
+    if builder is not None:
+        return builder(DEFAULT_LABEL_POLICY)
+    if contract_kind == "predicted_upside_context":
+        return predicted_upside_context_contract()
+    if contract_kind == "predicted_safety_context":
+        return predicted_safety_context_contract()
+    if contract_kind == "predicted_safety_pure_mfe":
+        return get_predicted_safety_pure_mfe_contract()
+    if contract_kind == "risk_normalized":
+        if not str(risk_param_policy or "").strip():
+            raise ValueError("risk-normalized target contract缺少param policy")
+        return build_risk_target_contract(
+            horizon_bars=int(spec.horizon_bars),
+            param_policy=str(risk_param_policy),
+        )
+    raise ValueError(f"不支援的daily target contract capability: {contract_kind!r}")
+
+
+def _load_predicted_context_by_capability(
+    source: str,
+    *,
+    root: Path,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    expected_dataset_policy,
+    expected_dataset_artifacts,
+):
+    loaders = {
+        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE: (
+            load_validated_predicted_upside_context,
+            PREDICTED_UPSIDE_CONTEXT_COLUMN,
+            "upside",
+            "predicted_upside_context_manifest",
+        ),
+        CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY: (
+            load_validated_predicted_safety_context,
+            PREDICTED_SAFETY_CONTEXT_COLUMN,
+            "safety",
+            "predicted_safety_context_manifest",
+        ),
+    }
+    try:
+        loader, context_column, context_name, manifest_key = loaders[str(source)]
+    except KeyError as exc:
+        raise ValueError(f"不支援的predicted context capability: {source!r}") from exc
+    frame, manifest = loader(
+        root,
+        filter_id=filter_id,
+        model_architecture=model_architecture,
+        experiment_profile=experiment_profile,
+        expected_dataset_policy=expected_dataset_policy,
+        expected_dataset_artifacts=expected_dataset_artifacts,
+    )
+    return frame, manifest, context_column, context_name, manifest_key
+
+
 def resolve_daily_training_universe_start(
     benchmark_index: pd.DatetimeIndex,
     *,
@@ -560,26 +711,21 @@ def load_daily_universal_ranker_data(
 
     del preload_feature_bank
     root = Path(project_root)
-    profile = get_breakout_quality_experiment_profile(experiment_profile)
-    target_id = str(profile.continuous_target_id or "").strip()
     execution_recipe = get_continuous_ranker_execution_recipe(experiment_profile)
+    target_id = str(execution_recipe.continuous_target_id).strip()
+    target_policy = execution_recipe.target_policy
     context_policy = execution_recipe.context_policy
     use_predicted_safety_pair_weight_context = context_policy.has_role(
         CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT
     )
-    if target_id not in {
-        DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
-        DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
-        DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-        DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
-        DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
-        DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
-        PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
-        PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
-        PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
-        DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
+    if target_policy.materialization_mode not in {
+        CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+        CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED,
     }:
-        raise ValueError(f"daily universal ranker target identity不一致: {target_id!r}")
+        raise ValueError(
+            "daily universal ranker需要daily target materialization capability: "
+            f"{target_policy.materialization_mode!r}"
+        )
     model_spec = get_model_spec(model_architecture)
     if bool(model_spec.requires_market_set) or bool(model_spec.derived_context_features):
         raise ValueError("daily universal ranker不支援market-set／derived-context architecture")
@@ -605,8 +751,12 @@ def load_daily_universal_ranker_data(
         use_risk_context or use_predicted_scalar_context
     ):
         raise ValueError("daily universal ranker architecture/context contract不一致")
-    if use_risk_context and target_id != DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID:
-        raise ValueError("risk-context architecture只允許MR-13I/J同源risk-normalized target")
+    if (
+        use_risk_context
+        and target_policy.materialization_mode
+        != CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED
+    ):
+        raise ValueError("risk-context architecture只允許risk-normalized target capability")
     if architecture_uses_predicted_upside_context != use_predicted_upside_context:
         raise ValueError("predicted-upside architecture與runtime context policy不一致")
     if architecture_uses_predicted_safety_context != use_predicted_safety_context:
@@ -657,7 +807,10 @@ def load_daily_universal_ranker_data(
     spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
     risk_schedule = None
     risk_param_policy = None
-    if target_id == DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID:
+    if (
+        target_policy.materialization_mode
+        == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED
+    ):
         from config.strategy_compare import get_strategy_comparison_settings
 
         risk_param_policy = str(
@@ -746,35 +899,19 @@ def load_daily_universal_ranker_data(
         local_opportunity_bar = np.full(len(local_positions), -1, dtype=np.int16)
         local_first_breach_bar = np.full(len(local_positions), -1, dtype=np.int16)
         local_minimum_low_return = np.full(len(local_positions), np.nan, dtype=np.float32)
-        if target_id in {
-            DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
-            DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
-            DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-            DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
-            DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
-            DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
-            PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
-            PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
-            PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
-        }:
+        if (
+            target_policy.materialization_mode
+            == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
+        ):
             local_targets = np.full(len(local_positions), np.nan, dtype=np.float32)
             local_target_valid = np.zeros(len(local_positions), dtype=bool)
             target_complete = local_positions + int(spec.horizon_bars) < len(frame)
             if bool(target_complete.any()):
-                component_target_id = (
-                    DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID
-                    if target_id == DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID
-                    else DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID
-                    if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID
-                    else DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID
-                    if target_id in {PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID, PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID}
-                    else target_id
-                )
                 completed_batch = compute_daily_opportunity_target_batch(
                     frame,
                     local_positions[target_complete],
                     spec=spec,
-                    target_id=component_target_id,
+                    target_id=str(target_policy.component_target_id),
                 )
                 completed_indexes = np.flatnonzero(target_complete)
                 local_targets[completed_indexes] = completed_batch.target_raw_r
@@ -946,7 +1083,10 @@ def load_daily_universal_ranker_data(
     valid_minimum_low_return = np.concatenate(valid_minimum_low_return_chunks)
     valid_mfe_percentile = None
     valid_low_adverse_percentile = None
-    if target_id == DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID:
+    if (
+        target_policy.postprocess
+        == CONTINUOUS_RANKER_TARGET_POSTPROCESS_EQUAL_RANK_MFE_LOW_ADVERSE
+    ):
         component_valid = np.ones(len(valid_targets), dtype=bool)
         risk_budget_return = float(spec.risk_budget_return)
         valid_targets, valid_mfe_percentile, valid_low_adverse_percentile = (
@@ -1042,7 +1182,10 @@ def load_daily_universal_ranker_data(
             "target_minimum_low_return": minimum_low_return,
         }
     )
-    if target_id == DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID:
+    if (
+        target_policy.postprocess
+        == CONTINUOUS_RANKER_TARGET_POSTPROCESS_EQUAL_RANK_MFE_LOW_ADVERSE
+    ):
         group_table["target_mfe_daily_percentile"] = np.concatenate(
             [
                 np.asarray(valid_mfe_percentile, dtype=np.float32),
@@ -1062,30 +1205,21 @@ def load_daily_universal_ranker_data(
         CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
         CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
     }:
-        if context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE:
-            context_frame, context_manifest = load_validated_predicted_upside_context(
-                root,
-                filter_id=filter_id,
-                model_architecture=model_architecture,
-                experiment_profile=experiment_profile,
-                expected_dataset_policy=summary.get("policy"),
-                expected_dataset_artifacts=summary.get("dataset_artifacts"),
-            )
-            context_column = PREDICTED_UPSIDE_CONTEXT_COLUMN
-            context_name = "upside"
-            predicted_context_manifest_key = "predicted_upside_context_manifest"
-        else:
-            context_frame, context_manifest = load_validated_predicted_safety_context(
-                root,
-                filter_id=filter_id,
-                model_architecture=model_architecture,
-                experiment_profile=experiment_profile,
-                expected_dataset_policy=summary.get("policy"),
-                expected_dataset_artifacts=summary.get("dataset_artifacts"),
-            )
-            context_column = PREDICTED_SAFETY_CONTEXT_COLUMN
-            context_name = "safety"
-            predicted_context_manifest_key = "predicted_safety_context_manifest"
+        (
+            context_frame,
+            context_manifest,
+            context_column,
+            context_name,
+            predicted_context_manifest_key,
+        ) = _load_predicted_context_by_capability(
+            context_policy.source,
+            root=root,
+            filter_id=filter_id,
+            model_architecture=model_architecture,
+            experiment_profile=experiment_profile,
+            expected_dataset_policy=summary.get("policy"),
+            expected_dataset_artifacts=summary.get("dataset_artifacts"),
+        )
         context_lookup = context_frame[["ticker", "date", context_column]].copy()
         group_keys = group_table[["ticker", "date"]].copy()
         group_keys["ticker"] = group_keys["ticker"].astype(str)
@@ -1113,34 +1247,31 @@ def load_daily_universal_ranker_data(
             group_context = np.where(
                 context_available[:, None], context_values[:, None], 0.5
             ).astype(np.float32)
-        if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
-            conditional = build_predicted_upside_conditional_low_adverse_targets(
-                group_table, target_valid, context_values
+        target_context_transform = str(target_policy.context_transform)
+        if (
+            target_context_transform == CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE
+            and use_predicted_safety_pair_weight_context
+        ):
+            # Pair weighting needs the same canonical Pure-MFE / Low-Adverse geometry
+            # columns for diagnostics, but it must not residualize or rewrite the target.
+            target_context_transform = (
+                CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PRESERVE_PURE_MFE
             )
-            group_table["predicted_upside_percentile"] = context_values
-            group_table["target_low_adverse_daily_percentile"] = conditional.low_adverse_percentile
-            group_table["target_conditional_low_adverse_residual"] = conditional.residual
-            group_table["target_conditional_low_adverse_percentile"] = conditional.residual_percentile
-        elif target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID:
-            conditional = build_predicted_safety_conditional_mfe_targets(
-                group_table, target_valid, context_values
-            )
-            group_table["predicted_safety_percentile"] = context_values
-            group_table["target_mfe_daily_percentile"] = conditional.pure_mfe_percentile
-            group_table["target_conditional_mfe_residual"] = conditional.residual
-            group_table["target_conditional_mfe_percentile"] = conditional.residual_percentile
-            raw_target = np.asarray(conditional.training_target, dtype=np.float32)
-        else:
-            # MR-13AE/AF keep the exact MR-13K Pure-MFE target/order.  AE uses
-            # predicted Safety as model input; AF uses it only in the pair-weight loss.
-            # Neither path residualizes or rewrites the canonical Pure-MFE target.
-            group_table["predicted_safety_percentile"] = context_values
-            group_table["target_mfe_daily_percentile"] = build_same_date_percentile_targets(
-                favorable_r, target_valid, group_table["date"]
-            )
-            group_table["target_low_adverse_daily_percentile"] = build_same_date_percentile_targets(
-                -adverse_r, target_valid, group_table["date"]
-            )
+        try:
+            context_transformer = _CONTEXT_TARGET_TRANSFORMERS[target_context_transform]
+        except KeyError as exc:
+            raise ValueError(
+                "predicted context缺少target-transform capability: "
+                f"{target_context_transform!r}"
+            ) from exc
+        raw_target = context_transformer(
+            group_table,
+            target_valid,
+            context_values,
+            raw_target,
+            favorable_r,
+            adverse_r,
+        )
         raw_target = np.asarray(raw_target, dtype=np.float32)
         raw_target[~target_valid] = np.nan
         target_valid_count = int(np.count_nonzero(target_valid))
@@ -1161,31 +1292,11 @@ def load_daily_universal_ranker_data(
         policy=DEFAULT_LABEL_POLICY,
     )
     validate_model_sequence_length(model_spec, int(feature_bank.shape[1]))
-    if target_id == DAILY_OPPORTUNITY_NO_TIME_TARGET_ID:
-        target_contract = build_daily_opportunity_no_time_contract(DEFAULT_LABEL_POLICY)
-    elif target_id == DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID:
-        target_contract = build_daily_full_horizon_opportunity_contract(DEFAULT_LABEL_POLICY)
-    elif target_id == DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID:
-        target_contract = build_daily_full_horizon_pure_mfe_contract(DEFAULT_LABEL_POLICY)
-    elif target_id == DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID:
-        target_contract = build_daily_first_risk_breach_pure_mfe_contract(DEFAULT_LABEL_POLICY)
-    elif target_id == DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID:
-        target_contract = build_daily_full_horizon_low_adverse_contract(DEFAULT_LABEL_POLICY)
-    elif target_id == DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID:
-        target_contract = build_daily_full_horizon_equal_rank_mfe_low_adverse_contract(
-            DEFAULT_LABEL_POLICY
-        )
-    elif target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
-        target_contract = predicted_upside_context_contract()
-    elif target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID:
-        target_contract = predicted_safety_context_contract()
-    elif target_id == PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID:
-        target_contract = get_predicted_safety_pure_mfe_contract()
-    else:
-        target_contract = build_risk_target_contract(
-            horizon_bars=int(spec.horizon_bars),
-            param_policy=str(risk_param_policy),
-        )
+    target_contract = _build_daily_target_contract(
+        target_policy.contract_kind,
+        spec=spec,
+        risk_param_policy=risk_param_policy,
+    )
     target_manifest = {
         "target_id": target_id,
         "target_contract": target_contract,

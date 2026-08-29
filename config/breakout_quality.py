@@ -1733,6 +1733,149 @@ class ContinuousRankerContextPolicy:
         return str(role) in self.roles
 
 
+CONTINUOUS_RANKER_TARGET_MATERIALIZATION_EXTERNAL = "external_continuous_target"
+CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT = "daily_component_target"
+CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED = "risk_normalized_target"
+CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE = "none"
+CONTINUOUS_RANKER_TARGET_POSTPROCESS_EQUAL_RANK_MFE_LOW_ADVERSE = "equal_rank_mfe_low_adverse"
+CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE = "none"
+CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_UPSIDE_LOW_ADVERSE = (
+    "predicted_upside_conditional_low_adverse"
+)
+CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_SAFETY_MFE = (
+    "predicted_safety_conditional_mfe"
+)
+CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PRESERVE_PURE_MFE = "preserve_pure_mfe"
+
+CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED = "shuffled_unique_group_batches"
+CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT = "whole_date_pack_no_date_split"
+CONTINUOUS_RANKER_TARGET_BUILDER_PERCENTILE = "percentile"
+CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE = "scalar_pairwise"
+CONTINUOUS_RANKER_TARGET_BUILDER_RAW_R = "raw_r"
+CONTINUOUS_RANKER_TARGET_BUILDER_DUAL_COMPONENT_R = "dual_component_r"
+CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS = "pareto_components"
+CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY = "conditional_mfe_safety"
+CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE = "conditional_mfe_single"
+CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE = "safety_conditional_mfe"
+CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE = "safety_raw_mfe"
+CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS = "safety_raw_mfe_hmhs"
+CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN = "safety_raw_mfe_joint_min"
+CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS = "direct_hmhs"
+CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE = "percentile_mse"
+CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R = "raw_r_regression"
+CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R = "dual_component_r_regression"
+CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE = "single_pairwise"
+CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE = "conditional_duo_pairwise"
+CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE = "safety_mfe_duo_pairwise"
+CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE = "safety_mfe_joint_tri_pairwise"
+CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE = "listwise"
+CONTINUOUS_RANKER_AUX_TARGET_NONE = "none"
+CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY = "conditional_mfe_safety"
+CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY = "conditional_mfe_opportunity"
+CONTINUOUS_RANKER_SEMANTICS_DEFAULT = "default"
+CONTINUOUS_RANKER_SEMANTICS_PAIRWISE = "pairwise"
+CONTINUOUS_RANKER_SEMANTICS_LISTWISE = "listwise"
+CONTINUOUS_RANKER_SEMANTICS_RAW_R = "raw_r"
+CONTINUOUS_RANKER_SEMANTICS_DUAL_COMPONENT_R = "dual_component_r"
+CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SAFETY = "conditional_mfe_safety"
+CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SINGLE = "conditional_mfe_single"
+CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE = "safety_conditional_mfe"
+CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE = "safety_raw_mfe"
+CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS = "safety_raw_mfe_hmhs"
+CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN = "safety_raw_mfe_joint_min"
+CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS = "direct_hmhs"
+CONTINUOUS_RANKER_SCORE_TRANSFORM_PROBABILITY = "pass_probability"
+CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R = "pass_minus_reject_margin"
+CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH = "mean_batch"
+CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED = "weighted_supervision"
+
+
+@dataclass(frozen=True)
+class ContinuousRankerTargetPolicy:
+    """Daily/external target materialization semantics, independent of experiment identity."""
+
+    materialization_mode: str
+    component_target_id: str | None = None
+    postprocess: str = CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE
+    context_source: str = CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+    context_roles: tuple[str, ...] = ()
+    context_transform: str = CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE
+    contract_kind: str = "external"
+
+    def __post_init__(self) -> None:
+        if self.materialization_mode not in {
+            CONTINUOUS_RANKER_TARGET_MATERIALIZATION_EXTERNAL,
+            CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED,
+        }:
+            raise ValueError(f"不支援的continuous-ranker target materialization: {self.materialization_mode!r}")
+        if self.postprocess not in {
+            CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE,
+            CONTINUOUS_RANKER_TARGET_POSTPROCESS_EQUAL_RANK_MFE_LOW_ADVERSE,
+        }:
+            raise ValueError(f"不支援的continuous-ranker target postprocess: {self.postprocess!r}")
+        if self.context_transform not in {
+            CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE,
+            CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_UPSIDE_LOW_ADVERSE,
+            CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_SAFETY_MFE,
+            CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PRESERVE_PURE_MFE,
+        }:
+            raise ValueError(f"不支援的continuous-ranker target context transform: {self.context_transform!r}")
+        ContinuousRankerContextPolicy(
+            source=self.context_source,
+            roles=self.context_roles,
+        )
+        if (
+            self.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
+            and not str(self.component_target_id or "").strip()
+        ):
+            raise ValueError("daily-component target policy必須指定component_target_id")
+        if (
+            self.materialization_mode != CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
+            and self.component_target_id is not None
+        ):
+            raise ValueError("非daily-component target policy不得指定component_target_id")
+
+
+@dataclass(frozen=True)
+class ContinuousRankerTrainingPolicy:
+    """Reusable training capability selected by objective, never by MR/profile identity."""
+
+    batch_mode: str
+    target_builder: str
+    loss_handler: str
+    auxiliary_target_bundle: str = CONTINUOUS_RANKER_AUX_TARGET_NONE
+    semantics_contract_key: str = CONTINUOUS_RANKER_SEMANTICS_DEFAULT
+    score_transform: str = CONTINUOUS_RANKER_SCORE_TRANSFORM_PROBABILITY
+    epoch_loss_aggregation: str = CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED
+    uses_pairwise_loss: bool = False
+
+    def __post_init__(self) -> None:
+        if self.batch_mode not in {
+            CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
+            CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+        }:
+            raise ValueError(f"不支援的continuous-ranker batch mode: {self.batch_mode!r}")
+        if self.auxiliary_target_bundle not in {
+            CONTINUOUS_RANKER_AUX_TARGET_NONE,
+            CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY,
+            CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+        }:
+            raise ValueError(f"不支援的continuous-ranker auxiliary target bundle: {self.auxiliary_target_bundle!r}")
+        if self.score_transform not in {
+            CONTINUOUS_RANKER_SCORE_TRANSFORM_PROBABILITY,
+            CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
+        }:
+            raise ValueError(f"不支援的continuous-ranker score transform: {self.score_transform!r}")
+        if self.epoch_loss_aggregation not in {
+            CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED,
+        }:
+            raise ValueError(
+                f"不支援的continuous-ranker epoch loss aggregation: {self.epoch_loss_aggregation!r}"
+            )
+
+
 @dataclass(frozen=True)
 class ContinuousRankerObjectivePolicy:
     """Executable objective semantics independent of research naming/history."""
@@ -1836,6 +1979,8 @@ class ContinuousRankerExecutionRecipe:
     training_sample_scope: str
     score_semantic_id: str
     objective_policy: ContinuousRankerObjectivePolicy
+    target_policy: ContinuousRankerTargetPolicy
+    training_policy: ContinuousRankerTrainingPolicy
     context_policy: ContinuousRankerContextPolicy
     dependency_spec: ContinuousRankerDependencySpec
     output_schema: BreakoutQualityOutputSchema
@@ -2565,40 +2710,237 @@ def get_continuous_ranker_research_spec(
     return spec
 
 
-def _resolve_continuous_ranker_context_policy(
+_CONTINUOUS_RANKER_TARGET_POLICIES: dict[str, ContinuousRankerTargetPolicy] = {
+    "strategy_aligned_opportunity_r_v1": ContinuousRankerTargetPolicy(
+        materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_EXTERNAL,
+    ),
+    "strategy_aligned_opportunity_no_time_r_v1": ContinuousRankerTargetPolicy(
+        materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_EXTERNAL,
+    ),
+    "daily_opportunity_no_time_r_v1": ContinuousRankerTargetPolicy(
+        materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+        component_target_id="daily_opportunity_no_time_r_v1",
+        contract_kind="daily_opportunity_no_time",
+    ),
+    "daily_full_horizon_opportunity_r_v1": ContinuousRankerTargetPolicy(
+        materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+        component_target_id="daily_full_horizon_opportunity_r_v1",
+        contract_kind="daily_full_horizon_opportunity",
+    ),
+    "daily_full_horizon_pure_mfe_r_v1": ContinuousRankerTargetPolicy(
+        materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+        component_target_id="daily_full_horizon_pure_mfe_r_v1",
+        contract_kind="daily_full_horizon_pure_mfe",
+    ),
+    "daily_first_risk_breach_pure_mfe_r_v1": ContinuousRankerTargetPolicy(
+        materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+        component_target_id="daily_first_risk_breach_pure_mfe_r_v1",
+        contract_kind="daily_first_risk_breach_pure_mfe",
+    ),
+    "daily_full_horizon_low_adverse_r_v1": ContinuousRankerTargetPolicy(
+        materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+        component_target_id="daily_full_horizon_low_adverse_r_v1",
+        contract_kind="daily_full_horizon_low_adverse",
+    ),
+    "daily_full_horizon_equal_rank_mfe_low_adverse_v1": ContinuousRankerTargetPolicy(
+        materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+        component_target_id="daily_full_horizon_opportunity_r_v1",
+        postprocess=CONTINUOUS_RANKER_TARGET_POSTPROCESS_EQUAL_RANK_MFE_LOW_ADVERSE,
+        contract_kind="daily_full_horizon_equal_rank_mfe_low_adverse",
+    ),
+    PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID: ContinuousRankerTargetPolicy(
+        materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+        component_target_id="daily_full_horizon_low_adverse_r_v1",
+        context_source=CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
+        context_roles=(
+            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
+        ),
+        context_transform=CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_UPSIDE_LOW_ADVERSE,
+        contract_kind="predicted_upside_context",
+    ),
+    PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID: ContinuousRankerTargetPolicy(
+        materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+        component_target_id="daily_full_horizon_pure_mfe_r_v1",
+        context_source=CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+        context_roles=(
+            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
+        ),
+        context_transform=CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_SAFETY_MFE,
+        contract_kind="predicted_safety_context",
+    ),
+    PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID: ContinuousRankerTargetPolicy(
+        materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+        component_target_id="daily_full_horizon_pure_mfe_r_v1",
+        context_source=CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+        context_roles=(
+            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
+        ),
+        context_transform=CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PRESERVE_PURE_MFE,
+        contract_kind="predicted_safety_pure_mfe",
+    ),
+    "daily_risk_normalized_net_opportunity_r_v1": ContinuousRankerTargetPolicy(
+        materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED,
+        contract_kind="risk_normalized",
+    ),
+}
+
+
+_CONTINUOUS_RANKER_TRAINING_POLICIES: dict[str, ContinuousRankerTrainingPolicy] = {
+    TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION: ContinuousRankerTrainingPolicy(
+        batch_mode=CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
+        target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PERCENTILE,
+        loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE,
+        epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+    ),
+    TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION: ContinuousRankerTrainingPolicy(
+        batch_mode=CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
+        target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_RAW_R,
+        loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R,
+        semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_RAW_R,
+        score_transform=CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
+        epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+    ),
+    TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION: ContinuousRankerTrainingPolicy(
+        batch_mode=CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
+        target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_DUAL_COMPONENT_R,
+        loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R,
+        semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_DUAL_COMPONENT_R,
+        score_transform=CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
+        epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+    ),
+    TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+        target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE,
+        loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
+        semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_PAIRWISE,
+        uses_pairwise_loss=True,
+    ),
+    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+        target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS,
+        loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
+        semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_PAIRWISE,
+        uses_pairwise_loss=True,
+    ),
+    TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: ContinuousRankerTrainingPolicy(
+        batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+        target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PERCENTILE,
+        loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE,
+        semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_LISTWISE,
+    ),
+    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+        target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY,
+        loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE,
+        auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY,
+        semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SAFETY,
+        epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+        uses_pairwise_loss=True,
+    ),
+    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+        target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE,
+        loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
+        auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+        semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SINGLE,
+        epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+        uses_pairwise_loss=True,
+    ),
+    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+        target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE,
+        loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
+        auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+        semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE,
+        epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+        uses_pairwise_loss=True,
+    ),
+    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+        target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
+        loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
+        auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+        semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
+        epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+        uses_pairwise_loss=True,
+    ),
+    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+        target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
+        loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
+        auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+        semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS,
+        epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+        uses_pairwise_loss=True,
+    ),
+    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+        target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
+        loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
+        auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+        semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN,
+        epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+        uses_pairwise_loss=True,
+    ),
+    TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+        batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+        target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS,
+        loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
+        auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+        semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS,
+        uses_pairwise_loss=True,
+    ),
+}
+
+
+def get_continuous_ranker_training_policy(training_objective: str) -> ContinuousRankerTrainingPolicy:
+    try:
+        return _CONTINUOUS_RANKER_TRAINING_POLICIES[str(training_objective)]
+    except KeyError as exc:
+        raise ValueError(
+            f"continuous ranker objective缺少training capability登記: {training_objective!r}"
+        ) from exc
+
+
+def _resolve_continuous_ranker_target_policy(
     profile: BreakoutQualityExperimentProfile,
-    spec: ContinuousRankerResearchSpec,
-) -> ContinuousRankerContextPolicy:
+) -> ContinuousRankerTargetPolicy:
     target_id = str(profile.continuous_target_id or "")
-    roles: tuple[str, ...] = ()
-    source = CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
-    if target_id == PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID:
-        source = CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE
-        roles = (
-            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
-            CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
-            CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
-        )
-    elif target_id == PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID:
+    try:
+        return _CONTINUOUS_RANKER_TARGET_POLICIES[target_id]
+    except KeyError as exc:
+        raise ValueError(
+            f"continuous ranker target缺少runtime capability登記: {target_id!r}"
+        ) from exc
+
+
+def _resolve_continuous_ranker_context_policy(
+    target_policy: ContinuousRankerTargetPolicy,
+    objective_policy: ContinuousRankerObjectivePolicy,
+) -> ContinuousRankerContextPolicy:
+    source = str(target_policy.context_source)
+    roles = list(target_policy.context_roles)
+    if objective_policy.pair_weight_policy == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY:
+        if source not in {
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+        }:
+            raise ValueError(
+                "predicted-Safety pair weighting不能與其他persistent context source併用"
+            )
         source = CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
-        roles = (
-            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
-            CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
-            CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
-        )
-    elif target_id == PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID:
-        source = CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
-        roles = (
-            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
-            CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
-        )
-    elif spec.pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
-        source = CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
-        roles = (
+        for role in (
             CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
             CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
-        )
-    return ContinuousRankerContextPolicy(source=source, roles=roles)
+        ):
+            if role not in roles:
+                roles.append(role)
+    return ContinuousRankerContextPolicy(source=source, roles=tuple(roles))
 
 
 def _resolve_continuous_ranker_objective_policy(
@@ -2629,8 +2971,12 @@ def get_continuous_ranker_execution_recipe(
     spec = get_continuous_ranker_research_spec(profile_name)
     if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
         raise ValueError(f"continuous ranker recipe只接受continuous profile: {profile_name}")
-    context_policy = _resolve_continuous_ranker_context_policy(profile, spec)
+    target_policy = _resolve_continuous_ranker_target_policy(profile)
+    training_policy = get_continuous_ranker_training_policy(profile.training_objective)
     objective_policy = _resolve_continuous_ranker_objective_policy(spec)
+    context_policy = _resolve_continuous_ranker_context_policy(
+        target_policy, objective_policy
+    )
     dependency_spec = ContinuousRankerDependencySpec(
         requires_continuous_target_artifact=(
             profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
@@ -2648,6 +2994,8 @@ def get_continuous_ranker_execution_recipe(
         training_sample_scope=profile.training_sample_scope,
         score_semantic_id=spec.score_semantic_id,
         objective_policy=objective_policy,
+        target_policy=target_policy,
+        training_policy=training_policy,
         context_policy=context_policy,
         dependency_spec=dependency_spec,
         output_schema=BREAKOUT_QUALITY_OUTPUT_SCHEMA,
