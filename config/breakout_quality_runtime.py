@@ -1,0 +1,747 @@
+"""Generic continuous-ranker runtime capability contracts.
+
+This module owns execution-only primitives used by breakout-quality consumers.
+Scientific/profile declarations and user-adjustable settings remain in
+``config.breakout_quality``.  Runtime resolution imports that module lazily so the
+configuration facade may re-export these contracts without creating an import cycle.
+
+Do not add MR/profile-specific branches here.  New behavior belongs in reusable
+target/training/context/objective capabilities and is selected declaratively.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import Any
+
+CONTINUOUS_RANKER_TRAINER_EVENT = "event"
+CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL = "daily_universal"
+CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR = "equal_pair_weight"
+CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED = "target_gap_weighted_within_date"
+CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE = "upper_tail_relevance_weighted"
+CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG = "full_list_delta_ndcg_weighted"
+CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG = "full_list_delta_ndcg_times_min_predicted_safety"
+CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE = "pareto_dominance_equal_pair"
+
+# Generic runtime capability primitives.  Scientific/research identity must not leak into
+# execution consumers; consumers resolve these policies from ContinuousRankerExecutionRecipe.
+CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE = "none"
+CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE = "predicted_upside"
+CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY = "predicted_safety"
+CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE = "coverage"
+CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT = "model_input"
+CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM = "target_transform"
+CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT = "pair_weight"
+CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE = "none"
+CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY = "min_predicted_safety"
+CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR = "scalar"
+CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS = "pareto_components"
+CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT = "scalar_with_context_weight"
+
+SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS = (
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+    CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
+)
+
+@dataclass(frozen=True)
+class ContinuousRankerContextPolicy:
+    """Execution-only context capability; no MR/profile identity is allowed here."""
+
+    source: str = CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+    roles: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        supported_sources = {
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+        }
+        supported_roles = {
+            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
+        }
+        if self.source not in supported_sources:
+            raise ValueError(f"不支援的continuous-ranker context source: {self.source!r}")
+        unknown_roles = sorted(set(self.roles) - supported_roles)
+        if unknown_roles:
+            raise ValueError(f"不支援的continuous-ranker context roles: {unknown_roles}")
+        if self.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE and self.roles:
+            raise ValueError("context source=none時不得宣告context roles")
+        if self.source != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE and CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE not in self.roles:
+            raise ValueError("persistent context source必須宣告coverage role")
+
+    def has_role(self, role: str) -> bool:
+        return str(role) in self.roles
+
+
+CONTINUOUS_RANKER_TARGET_MATERIALIZATION_EXTERNAL = "external_continuous_target"
+CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT = "daily_component_target"
+CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED = "risk_normalized_target"
+CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE = "none"
+CONTINUOUS_RANKER_TARGET_POSTPROCESS_EQUAL_RANK_MFE_LOW_ADVERSE = "equal_rank_mfe_low_adverse"
+CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE = "none"
+CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_UPSIDE_LOW_ADVERSE = (
+    "predicted_upside_conditional_low_adverse"
+)
+CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_SAFETY_MFE = (
+    "predicted_safety_conditional_mfe"
+)
+CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PRESERVE_PURE_MFE = "preserve_pure_mfe"
+
+CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED = "shuffled_unique_group_batches"
+CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT = "whole_date_pack_no_date_split"
+CONTINUOUS_RANKER_TARGET_BUILDER_PERCENTILE = "percentile"
+CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE = "scalar_pairwise"
+CONTINUOUS_RANKER_TARGET_BUILDER_RAW_R = "raw_r"
+CONTINUOUS_RANKER_TARGET_BUILDER_DUAL_COMPONENT_R = "dual_component_r"
+CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS = "pareto_components"
+CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY = "conditional_mfe_safety"
+CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE = "conditional_mfe_single"
+CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE = "safety_conditional_mfe"
+CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE = "safety_raw_mfe"
+CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS = "safety_raw_mfe_hmhs"
+CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN = "safety_raw_mfe_joint_min"
+CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS = "direct_hmhs"
+CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE = "percentile_mse"
+CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R = "raw_r_regression"
+CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R = "dual_component_r_regression"
+CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE = "single_pairwise"
+CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE = "conditional_duo_pairwise"
+CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE = "safety_mfe_duo_pairwise"
+CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE = "safety_mfe_joint_tri_pairwise"
+CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE = "listwise"
+CONTINUOUS_RANKER_AUX_TARGET_NONE = "none"
+CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY = "conditional_mfe_safety"
+CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY = "conditional_mfe_opportunity"
+CONTINUOUS_RANKER_SEMANTICS_DEFAULT = "default"
+CONTINUOUS_RANKER_SEMANTICS_PAIRWISE = "pairwise"
+CONTINUOUS_RANKER_SEMANTICS_LISTWISE = "listwise"
+CONTINUOUS_RANKER_SEMANTICS_RAW_R = "raw_r"
+CONTINUOUS_RANKER_SEMANTICS_DUAL_COMPONENT_R = "dual_component_r"
+CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SAFETY = "conditional_mfe_safety"
+CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SINGLE = "conditional_mfe_single"
+CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE = "safety_conditional_mfe"
+CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE = "safety_raw_mfe"
+CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS = "safety_raw_mfe_hmhs"
+CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN = "safety_raw_mfe_joint_min"
+CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS = "direct_hmhs"
+CONTINUOUS_RANKER_SCORE_TRANSFORM_PROBABILITY = "pass_probability"
+CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R = "pass_minus_reject_margin"
+CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH = "mean_batch"
+CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED = "weighted_supervision"
+
+
+@dataclass(frozen=True)
+class ContinuousRankerTargetPolicy:
+    """Daily/external target materialization semantics, independent of experiment identity."""
+
+    materialization_mode: str
+    component_target_id: str | None = None
+    postprocess: str = CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE
+    context_source: str = CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+    context_roles: tuple[str, ...] = ()
+    context_transform: str = CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE
+    contract_kind: str = "external"
+
+    def __post_init__(self) -> None:
+        if self.materialization_mode not in {
+            CONTINUOUS_RANKER_TARGET_MATERIALIZATION_EXTERNAL,
+            CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED,
+        }:
+            raise ValueError(f"不支援的continuous-ranker target materialization: {self.materialization_mode!r}")
+        if self.postprocess not in {
+            CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE,
+            CONTINUOUS_RANKER_TARGET_POSTPROCESS_EQUAL_RANK_MFE_LOW_ADVERSE,
+        }:
+            raise ValueError(f"不支援的continuous-ranker target postprocess: {self.postprocess!r}")
+        if self.context_transform not in {
+            CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE,
+            CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_UPSIDE_LOW_ADVERSE,
+            CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_SAFETY_MFE,
+            CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PRESERVE_PURE_MFE,
+        }:
+            raise ValueError(f"不支援的continuous-ranker target context transform: {self.context_transform!r}")
+        ContinuousRankerContextPolicy(
+            source=self.context_source,
+            roles=self.context_roles,
+        )
+        if (
+            self.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
+            and not str(self.component_target_id or "").strip()
+        ):
+            raise ValueError("daily-component target policy必須指定component_target_id")
+        if (
+            self.materialization_mode != CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
+            and self.component_target_id is not None
+        ):
+            raise ValueError("非daily-component target policy不得指定component_target_id")
+
+
+@dataclass(frozen=True)
+class ContinuousRankerTrainingPolicy:
+    """Reusable training capability selected by objective, never by MR/profile identity."""
+
+    batch_mode: str
+    target_builder: str
+    loss_handler: str
+    auxiliary_target_bundle: str = CONTINUOUS_RANKER_AUX_TARGET_NONE
+    semantics_contract_key: str = CONTINUOUS_RANKER_SEMANTICS_DEFAULT
+    score_transform: str = CONTINUOUS_RANKER_SCORE_TRANSFORM_PROBABILITY
+    epoch_loss_aggregation: str = CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED
+    uses_pairwise_loss: bool = False
+
+    def __post_init__(self) -> None:
+        if self.batch_mode not in {
+            CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
+            CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+        }:
+            raise ValueError(f"不支援的continuous-ranker batch mode: {self.batch_mode!r}")
+        if self.auxiliary_target_bundle not in {
+            CONTINUOUS_RANKER_AUX_TARGET_NONE,
+            CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY,
+            CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+        }:
+            raise ValueError(f"不支援的continuous-ranker auxiliary target bundle: {self.auxiliary_target_bundle!r}")
+        if self.score_transform not in {
+            CONTINUOUS_RANKER_SCORE_TRANSFORM_PROBABILITY,
+            CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
+        }:
+            raise ValueError(f"不支援的continuous-ranker score transform: {self.score_transform!r}")
+        if self.epoch_loss_aggregation not in {
+            CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED,
+        }:
+            raise ValueError(
+                f"不支援的continuous-ranker epoch loss aggregation: {self.epoch_loss_aggregation!r}"
+            )
+
+
+@dataclass(frozen=True)
+class ContinuousRankerObjectivePolicy:
+    """Executable objective semantics independent of research naming/history."""
+
+    pairwise_reduction: str | None
+    pair_weight_policy: str = CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
+    pair_target_schema: str = CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR
+
+    def __post_init__(self) -> None:
+        if self.pairwise_reduction is not None and self.pairwise_reduction not in SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS:
+            raise ValueError(f"不支援的continuous-ranker pairwise reduction: {self.pairwise_reduction!r}")
+        if self.pair_weight_policy not in {
+            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+        }:
+            raise ValueError(f"不支援的continuous-ranker pair weight policy: {self.pair_weight_policy!r}")
+        if self.pair_target_schema not in {
+            CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR,
+            CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS,
+            CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
+        }:
+            raise ValueError(f"不支援的continuous-ranker pair target schema: {self.pair_target_schema!r}")
+        weighted = self.pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
+        if weighted != (self.pair_target_schema == CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT):
+            raise ValueError("pair weight policy與pair target schema不一致")
+
+
+@dataclass(frozen=True)
+class ContinuousRankerDependencySpec:
+    """Persistent upstream requirements expressed as capabilities, not artifact paths."""
+
+    requires_continuous_target_artifact: bool
+    context_source: str = CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+
+    def __post_init__(self) -> None:
+        if self.context_source not in {
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+        }:
+            raise ValueError(
+                f"不支援的continuous-ranker dependency context source: {self.context_source!r}"
+            )
+
+
+@dataclass(frozen=True)
+class BreakoutQualityOutputSchema:
+    """Canonical model-output width contract shared by inference consumers."""
+
+    head_widths: tuple[tuple[str, int], ...]
+
+    def width_for(self, output_head: str | None) -> int:
+        head = str(output_head or "").strip().lower()
+        widths = dict(self.head_widths)
+        try:
+            return int(widths[head])
+        except KeyError as exc:
+            raise ValueError(f"未知 breakout-quality output_head width contract: {output_head!r}") from exc
+
+
+BREAKOUT_QUALITY_OUTPUT_SCHEMA = BreakoutQualityOutputSchema(
+    head_widths=(
+        ("", 2),
+        ("primary", 2),
+        ("mfe", 2),
+        ("primary_mfe", 2),
+        ("conditional_safety", 2),
+        ("safety", 2),
+        ("raw_safety", 2),
+        ("safety_condition", 2),
+        ("conditional_mfe", 2),
+        ("final", 2),
+        ("joint_hmhs", 2),
+        ("hmhs", 2),
+        ("conditional_both", 4),
+        ("both", 4),
+        ("tri_head", 6),
+        ("safety_raw_mfe_hmhs", 6),
+        ("all_three", 6),
+    )
+)
+
+
+@dataclass(frozen=True)
+class ContinuousRankerExecutionRecipe:
+    """Experiment-agnostic execution contract derived from canonical declarations.
+
+    Services consume this recipe for trainer/target/context/dependency/output semantics.
+    Research identity (MR id, phase, experiment wording) remains in
+    ContinuousRankerResearchSpec for reports/history only.  Compatibility properties keep
+    existing consumers stable while Round 2 migrates them to the explicit policy objects.
+    """
+
+    profile_name: str
+    trainer_family: str
+    training_objective: str
+    continuous_target_id: str
+    loss_name: str
+    model_architecture: str | None
+    training_label_scope: str
+    training_sample_scope: str
+    score_semantic_id: str
+    objective_policy: ContinuousRankerObjectivePolicy
+    target_policy: ContinuousRankerTargetPolicy
+    training_policy: ContinuousRankerTrainingPolicy
+    context_policy: ContinuousRankerContextPolicy
+    dependency_spec: ContinuousRankerDependencySpec
+    output_schema: BreakoutQualityOutputSchema
+    historical_pit_authorized: bool
+    current_time_validation_authorized: bool
+
+    @property
+    def pairwise_reduction(self) -> str | None:
+        return self.objective_policy.pairwise_reduction
+
+    def as_dict(self) -> dict[str, Any]:
+        # Preserve the pre-Round-1 payload exactly: this helper may participate in
+        # manifests/fingerprints outside this module and architecture refactoring must not
+        # silently create a new scientific identity.
+        return {
+            "profile_name": self.profile_name,
+            "trainer_family": self.trainer_family,
+            "training_objective": self.training_objective,
+            "continuous_target_id": self.continuous_target_id,
+            "loss_name": self.loss_name,
+            "model_architecture": self.model_architecture,
+            "training_label_scope": self.training_label_scope,
+            "training_sample_scope": self.training_sample_scope,
+            "score_semantic_id": self.score_semantic_id,
+            "pairwise_reduction": self.pairwise_reduction,
+            "historical_pit_authorized": bool(self.historical_pit_authorized),
+            "current_time_validation_authorized": bool(
+                self.current_time_validation_authorized
+            ),
+        }
+
+@lru_cache(maxsize=1)
+def _continuous_ranker_target_policies() -> dict[str, ContinuousRankerTargetPolicy]:
+    from config import breakout_quality as cfg
+
+    return {
+        "strategy_aligned_opportunity_r_v1": ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_EXTERNAL,
+        ),
+        "strategy_aligned_opportunity_no_time_r_v1": ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_EXTERNAL,
+        ),
+        "daily_opportunity_no_time_r_v1": ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            component_target_id="daily_opportunity_no_time_r_v1",
+            contract_kind="daily_opportunity_no_time",
+        ),
+        "daily_full_horizon_opportunity_r_v1": ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            component_target_id="daily_full_horizon_opportunity_r_v1",
+            contract_kind="daily_full_horizon_opportunity",
+        ),
+        "daily_full_horizon_pure_mfe_r_v1": ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            component_target_id="daily_full_horizon_pure_mfe_r_v1",
+            contract_kind="daily_full_horizon_pure_mfe",
+        ),
+        "daily_first_risk_breach_pure_mfe_r_v1": ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            component_target_id="daily_first_risk_breach_pure_mfe_r_v1",
+            contract_kind="daily_first_risk_breach_pure_mfe",
+        ),
+        "daily_full_horizon_low_adverse_r_v1": ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            component_target_id="daily_full_horizon_low_adverse_r_v1",
+            contract_kind="daily_full_horizon_low_adverse",
+        ),
+        "daily_full_horizon_equal_rank_mfe_low_adverse_v1": ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            component_target_id="daily_full_horizon_opportunity_r_v1",
+            postprocess=CONTINUOUS_RANKER_TARGET_POSTPROCESS_EQUAL_RANK_MFE_LOW_ADVERSE,
+            contract_kind="daily_full_horizon_equal_rank_mfe_low_adverse",
+        ),
+        cfg.PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID: ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            component_target_id="daily_full_horizon_low_adverse_r_v1",
+            context_source=CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
+            context_roles=(
+                CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+                CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
+                CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
+            ),
+            context_transform=CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_UPSIDE_LOW_ADVERSE,
+            contract_kind="predicted_upside_context",
+        ),
+        cfg.PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID: ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            component_target_id="daily_full_horizon_pure_mfe_r_v1",
+            context_source=CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+            context_roles=(
+                CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+                CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
+                CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
+            ),
+            context_transform=CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_SAFETY_MFE,
+            contract_kind="predicted_safety_context",
+        ),
+        cfg.PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID: ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            component_target_id="daily_full_horizon_pure_mfe_r_v1",
+            context_source=CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+            context_roles=(
+                CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+                CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
+            ),
+            context_transform=CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PRESERVE_PURE_MFE,
+            contract_kind="predicted_safety_pure_mfe",
+        ),
+        "daily_risk_normalized_net_opportunity_r_v1": ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED,
+            contract_kind="risk_normalized",
+        ),
+    }
+
+@lru_cache(maxsize=1)
+def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTrainingPolicy]:
+    from config import breakout_quality as cfg
+
+    return {
+        cfg.TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PERCENTILE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE,
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+        ),
+        cfg.TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_RAW_R,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_RAW_R,
+            score_transform=CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+        ),
+        cfg.TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_DUAL_COMPONENT_R,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_DUAL_COMPONENT_R,
+            score_transform=CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+        ),
+        cfg.TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_PAIRWISE,
+            uses_pairwise_loss=True,
+        ),
+        cfg.TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_PAIRWISE,
+            uses_pairwise_loss=True,
+        ),
+        cfg.TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PERCENTILE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_LISTWISE,
+        ),
+        cfg.TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE,
+            auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SAFETY,
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            uses_pairwise_loss=True,
+        ),
+        cfg.TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
+            auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SINGLE,
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            uses_pairwise_loss=True,
+        ),
+        cfg.TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
+            auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE,
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            uses_pairwise_loss=True,
+        ),
+        cfg.TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
+            auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            uses_pairwise_loss=True,
+        ),
+        cfg.TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
+            auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS,
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            uses_pairwise_loss=True,
+        ),
+        cfg.TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
+            auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN,
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            uses_pairwise_loss=True,
+        ),
+        cfg.TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
+            auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS,
+            uses_pairwise_loss=True,
+        ),
+    }
+
+def get_continuous_ranker_training_policy(
+    training_objective: str,
+) -> ContinuousRankerTrainingPolicy:
+    try:
+        return _continuous_ranker_training_policies()[str(training_objective)]
+    except KeyError as exc:
+        raise ValueError(
+            f"continuous ranker objective缺少training capability登記: {training_objective!r}"
+        ) from exc
+
+
+def _resolve_continuous_ranker_target_policy(profile: Any) -> ContinuousRankerTargetPolicy:
+    target_id = str(profile.continuous_target_id or "")
+    try:
+        return _continuous_ranker_target_policies()[target_id]
+    except KeyError as exc:
+        raise ValueError(
+            f"continuous ranker target缺少runtime capability登記: {target_id!r}"
+        ) from exc
+
+
+def _resolve_continuous_ranker_context_policy(
+    target_policy: ContinuousRankerTargetPolicy,
+    objective_policy: ContinuousRankerObjectivePolicy,
+) -> ContinuousRankerContextPolicy:
+    source = str(target_policy.context_source)
+    roles = list(target_policy.context_roles)
+    if objective_policy.pair_weight_policy == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY:
+        if source not in {
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+        }:
+            raise ValueError(
+                "predicted-Safety pair weighting不能與其他persistent context source併用"
+            )
+        source = CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY
+        for role in (
+            CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
+            CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
+        ):
+            if role not in roles:
+                roles.append(role)
+    return ContinuousRankerContextPolicy(source=source, roles=tuple(roles))
+
+
+def _resolve_continuous_ranker_objective_policy(spec: Any) -> ContinuousRankerObjectivePolicy:
+    reduction = spec.pairwise_reduction
+    if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG:
+        return ContinuousRankerObjectivePolicy(
+            pairwise_reduction=reduction,
+            pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
+            pair_target_schema=CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
+        )
+    if reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE:
+        return ContinuousRankerObjectivePolicy(
+            pairwise_reduction=reduction,
+            pair_target_schema=CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS,
+        )
+    return ContinuousRankerObjectivePolicy(pairwise_reduction=reduction)
+
+
+def get_continuous_ranker_execution_recipe(
+    experiment_profile: str,
+) -> ContinuousRankerExecutionRecipe:
+    """Resolve executable semantics once; consumers must not rediscover profile meaning."""
+
+    from config import breakout_quality as cfg
+
+    profile_name = cfg.normalize_breakout_quality_experiment_profile(experiment_profile)
+    profile = cfg.get_breakout_quality_experiment_profile(profile_name)
+    spec = cfg.get_continuous_ranker_research_spec(profile_name)
+    if profile.training_objective not in cfg.CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
+        raise ValueError(f"continuous ranker recipe只接受continuous profile: {profile_name}")
+    target_policy = _resolve_continuous_ranker_target_policy(profile)
+    training_policy = get_continuous_ranker_training_policy(profile.training_objective)
+    objective_policy = _resolve_continuous_ranker_objective_policy(spec)
+    context_policy = _resolve_continuous_ranker_context_policy(
+        target_policy, objective_policy
+    )
+    dependency_spec = ContinuousRankerDependencySpec(
+        requires_continuous_target_artifact=(
+            profile.training_sample_scope == cfg.TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
+        ),
+        context_source=context_policy.source,
+    )
+    return ContinuousRankerExecutionRecipe(
+        profile_name=profile_name,
+        trainer_family=spec.trainer_family,
+        training_objective=profile.training_objective,
+        continuous_target_id=str(profile.continuous_target_id),
+        loss_name=profile.loss_name,
+        model_architecture=profile.model_architecture,
+        training_label_scope=profile.training_label_scope,
+        training_sample_scope=profile.training_sample_scope,
+        score_semantic_id=spec.score_semantic_id,
+        objective_policy=objective_policy,
+        target_policy=target_policy,
+        training_policy=training_policy,
+        context_policy=context_policy,
+        dependency_spec=dependency_spec,
+        output_schema=BREAKOUT_QUALITY_OUTPUT_SCHEMA,
+        historical_pit_authorized=bool(spec.selection_pit_authorized),
+        current_time_validation_authorized=bool(
+            spec.current_time_validation_authorized
+        ),
+    )
+
+
+__all__ = (
+    "CONTINUOUS_RANKER_TRAINER_EVENT",
+    "CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL",
+    "CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR",
+    "CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED",
+    "CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE",
+    "CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG",
+    "CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG",
+    "CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE",
+    "CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE",
+    "CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE",
+    "CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY",
+    "CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE",
+    "CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT",
+    "CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM",
+    "CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT",
+    "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE",
+    "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY",
+    "CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR",
+    "CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS",
+    "CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT",
+    "SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS",
+    "ContinuousRankerContextPolicy",
+    "CONTINUOUS_RANKER_TARGET_MATERIALIZATION_EXTERNAL",
+    "CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT",
+    "CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED",
+    "CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE",
+    "CONTINUOUS_RANKER_TARGET_POSTPROCESS_EQUAL_RANK_MFE_LOW_ADVERSE",
+    "CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE",
+    "CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_UPSIDE_LOW_ADVERSE",
+    "CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PREDICTED_SAFETY_MFE",
+    "CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PRESERVE_PURE_MFE",
+    "CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED",
+    "CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT",
+    "CONTINUOUS_RANKER_TARGET_BUILDER_PERCENTILE",
+    "CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE",
+    "CONTINUOUS_RANKER_TARGET_BUILDER_RAW_R",
+    "CONTINUOUS_RANKER_TARGET_BUILDER_DUAL_COMPONENT_R",
+    "CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS",
+    "CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY",
+    "CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE",
+    "CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE",
+    "CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE",
+    "CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS",
+    "CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN",
+    "CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS",
+    "CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE",
+    "CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R",
+    "CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R",
+    "CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE",
+    "CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE",
+    "CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE",
+    "CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE",
+    "CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE",
+    "CONTINUOUS_RANKER_AUX_TARGET_NONE",
+    "CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY",
+    "CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY",
+    "CONTINUOUS_RANKER_SEMANTICS_DEFAULT",
+    "CONTINUOUS_RANKER_SEMANTICS_PAIRWISE",
+    "CONTINUOUS_RANKER_SEMANTICS_LISTWISE",
+    "CONTINUOUS_RANKER_SEMANTICS_RAW_R",
+    "CONTINUOUS_RANKER_SEMANTICS_DUAL_COMPONENT_R",
+    "CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SAFETY",
+    "CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SINGLE",
+    "CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE",
+    "CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE",
+    "CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS",
+    "CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN",
+    "CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS",
+    "CONTINUOUS_RANKER_SCORE_TRANSFORM_PROBABILITY",
+    "CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R",
+    "CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH",
+    "CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED",
+    "ContinuousRankerTargetPolicy",
+    "ContinuousRankerTrainingPolicy",
+    "ContinuousRankerObjectivePolicy",
+    "ContinuousRankerDependencySpec",
+    "BreakoutQualityOutputSchema",
+    "BREAKOUT_QUALITY_OUTPUT_SCHEMA",
+    "ContinuousRankerExecutionRecipe",
+    "get_continuous_ranker_training_policy",
+    "get_continuous_ranker_execution_recipe",
+)

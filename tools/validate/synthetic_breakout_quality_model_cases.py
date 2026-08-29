@@ -375,7 +375,9 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     # Capability-oriented contract: every registered continuous-ranker profile is
     # automatically checked here.  A new experiment that only recombines existing
     # target/context/objective capabilities must not require a new synthetic case.
-    from config.breakout_quality import (
+    import config.breakout_quality as breakout_quality_config
+    import config.breakout_quality_runtime as continuous_ranker_runtime
+    from config.breakout_quality_runtime import (
         CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,
         CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
         CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
@@ -398,6 +400,47 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE: ARTIFACT_PREDICTED_UPSIDE_CONTEXT,
         CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY: ARTIFACT_PREDICTED_SAFETY_CONTEXT,
     }
+    check(
+        "continuous_ranker_runtime_contract_has_dedicated_owner",
+        "config.breakout_quality_runtime",
+        continuous_ranker_runtime.ContinuousRankerExecutionRecipe.__module__,
+    )
+    check_true(
+        "continuous_ranker_config_facade_reexports_canonical_runtime_getter",
+        breakout_quality_config.get_continuous_ranker_execution_recipe
+        is continuous_ranker_runtime.get_continuous_ranker_execution_recipe,
+        note=(
+            "config.breakout_quality compatibility facade must re-export the canonical "
+            "runtime getter instead of defining a second implementation"
+        ),
+    )
+    runtime_public_names = set(continuous_ranker_runtime.__all__)
+    runtime_facade_bypass_imports = []
+    project_root = Path(__file__).resolve().parents[2]
+    for source_root_name in ("filters", "services"):
+        for source_path in sorted((project_root / source_root_name).rglob("*.py")):
+            source_tree = ast.parse(source_path.read_text(encoding="utf-8"))
+            for node in ast.walk(source_tree):
+                if not isinstance(node, ast.ImportFrom) or node.module != "config.breakout_quality":
+                    continue
+                imported_runtime_names = sorted(
+                    alias.name for alias in node.names if alias.name in runtime_public_names
+                )
+                if imported_runtime_names:
+                    runtime_facade_bypass_imports.append(
+                        f"{source_path.relative_to(project_root).as_posix()}:"
+                        + ",".join(imported_runtime_names)
+                    )
+    check(
+        "continuous_ranker_generic_consumers_import_runtime_owner_directly",
+        [],
+        runtime_facade_bypass_imports,
+        note=(
+            "filters/services generic consumers must import runtime capability names from "
+            "config.breakout_quality_runtime; config.breakout_quality is a compatibility facade"
+        ),
+    )
+
     registered_runtime_failures = []
     for registered_profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
         registered_profile = get_breakout_quality_experiment_profile(registered_profile_name)

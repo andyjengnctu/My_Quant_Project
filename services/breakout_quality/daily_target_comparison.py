@@ -10,12 +10,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from config.breakout_quality_runtime import (
+    get_continuous_ranker_execution_recipe,
+)
 from config.breakout_quality import (
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K,
     BREAKOUT_QUALITY_TARGET_COMPARISON_BARRIER_BAND_RETURN,
     get_breakout_quality_experiment_profile,
     get_breakout_quality_model_research_settings,
-    get_continuous_ranker_execution_recipe,
     get_continuous_ranker_research_spec,
 )
 from filters.breakout_quality.daily_ranker_data import load_daily_universal_ranker_data

@@ -7,7 +7,7 @@ remains acyclic while both trainers share ``ranker_training``.
 
 from __future__ import annotations
 
-from config.breakout_quality import (
+from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     get_continuous_ranker_execution_recipe,
 )

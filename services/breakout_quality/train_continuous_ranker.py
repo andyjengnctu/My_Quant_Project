@@ -17,9 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import (
-    STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
-    CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
+from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_TARGET_GAP_WEIGHTED,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_UPPER_TAIL_RELEVANCE,
@@ -53,6 +51,12 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_TRAINER_EVENT,
+    get_continuous_ranker_execution_recipe,
+    get_continuous_ranker_training_policy,
+)
+from config.breakout_quality import (
+    STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
+    CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
     TRAINING_LABEL_SCOPE_ALL,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
@@ -71,8 +75,6 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
-    get_continuous_ranker_execution_recipe,
-    get_continuous_ranker_training_policy,
     get_continuous_ranker_research_spec,
     resolve_breakout_quality_random_seed,
 )

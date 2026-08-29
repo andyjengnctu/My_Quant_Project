@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import (
+from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
     CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
@@ -26,8 +26,10 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
     CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED,
     CONTINUOUS_RANKER_TARGET_POSTPROCESS_EQUAL_RANK_MFE_LOW_ADVERSE,
-    get_breakout_quality_experiment_profile,
     get_continuous_ranker_execution_recipe,
+)
+from config.breakout_quality import (
+    get_breakout_quality_experiment_profile,
     get_high_safety_weighted_pure_mfe_contract,
 )
 from filters.breakout_quality.continuous_ranker_data import (

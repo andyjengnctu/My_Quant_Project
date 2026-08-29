@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from config.breakout_quality import (
+from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
     CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
     CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
@@ -31,6 +31,8 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN,
     get_continuous_ranker_execution_recipe,
+)
+from config.breakout_quality import (
     get_high_safety_weighted_pure_mfe_contract,
     get_predicted_safety_context_contract,
     get_predicted_safety_pure_mfe_contract,

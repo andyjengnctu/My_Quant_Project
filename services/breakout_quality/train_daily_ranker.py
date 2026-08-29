@@ -15,7 +15,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import (
+from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R,
@@ -31,6 +31,9 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_HIGH_SAFETY_MIN_DELTA_NDCG,
+    get_continuous_ranker_execution_recipe,
+)
+from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
@@ -40,7 +43,6 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-    get_continuous_ranker_execution_recipe,
     get_continuous_ranker_research_spec,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
