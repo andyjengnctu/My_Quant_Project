@@ -342,11 +342,11 @@ def collect_model_upstream_readiness(
                     PRODUCER_EXISTING_ARTIFACT if context_ready else PRODUCER_MODEL_TRAINING
                 ),
                 description=(
-                    "重用MR-13AD/AE/AF共用PIT-safe predicted-safety context"
+                    "重用canonical PIT-safe predicted-safety context"
                     if context_ready
                     else "canonical Dataset未就緒，predicted-safety context不可建立"
                     if not dataset_ready
-                    else "缺少或無效的MR-13AD/AE/AF共用PIT-safe predicted-safety context："
+                    else "缺少或無效的canonical PIT-safe predicted-safety context："
                     + (f"{type(context_error).__name__}: {context_error}" if context_error else "unknown")
                 ),
             )

@@ -388,6 +388,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
         CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
         CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
+        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
         ContinuousRankerObjectivePolicy,
         ContinuousRankerPairWeightPolicy,
         get_continuous_ranker_pair_weight_policy,
@@ -473,8 +474,11 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     winner_policy = get_continuous_ranker_pair_weight_policy(
         CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY
     )
+    product_policy = get_continuous_ranker_pair_weight_policy(
+        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY
+    )
     check_true(
-        "continuous_ranker_pair_weight_registry_preserves_min_and_directional_winner_primitives",
+        "continuous_ranker_pair_weight_registry_preserves_min_directional_and_product_primitives",
         torch.allclose(
             min_policy.apply(torch, target_diff, left_context, right_context),
             torch.tensor([0.15, 0.15]),
@@ -482,7 +486,36 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and torch.allclose(
             winner_policy.apply(torch, target_diff, left_context, right_context),
             torch.tensor([0.92, 0.15]),
+        )
+        and torch.allclose(
+            product_policy.apply(torch, target_diff, left_context, right_context),
+            torch.tensor([0.138, 0.138]),
         ),
+    )
+    product_low_low = product_policy.apply(
+        torch,
+        torch.tensor([0.4], dtype=torch.float32),
+        torch.tensor([0.2], dtype=torch.float32),
+        torch.tensor([0.2], dtype=torch.float32),
+    )
+    product_high_low_forward = product_policy.apply(
+        torch,
+        torch.tensor([0.4], dtype=torch.float32),
+        torch.tensor([0.9], dtype=torch.float32),
+        torch.tensor([0.2], dtype=torch.float32),
+    )
+    product_high_low_reverse = product_policy.apply(
+        torch,
+        torch.tensor([-0.4], dtype=torch.float32),
+        torch.tensor([0.9], dtype=torch.float32),
+        torch.tensor([0.2], dtype=torch.float32),
+    )
+    check_true(
+        "continuous_ranker_product_safety_weight_is_symmetric_and_concentrates_low_low_pairs",
+        torch.allclose(product_low_low, torch.tensor([0.04]))
+        and torch.allclose(product_high_low_forward, torch.tensor([0.18]))
+        and torch.allclose(product_high_low_reverse, torch.tensor([0.18]))
+        and float(product_low_low.item()) < 0.2,
     )
 
     margins = torch.tensor([0.4, 0.1, 0.7, -0.2], dtype=torch.float32)
@@ -499,6 +532,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     for policy_id in (
         CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
         CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
+        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
     ):
         weighted_loss, weighted_count = _pairwise_logistic_loss(
             torch,

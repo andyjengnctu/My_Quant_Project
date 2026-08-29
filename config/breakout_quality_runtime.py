@@ -76,6 +76,7 @@ CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT = "pair_weight"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE = "none"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY = "min_predicted_safety"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY = "mfe_winner_predicted_safety"
+CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY = "product_predicted_safety"
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,10 @@ def _minimum_predicted_safety_pair_weight(torch, _target_diff, left_safety, righ
 
 def _mfe_winner_predicted_safety_pair_weight(torch, target_diff, left_safety, right_safety):
     return torch.where(target_diff > 0, left_safety, right_safety)
+
+
+def _product_predicted_safety_pair_weight(torch, _target_diff, left_safety, right_safety):
+    return left_safety * right_safety
 
 
 _CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_REGISTRY: dict[str, ContinuousRankerPairWeightPolicy] = {
@@ -148,6 +153,23 @@ _CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_REGISTRY: dict[str, ContinuousRankerPairWe
         report_second_note=(
             "- Actual Safety/MFE metrics只作checkpoint寫入後診斷；epoch selection仍固定Pure-MFE "
             "Validation Daily rho；無額外mean normalization、bucket/cutoff/lambda/temperature。"
+        ),
+    ),
+    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY: ContinuousRankerPairWeightPolicy(
+        policy_id=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
+        context_source=CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
+        compatible_reductions=(CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,),
+        multiplier=_product_predicted_safety_pair_weight,
+        contract_pair_safety_weight="predicted_safety_percentile_i_times_predicted_safety_percentile_j",
+        contract_pair_weight_combination="delta_ndcg_times_product_predicted_safety",
+        report_extension_title="Pure-MFE × Safety-Product Pair Weight",
+        report_first_note=(
+            "- Target/order與MR-13K相同；Predicted Safety不進network，只把MR-13K full-list "
+            "ΔNDCG pair weight乘上S_i×S_j；pair weighting保持對稱，不依MFE winner方向改變。"
+        ),
+        report_second_note=(
+            "- Actual Safety/MFE metrics只作checkpoint寫入後診斷；epoch selection仍固定Pure-MFE "
+            "Validation Daily rho；無bucket/cutoff/lambda/exponent/temperature。"
         ),
     ),
 }
@@ -851,6 +873,7 @@ __all__ = (
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE",
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY",
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY",
+    "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY",
     "SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES",
     "PREDICTED_SAFETY_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES",
     "ContinuousRankerPairWeightPolicy",
