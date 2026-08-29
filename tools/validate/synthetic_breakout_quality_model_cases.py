@@ -619,16 +619,34 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             ),
         )
 
-    trainer_pair_source = read_source_text(project_root / "services" / "breakout_quality" / "train_continuous_ranker.py")
-    report_pair_source = read_source_text(project_root / "services" / "breakout_quality" / "train_daily_ranker.py")
-    forbidden_pair_identities = (
-        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
-        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
+    registered_pair_weight_ids = tuple(
+        sorted(
+            policy_id
+            for policy_id in continuous_ranker_runtime._CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_REGISTRY
+            if policy_id != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
+        )
     )
-    check_true(
-        "continuous_ranker_generic_trainer_and_renderer_do_not_recognize_specific_pair_weight_ids",
-        all(policy_id not in trainer_pair_source for policy_id in forbidden_pair_identities)
-        and all(policy_id not in report_pair_source for policy_id in forbidden_pair_identities),
+    pair_weight_identity_leaks = []
+    for source_root_name in ("filters", "services"):
+        for source_path in sorted((project_root / source_root_name).rglob("*.py")):
+            source_text = read_source_text(source_path)
+            leaked_policy_ids = [
+                policy_id for policy_id in registered_pair_weight_ids if policy_id in source_text
+            ]
+            if leaked_policy_ids:
+                pair_weight_identity_leaks.append(
+                    f"{source_path.relative_to(project_root).as_posix()}:"
+                    + ",".join(leaked_policy_ids)
+                )
+    check(
+        "continuous_ranker_generic_consumers_do_not_recognize_specific_pair_weight_ids",
+        [],
+        pair_weight_identity_leaks,
+        note=(
+            "all registered pair-weight identities, including future policies, must remain "
+            "owned by config.breakout_quality_runtime; filters/services consume resolved "
+            "policy contracts and must not branch on policy IDs"
+        ),
     )
 
     registered_runtime_failures = []

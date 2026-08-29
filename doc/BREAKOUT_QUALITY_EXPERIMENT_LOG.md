@@ -10906,3 +10906,14 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **No magic-strength extension**：不增加bucket、cutoff、lambda、Safety exponent、temperature、joint head、residual target、product score或portfolio state。Safety全1時loss必須精確退化MR-13K。
 - **Round 7 integration**：最新baseline已把pair-weight收斂為`config/breakout_quality_runtime.py` plugin registry，因此AH不修改generic trainer/data/report；只新增一個reusable product multiplier policy與declarative scientific profile/spec，consumer透過`ContinuousRankerExecutionRecipe`自動取得context/dependency/loss/report metadata。
 - **Model Gate authorization**：只先跑Seed42 Forward Model Gate；`selection_pit_authorized=False`、`current_time_validation_authorized=False`，不建立PIT/Strategy/Fixed/Multi-seed。
+
+
+## 2026-08-29 — Engineering modification-radius governance closure after MR-13AH acceptance
+
+- **Status**：`IMPLEMENTED / ENGINEERING_ONLY / BEHAVIOR_PRESERVING / MODIFICATION_RADIUS_GUARD`；不建立新的 scientific identity，不改 MR-13AH target、pair-weight formula、Seed、split、architecture、authorization、artifact identity 或 Model Gate 判讀。
+- **程式基準**：使用者提供已含 MR-13AH 的 `test-branch-1_20260829_153900_ee955284.zip`，SHA256=`a14472cc62fb2019d3347bf897b6c8ca296a776210e66fc2609d434f7cf9516d`。
+- **Empirical acceptance**：MR-13AH 相較 Round 7 後 baseline 實際修改 8 檔，其中必要 code radius 為 3 檔（declarative profile、pair-weight capability owner、generic primitive invariant test），另 1 個 production code 變更只是 `artifact_dependency_registry.py` 的 user-facing context wording 泛化，不影響 dependency behavior；其餘 4 檔為 Registry／Experiment Log／Research Queue／Checklist governance。此結果證明 Round 7 已將新 pair-weight primitive 的必要 code radius 從 MR-13AG 的 8 檔降至 3 檔，但也暴露 incidental cleanup 不應混入 scientific change。
+- **Project governance**：`PROJECT_SETTINGS.md C21` 新增「研究變更隔離與修改半徑驗收」；新 scientific identity 不得混入無關 wording/dead-code/file-move/general refactor。只重組既有 capability 時 production code 原則上只改 declarative spec；新增 primitive 時合理 code radius 原則上限於 declarative spec、唯一 capability owner 與 generic primitive invariant test。治理文件依 E5 另計，不得用 incidental cleanup 掩蓋 architecture acceptance。
+- **Executable guard**：continuous-ranker synthetic 的 pair-weight identity leakage 檢查改為直接遍歷 runtime registry 的所有 non-`none` policy IDs，掃描完整 `filters/` 與 `services/`。未來新增任何 pair-weight policy，只要 specific policy ID 滲入 generic consumer，就會自動 FAIL；不再硬編目前 AF/AG/AH policy 名單。
+- **獨立驗證**：targeted continuous-ranker contract=`35 checks / 0 FAIL`；完整 synthetic consistency=`4,616 checks / 244 cases / 0 FAIL`（formal-style isolated primary-param source）；source-root `compileall` PASS。正式 `apps/run_bundle.py`／`apps/test_suite.py`依治理規則留給使用者本機 double check。
+- **Research state**：MR-13AH 維持 `IMPLEMENTED / MODEL_GATE_RESULT_PENDING / NO_PIT / NO_STRATEGY_CONVERSION / NOT_PROMOTED`；Registry 與 Research Queue scientific state不因本工程 change 改變。
