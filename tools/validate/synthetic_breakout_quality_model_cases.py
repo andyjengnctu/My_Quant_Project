@@ -3282,11 +3282,11 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         project_root / "services" / "research" / "breakout_quality_application.py"
     ).read_text(encoding="utf-8")
     check_true(
-        "model_research_menu_uses_stable_target_model_submenu_and_config_driven_comparison_dispatch",
-        'render_menu_item(4, "Target／模型比較")' in app_source
-        and 'render_menu_item(2, BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL)' in app_source
-        and 'if choice == "2":' in app_source
-        and '_run_configured_continuous_ranker_model_gates(program_name)' in app_source
+        "reverse_conditional_profiles_share_config_driven_standard_model_comparison_route_without_dedicated_menu",
+        'get_breakout_quality_standard_model_comparison_settings().menu_label' in app_source
+        and 'render_menu_item(4, comparison_label)' in app_source
+        and 'if choice == "4":' in app_source
+        and '_run_configured_standard_model_comparison(program_name)' in app_source
         and 'Conditional-MFE Single／Duo Forward Model Gate' not in app_source,
     )
     daily_source = (
@@ -3564,8 +3564,8 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
     ).read_text(encoding="utf-8")
     contract_source = (project_root / "core" / "research_report_contract.py").read_text(encoding="utf-8")
     check_true(
-        "mr13s_truth_geometry_is_promoted_into_standard_model_sop_without_dedicated_menu",
-        'S("truth_prediction_geometry", 4, "Truth / Prediction Geometry"' in contract_source
+        "mr13s_truth_geometry_remains_standard_model_sop_section_without_dedicated_menu_after_v3_reorder",
+        'S("truth_prediction_geometry", 6, "Truth / Prediction Geometry"' in contract_source
         and "Actual MFE×Safety Truth Geometry（只讀）" not in app_source
         and "Pred Safety↔Raw-MFE Daily rho" in app_source,
     )

@@ -11021,3 +11021,13 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Fingerprints**：`model.standard_sop` v3=`5a1c1377b207204a`；新增`model.standard_comparison` v1=`84aad5e28c5d2ce3`。其餘persistent report fingerprints不變。
 - **Scientific status**：MR-13AF仍是已選long-term research BASE；H/AH/AF歷史Gate與strategy evidence不改。此改造只讓後續比較口徑更公平且避免不必要重訓。
 
+## 2026-08-30 — Standard Model SOP v3 formal double-check failure closure
+
+- **Formal evidence**：程式基準=`test-branch-1_20260830_152347_c20590ec.zip`，SHA256=`5679ce1b81988d4f534124fdbcb5b6607bf4d6a09c260793e649fae0d94a6e4d`；使用者提供formal bundle=`to_chatgpt_bundle_20260830_152431_37400e66.zip`，SHA256=`4d1a519fd863f762f1c03d1e0a6fec698700d7d725ca049468d48bec8e8a7188`。Quick gate、chain checks、ML smoke均PASS；consistency=`3 FAIL`，meta-quality=`2 FAIL`。
+- **Root cause 1 / stale menu regression**：`validate_breakout_quality_reverse_conditional_mfe_ab_contract_case`仍要求舊`Target／模型比較 → comparison submenu [2]`與`_run_configured_continuous_ranker_model_gates()`；B308已明確授權`[1]→[4]`直接進config-driven Standard SOP multi-model comparison。正式runtime正確，synthetic expectation過期。Regression改驗`get_breakout_quality_standard_model_comparison_settings().menu_label`、`[4]`與`_run_configured_standard_model_comparison()`，且維持不得復活Conditional-MFE dedicated menu。
+- **Root cause 2 / stale section-number regression**：MR-13S synthetic仍硬編Truth / Prediction Geometry為Standard section `4`；B308 v3已授權Upside/Downside與Top-tail前移，Truth Geometry正式為section `6`。只更新validator到approved v3 contract，不改renderer/runtime metric。
+- **Root cause 3 / Checklist mechanical contract**：T425 summary row同列引用三個validator entry，`checklist_t_rows_use_single_test_entry`正確FAIL。依Checklist自身SSOT拆為T425=`validate_research_report_contract_freeze_case`、T426=`validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_case`、T427=`validate_breakout_quality_continuous_ranker_contract_case`，B308 coverage不變。
+- **Meta-quality attribution**：`coverage_synthetic_suite_runs_successfully`為上述3個synthetic FAIL的連鎖；同一formal run coverage line=`63.54% >= 55%`、branch=`57.18% >= 50%`、critical targets無不足，因此不調coverage threshold。`checklist_t_rows_use_single_test_entry`則由T425拆列直接修正。
+- **Independent closure**：三個原始failure targeted regressions=`14/14 PASS`、`14/14 PASS`、`3/3 PASS`；Standard v3 report contract=`14/14 PASS`、generic continuous ranker=`37/37 PASS`、MR-13AE=`7/7 PASS`、MR-13AF=`8/8 PASS`、Checklist meta summary=`PASS`、G ordering=`3/3 PASS`、summary sort=`5/5 PASS`、Registry↔Checklist=`1673/1673 PASS`、source `compileall` PASS。未執行`apps/run_bundle.py`或`apps/test_suite.py`。
+- **Scientific/runtime status**：本閉環只修formal regression與Checklist governance；Standard SOP v3 fingerprints、H/AF/AH comparison config、report REUSE/BUILD semantics、MR-13AF BASE與production MR-13E均不變。
+
