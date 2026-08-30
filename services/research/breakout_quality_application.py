@@ -1136,13 +1136,101 @@ def _render_model_comparison_contract_table(
     )
 
 
+def _standard_model_sop_completeness_issues(payload: dict) -> tuple[str, ...]:
+    """Return missing common Standard-SOP evidence required by [1][1]/[1][4].
+
+    A reusable model/report must contain the current common evidence itself.
+    Renderers may upgrade presentation from persisted values, but they must not
+    silently omit a model or substitute ``-`` for missing common evidence.
+    """
+
+    view = _model_sop_view(dict(payload or {}))
+    if not view:
+        return ("Standard SOP payload缺失",)
+
+    issues: list[str] = []
+
+    def missing_value(value) -> bool:
+        return value is None or (isinstance(value, str) and value.strip() in {"", "-"})
+
+    def check_rows(
+        section_id: str,
+        table_id: str,
+        rows: list[dict],
+        *,
+        structural_key: str,
+        expected_values: tuple[str, ...],
+    ) -> None:
+        indexed = {str(row.get(structural_key) or "").strip(): dict(row) for row in rows}
+        table = table_contract("model.standard_sop", section_id, table_id)
+        metric_columns = tuple(
+            column for column in table.columns if column.key != structural_key
+        )
+        for expected in expected_values:
+            row = indexed.get(expected)
+            if row is None:
+                issues.append(f"{section_id}:{expected} row缺失")
+                continue
+            for column in metric_columns:
+                if missing_value(row.get(column.key)):
+                    issues.append(f"{section_id}:{expected}:{column.key}缺失")
+
+    check_rows(
+        "learnability", "learnability", list(view.get("learnability") or []),
+        structural_key="split",
+        expected_values=("validation", "oos", "breakout_candidate_oos"),
+    )
+    check_rows(
+        "generalization", "generalization", list(view.get("generalization") or []),
+        structural_key="comparison",
+        expected_values=("Validation → OOS", "OOS → Breakout slice"),
+    )
+    check_rows(
+        "upside_downside_alignment", "upside_downside_alignment",
+        list(view.get("upside_downside_alignment") or []),
+        structural_key="split",
+        expected_values=("Validation", "Forward OOS", "Breakout slice"),
+    )
+    check_rows(
+        "top_tail_economic_quality", "top_tail_economic_quality",
+        list(view.get("top_tail_economic_quality") or []),
+        structural_key="split",
+        expected_values=("Validation", "Forward OOS", "Breakout slice"),
+    )
+
+    ranking = dict(view.get("ranking") or {})
+    check_rows(
+        "ranking_boundary", "ranking_boundary", list(ranking.get("rows") or []),
+        structural_key="split",
+        expected_values=("validation", "oos", "breakout_candidate_oos"),
+    )
+
+    evidence = {str(label): str(status).upper() for label, status in list(view.get("evidence") or [])}
+    for label in (
+        "Learnability",
+        "Generalization",
+        "Upside / Downside Alignment",
+        "Top-tail Economic Quality",
+        "Breakout application slice",
+        "Ranking / Boundary",
+    ):
+        if evidence.get(label) != "AVAILABLE":
+            issues.append(f"evidence:{label}={evidence.get(label, 'MISSING')}")
+
+    return tuple(dict.fromkeys(issues))
+
+
 def _standard_model_comparison_views(models: list[dict]) -> list[dict]:
     views = []
     for item in models:
         payload = dict(item.get("payload") or {})
+        issues = _standard_model_sop_completeness_issues(payload)
+        if issues:
+            raise ValueError(
+                f"模型比較Standard SOP evidence不完整: {item.get('model_id')} | "
+                + "; ".join(issues)
+            )
         view = _model_sop_view(payload)
-        if not view:
-            raise ValueError(f"模型比較缺少Standard SOP payload: {item.get('model_id')}")
         views.append({**item, "view": view})
     return views
 
@@ -1200,9 +1288,10 @@ def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
 def _render_standard_model_comparison(models: list[dict], *, target: str) -> str:
     """Render the common Standard SOP for multiple models.
 
-    [1][4] never renders Validation rows. For each scope-bearing Standard
-    section, one numbered section title is followed by two independent tables:
-    Forward OOS first, then Breakout slice. Model-specific extensions are not
+    [1][4] does not render Validation as a raw split table. For each scope-bearing
+    Standard section, one numbered section title is followed by Forward OOS and
+    Breakout slice tables. Generalization uses two independent transition tables:
+    Validation → OOS and OOS → Breakout slice. Model-specific extensions are not
     part of this cross-model scorecard.
     """
 
@@ -1217,9 +1306,11 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
         return f"## {markdown_tone(title, 'blue', bold=True)}"
 
     def scope_heading(label: str) -> str:
+        # Scope / transition labels are secondary headings, not status or section
+        # titles. Keep them uncolored in both console and Markdown.
         if target == "console":
-            return paint(label, "cyan", enabled=color, bold=True)
-        return f"### {markdown_tone(label, 'blue', bold=True)}"
+            return str(label)
+        return f"### {label}"
 
     def split_matches(row: dict, aliases: set[str]) -> bool:
         normalized = str(row.get("split") or "").strip().lower()
@@ -1253,23 +1344,28 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
     # 1. Learnability
     append_scoped_section("learnability", "learnability", list(rows.get("learnability") or []))
 
-    # 2. Generalization -- [1][4] intentionally hides Validation→OOS.
-    generalization_rows = [
-        dict(row)
-        for row in list(rows.get("generalization") or [])
-        if "validation" not in str(row.get("comparison") or "").lower()
-    ]
-    if generalization_rows:
-        parts.extend([
-            section("generalization"),
-            _render_model_comparison_contract_table(
+    # 2. Generalization. One section title, then two independent transition tables.
+    generalization_rows = [dict(row) for row in list(rows.get("generalization") or [])]
+    transition_specs = ("Validation → OOS", "OOS → Breakout slice")
+    scoped_generalization = []
+    for transition_label in transition_specs:
+        table_rows = [
+            dict(row) for row in generalization_rows
+            if str(row.get("comparison") or "").strip() == transition_label
+        ]
+        if table_rows:
+            scoped_generalization.append((transition_label, table_rows))
+    if scoped_generalization:
+        parts.append(section("generalization"))
+        for transition_label, table_rows in scoped_generalization:
+            parts.append(scope_heading(transition_label))
+            parts.append(_render_model_comparison_contract_table(
                 "generalization",
                 "generalization",
-                generalization_rows,
+                table_rows,
                 target=target,
                 best_worst_style=True,
-            ),
-        ])
+            ))
 
     # 3. Upside / Downside Alignment
     append_scoped_section(
@@ -3382,6 +3478,12 @@ def _load_reusable_continuous_forward_contract(settings):
         return None, (
             "training seed不一致: "
             f"artifact={int(contract.seed)}, configured={int(settings.seed)}"
+        )
+    completeness_issues = _standard_model_sop_completeness_issues(dict(contract.report or {}))
+    if completeness_issues:
+        return None, (
+            "Standard SOP共通evidence不完整，需由canonical producer補建: "
+            + "; ".join(completeness_issues[:8])
         )
     return contract, None
 

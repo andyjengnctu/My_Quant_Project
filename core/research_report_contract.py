@@ -149,7 +149,11 @@ def _model_comparison_table(table: ReportTableContract) -> ReportTableContract:
     actual metric columns continue to come directly from the Standard SOP.
     """
 
-    metric_columns = tuple(column for column in table.columns if column.key != "split")
+    # Split / Comparison are structural labels in [1][4]. Each scope/transition
+    # is rendered as its own plain-text subheading above an independent table.
+    metric_columns = tuple(
+        column for column in table.columns if column.key not in {"split", "comparison"}
+    )
     return T(
         table.table_id,
         (C("model", "Model", alignment="left"), *metric_columns),
@@ -171,7 +175,7 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=3,
+    version=4,
     role="persistent_multi_model_comparison_oos_breakout",
     menu_path=("Research", "模型訓練／驗證", "模型比較（Standard SOP）"),
     sections=_model_comparison_sections(),
@@ -460,7 +464,7 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "7bf0ef0427519507",
+    "model.standard_comparison": "7ca43620ac4a01e0",
     "model.standard_sop": "9ec49fe2aaf3a2d6",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",

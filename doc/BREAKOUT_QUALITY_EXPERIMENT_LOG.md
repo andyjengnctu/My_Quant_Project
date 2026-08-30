@@ -11052,3 +11052,10 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Persistent contracts**：`model.standard_sop` v5 approved fingerprint=`9ec49fe2aaf3a2d6`；`model.standard_comparison` v3 approved fingerprint=`7bf0ef0427519507`。其餘persistent report fingerprints不變。
 - **Runtime/scientific boundary**：H/AF/AH current comparison set、合法report REUSE／缺失才BUILD、MR-13AF research BASE與production identity均不變。
 
+## 2026-08-30 — Standard Model Comparison v4 complete-evidence / Generalization closure
+
+- **使用者授權修正**：`[1]→[4]` 的Standard SOP 2不能只顯示`OOS → Breakout slice`；同一`2. Generalization`主標題下固定分成`Validation → OOS`與`OOS → Breakout slice`兩張獨立比較表。兩個transition以及其他section的`Forward OOS`／`Breakout slice`只作無色次標題；淡藍只保留Standard SOP section主標題。
+- **configured model completeness**：H／AF／AH等comparison model不得因舊report缺後來加入的共通evidence而在SOP 3/4等section靜默消失。canonical Forward model/report REUSE除了scientific identity/seed合法外，新增current Standard SOP 1～6共通evidence完整性檢查；任一required row/metric缺失即判定不可REUSE並由canonical producer自動BUILD/REFRESH。補建後仍缺失則fail-fast，不產生殘缺comparison。
+- **comparison schema**：`model.standard_sop`維持v5與approved fingerprint=`9ec49fe2aaf3a2d6`；`model.standard_comparison`升v4，`Split`與Generalization的`Comparison`皆視為renderer structural subtitle，不再重複進table columns；approved fingerprint=`7ca43620ac4a01e0`。
+- **科學邊界**：此輪只修persistent report/preparation/render contract；不改H/AF/AH target、architecture、loss、seed、fit semantics、current research BASE或production identity。
+

@@ -2876,7 +2876,7 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
     check_true(
         "standard_multi_model_comparison_schema_is_derived_from_standard_sop",
-        int(MODEL_STANDARD_COMPARISON.version) == 3
+        int(MODEL_STANDARD_COMPARISON.version) == 4
         and [(section.number, section.title) for section in MODEL_STANDARD_COMPARISON.sections]
         == [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         and all(
@@ -2886,7 +2886,7 @@ def validate_research_report_contract_freeze_case(_base_params):
                 *tuple(
                     column.label
                     for column in standard_table.columns
-                    if column.key != "split"
+                    if column.key not in {"split", "comparison"}
                 ),
             )
             for standard_section, comparison_section in zip(
@@ -3177,7 +3177,6 @@ def validate_research_report_contract_freeze_case(_base_params):
     check_true(
         "multi_model_comparison_uses_single_section_title_with_oos_then_breakout_tables",
         all(model in comparison_text for model in ("MODEL-A", "MODEL-B", "MODEL-C"))
-        and "Validation" not in comparison_text
         and comparison_text.count("模型比較 SOP｜1. Learnability") == 1
         and "模型比較 SOP｜1. Learnability｜Forward OOS" not in comparison_text
         and "模型比較 SOP｜1. Learnability｜Breakout slice" not in comparison_text
@@ -3186,6 +3185,9 @@ def validate_research_report_contract_freeze_case(_base_params):
         and comparison_text.count("模型比較 SOP｜5. Ranking / Boundary") == 1
         and "Forward OOS" in comparison_text
         and "Breakout slice" in comparison_text
+        and "Validation → OOS" in comparison_text
+        and "OOS → Breakout slice" in comparison_text
+        and "Comparison" not in comparison_text
         and "Target→Safety rho" in comparison_text
         and "Top10 Low-Adverse" in comparison_text
         and "Top-K Lift" in comparison_text
@@ -3197,6 +3199,15 @@ def validate_research_report_contract_freeze_case(_base_params):
             < comparison_text.find("模型比較 SOP｜4. Top-tail Economic Quality")
             < comparison_text.find("模型比較 SOP｜5. Ranking / Boundary")
             < comparison_text.find("模型比較 SOP｜6. Evidence Coverage"),
+    )
+
+    section3 = comparison_text.split("模型比較 SOP｜3. Upside / Downside Alignment", 1)[1].split("模型比較 SOP｜4. Top-tail Economic Quality", 1)[0]
+    section4 = comparison_text.split("模型比較 SOP｜4. Top-tail Economic Quality", 1)[1].split("模型比較 SOP｜5. Ranking / Boundary", 1)[0]
+    check_true(
+        "multi_model_comparison_never_silently_drops_a_configured_model_from_common_sections",
+        all(section3.count(model) == 2 for model in ("MODEL-A", "MODEL-B", "MODEL-C"))
+        and all(section4.count(model) == 2 for model in ("MODEL-A", "MODEL-B", "MODEL-C")),
+        detail=f"section3={section3}; section4={section4}",
     )
 
     comparison_payloads = []
@@ -3212,12 +3223,17 @@ def validate_research_report_contract_freeze_case(_base_params):
         target="markdown",
     )
     check_true(
-        "multi_model_comparison_uses_best_green_worst_red_blue_titles_and_existing_status_palette",
+        "multi_model_comparison_uses_best_green_worst_red_blue_titles_plain_subtitles_and_existing_status_palette",
         "#42A5F5" in comparison_markdown
         and "#188038" in comparison_markdown
         and "#C62828" in comparison_markdown
-        and "Validation" not in comparison_markdown
-        and "| Model | Groups | Daily rho |" in comparison_markdown,
+        and "### Forward OOS" in comparison_markdown
+        and "### Breakout slice" in comparison_markdown
+        and "### Validation → OOS" in comparison_markdown
+        and "### OOS → Breakout slice" in comparison_markdown
+        and "### <span" not in comparison_markdown
+        and "| Model | Groups | Daily rho |" in comparison_markdown
+        and "| Model | Δ Daily rho | Δ Pair | Δ Top-Bottom |" in comparison_markdown,
     )
 
     from services.breakout_quality.train_daily_ranker import _render_markdown as _render_detailed_model_markdown
@@ -3269,9 +3285,9 @@ def validate_research_report_contract_freeze_case(_base_params):
         detail=str(captured),
     )
 
-    # [1][1]: validated model/manifest/report identity is enough for reporting reuse;
-    # missing OOS score CSV must not force model retraining.
-    reusable_contract = SimpleNamespace(seed=42)
+    # [1][1]: validated model/manifest/report plus complete current Standard-SOP
+    # evidence is reusable; a missing OOS score CSV alone must not force retraining.
+    reusable_contract = SimpleNamespace(seed=42, report=control_payload)
     settings = SimpleNamespace(
         filter_id="breakout_quality_v1",
         model_architecture="inception_time_v1",
@@ -3300,7 +3316,22 @@ def validate_research_report_contract_freeze_case(_base_params):
         code == 0 and contract is reusable_contract and action == "REUSE",
     )
 
-    # Missing/stale artifact contract automatically takes canonical BUILD path.
+    incomplete_payload = json.loads(json.dumps(control_payload))
+    incomplete_payload.pop("upside_downside_alignment_evaluation", None)
+    incomplete_contract = SimpleNamespace(seed=42, report=incomplete_payload)
+    with patch.object(
+        app, "load_continuous_ranker_oos_contract", return_value=incomplete_contract
+    ):
+        loaded, reason = app._load_reusable_continuous_forward_contract(settings)
+    check_true(
+        "standard_sop_missing_common_evidence_is_not_reusable_and_requires_canonical_rebuild",
+        loaded is None
+        and "Standard SOP共通evidence不完整" in str(reason)
+        and "upside_downside_alignment" in str(reason),
+        detail=str(reason),
+    )
+
+    # Missing/stale/incomplete artifact contract automatically takes canonical BUILD path.
     plan = SimpleNamespace(blocked=False)
     with patch.object(
         app, "_load_reusable_continuous_forward_contract",
