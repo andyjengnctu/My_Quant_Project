@@ -16,7 +16,7 @@ from filters.breakout_quality.strategy_compare_contracts import (
     COMPARISON_MODE_SCORE_RANKING,
 )
 from filters.breakout_quality.strategy_compare_runtime import (
-    strategy_comparison_execution_pairs,
+    resolve_strategy_comparison_arm_param_policy,
 )
 
 
@@ -379,28 +379,40 @@ def load_strategy_arm_replay_sidecars(
             raise AuditSourceBlockedError(
                 f"{source.profile_id}/{arm_key} Strategy Compare缺少pair_execution evidence"
             )
-        paired_anchor: tuple[str, Mapping[str, Any] | None] | None = None
-        for _param_source, _rule_policy, off_arm, on_arm in (
-            strategy_comparison_execution_pairs(source.settings)
-        ):
-            if off_arm.arm_id != arm_key:
+        baseline_param_policy = resolve_strategy_comparison_arm_param_policy(
+            source.settings, arm
+        )
+        canonical_anchor_ids: list[str] = []
+        paired_anchor: tuple[str, Mapping[str, Any]] | None = None
+        for candidate_arm in source.settings.arms.values():
+            if not candidate_arm.dl_enabled:
                 continue
-            candidate_execution = pair_execution.get(on_arm.arm_id)
-            paired_anchor = (
-                on_arm.arm_id,
-                candidate_execution if isinstance(candidate_execution, Mapping) else None,
-            )
-            break
-        if paired_anchor is None:
+            if candidate_arm.param_source != arm.param_source:
+                continue
+            if candidate_arm.rule_policy != arm.rule_policy:
+                continue
+            if (
+                resolve_strategy_comparison_arm_param_policy(
+                    source.settings, candidate_arm
+                )
+                != baseline_param_policy
+            ):
+                continue
+            canonical_anchor_ids.append(candidate_arm.arm_id)
+            candidate_execution = pair_execution.get(candidate_arm.arm_id)
+            if isinstance(candidate_execution, Mapping):
+                paired_anchor = (candidate_arm.arm_id, candidate_execution)
+                break
+        if not canonical_anchor_ids:
             raise AuditSourceBlockedError(
                 f"{source.profile_id}/{arm_key} 不屬於任何canonical Strategy Compare execution group"
             )
-        execution_source_arm_id, execution = paired_anchor
-        if not isinstance(execution, Mapping):
+        if paired_anchor is None:
             raise AuditSourceBlockedError(
-                f"{source.profile_id}/{arm_key} canonical shared-baseline anchor "
-                f"{execution_source_arm_id} 缺少pair_execution evidence"
+                f"{source.profile_id}/{arm_key} canonical shared-baseline anchors "
+                f"{canonical_anchor_ids} 均缺少pair_execution evidence"
             )
+        execution_source_arm_id, execution = paired_anchor
         paired_baseline = True
 
     def _resolve_pair_dir(

@@ -3285,9 +3285,10 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
     ).read_text(encoding="utf-8")
     check_true(
         "reverse_conditional_profiles_share_config_driven_standard_model_comparison_route_without_dedicated_menu",
-        'get_breakout_quality_standard_model_comparison_settings().menu_label' in app_source
-        and 'render_menu_item(4, comparison_label)' in app_source
-        and 'if choice == "4":' in app_source
+        'comparison = get_breakout_quality_standard_model_comparison_settings()' in app_source
+        and 'for model_id, profile_name in comparison.model_profiles:' in app_source
+        and 'render_menu_item(3, "Forward OOS 模型比較")' in app_source
+        and 'if choice == "3":' in app_source
         and '_run_configured_standard_model_comparison(program_name)' in app_source
         and 'Conditional-MFE Single／Duo Forward Model Gate' not in app_source,
     )

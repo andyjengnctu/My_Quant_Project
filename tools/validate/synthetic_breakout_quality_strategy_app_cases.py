@@ -1222,10 +1222,13 @@ def validate_mr13z_c75_conversion_contract_case(_base_params):
 
     from config.breakout_quality import (
         DAILY_UNIVERSAL_SAFETY_RAW_MFE_JOINT_MIN_PATCH_TRANSFORMER_ATTN_POOL_MLP_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        get_breakout_quality_model_test_settings,
         get_continuous_ranker_research_spec,
     )
     from config.strategy_compare import (
+        STRATEGY_COMPARE_ARMS,
         STRATEGY_COMPARE_SCHEMA_VERSION,
+        STRATEGY_COMPARE_SUITES,
         STRATEGY_DL_SOURCES,
         get_strategy_compare_suite,
     )
@@ -1294,10 +1297,38 @@ def validate_mr13z_c75_conversion_contract_case(_base_params):
     )
 
     suite = get_strategy_compare_suite("extending_current")
+    selected_profiles = {
+        str(profile)
+        for _model_id, profile in get_breakout_quality_model_test_settings().model_profiles
+    }
+    declared_current_arm_ids = tuple(
+        str(value) for value in tuple(STRATEGY_COMPARE_SUITES["extending_current"].get("arm_ids") or ())
+    )
+    expected_current_arm_ids = tuple(
+        arm_id
+        for arm_id in declared_current_arm_ids
+        if (
+            not bool(dict(STRATEGY_COMPARE_ARMS[arm_id]).get("dl_enabled"))
+            or str(
+                dict(
+                    STRATEGY_DL_SOURCES.get(
+                        str(dict(STRATEGY_COMPARE_ARMS[arm_id]).get("dl_id") or "")
+                    )
+                    or {}
+                ).get("experiment_profile")
+                or ""
+            )
+            in selected_profiles
+        )
+    )
     check(
-        "current_suite_schema66_retires_c75_but_keeps_history",
-        (66, 0, 8),
-        (int(STRATEGY_COMPARE_SCHEMA_VERSION), tuple(suite.get("arm_ids") or ()).count("C75"), len(tuple(suite.get("arm_ids") or ()))),
+        "current_suite_schema66_retires_c75_and_derives_membership_from_shared_model_list",
+        (66, 0, expected_current_arm_ids),
+        (
+            int(STRATEGY_COMPARE_SCHEMA_VERSION),
+            tuple(suite.get("arm_ids") or ()).count("C75"),
+            tuple(suite.get("arm_ids") or ()),
+        ),
     )
     check_true(
         "c75_primary_and_secondary_contrasts_are_historical",
