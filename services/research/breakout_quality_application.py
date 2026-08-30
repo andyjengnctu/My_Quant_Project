@@ -4855,11 +4855,12 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
         source_reports = []
         built = False
         for seed_index, (seed, payload, path, reason) in enumerate(seed_states, start=1):
+            seed_text = _seed_progress_text(seed, seed_index, len(seeds))
             if payload is None:
                 print(
                     styled_workflow_status("[BUILD/REFRESH]")
                     + " " + _model_identity_text(model_id)
-                    + " | " + _seed_progress_text(seed, seed_index, len(seeds))
+                    + " | " + seed_text
                     + f" | {reason}"
                 )
                 code = (
@@ -4876,7 +4877,20 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
                     raise RuntimeError(
                         f"{model_id} robustness seed={seed}補建後Standard SOP仍不可用: {reason}"
                     )
+                print(
+                    styled_workflow_status("[DONE]")
+                    + " " + _model_identity_text(model_id)
+                    + " | " + seed_text
+                    + f" | {mode_label} Standard SOP READY"
+                )
                 built = True
+            else:
+                print(
+                    styled_workflow_status("[REUSE]")
+                    + " " + _model_identity_text(model_id)
+                    + " | " + seed_text
+                    + f" | {mode_label} Standard SOP READY"
+                )
             seed_payloads.append(dict(payload["standard_model_sop"]))
             source_reports.append(Path(path))
         aggregated = aggregate_standard_model_sop_robustness(seed_payloads, seeds=seeds)

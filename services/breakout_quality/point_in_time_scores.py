@@ -2460,6 +2460,8 @@ def _run_point_in_time_scores(
         migrated = False
         rescored_checkpoint = False
         fitting_checkpoint_reuse = False
+        forward_checkpoint_verified = False
+        forward_checkpoint_imported = False
         if reused is None and bool(args.resume):
             reused = _rescore_fold_from_compatible_checkpoint(
                 fold_dir=fold_dir,
@@ -2488,8 +2490,11 @@ def _run_point_in_time_scores(
                 torch_module=torch,
                 execution_plan=plan,
             )
-            if imported is not None and not bool(imported.get("reused_existing_cache")):
-                forward_checkpoint_import_count += 1
+            if imported is not None:
+                forward_checkpoint_verified = True
+                forward_checkpoint_imported = not bool(imported.get("reused_existing_cache"))
+                if forward_checkpoint_imported:
+                    forward_checkpoint_import_count += 1
         if (
             reused is None
             and bool(args.resume)
@@ -2529,15 +2534,35 @@ def _run_point_in_time_scores(
                 migrated_fold_count += 1
             else:
                 reused_fold_count += 1
-            if not compact_console:
-                if fitting_checkpoint_reuse:
-                    reuse_label = "重用fitting identity checkpoint並依目前fold重評score"
-                elif rescored_checkpoint:
-                    reuse_label = "重用既有checkpoint並重評score universe"
-                elif migrated:
-                    reuse_label = "遷移舊fold並重用"
+            if fitting_checkpoint_reuse:
+                if forward_checkpoint_verified:
+                    reuse_source = (
+                        "Forward OOS fitting checkpoint → shared cache"
+                        if forward_checkpoint_imported
+                        else "shared fitting cache（Forward OOS identity verified）"
+                    )
                 else:
-                    reuse_label = "重用既有 fold 工件"
+                    reuse_source = "shared fitting cache"
+                reuse_label = "重用fitting identity checkpoint並依目前fold重評score"
+            elif rescored_checkpoint:
+                reuse_source = "Rolling fold checkpoint"
+                reuse_label = "重用既有checkpoint並重評score universe"
+            elif migrated:
+                reuse_source = "compatible legacy fold"
+                reuse_label = "遷移舊fold並重用"
+            else:
+                reuse_source = "Rolling fold artifact"
+                reuse_label = "重用既有 fold 工件"
+            if compact_console:
+                fold_progress.print_line(
+                    f"PIT fold {fold_index}/{len(folds)} | "
+                    + paint(str(fold["fold_id"]), "cyan", enabled=color_enabled, bold=True)
+                    + " | "
+                    + paint("REUSE", "green", enabled=color_enabled, bold=True)
+                    + f" | source={reuse_source}"
+                    + f" | score={len(frame):,}"
+                )
+            else:
                 print(
                     "\n"
                     + paint(str(fold["fold_id"]), "cyan", enabled=color_enabled, bold=True)
@@ -2548,6 +2573,7 @@ def _run_point_in_time_scores(
                         enabled=color_enabled,
                         bold=True,
                     )
+                    + f" | source={reuse_source}"
                 )
         else:
             if bool(args.checkpoint_only):
@@ -2789,6 +2815,7 @@ def _run_point_in_time_scores(
             + f" | 遷移重用={migrated_fold_count}"
             + f" | checkpoint重評={rescored_checkpoint_fold_count}"
             + f" | fitting identity checkpoint={fitting_checkpoint_reuse_fold_count}"
+            + f" | Forward import={forward_checkpoint_import_count}"
             + f" | 新建={built_fold_count}"
             + f" | groups={validation['scored_group_count']:,}"
             + f" | coverage={validation['coverage_rate']:.2%}"

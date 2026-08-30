@@ -532,6 +532,20 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         publish_call < post_sync_reload < aggregate_append,
     )
 
+    reuse_branch_start = pit_source.index("if reused is not None:", loop_anchor)
+    train_branch_start = pit_source.index("else:\n            if bool(args.checkpoint_only):", reuse_branch_start)
+    reuse_branch_source = pit_source[reuse_branch_start:train_branch_start]
+    check_true(
+        "pit_compact_console_reports_every_reused_fold_with_source_and_progress",
+        'fold_progress.print_line(' in reuse_branch_source
+        and 'paint("REUSE", "green"' in reuse_branch_source
+        and 'f"PIT fold {fold_index}/{len(folds)} | "' in reuse_branch_source
+        and 'reuse_source = "Rolling fold artifact"' in reuse_branch_source
+        and 'reuse_source = "Rolling fold checkpoint"' in reuse_branch_source
+        and 'reuse_source = "shared fitting cache"' in reuse_branch_source
+        and 'Forward OOS fitting checkpoint → shared cache' in reuse_branch_source,
+    )
+
     oos_2023 = {
         **expected_contract,
         "model_information_cutoff": "2022-12-31",

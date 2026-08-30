@@ -1153,6 +1153,14 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and 'checkpoint selected_epoch mismatch' not in pit_score_source,
     )
 
+    check_true(
+        "model_robustness_restart_reports_ready_seed_reuse_and_completed_seed_done",
+        'seed_text = _seed_progress_text(seed, seed_index, len(seeds))' in app_source
+        and 'styled_workflow_status("[REUSE]")' in app_source
+        and 'styled_workflow_status("[DONE]")' in app_source
+        and 'f" | {mode_label} Standard SOP READY"' in app_source,
+    )
+
 
     shared_training = breakout_quality_config.get_breakout_quality_model_research_settings()
     shared_test = breakout_quality_config.get_breakout_quality_model_test_settings().model_profiles
