@@ -2863,7 +2863,7 @@ def validate_research_report_contract_freeze_case(_base_params):
         detail=str(errors),
     )
     check_true(
-        "standard_model_sop_v3_section_order_is_user_approved",
+        "standard_model_sop_v4_section_order_is_user_approved",
         [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         == [
             (1, "Learnability"),
@@ -2878,11 +2878,19 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
     check_true(
         "standard_multi_model_comparison_schema_is_derived_from_standard_sop",
-        int(MODEL_STANDARD_COMPARISON.version) == 1
+        int(MODEL_STANDARD_COMPARISON.version) == 2
         and [(section.number, section.title) for section in MODEL_STANDARD_COMPARISON.sections]
         == [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         and all(
-            comparison_table.headers == ("Model", *standard_table.headers)
+            comparison_table.headers
+            == (
+                "Model",
+                *tuple(
+                    column.label
+                    for column in standard_table.columns
+                    if column.key != "split"
+                ),
+            )
             for standard_section, comparison_section in zip(
                 MODEL_STANDARD_SOP.sections, MODEL_STANDARD_COMPARISON.sections
             )
@@ -2903,7 +2911,7 @@ def validate_research_report_contract_freeze_case(_base_params):
         "model.standard_sop", "ranking_boundary", "ranking_boundary"
     ).headers
     check_true(
-        "standard_sop_v3_common_columns_match_user_approved_semantics",
+        "standard_sop_v4_common_columns_match_user_approved_semantics",
         "Top-Bottom Target" in learn_headers
         and alignment_headers == (
             "Split", "Target→MFE rho", "Target→Safety rho", "Score→MFE rho", "Score→Safety rho"
@@ -3104,9 +3112,11 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "Δ HM/HS Pair" not in standard_lines["h_only"],
     )
     check_true(
-        "cross_profile_standard_v3_headers_and_section_order_are_invariant",
+        "cross_profile_standard_v4_headers_and_section_order_are_invariant",
         all(
             "Top-Bottom Target" in text
+            and "Validation → OOS" in text
+            and "Primary score" not in text
             and "標準模型 SOP｜4. Upside / Downside Alignment" in text
             and "標準模型 SOP｜5. Top-tail Economic Quality" in text
             and "標準模型 SOP｜7. Ranking / Boundary" in text
@@ -3136,14 +3146,66 @@ def validate_research_report_contract_freeze_case(_base_params):
         target="console",
     )
     check_true(
-        "multi_model_comparison_uses_same_standard_v3_schema_for_three_models",
+        "multi_model_comparison_uses_standard_v4_oos_breakout_view_for_three_models",
         all(model in comparison_text for model in ("MODEL-A", "MODEL-B", "MODEL-C"))
-        and "模型比較 SOP｜4. Upside / Downside Alignment" in comparison_text
+        and "Validation" not in comparison_text
+        and "模型比較 SOP｜1. Learnability｜Forward OOS" in comparison_text
+        and "模型比較 SOP｜1. Learnability｜Breakout slice" in comparison_text
+        and "模型比較 SOP｜4. Upside / Downside Alignment｜Forward OOS" in comparison_text
+        and "模型比較 SOP｜4. Upside / Downside Alignment｜Breakout slice" in comparison_text
         and "Target→Safety rho" in comparison_text
         and "Top10 Low-Adverse" in comparison_text
         and "Top-K Lift" in comparison_text
         and "競爭日 / Pool日" in comparison_text
         and "模型比較 SOP｜8. Evidence Coverage" in comparison_text,
+    )
+
+    comparison_payloads = []
+    for idx, model_id in enumerate(("MODEL-LOW", "MODEL-MID", "MODEL-HIGH")):
+        candidate = json.loads(json.dumps(control_payload))
+        bump = idx * 0.01
+        for split_key in ("oos", "breakout_candidate_oos"):
+            candidate["split_metrics"][split_key]["mean_daily_spearman"] += bump
+            candidate["split_metrics"][split_key]["global_spearman_vs_raw_target"] += bump
+        comparison_payloads.append({"model_id": model_id, "payload": candidate})
+    comparison_markdown = app._render_standard_model_comparison(
+        comparison_payloads,
+        target="markdown",
+    )
+    check_true(
+        "multi_model_comparison_uses_best_green_worst_red_blue_titles_and_existing_status_palette",
+        "#42A5F5" in comparison_markdown
+        and "#188038" in comparison_markdown
+        and "#C62828" in comparison_markdown
+        and "Validation" not in comparison_markdown
+        and "| Model | Groups | Daily rho |" in comparison_markdown,
+    )
+
+    from services.breakout_quality.train_daily_ranker import _render_markdown as _render_detailed_model_markdown
+    detailed_payload = {
+        "experiment": "synthetic",
+        "experiment_profile": "synthetic",
+        "model_research_id": "MODEL-SYNTHETIC",
+        "training": {
+            "sample_scope": "daily_universal",
+            "target": "synthetic_target",
+            "selected_epoch": 1,
+            "objective": "daily_pairwise_ranking",
+        },
+        "score_semantic_id": "synthetic_score",
+        "source_dataset": {},
+        "target_manifest": {},
+        "split_metrics": {
+            "validation": dict(base_metrics["validation"]),
+            "oos": dict(base_metrics["oos"]),
+        },
+    }
+    detailed_markdown = _render_detailed_model_markdown(detailed_payload)
+    check_true(
+        "detailed_standard_model_report_uses_validation_to_oos_primary_generalization_label",
+        "Validation → OOS" in detailed_markdown
+        and "Validation → Forward OOS" not in detailed_markdown
+        and "Primary score" not in detailed_markdown,
     )
 
     # Standard SOP must not inject MR-13M Pred-Safety as a reporting-only dependency.

@@ -11031,3 +11031,13 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Independent closure**：三個原始failure targeted regressions=`14/14 PASS`、`14/14 PASS`、`3/3 PASS`；Standard v3 report contract=`14/14 PASS`、generic continuous ranker=`37/37 PASS`、MR-13AE=`7/7 PASS`、MR-13AF=`8/8 PASS`、Checklist meta summary=`PASS`、G ordering=`3/3 PASS`、summary sort=`5/5 PASS`、Registry↔Checklist=`1673/1673 PASS`、source `compileall` PASS。未執行`apps/run_bundle.py`或`apps/test_suite.py`。
 - **Scientific/runtime status**：本閉環只修formal regression與Checklist governance；Standard SOP v3 fingerprints、H/AF/AH comparison config、report REUSE/BUILD semantics、MR-13AF BASE與production MR-13E均不變。
 
+
+## 2026-08-30 — Standard Model SOP v4 display consistency / [1][4] OOS-Breakout split comparison
+
+- **Authorization**：使用者明確要求常駐Model SOP顯示契約調整；不改任何MR scientific identity、target、architecture、loss、seed、artifact identity或production promotion。
+- **[1]→[1]**：Generalization主列由`Primary score`改為`Validation → OOS`，其餘Standard SOP sections與metric定義不變。
+- **Color contract**：跨模型comparison所有具有canonical `higher/lower` preference的metric統一使用project-wide best/worst palette：同欄最佳值綠色、最差值紅色、tie/不可比較維持中性；section title固定淡藍；Evidence與REUSE/BUILD/READY/BLOCKED等status繼續使用既有workflow/status色彩規則，不以數值正負取代metric direction。
+- **[1]→[4] comparison v2**：不顯示任何Validation row。Learnability、Multi-head、Upside/Downside、Top-tail、Ranking及可用Truth Geometry均固定拆成`Forward OOS`與`Breakout slice`兩張獨立比較表；因scope已由table title固定，comparison schema省略冗餘`Split`欄。Generalization只保留`OOS → Breakout slice`，Evidence Coverage仍固定最後。
+- **Top-tail direction**：四象限display仍為`rate% (enrichment×)`；comparison color依經濟方向固定`HM/HS=higher`、`HM/LS=lower`、`LM/HS=lower`、`LM/LS=lower`，不由字串正負猜測。Top10 Low-Adverse持續higher-is-better。
+- **Persistent contracts**：`model.standard_sop`升v4，approved fingerprint=`72cc375fdf115504`；`model.standard_comparison`升v2，approved fingerprint=`71d1789521ca6d79`。其餘persistent report fingerprints不變。
+- **Runtime boundary**：H/AF/AH current comparison set與`REUSE if canonical model+manifest+report READY / BUILD only if missing or stale`行為完全不變。

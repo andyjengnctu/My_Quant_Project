@@ -71,6 +71,7 @@ from core.report_style import (
     SIGNAL_NEUTRAL,
     SIGNAL_POSITIVE,
     SIGNAL_WARNING,
+    best_worst_signals,
     markdown_tone,
     signal_for_delta,
     styled_signal,
@@ -491,7 +492,7 @@ def _model_sop_view(payload: dict) -> dict:
 
     if val and oos:
         generalization_rows.append({
-            "comparison": "Primary score",
+            "comparison": "Validation → OOS",
             "delta_daily_rho": delta(val.get("mean_daily_spearman"), oos.get("mean_daily_spearman")),
             "delta_pair": None if delta(val.get("pairwise_concordance"), oos.get("pairwise_concordance")) is None else delta(val.get("pairwise_concordance"), oos.get("pairwise_concordance")) * 100.0,
             "delta_top_bottom": delta(top_bottom(val), top_bottom(oos)),
@@ -647,6 +648,10 @@ def _model_sop_view(payload: dict) -> dict:
             "score_to_safety_daily_spearman": row.get("score_to_low_adverse_daily_spearman"),
         })
         adverse = top.get("adverse_r_mean")
+        quadrant_values = {
+            key: quadrant_metrics(row, top, key)[0]
+            for key in ("hmhs", "hmls", "lmhs", "lmls")
+        }
         top_tail_rows.append({
             "split": scope_label,
             "top10_n": top.get("n"),
@@ -662,6 +667,10 @@ def _model_sop_view(payload: dict) -> dict:
             "top10_hmls": quadrant_display(row, top, "hmls"),
             "top10_lmhs": quadrant_display(row, top, "lmhs"),
             "top10_lmls": quadrant_display(row, top, "lmls"),
+            "__compare__top10_hmhs": quadrant_values["hmhs"],
+            "__compare__top10_hmls": quadrant_values["hmls"],
+            "__compare__top10_lmhs": quadrant_values["lmhs"],
+            "__compare__top10_lmls": quadrant_values["lmls"],
         })
 
     evidence = [
@@ -773,9 +782,31 @@ def _model_sop_view(payload: dict) -> dict:
     }
 
 
-def _render_model_contract_table(table, rows, *, target: str, scope_styler=None, delta_style: bool = False) -> str:
+def _render_model_contract_table(
+    table,
+    rows,
+    *,
+    target: str,
+    scope_styler=None,
+    delta_style: bool = False,
+    best_worst_style: bool = False,
+) -> str:
+    comparison_signals: dict[str, dict[str, str]] = {}
+    if best_worst_style:
+        for column in table.columns:
+            if column.preference not in {"higher", "lower"}:
+                continue
+            values = {
+                str(index): row.get(f"__compare__{column.key}", row.get(column.key))
+                for index, row in enumerate(rows)
+            }
+            comparison_signals[column.key] = best_worst_signals(
+                values,
+                preference=column.preference,
+            )
+
     rendered = []
-    for row in rows:
+    for index, row in enumerate(rows):
         cells = []
         for column in table.columns:
             value = row.get(column.key)
@@ -789,6 +820,14 @@ def _render_model_contract_table(table, rows, *, target: str, scope_styler=None,
                     enabled=console_color_enabled() if target == "console" else None,
                     bold=True,
                 )
+            elif best_worst_style:
+                signal = comparison_signals.get(column.key, {}).get(str(index))
+                if signal is not None:
+                    text = styled_signal(
+                        text, signal, target=target,
+                        enabled=console_color_enabled() if target == "console" else None,
+                        bold=True,
+                    )
             cells.append(text)
         rendered.append(tuple(cells))
     if target == "console":
@@ -1116,6 +1155,7 @@ def _render_model_comparison_contract_table(
     target: str,
     scope_styler=None,
     delta_style: bool = False,
+    best_worst_style: bool = False,
 ) -> str:
     return _render_model_contract_table(
         table_contract("model.standard_comparison", section_id, table_id),
@@ -1123,6 +1163,7 @@ def _render_model_comparison_contract_table(
         target=target,
         scope_styler=scope_styler,
         delta_style=delta_style,
+        best_worst_style=best_worst_style,
     )
 
 
@@ -1232,6 +1273,14 @@ def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
 
 
 def _render_standard_model_comparison(models: list[dict], *, target: str) -> str:
+    """Render multi-model Standard SOP comparison without Validation rows.
+
+    OOS and Breakout are intentionally rendered as separate comparison tables.
+    Metric values use the project-wide best/worst color contract: best green,
+    worst red, neutral/ties unstyled. Workflow/evidence statuses retain the
+    existing status-color rules.
+    """
+
     views = _standard_model_comparison_views(models)
     rows = _standard_model_comparison_rows(views)
     color = console_color_enabled()
@@ -1243,27 +1292,63 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
         return f"## {markdown_tone(title, 'blue', bold=True)}"
 
     def scope_text(value: str) -> str:
-        tone = "gray" if str(value).lower() == "validation" else "cyan"
         if target == "console":
-            return paint(str(value), tone, enabled=color, bold=str(value).lower() != "validation")
-        return markdown_tone(value, "gray" if tone == "gray" else "blue", bold=str(value).lower() != "validation")
+            return paint(str(value), "cyan", enabled=color, bold=True)
+        return markdown_tone(value, "blue", bold=True)
+
+    def split_matches(row: dict, aliases: set[str]) -> bool:
+        return str(row.get("split") or "").strip().lower() in {
+            alias.strip().lower() for alias in aliases
+        }
+
+    scope_specs = (
+        ("Forward OOS", {"oos", "forward oos"}),
+        ("Breakout slice", {"breakout_candidate_oos", "breakout slice"}),
+    )
 
     parts: list[str] = []
-    for section_id, table_id, delta_style in (
-        ("learnability", "learnability", False),
-        ("generalization", "generalization", True),
-        ("multi_head", "multi_head", False),
-        ("upside_downside_alignment", "upside_downside_alignment", False),
-        ("top_tail_economic_quality", "top_tail_economic_quality", False),
+
+    # Scope-bearing Standard SOP sections are rendered twice: once for OOS and
+    # once for Breakout. Validation is deliberately absent from [1][4].
+    for section_id, table_id in (
+        ("learnability", "learnability"),
+        ("multi_head", "multi_head"),
+        ("upside_downside_alignment", "upside_downside_alignment"),
+        ("top_tail_economic_quality", "top_tail_economic_quality"),
     ):
-        section_rows = list(rows.get(table_id) or [])
-        if not section_rows:
-            continue
+        all_rows = list(rows.get(table_id) or [])
+        for scope_label, aliases in scope_specs:
+            scoped_rows = [dict(row) for row in all_rows if split_matches(dict(row), aliases)]
+            if not scoped_rows:
+                continue
+            parts.extend([
+                section(section_id, suffix=scope_label),
+                _render_model_comparison_contract_table(
+                    section_id,
+                    table_id,
+                    scoped_rows,
+                    target=target,
+                    scope_styler=scope_text,
+                    best_worst_style=True,
+                ),
+            ])
+
+    # Generalization remains useful only for the OOS→Breakout transfer. The
+    # Validation→OOS row is intentionally hidden from [1][4].
+    generalization_rows = [
+        dict(row)
+        for row in list(rows.get("generalization") or [])
+        if "validation" not in str(row.get("comparison") or "").lower()
+    ]
+    if generalization_rows:
         parts.extend([
-            section(section_id),
+            section("generalization", suffix="OOS → Breakout slice"),
             _render_model_comparison_contract_table(
-                section_id, table_id, section_rows,
-                target=target, scope_styler=scope_text, delta_style=delta_style,
+                "generalization",
+                "generalization",
+                generalization_rows,
+                target=target,
+                best_worst_style=True,
             ),
         ])
 
@@ -1273,30 +1358,53 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
         ("predicted_5x5", "predicted_5x5"),
         ("safety_cohorts", "safety_cohorts"),
     )
-    geometry_present = any(rows.get(key) for key, _table in geometry_tables)
-    if geometry_present:
-        parts.append(section("truth_prediction_geometry"))
+    geometry_scope_markers = (
+        ("Forward OOS", ("daily universal oos",)),
+        ("Breakout slice", ("breakout candidate oos",)),
+    )
+    for scope_label, markers in geometry_scope_markers:
+        scoped_geometry: list[tuple[str, list[dict]]] = []
         for key, table_id in geometry_tables:
-            table_rows = list(rows.get(key) or [])
+            table_rows = []
+            for raw in list(rows.get(key) or []):
+                row = dict(raw)
+                probe = str(row.get("metric") or row.get("safety") or "").strip().lower()
+                if any(probe.startswith(marker) for marker in markers):
+                    table_rows.append(row)
             if table_rows:
+                scoped_geometry.append((table_id, table_rows))
+        if scoped_geometry:
+            parts.append(section("truth_prediction_geometry", suffix=scope_label))
+            for table_id, table_rows in scoped_geometry:
                 parts.append(_render_model_comparison_contract_table(
-                    "truth_prediction_geometry", table_id, table_rows, target=target
+                    "truth_prediction_geometry",
+                    table_id,
+                    table_rows,
+                    target=target,
+                    best_worst_style=True,
                 ))
 
     ranking_rows = list(rows.get("ranking_boundary") or [])
-    if ranking_rows:
-        settings_set = {tuple(value) for value in list(rows.get("ranking_settings") or [])}
-        suffix = ""
+    settings_set = {tuple(value) for value in list(rows.get("ranking_settings") or [])}
+    for scope_label, aliases in scope_specs:
+        scoped_rows = [dict(row) for row in ranking_rows if split_matches(dict(row), aliases)]
+        if not scoped_rows:
+            continue
+        suffix = scope_label
         if len(settings_set) == 1:
             k, boundary, scope = next(iter(settings_set))
-            suffix = f"K={k}，boundary={boundary}；{scope}"
+            suffix += f"；K={k}，boundary={boundary}；{scope}"
         elif settings_set:
-            suffix = "各模型依自身canonical K/boundary"
+            suffix += "；各模型依自身canonical K/boundary"
         parts.extend([
             section("ranking_boundary", suffix=suffix),
             _render_model_comparison_contract_table(
-                "ranking_boundary", "ranking_boundary", ranking_rows,
-                target=target, scope_styler=scope_text,
+                "ranking_boundary",
+                "ranking_boundary",
+                scoped_rows,
+                target=target,
+                scope_styler=scope_text,
+                best_worst_style=True,
             ),
         ])
 
@@ -1312,21 +1420,26 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
             "MISSING": SIGNAL_NEGATIVE,
         }.get(normalized, SIGNAL_NEUTRAL)
         row["status"] = styled_signal(
-            row.get("status"), signal, target=target,
-            enabled=color if target == "console" else None, bold=True,
+            row.get("status"),
+            signal,
+            target=target,
+            enabled=color if target == "console" else None,
+            bold=True,
         )
         evidence_rows.append(row)
     if evidence_rows:
         parts.extend([
             section("evidence_coverage"),
             _render_model_comparison_contract_table(
-                "evidence_coverage", "evidence_coverage", evidence_rows, target=target
+                "evidence_coverage",
+                "evidence_coverage",
+                evidence_rows,
+                target=target,
             ),
         ])
 
     separator = "\n" if target == "console" else "\n\n"
     return separator.join(part for part in parts if part)
-
 
 def _write_standard_model_comparison_report(models: list[dict]) -> tuple[Path, Path]:
     if not models:

@@ -644,7 +644,7 @@ def _render_markdown(payload: dict) -> str:
         "",
         "| Comparison | Δ Daily rho | Δ Pair | Δ Top-Bottom |",
         "|---|---:|---:|---:|",
-        f"| Validation → Forward OOS | {delta(validation.get('mean_daily_spearman'), oos.get('mean_daily_spearman'))} "
+        f"| Validation → OOS | {delta(validation.get('mean_daily_spearman'), oos.get('mean_daily_spearman'))} "
         f"| {delta(validation.get('pairwise_concordance'), oos.get('pairwise_concordance'), percent=True)} "
         f"| {delta((None if validation.get('top_score_decile_raw_target_mean') is None or validation.get('bottom_score_decile_raw_target_mean') is None else float(validation['top_score_decile_raw_target_mean'])-float(validation['bottom_score_decile_raw_target_mean'])), (None if oos.get('top_score_decile_raw_target_mean') is None or oos.get('bottom_score_decile_raw_target_mean') is None else float(oos['top_score_decile_raw_target_mean'])-float(oos['bottom_score_decile_raw_target_mean'])))} |",
     ])

@@ -76,7 +76,7 @@ S = ReportSectionContract
 
 MODEL_STANDARD_SOP = PersistentReportContract(
     report_id="model.standard_sop",
-    version=3,
+    version=4,
     role="persistent_standard",
     menu_path=("Research", "模型訓練／驗證", "訓練目前模型 → Forward-OOS 標準模型 SOP 報表"),
     sections=(
@@ -124,10 +124,10 @@ MODEL_STANDARD_SOP = PersistentReportContract(
                 C("top10_low_adverse_r_mean", "Top10 Low-Adverse", 4, "R", "higher", "number"),
                 C("top10_high_mfe_pct", "High-MFE", 2, "%", "higher", "pct"),
                 C("top10_high_safety_pct", "High-Safety", 2, "%", "higher", "pct"),
-                C("top10_hmhs", "HM/HS", alignment="right"),
-                C("top10_hmls", "HM/LS", alignment="right"),
-                C("top10_lmhs", "LM/HS", alignment="right"),
-                C("top10_lmls", "LM/LS", alignment="right"),
+                C("top10_hmhs", "HM/HS", preference="higher", alignment="right"),
+                C("top10_hmls", "HM/LS", preference="lower", alignment="right"),
+                C("top10_lmhs", "LM/HS", preference="lower", alignment="right"),
+                C("top10_lmls", "LM/LS", preference="lower", alignment="right"),
             )),
         )),
         S("truth_prediction_geometry", 6, "Truth / Prediction Geometry", "geometry_models", (
@@ -170,11 +170,17 @@ MODEL_STANDARD_SOP = PersistentReportContract(
 
 
 def _model_comparison_table(table: ReportTableContract) -> ReportTableContract:
-    """Derive multi-model comparison schema from the Standard Model SOP table SSOT."""
+    """Derive multi-model comparison schema from the Standard Model SOP table SSOT.
 
+    [1][4] renders Forward OOS and Breakout as separate tables, so the Standard
+    SOP ``Split`` column is structural/redundant there and is omitted. All
+    actual metric columns continue to come directly from the Standard SOP.
+    """
+
+    metric_columns = tuple(column for column in table.columns if column.key != "split")
     return T(
         table.table_id,
-        (C("model", "Model", alignment="left"), *table.columns),
+        (C("model", "Model", alignment="left"), *metric_columns),
     )
 
 
@@ -193,8 +199,8 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=1,
-    role="persistent_multi_model_comparison",
+    version=2,
+    role="persistent_multi_model_comparison_oos_breakout",
     menu_path=("Research", "模型訓練／驗證", "模型比較（Standard SOP）"),
     sections=_model_comparison_sections(),
 )
@@ -449,8 +455,8 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "84aad5e28c5d2ce3",
-    "model.standard_sop": "5a1c1377b207204a",
+    "model.standard_comparison": "71d1789521ca6d79",
+    "model.standard_sop": "72cc375fdf115504",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",
 }
