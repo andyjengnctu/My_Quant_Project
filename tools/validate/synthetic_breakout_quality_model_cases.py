@@ -1075,7 +1075,9 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         patch.object(
             research_app,
             "get_continuous_ranker_research_spec",
-            return_value=SimpleNamespace(reference_profile_name=None),
+            return_value=SimpleNamespace(
+                reference_profile_name=None, model_research_id="SYNTHETIC-MODEL"
+            ),
         ),
         patch("builtins.input", return_value=""),
         patch.object(research_app, "_run_continuous_forward_model_gate", return_value=29) as forward_gate,
@@ -1102,6 +1104,24 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and 'render_menu_item(3, "Fixed-Window Rolling")' not in app_source
         and "查看目前Workflow、工件與模型報表" not in app_source
         and "Actual MFE×Safety Truth Geometry（只讀）" not in app_source,
+    )
+    daily_ranker_source = (
+        project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
+    ).read_text(encoding="utf-8")
+    check_true(
+        "model_workflow_ui_uses_mr_identity_one_status_table_and_inline_daily_target_progress",
+        'print(f"Training Model：{_model_display_id(settings.experiment_profile)}")' in app_source
+        and 'print(f"Training Profile：{settings.experiment_profile}")' not in app_source
+        and 'def _print_model_action_status(rows)' in app_source
+        and app_source.count('_print_model_action_status(') >= 5
+        and 'paint("工件狀態", "cyan"' in app_source
+        and 'paint("Workflow 狀態", "cyan"' not in app_source
+        and 'model/report identity READY' not in app_source
+        and ' Standard SOP | {mode} | ' not in app_source
+        and 'from core.display_common import InlineProgress' in daily_ranker_source
+        and 'daily_target_progress.update(' in daily_ranker_source
+        and 'daily_target_progress.finish()' in daily_ranker_source
+        and 'print("[Daily target/index] 開始建立daily stock-day index與40D target...' not in daily_ranker_source,
     )
 
     shared_training = breakout_quality_config.get_breakout_quality_model_research_settings()

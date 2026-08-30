@@ -69,6 +69,7 @@ from filters.breakout_quality.paths import resolve_filter_model_output_dir
 from filters.breakout_quality.ranking_score_store import DAILY_RANKER_OOS_SCORE_FILENAME
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from core.console_report import print_artifact_paths
+from core.display_common import InlineProgress
 from core.research_report_contract import format_contract_value, section_contract, table_contract
 from core.report_style import markdown_tone, signal_for_delta, styled_signal
 
@@ -928,6 +929,8 @@ def run(args) -> int:
     build_started = time.perf_counter()
     progress_state = {"last_bucket": -1}
 
+    daily_target_progress = InlineProgress()
+
     def _daily_build_progress(processed, total, target_valid, skipped):
         total = max(int(total), 1)
         processed = int(processed)
@@ -937,23 +940,25 @@ def run(args) -> int:
         progress_state["last_bucket"] = bucket
         pct = min(100.0, 100.0 * processed / total)
         elapsed = time.perf_counter() - build_started
-        print(
+        daily_target_progress.update(
             "[Daily target/index] "
             f"{processed}/{total} tickers ({pct:5.1f}%)｜"
             f"target_valid={int(target_valid):,}｜skipped={int(skipped)}｜"
-            f"elapsed={elapsed:,.1f}s",
-            flush=True,
+            f"elapsed={elapsed:,.1f}s"
         )
 
-    print("[Daily target/index] 開始建立daily stock-day index與40D target...", flush=True)
-    bundle = load_daily_universal_ranker_data(
-        filter_id=str(args.filter_id),
-        model_architecture=str(args.model_architecture),
-        experiment_profile=str(args.experiment_profile),
-        preload_feature_bank=bool(args.preload_feature_bank),
-        allow_stale_source=bool(args.allow_stale_source),
-        progress_callback=_daily_build_progress,
-    )
+    daily_target_progress.update("[Daily target/index] 開始建立daily stock-day index與40D target...")
+    try:
+        bundle = load_daily_universal_ranker_data(
+            filter_id=str(args.filter_id),
+            model_architecture=str(args.model_architecture),
+            experiment_profile=str(args.experiment_profile),
+            preload_feature_bank=bool(args.preload_feature_bank),
+            allow_stale_source=bool(args.allow_stale_source),
+            progress_callback=_daily_build_progress,
+        )
+    finally:
+        daily_target_progress.finish()
     target_id = str(bundle.profile.continuous_target_id or "").strip()
     if not target_id:
         raise ValueError("daily-universal continuous ranker缺少target identity")

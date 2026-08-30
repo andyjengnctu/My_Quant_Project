@@ -2939,6 +2939,30 @@ def _print_artifact_status(
 
 
 
+def _model_display_id(profile_name: str) -> str:
+    """Return the user-facing MR identity for one continuous-ranker profile."""
+
+    return str(get_continuous_ranker_research_spec(str(profile_name)).model_research_id)
+
+
+def _print_model_action_status(rows) -> None:
+    """Render one canonical model workflow status table for [1]～[6]."""
+
+    styled_rows = []
+    for model_id, profile_name, action, reason in rows:
+        styled_rows.append((
+            str(model_id),
+            str(profile_name),
+            styled_workflow_status(str(action)),
+            str(reason),
+        ))
+    print(render_section("模型狀態"))
+    print(render_table(
+        ("Model", "Profile", "Action", "Reason"), styled_rows,
+        alignments=("left", "left", "left", "left"),
+    ))
+
+
 def _print_workflow_status(settings=None) -> None:
     if settings is None:
         settings = get_breakout_quality_model_research_settings()
@@ -2964,6 +2988,8 @@ def _print_workflow_status(settings=None) -> None:
         ("Sample Scope", settings.training_sample_scope),
         ("Seed", settings.seed),
     ]
+    if settings.is_continuous_ranker:
+        base_rows.insert(0, ("Model", _model_display_id(settings.experiment_profile)))
 
     if settings.is_binary_classification:
         defaults = _train_defaults()
@@ -3098,7 +3124,7 @@ def _print_workflow_status(settings=None) -> None:
         )
     print(
         render_section(
-            paint("Workflow 狀態", "cyan", enabled=color_enabled, bold=True)
+            paint("工件狀態", "cyan", enabled=color_enabled, bold=True)
         )
     )
     print(render_table(("狀態", "項目"), status_rows))
@@ -3359,6 +3385,7 @@ def _render_continuous_research_input_plan(settings, plan) -> None:
     print(
         render_key_values(
             (
+                ("Model", _model_display_id(settings.experiment_profile)),
                 ("Profile", str(settings.experiment_profile)),
                 ("整體狀態", str(plan.overall_status)),
             )
@@ -3619,16 +3646,8 @@ def _ensure_continuous_forward_model_report(
 
     contract, reuse_reason = _load_reusable_continuous_forward_contract(settings)
     if contract is not None:
-        print(
-            styled_workflow_status("[REUSE]")
-            + f" {model_id} | model/report identity READY"
-        )
         return 0, contract, "REUSE"
 
-    print(
-        styled_workflow_status("[BUILD]")
-        + f" {model_id} | canonical Forward model/report需建立：{reuse_reason or 'missing'}"
-    )
     upstream_plan = _collect_continuous_research_input_plan(settings)
     _render_continuous_research_input_plan(settings, upstream_plan)
     if upstream_plan.blocked:
@@ -3668,6 +3687,13 @@ def _run_continuous_forward_model_gate(program_name: str, settings) -> int:
 
     _print_workflow_status(settings)
     research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
+    reusable_contract, reuse_reason = _load_reusable_continuous_forward_contract(settings)
+    _print_model_action_status(((
+        str(research_spec.model_research_id),
+        str(settings.experiment_profile),
+        "REUSE" if reusable_contract is not None else "BUILD",
+        "READY" if reusable_contract is not None else str(reuse_reason or "missing"),
+    ),))
     code, contract, action = _ensure_continuous_forward_model_report(
         program_name,
         model_id=str(research_spec.model_research_id),
@@ -3783,8 +3809,6 @@ def _emit_standard_model_sop_report(
     standard = dict(payload.get("standard_model_sop") or {})
     if not standard and str(payload.get("schema") or "").startswith("standard_model_sop_v"):
         standard = payload
-    mode = str(standard.get("evaluation_mode") or "-")
-    print(styled_workflow_status(f"[{action}]") + f" Standard SOP | {mode} | {settings.experiment_profile}")
     rendered = _render_continuous_ranker_simple_console(payload)
     if rendered:
         print(rendered)
@@ -3885,6 +3909,13 @@ def _run_continuous_rolling_mode_direct(
         return 0
     _print_workflow_status(settings)
     contract, payload, reason = _load_reusable_rolling_standard_report(settings, mode)
+    model_id = _model_display_id(settings.experiment_profile)
+    _print_model_action_status(((
+        model_id,
+        str(settings.experiment_profile),
+        "REUSE" if contract is not None and payload is not None else "BUILD/REFRESH",
+        "READY" if contract is not None and payload is not None else str(reason or "Rolling OOS artifact missing"),
+    ),))
     if contract is not None and payload is not None:
         _emit_standard_model_sop_report(
             settings, source_payload=payload, source_path=Path(contract.audit_path), action="REUSE"
@@ -3893,7 +3924,6 @@ def _run_continuous_rolling_mode_direct(
 
     # One producer path only: the PIT builder runs with resume, so compatible folds are
     # reused/rescored as needed before the canonical audit rebuilds the shared SOP payload.
-    print(styled_workflow_status("[BUILD/REFRESH]") + f" {reason or 'Rolling OOS artifact missing'}")
     upstream_plan = _collect_continuous_research_input_plan(settings)
     _render_continuous_research_input_plan(settings, upstream_plan)
     if upstream_plan.blocked:
@@ -4522,10 +4552,7 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
 
     mode_label = "Rolling OOS" if rolling else "Forward OOS"
     print("\n" + render_title(f"{mode_label} 模型比較"))
-    print(render_table(
-        ("Model", "Profile", "Action", "Reason"), display_rows,
-        alignments=("left", "left", "left", "left"),
-    ))
+    _print_model_action_status(display_rows)
     if not _prompt_bool(
         f"確認產生{mode_label}多模型Standard SOP比較；完整者REUSE，缺失者由canonical producer補建",
         True,
@@ -4781,10 +4808,7 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
         rows.append((str(model_id), str(profile_name), action, reason))
         plans.append((str(model_id), settings, seed_states))
 
-    print(render_table(
-        ("Model", "Profile", "Action", "Reason"), rows,
-        alignments=("left", "left", "left", "left"),
-    ))
+    _print_model_action_status(rows)
     if not _prompt_bool(
         f"確認產生{mode_label} Robustness多模型Standard SOP比較；缺失seed由canonical producer補建",
         True,
@@ -4856,7 +4880,7 @@ def _interactive_model_research(program_name: str) -> int:
 
     while True:
         print("\n=== Continuous DL 模型研究與驗證 ===")
-        print(f"Training Profile：{settings.experiment_profile}")
+        print(f"Training Model：{_model_display_id(settings.experiment_profile)}")
         print("Model Compare/Test List：" + " / ".join(
             model_id for model_id, _profile in get_breakout_quality_model_test_settings().model_profiles
         ))

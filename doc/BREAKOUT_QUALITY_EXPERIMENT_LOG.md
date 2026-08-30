@@ -11093,3 +11093,9 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Scientific/runtime scope**：不改target、architecture、loss、seed、fold schedule、Standard SOP metric、v7/v6 persistent fingerprint、Strategy binding或production。既有6個fold/checkpoint/validation sidecar可直接reuse；本修正只確保REFRESH後同process立即讀到新artifact。
 - **Independent GPT validation**：`validate_breakout_quality_point_in_time_score_builder_contract_case`=`20/20 PASS`；以retained formal primary params執行完整synthetic consistency=`4722 checks / 244 validators / 0 FAIL`（治理文件同步前）；source compile PASS。正式`apps/run_bundle.py`依PROJECT_SETTINGS由使用者本機執行。
 
+## 2026-08-30 — B316 Model workflow console identity / status / progress SSOT
+
+- **User-visible identity**：使用者指出Training Profile以長profile slug顯示、Model Compare/Test List以MR identity顯示，形成DL命名不一致。current Model Research menu改為`Training Model：MR-*`；workflow詳細頁另保留`Experiment Profile`作技術metadata，不再把slug當model名稱。
+- **Status presentation**：單模型[1]/[2]原本以零散`[REUSE] ...`文字顯示，comparison/robustness則使用`Model / Profile / Action / Reason`表。現在[1]～[6]全部經同一`_print_model_action_status()` renderer，action沿用canonical workflow status palette；Dataset/Model file等存在性另列`工件狀態`，不得混成model action。
+- **Progress presentation**：Daily target/index原本每5%輸出新行；改用既有`core.display_common.InlineProgress`，互動TTY原地刷新同一行，redirected output只保留final state。此變更只影響顯示，不改sample membership、target、training、SOP metric、artifact identity或reuse decision。
+- **Regression**：T438由`validate_breakout_quality_continuous_ranker_contract_case`固定MR identity、共用status renderer、工件/模型狀態分工與InlineProgress route。
