@@ -42,6 +42,7 @@ from filters.breakout_quality.paths import (
     resolve_selection_point_in_time_score_path,
 )
 from filters.breakout_quality.ranking_score_store import (
+    clear_selection_point_in_time_ranking_contract_cache,
     derive_point_in_time_model_validation_gate,
 )
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
@@ -1407,11 +1408,17 @@ def _run_point_in_time_scores_audit(
             raise FileNotFoundError(f"Rolling Standard SOP缺少validation score sidecar: {validation_path}")
         if build_file_manifest(validation_path) != artifacts.get("validation_scores"):
             raise ValueError(f"Rolling Standard SOP {fold_id} validation score hash不一致")
-        validation_frame = pd.read_csv(validation_path, encoding="utf-8-sig")
         required = {"group_index", "date", "breakout_quality_score", "fold_id"}
-        missing = sorted(required.difference(validation_frame.columns))
+        header_columns = set(pd.read_csv(validation_path, encoding="utf-8-sig", nrows=0).columns)
+        missing = sorted(required.difference(header_columns))
         if missing:
             raise ValueError(f"Rolling Standard SOP {fold_id} validation sidecar缺欄: {missing}")
+        validation_frame = pd.read_csv(
+            validation_path,
+            encoding="utf-8-sig",
+            usecols=sorted(required),
+            dtype={"fold_id": "string"},
+        )
         validation_frame["date"] = pd.to_datetime(validation_frame["date"], errors="raise").dt.normalize()
         validation_frame["rank_group"] = (
             validation_frame["fold_id"].astype(str) + "|" + validation_frame["date"].dt.strftime("%Y-%m-%d")
@@ -1587,6 +1594,7 @@ def _run_point_in_time_scores_audit(
     output_json.parent.mkdir(parents=True, exist_ok=True)
     write_json(output_json, payload)
     output_markdown.write_text(_render_markdown(payload), encoding="utf-8")
+    clear_selection_point_in_time_ranking_contract_cache()
     color_enabled = console_color_enabled()
     if compact_console_enabled():
         print(render_compact_console_summary(payload, color=color_enabled))

@@ -52,6 +52,7 @@ from config.breakout_quality import (
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
+from filters.breakout_quality.ranking_score_store import clear_selection_point_in_time_ranking_contract_cache
 from filters.breakout_quality.models.factory import build_model
 from filters.breakout_quality.point_in_time_schedule import (
     FOLD_CALENDAR_ANCHOR,
@@ -2415,6 +2416,7 @@ def _run_point_in_time_scores(
     ):
         manifest["score_eligibility_contract"] = build_score_eligibility_contract(bundle.profile)
     write_json(manifest_path, manifest)
+    clear_selection_point_in_time_ranking_contract_cache()
     if compact_console:
         print(
             paint("PIT Scores 完成", "green", enabled=color_enabled, bold=True)

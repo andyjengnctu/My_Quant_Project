@@ -537,6 +537,28 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         and bool(joint_runtime["available"]),
     )
 
+    audit_source = read_source_text("services/breakout_quality/point_in_time_audit.py")
+    ranking_store_source = read_source_text("filters/breakout_quality/ranking_score_store.py")
+    pit_manifest_write = pit_source.index("write_json(manifest_path, manifest)")
+    pit_cache_clear = pit_source.index(
+        "clear_selection_point_in_time_ranking_contract_cache()", pit_manifest_write
+    )
+    audit_json_write = audit_source.index("write_json(output_json, payload)")
+    audit_cache_clear = audit_source.index(
+        "clear_selection_point_in_time_ranking_contract_cache()", audit_json_write
+    )
+    check_true(
+        "pit_score_and_audit_producers_invalidate_cached_ranking_contract_after_artifact_rewrite",
+        "def clear_selection_point_in_time_ranking_contract_cache()" in ranking_store_source
+        and pit_manifest_write < pit_cache_clear
+        and audit_json_write < audit_cache_clear,
+    )
+    check_true(
+        "rolling_standard_sop_validation_sidecar_reader_ignores_non_sop_ticker_dtype",
+        'usecols=sorted(required)' in audit_source
+        and 'dtype={"fold_id": "string"}' in audit_source,
+    )
+
     summary.update({
         "profile": settings.experiment_profile,
         "oos_fold_count": len(oos),

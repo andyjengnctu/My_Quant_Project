@@ -11084,3 +11084,12 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Persistent contract**：唯一`model.standard_sop`升v7，approved fingerprint=`56e5fb1173404d7f`；唯一`model.standard_comparison`升v6，approved fingerprint=`7b11c0b9ddf50e41`。Rolling只追加`Rolling-specific Extension｜Fold / Year Stability`；Robustness只追加`Robustness-specific Extension｜Across-seed Stability`，extension不得改Standard 1～6 schema。
 - **Robustness**：`[5]/[6]`改成model-level robustness route，從同一Model Compare/Test List取得模型；各benchmark seed先建立相同Standard SOP payload，再由generic aggregate建立同schema summary。Rolling robustness同時可帶Rolling extension＋Across-seed extension，不再接Strategy robustness報表。
 - **Independent GPT validation**：以formal bundle retained primary params執行完整synthetic consistency=`4710 checks / 244 validators / 0 FAIL`；source compileall PASS。正式`apps/run_bundle.py`/`apps/test_suite.py`依PROJECT_SETTINGS不由GPT執行。
+
+## 2026-08-30 — B315 Rolling Standard SOP REFRESH cache invalidation closure
+
+- **Observed failure**：使用者在B314正式版執行`[1]→[2] Rolling OOS模型訓練`；6個fold均已checkpoint-only重評並寫出`validation_scores.csv`，PIT Audit也完成，但回到Research application後仍報`Validation`/`Validation → OOS`等Standard SOP evidence缺失。實際log同時顯示6次validation sidecar `ticker` mixed-dtype warning。
+- **Root cause**：`load_selection_point_in_time_ranking_contract`使用`lru_cache`且cache key只有path/identity。`[2]`在BUILD前先讀取舊audit以判定`BUILD/REFRESH`，該舊contract因此留在process cache；canonical Scores/Audit producer雖已重寫manifest/audit，BUILD後的reuse check仍拿到cache中的舊payload，造成假性「重建後仍缺Validation」。
+- **Fix**：新增唯一`clear_selection_point_in_time_ranking_contract_cache()`；canonical PIT Scores producer成功重寫top-level manifest後、PIT Audit成功重寫audit後都必須invalidate cache。cache invalidation放在producer owner，不在menu/renderer加例外，因此所有合法程式化producer路徑都一致。Rolling validation sidecar audit只讀`group_index/date/breakout_quality_score/fold_id`四個Standard SOP必要欄，不再讀`ticker`，消除mixed dtype warning且不改ticker科學語意。
+- **Scientific/runtime scope**：不改target、architecture、loss、seed、fold schedule、Standard SOP metric、v7/v6 persistent fingerprint、Strategy binding或production。既有6個fold/checkpoint/validation sidecar可直接reuse；本修正只確保REFRESH後同process立即讀到新artifact。
+- **Independent GPT validation**：`validate_breakout_quality_point_in_time_score_builder_contract_case`=`20/20 PASS`；以retained formal primary params執行完整synthetic consistency=`4722 checks / 244 validators / 0 FAIL`（治理文件同步前）；source compile PASS。正式`apps/run_bundle.py`依PROJECT_SETTINGS由使用者本機執行。
+

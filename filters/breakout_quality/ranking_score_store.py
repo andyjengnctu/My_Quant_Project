@@ -524,6 +524,12 @@ def load_selection_point_in_time_ranking_contract(
     )
 
 
+def clear_selection_point_in_time_ranking_contract_cache() -> None:
+    """Invalidate cached PIT contract after canonical score/audit producers rewrite artifacts."""
+
+    load_selection_point_in_time_ranking_contract.cache_clear()
+
+
 def _selection_pit_file_cache_signature(path: Path) -> tuple[int, int]:
     stat = path.stat()
     return int(stat.st_mtime_ns), int(stat.st_size)
