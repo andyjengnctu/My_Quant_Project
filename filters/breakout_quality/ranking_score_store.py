@@ -687,6 +687,7 @@ def load_continuous_ranker_oos_contract(
     filter_id: str,
     model_architecture: str,
     experiment_profile: str,
+    require_scores: bool = True,
 ) -> ContinuousRankerOOSContract:
     root = Path(project_root).resolve()
     profile = get_breakout_quality_experiment_profile(str(experiment_profile))
@@ -702,12 +703,14 @@ def load_continuous_ranker_oos_contract(
     report_path = (output_dir / CONTINUOUS_RANKER_REPORT_FILENAME).resolve()
     manifest_path = artifacts.manifest_path.resolve()
     model_path = artifacts.model_path.resolve()
-    for label, path in (
+    required_paths = [
         ("Continuous ranker model", model_path),
         ("Continuous ranker manifest", manifest_path),
         ("Continuous ranker report", report_path),
-        ("Continuous ranker OOS scores", score_path),
-    ):
+    ]
+    if bool(require_scores):
+        required_paths.append(("Continuous ranker OOS scores", score_path))
+    for label, path in required_paths:
         if not path.is_file():
             raise FileNotFoundError(
                 f"找不到{label}: {_display_path(path, project_root=root)}"
@@ -941,19 +944,20 @@ def load_continuous_ranker_oos_contract(
     _validate_file_record_simple(
         manifest.get("model"), path=model_path, label="Continuous ranker model"
     )
-    research_outputs = dict(manifest.get("research_outputs") or {})
-    report_artifacts = dict(report.get("artifacts") or {})
-    score_record_key = "oos_scores_gzip" if is_daily else "scores"
-    _validate_file_record_simple(
-        research_outputs.get(score_record_key),
-        path=score_path,
-        label="Continuous ranker scores",
-    )
-    _validate_file_record_simple(
-        report_artifacts.get(score_record_key),
-        path=score_path,
-        label="Continuous ranker report scores",
-    )
+    if bool(require_scores):
+        research_outputs = dict(manifest.get("research_outputs") or {})
+        report_artifacts = dict(report.get("artifacts") or {})
+        score_record_key = "oos_scores_gzip" if is_daily else "scores"
+        _validate_file_record_simple(
+            research_outputs.get(score_record_key),
+            path=score_path,
+            label="Continuous ranker scores",
+        )
+        _validate_file_record_simple(
+            report_artifacts.get(score_record_key),
+            path=score_path,
+            label="Continuous ranker report scores",
+        )
 
     outer = dict(manifest.get("outer_oos_policy") or {})
     execution_start = pd.Timestamp(str(outer.get("oos_start_date") or "")).strftime("%Y-%m-%d")
@@ -974,29 +978,32 @@ def load_continuous_ranker_oos_contract(
     if seed < 0:
         raise ValueError("Continuous ranker report缺少合法training seed")
 
-    table = load_continuous_ranker_oos_score_table(
-        str(root), str(filter_id), str(model_architecture), str(experiment_profile)
-    )
-    if table.empty:
-        raise ValueError("Continuous ranker OOS score table不可為空")
-    available_from = str(table.attrs.get("available_from") or "")
-    available_through = str(table.attrs.get("available_through") or "")
-    if not available_from or not available_through:
-        raise ValueError(
-            "Continuous ranker OOS score table缺少預先計算的日期範圍metadata"
+    available_from = ""
+    available_through = ""
+    if bool(require_scores):
+        table = load_continuous_ranker_oos_score_table(
+            str(root), str(filter_id), str(model_architecture), str(experiment_profile)
         )
-    if available_from < execution_start:
-        raise ValueError(
-            "Continuous ranker OOS scores包含execution_start之前事件: "
-            f"available_from={available_from}, execution_start={execution_start}"
-        )
-    if len(table) != inference_groups:
-        raise ValueError(
-            "Continuous ranker Forward-OOS score row count與inference eligibility contract不一致: "
-            f"table={len(table)}, expected={inference_groups}"
-        )
-    if configured_end and pd.Timestamp(available_through) > pd.Timestamp(configured_end):
-        raise ValueError("Continuous ranker OOS scores超出outer OOS configured end")
+        if table.empty:
+            raise ValueError("Continuous ranker OOS score table不可為空")
+        available_from = str(table.attrs.get("available_from") or "")
+        available_through = str(table.attrs.get("available_through") or "")
+        if not available_from or not available_through:
+            raise ValueError(
+                "Continuous ranker OOS score table缺少預先計算的日期範圍metadata"
+            )
+        if available_from < execution_start:
+            raise ValueError(
+                "Continuous ranker OOS scores包含execution_start之前事件: "
+                f"available_from={available_from}, execution_start={execution_start}"
+            )
+        if len(table) != inference_groups:
+            raise ValueError(
+                "Continuous ranker Forward-OOS score row count與inference eligibility contract不一致: "
+                f"table={len(table)}, expected={inference_groups}"
+            )
+        if configured_end and pd.Timestamp(available_through) > pd.Timestamp(configured_end):
+            raise ValueError("Continuous ranker OOS scores超出outer OOS configured end")
     return ContinuousRankerOOSContract(
         score_path=score_path,
         manifest_path=manifest_path,

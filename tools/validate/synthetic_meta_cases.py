@@ -3,7 +3,6 @@ from contextlib import redirect_stdout
 import io
 from pathlib import Path
 import importlib
-import inspect
 import json
 import re
 import shlex
@@ -2827,14 +2826,19 @@ def validate_portfolio_rotation_mark_to_market_return_contract_case(_base_params
 
 
 def validate_research_report_contract_freeze_case(_base_params):
-    """Persistent Research reports are user-approved schemas; model extensions cannot mutate them."""
+    """Persistent Research report/menu contracts stay frozen and cross-profile comparable."""
 
+    from types import SimpleNamespace
+
+    import config.breakout_quality as bq
     from core.research_report_contract import (
         APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
         MODEL_EXTENSION_SCHEMAS,
+        MODEL_STANDARD_COMPARISON,
         MODEL_STANDARD_SOP,
         extension_contract,
         persistent_report_contract_fingerprints,
+        table_contract,
         validate_approved_persistent_report_contracts,
     )
     from services.research import breakout_quality_application as app
@@ -2852,25 +2856,71 @@ def validate_research_report_contract_freeze_case(_base_params):
         add_check(results, "synthetic_meta", case_id, name, True, bool(condition), note=detail)
 
     current = persistent_report_contract_fingerprints()
+    errors = validate_approved_persistent_report_contracts()
     check_true(
         "persistent_research_report_contract_fingerprints_match_user_approved_freeze",
-        not validate_approved_persistent_report_contracts()
-        and current == dict(APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS),
-        detail=str(validate_approved_persistent_report_contracts()),
+        not errors and current == dict(APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS),
+        detail=str(errors),
     )
     check_true(
-        "standard_model_sop_skeleton_is_user_approved_one_through_eight",
+        "standard_model_sop_v3_section_order_is_user_approved",
         [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         == [
             (1, "Learnability"),
             (2, "Generalization"),
             (3, "Multi-head Learnability"),
-            (4, "Truth / Prediction Geometry"),
-            (5, "Ranking / Boundary"),
-            (6, "Evidence Coverage"),
-            (7, "Upside / Downside Alignment"),
-            (8, "Top-tail Economic Quality"),
+            (4, "Upside / Downside Alignment"),
+            (5, "Top-tail Economic Quality"),
+            (6, "Truth / Prediction Geometry"),
+            (7, "Ranking / Boundary"),
+            (8, "Evidence Coverage"),
         ],
+    )
+    check_true(
+        "standard_multi_model_comparison_schema_is_derived_from_standard_sop",
+        int(MODEL_STANDARD_COMPARISON.version) == 1
+        and [(section.number, section.title) for section in MODEL_STANDARD_COMPARISON.sections]
+        == [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
+        and all(
+            comparison_table.headers == ("Model", *standard_table.headers)
+            for standard_section, comparison_section in zip(
+                MODEL_STANDARD_SOP.sections, MODEL_STANDARD_COMPARISON.sections
+            )
+            for standard_table, comparison_table in zip(
+                standard_section.tables, comparison_section.tables
+            )
+        ),
+    )
+
+    learn_headers = table_contract("model.standard_sop", "learnability", "learnability").headers
+    alignment_headers = table_contract(
+        "model.standard_sop", "upside_downside_alignment", "upside_downside_alignment"
+    ).headers
+    tail_headers = table_contract(
+        "model.standard_sop", "top_tail_economic_quality", "top_tail_economic_quality"
+    ).headers
+    ranking_headers = table_contract(
+        "model.standard_sop", "ranking_boundary", "ranking_boundary"
+    ).headers
+    check_true(
+        "standard_sop_v3_common_columns_match_user_approved_semantics",
+        "Top-Bottom Target" in learn_headers
+        and alignment_headers == (
+            "Split", "Target→MFE rho", "Target→Safety rho", "Score→MFE rho", "Score→Safety rho"
+        )
+        and "Pred-Safety→Target rho" not in alignment_headers
+        and "Pred-Safety→Score rho" not in alignment_headers
+        and "Top10 Low-Adverse" in tail_headers
+        and "HM/HS" in tail_headers and "HM/LS" in tail_headers
+        and "LM/HS" in tail_headers and "LM/LS" in tail_headers
+        and "HM/HS ×" not in tail_headers
+        and "Top-K Target" not in ranking_headers
+        and "Top-K Lift" in ranking_headers
+        and "競爭日 / Pool日" in ranking_headers,
+        detail=(
+            f"learn={learn_headers}; alignment={alignment_headers}; "
+            f"tail={tail_headers}; ranking={ranking_headers}"
+        ),
     )
 
     base_metrics = {
@@ -2881,6 +2931,12 @@ def validate_research_report_contract_freeze_case(_base_params):
             "pairwise_concordance": 0.60,
             "top_score_decile_raw_target_mean": 1.2,
             "bottom_score_decile_raw_target_mean": 0.3,
+            "top_k_quality": {
+                "top_k": 10, "boundary_width": 3, "ndcg_at_k": 0.70,
+                "top_k_raw_target_lift": 0.50, "oracle_top_k_overlap": 0.10,
+                "boundary_concordance": 0.53, "boundary_raw_target_gap": 0.10,
+                "competition_date_count": 4, "all_date_count": 6,
+            },
         },
         "oos": {
             "group_count": 10,
@@ -2889,6 +2945,12 @@ def validate_research_report_contract_freeze_case(_base_params):
             "pairwise_concordance": 0.58,
             "top_score_decile_raw_target_mean": 1.1,
             "bottom_score_decile_raw_target_mean": 0.35,
+            "top_k_quality": {
+                "top_k": 10, "boundary_width": 3, "ndcg_at_k": 0.68,
+                "top_k_raw_target_lift": 0.45, "oracle_top_k_overlap": 0.09,
+                "boundary_concordance": 0.52, "boundary_raw_target_gap": 0.08,
+                "competition_date_count": 5, "all_date_count": 7,
+            },
         },
         "breakout_candidate_oos": {
             "group_count": 5,
@@ -2897,57 +2959,63 @@ def validate_research_report_contract_freeze_case(_base_params):
             "pairwise_concordance": 0.56,
             "top_score_decile_raw_target_mean": 1.0,
             "bottom_score_decile_raw_target_mean": 0.4,
+            "top_k_quality": {
+                "top_k": 10, "boundary_width": 3, "ndcg_at_k": 0.75,
+                "top_k_raw_target_lift": 0.40, "oracle_top_k_overlap": 0.50,
+                "boundary_concordance": 0.54, "boundary_raw_target_gap": 0.12,
+                "competition_date_count": 3, "all_date_count": 5,
+            },
         },
     }
 
-    def payload(model_id, objective):
-        common_alignment = {
-            "reference": {"available": True, "status": "AVAILABLE"},
-            "validation": {
-                "target_to_full_mfe_daily_spearman": 0.30,
-                "target_to_low_adverse_daily_spearman": 0.20,
-                "predicted_safety_to_target_daily_spearman": 0.10,
-                "score_to_full_mfe_daily_spearman": 0.28,
-                "score_to_low_adverse_daily_spearman": 0.18,
-                "predicted_safety_to_model_score_mean_daily_spearman": 0.08,
-                "top_10pct": {
-                    "n": 2, "full_mfe_r_mean": 2.1, "adverse_r_mean": 0.5,
-                    "high_mfe_pct": 80.0, "high_safety_pct": 70.0,
-                    "hmhs_pct": 60.0, "hmhs_enrichment": 1.25,
-                },
+    def alignment_scope(*, target_mfe, target_safety, score_mfe, score_safety, top_n):
+        return {
+            "target_to_full_mfe_daily_spearman": target_mfe,
+            "target_to_low_adverse_daily_spearman": target_safety,
+            "score_to_full_mfe_daily_spearman": score_mfe,
+            "score_to_low_adverse_daily_spearman": score_safety,
+            "population": {
+                "full_mfe_r_mean": 1.0,
+                "adverse_r_mean": 0.50,
+                "low_adverse_r_mean": -0.50,
+                "high_mfe_pct": 50.0,
+                "high_safety_pct": 50.0,
+                "quadrants": {"hmhs": 25.0, "hmls": 25.0, "lmhs": 25.0, "lmls": 25.0},
             },
-            "oos": {
-                "target_to_full_mfe_daily_spearman": 0.27,
-                "target_to_low_adverse_daily_spearman": 0.19,
-                "predicted_safety_to_target_daily_spearman": 0.09,
-                "score_to_full_mfe_daily_spearman": 0.25,
-                "score_to_low_adverse_daily_spearman": 0.17,
-                "predicted_safety_to_model_score_mean_daily_spearman": 0.07,
-                "top_10pct": {
-                    "n": 2, "full_mfe_r_mean": 2.0, "adverse_r_mean": 0.55,
-                    "high_mfe_pct": 78.0, "high_safety_pct": 68.0,
-                    "hmhs_pct": 58.0, "hmhs_enrichment": 1.20,
-                },
-            },
-            "breakout_candidate_oos": {
-                "target_to_full_mfe_daily_spearman": 0.24,
-                "target_to_low_adverse_daily_spearman": 0.18,
-                "predicted_safety_to_target_daily_spearman": 0.08,
-                "score_to_full_mfe_daily_spearman": 0.22,
-                "score_to_low_adverse_daily_spearman": 0.16,
-                "predicted_safety_to_model_score_mean_daily_spearman": 0.06,
-                "top_10pct": {
-                    "n": 1, "full_mfe_r_mean": 1.9, "adverse_r_mean": 0.6,
-                    "high_mfe_pct": 76.0, "high_safety_pct": 66.0,
-                    "hmhs_pct": 56.0, "hmhs_enrichment": 1.15,
+            "top_10pct": {
+                "n": top_n,
+                "full_mfe_r_mean": 2.0,
+                "adverse_r_mean": 0.40,
+                "low_adverse_r_mean": -0.40,
+                "high_mfe_pct": 80.0,
+                "high_safety_pct": 70.0,
+                "hmhs_pct": 60.0,
+                "hmhs_enrichment": 2.40,
+                "quadrants": {
+                    "hmhs": {"pct": 60.0, "population_pct": 25.0, "enrichment": 2.40},
+                    "hmls": {"pct": 20.0, "population_pct": 25.0, "enrichment": 0.80},
+                    "lmhs": {"pct": 10.0, "population_pct": 25.0, "enrichment": 0.40},
+                    "lmls": {"pct": 10.0, "population_pct": 25.0, "enrichment": 0.40},
                 },
             },
         }
+
+    def payload(model_id, objective):
         return {
             "model_research_id": model_id,
             "training": {"objective": objective},
             "split_metrics": json.loads(json.dumps(base_metrics)),
-            "upside_downside_alignment_evaluation": common_alignment,
+            "upside_downside_alignment_evaluation": {
+                "validation": alignment_scope(
+                    target_mfe=0.30, target_safety=0.20, score_mfe=0.28, score_safety=0.18, top_n=2
+                ),
+                "oos": alignment_scope(
+                    target_mfe=0.27, target_safety=0.19, score_mfe=0.25, score_safety=0.17, top_n=2
+                ),
+                "breakout_candidate_oos": alignment_scope(
+                    target_mfe=0.24, target_safety=0.18, score_mfe=0.22, score_safety=0.16, top_n=1
+                ),
+            },
         }
 
     control_payload = payload("MODEL-CONTROL", TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING)
@@ -2959,8 +3027,17 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
     joint_payload["safety_raw_mfe_hmhs_evaluation"] = {
         "validation": {
-            "joint_hmhs": {"population_hmhs_pct": 22.0, "pairwise_concordance": 0.57, "global_average_precision": 0.25, "top_10pct": {"hmhs_pct": 26.0, "hmhs_enrichment": 1.18}},
-            "joint_product_control": {"pairwise_concordance": 0.56, "global_average_precision": 0.24, "top_10pct": {"hmhs_pct": 25.0, "hmhs_enrichment": 1.12}},
+            "joint_hmhs": {
+                "population_hmhs_pct": 22.0,
+                "pairwise_concordance": 0.57,
+                "global_average_precision": 0.25,
+                "top_10pct": {"hmhs_pct": 26.0, "hmhs_enrichment": 1.18},
+            },
+            "joint_product_control": {
+                "pairwise_concordance": 0.56,
+                "global_average_precision": 0.24,
+                "top_10pct": {"hmhs_pct": 25.0, "hmhs_enrichment": 1.12},
+            },
         }
     }
     for key, pct, pair, ap, daily_ap, top10, top20 in (
@@ -2976,7 +3053,6 @@ def validate_research_report_contract_freeze_case(_base_params):
             "top_20pct": {"hmhs_pct": pct + 0.5, "hmhs_enrichment": top20},
             "pairwise_concordance": pair,
         })
-
     joint_min_payload["safety_raw_mfe_joint_min_evaluation"] = {
         "validation": {
             "raw_safety": dict(base_metrics["validation"]),
@@ -2992,10 +3068,7 @@ def validate_research_report_contract_freeze_case(_base_params):
                     "hmhs_pct": 62.0,
                     "hmhs_enrichment": 2.7,
                 },
-                "top_20pct": {
-                    "mean_joint_min": 0.55,
-                    "hmhs_enrichment": 2.1,
-                },
+                "top_20pct": {"mean_joint_min": 0.55, "hmhs_enrichment": 2.1},
             },
         }
     }
@@ -3007,9 +3080,7 @@ def validate_research_report_contract_freeze_case(_base_params):
         "joint_min": app._render_continuous_ranker_simple_console(joint_min_payload),
     }
     standard_lines = {
-        key: "\n".join(
-            line for line in text.splitlines() if line.startswith("標準模型 SOP｜")
-        )
+        key: "\n".join(line for line in text.splitlines() if line.startswith("標準模型 SOP｜"))
         for key, text in rendered.items()
     }
     extension_expectations = {
@@ -3020,46 +3091,62 @@ def validate_research_report_contract_freeze_case(_base_params):
     check_true(
         "model_extension_registry_is_fully_covered_by_capability_payloads",
         set(extension_expectations) == set(MODEL_EXTENSION_SCHEMAS),
-        detail=(
-            f"covered={sorted(extension_expectations)}, "
-            f"registered={sorted(MODEL_EXTENSION_SCHEMAS)}"
-        ),
+        detail=f"covered={sorted(extension_expectations)}, registered={sorted(MODEL_EXTENSION_SCHEMAS)}",
     )
     check_true(
         "model_extensions_cannot_mutate_standard_model_sop_namespace",
         all(
             extension_contract(extension_id).title not in standard_lines[render_key]
-            and (
-                f"Model-specific Extension｜{model_id}｜"
-                f"{extension_contract(extension_id).title}"
-            ) in rendered[render_key]
+            and f"Model-specific Extension｜{model_id}｜{extension_contract(extension_id).title}"
+            in rendered[render_key]
             for extension_id, (render_key, model_id) in extension_expectations.items()
         )
         and "Δ HM/HS Pair" not in standard_lines["h_only"],
     )
-    standard_generalization_header = ("Comparison", "Δ Daily rho", "Δ Pair", "Δ Top-Bottom")
     check_true(
-        "cross_profile_standard_generalization_schema_is_invariant",
-        all(header in app.table_contract("model.standard_sop", "generalization", "generalization").headers for header in standard_generalization_header)
-        and "Δ Daily rho" in rendered["control"]
-        and "Δ Daily rho" in rendered["joint"]
-        and "Δ Daily rho" in rendered["h_only"],
-    )
-    check_true(
-        "upside_downside_and_top_tail_are_standard_cross_profile_sections_not_extensions",
+        "cross_profile_standard_v3_headers_and_section_order_are_invariant",
         all(
-            "標準模型 SOP｜7. Upside / Downside Alignment" in text
-            and "標準模型 SOP｜8. Top-tail Economic Quality" in text
-            and "Pred-Safety→Score rho" in text
-            and "Top10 Adverse" in text
+            "Top-Bottom Target" in text
+            and "標準模型 SOP｜4. Upside / Downside Alignment" in text
+            and "標準模型 SOP｜5. Top-tail Economic Quality" in text
+            and "標準模型 SOP｜7. Ranking / Boundary" in text
+            and "標準模型 SOP｜8. Evidence Coverage" in text
+            and "Target→Safety rho" in text
+            and "Score→Safety rho" in text
+            and "Pred-Safety→Target rho" not in text
+            and "Pred-Safety→Score rho" not in text
+            and "Top10 Low-Adverse" in text
+            and "60.00% (2.40×)" in text
+            and "HM/LS" in text and "LM/HS" in text and "LM/LS" in text
+            and "Top-K Target" not in text
+            and "Top-K Lift" in text
+            and "競爭日 / Pool日" in text
+            and text.find("標準模型 SOP｜8. Evidence Coverage")
+                > text.find("標準模型 SOP｜7. Ranking / Boundary")
             for text in rendered.values()
-        )
-        and all(
-            "Model-specific Extension｜" + model_id + "｜Upside / Downside Alignment" not in rendered[key]
-            for key, model_id in (("control", "MODEL-CONTROL"), ("joint", "MODEL-JOINT"), ("h_only", "MODEL-HONLY"), ("joint_min", "MODEL-JOINT-MIN"))
         ),
     )
 
+    comparison_text = app._render_standard_model_comparison(
+        [
+            {"model_id": "MODEL-A", "payload": control_payload},
+            {"model_id": "MODEL-B", "payload": control_payload},
+            {"model_id": "MODEL-C", "payload": control_payload},
+        ],
+        target="console",
+    )
+    check_true(
+        "multi_model_comparison_uses_same_standard_v3_schema_for_three_models",
+        all(model in comparison_text for model in ("MODEL-A", "MODEL-B", "MODEL-C"))
+        and "模型比較 SOP｜4. Upside / Downside Alignment" in comparison_text
+        and "Target→Safety rho" in comparison_text
+        and "Top10 Low-Adverse" in comparison_text
+        and "Top-K Lift" in comparison_text
+        and "競爭日 / Pool日" in comparison_text
+        and "模型比較 SOP｜8. Evidence Coverage" in comparison_text,
+    )
+
+    # Standard SOP must not inject MR-13M Pred-Safety as a reporting-only dependency.
     captured = {}
 
     class _Settings:
@@ -3076,23 +3163,87 @@ def validate_research_report_contract_freeze_case(_base_params):
     with patch.object(app, "collect_model_upstream_preparation_plan", side_effect=_capture_plan):
         actual_plan = app._collect_continuous_research_input_plan(_Settings())
     check_true(
-        "interactive_model_sop_prepares_shared_predicted_safety_reporting_reference",
-        actual_plan is sentinel_plan
-        and captured.get("include_standard_report_references") is True,
+        "standard_sop_has_no_model_specific_pred_safety_reporting_dependency",
+        actual_plan is sentinel_plan and "include_standard_report_references" not in captured,
         detail=str(captured),
     )
 
-    from filters.breakout_quality.artifact_dependency_registry import (
-        collect_model_upstream_preparation_plan,
+    # [1][1]: validated model/manifest/report identity is enough for reporting reuse;
+    # missing OOS score CSV must not force model retraining.
+    reusable_contract = SimpleNamespace(seed=42)
+    settings = SimpleNamespace(
+        filter_id="breakout_quality_v1",
+        model_architecture="inception_time_v1",
+        experiment_profile="synthetic_profile",
+        seed=42,
+    )
+    with patch.object(
+        app, "load_continuous_ranker_oos_contract", return_value=reusable_contract
+    ) as report_loader:
+        loaded, reason = app._load_reusable_continuous_forward_contract(settings)
+    check_true(
+        "report_reuse_validates_model_manifest_report_without_requiring_oos_score_file",
+        loaded is reusable_contract
+        and reason is None
+        and report_loader.call_args.kwargs.get("require_scores") is False,
+        detail=str(report_loader.call_args),
+    )
+    with patch.object(app, "_load_reusable_continuous_forward_contract", return_value=(reusable_contract, None)), \
+         patch.object(app, "_run_command", side_effect=AssertionError("REUSE path must not train")):
+        code, contract, action = app._ensure_continuous_forward_model_report(
+            "synthetic", model_id="MODEL-REUSE", settings=settings,
+            prompt_for_build=False, emit_reuse_report=False,
+        )
+    check_true(
+        "forward_standard_sop_reuses_valid_complete_model_report_without_training",
+        code == 0 and contract is reusable_contract and action == "REUSE",
     )
 
-    default_parameter = inspect.signature(
-        collect_model_upstream_preparation_plan
-    ).parameters["include_standard_report_references"].default
+    # Missing/stale artifact contract automatically takes canonical BUILD path.
+    plan = SimpleNamespace(blocked=False)
+    with patch.object(
+        app, "_load_reusable_continuous_forward_contract",
+        side_effect=[(None, "synthetic missing"), (reusable_contract, None)],
+    ), patch.object(app, "_collect_continuous_research_input_plan", return_value=plan), \
+         patch.object(app, "_render_continuous_research_input_plan", return_value=None), \
+         patch.object(app, "_prepare_continuous_research_inputs", return_value=0), \
+         patch.object(app, "_run_command", return_value=0) as train_call, \
+         patch.object(app, "_clear_continuous_forward_reuse_caches", return_value=None):
+        code, contract, action = app._ensure_continuous_forward_model_report(
+            "synthetic", model_id="MODEL-BUILD", settings=settings,
+            prompt_for_build=False, emit_reuse_report=False,
+        )
     check_true(
-        "shared_reporting_reference_is_opt_in_outside_interactive_model_sop",
-        default_parameter is False,
-        detail=f"default={default_parameter!r}",
+        "forward_standard_sop_auto_builds_only_when_complete_contract_is_not_reusable",
+        code == 0 and contract is reusable_contract and action == "BUILD"
+        and train_call.call_count == 1
+        and train_call.call_args.args[0] == "train-continuous-ranker",
+    )
+
+    # Current requested comparison set is H / AF / AH, while the generic config accepts 3+ arms.
+    current_pairs = tuple(bq.BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES)
+    check_true(
+        "current_standard_model_comparison_set_is_requested_h_af_ah",
+        current_pairs == (
+            ("MR-13H", bq.DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE),
+            ("MR-13AF", bq.DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE),
+            ("MR-13AH", bq.DAILY_UNIVERSAL_PREDICTED_SAFETY_PRODUCT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE),
+        ),
+        detail=str(current_pairs),
+    )
+
+    # Comparison config accepts 3+ arbitrary valid model/profile pairs rather than a fixed two-arm flow.
+    extra_profile = bq.DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    extra_id = str(bq.get_continuous_ranker_research_spec(extra_profile).model_research_id)
+    synthetic_pairs = (*current_pairs, (extra_id, extra_profile))
+    with patch.object(bq, "BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES", synthetic_pairs):
+        resolved = bq.get_breakout_quality_standard_model_comparison_settings()
+    check_true(
+        "standard_model_comparison_config_supports_more_than_three_models",
+        len(resolved.model_profiles) == len(synthetic_pairs) == 4
+        and tuple(resolved.model_profiles) == tuple(synthetic_pairs),
+        detail=str(resolved.model_profiles),
     )
 
     return results, {"ticker": case_id, "synthetic": True, "training_performed": False}
+

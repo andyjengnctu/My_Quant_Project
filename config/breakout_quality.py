@@ -432,9 +432,14 @@ BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_REFERENCE_ARM = "C17"
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_SUMMARY_PAIR = ("MR-12B", "MR-12A")
 # Forward-OOS top-prefix diagnostic. Values are descriptive only and never enter training.
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES = (1, 2, 3, 5, 10)
-BREAKOUT_QUALITY_CONDITIONAL_MFE_AB_MODEL_GATE_PROFILES = (
-    ("MR-13Q", "daily_universal_conditional_mfe_single_head_full_list_ndcg_pairwise"),
-    ("MR-13R", "daily_universal_safety_conditional_mfe_duo_head_full_list_ndcg_pairwise"),
+# Standard Model SOP multi-model comparison.  Any number >=2 is allowed; the menu
+# REUSEs each model/report when its canonical OOS contract is valid and only trains
+# missing/stale identities.  Ordering controls report presentation only.
+BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_MENU_LABEL = "模型比較（Standard SOP）"
+BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES = (
+    ("MR-13H", "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise"),
+    ("MR-13AF", "daily_universal_predicted_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
+    ("MR-13AH", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"),
 )
 
 # "auto" resolves from the selected experiment profile:
@@ -2804,6 +2809,52 @@ def get_breakout_quality_continuous_ranker_comparison_settings(
 
 
 @dataclass(frozen=True)
+class BreakoutQualityStandardModelComparisonSettings:
+    menu_label: str
+    model_profiles: tuple[tuple[str, str], ...]
+
+    @property
+    def model_ids(self) -> tuple[str, ...]:
+        return tuple(model_id for model_id, _profile in self.model_profiles)
+
+
+def get_breakout_quality_standard_model_comparison_settings(
+) -> BreakoutQualityStandardModelComparisonSettings:
+    model_profiles = tuple(
+        (str(model_id).strip(), str(profile).strip())
+        for model_id, profile in BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES
+    )
+    if len(model_profiles) < 2:
+        raise ValueError("Standard Model SOP比較至少需要兩個model profile")
+    model_ids = tuple(model_id for model_id, _profile in model_profiles)
+    profiles = tuple(profile for _model_id, profile in model_profiles)
+    if any(not value for value in (*model_ids, *profiles)):
+        raise ValueError("Standard Model SOP比較model id/profile不得為空")
+    if len(set(model_ids)) != len(model_ids) or len(set(profiles)) != len(profiles):
+        raise ValueError("Standard Model SOP比較model id/profile不可重複")
+    for model_id, profile_name in model_profiles:
+        experiment = get_breakout_quality_experiment_profile(profile_name)
+        if experiment.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
+            raise ValueError(
+                "Standard Model SOP比較只允許continuous ranker profile: "
+                f"{profile_name}"
+            )
+        research = get_continuous_ranker_research_spec(profile_name)
+        if str(research.model_research_id) != str(model_id):
+            raise ValueError(
+                "Standard Model SOP比較model id/profile research identity不一致: "
+                f"configured={model_id}, resolved={research.model_research_id}, profile={profile_name}"
+            )
+    menu_label = str(BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_MENU_LABEL).strip()
+    if not menu_label:
+        raise ValueError("Standard Model SOP比較menu label不得為空")
+    return BreakoutQualityStandardModelComparisonSettings(
+        menu_label=menu_label,
+        model_profiles=model_profiles,
+    )
+
+
+@dataclass(frozen=True)
 class BreakoutQualityRollingTestModeSettings:
     mode_id: str
     label: str
@@ -3457,6 +3508,8 @@ __all__ = [
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_ENABLED',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_PROFILES',
+    'BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_MENU_LABEL',
+    'BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_REFERENCE_ARM',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_SUMMARY_PAIR',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES',
@@ -3671,6 +3724,7 @@ __all__ = [
     'WORKFLOW_STRATEGY_MODE_HARD_FILTER',
     'WORKFLOW_STRATEGY_MODE_SCORE_RANKING',
     'get_breakout_quality_continuous_ranker_comparison_settings',
+    'get_breakout_quality_standard_model_comparison_settings',
     'get_breakout_quality_rolling_test_modes',
     'get_breakout_quality_rolling_test_mode',
     'get_breakout_quality_rolling_timing_settings',

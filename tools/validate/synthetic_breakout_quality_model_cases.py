@@ -1036,6 +1036,14 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
 
     with (
         patch.object(research_app, "_print_workflow_status"),
+        patch.object(
+            research_app, "get_continuous_ranker_research_spec",
+            return_value=SimpleNamespace(model_research_id="SYNTHETIC-MODEL"),
+        ),
+        patch.object(
+            research_app, "_load_reusable_continuous_forward_contract",
+            return_value=(None, "synthetic missing"),
+        ),
         patch.object(research_app, "_collect_continuous_research_input_plan", return_value=ready_plan),
         patch.object(research_app, "_render_continuous_research_input_plan"),
         patch.object(research_app, "_prompt_bool", return_value=True),
@@ -1085,7 +1093,8 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         'render_menu_item(1, "訓練目前模型 → Forward-OOS 標準模型 SOP 報表", default=True)' in app_source
         and 'render_menu_item(2, "Extending-Window Rolling")' in app_source
         and 'render_menu_item(3, "Fixed-Window Rolling")' in app_source
-        and 'render_menu_item(4, "Target／模型比較")' in app_source
+        and 'render_menu_item(4, comparison_label)' in app_source
+        and 'get_breakout_quality_standard_model_comparison_settings().menu_label' in app_source
         and 'render_menu_item(5, "Timing Mode｜Rolling 訓練前後比較  [工程]")' in app_source
         and "查看目前Workflow、工件與模型報表" not in app_source
         and "Actual MFE×Safety Truth Geometry（只讀）" not in app_source,
@@ -6021,21 +6030,26 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
         metric_table["target_favorable_r"].to_numpy(dtype=np.float64)
         - metric_table["target_adverse_r"].to_numpy(dtype=np.float64),
         np.linspace(0.0, 1.0, 10),
-        np.linspace(0.0, 1.0, 10),
     )
+    top = dict(metric_payload.get("top_10pct") or {})
+    quadrants = dict(top.get("quadrants") or {})
     check_true(
-        "mr13ae_model_gate_behavior_reports_mfe_downside_safety_and_daily_top_decile_only",
+        "mr13ae_standard_sop_common_diagnostic_is_actual_truth_only_with_four_quadrants",
         bool(metric_payload.get("available"))
-        and metric_payload.get("status") == "standard_sop_diagnostic_only_no_fit_no_selection"
+        and metric_payload.get("status") == "standard_sop_actual_truth_diagnostic_only_no_fit_no_selection"
         and int(metric_payload.get("group_count", 0)) == 10
-        and int((metric_payload.get("top_10pct") or {}).get("n", 0)) == 1
-        and float((metric_payload.get("top_10pct") or {}).get("full_mfe_r_mean")) == 10.0
-        and float((metric_payload.get("top_10pct") or {}).get("adverse_r_mean")) == 1.0
-        and float((metric_payload.get("top_10pct") or {}).get("high_mfe_pct")) == 100.0
-        and float((metric_payload.get("top_10pct") or {}).get("high_safety_pct")) == 100.0
-        and float((metric_payload.get("top_10pct") or {}).get("hmhs_pct")) == 100.0
+        and int(top.get("n", 0)) == 1
+        and float(top.get("full_mfe_r_mean")) == 10.0
+        and float(top.get("adverse_r_mean")) == 1.0
+        and float(top.get("low_adverse_r_mean")) == -1.0
+        and float(top.get("high_mfe_pct")) == 100.0
+        and float(top.get("high_safety_pct")) == 100.0
+        and float(top.get("hmhs_pct")) == 100.0
         and float(metric_payload.get("score_to_low_adverse_daily_spearman")) > 0.999
-        and float(metric_payload.get("predicted_safety_to_model_score_mean_daily_spearman")) > 0.999,
+        and set(quadrants) == {"hmhs", "hmls", "lmhs", "lmls"}
+        and float((quadrants.get("hmhs") or {}).get("pct")) == 100.0
+        and "predicted_safety_to_target_daily_spearman" not in metric_payload
+        and "predicted_safety_to_model_score_mean_daily_spearman" not in metric_payload,
     )
     summary["training_performed"] = False
     return results, summary

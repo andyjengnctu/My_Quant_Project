@@ -17,7 +17,6 @@ import pandas as pd
 
 from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
-    CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R,
     CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R,
     CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
@@ -67,9 +66,6 @@ from filters.breakout_quality.ranker_sample_contract import (
     resolve_forward_oos_score_group_ids,
 )
 from filters.breakout_quality.paths import resolve_filter_model_output_dir
-from filters.breakout_quality.predicted_context_artifact import (
-    load_validated_predicted_context,
-)
 from filters.breakout_quality.ranking_score_store import DAILY_RANKER_OOS_SCORE_FILENAME
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from core.console_report import print_artifact_paths
@@ -406,75 +402,18 @@ def _dual_component_metrics(
 
 
 
-def _load_standard_predicted_safety_reference(bundle) -> tuple[np.ndarray | None, dict]:
-    """Load the canonical PIT-safe Pred-Safety reference used only by Standard SOP diagnostics.
-
-    This is deliberately evaluation-only: it never alters target-valid membership, model
-    inputs, loss, epoch selection, final refit, or score generation.  The interactive
-    ``[1] -> [1]`` preparation path ensures this shared reference is READY when possible;
-    direct/legacy CLI runs degrade to an explicit unavailable evidence row instead of
-    changing the fitted scientific identity.
-    """
-
-    try:
-        frame, manifest = load_validated_predicted_context(
-            CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
-            PROJECT_ROOT,
-            filter_id=str(bundle.summary["filter_id"]),
-            model_architecture=str(bundle.model_spec.architecture),
-            experiment_profile=str(bundle.profile.name),
-            expected_dataset_policy=dict(bundle.summary.get("policy") or {}),
-            expected_dataset_artifacts=dict(
-                bundle.summary.get("source_dataset_artifacts") or {}
-            ),
-        )
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        return None, {
-            "available": False,
-            "status": "MISSING_OR_INVALID",
-            "reason": f"{type(exc).__name__}: {exc}",
-        }
-
-    try:
-        keys = bundle.group_table[["ticker", "date"]].copy()
-        keys["ticker"] = keys["ticker"].astype(str)
-        keys["date"] = pd.to_datetime(keys["date"], errors="raise").dt.normalize()
-        ref = frame[["ticker", "date", "predicted_safety_percentile"]].copy()
-        ref["ticker"] = ref["ticker"].astype(str)
-        ref["date"] = pd.to_datetime(ref["date"], errors="raise").dt.normalize()
-        if ref.duplicated(["ticker", "date"]).any():
-            raise ValueError("canonical Pred-Safety reference ticker/date重複")
-        merged = keys.merge(ref, on=["ticker", "date"], how="left", validate="one_to_one")
-        values = pd.to_numeric(
-            merged["predicted_safety_percentile"], errors="coerce"
-        ).to_numpy(dtype=np.float64)
-    except (ValueError, KeyError, TypeError) as exc:
-        return None, {
-            "available": False,
-            "status": "MISSING_OR_INVALID",
-            "reason": f"{type(exc).__name__}: {exc}",
-        }
-    return values, {
-        "available": True,
-        "status": "AVAILABLE",
-        "manifest": manifest,
-        "covered_group_count": int(np.isfinite(values).sum()),
-        "group_count": int(len(values)),
-    }
-
-
 def _upside_downside_alignment_metrics(
     group_ids: np.ndarray,
     group_table: pd.DataFrame,
     raw_target: np.ndarray,
     scores: np.ndarray,
-    predicted_safety_percentile: np.ndarray | None,
 ) -> dict:
-    """Canonical target-neutral MFE/Safety diagnostics for every Daily Universal DL.
+    """Canonical actual-truth MFE/Safety diagnostics for every Daily Universal DL.
 
-    Actual High-MFE / High-Safety truth always uses same-date percentiles computed on the
-    full Daily Universal universe.  A Breakout slice only filters those canonical truths;
-    it never re-ranks actual MFE/Safety inside the subset.
+    Standard SOP deliberately depends only on the evaluated model's Target/Score and
+    the common actual future truth.  High-MFE / High-Safety truth uses same-date
+    percentiles computed on the full Daily Universal universe; a Breakout slice only
+    filters those canonical truths and never re-ranks inside the subset.
     """
 
     ids = np.asarray(group_ids, dtype=np.int64)
@@ -506,14 +445,6 @@ def _upside_downside_alignment_metrics(
     adverse = adverse_all[ids]
     mfe_pct = mfe_pct_all[ids]
     safety_pct = safety_pct_all[ids]
-    pred_safety = (
-        np.full(len(group_table), np.nan, dtype=np.float64)
-        if predicted_safety_percentile is None
-        else np.asarray(predicted_safety_percentile, dtype=np.float64)
-    )
-    if pred_safety.ndim != 1 or len(pred_safety) != len(group_table):
-        raise ValueError("Standard Pred-Safety reference length mismatch")
-    pred_safety = pred_safety[ids]
 
     def daily_rho(left: np.ndarray, right: np.ndarray) -> float | None:
         valid = np.isfinite(left) & np.isfinite(right)
@@ -552,42 +483,65 @@ def _upside_downside_alignment_metrics(
 
     hm = mfe_pct >= 0.50
     hs = safety_pct >= 0.50
-    population_hmhs = float(np.mean((hm & hs)[valid_ids]) * 100.0)
-    top_hmhs = float(np.mean((hm & hs)[top]) * 100.0)
-    top_hmhs_enrichment = (
-        None if population_hmhs <= 0.0 else float(top_hmhs / population_hmhs)
-    )
-    pred_safety_valid = base_valid & np.isfinite(pred_safety)
+    quadrants = {
+        "hmhs": hm & hs,
+        "hmls": hm & ~hs,
+        "lmhs": ~hm & hs,
+        "lmls": ~hm & ~hs,
+    }
+
+    def quadrant_payload(mask: np.ndarray, cohort: np.ndarray) -> dict:
+        population_pct = float(np.mean(mask[valid_ids]) * 100.0)
+        cohort_pct = float(np.mean(mask[cohort]) * 100.0)
+        enrichment = (
+            None
+            if population_pct <= 0.0
+            else float(cohort_pct / population_pct)
+        )
+        return {
+            "pct": cohort_pct,
+            "population_pct": population_pct,
+            "enrichment": enrichment,
+        }
+
+    top_quadrants = {
+        key: quadrant_payload(mask, top)
+        for key, mask in quadrants.items()
+    }
+    population_quadrants = {
+        key: float(np.mean(mask[valid_ids]) * 100.0)
+        for key, mask in quadrants.items()
+    }
 
     return {
         "available": True,
         "group_count": int(base_valid.sum()),
-        "predicted_safety_covered_group_count": int(pred_safety_valid.sum()),
         "target_to_full_mfe_daily_spearman": daily_rho(target, favorable),
+        # Safety is the monotonic inverse of adverse magnitude, so higher is safer.
         "target_to_low_adverse_daily_spearman": daily_rho(target, -adverse),
-        "predicted_safety_to_target_daily_spearman": daily_rho(pred_safety, target),
         "score_to_full_mfe_daily_spearman": daily_rho(score, favorable),
         "score_to_low_adverse_daily_spearman": daily_rho(score, -adverse),
-        "predicted_safety_to_model_score_mean_daily_spearman": daily_rho(
-            pred_safety, score
-        ),
         "population": {
             "full_mfe_r_mean": float(np.mean(favorable[valid_ids])),
             "adverse_r_mean": float(np.mean(adverse[valid_ids])),
+            "low_adverse_r_mean": float(np.mean(-adverse[valid_ids])),
             "high_mfe_pct": float(np.mean(hm[valid_ids]) * 100.0),
             "high_safety_pct": float(np.mean(hs[valid_ids]) * 100.0),
-            "hmhs_pct": population_hmhs,
+            "quadrants": population_quadrants,
         },
         "top_10pct": {
             "n": int(len(top)),
             "full_mfe_r_mean": float(np.mean(favorable[top])),
             "adverse_r_mean": float(np.mean(adverse[top])),
+            "low_adverse_r_mean": float(np.mean(-adverse[top])),
             "high_mfe_pct": float(np.mean(hm[top]) * 100.0),
             "high_safety_pct": float(np.mean(hs[top]) * 100.0),
-            "hmhs_pct": top_hmhs,
-            "hmhs_enrichment": top_hmhs_enrichment,
+            "quadrants": top_quadrants,
+            # Compatibility fields retained in raw JSON for historical consumers.
+            "hmhs_pct": top_quadrants["hmhs"]["pct"],
+            "hmhs_enrichment": top_quadrants["hmhs"]["enrichment"],
         },
-        "status": "standard_sop_diagnostic_only_no_fit_no_selection",
+        "status": "standard_sop_actual_truth_diagnostic_only_no_fit_no_selection",
     }
 
 def _pair_weight_report_extension(
@@ -659,8 +613,8 @@ def _render_markdown(payload: dict) -> str:
         "",
         section("1. Learnability"),
         "",
-        "| Scope | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Scope | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target | Top-Bottom Target |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ])
     for label, key in (
         ("Validation", "validation"),
@@ -677,7 +631,8 @@ def _render_markdown(payload: dict) -> str:
             f"| {fmt(row.get('global_spearman_vs_raw_target'))} "
             f"| {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
             f"| {fmt(row.get('top_score_decile_raw_target_mean'))} "
-            f"| {fmt(row.get('bottom_score_decile_raw_target_mean'))} |"
+            f"| {fmt(row.get('bottom_score_decile_raw_target_mean'))} "
+            f"| {fmt(None if row.get('top_score_decile_raw_target_mean') is None or row.get('bottom_score_decile_raw_target_mean') is None else float(row['top_score_decile_raw_target_mean']) - float(row['bottom_score_decile_raw_target_mean']))} |"
         )
 
     validation = dict((payload.get("split_metrics") or {}).get("validation") or {})
@@ -687,15 +642,17 @@ def _render_markdown(payload: dict) -> str:
         "",
         section("2. Generalization"),
         "",
-        "| Comparison | Δ Daily rho | Δ Pair |",
-        "|---|---:|---:|",
+        "| Comparison | Δ Daily rho | Δ Pair | Δ Top-Bottom |",
+        "|---|---:|---:|---:|",
         f"| Validation → Forward OOS | {delta(validation.get('mean_daily_spearman'), oos.get('mean_daily_spearman'))} "
-        f"| {delta(validation.get('pairwise_concordance'), oos.get('pairwise_concordance'), percent=True)} |",
+        f"| {delta(validation.get('pairwise_concordance'), oos.get('pairwise_concordance'), percent=True)} "
+        f"| {delta((None if validation.get('top_score_decile_raw_target_mean') is None or validation.get('bottom_score_decile_raw_target_mean') is None else float(validation['top_score_decile_raw_target_mean'])-float(validation['bottom_score_decile_raw_target_mean'])), (None if oos.get('top_score_decile_raw_target_mean') is None or oos.get('bottom_score_decile_raw_target_mean') is None else float(oos['top_score_decile_raw_target_mean'])-float(oos['bottom_score_decile_raw_target_mean'])))} |",
     ])
     if breakout:
         lines.append(
             f"| Forward OOS → Breakout slice | {delta(oos.get('mean_daily_spearman'), breakout.get('mean_daily_spearman'))} "
-            f"| {delta(oos.get('pairwise_concordance'), breakout.get('pairwise_concordance'), percent=True)} |"
+            f"| {delta(oos.get('pairwise_concordance'), breakout.get('pairwise_concordance'), percent=True)} "
+            f"| {delta((None if oos.get('top_score_decile_raw_target_mean') is None or oos.get('bottom_score_decile_raw_target_mean') is None else float(oos['top_score_decile_raw_target_mean'])-float(oos['bottom_score_decile_raw_target_mean'])), (None if breakout.get('top_score_decile_raw_target_mean') is None or breakout.get('bottom_score_decile_raw_target_mean') is None else float(breakout['top_score_decile_raw_target_mean'])-float(breakout['bottom_score_decile_raw_target_mean'])))} |"
         )
     alignment_eval = dict(payload.get("upside_downside_alignment_evaluation") or {})
     if alignment_eval:
@@ -723,6 +680,14 @@ def _render_markdown(payload: dict) -> str:
                 )
             return [header, separator, *body]
 
+        def qdisplay(top: dict, key: str) -> str:
+            item = dict((top.get("quadrants") or {}).get(key) or {})
+            pct = item.get("pct")
+            enrich = item.get("enrichment")
+            if pct is None:
+                return "-"
+            return f"{float(pct):.2f}% ({'-' if enrich is None else f'{float(enrich):.2f}×'})"
+
         alignment_rows = []
         top_tail_rows = []
         for label, key in (
@@ -735,30 +700,30 @@ def _render_markdown(payload: dict) -> str:
             alignment_rows.append({
                 "split": label,
                 "target_to_full_mfe_daily_spearman": row.get("target_to_full_mfe_daily_spearman"),
-                "target_to_low_adverse_daily_spearman": row.get("target_to_low_adverse_daily_spearman"),
-                "predicted_safety_to_target_daily_spearman": row.get("predicted_safety_to_target_daily_spearman"),
+                "target_to_safety_daily_spearman": row.get("target_to_low_adverse_daily_spearman"),
                 "score_to_full_mfe_daily_spearman": row.get("score_to_full_mfe_daily_spearman"),
-                "score_to_low_adverse_daily_spearman": row.get("score_to_low_adverse_daily_spearman"),
-                "predicted_safety_to_model_score_mean_daily_spearman": row.get("predicted_safety_to_model_score_mean_daily_spearman"),
+                "score_to_safety_daily_spearman": row.get("score_to_low_adverse_daily_spearman"),
             })
             top_tail_rows.append({
                 "split": label,
                 "top10_n": top.get("n"),
                 "top10_full_mfe_r_mean": top.get("full_mfe_r_mean"),
-                "top10_adverse_r_mean": top.get("adverse_r_mean"),
+                "top10_low_adverse_r_mean": top.get("low_adverse_r_mean"),
                 "top10_high_mfe_pct": top.get("high_mfe_pct"),
                 "top10_high_safety_pct": top.get("high_safety_pct"),
-                "top10_hmhs_pct": top.get("hmhs_pct"),
-                "top10_hmhs_enrichment": top.get("hmhs_enrichment"),
+                "top10_hmhs": qdisplay(top, "hmhs"),
+                "top10_hmls": qdisplay(top, "hmls"),
+                "top10_lmhs": qdisplay(top, "lmhs"),
+                "top10_lmls": qdisplay(top, "lmls"),
             })
         lines.extend([
             "",
-            section("7. Upside / Downside Alignment"),
+            section("4. Upside / Downside Alignment"),
             "",
-            "- Canonical Pred-Safety是固定PIT-safe reporting reference；不參與此模型fit、epoch selection或score generation。",
+            "- Safety固定為actual Low-Adverse（`-Adverse`）方向；數值越高越安全。",
             *contract_markdown("upside_downside_alignment", alignment_rows),
             "",
-            section("8. Top-tail Economic Quality"),
+            section("5. Top-tail Economic Quality"),
             "",
             "- High-MFE / High-Safety使用Daily-universal同日actual percentile；Breakout只filter，不在subset內重新排名truth。",
             *contract_markdown("top_tail_economic_quality", top_tail_rows),
@@ -1374,35 +1339,17 @@ def run(args) -> int:
         bundle, split.oos_ids, allow_stale_source=bool(args.allow_stale_source)
     )
 
-    # Standard SOP reference diagnostics are evaluated only after the fitted checkpoint
-    # is persisted and frozen scores exist.  The canonical Pred-Safety reference is a
-    # shared reporting dependency, never a fitting dependency unless the profile itself
-    # explicitly declares it as model input / target transform / pair weighting.
-    standard_predicted_safety, standard_predicted_safety_reference = (
-        _load_standard_predicted_safety_reference(bundle)
-    )
+    # Standard SOP common diagnostics depend only on actual MFE/Safety truth.
+    # Model-specific predicted-Safety references are intentionally excluded.
     upside_downside_alignment_evaluation = {
-        "reference": standard_predicted_safety_reference,
         "validation": _upside_downside_alignment_metrics(
-            split.validation_ids,
-            bundle.group_table,
-            bundle.raw_target,
-            validation_scores,
-            standard_predicted_safety,
+            split.validation_ids, bundle.group_table, bundle.raw_target, validation_scores
         ),
         "oos": _upside_downside_alignment_metrics(
-            split.oos_ids,
-            bundle.group_table,
-            bundle.raw_target,
-            oos_scores,
-            standard_predicted_safety,
+            split.oos_ids, bundle.group_table, bundle.raw_target, oos_scores
         ),
         "breakout_candidate_oos": _upside_downside_alignment_metrics(
-            candidate_ids,
-            bundle.group_table,
-            bundle.raw_target,
-            score_by_group[candidate_ids],
-            standard_predicted_safety,
+            candidate_ids, bundle.group_table, bundle.raw_target, score_by_group[candidate_ids]
         ),
     }
     if forward_components is not None:

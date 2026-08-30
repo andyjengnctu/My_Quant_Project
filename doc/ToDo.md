@@ -1,11 +1,24 @@
 
-- bug fix
-    - epoch performance inconsistat in [1][3]
-
-
 
 - restreucture
-    - centralized color template file to consist rule
+    - research 報表是否需要集中管理架構? 包含報表用色規則是否需要集中管理? 目前架構現況?
+    - report refine
+        - [1][1]
+            - 確認如果模型/報表已經在就不要重跑
+            - Learnability 多一欄是 = Top 10% Target - Bottom 10% Target
+            - Ranking / Boundary移除 Top-K Target，並將Lift更名為Top-K Lift，競爭日要對比該pool的母體數量
+            - Upside / Downside Alignment
+                - 移除Pred-Safety→Target rho / Pred-Safety→Score rho 這兩個非共通的指標
+                - Target→Low-Adverse rho -> Target→Safety rho
+                - Score→Low-Adverse rho -> Score→Safety rho
+            - Top-tail Economic Quality
+                - Top10 Adverse  -> Top10 Low-Adverse     
+                - HM/HS HM/HSx合併顯示為 24.51% (1.08x) 
+                - 也加入 HM/LS, LM/HS, LM/LS
+            - 4/5往後移, Evidence Coverage 放到最後
+        -[1] [4] 報表項目與sop相同，可任意加多個比較對像，先進行13H, 13AF, 13AH三個比較，如果模型已經在不要重訓，如果不在自動重訓
+
+
 
 - imrove DL module
     - attention (temperal / cross-secction)

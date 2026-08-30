@@ -29,10 +29,10 @@ from config.breakout_quality import (
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
     get_breakout_quality_continuous_ranker_comparison_settings,
+    get_breakout_quality_standard_model_comparison_settings,
     get_breakout_quality_experiment_profile,
     get_continuous_ranker_research_spec,
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL,
-    BREAKOUT_QUALITY_CONDITIONAL_MFE_AB_MODEL_GATE_PROFILES,
 )
 from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
@@ -61,6 +61,8 @@ from core.training_scheduler import pop_next_seed_diverse_unit
 from core.research_report_contract import (
     extension_contract,
     format_contract_value,
+    persistent_report_contract_fingerprint,
+    report_contract,
     section_contract,
     table_contract,
 )
@@ -136,6 +138,7 @@ from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     derive_point_in_time_model_validation_gate,
     load_continuous_ranker_oos_contract,
+    load_continuous_ranker_oos_score_table,
     resolve_continuous_ranker_oos_score_path,
 )
 from services.audit.catalog import get_domain_cli_commands
@@ -456,14 +459,21 @@ def _model_sop_view(payload: dict) -> dict:
     learnability_rows = []
     for name in split_names:
         row = dict(metrics.get(name) or {})
+        top_value = row.get("top_score_decile_raw_target_mean")
+        bottom_value = row.get("bottom_score_decile_raw_target_mean")
         learnability_rows.append({
             "split": name,
             "group_count": int(row.get("group_count", 0) or 0),
             "mean_daily_spearman": row.get("mean_daily_spearman"),
             "global_spearman_vs_raw_target": row.get("global_spearman_vs_raw_target"),
             "pairwise_concordance": row.get("pairwise_concordance"),
-            "top_score_decile_raw_target_mean": row.get("top_score_decile_raw_target_mean"),
-            "bottom_score_decile_raw_target_mean": row.get("bottom_score_decile_raw_target_mean"),
+            "top_score_decile_raw_target_mean": top_value,
+            "bottom_score_decile_raw_target_mean": bottom_value,
+            "top_bottom_raw_target_gap": (
+                None
+                if top_value is None or bottom_value is None
+                else float(top_value) - float(bottom_value)
+            ),
         })
 
     generalization_rows = []
@@ -556,17 +566,70 @@ def _model_sop_view(payload: dict) -> dict:
             ranking["rows"].append({
                 "split": name,
                 "ndcg_at_k": quality.get("ndcg_at_k"),
-                "top_k_raw_target_mean": quality.get("top_k_raw_target_mean"),
                 "top_k_raw_target_lift": quality.get("top_k_raw_target_lift"),
                 "oracle_top_k_overlap": quality.get("oracle_top_k_overlap"),
                 "boundary_concordance": quality.get("boundary_concordance"),
                 "boundary_raw_target_gap": quality.get("boundary_raw_target_gap"),
-                "competition_date_count": int(quality.get("competition_date_count", quality.get("top_k_date_count", 0)) or 0),
+                "competition_date_pool": (
+                    f"{int(quality.get('competition_date_count', quality.get('top_k_date_count', 0)) or 0):,} / "
+                    f"{int(quality.get('all_date_count', 0) or 0):,}"
+                ),
             })
 
     alignment_eval = dict(payload.get("upside_downside_alignment_evaluation") or {})
     alignment_rows = []
     top_tail_rows = []
+
+    def quadrant_metrics(row: dict, top: dict, key: str) -> tuple[float | None, float | None]:
+        top_quadrants = dict(top.get("quadrants") or {})
+        explicit = dict(top_quadrants.get(key) or {})
+        if explicit:
+            return explicit.get("pct"), explicit.get("enrichment")
+
+        # Historical Standard-SOP-v2 reports can be upgraded read-only from the
+        # already persisted marginals; no model retraining is required.
+        pop = dict(row.get("population") or {})
+        top_hm = top.get("high_mfe_pct")
+        top_hs = top.get("high_safety_pct")
+        top_hmhs = top.get("hmhs_pct")
+        pop_hm = pop.get("high_mfe_pct")
+        pop_hs = pop.get("high_safety_pct")
+        pop_hmhs = None
+        pop_quadrants = dict(pop.get("quadrants") or {})
+        if pop_quadrants:
+            pop_hmhs = pop_quadrants.get("hmhs")
+        if pop_hmhs is None:
+            # v2 stored the HM/HS population implicitly through top HM/HS enrichment.
+            top_enrich = top.get("hmhs_enrichment")
+            if top_hmhs is not None and top_enrich not in (None, 0, 0.0):
+                pop_hmhs = float(top_hmhs) / float(top_enrich)
+        required = (top_hm, top_hs, top_hmhs, pop_hm, pop_hs, pop_hmhs)
+        if any(value is None for value in required):
+            return None, None
+        top_hm = float(top_hm); top_hs = float(top_hs); top_hmhs = float(top_hmhs)
+        pop_hm = float(pop_hm); pop_hs = float(pop_hs); pop_hmhs = float(pop_hmhs)
+        top_values = {
+            "hmhs": top_hmhs,
+            "hmls": top_hm - top_hmhs,
+            "lmhs": top_hs - top_hmhs,
+            "lmls": 100.0 - top_hm - top_hs + top_hmhs,
+        }
+        pop_values = {
+            "hmhs": pop_hmhs,
+            "hmls": pop_hm - pop_hmhs,
+            "lmhs": pop_hs - pop_hmhs,
+            "lmls": 100.0 - pop_hm - pop_hs + pop_hmhs,
+        }
+        pct = top_values[key]
+        population_pct = pop_values[key]
+        return pct, (None if population_pct <= 0.0 else pct / population_pct)
+
+    def quadrant_display(row: dict, top: dict, key: str) -> str:
+        pct, enrichment = quadrant_metrics(row, top, key)
+        if pct is None:
+            return "-"
+        return f"{float(pct):.2f}% ({'-' if enrichment is None else f'{float(enrichment):.2f}×'})"
+
     for scope_label, scope_key in (
         ("Validation", "validation"),
         ("Forward OOS", "oos"),
@@ -579,39 +642,36 @@ def _model_sop_view(payload: dict) -> dict:
         alignment_rows.append({
             "split": scope_label,
             "target_to_full_mfe_daily_spearman": row.get("target_to_full_mfe_daily_spearman"),
-            "target_to_low_adverse_daily_spearman": row.get("target_to_low_adverse_daily_spearman"),
-            "predicted_safety_to_target_daily_spearman": row.get("predicted_safety_to_target_daily_spearman"),
+            "target_to_safety_daily_spearman": row.get("target_to_low_adverse_daily_spearman"),
             "score_to_full_mfe_daily_spearman": row.get("score_to_full_mfe_daily_spearman"),
-            "score_to_low_adverse_daily_spearman": row.get("score_to_low_adverse_daily_spearman"),
-            "predicted_safety_to_model_score_mean_daily_spearman": row.get("predicted_safety_to_model_score_mean_daily_spearman"),
+            "score_to_safety_daily_spearman": row.get("score_to_low_adverse_daily_spearman"),
         })
+        adverse = top.get("adverse_r_mean")
         top_tail_rows.append({
             "split": scope_label,
             "top10_n": top.get("n"),
             "top10_full_mfe_r_mean": top.get("full_mfe_r_mean"),
-            "top10_adverse_r_mean": top.get("adverse_r_mean"),
+            "top10_low_adverse_r_mean": (
+                top.get("low_adverse_r_mean")
+                if top.get("low_adverse_r_mean") is not None
+                else None if adverse is None else -float(adverse)
+            ),
             "top10_high_mfe_pct": top.get("high_mfe_pct"),
             "top10_high_safety_pct": top.get("high_safety_pct"),
-            "top10_hmhs_pct": top.get("hmhs_pct"),
-            "top10_hmhs_enrichment": top.get("hmhs_enrichment"),
+            "top10_hmhs": quadrant_display(row, top, "hmhs"),
+            "top10_hmls": quadrant_display(row, top, "hmls"),
+            "top10_lmhs": quadrant_display(row, top, "lmhs"),
+            "top10_lmls": quadrant_display(row, top, "lmls"),
         })
-    reference = dict(alignment_eval.get("reference") or {})
-    alignment_status = (
-        "AVAILABLE"
-        if alignment_rows and bool(reference.get("available"))
-        else "PARTIAL"
-        if alignment_rows
-        else "N/A"
-    )
 
     evidence = [
         ("Learnability", "AVAILABLE" if metrics.get("oos") else "N/A"),
         ("Generalization", "AVAILABLE" if metrics.get("validation") and metrics.get("oos") else "N/A"),
+        ("Upside / Downside Alignment", "AVAILABLE" if alignment_rows else "N/A"),
+        ("Top-tail Economic Quality", "AVAILABLE" if top_tail_rows else "N/A"),
         ("Truth / Prediction Geometry", "AVAILABLE" if geometry_scopes else "N/A"),
         ("Breakout application slice", "AVAILABLE" if metrics.get("breakout_candidate_oos") else "N/A"),
         ("Ranking / Boundary", "AVAILABLE" if sample else "N/A"),
-        ("Upside / Downside Alignment", alignment_status),
-        ("Top-tail Economic Quality", "AVAILABLE" if top_tail_rows else "N/A"),
     ]
 
     extensions = []
@@ -780,6 +840,24 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             ),
         ])
 
+    if view.get("upside_downside_alignment"):
+        lines.extend([
+            section("upside_downside_alignment"),
+            _render_model_contract_table(
+                table_contract("model.standard_sop", "upside_downside_alignment", "upside_downside_alignment"),
+                view["upside_downside_alignment"], target="console", scope_styler=scope_text,
+            ),
+        ])
+    if view.get("top_tail_economic_quality"):
+        lines.extend([
+            section("top_tail_economic_quality"),
+            _render_model_contract_table(
+                table_contract("model.standard_sop", "top_tail_economic_quality", "top_tail_economic_quality"),
+                view["top_tail_economic_quality"], target="console", scope_styler=scope_text,
+            ),
+        ])
+
+
     def truth_cell(cell: dict) -> str:
         if not cell:
             return "0 / - / -"
@@ -864,22 +942,6 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             evidence_rows, target="console",
         ),
     ])
-    if view.get("upside_downside_alignment"):
-        lines.extend([
-            section("upside_downside_alignment"),
-            _render_model_contract_table(
-                table_contract("model.standard_sop", "upside_downside_alignment", "upside_downside_alignment"),
-                view["upside_downside_alignment"], target="console", scope_styler=scope_text,
-            ),
-        ])
-    if view.get("top_tail_economic_quality"):
-        lines.extend([
-            section("top_tail_economic_quality"),
-            _render_model_contract_table(
-                table_contract("model.standard_sop", "top_tail_economic_quality", "top_tail_economic_quality"),
-                view["top_tail_economic_quality"], target="console", scope_styler=scope_text,
-            ),
-        ])
 
     for ext in view["extensions"]:
         ext_id = str(ext["id"])
@@ -931,6 +993,18 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         lines.extend(["", section("multi_head"), "", _render_model_contract_table(
             table_contract("model.standard_sop", "multi_head", "multi_head"), view["multi_head"], target="markdown", scope_styler=scope_text,
         )])
+
+    if view.get("upside_downside_alignment"):
+        lines.extend(["", section("upside_downside_alignment"), "", _render_model_contract_table(
+            table_contract("model.standard_sop", "upside_downside_alignment", "upside_downside_alignment"),
+            view["upside_downside_alignment"], target="markdown", scope_styler=scope_text,
+        )])
+    if view.get("top_tail_economic_quality"):
+        lines.extend(["", section("top_tail_economic_quality"), "", _render_model_contract_table(
+            table_contract("model.standard_sop", "top_tail_economic_quality", "top_tail_economic_quality"),
+            view["top_tail_economic_quality"], target="markdown", scope_styler=scope_text,
+        )])
+
 
     def truth_cell(cell: dict) -> str:
         if not cell:
@@ -1005,16 +1079,6 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
     lines.extend(["", section("evidence_coverage"), "", _render_model_contract_table(
         table_contract("model.standard_sop", "evidence_coverage", "evidence_coverage"), evidence_rows, target="markdown",
     )])
-    if view.get("upside_downside_alignment"):
-        lines.extend(["", section("upside_downside_alignment"), "", _render_model_contract_table(
-            table_contract("model.standard_sop", "upside_downside_alignment", "upside_downside_alignment"),
-            view["upside_downside_alignment"], target="markdown", scope_styler=scope_text,
-        )])
-    if view.get("top_tail_economic_quality"):
-        lines.extend(["", section("top_tail_economic_quality"), "", _render_model_contract_table(
-            table_contract("model.standard_sop", "top_tail_economic_quality", "top_tail_economic_quality"),
-            view["top_tail_economic_quality"], target="markdown", scope_styler=scope_text,
-        )])
 
     for ext in view["extensions"]:
         ext_id = str(ext["id"])
@@ -1036,6 +1100,279 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
                 extension_contract(ext_id).tables[0], ext["rows"], target="markdown", scope_styler=scope_text,
             ))
     return lines
+
+
+def _model_comparison_section_title(section_id: str, *, suffix: str = "") -> str:
+    section = section_contract("model.standard_comparison", section_id)
+    base = f"模型比較 SOP｜{section.number}. {section.title}"
+    return base + (f"｜{suffix}" if suffix else "")
+
+
+def _render_model_comparison_contract_table(
+    section_id: str,
+    table_id: str,
+    rows: list[dict],
+    *,
+    target: str,
+    scope_styler=None,
+    delta_style: bool = False,
+) -> str:
+    return _render_model_contract_table(
+        table_contract("model.standard_comparison", section_id, table_id),
+        rows,
+        target=target,
+        scope_styler=scope_styler,
+        delta_style=delta_style,
+    )
+
+
+def _standard_model_comparison_views(models: list[dict]) -> list[dict]:
+    views = []
+    for item in models:
+        payload = dict(item.get("payload") or {})
+        view = _model_sop_view(payload)
+        if not view:
+            raise ValueError(f"模型比較缺少Standard SOP payload: {item.get('model_id')}")
+        views.append({**item, "view": view})
+    return views
+
+
+def _comparison_truth_cell(cell: dict) -> str:
+    if not cell:
+        return "0 / - / -"
+    pct = cell.get("population_pct")
+    enrich = cell.get("independence_enrichment")
+    return (
+        f"{int(cell.get('n', 0) or 0):,} / "
+        f"{'-' if pct is None else f'{float(pct):.2f}%'} / "
+        f"{'-' if enrich is None else f'{float(enrich):.2f}×'}"
+    )
+
+
+def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
+    result: dict[str, object] = {
+        "learnability": [],
+        "generalization": [],
+        "multi_head": [],
+        "upside_downside_alignment": [],
+        "top_tail_economic_quality": [],
+        "geometry_summary": [],
+        "truth_5x5": [],
+        "predicted_5x5": [],
+        "safety_cohorts": [],
+        "ranking_boundary": [],
+        "evidence_coverage": [],
+        "extensions": [],
+        "ranking_settings": [],
+    }
+    for item in views:
+        model = str(item["model_id"])
+        view = dict(item["view"])
+        for key in (
+            "learnability",
+            "generalization",
+            "multi_head",
+            "upside_downside_alignment",
+            "top_tail_economic_quality",
+        ):
+            result[key].extend({"model": model, **dict(row)} for row in list(view.get(key) or []))
+
+        ranking = dict(view.get("ranking") or {})
+        if ranking:
+            result["ranking_settings"].append(
+                (int(ranking.get("top_k", 0) or 0), int(ranking.get("boundary_width", 0) or 0), str(ranking.get("competition_scope") or ""))
+            )
+            result["ranking_boundary"].extend(
+                {"model": model, **dict(row)} for row in list(ranking.get("rows") or [])
+            )
+
+        for evidence, status in list(view.get("evidence") or []):
+            result["evidence_coverage"].append(
+                {"model": model, "evidence": evidence, "status": status}
+            )
+
+        for scope_label, gate in list(view.get("geometry") or []):
+            gate = dict(gate or {})
+            actual = dict(gate.get("actual_truth_geometry") or {})
+            upper = dict(gate.get("upper_right_s5_m5") or {})
+            result["geometry_summary"].extend([
+                {"model": model, "metric": f"{scope_label} | Actual Safety↔MFE Daily rho", "value": _fmt_simple_metric(actual.get("safety_to_mfe_mean_daily_spearman"))},
+                {"model": model, "metric": f"{scope_label} | Pred Safety↔Raw-MFE Daily rho", "value": _fmt_simple_metric(gate.get("predicted_safety_to_raw_mfe_mean_daily_spearman"))},
+                {"model": model, "metric": f"{scope_label} | Actual S5×M5", "value": _comparison_truth_cell(dict(actual.get("s5_m5") or {}))},
+                {"model": model, "metric": f"{scope_label} | Actual S4+×M4+", "value": _comparison_truth_cell(dict(actual.get("s4plus_m4plus") or {}))},
+                {"model": model, "metric": f"{scope_label} | Pred S5×M5 N", "value": f"{int(upper.get('n', 0) or 0):,}"},
+                {"model": model, "metric": f"{scope_label} | Joint product→actual HM/HS Daily rho", "value": _fmt_simple_metric(gate.get("joint_product_to_actual_hmhs_mean_daily_spearman"))},
+            ])
+            for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1):
+                result["truth_5x5"].append({
+                    "model": model,
+                    "safety": f"{scope_label} S{s_idx}",
+                    **{f"m{i}": _comparison_truth_cell(dict(cell or {})) for i, cell in enumerate(row, start=1)},
+                })
+            for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
+                cells = {}
+                for i, cell in enumerate(row, start=1):
+                    cell = dict(cell or {})
+                    pct = cell.get("actual_hmhs_pct")
+                    cells[f"m{i}"] = f"{int(cell.get('n', 0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'}"
+                result["predicted_5x5"].append({"model": model, "safety": f"{scope_label} S{s_idx}", **cells})
+            for cohort in list(gate.get("safety_cohorts") or []):
+                cohort = dict(cohort or {})
+                result["safety_cohorts"].append({
+                    "model": model,
+                    "safety": f"{scope_label} S{int(cohort.get('predicted_safety_quintile', 0) or 0)}",
+                    "n": int(cohort.get("n", 0) or 0),
+                    "raw_mfe_to_actual_mfe_mean_daily_spearman": cohort.get("raw_mfe_to_actual_mfe_mean_daily_spearman"),
+                    "high_mfe_pct": cohort.get("high_mfe_pct"),
+                    "hmhs_pct": cohort.get("hmhs_pct"),
+                })
+        for extension in list(view.get("extensions") or []):
+            result["extensions"].append({"model": model, **dict(extension)})
+    return result
+
+
+def _render_standard_model_comparison(models: list[dict], *, target: str) -> str:
+    views = _standard_model_comparison_views(models)
+    rows = _standard_model_comparison_rows(views)
+    color = console_color_enabled()
+
+    def section(section_id: str, *, suffix: str = "") -> str:
+        title = _model_comparison_section_title(section_id, suffix=suffix)
+        if target == "console":
+            return render_section(paint(title, "cyan", enabled=color, bold=True))
+        return f"## {markdown_tone(title, 'blue', bold=True)}"
+
+    def scope_text(value: str) -> str:
+        tone = "gray" if str(value).lower() == "validation" else "cyan"
+        if target == "console":
+            return paint(str(value), tone, enabled=color, bold=str(value).lower() != "validation")
+        return markdown_tone(value, "gray" if tone == "gray" else "blue", bold=str(value).lower() != "validation")
+
+    parts: list[str] = []
+    for section_id, table_id, delta_style in (
+        ("learnability", "learnability", False),
+        ("generalization", "generalization", True),
+        ("multi_head", "multi_head", False),
+        ("upside_downside_alignment", "upside_downside_alignment", False),
+        ("top_tail_economic_quality", "top_tail_economic_quality", False),
+    ):
+        section_rows = list(rows.get(table_id) or [])
+        if not section_rows:
+            continue
+        parts.extend([
+            section(section_id),
+            _render_model_comparison_contract_table(
+                section_id, table_id, section_rows,
+                target=target, scope_styler=scope_text, delta_style=delta_style,
+            ),
+        ])
+
+    geometry_tables = (
+        ("geometry_summary", "geometry_summary"),
+        ("truth_5x5", "truth_5x5"),
+        ("predicted_5x5", "predicted_5x5"),
+        ("safety_cohorts", "safety_cohorts"),
+    )
+    geometry_present = any(rows.get(key) for key, _table in geometry_tables)
+    if geometry_present:
+        parts.append(section("truth_prediction_geometry"))
+        for key, table_id in geometry_tables:
+            table_rows = list(rows.get(key) or [])
+            if table_rows:
+                parts.append(_render_model_comparison_contract_table(
+                    "truth_prediction_geometry", table_id, table_rows, target=target
+                ))
+
+    ranking_rows = list(rows.get("ranking_boundary") or [])
+    if ranking_rows:
+        settings_set = {tuple(value) for value in list(rows.get("ranking_settings") or [])}
+        suffix = ""
+        if len(settings_set) == 1:
+            k, boundary, scope = next(iter(settings_set))
+            suffix = f"K={k}，boundary={boundary}；{scope}"
+        elif settings_set:
+            suffix = "各模型依自身canonical K/boundary"
+        parts.extend([
+            section("ranking_boundary", suffix=suffix),
+            _render_model_comparison_contract_table(
+                "ranking_boundary", "ranking_boundary", ranking_rows,
+                target=target, scope_styler=scope_text,
+            ),
+        ])
+
+    evidence_rows = []
+    for row in list(rows.get("evidence_coverage") or []):
+        row = dict(row)
+        normalized = str(row.get("status") or "").upper()
+        signal = {
+            "AVAILABLE": SIGNAL_POSITIVE,
+            "READY": SIGNAL_POSITIVE,
+            "PARTIAL": SIGNAL_WARNING,
+            "BLOCKED": SIGNAL_NEGATIVE,
+            "MISSING": SIGNAL_NEGATIVE,
+        }.get(normalized, SIGNAL_NEUTRAL)
+        row["status"] = styled_signal(
+            row.get("status"), signal, target=target,
+            enabled=color if target == "console" else None, bold=True,
+        )
+        evidence_rows.append(row)
+    if evidence_rows:
+        parts.extend([
+            section("evidence_coverage"),
+            _render_model_comparison_contract_table(
+                "evidence_coverage", "evidence_coverage", evidence_rows, target=target
+            ),
+        ])
+
+    separator = "\n" if target == "console" else "\n\n"
+    return separator.join(part for part in parts if part)
+
+
+def _write_standard_model_comparison_report(models: list[dict]) -> tuple[Path, Path]:
+    if not models:
+        raise ValueError("Standard Model SOP比較沒有model")
+    filter_ids = {str(item["settings"].filter_id) for item in models}
+    if len(filter_ids) != 1:
+        raise ValueError(f"Standard Model SOP比較目前要求相同Filter ID: {sorted(filter_ids)}")
+    filter_id = next(iter(filter_ids))
+    output_dir = resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id) / "standard_model_comparison"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_path = output_dir / "standard_model_comparison.json"
+    markdown_path = output_dir / "standard_model_comparison.md"
+    contract = report_contract("model.standard_comparison")
+    machine_payload = {
+        "report_id": contract.report_id,
+        "report_version": int(contract.version),
+        "report_contract_fingerprint": persistent_report_contract_fingerprint(contract.report_id),
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "models": [
+            {
+                "model_id": str(item["model_id"]),
+                "filter_id": str(item["settings"].filter_id),
+                "architecture": str(item["settings"].model_architecture),
+                "profile": str(item["settings"].experiment_profile),
+                "seed": int(item["settings"].seed),
+                "artifact_action": str(item.get("artifact_action") or "REUSE"),
+                "source_report": project_relative_display_path(item["contract"].report_path, project_root=PROJECT_ROOT),
+                "sop_view": _model_sop_view(dict(item["payload"])),
+            }
+            for item in models
+        ],
+    }
+    json_path.write_text(
+        json.dumps(machine_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    body = _render_standard_model_comparison(models, target="markdown")
+    markdown_path.write_text(
+        "# Standard Model SOP Comparison\n\n"
+        f"- Contract：`{contract.report_id}` v`{contract.version}` / `{machine_payload['report_contract_fingerprint']}`\n"
+        f"- Models：`{' / '.join(str(item['model_id']) for item in models)}`\n\n"
+        + body + "\n",
+        encoding="utf-8",
+    )
+    return json_path, markdown_path
+
 
 def _simple_report_details(
     command: str,
@@ -1515,6 +1852,7 @@ def _emit_breakout_quality_simple_report(
     *,
     returncode: int,
     elapsed_sec: float,
+    execution_mode: str = "RUN",
 ) -> Path:
     filter_id, architecture, profile = _simple_report_context(command, args)
     experiment = get_breakout_quality_experiment_profile(profile)
@@ -1544,6 +1882,7 @@ def _emit_breakout_quality_simple_report(
     status = "PASS" if int(returncode) == 0 else f"FAIL ({int(returncode)})"
     rows: list[tuple[str, object]] = [
         ("動作", command),
+        ("執行", str(execution_mode).upper()),
         ("狀態", status),
         ("Filter ID", filter_id),
         ("Architecture", architecture),
@@ -2719,7 +3058,6 @@ def _collect_continuous_research_input_plan(
         experiment_profile=str(settings.experiment_profile),
         dataset=resolved_dataset_profile,
         max_tickers=resolved_max_tickers,
-        include_standard_report_references=True,
     )
 
 
@@ -3009,36 +3347,118 @@ def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
     )
 
 
-def _run_continuous_forward_model_gate(program_name: str, settings) -> int:
-    """Train the active continuous model and emit its Forward-OOS model report.
+def _load_reusable_continuous_forward_contract(settings):
+    """Return the validated canonical Forward-OOS model contract, if reusable."""
 
-    This is the legal entry for model-gate-only research profiles.  It deliberately
-    does not build PIT/rolling artifacts or change current-time authorization.
-    """
+    try:
+        contract = load_continuous_ranker_oos_contract(
+            str(PROJECT_ROOT),
+            str(settings.filter_id),
+            str(settings.model_architecture),
+            str(settings.experiment_profile),
+            require_scores=False,
+        )
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    if int(contract.seed) != int(settings.seed):
+        return None, (
+            "training seed不一致: "
+            f"artifact={int(contract.seed)}, configured={int(settings.seed)}"
+        )
+    return contract, None
 
-    _print_workflow_status(settings)
+
+def _clear_continuous_forward_reuse_caches() -> None:
+    for loader in (
+        load_continuous_ranker_oos_contract,
+        load_continuous_ranker_oos_score_table,
+    ):
+        clear = getattr(loader, "cache_clear", None)
+        if callable(clear):
+            clear()
+
+
+def _ensure_continuous_forward_model_report(
+    program_name: str,
+    *,
+    model_id: str,
+    settings,
+    prompt_for_build: bool,
+    emit_reuse_report: bool,
+):
+    """REUSE a valid model/manifest/report contract or train only when it is unavailable."""
+
+    contract, reuse_reason = _load_reusable_continuous_forward_contract(settings)
+    if contract is not None:
+        print(
+            styled_workflow_status("[REUSE]")
+            + f" {model_id} | model/report identity READY"
+        )
+        if emit_reuse_report:
+            _emit_breakout_quality_simple_report(
+                "train-continuous-ranker",
+                [
+                    "--filter-id", str(settings.filter_id),
+                    "--model-architecture", str(settings.model_architecture),
+                    "--experiment-profile", str(settings.experiment_profile),
+                    "--seed", str(int(settings.seed)),
+                ],
+                returncode=0,
+                elapsed_sec=0.0,
+                execution_mode="REUSE",
+            )
+        return 0, contract, "REUSE"
+
+    print(
+        styled_workflow_status("[BUILD]")
+        + f" {model_id} | canonical Forward model/report需建立：{reuse_reason or 'missing'}"
+    )
     upstream_plan = _collect_continuous_research_input_plan(settings)
     _render_continuous_research_input_plan(settings, upstream_plan)
     if upstream_plan.blocked:
-        print("目前存在不可由canonical producer確定性補建的前置工件；本次不執行。")
-        return 0
-    if not _prompt_bool("確認訓練目前模型並產生Forward-OOS模型報表（含必要自動前置）", True):
-        return 0
+        print(f"{model_id} 存在不可由canonical producer確定性補建的前置工件；本次不執行。")
+        return 1, None, "BLOCKED"
+    if prompt_for_build and not _prompt_bool(
+        "目前無可合法REUSE的完整模型報表；確認自動建立缺失工件並訓練", True
+    ):
+        return 0, None, "CANCELLED"
     code = _prepare_continuous_research_inputs(program_name, settings)
     if code != 0:
-        return int(code)
-    return int(
-        _run_command(
-            "train-continuous-ranker",
-            [
-                "--filter-id", str(settings.filter_id),
-                "--model-architecture", str(settings.model_architecture),
-                "--experiment-profile", str(settings.experiment_profile),
-                "--seed", str(int(settings.seed)),
-            ],
-            program_name=program_name,
-        )
+        return int(code), None, "BUILD_FAILED"
+    code = _run_command(
+        "train-continuous-ranker",
+        [
+            "--filter-id", str(settings.filter_id),
+            "--model-architecture", str(settings.model_architecture),
+            "--experiment-profile", str(settings.experiment_profile),
+            "--seed", str(int(settings.seed)),
+        ],
+        program_name=program_name,
     )
+    if code != 0:
+        return int(code), None, "BUILD_FAILED"
+    _clear_continuous_forward_reuse_caches()
+    contract, reason = _load_reusable_continuous_forward_contract(settings)
+    if contract is None:
+        raise RuntimeError(
+            f"{model_id}訓練完成但canonical Forward-OOS contract仍不可REUSE: {reason}"
+        )
+    return 0, contract, "BUILD"
+
+
+def _run_continuous_forward_model_gate(program_name: str, settings) -> int:
+    """REUSE or build the active continuous model, then emit Standard Model SOP."""
+
+    _print_workflow_status(settings)
+    research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
+    code, _contract, _action = _ensure_continuous_forward_model_report(
+        program_name,
+        model_id=str(research_spec.model_research_id),
+        settings=settings,
+        prompt_for_build=True,
+        emit_reuse_report=True,
+    )
+    return int(code)
 
 
 def _run_continuous_pit_profile(
@@ -3166,66 +3586,6 @@ def _run_continuous_rolling_mode_direct(
         mode=mode,
         fixed_window=fixed_window,
     )
-
-
-def _interactive_target_model_comparison(program_name: str, settings) -> int:
-    research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
-    while True:
-        print("\n=== Target／模型比較 ===")
-        print(render_menu_item(1, "比較目前 Target 與 Reference Target", default=True))
-        print(render_menu_item(2, BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL))
-        print(render_menu_item(0, "返回"))
-        try:
-            raw_choice = input("👉 請選擇：").strip().lower()
-        except EOFError:
-            return 0
-        choice = "1" if raw_choice == "" else raw_choice
-        if choice in {"0", "q", "quit", "exit"}:
-            return 0
-        if choice == "1":
-            if not research_spec.reference_profile_name:
-                print("目前Active Profile未設定reference Target；此項BLOCKED。")
-                continue
-            reference_settings = get_breakout_quality_workflow_settings(
-                experiment_profile=str(research_spec.reference_profile_name)
-            )
-            target_compare_plans = []
-            for required_settings in (settings, reference_settings):
-                plan = _collect_continuous_research_input_plan(required_settings)
-                _render_continuous_research_input_plan(required_settings, plan)
-                target_compare_plans.append(plan)
-            if any(plan.blocked for plan in target_compare_plans):
-                print("Target比較存在不可由canonical producer確定性補建的前置工件；本次不執行。")
-                continue
-            if not _prompt_bool("確認執行Target比較（含必要自動前置）", True):
-                continue
-            for required_settings in (settings, reference_settings):
-                code = _prepare_continuous_research_inputs(
-                    program_name, required_settings
-                )
-                if code != 0:
-                    return int(code)
-            return int(
-                _run_command(
-                    "compare-daily-targets",
-                    [
-                        "--filter-id", settings.filter_id,
-                        "--model-architecture", settings.model_architecture,
-                        "--experiment-profile", settings.experiment_profile,
-                        "--reference-experiment-profile", research_spec.reference_profile_name,
-                    ],
-                    program_name=program_name,
-                )
-            )
-        if choice == "2":
-            return int(_run_configured_continuous_ranker_model_gates(program_name))
-        print("無效選項，請重新輸入。")
-
-
-
-
-
-
 
 
 def _prepare_strategy_compare_model_upstream(
@@ -3817,45 +4177,72 @@ def _interactive_rolling_timing_mode(program_name: str, settings) -> int:
         except KeyboardInterrupt:
             print("\nTiming操作已中止，返回Timing Mode選單。")
 
-def _run_configured_continuous_ranker_model_gates(program_name: str) -> int:
-    configured = tuple(BREAKOUT_QUALITY_CONDITIONAL_MFE_AB_MODEL_GATE_PROFILES)
-    if len(configured) != 2:
-        raise ValueError("設定中的 Continuous Ranker Model Gate目前必須剛好有兩個profile")
+def _run_configured_standard_model_comparison(program_name: str) -> int:
+    comparison = get_breakout_quality_standard_model_comparison_settings()
     rows = []
-    for model_id, profile_name in configured:
-        settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile_name))
-        rows.append((str(model_id), settings))
-    print("\n" + render_title(BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL))
-    print(render_table(
-        ("Model", "Profile", "Architecture", "Seed"),
-        [(model_id, settings.experiment_profile, settings.model_architecture, str(settings.seed)) for model_id, settings in rows],
-        alignments=("left", "left", "left", "right"),
-    ))
-    if not _prompt_bool("確認依設定順序訓練兩個模型並產生各自Forward-OOS Model Gate報表", True):
-        return 0
-    for model_id, settings in rows:
-        print("\n" + render_title(f"{model_id} Forward Model Gate"))
-        upstream_plan = _collect_continuous_research_input_plan(settings)
-        _render_continuous_research_input_plan(settings, upstream_plan)
-        if upstream_plan.blocked:
-            print(f"{model_id} 存在不可確定補建的前置工件；模型比較流程停止。")
-            return 1
-        code = _prepare_continuous_research_inputs(program_name, settings)
-        if code != 0:
-            return int(code)
-        code = _run_command(
-            "train-continuous-ranker",
-            [
-                "--filter-id", str(settings.filter_id),
-                "--model-architecture", str(settings.model_architecture),
-                "--experiment-profile", str(settings.experiment_profile),
-                "--seed", str(int(settings.seed)),
-            ],
-            program_name=program_name,
+    planned = []
+    for model_id, profile_name in comparison.model_profiles:
+        settings = get_breakout_quality_workflow_settings(
+            experiment_profile=str(profile_name)
         )
-        if code != 0:
-            return int(code)
-    print("\n設定中的 Continuous Rankers Forward Model Gate完成；請先比較各模型報表，再解讀Strategy Compare conversion。")
+        contract, reason = _load_reusable_continuous_forward_contract(settings)
+        action = "REUSE" if contract is not None else "BUILD"
+        rows.append((
+            str(model_id), str(settings.experiment_profile),
+            str(settings.model_architecture), str(settings.seed),
+            action,
+        ))
+        planned.append((str(model_id), settings, contract, reason))
+
+    print("\n" + render_title(comparison.menu_label))
+    print(render_table(
+        ("Model", "Profile", "Architecture", "Seed", "Action"),
+        rows,
+        alignments=("left", "left", "left", "right", "left"),
+    ))
+    if not _prompt_bool(
+        "確認產生多模型Standard SOP比較；READY者REUSE，缺失者自動訓練", True
+    ):
+        return 0
+
+    completed = []
+    for model_id, settings, preflight_contract, _reason in planned:
+        if preflight_contract is not None:
+            print(
+                styled_workflow_status("[REUSE]")
+                + f" {model_id} | model/report identity READY"
+            )
+            contract = preflight_contract
+            action = "REUSE"
+        else:
+            code, contract, action = _ensure_continuous_forward_model_report(
+                program_name,
+                model_id=model_id,
+                settings=settings,
+                prompt_for_build=False,
+                emit_reuse_report=False,
+            )
+            if code != 0 or contract is None:
+                return int(code or 1)
+        completed.append({
+            "model_id": model_id,
+            "settings": settings,
+            "contract": contract,
+            "payload": dict(contract.report),
+            "artifact_action": action,
+        })
+
+    console = _render_standard_model_comparison(completed, target="console")
+    print("\n" + render_title("Standard Model SOP Comparison"))
+    print(console)
+    json_path, markdown_path = _write_standard_model_comparison_report(completed)
+    print(render_status_paths(
+        (
+            ("比較JSON", json_path, json_path.is_file()),
+            ("比較Markdown", markdown_path, markdown_path.is_file()),
+        ),
+        project_root=PROJECT_ROOT,
+    ))
     return 0
 
 
@@ -3877,7 +4264,8 @@ def _interactive_model_research(program_name: str) -> int:
         print(render_menu_item(1, "訓練目前模型 → Forward-OOS 標準模型 SOP 報表", default=True))
         print(render_menu_item(2, "Extending-Window Rolling"))
         print(render_menu_item(3, "Fixed-Window Rolling"))
-        print(render_menu_item(4, "Target／模型比較"))
+        comparison_label = get_breakout_quality_standard_model_comparison_settings().menu_label
+        print(render_menu_item(4, comparison_label))
         print(render_menu_item(5, "Timing Mode｜Rolling 訓練前後比較  [工程]"))
         print(render_menu_item(0, "返回"))
         try:
@@ -3901,7 +4289,7 @@ def _interactive_model_research(program_name: str) -> int:
             )
             continue
         if choice == "4":
-            _interactive_target_model_comparison(program_name, settings)
+            _run_configured_standard_model_comparison(program_name)
             continue
         if choice == "5":
             timing = get_breakout_quality_rolling_timing_settings()

@@ -11010,3 +11010,14 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Precommitted BASE rule application**：事前規則要求H必須在保有可接受MFE learnability時，Safety/HMHS geometry明顯優於AF才選H；若H score丟失Safety或放大unsafe bias則重新評估AF。實測H `Pred-Safety→Score` OOS比AF更負`-0.8193 vs -0.7763`，`Score→Low-Adverse`也更負`-0.3230 vs -0.3038`，HM/HS OOS近乎相同且Breakout略低。故H不符合選BASE條件。
 - **Decision**：`MR-13AF = SELECTED_LONG_TERM_RESEARCH_BASE`；`MR-13H = BASE_NOT_SELECTED`。此決策只定義後續DL改善的scientific control，不撤銷AF歷史`FORWARD_MODEL_GATE_FAIL`，不授權AF本身PIT/Strategy/robustness，不改production MR-13E。Active Model Research Profile切回既有MR-13AF；下一個改善需另建新MR identity，具體scientific design尚未授權。
 
+## 2026-08-30 — Standard Model SOP v3 / artifact REUSE / multi-model [1][4] comparison engineering contract
+
+- **Authorization**：使用者明確要求重整`[1]→[1]`共通報表與`[1]→[4]`模型比較；本項是report/menu/artifact-orchestration engineering contract，不建立新MR、不改任何既有scientific result或production authorization。
+- **Standard Model SOP v3**：section順序固定為`1 Learnability / 2 Generalization / 3 Multi-head / 4 Upside-Downside Alignment / 5 Top-tail Economic Quality / 6 Truth-Prediction Geometry / 7 Ranking-Boundary / 8 Evidence Coverage`。Learnability新增`Top-Bottom Target`；Ranking移除`Top-K Target`、`Lift`更名`Top-K Lift`，競爭日顯示為`competition days / pool days`。
+- **Common Safety semantics**：Standard cross-model欄位只保留actual truth：`Target→MFE`、`Target→Safety`、`Score→MFE`、`Score→Safety`。原v2 `Pred-Safety→Target/Score`移出common SOP，因AF/AH scientific training本身使用MR-13M而H沒有，reference role不對稱。這些profile-specific Pred-Safety evidence仍可留在其歷史scientific record/Audit，不作共通scorecard。
+- **Top-tail v3**：`Top10 Adverse`改以`Top10 Low-Adverse = -Adverse`顯示，統一higher-is-better方向；HM/HS rate與enrichment合成`xx.xx% (x.xx×)`，並新增HM/LS、LM/HS、LM/LS三象限，同樣顯示rate＋relative enrichment。四象限truth percentile仍先在完整Daily Universal同日母體計算，Breakout只filter、不得subset rerank。
+- **[1]→[1] reuse**：正式入口先驗證canonical `model.pt + manifest + continuous_ranker_report.json` scientific identity；合法即`REUSE`現有machine report並用current v3 renderer顯示，OOS score sidecar不是單純報表reuse的必要條件。只有model/report缺失、stale或identity不符才準備upstream並執行`train-continuous-ranker`。因此既有v2 H/AF/AH report可read-only升級到v3顯示，不因報表schema變更重訓。
+- **[1]→[4] comparison**：舊固定two-arm Target/Model comparison改為`model.standard_comparison` persistent contract；table schemas由`model.standard_sop`程式化prepend `Model`欄派生。model list完全config-driven、可任意擴充；current初始配置=`MR-13H / MR-13AF / MR-13AH`。每個model先做同一report reuse check，READY直接REUSE，缺失才自動BUILD；完成後輸出`standard_model_comparison.json/.md`。
+- **Fingerprints**：`model.standard_sop` v3=`5a1c1377b207204a`；新增`model.standard_comparison` v1=`84aad5e28c5d2ce3`。其餘persistent report fingerprints不變。
+- **Scientific status**：MR-13AF仍是已選long-term research BASE；H/AH/AF歷史Gate與strategy evidence不改。此改造只讓後續比較口徑更公平且避免不必要重訓。
+
