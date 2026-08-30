@@ -1141,6 +1141,18 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and 'daily_data_progress.finish()' in pit_score_source
         and 'print("[PIT data] 建立daily stock-day index／40D target...' not in pit_score_source,
     )
+    check_true(
+        "forward_robustness_seed_is_offered_to_rolling_pit_only_through_fitting_identity_cache_bridge",
+        'forward_payload, forward_report_path, _forward_reason = _load_forward_robustness_seed(' in app_source
+        and '"--checkpoint-cache-root", str(BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT)' in app_source
+        and '"--checkpoint-import-model-dir", str(forward_model_dir)' in app_source
+        and '"--checkpoint-import-report-path", str(forward_report_path)' in app_source
+        and 'def _forward_checkpoint_import_issues(' in pit_score_source
+        and 'execution_plan=plan' in pit_score_source
+        and 'checkpoint_sample_scope = str(' in pit_score_source
+        and 'checkpoint selected_epoch mismatch' not in pit_score_source,
+    )
+
 
     shared_training = breakout_quality_config.get_breakout_quality_model_research_settings()
     shared_test = breakout_quality_config.get_breakout_quality_model_test_settings().model_profiles

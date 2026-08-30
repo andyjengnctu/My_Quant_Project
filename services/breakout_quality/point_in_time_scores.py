@@ -273,6 +273,19 @@ def parse_args(argv=None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--checkpoint-import-model-dir",
+        default=None,
+        help=(
+            "可選的既有Forward model目錄；只在其canonical training evidence與目前fold fitting identity"
+            "完全相容時，將原checkpoint位元組登錄至shared fitting cache供本fold重評score。"
+        ),
+    )
+    parser.add_argument(
+        "--checkpoint-import-report-path",
+        default=None,
+        help="checkpoint-import-model-dir對應的canonical Forward report JSON。",
+    )
+    parser.add_argument(
         "--allow-stale-source",
         action="store_true",
         help="只供離線重現；預設要求來源CSV inventory與dataset一致",
@@ -314,6 +327,14 @@ def _validate_args(args: argparse.Namespace) -> None:
                 "checkpoint-cache-root存在但不是資料夾: "
                 f"{cache_root}"
             )
+    import_model_dir = str(getattr(args, "checkpoint_import_model_dir", "") or "").strip()
+    import_report_path = str(getattr(args, "checkpoint_import_report_path", "") or "").strip()
+    if bool(import_model_dir) != bool(import_report_path):
+        raise ValueError(
+            "checkpoint-import-model-dir與checkpoint-import-report-path必須同時設定"
+        )
+    if import_model_dir and args.checkpoint_cache_root in (None, ""):
+        raise ValueError("checkpoint import需要同時設定checkpoint-cache-root")
     if args.train_window_months is not None:
         if int(args.train_window_months) <= int(args.inner_validation_months):
             raise ValueError("fixed train-window-months必須大於inner-validation-months")
@@ -982,6 +1003,274 @@ def _checkpoint_cache_entry_dir(cache_root: Path, fold_contract: dict[str, Any])
     return Path(cache_root).resolve() / fold_training_identity(fold_contract)
 
 
+def _forward_checkpoint_import_issues(
+    *,
+    source_manifest: dict[str, Any],
+    source_report: dict[str, Any],
+    checkpoint: dict[str, Any],
+    checkpoint_manifest: dict[str, Any],
+    fold_contract: dict[str, Any],
+    bundle,
+    execution_plan,
+) -> tuple[str, ...]:
+    """Validate that a canonical Forward model is the exact fit required by this PIT fold.
+
+    Forward and Rolling remain separate evaluation identities.  This bridge only imports the
+    fitted model bytes; score rows are always regenerated for the Rolling fold.  The current
+    bridge is intentionally limited to daily-universal stock-day training, whose Forward split
+    report fully pins the deterministic group membership used by the first Rolling fold.
+    """
+
+    issues: list[str] = []
+    if str(fold_contract.get("training_sample_scope") or "") != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        issues.append("checkpoint import目前只支援daily-universal stock-day fitting identity")
+
+    for field in (
+        "filter_id",
+        "model_architecture",
+        "experiment_profile",
+        "continuous_target_id",
+        "training_label_scope",
+        "model_information_cutoff",
+        "model_spec",
+        "experiment_settings",
+    ):
+        if source_manifest.get(field) != fold_contract.get(field):
+            issues.append(f"manifest {field} mismatch")
+
+    source_profile_settings = dict(source_manifest.get("experiment_settings") or {})
+    manifest_sample_scope = str(
+        source_manifest.get("training_sample_scope")
+        or source_profile_settings.get("training_sample_scope")
+        or ""
+    )
+    if manifest_sample_scope != str(fold_contract.get("training_sample_scope") or ""):
+        issues.append("manifest training_sample_scope mismatch")
+
+    training = dict(source_report.get("training") or {})
+    if int(training.get("seed", -1)) != int(fold_contract.get("seed", -2)):
+        issues.append("report seed mismatch")
+    training_settings = dict(fold_contract.get("training_settings") or {})
+    report_training_fields = (
+        ("batch_size", "batch_size", int),
+        ("learning_rate", "learning_rate", float),
+        ("weight_decay", "weight_decay", float),
+        ("gradient_clip_norm", "gradient_clip_norm", float),
+    )
+    for report_field, contract_field, caster in report_training_fields:
+        try:
+            actual = caster(training.get(report_field))
+            expected = caster(training_settings.get(contract_field))
+        except (TypeError, ValueError):
+            issues.append(f"report training {report_field} missing")
+            continue
+        if actual != expected:
+            issues.append(f"report training {report_field} mismatch")
+
+    expected_execution = execution_plan.as_manifest_payload()
+    if source_manifest.get("torch_execution") != expected_execution:
+        issues.append("manifest torch_execution mismatch")
+    if source_report.get("torch_execution") != expected_execution:
+        issues.append("report torch_execution mismatch")
+    if int(source_manifest.get("selected_epoch", 0) or 0) < 1:
+        issues.append("manifest selected_epoch missing")
+    if int(training.get("selected_epoch", 0) or 0) != int(source_manifest.get("selected_epoch", 0) or 0):
+        issues.append("report/manifest selected_epoch mismatch")
+
+    standard = dict(source_report.get("standard_model_sop") or {})
+    if str(standard.get("evaluation_mode") or "") != "forward_oos":
+        issues.append("source report is not canonical forward_oos evidence")
+
+    planned = dict(fold_contract.get("planned_periods") or {})
+    split_report = dict(source_report.get("split_report") or {})
+    expected_split_values = {
+        "selection_start_date": dict(fold_contract.get("source_contract") or {}).get("training_universe_start_date"),
+        "inner_validation_start_date": planned.get("validation_start"),
+        "selection_end_date": planned.get("validation_end"),
+        "oos_start_date": planned.get("score_start"),
+    }
+    for field, expected in expected_split_values.items():
+        if expected is not None and str(split_report.get(field) or "") != str(expected):
+            issues.append(f"split_report {field} mismatch")
+
+    counts = dict(split_report.get("counts") or {})
+    expected_counts = dict(fold_contract.get("group_counts") or {})
+    for source_key, fold_key in (
+        ("inner_train", "inner_train"),
+        ("validation", "validation"),
+        ("selection", "final_refit"),
+    ):
+        if int(counts.get(source_key, -1)) != int(expected_counts.get(fold_key, -2)):
+            issues.append(f"split_report {source_key} count mismatch")
+
+    source_dataset = dict(source_manifest.get("source_dataset") or {})
+    source_target = dict(source_manifest.get("source_continuous_target") or {})
+    expected_source = dict(fold_contract.get("source_contract") or {})
+    source_pairs = (
+        ("dataset_policy", source_dataset.get("policy")),
+        ("dataset_storage_schema_version", source_dataset.get("dataset_storage_schema_version")),
+        ("source_data_inventory", source_dataset.get("source_data_inventory")),
+        ("dataset_artifacts", source_dataset.get("dataset_artifacts")),
+        ("target_schema_version", source_target.get("schema_version")),
+        ("target_contract", source_target.get("target_contract")),
+        ("target_artifacts", source_target.get("artifacts")),
+        ("training_universe_start_date", source_dataset.get("training_universe_start_date")),
+    )
+    for field, actual in source_pairs:
+        if field in expected_source and actual != expected_source.get(field):
+            issues.append(f"source_contract {field} mismatch")
+
+    if checkpoint.get("model_spec") != fold_contract.get("model_spec"):
+        issues.append("checkpoint model_spec mismatch")
+    if checkpoint.get("experiment_settings") != fold_contract.get("experiment_settings"):
+        issues.append("checkpoint experiment_settings mismatch")
+    if str(checkpoint.get("experiment_profile") or "") != str(fold_contract.get("experiment_profile") or ""):
+        issues.append("checkpoint experiment_profile mismatch")
+    checkpoint_profile_settings = dict(checkpoint.get("experiment_settings") or {})
+    checkpoint_sample_scope = str(
+        checkpoint.get("training_sample_scope")
+        or checkpoint_profile_settings.get("training_sample_scope")
+        or ""
+    )
+    if checkpoint_sample_scope != str(fold_contract.get("training_sample_scope") or ""):
+        issues.append("checkpoint training_sample_scope mismatch")
+
+    expected_shape = (
+        int(bundle.feature_bank.shape[1]),
+        int(bundle.feature_bank.shape[2]),
+        int(bundle.group_context.shape[1]),
+    )
+    checkpoint_shape = tuple(
+        int(checkpoint.get(field)) if checkpoint.get(field) is not None else -1
+        for field in ("sequence_length", "feature_count", "context_count")
+    )
+    if checkpoint_shape != expected_shape:
+        issues.append("checkpoint input shape mismatch")
+
+    source_model_manifest = source_manifest.get("model")
+    report_model_manifest = dict(source_report.get("artifacts") or {}).get("model")
+    if source_model_manifest != checkpoint_manifest:
+        issues.append("source manifest checkpoint hash/size mismatch")
+    if report_model_manifest is not None and report_model_manifest != checkpoint_manifest:
+        issues.append("source report checkpoint hash/size mismatch")
+    return tuple(dict.fromkeys(issues))
+
+
+def _import_forward_checkpoint_to_fitting_cache(
+    *,
+    source_model_dir: Path,
+    source_report_path: Path,
+    cache_root: Path,
+    fold_contract: dict[str, Any],
+    bundle,
+    torch_module,
+    execution_plan,
+) -> dict[str, Any] | None:
+    """Publish an already-fitted Forward checkpoint into the canonical fitting cache.
+
+    Returns ``None`` when the Forward artifact is simply not the fit required by this fold.
+    Corruption or a conflicting checkpoint for the same fitting identity fails fast.
+    """
+
+    source_model_dir = Path(source_model_dir).resolve()
+    source_report_path = Path(source_report_path).resolve()
+    source_manifest_path = source_model_dir / FOLD_MANIFEST_FILENAME
+    source_model_path = source_model_dir / DEFAULT_MODEL_FILENAME
+    if not (source_manifest_path.is_file() and source_model_path.is_file() and source_report_path.is_file()):
+        return None
+    try:
+        source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+        source_report = json.loads(source_report_path.read_text(encoding="utf-8"))
+        if not isinstance(source_manifest, dict) or not isinstance(source_report, dict):
+            return None
+        checkpoint_manifest = build_file_manifest(source_model_path)
+        checkpoint = torch_module.load(source_model_path, map_location="cpu", weights_only=True)
+        if not isinstance(checkpoint, dict):
+            return None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError, RuntimeError):
+        return None
+
+    issues = _forward_checkpoint_import_issues(
+        source_manifest=source_manifest,
+        source_report=source_report,
+        checkpoint=checkpoint,
+        checkpoint_manifest=checkpoint_manifest,
+        fold_contract=fold_contract,
+        bundle=bundle,
+        execution_plan=execution_plan,
+    )
+    if issues:
+        return None
+
+    identity = fold_training_identity(fold_contract)
+    entry_dir = _checkpoint_cache_entry_dir(Path(cache_root), fold_contract)
+    cached_manifest_path = entry_dir / FOLD_MANIFEST_FILENAME
+    cached_model_path = entry_dir / DEFAULT_MODEL_FILENAME
+    if entry_dir.exists():
+        if not (cached_manifest_path.is_file() and cached_model_path.is_file()):
+            raise RuntimeError(f"fitting identity cache entry不完整: identity={identity}")
+        try:
+            cached_manifest = json.loads(cached_manifest_path.read_text(encoding="utf-8"))
+            cached_checkpoint = build_file_manifest(cached_model_path)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            raise RuntimeError(f"fitting identity cache entry無法驗證: identity={identity}") from exc
+        if not isinstance(cached_manifest, dict) or not _fold_training_contract_is_compatible(
+            cached_manifest, expected_contract=fold_contract
+        ):
+            raise RuntimeError(f"fitting identity cache contract衝突: identity={identity}")
+        if cached_checkpoint != checkpoint_manifest:
+            raise RuntimeError(
+                "同一fitting identity已有不同checkpoint；"
+                f"identity={identity}, cached={cached_checkpoint.get('sha256')}, "
+                f"forward={checkpoint_manifest.get('sha256')}"
+            )
+        return {
+            "training_identity": identity,
+            "cache_entry": str(entry_dir),
+            "reused_existing_cache": True,
+        }
+
+    cache_manifest = {
+        **fold_contract,
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "selected_epoch": int(source_manifest["selected_epoch"]),
+        "migration": {
+            "kind": "forward_model_fitting_identity_import",
+            "training_contract_unchanged": True,
+            "source_score_reused": False,
+            "source_checkpoint_sha_preserved": True,
+            "source_forward_checkpoint": checkpoint_manifest,
+        },
+        "artifacts": {"checkpoint": checkpoint_manifest},
+    }
+    entry_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = entry_dir.parent / f".{entry_dir.name}.forward_import_{os.getpid()}_{time.time_ns()}"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=False)
+    try:
+        shutil.copy2(source_model_path, staging / DEFAULT_MODEL_FILENAME)
+        write_json(staging / FOLD_MANIFEST_FILENAME, cache_manifest)
+        write_json(
+            staging / "cache_manifest.json",
+            {
+                "schema_version": 1,
+                "training_identity": identity,
+                "source_kind": "forward_model_fitting_identity_import",
+                "checkpoint": checkpoint_manifest,
+                "published_at_utc": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        staging.replace(entry_dir)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+    return {
+        "training_identity": identity,
+        "cache_entry": str(entry_dir),
+        "reused_existing_cache": False,
+    }
+
+
 _SCORE_ONLY_CHECKPOINT_REUSE_MIGRATION_KINDS = frozenset({
     "expanded_daily_score_universe_checkpoint_reuse",
     "checkpoint_score_regeneration",
@@ -1150,6 +1439,66 @@ def _reload_fold_manifest_after_checkpoint_cache_sync(
     return manifest
 
 
+def _checkpoint_matches_rescore_contract(
+    *,
+    checkpoint: dict[str, Any],
+    manifest: dict[str, Any],
+    fold_contract: dict[str, Any],
+    bundle,
+) -> bool:
+    """Validate PIT-native or imported-Forward checkpoint metadata before score regeneration."""
+
+    migration = dict(manifest.get("migration") or {})
+    imported_forward = (
+        str(migration.get("kind") or "") == "forward_model_fitting_identity_import"
+        and migration.get("training_contract_unchanged") is True
+        and migration.get("source_checkpoint_sha_preserved") is True
+    )
+    checkpoint_contract = checkpoint.get("fold_contract")
+    if isinstance(checkpoint_contract, dict):
+        if not _fold_training_contract_is_compatible(
+            checkpoint_contract, expected_contract=fold_contract
+        ):
+            return False
+    elif not imported_forward:
+        return False
+
+    manifest_epoch = int(manifest.get("selected_epoch") or 0)
+    if manifest_epoch < 1:
+        return False
+    if not imported_forward:
+        checkpoint_epoch = int(checkpoint.get("selected_epoch") or 0)
+        if checkpoint_epoch != manifest_epoch:
+            return False
+
+    if checkpoint.get("model_spec") != fold_contract.get("model_spec"):
+        return False
+    if imported_forward:
+        if checkpoint.get("experiment_settings") != fold_contract.get("experiment_settings"):
+            return False
+        if str(checkpoint.get("experiment_profile") or "") != str(fold_contract.get("experiment_profile") or ""):
+            return False
+        checkpoint_profile_settings = dict(checkpoint.get("experiment_settings") or {})
+        checkpoint_sample_scope = str(
+            checkpoint.get("training_sample_scope")
+            or checkpoint_profile_settings.get("training_sample_scope")
+            or ""
+        )
+        if checkpoint_sample_scope != str(fold_contract.get("training_sample_scope") or ""):
+            return False
+
+    expected_shape = (
+        int(bundle.feature_bank.shape[1]),
+        int(bundle.feature_bank.shape[2]),
+        int(bundle.group_context.shape[1]),
+    )
+    checkpoint_shape = tuple(
+        int(checkpoint.get(field)) if checkpoint.get(field) is not None else -1
+        for field in ("sequence_length", "feature_count", "context_count")
+    )
+    return checkpoint_shape == expected_shape
+
+
 def _rescore_fold_from_compatible_checkpoint(
     *,
     fold_dir: Path,
@@ -1182,27 +1531,18 @@ def _rescore_fold_from_compatible_checkpoint(
         checkpoint = torch_module.load(model_path, map_location="cpu", weights_only=True)
         if not isinstance(checkpoint, dict):
             return None
-        checkpoint_contract = checkpoint.get("fold_contract")
-        if not isinstance(checkpoint_contract, dict) or not _fold_training_contract_is_compatible(
-            checkpoint_contract, expected_contract=fold_contract
+        if not _checkpoint_matches_rescore_contract(
+            checkpoint=checkpoint,
+            manifest=manifest,
+            fold_contract=fold_contract,
+            bundle=bundle,
         ):
-            return None
-        selected_epoch = int(checkpoint.get("selected_epoch") or 0)
-        if selected_epoch < 1 or selected_epoch != int(manifest.get("selected_epoch") or 0):
-            return None
-        if checkpoint.get("model_spec") != fold_contract.get("model_spec"):
             return None
         expected_shape = (
             int(bundle.feature_bank.shape[1]),
             int(bundle.feature_bank.shape[2]),
             int(bundle.group_context.shape[1]),
         )
-        checkpoint_shape = tuple(
-            int(checkpoint.get(field)) if checkpoint.get(field) is not None else -1
-            for field in ("sequence_length", "feature_count", "context_count")
-        )
-        if checkpoint_shape != expected_shape:
-            return None
 
         model = build_model(
             expected_shape[1],
@@ -2088,6 +2428,7 @@ def _run_point_in_time_scores(
     migrated_fold_count = 0
     rescored_checkpoint_fold_count = 0
     fitting_checkpoint_reuse_fold_count = 0
+    forward_checkpoint_import_count = 0
     built_fold_count = 0
     fold_progress = InlineProgress()
     if folds:
@@ -2131,6 +2472,24 @@ def _run_point_in_time_scores(
                 plan=plan,
             )
             rescored_checkpoint = reused is not None
+        if (
+            reused is None
+            and bool(args.resume)
+            and args.checkpoint_cache_root not in (None, "")
+            and getattr(args, "checkpoint_import_model_dir", None) not in (None, "")
+            and getattr(args, "checkpoint_import_report_path", None) not in (None, "")
+        ):
+            imported = _import_forward_checkpoint_to_fitting_cache(
+                source_model_dir=Path(str(args.checkpoint_import_model_dir)),
+                source_report_path=Path(str(args.checkpoint_import_report_path)),
+                cache_root=Path(str(args.checkpoint_cache_root)),
+                fold_contract=fold_contract,
+                bundle=bundle,
+                torch_module=torch,
+                execution_plan=plan,
+            )
+            if imported is not None and not bool(imported.get("reused_existing_cache")):
+                forward_checkpoint_import_count += 1
         if (
             reused is None
             and bool(args.resume)
@@ -2389,6 +2748,7 @@ def _run_point_in_time_scores(
             "legacy_migration": int(migrated_fold_count),
             "local_checkpoint_rescore": int(rescored_checkpoint_fold_count),
             "fitting_identity_checkpoint_reuse": int(fitting_checkpoint_reuse_fold_count),
+            "forward_checkpoint_import": int(forward_checkpoint_import_count),
             "built": int(built_fold_count),
         },
         "folds": [_combined_fold_record(args, item) for item in fold_manifests],

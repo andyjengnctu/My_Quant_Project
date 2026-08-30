@@ -804,7 +804,7 @@ def render_runtime_integration_report(payload: dict[str, Any]) -> str:
     counts = {status: sum(row.get("status") == status for row in checks) for status in ("PASS", "FAIL", "BLOCKED")}
     runtime = dict(dict(payload.get("candidate_contract") or {}).get("runtime") or {})
     lines = [
-        "# Runtime 整合 Gate",
+        "# Runtime Promotion Gate",
         "",
         f"- Decision: **{payload.get('status')}**",
         f"- Candidate: `{runtime.get('experiment_profile')}`",
@@ -838,7 +838,7 @@ def render_runtime_integration_report(payload: dict[str, Any]) -> str:
 
 
 def _print_console_summary(payload: dict[str, Any]) -> None:
-    print("\n" + render_title("Runtime 整合 Gate"))
+    print("\n" + render_title("Runtime Promotion Gate"))
     runtime = dict(dict(payload.get("candidate_contract") or {}).get("runtime") or {})
     print(f"Decision          ：{payload.get('status')}")
     print(f"Experiment Profile：{runtime.get('experiment_profile')}")

@@ -18,8 +18,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from config.audit import get_active_audit_module_id, get_audit_definitions
 from config.research import get_active_model_research_provider
 from config.strategy_compare import (
-    STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL,
-    STRATEGY_COMPARE_ROLLING_TEST_MENU_LABEL,
     get_strategy_comparison_menu_profiles,
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_profiles,
@@ -32,7 +30,6 @@ from core.runtime_utils import is_interactive_console, run_cli_entrypoint
 from services.research.strategy_compare_application import (
     dispatch_runtime_integration_action,
     execute_strategy_comparison,
-    materialize_strategy_oos_rolling_consistency,
     resolve_strategy_comparison_execution,
     run_strategy_multi_seed_robustness,
     runtime_integration_allowed_actions,
@@ -220,7 +217,7 @@ def _strategy_multi_seed_robustness_menu(robustness_id: str) -> int:
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"[錯誤] {type(exc).__name__}: {exc}")
     except KeyboardInterrupt:
-        print("\n目前操作已中止，返回Multi-seed Robustness選單。")
+        print("\n目前操作已中止，返回策略組合比較選單。")
     return 0
 
 
@@ -231,92 +228,6 @@ def _current_strategy_mode_rows() -> tuple[dict, dict]:
     if oos is None or rolling is None:
         raise ValueError("current Strategy Compare必須同時定義OOS與Rolling mode")
     return oos, rolling
-
-
-def _run_strategy_oos_rolling_one_click() -> int:
-    oos_mode, rolling_mode = _current_strategy_mode_rows()
-    plans = []
-    for label, mode in (("OOS", oos_mode), ("Rolling", rolling_mode)):
-        settings, resolved_plan, rendered_plan = resolve_strategy_comparison_execution(
-            str(mode["profile_id"])
-        )
-        print(f"\n--- {label} ---\n{rendered_plan}")
-        if resolved_plan.preparation_plan.blocked:
-            print(f"{label}目前BLOCKED；OOS + Rolling一鍵流程不執行。")
-            return 0
-        plans.append((settings, resolved_plan))
-    try:
-        confirm = input("👉 按 Enter 依序執行 OOS + Rolling 並產生 Consistency；輸入 0 返回：").strip().lower()
-    except EOFError:
-        return 0
-    if confirm in {"0", "q", "quit", "exit"}:
-        return 0
-    if confirm not in {"", "1"}:
-        print("輸入無效，本次不執行。")
-        return 0
-    payloads = []
-    for mode, (settings, resolved_plan) in zip((oos_mode, rolling_mode), plans):
-        payloads.append(
-            execute_strategy_comparison(
-                resolved_plan=resolved_plan,
-                settings=settings,
-                producer_handlers={
-                    "model_training": lambda action, profile_id=str(mode["profile_id"]): _prepare_strategy_model_artifacts(
-                        profile_id=profile_id,
-                        scope=_strategy_model_artifact_scope(action),
-                    )
-                },
-            )
-        )
-    materialize_strategy_oos_rolling_consistency(payloads[0], payloads[1])
-    return 0
-
-
-def _strategy_robustness_menu() -> int:
-    oos_mode, rolling_mode = _current_strategy_mode_rows()
-    while True:
-        print("\n=== Multi-seed Robustness ===")
-        print(render_menu_item(1, "OOS Multi-seed", default=True))
-        print(render_menu_item(2, "Rolling Multi-seed"))
-        print(render_menu_item(3, "OOS + Rolling Multi-seed 一鍵"))
-        print(render_menu_item(0, "返回"))
-        try:
-            raw = input("👉 請選擇：").strip().lower()
-        except EOFError:
-            return 0
-        choice = "1" if raw == "" else raw
-        if choice in {"0", "q", "quit", "exit"}:
-            return 0
-        if choice == "1":
-            _strategy_multi_seed_robustness_menu(str(oos_mode["robustness_id"]))
-            continue
-        if choice == "2":
-            _strategy_multi_seed_robustness_menu(str(rolling_mode["robustness_id"]))
-            continue
-        if choice == "3":
-            for label, mode in (("OOS", oos_mode), ("Rolling", rolling_mode)):
-                print(f"\n--- {label} Multi-seed preflight ---")
-                show_strategy_multi_seed_robustness_status(
-                    robustness_id=str(mode["robustness_id"])
-                )
-            try:
-                confirm = input("👉 按 Enter 依序執行 OOS + Rolling Multi-seed；輸入 0 返回：").strip().lower()
-            except EOFError:
-                return 0
-            if confirm in {"0", "q", "quit", "exit"}:
-                continue
-            if confirm not in {"", "1"}:
-                print("輸入無效，本次不執行。")
-                continue
-            _run_current_robustness(
-                robustness_id=str(oos_mode["robustness_id"]), confirm=False
-            )
-            _run_current_robustness(
-                robustness_id=str(rolling_mode["robustness_id"]), confirm=False
-            )
-            print("OOS + Rolling Multi-seed完成；兩個canonical robustness報表維持分開保存。")
-            continue
-        print("無效選項，請輸入 0～3。")
 
 
 def _strategy_runtime_integration_menu() -> int:
@@ -373,67 +284,14 @@ def _show_all_strategy_comparison_status() -> None:
             print(f"[狀態不可用] {type(exc).__name__}: {exc}")
 
 
-def _strategy_rolling_mode_menu(*, robustness: bool) -> int:
-    modes = get_strategy_rolling_test_modes()
-    title = (
-        STRATEGY_COMPARE_ROBUSTNESS_MENU_LABEL
-        if robustness
-        else STRATEGY_COMPARE_ROLLING_TEST_MENU_LABEL
-    )
-    while True:
-        print(f"\n=== {title} ===")
-        for index, mode in enumerate(modes, start=1):
-            print(
-                render_menu_item(
-                    index,
-                    (
-                        f"{mode['label']} | {mode.get('score_start_date')}→{'最新' if str(mode.get('score_end_date')).lower() == 'auto' else mode.get('score_end_date')}"
-                        if bool(mode.get("single_score_block"))
-                        else (
-                            f"{mode['label']} | {mode.get('score_start_date')}→"
-                            f"{'最新' if str(mode.get('score_end_date')).lower() == 'auto' else mode.get('score_end_date')}"
-                            f" | {int(mode['fold_months'])}M"
-                        )
-                    ),
-                    default=index == 1,
-                )
-            )
-        print(render_menu_item(0, "返回"))
-        try:
-            raw = input("👉 請選擇：").strip().lower()
-        except EOFError:
-            return 0
-        choice = "1" if raw == "" else raw
-        if choice in {"0", "q", "quit", "exit"}:
-            return 0
-        try:
-            numeric = int(choice)
-        except ValueError:
-            print("選項無效。")
-            continue
-        if 1 <= numeric <= len(modes):
-            mode = modes[numeric - 1]
-            if robustness:
-                _strategy_multi_seed_robustness_menu(str(mode["robustness_id"]))
-            else:
-                _strategy_compare_profile_menu(str(mode["profile_id"]))
-            continue
-        print(f"選項無效，請按 Enter 或輸入 0～{len(modes)}。")
-
-
 def _strategy_compare_menu() -> int:
     while True:
         oos_mode, rolling_mode = _current_strategy_mode_rows()
         print("\n=== 策略組合比較 ===")
-        print(render_menu_item(1, "Extending-Window OOS", default=True))
-        print(render_menu_item(2, "Extending-Window Rolling"))
-        print(render_menu_item(3, "OOS + Rolling 一鍵／Consistency"))
-        print(render_menu_item(4, "Multi-seed Robustness"))
-        integration_cfg = get_strategy_runtime_integration_settings()
-        integration_label = integration_cfg.label
-        if not runtime_integration_execution_enabled():
-            integration_label += "  [歷史／唯讀]"
-        print(render_menu_item(5, integration_label))
+        print(render_menu_item(1, "Forward OOS Test", default=True))
+        print(render_menu_item(2, "Rolling OOS Test"))
+        print(render_menu_item(3, "Forward OOS Robustness Test"))
+        print(render_menu_item(4, "Rolling OOS Robustness Test"))
         print(render_menu_item(0, "返回"))
         try:
             raw = input("👉 請選擇：").strip().lower()
@@ -452,13 +310,11 @@ def _strategy_compare_menu() -> int:
         elif numeric == 2:
             _strategy_compare_profile_menu(str(rolling_mode["profile_id"]))
         elif numeric == 3:
-            _run_strategy_oos_rolling_one_click()
+            _strategy_multi_seed_robustness_menu(str(oos_mode["robustness_id"]))
         elif numeric == 4:
-            _strategy_robustness_menu()
-        elif numeric == 5:
-            _strategy_runtime_integration_menu()
+            _strategy_multi_seed_robustness_menu(str(rolling_mode["robustness_id"]))
         else:
-            print("選項無效，請按 Enter 或輸入 0～5。")
+            print("選項無效，請按 Enter 或輸入 0～4。")
 
 
 def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
@@ -642,7 +498,12 @@ def _print_main_menu() -> None:
     print(render_menu_item(2, "策略參數最佳化"))
     print(render_menu_item(3, "策略組合比較"))
     print(render_menu_item(4, "Audit／診斷"))
-    print(render_menu_item(5, "查看目前研究狀態與工件"))
+    integration_cfg = get_strategy_runtime_integration_settings()
+    integration_label = integration_cfg.label
+    if not runtime_integration_execution_enabled():
+        integration_label += "  [歷史／唯讀]"
+    print(render_menu_item(5, integration_label))
+    print(render_menu_item(6, "查看目前研究狀態與工件"))
     print(render_menu_item(0, "離開"))
 
 
@@ -667,9 +528,11 @@ def _interactive_menu() -> int:
             elif choice == "4":
                 _audit_menu()
             elif choice == "5":
+                _strategy_runtime_integration_menu()
+            elif choice == "6":
                 _show_research_status()
             else:
-                print("選項無效，請按 Enter 或輸入 0～5。")
+                print("選項無效，請按 Enter 或輸入 0～6。")
         except (FileNotFoundError, ImportError, RuntimeError, ValueError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:

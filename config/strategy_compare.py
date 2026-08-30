@@ -135,7 +135,7 @@ STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PERCENTILE_METHOD = "average_zero_based"
 # Runtime promotion只讀取已存在的正式Strategy Compare / robustness工件；
 # Gate本身不訓練模型、不重跑策略，也不自動切換runtime default。
 STRATEGY_RUNTIME_INTEGRATION = {
-    "label": "Runtime 整合 Gate",
+    "label": "Runtime Promotion Gate",
     "enabled": False,
     "selection_profile_id": "selection_pit",
     "forward_profile_id": "forward_oos",

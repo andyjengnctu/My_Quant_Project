@@ -263,12 +263,19 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         not in research_shell_source,
     )
     check_true(
-        "research_strategy_menu_exposes_oos_rolling_and_one_click_consistency_at_same_level_without_status_submenu",
-        '"Extending-Window OOS"' in research_shell_source
-        and '"Extending-Window Rolling"' in research_shell_source
-        and '"OOS + Rolling 一鍵／Consistency"' in research_shell_source
-        and '"查看目前Framework設定與工件狀態"' not in research_shell_source
-        and "materialize_strategy_oos_rolling_consistency" in research_shell_source,
+        "research_strategy_menu_has_four_direct_tests_no_one_click_and_runtime_gate_is_main_level",
+        'render_menu_item(1, "Forward OOS Test", default=True)' in research_shell_source
+        and 'render_menu_item(2, "Rolling OOS Test")' in research_shell_source
+        and 'render_menu_item(3, "Forward OOS Robustness Test")' in research_shell_source
+        and 'render_menu_item(4, "Rolling OOS Robustness Test")' in research_shell_source
+        and 'render_menu_item(5, integration_label)' in research_shell_source
+        and 'render_menu_item(6, "查看目前研究狀態與工件")' in research_shell_source
+        and '"OOS + Rolling 一鍵／Consistency"' not in research_shell_source
+        and '"OOS + Rolling Multi-seed 一鍵"' not in research_shell_source
+        and "_run_strategy_oos_rolling_one_click" not in research_shell_source
+        and "materialize_strategy_oos_rolling_consistency" not in research_shell_source
+        and 'elif numeric == 3:\n            _strategy_multi_seed_robustness_menu(str(oos_mode["robustness_id"]))' in research_shell_source
+        and 'elif numeric == 4:\n            _strategy_multi_seed_robustness_menu(str(rolling_mode["robustness_id"]))' in research_shell_source,
     )
 
     from services.research.strategy_compare_application import (

@@ -47,7 +47,9 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     )
     from tools.filters.breakout_quality.build_point_in_time_scores import (
         _build_fold_periods,
+        _checkpoint_matches_rescore_contract,
         _fold_training_contract_is_compatible,
+        _forward_checkpoint_import_issues,
         _publish_fold_checkpoint_to_cache,
         _reload_fold_manifest_after_checkpoint_cache_sync,
         fold_training_identity,
@@ -89,6 +91,164 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     else:
         missing_history_rejected = False
     check_true("daily_universal_missing_history_start_fails_closed", missing_history_rejected)
+
+    # Forward→Rolling robustness bridge: current Forward artifacts persist sample scope
+    # inside experiment_settings (not as a top-level manifest/checkpoint field), and the
+    # checkpoint itself does not persist selected_epoch.  The bridge must therefore use
+    # canonical manifest/report/hash/split/execution evidence without requiring fields that
+    # do not exist in already-trained [5] artifacts.
+    execution_payload = {
+        "requested_device": "auto",
+        "resolved_device": "cuda",
+        "mixed_precision_requested": True,
+        "mixed_precision_enabled": True,
+        "autocast_dtype": "bfloat16",
+        "deterministic_algorithms": True,
+        "allow_tf32": False,
+    }
+    profile_payload = {
+        "name": "synthetic_daily_profile",
+        "training_sample_scope": TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    }
+    checkpoint_manifest = {"sha256": "abc", "size_bytes": 123}
+    source_contract = {
+        "dataset_policy": "synthetic",
+        "dataset_storage_schema_version": 1,
+        "source_data_inventory": {"sha256": "inventory"},
+        "dataset_artifacts": {"groups": {"sha256": "groups"}},
+        "target_schema_version": 1,
+        "target_contract": {"target_id": "synthetic_target"},
+        "target_artifacts": {"raw": {"sha256": "target"}},
+        "training_universe_start_date": "2004-09-08",
+    }
+    fold_contract = {
+        "filter_id": "synthetic_quality",
+        "model_architecture": "synthetic_arch",
+        "experiment_profile": "synthetic_daily_profile",
+        "continuous_target_id": "synthetic_target",
+        "training_label_scope": TRAINING_LABEL_SCOPE_ALL,
+        "training_sample_scope": TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        "model_information_cutoff": "2020-12-31",
+        "model_spec": {"name": "synthetic_model"},
+        "experiment_settings": profile_payload,
+        "seed": 693545351,
+        "training_settings": {
+            "batch_size": 128,
+            "learning_rate": 0.0003,
+            "weight_decay": 0.0001,
+            "gradient_clip_norm": 1.0,
+        },
+        "planned_periods": {
+            "validation_start": "2019-01-01",
+            "validation_end": "2020-12-31",
+            "score_start": "2021-01-01",
+        },
+        "group_counts": {"inner_train": 1000, "validation": 200, "final_refit": 1200},
+        "source_contract": source_contract,
+    }
+    source_manifest = {
+        **{
+            key: fold_contract[key]
+            for key in (
+                "filter_id", "model_architecture", "experiment_profile",
+                "continuous_target_id", "training_label_scope",
+                "model_information_cutoff", "model_spec", "experiment_settings",
+            )
+        },
+        "selected_epoch": 2,
+        "torch_execution": execution_payload,
+        "source_dataset": {
+            "policy": source_contract["dataset_policy"],
+            "dataset_storage_schema_version": source_contract["dataset_storage_schema_version"],
+            "source_data_inventory": source_contract["source_data_inventory"],
+            "dataset_artifacts": source_contract["dataset_artifacts"],
+            "training_universe_start_date": source_contract["training_universe_start_date"],
+        },
+        "source_continuous_target": {
+            "schema_version": source_contract["target_schema_version"],
+            "target_contract": source_contract["target_contract"],
+            "artifacts": source_contract["target_artifacts"],
+        },
+        "model": checkpoint_manifest,
+    }
+    source_report = {
+        "training": {
+            "seed": fold_contract["seed"],
+            "selected_epoch": 2,
+            "batch_size": 128,
+            "learning_rate": 0.0003,
+            "weight_decay": 0.0001,
+            "gradient_clip_norm": 1.0,
+        },
+        "standard_model_sop": {"evaluation_mode": "forward_oos"},
+        "split_report": {
+            "selection_start_date": source_contract["training_universe_start_date"],
+            "inner_validation_start_date": "2019-01-01",
+            "selection_end_date": "2020-12-31",
+            "oos_start_date": "2021-01-01",
+            "counts": {"inner_train": 1000, "validation": 200, "selection": 1200},
+        },
+        "torch_execution": execution_payload,
+        "artifacts": {"model": checkpoint_manifest},
+    }
+    checkpoint = {
+        "model_spec": fold_contract["model_spec"],
+        "experiment_settings": profile_payload,
+        "experiment_profile": fold_contract["experiment_profile"],
+        "sequence_length": 300,
+        "feature_count": 10,
+        "context_count": 5,
+    }
+    import_bundle = SimpleNamespace(
+        feature_bank=np.zeros((2, 300, 10), dtype=np.float32),
+        group_context=np.zeros((2, 5), dtype=np.float32),
+    )
+    execution_plan = SimpleNamespace(as_manifest_payload=lambda: execution_payload)
+    import_issues = _forward_checkpoint_import_issues(
+        source_manifest=source_manifest,
+        source_report=source_report,
+        checkpoint=checkpoint,
+        checkpoint_manifest=checkpoint_manifest,
+        fold_contract=fold_contract,
+        bundle=import_bundle,
+        execution_plan=execution_plan,
+    )
+    check_true(
+        "forward_robustness_checkpoint_matches_first_rolling_fit_without_nonexistent_checkpoint_fields",
+        import_issues == (),
+    )
+    imported_cache_manifest = {
+        **fold_contract,
+        "selected_epoch": 2,
+        "migration": {
+            "kind": "forward_model_fitting_identity_import",
+            "training_contract_unchanged": True,
+            "source_checkpoint_sha_preserved": True,
+        },
+    }
+    check_true(
+        "forward_imported_checkpoint_can_rescore_without_pit_only_checkpoint_fields",
+        _checkpoint_matches_rescore_contract(
+            checkpoint=checkpoint,
+            manifest=imported_cache_manifest,
+            fold_contract=fold_contract,
+            bundle=import_bundle,
+        ),
+    )
+    stale_fold_contract = {**fold_contract, "model_information_cutoff": "2021-12-31"}
+    stale_issues = _forward_checkpoint_import_issues(
+        source_manifest=source_manifest,
+        source_report=source_report,
+        checkpoint=checkpoint,
+        checkpoint_manifest=checkpoint_manifest,
+        fold_contract=stale_fold_contract,
+        bundle=import_bundle,
+        execution_plan=execution_plan,
+    )
+    check_true(
+        "forward_robustness_checkpoint_never_crosses_different_rolling_cutoff",
+        "manifest model_information_cutoff mismatch" in stale_issues,
+    )
 
     event_profile = get_breakout_quality_experiment_profile(
         STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE

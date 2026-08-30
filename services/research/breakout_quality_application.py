@@ -4759,6 +4759,12 @@ def _build_rolling_robustness_seed(program_name: str, settings, *, seed: int) ->
     mode = get_breakout_quality_rolling_test_mode("rolling")
     pit_dir, _unused = _model_robustness_dirs(settings, seed=seed, rolling=True)
     pit_dir.mkdir(parents=True, exist_ok=True)
+    forward_payload, forward_report_path, _forward_reason = _load_forward_robustness_seed(
+        settings, seed=seed
+    )
+    forward_model_dir, _forward_research_dir = _model_robustness_dirs(
+        settings, seed=seed, rolling=False
+    )
     build_args = [
         "--filter-id", str(settings.filter_id),
         "--model-architecture", str(settings.model_architecture),
@@ -4771,6 +4777,11 @@ def _build_rolling_robustness_seed(program_name: str, settings, *, seed: int) ->
         "--point-in-time-dir-override", str(pit_dir),
         "--resume" if settings.point_in_time_resume else "--no-resume",
     ]
+    if forward_payload is not None:
+        build_args.extend([
+            "--checkpoint-import-model-dir", str(forward_model_dir),
+            "--checkpoint-import-report-path", str(forward_report_path),
+        ])
     if mode.fold_anchor_date is not None:
         build_args.extend(["--fold-anchor-date", str(mode.fold_anchor_date)])
     if mode.single_score_block:
