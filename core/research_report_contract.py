@@ -76,7 +76,7 @@ S = ReportSectionContract
 
 MODEL_STANDARD_SOP = PersistentReportContract(
     report_id="model.standard_sop",
-    version=4,
+    version=5,
     role="persistent_standard",
     menu_path=("Research", "模型訓練／驗證", "訓練目前模型 → Forward-OOS 標準模型 SOP 報表"),
     sections=(
@@ -99,15 +99,7 @@ MODEL_STANDARD_SOP = PersistentReportContract(
                 C("delta_top_bottom", "Δ Top-Bottom", 4, preference="higher", format_kind="signed_number"),
             )),
         )),
-        S("multi_head", 3, "Multi-head Learnability", "multi_head_only", (
-            T("multi_head", (
-                C("split", "Split", alignment="left"), C("head", "Head", alignment="left"),
-                C("mean_daily_spearman", "Daily rho", 4, preference="higher", format_kind="number"),
-                C("global_spearman_vs_raw_target", "Global rho", 4, preference="higher", format_kind="number"),
-                C("pairwise_concordance", "Pair", 2, "%", "higher", "fraction_pct"),
-            )),
-        )),
-        S("upside_downside_alignment", 4, "Upside / Downside Alignment", "daily_universal_mfe_adverse_truth", (
+        S("upside_downside_alignment", 3, "Upside / Downside Alignment", "daily_universal_mfe_adverse_truth", (
             T("upside_downside_alignment", (
                 C("split", "Split", alignment="left"),
                 C("target_to_full_mfe_daily_spearman", "Target→MFE rho", 4, preference="higher", format_kind="number"),
@@ -116,7 +108,7 @@ MODEL_STANDARD_SOP = PersistentReportContract(
                 C("score_to_safety_daily_spearman", "Score→Safety rho", 4, preference="higher", format_kind="number"),
             )),
         )),
-        S("top_tail_economic_quality", 5, "Top-tail Economic Quality", "daily_universal_mfe_adverse_truth", (
+        S("top_tail_economic_quality", 4, "Top-tail Economic Quality", "daily_universal_mfe_adverse_truth", (
             T("top_tail_economic_quality", (
                 C("split", "Split", alignment="left"),
                 C("top10_n", "Top10 N", 0, format_kind="int"),
@@ -130,26 +122,7 @@ MODEL_STANDARD_SOP = PersistentReportContract(
                 C("top10_lmls", "LM/LS", preference="lower", alignment="right"),
             )),
         )),
-        S("truth_prediction_geometry", 6, "Truth / Prediction Geometry", "geometry_models", (
-            T("geometry_summary", (
-                C("metric", "Metric", alignment="left"), C("value", "Value", alignment="right"),
-            )),
-            T("truth_5x5", (
-                C("safety", "Actual Safety \\ Pure-MFE", alignment="left"),
-                C("m1", "M1"), C("m2", "M2"), C("m3", "M3"), C("m4", "M4"), C("m5", "M5"),
-            )),
-            T("predicted_5x5", (
-                C("safety", "Pred Safety \\ Raw-MFE", alignment="left"),
-                C("m1", "M1"), C("m2", "M2"), C("m3", "M3"), C("m4", "M4"), C("m5", "M5"),
-            )),
-            T("safety_cohorts", (
-                C("safety", "Pred Safety", alignment="left"), C("n", "N", 0, format_kind="int"),
-                C("raw_mfe_to_actual_mfe_mean_daily_spearman", "Raw-MFE→MFE rho", 4, preference="higher", format_kind="number"),
-                C("high_mfe_pct", "High-MFE", 2, "%", "higher", "pct"),
-                C("hmhs_pct", "HM/HS", 2, "%", "higher", "pct"),
-            )),
-        )),
-        S("ranking_boundary", 7, "Ranking / Boundary", "ranking_quality_available", (
+        S("ranking_boundary", 5, "Ranking / Boundary", "ranking_quality_available", (
             T("ranking_boundary", (
                 C("split", "Split", alignment="left"),
                 C("ndcg_at_k", "NDCG@K", 4, preference="higher", format_kind="number"),
@@ -160,14 +133,13 @@ MODEL_STANDARD_SOP = PersistentReportContract(
                 C("competition_date_pool", "競爭日 / Pool日", alignment="right"),
             )),
         )),
-        S("evidence_coverage", 8, "Evidence Coverage", "all_continuous_dl", (
+        S("evidence_coverage", 6, "Evidence Coverage", "all_continuous_dl", (
             T("evidence_coverage", (
                 C("evidence", "Evidence", alignment="left"), C("status", "Status", alignment="left"),
             )),
         )),
     ),
 )
-
 
 def _model_comparison_table(table: ReportTableContract) -> ReportTableContract:
     """Derive multi-model comparison schema from the Standard Model SOP table SSOT.
@@ -199,7 +171,7 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=2,
+    version=3,
     role="persistent_multi_model_comparison_oos_breakout",
     menu_path=("Research", "模型訓練／驗證", "模型比較（Standard SOP）"),
     sections=_model_comparison_sections(),
@@ -207,6 +179,39 @@ MODEL_STANDARD_COMPARISON = PersistentReportContract(
 
 
 MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
+    "multi_head_learnability": ModelExtensionContract(
+        "multi_head_learnability", "Multi-head Learnability",
+        "multi_head_only",
+        (T("multi_head", (
+            C("split", "Split", alignment="left"), C("head", "Head", alignment="left"),
+            C("mean_daily_spearman", "Daily rho", 4, preference="higher", format_kind="number"),
+            C("global_spearman_vs_raw_target", "Global rho", 4, preference="higher", format_kind="number"),
+            C("pairwise_concordance", "Pair", 2, "%", "higher", "fraction_pct"),
+        )),),
+    ),
+    "truth_prediction_geometry": ModelExtensionContract(
+        "truth_prediction_geometry", "Truth / Prediction Geometry",
+        "geometry_models",
+        (
+            T("geometry_summary", (
+                C("metric", "Metric", alignment="left"), C("value", "Value", alignment="right"),
+            )),
+            T("truth_5x5", (
+                C("safety", "Actual Safety \\ Pure-MFE", alignment="left"),
+                C("m1", "M1"), C("m2", "M2"), C("m3", "M3"), C("m4", "M4"), C("m5", "M5"),
+            )),
+            T("predicted_5x5", (
+                C("safety", "Pred Safety \\ Raw-MFE", alignment="left"),
+                C("m1", "M1"), C("m2", "M2"), C("m3", "M3"), C("m4", "M4"), C("m5", "M5"),
+            )),
+            T("safety_cohorts", (
+                C("safety", "Pred Safety", alignment="left"), C("n", "N", 0, format_kind="int"),
+                C("raw_mfe_to_actual_mfe_mean_daily_spearman", "Raw-MFE→MFE rho", 4, preference="higher", format_kind="number"),
+                C("high_mfe_pct", "High-MFE", 2, "%", "higher", "pct"),
+                C("hmhs_pct", "HM/HS", 2, "%", "higher", "pct"),
+            )),
+        ),
+    ),
     "direct_hmhs_joint_retrieval": ModelExtensionContract(
         "direct_hmhs_joint_retrieval", "Direct HM/HS Joint Retrieval",
         "marginal_safety_raw_mfe_plus_direct_hmhs_head",
@@ -455,8 +460,8 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "71d1789521ca6d79",
-    "model.standard_sop": "72cc375fdf115504",
+    "model.standard_comparison": "7bf0ef0427519507",
+    "model.standard_sop": "9ec49fe2aaf3a2d6",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",
 }

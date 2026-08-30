@@ -2863,22 +2863,20 @@ def validate_research_report_contract_freeze_case(_base_params):
         detail=str(errors),
     )
     check_true(
-        "standard_model_sop_v4_section_order_is_user_approved",
+        "standard_model_sop_v5_common_section_order_is_contiguous_1_to_6",
         [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         == [
             (1, "Learnability"),
             (2, "Generalization"),
-            (3, "Multi-head Learnability"),
-            (4, "Upside / Downside Alignment"),
-            (5, "Top-tail Economic Quality"),
-            (6, "Truth / Prediction Geometry"),
-            (7, "Ranking / Boundary"),
-            (8, "Evidence Coverage"),
+            (3, "Upside / Downside Alignment"),
+            (4, "Top-tail Economic Quality"),
+            (5, "Ranking / Boundary"),
+            (6, "Evidence Coverage"),
         ],
     )
     check_true(
         "standard_multi_model_comparison_schema_is_derived_from_standard_sop",
-        int(MODEL_STANDARD_COMPARISON.version) == 2
+        int(MODEL_STANDARD_COMPARISON.version) == 3
         and [(section.number, section.title) for section in MODEL_STANDARD_COMPARISON.sections]
         == [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         and all(
@@ -2911,7 +2909,7 @@ def validate_research_report_contract_freeze_case(_base_params):
         "model.standard_sop", "ranking_boundary", "ranking_boundary"
     ).headers
     check_true(
-        "standard_sop_v4_common_columns_match_user_approved_semantics",
+        "standard_sop_v5_common_columns_match_user_approved_semantics",
         "Top-Bottom Target" in learn_headers
         and alignment_headers == (
             "Split", "Target→MFE rho", "Target→Safety rho", "Score→MFE rho", "Score→Safety rho"
@@ -3033,6 +3031,33 @@ def validate_research_report_contract_freeze_case(_base_params):
         "MODEL-JOINT-MIN",
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     )
+    control_payload["safety_raw_mfe_evaluation"] = {
+        "validation": {
+            "raw_safety": dict(base_metrics["validation"]),
+            "raw_mfe": dict(base_metrics["validation"]),
+        },
+        "oos": {
+            "raw_safety": dict(base_metrics["oos"]),
+            "raw_mfe": dict(base_metrics["oos"]),
+            "model_gate": {
+                "predicted_safety_to_raw_mfe_mean_daily_spearman": -0.80,
+                "joint_product_to_actual_hmhs_mean_daily_spearman": 0.03,
+                "upper_right_s5_m5": {"n": 0},
+                "actual_truth_geometry": {
+                    "safety_to_mfe_mean_daily_spearman": -0.12,
+                    "s5_m5": {"n": 4, "population_pct": 4.0, "independence_enrichment": 0.9},
+                    "s4plus_m4plus": {"n": 15, "population_pct": 15.0, "independence_enrichment": 0.95},
+                    "actual_joint_geometry": [],
+                },
+                "predicted_joint_geometry": [],
+                "safety_cohorts": [],
+            },
+        },
+        "breakout_candidate_oos": {
+            "raw_safety": dict(base_metrics["breakout_candidate_oos"]),
+            "raw_mfe": dict(base_metrics["breakout_candidate_oos"]),
+        },
+    }
     joint_payload["safety_raw_mfe_hmhs_evaluation"] = {
         "validation": {
             "joint_hmhs": {
@@ -3092,6 +3117,8 @@ def validate_research_report_contract_freeze_case(_base_params):
         for key, text in rendered.items()
     }
     extension_expectations = {
+        "multi_head_learnability": ("control", "MODEL-CONTROL"),
+        "truth_prediction_geometry": ("control", "MODEL-CONTROL"),
         "direct_hmhs_joint_retrieval": ("joint", "MODEL-JOINT"),
         "direct_hmhs_h_only": ("h_only", "MODEL-HONLY"),
         "joint_min_retrieval": ("joint_min", "MODEL-JOINT-MIN"),
@@ -3112,15 +3139,17 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "Δ HM/HS Pair" not in standard_lines["h_only"],
     )
     check_true(
-        "cross_profile_standard_v4_headers_and_section_order_are_invariant",
+        "cross_profile_standard_v5_common_headers_and_section_order_are_invariant",
         all(
             "Top-Bottom Target" in text
             and "Validation → OOS" in text
             and "Primary score" not in text
-            and "標準模型 SOP｜4. Upside / Downside Alignment" in text
-            and "標準模型 SOP｜5. Top-tail Economic Quality" in text
-            and "標準模型 SOP｜7. Ranking / Boundary" in text
-            and "標準模型 SOP｜8. Evidence Coverage" in text
+            and "標準模型 SOP｜3. Upside / Downside Alignment" in text
+            and "標準模型 SOP｜4. Top-tail Economic Quality" in text
+            and "標準模型 SOP｜5. Ranking / Boundary" in text
+            and "標準模型 SOP｜6. Evidence Coverage" in text
+            and "標準模型 SOP｜3. Multi-head Learnability" not in text
+            and "標準模型 SOP｜6. Truth / Prediction Geometry" not in text
             and "Target→Safety rho" in text
             and "Score→Safety rho" in text
             and "Pred-Safety→Target rho" not in text
@@ -3131,8 +3160,8 @@ def validate_research_report_contract_freeze_case(_base_params):
             and "Top-K Target" not in text
             and "Top-K Lift" in text
             and "競爭日 / Pool日" in text
-            and text.find("標準模型 SOP｜8. Evidence Coverage")
-                > text.find("標準模型 SOP｜7. Ranking / Boundary")
+            and text.find("標準模型 SOP｜6. Evidence Coverage")
+                > text.find("標準模型 SOP｜5. Ranking / Boundary")
             for text in rendered.values()
         ),
     )
@@ -3146,18 +3175,28 @@ def validate_research_report_contract_freeze_case(_base_params):
         target="console",
     )
     check_true(
-        "multi_model_comparison_uses_standard_v4_oos_breakout_view_for_three_models",
+        "multi_model_comparison_uses_single_section_title_with_oos_then_breakout_tables",
         all(model in comparison_text for model in ("MODEL-A", "MODEL-B", "MODEL-C"))
         and "Validation" not in comparison_text
-        and "模型比較 SOP｜1. Learnability｜Forward OOS" in comparison_text
-        and "模型比較 SOP｜1. Learnability｜Breakout slice" in comparison_text
-        and "模型比較 SOP｜4. Upside / Downside Alignment｜Forward OOS" in comparison_text
-        and "模型比較 SOP｜4. Upside / Downside Alignment｜Breakout slice" in comparison_text
+        and comparison_text.count("模型比較 SOP｜1. Learnability") == 1
+        and "模型比較 SOP｜1. Learnability｜Forward OOS" not in comparison_text
+        and "模型比較 SOP｜1. Learnability｜Breakout slice" not in comparison_text
+        and comparison_text.count("模型比較 SOP｜3. Upside / Downside Alignment") == 1
+        and comparison_text.count("模型比較 SOP｜4. Top-tail Economic Quality") == 1
+        and comparison_text.count("模型比較 SOP｜5. Ranking / Boundary") == 1
+        and "Forward OOS" in comparison_text
+        and "Breakout slice" in comparison_text
         and "Target→Safety rho" in comparison_text
         and "Top10 Low-Adverse" in comparison_text
         and "Top-K Lift" in comparison_text
         and "競爭日 / Pool日" in comparison_text
-        and "模型比較 SOP｜8. Evidence Coverage" in comparison_text,
+        and "模型比較 SOP｜6. Evidence Coverage" in comparison_text
+        and comparison_text.find("模型比較 SOP｜1. Learnability")
+            < comparison_text.find("模型比較 SOP｜2. Generalization")
+            < comparison_text.find("模型比較 SOP｜3. Upside / Downside Alignment")
+            < comparison_text.find("模型比較 SOP｜4. Top-tail Economic Quality")
+            < comparison_text.find("模型比較 SOP｜5. Ranking / Boundary")
+            < comparison_text.find("模型比較 SOP｜6. Evidence Coverage"),
     )
 
     comparison_payloads = []

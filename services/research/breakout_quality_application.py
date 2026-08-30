@@ -678,12 +678,15 @@ def _model_sop_view(payload: dict) -> dict:
         ("Generalization", "AVAILABLE" if metrics.get("validation") and metrics.get("oos") else "N/A"),
         ("Upside / Downside Alignment", "AVAILABLE" if alignment_rows else "N/A"),
         ("Top-tail Economic Quality", "AVAILABLE" if top_tail_rows else "N/A"),
-        ("Truth / Prediction Geometry", "AVAILABLE" if geometry_scopes else "N/A"),
         ("Breakout application slice", "AVAILABLE" if metrics.get("breakout_candidate_oos") else "N/A"),
         ("Ranking / Boundary", "AVAILABLE" if sample else "N/A"),
     ]
 
     extensions = []
+    if multi_head_rows:
+        extensions.append({"id": "multi_head_learnability", "rows": multi_head_rows})
+    if geometry_scopes:
+        extensions.append({"id": "truth_prediction_geometry", "geometry": geometry_scopes})
     if direct_hmhs_only:
         ext_rows = []
         for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
@@ -838,6 +841,67 @@ def _render_model_contract_table(
     return "\n".join([header, separator, *body])
 
 
+def _truth_geometry_cell(cell: dict) -> str:
+    cell = dict(cell or {})
+    if not cell:
+        return "0 / - / -"
+    pct = cell.get("population_pct")
+    enrich = cell.get("independence_enrichment")
+    return (
+        f"{int(cell.get('n', 0) or 0):,} / "
+        f"{'-' if pct is None else f'{float(pct):.2f}%'} / "
+        f"{'-' if enrich is None else f'{float(enrich):.2f}×'}"
+    )
+
+
+def _truth_geometry_extension_scopes(geometry_scopes: list[tuple[str, dict]]) -> list[dict]:
+    rendered_scopes = []
+    for scope_label, raw_gate in geometry_scopes:
+        gate = dict(raw_gate or {})
+        actual = dict(gate.get("actual_truth_geometry") or {})
+        upper = dict(gate.get("upper_right_s5_m5") or {})
+        summary_rows = [
+            {"metric": "Actual Safety↔MFE Daily rho", "value": _fmt_simple_metric(actual.get("safety_to_mfe_mean_daily_spearman"))},
+            {"metric": "Pred Safety↔Raw-MFE Daily rho", "value": _fmt_simple_metric(gate.get("predicted_safety_to_raw_mfe_mean_daily_spearman"))},
+            {"metric": "Actual S5×M5", "value": _truth_geometry_cell(actual.get("s5_m5"))},
+            {"metric": "Actual S4+×M4+", "value": _truth_geometry_cell(actual.get("s4plus_m4plus"))},
+            {"metric": "Pred S5×M5 N", "value": f"{int(upper.get('n', 0) or 0):,}"},
+            {"metric": "Joint product→actual HM/HS Daily rho", "value": _fmt_simple_metric(gate.get("joint_product_to_actual_hmhs_mean_daily_spearman"))},
+        ]
+        truth_rows = [
+            {"safety": f"S{s_idx}", **{f"m{i}": _truth_geometry_cell(cell) for i, cell in enumerate(row, start=1)}}
+            for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1)
+        ]
+        predicted_rows = []
+        for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
+            cells = {}
+            for i, raw_cell in enumerate(row, start=1):
+                cell = dict(raw_cell or {})
+                pct = cell.get("actual_hmhs_pct")
+                cells[f"m{i}"] = f"{int(cell.get('n', 0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'}"
+            predicted_rows.append({"safety": f"S{s_idx}", **cells})
+        cohort_rows = []
+        for raw_cohort in list(gate.get("safety_cohorts") or []):
+            cohort = dict(raw_cohort or {})
+            cohort_rows.append({
+                "safety": f"S{int(cohort.get('predicted_safety_quintile', 0) or 0)}",
+                "n": int(cohort.get("n", 0) or 0),
+                "raw_mfe_to_actual_mfe_mean_daily_spearman": cohort.get("raw_mfe_to_actual_mfe_mean_daily_spearman"),
+                "high_mfe_pct": cohort.get("high_mfe_pct"),
+                "hmhs_pct": cohort.get("hmhs_pct"),
+            })
+        rendered_scopes.append({
+            "scope": scope_label,
+            "summary": summary_rows,
+            "truth_5x5": truth_rows,
+            "predicted_5x5": predicted_rows,
+            "safety_cohorts": cohort_rows,
+            "actual_s5_n": int(dict(actual.get("s5_m5") or {}).get("n", 0) or 0),
+            "pred_s5_n": int(upper.get("n", 0) or 0),
+        })
+    return rendered_scopes
+
+
 def _render_continuous_ranker_simple_console(payload: dict) -> str:
     view = _model_sop_view(payload)
     if not view:
@@ -870,15 +934,6 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
                 view["generalization"], target="console", delta_style=True,
             ),
         ])
-    if view["multi_head"]:
-        lines.extend([
-            section("multi_head"),
-            _render_model_contract_table(
-                table_contract("model.standard_sop", "multi_head", "multi_head"),
-                view["multi_head"], target="console", scope_styler=scope_text,
-            ),
-        ])
-
     if view.get("upside_downside_alignment"):
         lines.extend([
             section("upside_downside_alignment"),
@@ -895,68 +950,6 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
                 view["top_tail_economic_quality"], target="console", scope_styler=scope_text,
             ),
         ])
-
-
-    def truth_cell(cell: dict) -> str:
-        if not cell:
-            return "0 / - / -"
-        pct = cell.get("population_pct")
-        enrich = cell.get("independence_enrichment")
-        return f"{int(cell.get('n', 0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'} / {'-' if enrich is None else f'{float(enrich):.2f}×'}"
-
-    for scope_label, gate in view["geometry"]:
-        actual = dict(gate.get("actual_truth_geometry") or {})
-        upper = dict(gate.get("upper_right_s5_m5") or {})
-        pred_n = int(upper.get("n", 0) or 0)
-        actual_s5_n = int(dict(actual.get("s5_m5") or {}).get("n", 0) or 0)
-        pred_n_text = styled_signal(
-            f"{pred_n:,}",
-            SIGNAL_NEGATIVE if actual_s5_n > 0 and pred_n == 0 else SIGNAL_NEUTRAL,
-            target="console", enabled=color, bold=True,
-        )
-        lines.extend([
-            section("truth_prediction_geometry", suffix=scope_label),
-            render_key_values((
-                ("Actual Safety↔MFE Daily rho", _fmt_simple_metric(actual.get("safety_to_mfe_mean_daily_spearman"))),
-                ("Pred Safety↔Raw-MFE Daily rho", _fmt_simple_metric(gate.get("predicted_safety_to_raw_mfe_mean_daily_spearman"))),
-                ("Actual S5×M5", truth_cell(dict(actual.get("s5_m5") or {}))),
-                ("Actual S4+×M4+", truth_cell(dict(actual.get("s4plus_m4plus") or {}))),
-                ("Pred S5×M5 N", pred_n_text),
-                ("Joint product→actual HM/HS Daily rho", _fmt_simple_metric(gate.get("joint_product_to_actual_hmhs_mean_daily_spearman"))),
-            )),
-        ])
-        actual_rows = []
-        for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1):
-            actual_rows.append((f"S{s_idx}", *(truth_cell(dict(cell or {})) for cell in row)))
-        if actual_rows:
-            t = table_contract("model.standard_sop", "truth_prediction_geometry", "truth_5x5")
-            lines.append(render_table(t.headers, actual_rows, alignments=t.alignments))
-        predicted_rows = []
-        for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
-            cells = []
-            for cell in row:
-                cell = dict(cell or {})
-                pct = cell.get("actual_hmhs_pct")
-                cells.append(f"{int(cell.get('n', 0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'}")
-            predicted_rows.append((f"S{s_idx}", *cells))
-        if predicted_rows:
-            t = table_contract("model.standard_sop", "truth_prediction_geometry", "predicted_5x5")
-            lines.append(render_table(t.headers, predicted_rows, alignments=t.alignments))
-        cohort_rows = []
-        for cohort in list(gate.get("safety_cohorts") or []):
-            cohort = dict(cohort or {})
-            cohort_rows.append({
-                "safety": f"S{int(cohort.get('predicted_safety_quintile', 0) or 0)}",
-                "n": int(cohort.get("n", 0) or 0),
-                "raw_mfe_to_actual_mfe_mean_daily_spearman": cohort.get("raw_mfe_to_actual_mfe_mean_daily_spearman"),
-                "high_mfe_pct": cohort.get("high_mfe_pct"),
-                "hmhs_pct": cohort.get("hmhs_pct"),
-            })
-        if cohort_rows:
-            lines.append(_render_model_contract_table(
-                table_contract("model.standard_sop", "truth_prediction_geometry", "safety_cohorts"),
-                cohort_rows, target="console",
-            ))
 
     ranking = view.get("ranking")
     if ranking:
@@ -985,7 +978,27 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
     for ext in view["extensions"]:
         ext_id = str(ext["id"])
         lines.append(extension(_model_extension_title(payload, ext_id)))
-        if ext_id == "direct_hmhs_h_only":
+        if ext_id == "multi_head_learnability":
+            lines.append(_render_model_contract_table(
+                extension_contract(ext_id).tables[0], ext["rows"], target="console", scope_styler=scope_text,
+            ))
+        elif ext_id == "truth_prediction_geometry":
+            tables = {table.table_id: table for table in extension_contract(ext_id).tables}
+            for scope in _truth_geometry_extension_scopes(list(ext.get("geometry") or [])):
+                lines.append(scope_text(scope["scope"]))
+                summary_rows = [dict(row) for row in scope["summary"]]
+                if scope["actual_s5_n"] > 0 and scope["pred_s5_n"] == 0:
+                    for row in summary_rows:
+                        if row.get("metric") == "Pred S5×M5 N":
+                            row["value"] = styled_signal(
+                                row["value"], SIGNAL_NEGATIVE, target="console", enabled=color, bold=True,
+                            )
+                lines.append(_render_model_contract_table(tables["geometry_summary"], summary_rows, target="console"))
+                for table_id in ("truth_5x5", "predicted_5x5", "safety_cohorts"):
+                    table_rows = list(scope.get(table_id) or [])
+                    if table_rows:
+                        lines.append(_render_model_contract_table(tables[table_id], table_rows, target="console"))
+        elif ext_id == "direct_hmhs_h_only":
             if ext.get("generalization"):
                 lines.append("Generalization")
                 lines.append(_render_model_contract_table(
@@ -1028,11 +1041,6 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         lines.extend(["", section("generalization"), "", _render_model_contract_table(
             table_contract("model.standard_sop", "generalization", "generalization"), view["generalization"], target="markdown", delta_style=True,
         )])
-    if view["multi_head"]:
-        lines.extend(["", section("multi_head"), "", _render_model_contract_table(
-            table_contract("model.standard_sop", "multi_head", "multi_head"), view["multi_head"], target="markdown", scope_styler=scope_text,
-        )])
-
     if view.get("upside_downside_alignment"):
         lines.extend(["", section("upside_downside_alignment"), "", _render_model_contract_table(
             table_contract("model.standard_sop", "upside_downside_alignment", "upside_downside_alignment"),
@@ -1043,65 +1051,6 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
             table_contract("model.standard_sop", "top_tail_economic_quality", "top_tail_economic_quality"),
             view["top_tail_economic_quality"], target="markdown", scope_styler=scope_text,
         )])
-
-
-    def truth_cell(cell: dict) -> str:
-        if not cell:
-            return "0 / - / -"
-        pct = cell.get("population_pct")
-        enrich = cell.get("independence_enrichment")
-        return f"{int(cell.get('n', 0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'} / {'-' if enrich is None else f'{float(enrich):.2f}×'}"
-
-    for scope_label, gate in view["geometry"]:
-        actual = dict(gate.get("actual_truth_geometry") or {})
-        upper = dict(gate.get("upper_right_s5_m5") or {})
-        pred_n = int(upper.get("n", 0) or 0)
-        actual_s5_n = int(dict(actual.get("s5_m5") or {}).get("n", 0) or 0)
-        pred_n_text = styled_signal(
-            f"{pred_n:,}", SIGNAL_NEGATIVE if actual_s5_n > 0 and pred_n == 0 else SIGNAL_NEUTRAL,
-            target="markdown", bold=True,
-        )
-        lines.extend([
-            "", section("truth_prediction_geometry", suffix=scope_label), "",
-            f"- **Actual Safety↔MFE Daily rho**: `{_fmt_simple_metric(actual.get('safety_to_mfe_mean_daily_spearman'))}`",
-            f"- **Pred Safety↔Raw-MFE Daily rho**: `{_fmt_simple_metric(gate.get('predicted_safety_to_raw_mfe_mean_daily_spearman'))}`",
-            f"- **Actual S5×M5**: `{truth_cell(dict(actual.get('s5_m5') or {}))}`",
-            f"- **Actual S4+×M4+**: `{truth_cell(dict(actual.get('s4plus_m4plus') or {}))}`",
-            f"- **Pred S5×M5 N**: {pred_n_text}",
-            f"- **Joint product→actual HM/HS Daily rho**: `{_fmt_simple_metric(gate.get('joint_product_to_actual_hmhs_mean_daily_spearman'))}`",
-        ])
-        actual_rows = []
-        for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1):
-            actual_rows.append({"safety": f"S{s_idx}", **{f"m{i}": truth_cell(dict(cell or {})) for i, cell in enumerate(row, start=1)}})
-        if actual_rows:
-            lines.extend(["", "### Actual 5×5", "", _render_model_contract_table(
-                table_contract("model.standard_sop", "truth_prediction_geometry", "truth_5x5"), actual_rows, target="markdown",
-            )])
-        predicted_rows = []
-        for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
-            cells = {}
-            for i, cell in enumerate(row, start=1):
-                cell = dict(cell or {})
-                pct = cell.get("actual_hmhs_pct")
-                cells[f"m{i}"] = f"{int(cell.get('n', 0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'}"
-            predicted_rows.append({"safety": f"S{s_idx}", **cells})
-        if predicted_rows:
-            lines.extend(["", "### Predicted 5×5", "", _render_model_contract_table(
-                table_contract("model.standard_sop", "truth_prediction_geometry", "predicted_5x5"), predicted_rows, target="markdown",
-            )])
-        cohort_rows = []
-        for cohort in list(gate.get("safety_cohorts") or []):
-            cohort = dict(cohort or {})
-            cohort_rows.append({
-                "safety": f"S{int(cohort.get('predicted_safety_quintile', 0) or 0)}",
-                "n": int(cohort.get("n", 0) or 0),
-                "raw_mfe_to_actual_mfe_mean_daily_spearman": cohort.get("raw_mfe_to_actual_mfe_mean_daily_spearman"),
-                "high_mfe_pct": cohort.get("high_mfe_pct"), "hmhs_pct": cohort.get("hmhs_pct"),
-            })
-        if cohort_rows:
-            lines.extend(["", _render_model_contract_table(
-                table_contract("model.standard_sop", "truth_prediction_geometry", "safety_cohorts"), cohort_rows, target="markdown",
-            )])
 
     ranking = view.get("ranking")
     if ranking:
@@ -1122,7 +1071,27 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
     for ext in view["extensions"]:
         ext_id = str(ext["id"])
         lines.extend(["", extension(_model_extension_title(payload, ext_id)), ""])
-        if ext_id == "direct_hmhs_h_only":
+        if ext_id == "multi_head_learnability":
+            lines.append(_render_model_contract_table(
+                extension_contract(ext_id).tables[0], ext["rows"], target="markdown", scope_styler=scope_text,
+            ))
+        elif ext_id == "truth_prediction_geometry":
+            tables = {table.table_id: table for table in extension_contract(ext_id).tables}
+            for scope in _truth_geometry_extension_scopes(list(ext.get("geometry") or [])):
+                lines.extend([f"### {markdown_tone(scope['scope'], 'blue', bold=True)}", ""])
+                summary_rows = [dict(row) for row in scope["summary"]]
+                if scope["actual_s5_n"] > 0 and scope["pred_s5_n"] == 0:
+                    for row in summary_rows:
+                        if row.get("metric") == "Pred S5×M5 N":
+                            row["value"] = styled_signal(
+                                row["value"], SIGNAL_NEGATIVE, target="markdown", bold=True,
+                            )
+                lines.extend([_render_model_contract_table(tables["geometry_summary"], summary_rows, target="markdown"), ""])
+                for table_id, label in (("truth_5x5", "Actual 5×5"), ("predicted_5x5", "Predicted 5×5"), ("safety_cohorts", "Safety cohorts")):
+                    table_rows = list(scope.get(table_id) or [])
+                    if table_rows:
+                        lines.extend([f"#### {label}", "", _render_model_contract_table(tables[table_id], table_rows, target="markdown"), ""])
+        elif ext_id == "direct_hmhs_h_only":
             if ext.get("generalization"):
                 lines.extend(["### Generalization", "", _render_model_contract_table(
                     extension_contract(ext_id).tables[1], ext["generalization"], target="markdown", delta_style=True,
@@ -1178,32 +1147,20 @@ def _standard_model_comparison_views(models: list[dict]) -> list[dict]:
     return views
 
 
-def _comparison_truth_cell(cell: dict) -> str:
-    if not cell:
-        return "0 / - / -"
-    pct = cell.get("population_pct")
-    enrich = cell.get("independence_enrichment")
-    return (
-        f"{int(cell.get('n', 0) or 0):,} / "
-        f"{'-' if pct is None else f'{float(pct):.2f}%'} / "
-        f"{'-' if enrich is None else f'{float(enrich):.2f}×'}"
-    )
-
-
 def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
+    """Collect only Standard-SOP common rows for [1][4].
+
+    Model-specific extensions are intentionally excluded from the cross-model
+    scorecard. They remain available in each model's [1][1] report.
+    """
+
     result: dict[str, object] = {
         "learnability": [],
         "generalization": [],
-        "multi_head": [],
         "upside_downside_alignment": [],
         "top_tail_economic_quality": [],
-        "geometry_summary": [],
-        "truth_5x5": [],
-        "predicted_5x5": [],
-        "safety_cohorts": [],
         "ranking_boundary": [],
         "evidence_coverage": [],
-        "extensions": [],
         "ranking_settings": [],
     }
     for item in views:
@@ -1212,129 +1169,91 @@ def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
         for key in (
             "learnability",
             "generalization",
-            "multi_head",
             "upside_downside_alignment",
             "top_tail_economic_quality",
         ):
-            result[key].extend({"model": model, **dict(row)} for row in list(view.get(key) or []))
+            result[key].extend(
+                {"model": model, **dict(row)} for row in list(view.get(key) or [])
+            )
 
         ranking = dict(view.get("ranking") or {})
         if ranking:
             result["ranking_settings"].append(
-                (int(ranking.get("top_k", 0) or 0), int(ranking.get("boundary_width", 0) or 0), str(ranking.get("competition_scope") or ""))
+                (
+                    int(ranking.get("top_k", 0) or 0),
+                    int(ranking.get("boundary_width", 0) or 0),
+                    str(ranking.get("competition_scope") or ""),
+                )
             )
             result["ranking_boundary"].extend(
-                {"model": model, **dict(row)} for row in list(ranking.get("rows") or [])
+                {"model": model, **dict(row)}
+                for row in list(ranking.get("rows") or [])
             )
 
         for evidence, status in list(view.get("evidence") or []):
             result["evidence_coverage"].append(
                 {"model": model, "evidence": evidence, "status": status}
             )
-
-        for scope_label, gate in list(view.get("geometry") or []):
-            gate = dict(gate or {})
-            actual = dict(gate.get("actual_truth_geometry") or {})
-            upper = dict(gate.get("upper_right_s5_m5") or {})
-            result["geometry_summary"].extend([
-                {"model": model, "metric": f"{scope_label} | Actual Safety↔MFE Daily rho", "value": _fmt_simple_metric(actual.get("safety_to_mfe_mean_daily_spearman"))},
-                {"model": model, "metric": f"{scope_label} | Pred Safety↔Raw-MFE Daily rho", "value": _fmt_simple_metric(gate.get("predicted_safety_to_raw_mfe_mean_daily_spearman"))},
-                {"model": model, "metric": f"{scope_label} | Actual S5×M5", "value": _comparison_truth_cell(dict(actual.get("s5_m5") or {}))},
-                {"model": model, "metric": f"{scope_label} | Actual S4+×M4+", "value": _comparison_truth_cell(dict(actual.get("s4plus_m4plus") or {}))},
-                {"model": model, "metric": f"{scope_label} | Pred S5×M5 N", "value": f"{int(upper.get('n', 0) or 0):,}"},
-                {"model": model, "metric": f"{scope_label} | Joint product→actual HM/HS Daily rho", "value": _fmt_simple_metric(gate.get("joint_product_to_actual_hmhs_mean_daily_spearman"))},
-            ])
-            for s_idx, row in enumerate(list(actual.get("actual_joint_geometry") or []), start=1):
-                result["truth_5x5"].append({
-                    "model": model,
-                    "safety": f"{scope_label} S{s_idx}",
-                    **{f"m{i}": _comparison_truth_cell(dict(cell or {})) for i, cell in enumerate(row, start=1)},
-                })
-            for s_idx, row in enumerate(list(gate.get("predicted_joint_geometry") or []), start=1):
-                cells = {}
-                for i, cell in enumerate(row, start=1):
-                    cell = dict(cell or {})
-                    pct = cell.get("actual_hmhs_pct")
-                    cells[f"m{i}"] = f"{int(cell.get('n', 0) or 0):,} / {'-' if pct is None else f'{float(pct):.2f}%'}"
-                result["predicted_5x5"].append({"model": model, "safety": f"{scope_label} S{s_idx}", **cells})
-            for cohort in list(gate.get("safety_cohorts") or []):
-                cohort = dict(cohort or {})
-                result["safety_cohorts"].append({
-                    "model": model,
-                    "safety": f"{scope_label} S{int(cohort.get('predicted_safety_quintile', 0) or 0)}",
-                    "n": int(cohort.get("n", 0) or 0),
-                    "raw_mfe_to_actual_mfe_mean_daily_spearman": cohort.get("raw_mfe_to_actual_mfe_mean_daily_spearman"),
-                    "high_mfe_pct": cohort.get("high_mfe_pct"),
-                    "hmhs_pct": cohort.get("hmhs_pct"),
-                })
-        for extension in list(view.get("extensions") or []):
-            result["extensions"].append({"model": model, **dict(extension)})
     return result
 
 
 def _render_standard_model_comparison(models: list[dict], *, target: str) -> str:
-    """Render multi-model Standard SOP comparison without Validation rows.
+    """Render the common Standard SOP for multiple models.
 
-    OOS and Breakout are intentionally rendered as separate comparison tables.
-    Metric values use the project-wide best/worst color contract: best green,
-    worst red, neutral/ties unstyled. Workflow/evidence statuses retain the
-    existing status-color rules.
+    [1][4] never renders Validation rows. For each scope-bearing Standard
+    section, one numbered section title is followed by two independent tables:
+    Forward OOS first, then Breakout slice. Model-specific extensions are not
+    part of this cross-model scorecard.
     """
 
     views = _standard_model_comparison_views(models)
     rows = _standard_model_comparison_rows(views)
     color = console_color_enabled()
 
-    def section(section_id: str, *, suffix: str = "") -> str:
-        title = _model_comparison_section_title(section_id, suffix=suffix)
+    def section(section_id: str) -> str:
+        title = _model_comparison_section_title(section_id)
         if target == "console":
             return render_section(paint(title, "cyan", enabled=color, bold=True))
         return f"## {markdown_tone(title, 'blue', bold=True)}"
 
-    def scope_text(value: str) -> str:
+    def scope_heading(label: str) -> str:
         if target == "console":
-            return paint(str(value), "cyan", enabled=color, bold=True)
-        return markdown_tone(value, "blue", bold=True)
+            return paint(label, "cyan", enabled=color, bold=True)
+        return f"### {markdown_tone(label, 'blue', bold=True)}"
 
     def split_matches(row: dict, aliases: set[str]) -> bool:
-        return str(row.get("split") or "").strip().lower() in {
-            alias.strip().lower() for alias in aliases
-        }
+        normalized = str(row.get("split") or "").strip().lower()
+        return normalized in {alias.strip().lower() for alias in aliases}
 
     scope_specs = (
         ("Forward OOS", {"oos", "forward oos"}),
         ("Breakout slice", {"breakout_candidate_oos", "breakout slice"}),
     )
-
     parts: list[str] = []
 
-    # Scope-bearing Standard SOP sections are rendered twice: once for OOS and
-    # once for Breakout. Validation is deliberately absent from [1][4].
-    for section_id, table_id in (
-        ("learnability", "learnability"),
-        ("multi_head", "multi_head"),
-        ("upside_downside_alignment", "upside_downside_alignment"),
-        ("top_tail_economic_quality", "top_tail_economic_quality"),
-    ):
-        all_rows = list(rows.get(table_id) or [])
+    def append_scoped_section(section_id: str, table_id: str, source_rows: list[dict]) -> None:
+        scoped = []
         for scope_label, aliases in scope_specs:
-            scoped_rows = [dict(row) for row in all_rows if split_matches(dict(row), aliases)]
-            if not scoped_rows:
-                continue
-            parts.extend([
-                section(section_id, suffix=scope_label),
-                _render_model_comparison_contract_table(
-                    section_id,
-                    table_id,
-                    scoped_rows,
-                    target=target,
-                    scope_styler=scope_text,
-                    best_worst_style=True,
-                ),
-            ])
+            table_rows = [dict(row) for row in source_rows if split_matches(dict(row), aliases)]
+            if table_rows:
+                scoped.append((scope_label, table_rows))
+        if not scoped:
+            return
+        parts.append(section(section_id))
+        for scope_label, table_rows in scoped:
+            parts.append(scope_heading(scope_label))
+            parts.append(_render_model_comparison_contract_table(
+                section_id,
+                table_id,
+                table_rows,
+                target=target,
+                best_worst_style=True,
+            ))
 
-    # Generalization remains useful only for the OOS→Breakout transfer. The
-    # Validation→OOS row is intentionally hidden from [1][4].
+    # 1. Learnability
+    append_scoped_section("learnability", "learnability", list(rows.get("learnability") or []))
+
+    # 2. Generalization -- [1][4] intentionally hides Validation→OOS.
     generalization_rows = [
         dict(row)
         for row in list(rows.get("generalization") or [])
@@ -1342,7 +1261,7 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
     ]
     if generalization_rows:
         parts.extend([
-            section("generalization", suffix="OOS → Breakout slice"),
+            section("generalization"),
             _render_model_comparison_contract_table(
                 "generalization",
                 "generalization",
@@ -1352,65 +1271,50 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
             ),
         ])
 
-    geometry_tables = (
-        ("geometry_summary", "geometry_summary"),
-        ("truth_5x5", "truth_5x5"),
-        ("predicted_5x5", "predicted_5x5"),
-        ("safety_cohorts", "safety_cohorts"),
+    # 3. Upside / Downside Alignment
+    append_scoped_section(
+        "upside_downside_alignment",
+        "upside_downside_alignment",
+        list(rows.get("upside_downside_alignment") or []),
     )
-    geometry_scope_markers = (
-        ("Forward OOS", ("daily universal oos",)),
-        ("Breakout slice", ("breakout candidate oos",)),
-    )
-    for scope_label, markers in geometry_scope_markers:
-        scoped_geometry: list[tuple[str, list[dict]]] = []
-        for key, table_id in geometry_tables:
-            table_rows = []
-            for raw in list(rows.get(key) or []):
-                row = dict(raw)
-                probe = str(row.get("metric") or row.get("safety") or "").strip().lower()
-                if any(probe.startswith(marker) for marker in markers):
-                    table_rows.append(row)
-            if table_rows:
-                scoped_geometry.append((table_id, table_rows))
-        if scoped_geometry:
-            parts.append(section("truth_prediction_geometry", suffix=scope_label))
-            for table_id, table_rows in scoped_geometry:
-                parts.append(_render_model_comparison_contract_table(
-                    "truth_prediction_geometry",
-                    table_id,
-                    table_rows,
-                    target=target,
-                    best_worst_style=True,
-                ))
 
+    # 4. Top-tail Economic Quality
+    append_scoped_section(
+        "top_tail_economic_quality",
+        "top_tail_economic_quality",
+        list(rows.get("top_tail_economic_quality") or []),
+    )
+
+    # 5. Ranking / Boundary. One section title, two scope tables.
     ranking_rows = list(rows.get("ranking_boundary") or [])
-    settings_set = {tuple(value) for value in list(rows.get("ranking_settings") or [])}
+    scoped_ranking = []
     for scope_label, aliases in scope_specs:
-        scoped_rows = [dict(row) for row in ranking_rows if split_matches(dict(row), aliases)]
-        if not scoped_rows:
-            continue
-        suffix = scope_label
-        if len(settings_set) == 1:
-            k, boundary, scope = next(iter(settings_set))
-            suffix += f"；K={k}，boundary={boundary}；{scope}"
-        elif settings_set:
-            suffix += "；各模型依自身canonical K/boundary"
-        parts.extend([
-            section("ranking_boundary", suffix=suffix),
-            _render_model_comparison_contract_table(
+        table_rows = [dict(row) for row in ranking_rows if split_matches(dict(row), aliases)]
+        if table_rows:
+            scoped_ranking.append((scope_label, table_rows))
+    if scoped_ranking:
+        parts.append(section("ranking_boundary"))
+        settings_set = {tuple(value) for value in list(rows.get("ranking_settings") or [])}
+        for scope_label, table_rows in scoped_ranking:
+            label = scope_label
+            if len(settings_set) == 1:
+                k, boundary, scope = next(iter(settings_set))
+                label += f"；K={k}，boundary={boundary}；{scope}"
+            elif settings_set:
+                label += "；各模型依自身canonical K/boundary"
+            parts.append(scope_heading(label))
+            parts.append(_render_model_comparison_contract_table(
                 "ranking_boundary",
                 "ranking_boundary",
-                scoped_rows,
+                table_rows,
                 target=target,
-                scope_styler=scope_text,
                 best_worst_style=True,
-            ),
-        ])
+            ))
 
+    # 6. Evidence Coverage is always last and retains status-color semantics.
     evidence_rows = []
-    for row in list(rows.get("evidence_coverage") or []):
-        row = dict(row)
+    for raw_row in list(rows.get("evidence_coverage") or []):
+        row = dict(raw_row)
         normalized = str(row.get("status") or "").upper()
         signal = {
             "AVAILABLE": SIGNAL_POSITIVE,
@@ -1440,6 +1344,7 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
 
     separator = "\n" if target == "console" else "\n\n"
     return separator.join(part for part in parts if part)
+
 
 def _write_standard_model_comparison_report(models: list[dict]) -> tuple[Path, Path]:
     if not models:

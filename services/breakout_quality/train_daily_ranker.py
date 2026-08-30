@@ -69,7 +69,7 @@ from filters.breakout_quality.paths import resolve_filter_model_output_dir
 from filters.breakout_quality.ranking_score_store import DAILY_RANKER_OOS_SCORE_FILENAME
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from core.console_report import print_artifact_paths
-from core.research_report_contract import format_contract_value, table_contract
+from core.research_report_contract import format_contract_value, section_contract, table_contract
 from core.report_style import markdown_tone, signal_for_delta, styled_signal
 
 from services.breakout_quality import ranker_training as ranker_api
@@ -582,6 +582,9 @@ def _render_markdown(payload: dict) -> str:
     def section(title: str, *, level: int = 2) -> str:
         return f"{'#' * int(level)} {markdown_tone(title, 'blue', bold=True)}"
 
+    def standard_section(section_id: str) -> str:
+        return section(section_contract("model.standard_sop", section_id).display_title)
+
     def delta(left, right, *, percent=False):
         if left is None or right is None:
             return "-"
@@ -611,7 +614,7 @@ def _render_markdown(payload: dict) -> str:
     ]
     lines.extend([
         "",
-        section("1. Learnability"),
+        standard_section("learnability"),
         "",
         "| Scope | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target | Top-Bottom Target |",
         "|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -640,7 +643,7 @@ def _render_markdown(payload: dict) -> str:
     breakout = dict((payload.get("split_metrics") or {}).get("breakout_candidate_oos") or {})
     lines.extend([
         "",
-        section("2. Generalization"),
+        standard_section("generalization"),
         "",
         "| Comparison | Δ Daily rho | Δ Pair | Δ Top-Bottom |",
         "|---|---:|---:|---:|",
@@ -718,12 +721,12 @@ def _render_markdown(payload: dict) -> str:
             })
         lines.extend([
             "",
-            section("4. Upside / Downside Alignment"),
+            standard_section("upside_downside_alignment"),
             "",
             "- Safety固定為actual Low-Adverse（`-Adverse`）方向；數值越高越安全。",
             *contract_markdown("upside_downside_alignment", alignment_rows),
             "",
-            section("5. Top-tail Economic Quality"),
+            standard_section("top_tail_economic_quality"),
             "",
             "- High-MFE / High-Safety使用Daily-universal同日actual percentile；Breakout只filter，不在subset內重新排名truth。",
             *contract_markdown("top_tail_economic_quality", top_tail_rows),
@@ -873,7 +876,7 @@ def _render_markdown(payload: dict) -> str:
                 "兩head固定等權full-list Delta-NDCG，無lambda／threshold／calibration。"
             ),
             "",
-            section("3. Multi-head Learnability / Truth / Prediction Geometry"),
+            section(f"Model-specific Extension｜{payload['model_research_id']}｜Multi-head Learnability"),
             "",
             "| Scope | Head | Groups | Daily rho | Global rho | Pair concordance | Top 10% Target | Bottom 10% Target |",
             "|---|---|---:|---:|---:|---:|---:|---:|",
@@ -913,10 +916,17 @@ def _render_markdown(payload: dict) -> str:
                     f"| Top 20% HM/HS | {pct100(top20.get('hmhs_pct'))} / {fmt(top20.get('hmhs_enrichment'), 2)}× | - |",
                     f"| Population HM/HS | {pct100(joint.get('population_hmhs_pct'))} | same truth |",
                 ])
+        geometry_title_rendered = False
         for scope_label, scope_key in (("Daily universal OOS", "oos"), ("Breakout candidate OOS", "breakout_candidate_oos")):
             gate = dict((raw_eval.get(scope_key) or {}).get("model_gate") or {})
             if not gate:
                 continue
+            if not geometry_title_rendered:
+                lines.extend([
+                    "",
+                    section(f"Model-specific Extension｜{payload['model_research_id']}｜Truth / Prediction Geometry"),
+                ])
+                geometry_title_rendered = True
             upper = dict(gate.get("upper_right_s5_m5") or {})
             actual = dict(gate.get("actual_truth_geometry") or {})
 
@@ -932,7 +942,7 @@ def _render_markdown(payload: dict) -> str:
 
             lines.extend([
                 "",
-                section(f"{scope_label} Truth / Prediction Geometry", level=3),
+                section(scope_label, level=3),
                 "",
                 f"- Actual Safety↔MFE Dailyρ：`{fmt(actual.get('safety_to_mfe_mean_daily_spearman'), 4)}`",
                 f"- Pred Safety↔Raw-MFE Dailyρ：`{fmt(gate.get('predicted_safety_to_raw_mfe_mean_daily_spearman'), 4)}`",

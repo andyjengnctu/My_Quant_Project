@@ -2,21 +2,16 @@
 
 - restreucture
     - research 報表是否需要集中管理架構? 包含報表用色規則是否需要集中管理? 目前架構現況?
-    - report refine
-        - [1][1]
-            - 確認如果模型/報表已經在就不要重跑
-            - Learnability 多一欄是 = Top 10% Target - Bottom 10% Target
-            - Ranking / Boundary移除 Top-K Target，並將Lift更名為Top-K Lift，競爭日要對比該pool的母體數量
-            - Upside / Downside Alignment
-                - 移除Pred-Safety→Target rho / Pred-Safety→Score rho 這兩個非共通的指標
-                - Target→Low-Adverse rho -> Target→Safety rho
-                - Score→Low-Adverse rho -> Score→Safety rho
-            - Top-tail Economic Quality
-                - Top10 Adverse  -> Top10 Low-Adverse     
-                - HM/HS HM/HSx合併顯示為 24.51% (1.08x) 
-                - 也加入 HM/LS, LM/HS, LM/LS
-            - 4/5往後移, Evidence Coverage 放到最後
-        -[1] [4] 報表項目與sop相同，可任意加多個比較對像，先進行13H, 13AF, 13AH三個比較，如果模型已經在不要重訓，如果不在自動重訓
+    - [1] 下面換成
+        - [1] Foward OOS 模型訓練 <- 也就是現在的[1]
+        - [2] Rolling OOS 模型訓練 <- 報表與[1] 一致 + Rolling獨有
+        - [3] Foward OOS 模型比較 <- 也就是現在的 [4]
+        - [4] Rolling OOS 模型比較 <- 報表與[3] 一致 + Rolling獨有
+        - [5] Timing Mode｜Rolling 訓練前後比較  [工程]
+
+        原[3] Fixed-Winddow Rolling 刪除
+        只需要設定一次模型訓練對像 [1]、[2] 都可以接通使用
+        只需要設定一次模型比較與測試清單 [3]、[4] 都可接通使用
 
 
 

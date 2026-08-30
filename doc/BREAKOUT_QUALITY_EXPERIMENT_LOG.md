@@ -11041,3 +11041,14 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Top-tail direction**：四象限display仍為`rate% (enrichment×)`；comparison color依經濟方向固定`HM/HS=higher`、`HM/LS=lower`、`LM/HS=lower`、`LM/LS=lower`，不由字串正負猜測。Top10 Low-Adverse持續higher-is-better。
 - **Persistent contracts**：`model.standard_sop`升v4，approved fingerprint=`72cc375fdf115504`；`model.standard_comparison`升v2，approved fingerprint=`71d1789521ca6d79`。其餘persistent report fingerprints不變。
 - **Runtime boundary**：H/AF/AH current comparison set與`REUSE if canonical model+manifest+report READY / BUILD only if missing or stale`行為完全不變。
+
+
+## 2026-08-30 — Standard Model SOP v5 common-section reindex / multi-head extension isolation
+
+- **Authorization**：使用者明確要求將原本只適用multi-head DL的`Multi-head Learnability`與`Truth / Prediction Geometry`移出Standard SOP，並修正`[1]→[4]`section順序與OOS/Breakout標題結構；不改任何model scientific identity、target、architecture、loss、seed、artifact reuse或production promotion。
+- **Standard Model SOP v5**：共通section固定連續`1 Learnability / 2 Generalization / 3 Upside / Downside Alignment / 4 Top-tail Economic Quality / 5 Ranking / Boundary / 6 Evidence Coverage`，不留跳號。原Multi-head Learnability與Truth / Prediction Geometry改由`Model-specific Extension` machine-readable schema持有，只在該DL payload有對應evidence時顯示，不再進common Evidence Coverage或cross-model Standard scorecard。
+- **[1]→[4] comparison v3**：完全依Standard common 1～6順序；Generalization固定section 2且只保留`OOS → Breakout slice`。Learnability、Upside/Downside、Top-tail、Ranking等scope-bearing section只印一次淡藍編號標題，標題下依序顯示`Forward OOS`與`Breakout slice`兩張獨立表；不再把scope接在section title後形成兩個重複標題。Validation仍不顯示，best/worst與status palette規則不變。
+- **Detailed renderer**：common標題改直接消費`model.standard_sop` section contract；multi-head／truth-geometry detailed evidence同樣使用Model-specific Extension標題，避免renderer自行維護第二套Standard編號。
+- **Persistent contracts**：`model.standard_sop` v5 approved fingerprint=`9ec49fe2aaf3a2d6`；`model.standard_comparison` v3 approved fingerprint=`7bf0ef0427519507`。其餘persistent report fingerprints不變。
+- **Runtime/scientific boundary**：H/AF/AH current comparison set、合法report REUSE／缺失才BUILD、MR-13AF research BASE與production identity均不變。
+
