@@ -332,14 +332,10 @@ BREAKOUT_QUALITY_PRETRAINING_STRIDE = 5  # Dataset sampling設定；每個ticker
 # 9. Rolling point-in-time evaluation contract
 # =============================================================================
 
-# Extending-Window Rolling 是正式主要評估：使用當時所有合法歷史資料（expanding）
+# Rolling OOS 是正式時間泛化評估：使用當時所有合法歷史資料（expanding）
 # 並按固定score fold cadence重新選epoch／refit，再只評分下一段。每筆score都必須
-# 滿足label completion < score_start；不再以2014-2020 Selection / 2021+ Frozen
-# Forward的人為年代切割定義OOS。
-#
-# Fixed-Window Rolling 是獨立診斷：相同annual refit，但限制完整fit history為固定
-# calendar window，專門檢查不同年代在較一致資訊長度下的learnability。它使用
-# 獨立工件路徑，不覆寫Extending-Window Rolling。
+# 滿足label completion < score_start；Fixed-Window Rolling 已退出 current workflow，
+# 僅保留既有歷史工件／研究紀錄，不再提供正式執行入口。
 BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE = "2021-01-01"
 # Strategy/reporting只從此日期起視為正式operational evidence；更早的合法fold可保留
 # 作模型warm-up與coverage，但不強迫策略比較納入。
@@ -383,8 +379,12 @@ BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS = 24
 # None = expanding history；正整數 = 完整fit history固定最近N個calendar months，
 # 且必須大於inner validation months。Operational固定為None。
 BREAKOUT_QUALITY_POINT_IN_TIME_TRAIN_WINDOW_MONTHS: int | None = None
-# Fixed-Window Rolling使用10年固定history；此值是config而非validator magic constant。
-BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS = 120
+# Canonical fitting-identity checkpoint cache shared by model Rolling and Strategy Compare.
+# Exact fitting identity is still mandatory; score/report identities remain evaluation-specific.
+BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT = (
+    "models/research/breakout_quality/strategy_compare/"
+    "extending_window/shared_fitting_checkpoints"
+)
 
 # Rolling Timing Mode：只做 execution benchmark，不改正式 PIT 工件或模型科學契約。
 # 第一次執行會建立改善前 baseline；之後同設定重跑時以目前程式作 candidate，
@@ -432,15 +432,19 @@ BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_REFERENCE_ARM = "C17"
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_SUMMARY_PAIR = ("MR-12B", "MR-12A")
 # Forward-OOS top-prefix diagnostic. Values are descriptive only and never enter training.
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES = (1, 2, 3, 5, 10)
-# Standard Model SOP multi-model comparison.  Any number >=2 is allowed; the menu
-# REUSEs each model/report when its canonical OOS contract is valid and only trains
-# missing/stale identities.  Ordering controls report presentation only.
-BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_MENU_LABEL = "模型比較（Standard SOP）"
-BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES = (
+# Model comparison / robustness / Strategy Compare shared target list.  Configure once:
+# [1][3] Forward model comparison, [1][4] Rolling model comparison, [1][5]/[1][6]
+# robustness routing and Strategy Compare model bindings all consume this same ordered list.
+# A model may remain model-only when no Strategy Compare arm is scientifically authorized;
+# Strategy Compare must report that binding gap instead of inventing a strategy conversion.
+BREAKOUT_QUALITY_MODEL_TEST_PROFILES = (
     ("MR-13H", "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise"),
     ("MR-13AF", "daily_universal_predicted_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AH", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"),
 )
+BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_MENU_LABEL = "模型比較（Standard SOP）"
+# Backward-compatible alias; there is no second model list.
+BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES = BREAKOUT_QUALITY_MODEL_TEST_PROFILES
 
 # "auto" resolves from the selected experiment profile:
 # - binary classification -> hard-filter / canonical_runtime / original
@@ -2809,6 +2813,44 @@ def get_breakout_quality_continuous_ranker_comparison_settings(
 
 
 @dataclass(frozen=True)
+class BreakoutQualityModelTestSettings:
+    model_profiles: tuple[tuple[str, str], ...]
+
+    @property
+    def model_ids(self) -> tuple[str, ...]:
+        return tuple(model_id for model_id, _profile in self.model_profiles)
+
+
+def get_breakout_quality_model_test_settings() -> BreakoutQualityModelTestSettings:
+    model_profiles = tuple(
+        (str(model_id).strip(), str(profile).strip())
+        for model_id, profile in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+    )
+    if len(model_profiles) < 2:
+        raise ValueError("模型比較／測試清單至少需要兩個model profile")
+    model_ids = tuple(model_id for model_id, _profile in model_profiles)
+    profiles = tuple(profile for _model_id, profile in model_profiles)
+    if any(not value for value in (*model_ids, *profiles)):
+        raise ValueError("模型比較／測試清單model id/profile不得為空")
+    if len(set(model_ids)) != len(model_ids) or len(set(profiles)) != len(profiles):
+        raise ValueError("模型比較／測試清單model id/profile不可重複")
+    for model_id, profile_name in model_profiles:
+        experiment = get_breakout_quality_experiment_profile(profile_name)
+        if experiment.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
+            raise ValueError(
+                "模型比較／測試清單只允許continuous ranker profile: "
+                f"{profile_name}"
+            )
+        research = get_continuous_ranker_research_spec(profile_name)
+        if str(research.model_research_id) != str(model_id):
+            raise ValueError(
+                "模型比較／測試清單model id/profile research identity不一致: "
+                f"configured={model_id}, resolved={research.model_research_id}, profile={profile_name}"
+            )
+    return BreakoutQualityModelTestSettings(model_profiles=model_profiles)
+
+
+@dataclass(frozen=True)
 class BreakoutQualityStandardModelComparisonSettings:
     menu_label: str
     model_profiles: tuple[tuple[str, str], ...]
@@ -2820,31 +2862,7 @@ class BreakoutQualityStandardModelComparisonSettings:
 
 def get_breakout_quality_standard_model_comparison_settings(
 ) -> BreakoutQualityStandardModelComparisonSettings:
-    model_profiles = tuple(
-        (str(model_id).strip(), str(profile).strip())
-        for model_id, profile in BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES
-    )
-    if len(model_profiles) < 2:
-        raise ValueError("Standard Model SOP比較至少需要兩個model profile")
-    model_ids = tuple(model_id for model_id, _profile in model_profiles)
-    profiles = tuple(profile for _model_id, profile in model_profiles)
-    if any(not value for value in (*model_ids, *profiles)):
-        raise ValueError("Standard Model SOP比較model id/profile不得為空")
-    if len(set(model_ids)) != len(model_ids) or len(set(profiles)) != len(profiles):
-        raise ValueError("Standard Model SOP比較model id/profile不可重複")
-    for model_id, profile_name in model_profiles:
-        experiment = get_breakout_quality_experiment_profile(profile_name)
-        if experiment.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
-            raise ValueError(
-                "Standard Model SOP比較只允許continuous ranker profile: "
-                f"{profile_name}"
-            )
-        research = get_continuous_ranker_research_spec(profile_name)
-        if str(research.model_research_id) != str(model_id):
-            raise ValueError(
-                "Standard Model SOP比較model id/profile research identity不一致: "
-                f"configured={model_id}, resolved={research.model_research_id}, profile={profile_name}"
-            )
+    model_profiles = get_breakout_quality_model_test_settings().model_profiles
     menu_label = str(BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_MENU_LABEL).strip()
     if not menu_label:
         raise ValueError("Standard Model SOP比較menu label不得為空")
@@ -3227,12 +3245,6 @@ def get_breakout_quality_workflow_settings(
             raise ValueError(
                 "point-in-time fixed train window必須大於inner validation months"
             )
-    if int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS) <= int(
-        BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS
-    ):
-        raise ValueError(
-            "stability fixed train window必須大於inner validation months"
-        )
     if min(
         int(BREAKOUT_QUALITY_POINT_IN_TIME_MIN_TRAIN_GROUPS),
         int(BREAKOUT_QUALITY_POINT_IN_TIME_MIN_VALIDATION_GROUPS),
@@ -3508,6 +3520,7 @@ __all__ = [
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_ENABLED',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_PROFILES',
+    'BREAKOUT_QUALITY_MODEL_TEST_PROFILES',
     'BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_MENU_LABEL',
     'BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_REFERENCE_ARM',
@@ -3732,4 +3745,5 @@ __all__ = [
     'BreakoutQualityContinuousRankerPITGateSettings',
     'get_breakout_quality_continuous_ranker_pit_gate_settings',
     'get_breakout_quality_model_research_settings',
+    'get_breakout_quality_model_test_settings',
 ]

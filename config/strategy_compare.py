@@ -3,7 +3,7 @@
 Active framework以Extending-Window Rolling作唯一策略績效主線：expanding history、
 每個PIT fold重新選epoch/refit，再評分下一段。舊Selection PIT／Frozen Forward
 profiles保留作歷史工件解讀／重現，但不再暴露於主選單或作current Gate。
-Fixed-Window Rolling屬模型穩定性診斷，不建立另一套production strategy truth。
+Fixed-Window Rolling已退出current workflow，只保留既有歷史 evidence。
 """
 
 from __future__ import annotations
@@ -11,7 +11,9 @@ from __future__ import annotations
 from dataclasses import replace
 
 from config.breakout_quality import (
+    BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT,
     DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+    get_breakout_quality_model_test_settings,
     get_breakout_quality_rolling_test_mode,
     get_breakout_quality_workflow_settings,
 )
@@ -97,8 +99,7 @@ STRATEGY_COMPARE_GPU_TRAIN_WORKERS = 1
 validate_strategy_compare_gpu_train_workers(STRATEGY_COMPARE_GPU_TRAIN_WORKERS)
 STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS = 60.0
 STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT = (
-    "models/research/breakout_quality/strategy_compare/"
-    "extending_window/shared_fitting_checkpoints"
+    BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT
 )
 STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS = 1
 STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED = True
@@ -1153,12 +1154,65 @@ def get_strategy_compare_suite(suite_id: str) -> dict[str, object]:
         spec = dict(STRATEGY_COMPARE_CONTRASTS[cid])
         if str(spec.get("left") or "") not in arm_ids or str(spec.get("right") or "") not in arm_ids:
             raise ValueError(f"Strategy Compare suite contrast端點不在suite: {selected}/{cid}")
+
+    # Current Extending matrix consumes the same model-level SSOT as [1][3]～[1][6].
+    # Baselines remain enabled. DL arms are enabled only when their source profile is
+    # selected in BREAKOUT_QUALITY_MODEL_TEST_PROFILES and a formal arm already exists.
+    # A selected model without an authorized strategy arm remains MODEL-ONLY; no binding
+    # is synthesized here. Historical/non-current suites keep their stored membership.
+    if selected == "extending_current":
+        selected_profiles = {
+            str(profile)
+            for _model_id, profile in get_breakout_quality_model_test_settings().model_profiles
+        }
+        active_arm_ids = []
+        for arm_id in arm_ids:
+            arm = dict(STRATEGY_COMPARE_ARMS[arm_id])
+            if not bool(arm.get("dl_enabled")):
+                active_arm_ids.append(arm_id)
+                continue
+            dl_id = str(arm.get("dl_id") or "").strip()
+            source = dict(STRATEGY_DL_SOURCES.get(dl_id) or {})
+            if str(source.get("experiment_profile") or "") in selected_profiles:
+                active_arm_ids.append(arm_id)
+        active = tuple(active_arm_ids)
+        active_set = set(active)
+        contrast_ids = tuple(
+            cid for cid in contrast_ids
+            if str(STRATEGY_COMPARE_CONTRASTS[cid].get("left") or "") in active_set
+            and str(STRATEGY_COMPARE_CONTRASTS[cid].get("right") or "") in active_set
+        )
+        arm_ids = active
+        display_name_bases = {key: value for key, value in display_name_bases.items() if key in active_set}
+
     return {
         "suite_id": selected,
         "arm_ids": arm_ids,
         "contrast_ids": contrast_ids,
         "display_name_bases": display_name_bases,
     }
+
+
+def get_strategy_compare_model_bindings() -> tuple[dict[str, object], ...]:
+    """Resolve shared model-list bindings without authorizing new strategy conversions."""
+
+    rows = []
+    for model_id, profile in get_breakout_quality_model_test_settings().model_profiles:
+        bound = []
+        for arm_id, arm_raw in STRATEGY_COMPARE_ARMS.items():
+            arm = dict(arm_raw)
+            if not bool(arm.get("dl_enabled")):
+                continue
+            source = dict(STRATEGY_DL_SOURCES.get(str(arm.get("dl_id") or "")) or {})
+            if str(source.get("experiment_profile") or "") == str(profile):
+                bound.append(str(arm_id))
+        rows.append({
+            "model_id": str(model_id),
+            "experiment_profile": str(profile),
+            "strategy_arm_ids": tuple(bound),
+            "status": "BOUND" if bound else "MODEL-ONLY / NO STRATEGY BINDING",
+        })
+    return tuple(rows)
 
 
 def get_strategy_comparison_profiles() -> tuple[dict[str, str], ...]:

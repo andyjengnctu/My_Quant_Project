@@ -179,6 +179,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     from config import strategy_compare as strategy_config
     from config.breakout_quality import (
         get_breakout_quality_workflow_settings,
+        get_breakout_quality_model_test_settings,
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
     )
@@ -226,14 +227,20 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     from config.compatibility import strategy_compare_history as strategy_history
 
+    shared_models = get_breakout_quality_model_test_settings().model_profiles
+    model_bindings = strategy_config.get_strategy_compare_model_bindings()
     check_true(
-        "current_strategy_compare_catalog_is_physically_minimal_and_history_is_compatibility_only",
+        "current_strategy_compare_active_membership_is_model_list_driven_and_history_is_compatibility_only",
         set(strategy_config.STRATEGY_PARAM_SOURCES)
         == {"full_oos", "min_oos", "full_rolling", "min_rolling"}
-        and set(strategy_config.STRATEGY_DL_SOURCES)
-        == {"CONT13E_ROLL", "CONT13H_ROLL", "CONT13AC_ROLL", "CONT13AH_ROLL"}
-        and set(strategy_config.STRATEGY_COMPARE_ARMS) == set(expected_arm_ids)
-        and set(strategy_config.STRATEGY_COMPARE_CONTRASTS) == set(expected_contrast_ids)
+        and set(expected_arm_ids).issubset(set(strategy_config.STRATEGY_COMPARE_ARMS))
+        and set(expected_contrast_ids).issubset(set(strategy_config.STRATEGY_COMPARE_CONTRASTS))
+        and tuple((row["model_id"], row["experiment_profile"]) for row in model_bindings)
+            == tuple(shared_models)
+        and all(
+            (row["status"] == "BOUND") is bool(row["strategy_arm_ids"])
+            for row in model_bindings
+        )
         and {"full_roos", "min_roos", "selection_min_roos", "selection_full_roos"}
         .issubset(set(strategy_history.HISTORICAL_STRATEGY_PARAM_SOURCES))
         and {
@@ -495,16 +502,33 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         bool(controlled_checks) and all(controlled_checks),
     )
 
+    selected_profiles = {profile for _model_id, profile in shared_models}
+    configured_suite = dict(strategy_config.STRATEGY_COMPARE_SUITES[suite_id])
+    derived_arm_ids = []
+    for arm_id in tuple(configured_suite.get("arm_ids") or ()):
+        arm = dict(strategy_config.STRATEGY_COMPARE_ARMS[arm_id])
+        if not bool(arm.get("dl_enabled")):
+            derived_arm_ids.append(str(arm_id))
+            continue
+        source = dict(strategy_config.STRATEGY_DL_SOURCES.get(str(arm.get("dl_id") or "")) or {})
+        if str(source.get("experiment_profile") or "") in selected_profiles:
+            derived_arm_ids.append(str(arm_id))
+    derived_arm_ids = tuple(derived_arm_ids)
+    derived_arm_set = set(derived_arm_ids)
+    derived_contrast_ids = tuple(
+        str(cid)
+        for cid in tuple(configured_suite.get("contrast_ids") or ())
+        if str(strategy_config.STRATEGY_COMPARE_CONTRASTS[cid].get("left") or "") in derived_arm_set
+        and str(strategy_config.STRATEGY_COMPARE_CONTRASTS[cid].get("right") or "") in derived_arm_set
+    )
     check_true(
-        "current_suite_schema66_adds_c80_c81_ah_conversion_matrix",
-        expected_arm_ids == ("C61", "C58", "C59", "C77", "C78", "C79", "C80", "C81")
-        and expected_contrast_ids == (
-            "C61-C58", "C59-C58", "C77-C58",
-            "C78-C58", "C78-C77",
-            "C79-C58", "C79-C59", "C79-C78",
-            "C80-C58", "C80-C59", "C80-C79",
-            "C81-C58", "C81-C77", "C81-C78",
-            "C80-C81",
+        "current_suite_membership_is_derived_from_shared_model_list_without_inventing_strategy_arms",
+        expected_arm_ids == derived_arm_ids
+        and expected_contrast_ids == derived_contrast_ids
+        and all(
+            set(row["strategy_arm_ids"]).issubset(derived_arm_set)
+            for row in model_bindings
+            if row["strategy_arm_ids"]
         ),
     )
 

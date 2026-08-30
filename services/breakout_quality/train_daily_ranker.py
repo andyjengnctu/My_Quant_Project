@@ -402,7 +402,7 @@ def _dual_component_metrics(
 
 
 
-def _upside_downside_alignment_metrics(
+def calculate_upside_downside_alignment_metrics(
     group_ids: np.ndarray,
     group_table: pd.DataFrame,
     raw_target: np.ndarray,
@@ -543,6 +543,10 @@ def _upside_downside_alignment_metrics(
         },
         "status": "standard_sop_actual_truth_diagnostic_only_no_fit_no_selection",
     }
+
+
+# Backward-compatible private alias for historical synthetic/import consumers.
+_upside_downside_alignment_metrics = calculate_upside_downside_alignment_metrics
 
 def _pair_weight_report_extension(
     pairwise_reduction: str, pair_weight_policy: str
@@ -1352,13 +1356,13 @@ def run(args) -> int:
     # Standard SOP common diagnostics depend only on actual MFE/Safety truth.
     # Model-specific predicted-Safety references are intentionally excluded.
     upside_downside_alignment_evaluation = {
-        "validation": _upside_downside_alignment_metrics(
+        "validation": calculate_upside_downside_alignment_metrics(
             split.validation_ids, bundle.group_table, bundle.raw_target, validation_scores
         ),
-        "oos": _upside_downside_alignment_metrics(
+        "oos": calculate_upside_downside_alignment_metrics(
             split.oos_ids, bundle.group_table, bundle.raw_target, oos_scores
         ),
-        "breakout_candidate_oos": _upside_downside_alignment_metrics(
+        "breakout_candidate_oos": calculate_upside_downside_alignment_metrics(
             candidate_ids, bundle.group_table, bundle.raw_target, score_by_group[candidate_ids]
         ),
     }

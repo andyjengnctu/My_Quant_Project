@@ -1089,13 +1089,15 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
 
     app_source = (project_root / "services" / "research" / "breakout_quality_application.py").read_text(encoding="utf-8")
     check_true(
-        "continuous_model_menu_uses_fixed_sop_without_independent_status_or_truth_geometry_option",
-        'render_menu_item(1, "訓練目前模型 → Forward-OOS 標準模型 SOP 報表", default=True)' in app_source
-        and 'render_menu_item(2, "Extending-Window Rolling")' in app_source
-        and 'render_menu_item(3, "Fixed-Window Rolling")' in app_source
-        and 'render_menu_item(4, comparison_label)' in app_source
-        and 'get_breakout_quality_standard_model_comparison_settings().menu_label' in app_source
-        and 'render_menu_item(5, "Timing Mode｜Rolling 訓練前後比較  [工程]")' in app_source
+        "continuous_model_menu_uses_shared_forward_rolling_train_compare_robustness_workflow",
+        'render_menu_item(1, "Forward OOS 模型訓練", default=True)' in app_source
+        and 'render_menu_item(2, "Rolling OOS 模型訓練")' in app_source
+        and 'render_menu_item(3, "Forward OOS 模型比較")' in app_source
+        and 'render_menu_item(4, "Rolling OOS 模型比較")' in app_source
+        and 'render_menu_item(5, "Forward OOS Robustness 模型測試")' in app_source
+        and 'render_menu_item(6, "Rolling OOS Robustness 模型測試")' in app_source
+        and 'render_menu_item(7, "Timing Mode｜Rolling 訓練前後比較  [工程]")' in app_source
+        and 'render_menu_item(3, "Fixed-Window Rolling")' not in app_source
         and "查看目前Workflow、工件與模型報表" not in app_source
         and "Actual MFE×Safety Truth Geometry（只讀）" not in app_source,
     )

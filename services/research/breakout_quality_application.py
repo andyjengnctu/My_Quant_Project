@@ -30,6 +30,7 @@ from config.breakout_quality import (
     SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
     get_breakout_quality_continuous_ranker_comparison_settings,
     get_breakout_quality_standard_model_comparison_settings,
+    get_breakout_quality_model_test_settings,
     get_breakout_quality_experiment_profile,
     get_continuous_ranker_research_spec,
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL,
@@ -39,7 +40,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS,
-    BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS,
+    BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT,
 )
 from config.breakout_quality import (
     get_breakout_quality_continuous_ranker_pit_gate_settings,
@@ -88,6 +89,15 @@ from services.research.strategy_compare_training import (
 )
 from services.research.training_process import (
     terminate_registered_training_processes,
+)
+from config.strategy_compare import (
+    get_strategy_multi_seed_robustness_settings,
+    get_strategy_rolling_test_modes,
+    get_strategy_compare_model_bindings,
+)
+from services.research.strategy_compare_application import (
+    run_strategy_multi_seed_robustness,
+    show_strategy_multi_seed_robustness_status,
 )
 from filters.breakout_quality.artifact_dependency_registry import (
     collect_model_upstream_preparation_plan,
@@ -138,6 +148,7 @@ from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     derive_point_in_time_model_validation_gate,
+    load_selection_point_in_time_ranking_contract,
     load_continuous_ranker_oos_contract,
     load_continuous_ranker_oos_score_table,
     resolve_continuous_ranker_oos_score_path,
@@ -447,15 +458,21 @@ def _model_sop_view(payload: dict) -> dict:
     if not metrics:
         return {}
     training = dict(payload.get("training") or {})
+    evaluation_mode = str(payload.get("evaluation_mode") or "forward_oos").strip().lower()
+    rolling_oos = evaluation_mode == "rolling_oos"
+    oos_scope_label = "Rolling OOS" if rolling_oos else "Forward OOS"
     direct_hmhs_only = (
         training.get("objective") == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING
     )
     daily_universal = bool(metrics.get("breakout_candidate_oos"))
-    split_names = (
-        ["validation", "oos", "breakout_candidate_oos"]
-        if daily_universal
-        else ["validation", "selection", "oos"]
-    )
+    if rolling_oos:
+        split_names = ["oos", "breakout_candidate_oos"] if daily_universal else ["oos"]
+    else:
+        split_names = (
+            ["validation", "oos", "breakout_candidate_oos"]
+            if daily_universal
+            else ["validation", "selection", "oos"]
+        )
 
     learnability_rows = []
     for name in split_names:
@@ -490,20 +507,20 @@ def _model_sop_view(payload: dict) -> dict:
     def delta(left, right):
         return None if left is None or right is None else float(right) - float(left)
 
-    if val and oos:
+    if val and oos and not rolling_oos:
         generalization_rows.append({
             "comparison": "Validation → OOS",
             "delta_daily_rho": delta(val.get("mean_daily_spearman"), oos.get("mean_daily_spearman")),
             "delta_pair": None if delta(val.get("pairwise_concordance"), oos.get("pairwise_concordance")) is None else delta(val.get("pairwise_concordance"), oos.get("pairwise_concordance")) * 100.0,
             "delta_top_bottom": delta(top_bottom(val), top_bottom(oos)),
         })
-        if daily_universal and breakout:
-            generalization_rows.append({
-                "comparison": "OOS → Breakout slice",
-                "delta_daily_rho": delta(oos.get("mean_daily_spearman"), breakout.get("mean_daily_spearman")),
-                "delta_pair": None if delta(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance")) is None else delta(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance")) * 100.0,
-                "delta_top_bottom": delta(top_bottom(oos), top_bottom(breakout)),
-            })
+    if oos and daily_universal and breakout:
+        generalization_rows.append({
+            "comparison": ("Rolling OOS → Breakout slice" if rolling_oos else "OOS → Breakout slice"),
+            "delta_daily_rho": delta(oos.get("mean_daily_spearman"), breakout.get("mean_daily_spearman")),
+            "delta_pair": None if delta(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance")) is None else delta(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance")) * 100.0,
+            "delta_top_bottom": delta(top_bottom(oos), top_bottom(breakout)),
+        })
 
     multi_head_rows = []
     for evaluation, heads in (
@@ -631,11 +648,12 @@ def _model_sop_view(payload: dict) -> dict:
             return "-"
         return f"{float(pct):.2f}% ({'-' if enrichment is None else f'{float(enrichment):.2f}×'})"
 
-    for scope_label, scope_key in (
-        ("Validation", "validation"),
-        ("Forward OOS", "oos"),
-        ("Breakout slice", "breakout_candidate_oos"),
-    ):
+    alignment_scopes = (
+        ((oos_scope_label, "oos"), ("Breakout slice", "breakout_candidate_oos"))
+        if rolling_oos
+        else (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos"))
+    )
+    for scope_label, scope_key in alignment_scopes:
         row = dict(alignment_eval.get(scope_key) or {})
         if not row:
             continue
@@ -675,7 +693,7 @@ def _model_sop_view(payload: dict) -> dict:
 
     evidence = [
         ("Learnability", "AVAILABLE" if metrics.get("oos") else "N/A"),
-        ("Generalization", "AVAILABLE" if metrics.get("validation") and metrics.get("oos") else "N/A"),
+        ("Generalization", "AVAILABLE" if (metrics.get("oos") and (metrics.get("breakout_candidate_oos") if rolling_oos else metrics.get("validation"))) else "N/A"),
         ("Upside / Downside Alignment", "AVAILABLE" if alignment_rows else "N/A"),
         ("Top-tail Economic Quality", "AVAILABLE" if top_tail_rows else "N/A"),
         ("Breakout application slice", "AVAILABLE" if metrics.get("breakout_candidate_oos") else "N/A"),
@@ -782,6 +800,8 @@ def _model_sop_view(payload: dict) -> dict:
         "upside_downside_alignment": alignment_rows,
         "top_tail_economic_quality": top_tail_rows,
         "extensions": extensions,
+        "evaluation_mode": evaluation_mode,
+        "rolling_specific": dict(payload.get("rolling_specific") or {}),
     }
 
 
@@ -902,6 +922,35 @@ def _truth_geometry_extension_scopes(geometry_scopes: list[tuple[str, dict]]) ->
     return rendered_scopes
 
 
+def _rolling_specific_extension_rows(view: dict) -> list[dict]:
+    rolling = dict(view.get("rolling_specific") or {})
+    if not rolling:
+        return []
+    direction = dict(rolling.get("direction_summary") or {})
+    drift = dict(rolling.get("fold_drift") or {})
+    return [
+        {"metric": "Fold count", "value": rolling.get("fold_count", "-")},
+        {"metric": "Fold cadence", "value": f"{rolling.get('fold_months', '-')}M"},
+        {"metric": "Valid years", "value": direction.get("valid_year_count", "-")},
+        {
+            "metric": "Positive-rho years",
+            "value": f"{direction.get('positive_spearman_year_count', '-')} / {direction.get('valid_year_count', '-')}",
+        },
+        {
+            "metric": "Positive Top-Bottom years",
+            "value": f"{direction.get('positive_spread_year_count', '-')} / {direction.get('valid_year_count', '-')}",
+        },
+        {
+            "metric": "Max adjacent score-mean drift",
+            "value": (
+                "-" if drift.get("max_adjacent_mean_shift_in_pooled_std") is None
+                else f"{float(drift['max_adjacent_mean_shift_in_pooled_std']):.4f} pooled σ"
+            ),
+        },
+        {"metric": "Drift flag", "value": "YES" if bool(drift.get("drift_flag")) else "NO"},
+    ]
+
+
 def _render_continuous_ranker_simple_console(payload: dict) -> str:
     view = _model_sop_view(payload)
     if not view:
@@ -974,6 +1023,15 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             evidence_rows, target="console",
         ),
     ])
+
+    rolling_rows = _rolling_specific_extension_rows(view)
+    if rolling_rows:
+        lines.append(extension("Rolling-specific Extension｜Fold / Year Stability"))
+        lines.append(_render_model_contract_table(
+            table_contract("model.rolling_standard_sop", "rolling_stability", "rolling_stability"),
+            rolling_rows,
+            target="console",
+        ))
 
     for ext in view["extensions"]:
         ext_id = str(ext["id"])
@@ -1068,6 +1126,17 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         table_contract("model.standard_sop", "evidence_coverage", "evidence_coverage"), evidence_rows, target="markdown",
     )])
 
+    rolling_rows = _rolling_specific_extension_rows(view)
+    if rolling_rows:
+        lines.extend([
+            "", extension("Rolling-specific Extension｜Fold / Year Stability"), "",
+            _render_model_contract_table(
+                table_contract("model.rolling_standard_sop", "rolling_stability", "rolling_stability"),
+                rolling_rows,
+                target="markdown",
+            ),
+        ])
+
     for ext in view["extensions"]:
         ext_id = str(ext["id"])
         lines.extend(["", extension(_model_extension_title(payload, ext_id)), ""])
@@ -1110,8 +1179,10 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
     return lines
 
 
-def _model_comparison_section_title(section_id: str, *, suffix: str = "") -> str:
-    section = section_contract("model.standard_comparison", section_id)
+def _model_comparison_section_title(
+    section_id: str, *, suffix: str = "", report_id: str = "model.standard_comparison"
+) -> str:
+    section = section_contract(report_id, section_id)
     base = f"模型比較 SOP｜{section.number}. {section.title}"
     return base + (f"｜{suffix}" if suffix else "")
 
@@ -1122,12 +1193,13 @@ def _render_model_comparison_contract_table(
     rows: list[dict],
     *,
     target: str,
+    report_id: str = "model.standard_comparison",
     scope_styler=None,
     delta_style: bool = False,
     best_worst_style: bool = False,
 ) -> str:
     return _render_model_contract_table(
-        table_contract("model.standard_comparison", section_id, table_id),
+        table_contract(report_id, section_id, table_id),
         rows,
         target=target,
         scope_styler=scope_styler,
@@ -1175,34 +1247,34 @@ def _standard_model_sop_completeness_issues(payload: dict) -> tuple[str, ...]:
                 if missing_value(row.get(column.key)):
                     issues.append(f"{section_id}:{expected}:{column.key}缺失")
 
+    rolling_oos = str(view.get("evaluation_mode") or "forward_oos") == "rolling_oos"
+    expected_raw_splits = ("oos", "breakout_candidate_oos") if rolling_oos else ("validation", "oos", "breakout_candidate_oos")
+    expected_display_splits = ("Rolling OOS", "Breakout slice") if rolling_oos else ("Validation", "Forward OOS", "Breakout slice")
+    expected_generalization = ("Rolling OOS → Breakout slice",) if rolling_oos else ("Validation → OOS", "OOS → Breakout slice")
+
     check_rows(
         "learnability", "learnability", list(view.get("learnability") or []),
-        structural_key="split",
-        expected_values=("validation", "oos", "breakout_candidate_oos"),
+        structural_key="split", expected_values=expected_raw_splits,
     )
     check_rows(
         "generalization", "generalization", list(view.get("generalization") or []),
-        structural_key="comparison",
-        expected_values=("Validation → OOS", "OOS → Breakout slice"),
+        structural_key="comparison", expected_values=expected_generalization,
     )
     check_rows(
         "upside_downside_alignment", "upside_downside_alignment",
         list(view.get("upside_downside_alignment") or []),
-        structural_key="split",
-        expected_values=("Validation", "Forward OOS", "Breakout slice"),
+        structural_key="split", expected_values=expected_display_splits,
     )
     check_rows(
         "top_tail_economic_quality", "top_tail_economic_quality",
         list(view.get("top_tail_economic_quality") or []),
-        structural_key="split",
-        expected_values=("Validation", "Forward OOS", "Breakout slice"),
+        structural_key="split", expected_values=expected_display_splits,
     )
 
     ranking = dict(view.get("ranking") or {})
     check_rows(
         "ranking_boundary", "ranking_boundary", list(ranking.get("rows") or []),
-        structural_key="split",
-        expected_values=("validation", "oos", "breakout_candidate_oos"),
+        structural_key="split", expected_values=expected_raw_splits,
     )
 
     evidence = {str(label): str(status).upper() for label, status in list(view.get("evidence") or [])}
@@ -1285,7 +1357,35 @@ def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
     return result
 
 
-def _render_standard_model_comparison(models: list[dict], *, target: str) -> str:
+def _rolling_specific_comparison_rows(views: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    for item in views:
+        model = str(item.get("model_id") or "-")
+        view = dict(item.get("view") or {})
+        rolling = dict(view.get("rolling_specific") or {})
+        if not rolling:
+            continue
+        direction = dict(rolling.get("direction_summary") or {})
+        drift = dict(rolling.get("fold_drift") or {})
+        valid_years = int(direction.get("valid_year_count", 0) or 0)
+        positive_rho = int(direction.get("positive_spearman_year_count", 0) or 0)
+        positive_spread = int(direction.get("positive_spread_year_count", 0) or 0)
+        rows.append({
+            "model": model,
+            "fold_count": int(rolling.get("fold_count", 0) or 0),
+            "fold_months": int(rolling.get("fold_months", 0) or 0),
+            "valid_year_count": valid_years,
+            "positive_rho_years": f"{positive_rho} / {valid_years}",
+            "positive_spread_years": f"{positive_spread} / {valid_years}",
+            "max_adjacent_mean_shift": drift.get("max_adjacent_mean_shift_in_pooled_std"),
+            "drift_flag": "YES" if bool(drift.get("drift_flag")) else "NO",
+        })
+    return rows
+
+
+def _render_standard_model_comparison(
+    models: list[dict], *, target: str, report_id: str = "model.standard_comparison"
+) -> str:
     """Render the common Standard SOP for multiple models.
 
     [1][4] does not render Validation as a raw split table. For each scope-bearing
@@ -1298,9 +1398,13 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
     views = _standard_model_comparison_views(models)
     rows = _standard_model_comparison_rows(views)
     color = console_color_enabled()
+    rolling_oos = all(
+        str(dict(item.get("view") or {}).get("evaluation_mode") or "forward_oos") == "rolling_oos"
+        for item in views
+    )
 
     def section(section_id: str) -> str:
-        title = _model_comparison_section_title(section_id)
+        title = _model_comparison_section_title(section_id, report_id=report_id)
         if target == "console":
             return render_section(paint(title, "cyan", enabled=color, bold=True))
         return f"## {markdown_tone(title, 'blue', bold=True)}"
@@ -1317,7 +1421,7 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
         return normalized in {alias.strip().lower() for alias in aliases}
 
     scope_specs = (
-        ("Forward OOS", {"oos", "forward oos"}),
+        (("Rolling OOS" if rolling_oos else "Forward OOS"), {"oos", "forward oos", "rolling oos"}),
         ("Breakout slice", {"breakout_candidate_oos", "breakout slice"}),
     )
     parts: list[str] = []
@@ -1338,6 +1442,7 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
                 table_id,
                 table_rows,
                 target=target,
+                report_id=report_id,
                 best_worst_style=True,
             ))
 
@@ -1346,7 +1451,11 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
 
     # 2. Generalization. One section title, then two independent transition tables.
     generalization_rows = [dict(row) for row in list(rows.get("generalization") or [])]
-    transition_specs = ("Validation → OOS", "OOS → Breakout slice")
+    transition_specs = (
+        ("Rolling OOS → Breakout slice",)
+        if rolling_oos
+        else ("Validation → OOS", "OOS → Breakout slice")
+    )
     scoped_generalization = []
     for transition_label in transition_specs:
         table_rows = [
@@ -1364,6 +1473,7 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
                 "generalization",
                 table_rows,
                 target=target,
+                report_id=report_id,
                 best_worst_style=True,
             ))
 
@@ -1404,6 +1514,7 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
                 "ranking_boundary",
                 table_rows,
                 target=target,
+                report_id=report_id,
                 best_worst_style=True,
             ))
 
@@ -1435,25 +1546,49 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
                 "evidence_coverage",
                 evidence_rows,
                 target=target,
+                report_id=report_id,
             ),
         ])
+
+    # Rolling keeps the exact same Standard SOP 1～6, then adds one mode-specific
+    # stability extension. It is deliberately outside the numbered common SOP.
+    if rolling_oos:
+        rolling_rows = _rolling_specific_comparison_rows(views)
+        if rolling_rows:
+            extension_title = "Rolling-specific Extension｜Fold / Year Stability"
+            if target == "console":
+                parts.append(render_section(paint(extension_title, "cyan", enabled=color, bold=True)))
+            else:
+                parts.append(f"## {markdown_tone(extension_title, 'blue', bold=True)}")
+            parts.append(_render_model_comparison_contract_table(
+                "rolling_stability",
+                "rolling_stability",
+                rolling_rows,
+                target=target,
+                report_id=report_id,
+                best_worst_style=True,
+            ))
 
     separator = "\n" if target == "console" else "\n\n"
     return separator.join(part for part in parts if part)
 
 
-def _write_standard_model_comparison_report(models: list[dict]) -> tuple[Path, Path]:
+def _write_standard_model_comparison_report(
+    models: list[dict], *, rolling_oos: bool = False
+) -> tuple[Path, Path]:
     if not models:
         raise ValueError("Standard Model SOP比較沒有model")
     filter_ids = {str(item["settings"].filter_id) for item in models}
     if len(filter_ids) != 1:
         raise ValueError(f"Standard Model SOP比較目前要求相同Filter ID: {sorted(filter_ids)}")
     filter_id = next(iter(filter_ids))
-    output_dir = resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id) / "standard_model_comparison"
+    output_name = "rolling_standard_model_comparison" if rolling_oos else "standard_model_comparison"
+    output_dir = resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id) / output_name
     output_dir.mkdir(parents=True, exist_ok=True)
-    json_path = output_dir / "standard_model_comparison.json"
-    markdown_path = output_dir / "standard_model_comparison.md"
-    contract = report_contract("model.standard_comparison")
+    json_path = output_dir / f"{output_name}.json"
+    markdown_path = output_dir / f"{output_name}.md"
+    report_id = "model.rolling_standard_comparison" if rolling_oos else "model.standard_comparison"
+    contract = report_contract(report_id)
     machine_payload = {
         "report_id": contract.report_id,
         "report_version": int(contract.version),
@@ -1467,7 +1602,10 @@ def _write_standard_model_comparison_report(models: list[dict]) -> tuple[Path, P
                 "profile": str(item["settings"].experiment_profile),
                 "seed": int(item["settings"].seed),
                 "artifact_action": str(item.get("artifact_action") or "REUSE"),
-                "source_report": project_relative_display_path(item["contract"].report_path, project_root=PROJECT_ROOT),
+                "source_report": project_relative_display_path(
+                    getattr(item["contract"], "report_path", getattr(item["contract"], "audit_path", "-")),
+                    project_root=PROJECT_ROOT,
+                ),
                 "sop_view": _model_sop_view(dict(item["payload"])),
             }
             for item in models
@@ -1477,9 +1615,10 @@ def _write_standard_model_comparison_report(models: list[dict]) -> tuple[Path, P
         json.dumps(machine_payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    body = _render_standard_model_comparison(models, target="markdown")
+    body = _render_standard_model_comparison(models, target="markdown", report_id=report_id)
+    title = "Rolling OOS Standard Model SOP Comparison" if rolling_oos else "Standard Model SOP Comparison"
     markdown_path.write_text(
-        "# Standard Model SOP Comparison\n\n"
+        f"# {title}\n\n"
         f"- Contract：`{contract.report_id}` v`{contract.version}` / `{machine_payload['report_contract_fingerprint']}`\n"
         f"- Models：`{' / '.join(str(item['model_id']) for item in models)}`\n\n"
         + body + "\n",
@@ -2875,36 +3014,30 @@ def _print_workflow_status(settings=None) -> None:
         )
     )
     if settings.rolling_authorized:
-        for mode in get_breakout_quality_rolling_test_modes():
-            extending_dir = _rolling_mode_point_in_time_dir(
-                settings, mode, fixed_window=False
-            )
-            if extending_dir is None:
-                extending_dir = resolve_filter_model_output_dir(
-                    PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
-                ) / "point_in_time"
-            fixed_dir = _rolling_mode_point_in_time_dir(
-                settings, mode, fixed_window=True
-            )
-            assert fixed_dir is not None
-            for prefix, base in (("Extending", extending_dir), ("Fixed", fixed_dir)):
-                grouped_status.extend((
-                    (
-                        f"{prefix} {mode.label} Scores",
-                        (
-                            base / "selection_point_in_time_scores.csv",
-                            base / "selection_point_in_time_manifest.json",
-                            base / "selection_point_in_time_coverage.csv",
-                        ),
-                    ),
-                    (
-                        f"{prefix} {mode.label} Model Gate",
-                        (
-                            base / "selection_point_in_time_audit.json",
-                            base / "selection_point_in_time_audit.md",
-                        ),
-                    ),
-                ))
+        mode = get_breakout_quality_rolling_test_mode("rolling")
+        base = _rolling_mode_point_in_time_dir(settings, mode)
+        if base is None:
+            base = resolve_filter_model_output_dir(
+                PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
+            ) / "point_in_time"
+        grouped_status.extend((
+            (
+                "Rolling OOS Scores",
+                (
+                    base / "selection_point_in_time_scores.csv",
+                    base / "selection_point_in_time_manifest.json",
+                    base / "selection_point_in_time_coverage.csv",
+                ),
+            ),
+            (
+                "Rolling OOS Standard SOP / Audit",
+                (
+                    base / "selection_point_in_time_audit.json",
+                    base / "selection_point_in_time_audit.md",
+                    base / "rolling_standard_model_report.md",
+                ),
+            ),
+        ))
     status_rows = []
     for label, paths in grouped_status:
         existing = sum(path.is_file() for path in paths)
@@ -3352,23 +3485,13 @@ def _prepare_continuous_research_inputs(
 
 
 
-def _rolling_mode_point_in_time_dir(settings, mode, *, fixed_window: bool) -> Path | None:
+def _rolling_mode_point_in_time_dir(settings, mode) -> Path | None:
     model_output_dir = resolve_filter_model_output_dir(
         PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
     )
-    if fixed_window:
-        base = (
-            model_output_dir
-            / "fixed_window_rolling"
-            / f"fixed_{int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS)}m"
-        )
-        if mode.point_in_time_dirname in (None, ""):
-            return base
-        return base / str(mode.point_in_time_dirname)
     if mode.point_in_time_dirname in (None, ""):
         return None
     return model_output_dir / str(mode.point_in_time_dirname)
-
 
 def _rolling_mode_display_label(mode) -> str:
     end_label = "最新" if str(mode.score_end_date).strip().lower() == "auto" else str(mode.score_end_date)
@@ -3381,84 +3504,11 @@ def _render_rolling_mode_line(index: int, mode, *, default: bool = False) -> str
     return render_menu_item(index, _rolling_mode_display_label(mode), default=default)
 
 
-def _interactive_continuous_rolling_test(
-    program_name: str, settings, *, fixed_window: bool
-) -> int:
-    if not settings.rolling_authorized:
-        print("目前Active Profile尚未授權Rolling PIT。")
-        return 0
-    modes = get_breakout_quality_rolling_test_modes()
-    title = "Fixed-Window Stability Test" if fixed_window else "Extending-Window Test"
-    while True:
-        print(f"\n=== {title} ===")
-        for index, mode in enumerate(modes, start=1):
-            print(_render_rolling_mode_line(index, mode, default=index == 1))
-        status_choice = len(modes) + 1
-        print(render_menu_item(status_choice, "查看設定與工件狀態"))
-        print(render_menu_item(0, "返回"))
-        try:
-            raw_choice = input("👉 請選擇：").strip().lower()
-        except EOFError:
-            return 0
-        choice = "1" if raw_choice == "" else raw_choice
-        if choice in {"0", "q", "quit", "exit"}:
-            return 0
-        try:
-            numeric = int(choice)
-        except ValueError:
-            print("無效選項，請重新輸入。")
-            continue
-        if 1 <= numeric <= len(modes):
-            mode = modes[numeric - 1]
-            _print_workflow_status(settings)
-            if fixed_window:
-                purpose = "固定120M calendar train history的歷史learnability／stability診斷"
-            elif bool(mode.single_score_block):
-                purpose = "固定2020年底information cutoff的OOS Gate"
-            else:
-                purpose = "expanding history＋12M annual refit的PIT Rolling evidence"
-            print(
-                render_key_values(
-                    (
-                        ("Mode", mode.label),
-                        (
-                            "Score/refit",
-                            "single forward block" if mode.single_score_block else f"{int(mode.fold_months)} months",
-                        ),
-                        (
-                            "Score period",
-                            f"{mode.score_start_date} ～ "
-                            f"{('最新' if str(mode.score_end_date).strip().lower() == 'auto' else mode.score_end_date)}",
-                        ),
-                        ("用途", purpose),
-                    )
-                )
-            )
-            upstream_plan = _collect_continuous_research_input_plan(settings)
-            _render_continuous_research_input_plan(settings, upstream_plan)
-            if upstream_plan.blocked:
-                print("目前存在不可由canonical producer確定性補建的前置工件；本次不執行。")
-                continue
-            if not _prompt_bool(f"確認執行{mode.label}（含必要自動前置）", True):
-                continue
-            spec = get_continuous_ranker_research_spec(settings.experiment_profile)
-            return _run_continuous_pit_profile(
-                program_name,
-                model_id=spec.model_research_id,
-                profile_name=settings.experiment_profile,
-                mode=mode,
-                fixed_window=fixed_window,
-            )
-        if numeric == status_choice:
-            _print_workflow_status(settings)
-            continue
-        print("無效選項，請重新輸入。")
-
+def _interactive_continuous_rolling_test(program_name: str, settings) -> int:
+    return _run_continuous_rolling_mode_direct(program_name, settings)
 
 def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
-    return _interactive_continuous_rolling_test(
-        program_name, settings, fixed_window=False
-    )
+    return _interactive_continuous_rolling_test(program_name, settings)
 
 
 def _load_reusable_continuous_forward_contract(settings):
@@ -3581,24 +3631,94 @@ def _run_continuous_forward_model_gate(program_name: str, settings) -> int:
     return int(code)
 
 
+def _rolling_pit_dir_for_loader(settings, mode) -> Path | None:
+    return _rolling_mode_point_in_time_dir(settings, mode)
+
+
+def _load_reusable_rolling_standard_report(settings, mode):
+    """Validate Rolling PIT artifacts and return the current Standard-SOP payload."""
+
+    override = _rolling_pit_dir_for_loader(settings, mode)
+    try:
+        contract = load_selection_point_in_time_ranking_contract(
+            str(PROJECT_ROOT),
+            str(settings.filter_id),
+            str(settings.model_architecture),
+            str(settings.experiment_profile),
+            require_model_validation_pass=False,
+            point_in_time_dir_override=override,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        return None, None, f"{type(exc).__name__}: {exc}"
+
+    standard = dict((contract.audit or {}).get("standard_model_sop") or {})
+    if not standard:
+        return contract, None, "Rolling audit缺少current Standard SOP payload"
+    spec = get_continuous_ranker_research_spec(settings.experiment_profile)
+    standard["model_research_id"] = str(spec.model_research_id)
+    issues = _standard_model_sop_completeness_issues(standard)
+    if issues:
+        return contract, None, "Standard SOP evidence不完整: " + "; ".join(issues)
+    return contract, standard, None
+
+
+def _write_rolling_standard_model_report(settings, contract, standard_payload: dict) -> tuple[Path, Path]:
+    base = Path(contract.audit_path).parent
+    json_path = base / "rolling_standard_model_report.json"
+    markdown_path = base / "rolling_standard_model_report.md"
+    report = report_contract("model.rolling_standard_sop")
+    machine = {
+        "report_id": report.report_id,
+        "report_version": int(report.version),
+        "report_contract_fingerprint": persistent_report_contract_fingerprint(report.report_id),
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "filter_id": str(settings.filter_id),
+        "architecture": str(settings.model_architecture),
+        "profile": str(settings.experiment_profile),
+        "source_audit": project_relative_display_path(contract.audit_path, project_root=PROJECT_ROOT),
+        "sop_view": _model_sop_view(standard_payload),
+    }
+    json_path.write_text(json.dumps(machine, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(
+        "# Rolling OOS Standard Model SOP\n\n"
+        f"- Contract：`{report.report_id}` v`{report.version}` / `{machine['report_contract_fingerprint']}`\n"
+        f"- Profile：`{settings.experiment_profile}`\n\n"
+        + "\n".join(_render_continuous_ranker_simple_markdown(standard_payload)).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return json_path, markdown_path
+
+
+def _emit_rolling_standard_model_report(settings, contract, standard_payload: dict, *, action: str) -> None:
+    print(styled_workflow_status(f"[{action}]") + f" Rolling OOS | {settings.experiment_profile}")
+    rendered = _render_continuous_ranker_simple_console(standard_payload)
+    if rendered:
+        print(rendered)
+    json_path, markdown_path = _write_rolling_standard_model_report(
+        settings, contract, standard_payload
+    )
+    print(render_status_paths(
+        (("Rolling SOP JSON", json_path, True), ("Rolling SOP Markdown", markdown_path, True)),
+        project_root=PROJECT_ROOT,
+    ))
+
+
 def _run_continuous_pit_profile(
     program_name: str,
     *,
     model_id: str,
     profile_name: str,
     mode=None,
-    fixed_window: bool = False,
+    refresh_audit_only: bool = False,
 ) -> int:
     settings = get_breakout_quality_workflow_settings(experiment_profile=profile_name)
     selected_mode = mode or get_breakout_quality_rolling_test_mode("rolling")
-    pit_dir_override = _rolling_mode_point_in_time_dir(
-        settings, selected_mode, fixed_window=fixed_window
-    )
-    window_label = "Fixed-Window" if fixed_window else "Extending-Window"
+    pit_dir_override = _rolling_mode_point_in_time_dir(settings, selected_mode)
     print(
         "\n"
         + render_title(
-            f"{window_label} {selected_mode.label} | {model_id} | {settings.experiment_profile}"
+            f"Rolling OOS | {model_id} | {settings.experiment_profile}"
         )
     )
     code = _prepare_continuous_research_inputs(program_name, settings)
@@ -3614,6 +3734,7 @@ def _run_continuous_pit_profile(
         "--fold-months", str(int(selected_mode.fold_months)),
         "--inner-validation-months", str(settings.point_in_time_inner_validation_months),
         "--seed", str(settings.seed),
+        "--checkpoint-cache-root", str(BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT),
     ]
     if selected_mode.fold_anchor_date is not None:
         build_args.extend(["--fold-anchor-date", str(selected_mode.fold_anchor_date)])
@@ -3621,13 +3742,8 @@ def _run_continuous_pit_profile(
         build_args.append("--single-score-block")
     if score_end:
         build_args.extend(["--score-end-date", str(score_end)])
-    train_window = (
-        int(BREAKOUT_QUALITY_STABILITY_TRAIN_WINDOW_MONTHS)
-        if fixed_window
-        else settings.point_in_time_train_window_months
-    )
-    if train_window is not None:
-        build_args.extend(["--train-window-months", str(int(train_window))])
+    if settings.point_in_time_train_window_months is not None:
+        build_args.extend(["--train-window-months", str(int(settings.point_in_time_train_window_months))])
     if pit_dir_override is not None:
         build_args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
     build_args.append("--resume" if settings.point_in_time_resume else "--no-resume")
@@ -3639,64 +3755,57 @@ def _run_continuous_pit_profile(
     if pit_dir_override is not None:
         audit_args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
     with _compact_console_scope():
+        if not refresh_audit_only:
+            code = _run_command(
+                "build-point-in-time-scores", build_args, program_name=program_name
+            )
+            if code != 0:
+                return int(code)
         code = _run_command(
-            "build-point-in-time-scores", build_args, program_name=program_name
+            "audit-point-in-time-scores", audit_args, program_name=program_name
         )
         if code != 0:
             return int(code)
-        return int(
-            _run_command(
-                "audit-point-in-time-scores", audit_args, program_name=program_name
-            )
+    contract, standard, reason = _load_reusable_rolling_standard_report(settings, selected_mode)
+    if contract is None or standard is None:
+        raise RuntimeError(
+            f"{model_id} Rolling OOS完成但Standard SOP仍不可REUSE: {reason}"
         )
-
-
-def _interactive_continuous_stability_validation(program_name: str, settings) -> int:
-    return _interactive_continuous_rolling_test(
-        program_name, settings, fixed_window=True
+    _emit_rolling_standard_model_report(
+        settings, contract, standard, action="REFRESH" if refresh_audit_only else "BUILD"
     )
+    return 0
 
 
 def _run_continuous_rolling_mode_direct(
     program_name: str,
     settings,
     *,
-    fixed_window: bool,
+    prompt_for_build: bool = True,
 ) -> int:
-    """Run the canonical 12M Rolling mode without an extra mode-selection menu."""
+    """REUSE or build the canonical 12M expanding-history Rolling OOS model report."""
 
     mode = get_breakout_quality_rolling_test_mode("rolling")
-    title = "Fixed-Window Rolling" if fixed_window else "Extending-Window Rolling"
-    print(f"\n=== {title} ===")
+    print("\n=== Rolling OOS 模型訓練 ===")
     if not settings.rolling_authorized:
-        print("目前Active Profile未授權Rolling PIT；選單固定保留，本次BLOCKED。")
+        print("目前Active Profile未授權Rolling OOS；本次BLOCKED，不以menu重整改寫scientific authorization。")
         return 0
     _print_workflow_status(settings)
-    print(
-        render_key_values(
-            (
-                ("Mode", mode.label),
-                ("Score/refit", f"{int(mode.fold_months)} months"),
-                (
-                    "Score period",
-                    f"{mode.score_start_date} ～ "
-                    f"{('最新' if str(mode.score_end_date).strip().lower() == 'auto' else mode.score_end_date)}",
-                ),
-                (
-                    "用途",
-                    "固定120M calendar train history的歷史learnability／stability診斷"
-                    if fixed_window
-                    else "expanding history＋12M annual refit的PIT Rolling evidence",
-                ),
-            )
-        )
-    )
+    contract, standard, reason = _load_reusable_rolling_standard_report(settings, mode)
+    if contract is not None and standard is not None:
+        _emit_rolling_standard_model_report(settings, contract, standard, action="REUSE")
+        return 0
+
+    # A valid PIT contract with an old/incomplete audit only needs report refresh;
+    # do not retrain compatible folds merely because Standard-SOP fields were added.
+    refresh_audit_only = contract is not None
+    print(styled_workflow_status("[REFRESH]" if refresh_audit_only else "[BUILD]") + f" {reason or 'Rolling OOS artifact missing'}")
     upstream_plan = _collect_continuous_research_input_plan(settings)
     _render_continuous_research_input_plan(settings, upstream_plan)
     if upstream_plan.blocked:
         print("目前存在不可由canonical producer確定性補建的前置工件；本次不執行。")
         return 0
-    if not _prompt_bool(f"確認執行{title}（含必要自動前置）", True):
+    if prompt_for_build and not _prompt_bool("確認執行Rolling OOS（含必要自動前置）", True):
         return 0
     spec = get_continuous_ranker_research_spec(settings.experiment_profile)
     return _run_continuous_pit_profile(
@@ -3704,7 +3813,7 @@ def _run_continuous_rolling_mode_direct(
         model_id=spec.model_research_id,
         profile_name=settings.experiment_profile,
         mode=mode,
-        fixed_window=fixed_window,
+        refresh_audit_only=refresh_audit_only,
     )
 
 
@@ -4309,84 +4418,193 @@ def _run_configured_standard_model_comparison(program_name: str) -> int:
         action = "REUSE" if contract is not None else "BUILD"
         rows.append((
             str(model_id), str(settings.experiment_profile),
-            str(settings.model_architecture), str(settings.seed),
-            action,
+            str(settings.model_architecture), str(settings.seed), action,
         ))
         planned.append((str(model_id), settings, contract, reason))
 
-    print("\n" + render_title(comparison.menu_label))
+    print("\n" + render_title("Forward OOS 模型比較"))
     print(render_table(
-        ("Model", "Profile", "Architecture", "Seed", "Action"),
-        rows,
+        ("Model", "Profile", "Architecture", "Seed", "Action"), rows,
         alignments=("left", "left", "left", "right", "left"),
     ))
     if not _prompt_bool(
-        "確認產生多模型Standard SOP比較；READY者REUSE，缺失者自動訓練", True
+        "確認產生Forward OOS多模型Standard SOP比較；READY者REUSE，缺失者自動訓練", True
     ):
         return 0
 
     completed = []
     for model_id, settings, preflight_contract, _reason in planned:
         if preflight_contract is not None:
-            print(
-                styled_workflow_status("[REUSE]")
-                + f" {model_id} | model/report identity READY"
-            )
+            print(styled_workflow_status("[REUSE]") + f" {model_id} | model/report identity READY")
             contract = preflight_contract
             action = "REUSE"
         else:
             code, contract, action = _ensure_continuous_forward_model_report(
-                program_name,
-                model_id=model_id,
-                settings=settings,
-                prompt_for_build=False,
-                emit_reuse_report=False,
+                program_name, model_id=model_id, settings=settings,
+                prompt_for_build=False, emit_reuse_report=False,
             )
             if code != 0 or contract is None:
                 return int(code or 1)
         completed.append({
-            "model_id": model_id,
-            "settings": settings,
-            "contract": contract,
-            "payload": dict(contract.report),
-            "artifact_action": action,
+            "model_id": model_id, "settings": settings, "contract": contract,
+            "payload": dict(contract.report), "artifact_action": action,
         })
 
     console = _render_standard_model_comparison(completed, target="console")
-    print("\n" + render_title("Standard Model SOP Comparison"))
+    print("\n" + render_title("Forward OOS Standard Model SOP Comparison"))
     print(console)
     json_path, markdown_path = _write_standard_model_comparison_report(completed)
     print(render_status_paths(
-        (
-            ("比較JSON", json_path, json_path.is_file()),
-            ("比較Markdown", markdown_path, markdown_path.is_file()),
-        ),
+        (("比較JSON", json_path, json_path.is_file()), ("比較Markdown", markdown_path, markdown_path.is_file())),
         project_root=PROJECT_ROOT,
     ))
+    return 0
+
+
+def _run_configured_rolling_model_comparison(program_name: str) -> int:
+    model_list = get_breakout_quality_model_test_settings().model_profiles
+    mode = get_breakout_quality_rolling_test_mode("rolling")
+    planned = []
+    display_rows = []
+    blocked = []
+    for model_id, profile_name in model_list:
+        settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile_name))
+        if not settings.rolling_authorized:
+            blocked.append(str(model_id))
+            display_rows.append((str(model_id), str(profile_name), "BLOCKED", "Rolling未授權"))
+            continue
+        contract, standard, reason = _load_reusable_rolling_standard_report(settings, mode)
+        action = "REUSE" if contract is not None and standard is not None else ("REFRESH" if contract is not None else "BUILD")
+        display_rows.append((str(model_id), str(profile_name), action, reason or "READY"))
+        planned.append((str(model_id), settings, contract, standard, reason))
+
+    print("\n" + render_title("Rolling OOS 模型比較"))
+    print(render_table(
+        ("Model", "Profile", "Action", "Reason"), display_rows,
+        alignments=("left", "left", "left", "left"),
+    ))
+    if blocked:
+        print(
+            styled_workflow_status("[BLOCKED]")
+            + " Rolling OOS comparison要求共用清單全員具備scientific authorization；"
+            + f"未授權={','.join(blocked)}。不產生partial comparison。"
+        )
+        return 0
+    if not _prompt_bool(
+        "確認產生Rolling OOS多模型Standard SOP比較；完整者REUSE，缺失者自動補建", True
+    ):
+        return 0
+
+    completed = []
+    for model_id, settings, contract, standard, _reason in planned:
+        action = "REUSE"
+        if contract is None or standard is None:
+            code = _run_continuous_rolling_mode_direct(
+                program_name, settings, prompt_for_build=False
+            )
+            if code != 0:
+                return int(code)
+            contract, standard, reason = _load_reusable_rolling_standard_report(settings, mode)
+            if contract is None or standard is None:
+                raise RuntimeError(f"{model_id} Rolling OOS補建後仍不可比較: {reason}")
+            action = "BUILD/REFRESH"
+        completed.append({
+            "model_id": model_id, "settings": settings, "contract": contract,
+            "payload": dict(standard), "artifact_action": action,
+        })
+
+    report_id = "model.rolling_standard_comparison"
+    console = _render_standard_model_comparison(completed, target="console", report_id=report_id)
+    print("\n" + render_title("Rolling OOS Standard Model SOP Comparison"))
+    print(console)
+    json_path, markdown_path = _write_standard_model_comparison_report(completed, rolling_oos=True)
+    print(render_status_paths(
+        (("比較JSON", json_path, json_path.is_file()), ("比較Markdown", markdown_path, markdown_path.is_file())),
+        project_root=PROJECT_ROOT,
+    ))
+    return 0
+
+
+def _strategy_mode_for_robustness(*, rolling: bool) -> dict:
+    modes = tuple(get_strategy_rolling_test_modes())
+    found = next(
+        (dict(item) for item in modes if bool(item.get("single_score_block")) is (not rolling)),
+        None,
+    )
+    if found is None:
+        raise ValueError("Strategy Compare缺少對應OOS/Rolling robustness mode")
+    return found
+
+
+def _render_shared_strategy_model_bindings(*, robustness=None) -> None:
+    rows = []
+    robustness_arm_ids = (
+        None
+        if robustness is None
+        else set(str(value) for value in robustness.stochastic_arm_ids)
+    )
+    for row in get_strategy_compare_model_bindings():
+        arm_ids = tuple(str(value) for value in row["strategy_arm_ids"])
+        status = str(row["status"])
+        if robustness_arm_ids is not None and arm_ids:
+            eligible = tuple(arm_id for arm_id in arm_ids if arm_id in robustness_arm_ids)
+            if eligible:
+                status = "ROBUSTNESS-ELIGIBLE"
+            else:
+                status = "BOUND / ROBUSTNESS NOT AUTHORIZED"
+        rows.append((
+            row["model_id"],
+            ", ".join(arm_ids) if arm_ids else "-",
+            status,
+        ))
+    print(render_table(
+        ("Model", "Strategy arms", "Binding / Robustness"), rows,
+        alignments=("left", "left", "left"),
+    ))
+
+
+def _run_shared_strategy_robustness(program_name: str, *, rolling: bool) -> int:
+    mode = _strategy_mode_for_robustness(rolling=rolling)
+    robustness_id = str(mode["robustness_id"])
+    robustness = get_strategy_multi_seed_robustness_settings(robustness_id)
+    print("\n" + render_title("Rolling OOS Robustness 模型測試" if rolling else "Forward OOS Robustness 模型測試"))
+    _render_shared_strategy_model_bindings(robustness=robustness)
+    show_strategy_multi_seed_robustness_status(robustness_id=robustness_id)
+    try:
+        run_strategy_multi_seed_robustness(
+            robustness_id=robustness_id,
+            confirm=True,
+            model_upstream_preparer=lambda: prepare_strategy_compare_artifacts(
+                program_name=program_name,
+                profile_ids=(str(robustness.profile_id),),
+                scope="upstream",
+            ),
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"[錯誤] {type(exc).__name__}: {exc}")
     return 0
 
 
 def _interactive_model_research(program_name: str) -> int:
     settings = get_breakout_quality_model_research_settings()
     if settings.is_binary_classification:
-        return _interactive_binary_model_research(
-            program_name,
-            workflow_settings=settings,
-        )
+        return _interactive_binary_model_research(program_name, workflow_settings=settings)
     if not settings.is_continuous_ranker:
-        raise ValueError(
-            f"不支援的 workflow training objective: {settings.training_objective!r}"
-        )
+        raise ValueError(f"不支援的 workflow training objective: {settings.training_objective!r}")
 
     while True:
         print("\n=== Continuous DL 模型研究與驗證 ===")
-        print(f"Active Profile：{settings.experiment_profile}")
-        print(render_menu_item(1, "訓練目前模型 → Forward-OOS 標準模型 SOP 報表", default=True))
-        print(render_menu_item(2, "Extending-Window Rolling"))
-        print(render_menu_item(3, "Fixed-Window Rolling"))
-        comparison_label = get_breakout_quality_standard_model_comparison_settings().menu_label
-        print(render_menu_item(4, comparison_label))
-        print(render_menu_item(5, "Timing Mode｜Rolling 訓練前後比較  [工程]"))
+        print(f"Training Profile：{settings.experiment_profile}")
+        print("Model Compare/Test List：" + " / ".join(
+            model_id for model_id, _profile in get_breakout_quality_model_test_settings().model_profiles
+        ))
+        print(render_menu_item(1, "Forward OOS 模型訓練", default=True))
+        print(render_menu_item(2, "Rolling OOS 模型訓練"))
+        print(render_menu_item(3, "Forward OOS 模型比較"))
+        print(render_menu_item(4, "Rolling OOS 模型比較"))
+        print(render_menu_item(5, "Forward OOS Robustness 模型測試"))
+        print(render_menu_item(6, "Rolling OOS Robustness 模型測試"))
+        print(render_menu_item(7, "Timing Mode｜Rolling 訓練前後比較  [工程]"))
         print(render_menu_item(0, "返回"))
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
@@ -4399,25 +4617,28 @@ def _interactive_model_research(program_name: str) -> int:
         if choice == "1":
             return _run_continuous_forward_model_gate(program_name, settings)
         if choice == "2":
-            _run_continuous_rolling_mode_direct(
-                program_name, settings, fixed_window=False
-            )
+            _run_continuous_rolling_mode_direct(program_name, settings)
             continue
         if choice == "3":
-            _run_continuous_rolling_mode_direct(
-                program_name, settings, fixed_window=True
-            )
-            continue
-        if choice == "4":
             _run_configured_standard_model_comparison(program_name)
             continue
+        if choice == "4":
+            _run_configured_rolling_model_comparison(program_name)
+            continue
         if choice == "5":
+            _run_shared_strategy_robustness(program_name, rolling=False)
+            continue
+        if choice == "6":
+            _run_shared_strategy_robustness(program_name, rolling=True)
+            continue
+        if choice == "7":
             timing = get_breakout_quality_rolling_timing_settings()
             timing_settings = get_breakout_quality_workflow_settings(
                 experiment_profile=str(timing.experiment_profile)
             )
             return int(_interactive_rolling_timing_mode(program_name, timing_settings))
         print("無效選項，請重新輸入。")
+
 
 def run_model_training_menu(program_name: str = "apps/research.py model") -> int:
     """Run the active Breakout Quality model-training menu.

@@ -45,6 +45,9 @@ from filters.breakout_quality.ranking_score_store import (
     derive_point_in_time_model_validation_gate,
 )
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
+from services.breakout_quality.train_daily_ranker import (
+    calculate_upside_downside_alignment_metrics,
+)
 from services.breakout_quality.point_in_time_scores import (
     FOLD_MANIFEST_FILENAME,
     FOLD_SCORE_FILENAME,
@@ -80,7 +83,7 @@ from core.report_style import (
     tone_for_signal,
 )
 
-AUDIT_SCHEMA_VERSION = 3
+AUDIT_SCHEMA_VERSION = 4
 DRIFT_MEAN_SHIFT_STD_THRESHOLD = 1.0
 _ORDERABLE_PIT_SCORE_COLUMN = "__pit_breakout_quality_score"
 
@@ -430,6 +433,16 @@ def _scope_metrics(frame: pd.DataFrame) -> dict[str, Any]:
         **_decile_metrics(frame),
     }
 
+
+
+def _standard_sop_split_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    """Map PIT audit rank metrics to the canonical Standard Model SOP field names."""
+
+    row = dict(metrics or {})
+    row["global_spearman_vs_raw_target"] = row.get("global_spearman")
+    row["top_score_decile_raw_target_mean"] = row.get("top_decile_target_mean")
+    row["bottom_score_decile_raw_target_mean"] = row.get("bottom_decile_target_mean")
+    return row
 
 def _yearly_metrics(frame: pd.DataFrame) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -1386,6 +1399,25 @@ def _run_point_in_time_scores_audit(
             valid_target[valid_target["group_index"].isin(candidate_ids)].copy()
         )
 
+    oos_group_ids = valid_target["group_index"].to_numpy(dtype=np.int64)
+    oos_scores = valid_target["breakout_quality_score"].to_numpy(dtype=np.float64)
+    oos_alignment = calculate_upside_downside_alignment_metrics(
+        oos_group_ids, bundle.group_table, bundle.raw_target, oos_scores
+    )
+    candidate_alignment = {}
+    if (
+        bundle.profile.training_sample_scope
+        == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    ):
+        candidate_frame = valid_target[valid_target["group_index"].isin(candidate_ids)].copy()
+        if len(candidate_frame):
+            candidate_alignment = calculate_upside_downside_alignment_metrics(
+                candidate_frame["group_index"].to_numpy(dtype=np.int64),
+                bundle.group_table,
+                bundle.raw_target,
+                candidate_frame["breakout_quality_score"].to_numpy(dtype=np.float64),
+            )
+
     label_valid = merged[merged["label"].isin([LABEL_REJECT, LABEL_PASS])].copy()
     ordered = label_valid.sort_values("breakout_quality_score", kind="mergesort")
     decile_count = max(1, int(math.ceil(len(ordered) * 0.10))) if len(ordered) else 0
@@ -1481,6 +1513,26 @@ def _run_point_in_time_scores_audit(
             },
             "torch_execution": manifest.get("torch_execution"),
             "elapsed_sec": manifest.get("elapsed_sec"),
+        },
+        "standard_model_sop": {
+            "evaluation_mode": "rolling_oos",
+            "training": {
+                "objective": str(bundle.profile.training_objective),
+            },
+            "split_metrics": {
+                "oos": _standard_sop_split_metrics(all_metrics),
+                "breakout_candidate_oos": _standard_sop_split_metrics(candidate_metrics),
+            },
+            "upside_downside_alignment_evaluation": {
+                "oos": oos_alignment,
+                "breakout_candidate_oos": candidate_alignment,
+            },
+            "rolling_specific": {
+                "fold_count": int(manifest.get("fold_count", 0) or 0),
+                "fold_months": int(manifest.get("fold_months", 0) or 0),
+                "direction_summary": _direction_summary(yearly_primary),
+                "fold_drift": fold_drift,
+            },
         },
         "metrics": {
             "pass_only_target": pass_metrics,

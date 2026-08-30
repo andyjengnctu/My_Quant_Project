@@ -2836,6 +2836,8 @@ def validate_research_report_contract_freeze_case(_base_params):
         MODEL_EXTENSION_SCHEMAS,
         MODEL_STANDARD_COMPARISON,
         MODEL_STANDARD_SOP,
+        MODEL_ROLLING_STANDARD_COMPARISON,
+        MODEL_ROLLING_STANDARD_SOP,
         extension_contract,
         persistent_report_contract_fingerprints,
         table_contract,
@@ -2863,8 +2865,9 @@ def validate_research_report_contract_freeze_case(_base_params):
         detail=str(errors),
     )
     check_true(
-        "standard_model_sop_v5_common_section_order_is_contiguous_1_to_6",
-        [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
+        "standard_model_sop_v6_common_section_order_is_contiguous_1_to_6",
+        int(MODEL_STANDARD_SOP.version) == 6
+        and [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         == [
             (1, "Learnability"),
             (2, "Generalization"),
@@ -2876,7 +2879,7 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
     check_true(
         "standard_multi_model_comparison_schema_is_derived_from_standard_sop",
-        int(MODEL_STANDARD_COMPARISON.version) == 4
+        int(MODEL_STANDARD_COMPARISON.version) == 5
         and [(section.number, section.title) for section in MODEL_STANDARD_COMPARISON.sections]
         == [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         and all(
@@ -2896,6 +2899,18 @@ def validate_research_report_contract_freeze_case(_base_params):
                 standard_section.tables, comparison_section.tables
             )
         ),
+    )
+
+    check_true(
+        "rolling_model_reports_reuse_common_sop_1_to_6_and_add_rolling_specific_contract",
+        int(MODEL_ROLLING_STANDARD_SOP.version) == 1
+        and int(MODEL_ROLLING_STANDARD_COMPARISON.version) == 1
+        and [(section.number, section.title) for section in MODEL_ROLLING_STANDARD_SOP.sections[:6]]
+            == [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
+        and MODEL_ROLLING_STANDARD_SOP.sections[-1].section_id == "rolling_stability"
+        and [(section.number, section.title) for section in MODEL_ROLLING_STANDARD_COMPARISON.sections[:6]]
+            == [(section.number, section.title) for section in MODEL_STANDARD_COMPARISON.sections]
+        and MODEL_ROLLING_STANDARD_COMPARISON.sections[-1].section_id == "rolling_stability",
     )
 
     learn_headers = table_contract("model.standard_sop", "learnability", "learnability").headers
@@ -3139,7 +3154,7 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "Δ HM/HS Pair" not in standard_lines["h_only"],
     )
     check_true(
-        "cross_profile_standard_v5_common_headers_and_section_order_are_invariant",
+        "cross_profile_standard_v6_common_headers_and_section_order_are_invariant",
         all(
             "Top-Bottom Target" in text
             and "Validation → OOS" in text
@@ -3234,6 +3249,50 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "### <span" not in comparison_markdown
         and "| Model | Groups | Daily rho |" in comparison_markdown
         and "| Model | Δ Daily rho | Δ Pair | Δ Top-Bottom |" in comparison_markdown,
+    )
+
+    rolling_payload = json.loads(json.dumps(control_payload))
+    rolling_payload.pop("safety_raw_mfe_evaluation", None)
+    rolling_payload["evaluation_mode"] = "rolling_oos"
+    rolling_payload["split_metrics"].pop("validation", None)
+    rolling_payload["upside_downside_alignment_evaluation"].pop("validation", None)
+    rolling_payload["rolling_specific"] = {
+        "fold_count": 5,
+        "fold_months": 12,
+        "direction_summary": {
+            "valid_year_count": 5,
+            "positive_spearman_year_count": 4,
+            "positive_spread_year_count": 3,
+        },
+        "fold_drift": {
+            "max_adjacent_mean_shift_in_pooled_std": 0.42,
+            "drift_flag": False,
+        },
+    }
+    rolling_simple = app._render_continuous_ranker_simple_console(rolling_payload)
+    rolling_comparison = app._render_standard_model_comparison(
+        [
+            {"model_id": "ROLL-A", "payload": rolling_payload},
+            {"model_id": "ROLL-B", "payload": rolling_payload},
+        ],
+        target="console",
+        report_id="model.rolling_standard_comparison",
+    )
+    check_true(
+        "rolling_reports_keep_common_sop_and_append_fold_year_stability_extension",
+        "標準模型 SOP｜1. Learnability" in rolling_simple
+        and "標準模型 SOP｜6. Evidence Coverage" in rolling_simple
+        and "Validation" not in rolling_simple
+        and "Rolling-specific Extension｜Fold / Year Stability" in rolling_simple
+        and "Rolling OOS → Breakout slice" in rolling_simple
+        and rolling_comparison.count("模型比較 SOP｜1. Learnability") == 1
+        and "Rolling OOS" in rolling_comparison
+        and "Breakout slice" in rolling_comparison
+        and "Validation → OOS" not in rolling_comparison
+        and "Rolling-specific Extension｜Fold / Year Stability" in rolling_comparison
+        and "Fold count" in rolling_comparison
+        and all(model in rolling_comparison for model in ("ROLL-A", "ROLL-B")),
+        detail=rolling_comparison,
     )
 
     from services.breakout_quality.train_daily_ranker import _render_markdown as _render_detailed_model_markdown
@@ -3353,7 +3412,7 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
 
     # Current requested comparison set is H / AF / AH, while the generic config accepts 3+ arms.
-    current_pairs = tuple(bq.BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES)
+    current_pairs = tuple(bq.get_breakout_quality_model_test_settings().model_profiles)
     check_true(
         "current_standard_model_comparison_set_is_requested_h_af_ah",
         current_pairs == (
@@ -3368,12 +3427,14 @@ def validate_research_report_contract_freeze_case(_base_params):
     extra_profile = bq.DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
     extra_id = str(bq.get_continuous_ranker_research_spec(extra_profile).model_research_id)
     synthetic_pairs = (*current_pairs, (extra_id, extra_profile))
-    with patch.object(bq, "BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES", synthetic_pairs):
+    with patch.object(bq, "BREAKOUT_QUALITY_MODEL_TEST_PROFILES", synthetic_pairs):
+        resolved_shared = bq.get_breakout_quality_model_test_settings()
         resolved = bq.get_breakout_quality_standard_model_comparison_settings()
     check_true(
         "standard_model_comparison_config_supports_more_than_three_models",
         len(resolved.model_profiles) == len(synthetic_pairs) == 4
-        and tuple(resolved.model_profiles) == tuple(synthetic_pairs),
+        and tuple(resolved.model_profiles) == tuple(synthetic_pairs)
+        and tuple(resolved_shared.model_profiles) == tuple(synthetic_pairs),
         detail=str(resolved.model_profiles),
     )
 

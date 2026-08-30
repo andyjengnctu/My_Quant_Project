@@ -76,9 +76,9 @@ S = ReportSectionContract
 
 MODEL_STANDARD_SOP = PersistentReportContract(
     report_id="model.standard_sop",
-    version=5,
-    role="persistent_standard",
-    menu_path=("Research", "模型訓練／驗證", "訓練目前模型 → Forward-OOS 標準模型 SOP 報表"),
+    version=6,
+    role="persistent_standard_forward_oos",
+    menu_path=("Research", "模型訓練／驗證", "Forward OOS 模型訓練"),
     sections=(
         S("learnability", 1, "Learnability", "all_continuous_dl", (
             T("learnability", (
@@ -175,10 +175,47 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=4,
-    role="persistent_multi_model_comparison_oos_breakout",
-    menu_path=("Research", "模型訓練／驗證", "模型比較（Standard SOP）"),
+    version=5,
+    role="persistent_multi_model_comparison_forward_oos",
+    menu_path=("Research", "模型訓練／驗證", "Forward OOS 模型比較"),
     sections=_model_comparison_sections(),
+)
+
+_ROLLING_STABILITY_SECTION = S(
+    "rolling_stability", 7, "Rolling-specific Extension｜Fold / Year Stability", "rolling_oos_only",
+    (T("rolling_stability", (
+        C("metric", "Metric", alignment="left"), C("value", "Value", alignment="right"),
+    )),),
+)
+
+_ROLLING_STABILITY_COMPARISON_SECTION = S(
+    "rolling_stability", 7, "Rolling-specific Extension｜Fold / Year Stability", "rolling_oos_only",
+    (T("rolling_stability", (
+        C("model", "Model", alignment="left"),
+        C("fold_count", "Fold count", 0, format_kind="int"),
+        C("fold_months", "Cadence", 0, "M", format_kind="number"),
+        C("valid_year_count", "Valid years", 0, preference="higher", format_kind="int"),
+        C("positive_rho_years", "Positive-rho years", alignment="right"),
+        C("positive_spread_years", "Positive Top-Bottom years", alignment="right"),
+        C("max_adjacent_mean_shift", "Max adjacent score-mean drift", 4, " pooled σ", "lower", "number"),
+        C("drift_flag", "Drift flag", alignment="center"),
+    )),),
+)
+
+MODEL_ROLLING_STANDARD_SOP = PersistentReportContract(
+    report_id="model.rolling_standard_sop",
+    version=1,
+    role="persistent_standard_rolling_oos",
+    menu_path=("Research", "模型訓練／驗證", "Rolling OOS 模型訓練"),
+    sections=(*MODEL_STANDARD_SOP.sections, _ROLLING_STABILITY_SECTION),
+)
+
+MODEL_ROLLING_STANDARD_COMPARISON = PersistentReportContract(
+    report_id="model.rolling_standard_comparison",
+    version=1,
+    role="persistent_multi_model_comparison_rolling_oos",
+    menu_path=("Research", "模型訓練／驗證", "Rolling OOS 模型比較"),
+    sections=(*_model_comparison_sections(), _ROLLING_STABILITY_COMPARISON_SECTION),
 )
 
 
@@ -364,7 +401,8 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
 
 PERSISTENT_REPORT_CONTRACTS: Mapping[str, PersistentReportContract] = {
     contract.report_id: contract for contract in (
-        MODEL_STANDARD_SOP, MODEL_STANDARD_COMPARISON, STRATEGY_STANDARD_SOP, OPPORTUNITY_SELECTION_REPORT,
+        MODEL_STANDARD_SOP, MODEL_STANDARD_COMPARISON, MODEL_ROLLING_STANDARD_SOP,
+        MODEL_ROLLING_STANDARD_COMPARISON, STRATEGY_STANDARD_SOP, OPPORTUNITY_SELECTION_REPORT,
         TRADE_OUTCOME_PATH_REPORT, PORTFOLIO_DRAWDOWN_REPORT, STRATEGY_CONSISTENCY_REPORT,
     )
 }
@@ -464,8 +502,10 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "7ca43620ac4a01e0",
-    "model.standard_sop": "9ec49fe2aaf3a2d6",
+    "model.rolling_standard_comparison": "b8c9bb9c1c186f72",
+    "model.rolling_standard_sop": "aea55438c5b28b08",
+    "model.standard_comparison": "3e1ea007d941b1ad",
+    "model.standard_sop": "40bd02e5bcbe21b1",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",
 }
@@ -491,9 +531,9 @@ def validate_approved_persistent_report_contracts() -> tuple[str, ...]:
 
 __all__ = [
     "APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS",
-    "MODEL_EXTENSION_SCHEMAS", "MODEL_STANDARD_SOP",
+    "MODEL_EXTENSION_SCHEMAS", "MODEL_STANDARD_SOP", "MODEL_ROLLING_STANDARD_SOP",
     "OPPORTUNITY_SELECTION_REPORT", "PORTFOLIO_DRAWDOWN_REPORT",
-    "MODEL_STANDARD_COMPARISON", "PERSISTENT_REPORT_CONTRACTS", "STRATEGY_CONSISTENCY_METRIC_KEYS",
+    "MODEL_STANDARD_COMPARISON", "MODEL_ROLLING_STANDARD_COMPARISON", "PERSISTENT_REPORT_CONTRACTS", "STRATEGY_CONSISTENCY_METRIC_KEYS",
     "STRATEGY_CONSISTENCY_REPORT", "STRATEGY_STANDARD_SOP",
     "TRADE_OUTCOME_FIRST_PASSAGE_THRESHOLDS_R", "TRADE_OUTCOME_PATH_REPORT", "ModelExtensionContract",
     "PersistentReportContract", "ReportColumnContract", "ReportSectionContract",
