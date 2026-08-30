@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from .checks import bind_checks
 
+from config import breakout_quality as breakout_quality_config
+
 from .synthetic_breakout_quality_support import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
@@ -1100,6 +1102,25 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and 'render_menu_item(3, "Fixed-Window Rolling")' not in app_source
         and "查看目前Workflow、工件與模型報表" not in app_source
         and "Actual MFE×Safety Truth Geometry（只讀）" not in app_source,
+    )
+
+    shared_training = breakout_quality_config.get_breakout_quality_model_research_settings()
+    shared_test = breakout_quality_config.get_breakout_quality_model_test_settings().model_profiles
+    configured_workflow_profiles = breakout_quality_config.get_breakout_quality_model_workflow_profile_names()
+    expected_workflow_profiles = tuple(dict.fromkeys(
+        [str(shared_training.experiment_profile)]
+        + [str(profile_name) for _model_id, profile_name in shared_test]
+    ))
+    check_true(
+        "model_workflow_training_and_test_ssots_are_current_rolling_authorization_sources",
+        tuple(configured_workflow_profiles) == expected_workflow_profiles
+        and shared_training.rolling_authorized is True
+        and all(
+            breakout_quality_config.get_breakout_quality_workflow_settings(
+                experiment_profile=str(profile_name)
+            ).rolling_authorized
+            for _model_id, profile_name in shared_test
+        ),
     )
 
     from filters.breakout_quality.contract import RUNTIME_SCOPE_WORKFLOW
@@ -2889,9 +2910,9 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
 
 
     # Execution recipe is derived from canonical profile/spec but intentionally omits
-    # MR identity.  Generic model Rolling authorization remains fail-closed.  A current
-    # Strategy Compare source may instead carry a narrow single-seed-only conversion
-    # authorization; that exception must live on the source, not reopen the model recipe.
+    # MR identity.  Historical per-profile flags remain frozen evidence; current model
+    # workflow authorization is instead derived from the configured Training Profile /
+    # Model Compare-Test List SSOT and must not require a second profile authorization list.
     current_required_profiles = set()
     current_strategy_scoped_profiles = set()
     for mode in get_strategy_rolling_test_modes():
@@ -2914,17 +2935,16 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                 else:
                     current_required_profiles.add(profile_name)
 
-    current_authorized_profiles = {
-        profile_name
-        for profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-        if get_continuous_ranker_execution_recipe(
-            profile_name
-        ).current_time_validation_authorized
-    }
+    current_dependency_profiles = current_required_profiles | current_strategy_scoped_profiles
     check_true(
-        "current_compare_dependencies_use_model_auth_except_explicit_single_seed_sources",
-        current_required_profiles.issubset(current_authorized_profiles)
-        and current_strategy_scoped_profiles.isdisjoint(current_authorized_profiles),
+        "current_compare_dependencies_use_shared_model_workflow_authorization",
+        bool(current_dependency_profiles)
+        and all(
+            breakout_quality_config.get_breakout_quality_workflow_settings(
+                experiment_profile=profile_name
+            ).rolling_authorized
+            for profile_name in current_dependency_profiles
+        ),
     )
 
     representative_profile = next(

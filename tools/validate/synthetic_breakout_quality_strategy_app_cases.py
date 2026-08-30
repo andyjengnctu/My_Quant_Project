@@ -180,6 +180,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     from config.breakout_quality import (
         get_breakout_quality_workflow_settings,
         get_breakout_quality_model_test_settings,
+        is_breakout_quality_model_test_profile,
         get_continuous_ranker_execution_recipe,
         get_continuous_ranker_research_spec,
     )
@@ -402,16 +403,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         strategy_config.get_strategy_multi_seed_robustness_settings(str(mode["robustness_id"]))
         for mode in strategy_config.get_strategy_rolling_test_modes()
     ]
-    expected_robustness_arm_ids = tuple(
-        arm_id for arm_id in expected_arm_ids if arm_id not in {"C80", "C81"}
-    )
-    expected_robustness_contrast_ids = tuple(
-        contrast_id
-        for contrast_id in expected_contrast_ids
-        if "C80" not in contrast_id and "C81" not in contrast_id
-    )
+    expected_robustness_arm_ids = tuple(expected_arm_ids)
+    expected_robustness_contrast_ids = tuple(expected_contrast_ids)
     check_true(
-        "current_robustness_excludes_single_seed_only_ah_conversion_arms",
+        "current_robustness_membership_comes_from_same_shared_model_test_list",
         all(
             tuple(item.stochastic_arm_ids) == expected_robustness_arm_ids
             and tuple(item.benchmark_strategy_arm_ids) == expected_robustness_arm_ids
@@ -419,8 +414,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and not tuple(item.consensus_reference_arm_ids)
             and tuple(spec["contrast_id"] for spec in item.paired_contrasts)
             == expected_robustness_contrast_ids
-            and "C80" not in tuple(item.model_seed_sensitive_arm_ids)
-            and "C81" not in tuple(item.model_seed_sensitive_arm_ids)
+            and {"C77", "C80", "C81"}.issubset(set(item.model_seed_sensitive_arm_ids))
             for item in current_robustness
         ),
     )
@@ -575,21 +569,28 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         if arm.dl_enabled and arm.dl_id in settings.dl_sources
     ]
     check_true(
-        "current_dl_dependencies_use_model_auth_or_narrow_single_seed_strategy_auth",
+        "current_dl_dependencies_use_shared_model_workflow_authorization",
         bool(enabled_dl_sources)
         and all(
-            get_continuous_ranker_research_spec(source.experiment_profile).current_time_validation_authorized
-            or source.single_seed_strategy_conversion_authorized
+            get_breakout_quality_workflow_settings(
+                experiment_profile=str(source.experiment_profile)
+            ).rolling_authorized
+            and is_breakout_quality_model_test_profile(str(source.experiment_profile))
             for _profile_id, _dl_id, source in enabled_dl_sources
         ),
     )
     ah_research_spec = get_continuous_ranker_research_spec(
         "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"
     )
+    ah_workflow_auth = get_breakout_quality_workflow_settings(
+        experiment_profile=str(ah_research_spec.profile_name)
+    )
     check_true(
-        "mr13ah_model_auth_remains_closed_while_cont13ah_is_strategy_scoped",
+        "mr13ah_historical_flags_remain_frozen_but_shared_list_authorizes_current_model_workflow",
         ah_research_spec.selection_pit_authorized is False
         and ah_research_spec.current_time_validation_authorized is False
+        and ah_workflow_auth.rolling_authorized is True
+        and is_breakout_quality_model_test_profile(str(ah_research_spec.profile_name))
         and all(
             settings.dl_sources["CONT13AH_ROLL"].single_seed_strategy_conversion_authorized
             for settings in settings_by_mode.values()
@@ -925,29 +926,26 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         resume=True,
     )
     check_true(
-        "ah_single_seed_strategy_training_carries_narrow_authorization_scope",
+        "ah_shared_model_target_uses_generic_model_workflow_scope_for_single_and_multiseed",
         ah_command[:3]
         == [training_runtime.sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores"]
-        and ah_args[ah_args.index("--strategy-compare-profile-id") + 1]
-        == str(rolling_settings.profile_id)
-        and ah_args[ah_args.index("--strategy-compare-source-id") + 1]
-        == "CONT13AH_ROLL",
+        and "--strategy-compare-profile-id" not in ah_args
+        and "--strategy-compare-source-id" not in ah_args
+        and ah_workflow.rolling_authorized is True,
     )
-    try:
-        training_runtime.build_strategy_compare_trainer_command(
-            source=ah_dl,
-            workflow=ah_workflow,
-            seed=int(ah_workflow.seed),
-            strategy_compare_profile_id=None,
-            resume=True,
-        )
-    except ValueError:
-        ah_unscoped_rejected = True
-    else:
-        ah_unscoped_rejected = False
+    ah_unscoped_command, ah_unscoped_args, _ = training_runtime.build_strategy_compare_trainer_command(
+        source=ah_dl,
+        workflow=ah_workflow,
+        seed=int(ah_workflow.seed),
+        strategy_compare_profile_id=None,
+        resume=True,
+    )
     check_true(
-        "ah_strategy_conversion_source_rejects_generic_or_multiseed_training_scope",
-        ah_unscoped_rejected,
+        "ah_shared_model_target_no_longer_needs_second_strategy_scope_selector",
+        ah_unscoped_command[:3]
+        == [training_runtime.sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores"]
+        and "--strategy-compare-profile-id" not in ah_unscoped_args
+        and "--strategy-compare-source-id" not in ah_unscoped_args,
     )
     try:
         strategy_config.validate_single_seed_strategy_conversion_authorization(

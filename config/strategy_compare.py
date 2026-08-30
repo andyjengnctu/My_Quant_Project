@@ -14,6 +14,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT,
     DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     get_breakout_quality_model_test_settings,
+    is_breakout_quality_model_test_profile,
     get_breakout_quality_rolling_test_mode,
     get_breakout_quality_workflow_settings,
 )
@@ -833,10 +834,10 @@ def _derived_robustness_membership(
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     """Derive current robustness roles from the shared Compare Suite.
 
-    Current robustness repeats only the subset of the single-seed Compare Suite that
-    is explicitly robustness-eligible.  Sources carrying a single-seed-only strategy
-    conversion authorization are excluded until a later effect-size decision promotes
-    them to robustness; all remaining enabled arms are strategy-seed-sensitive.
+    Current robustness membership is derived from the same shared Model Compare/Test
+    List that owns [3]～[6].  A historical single-seed-only source restriction remains
+    fail-closed only when that profile is not selected by the current shared list; once
+    selected, the shared-list work item is the current robustness authorization.
     The first tuple is intentionally empty and exists only for the legacy fixed-arm
     compatibility shape used by disabled historical robustness profiles.
     """
@@ -848,6 +849,9 @@ def _derived_robustness_membership(
             and str(arm.dl_id or "").strip()
             and bool(
                 profile_settings.dl_sources[str(arm.dl_id)].single_seed_strategy_conversion_authorized
+            )
+            and not is_breakout_quality_model_test_profile(
+                profile_settings.dl_sources[str(arm.dl_id)].experiment_profile
             )
         )
     )

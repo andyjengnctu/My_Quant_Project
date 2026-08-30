@@ -3788,7 +3788,7 @@ def _run_continuous_rolling_mode_direct(
     mode = get_breakout_quality_rolling_test_mode("rolling")
     print("\n=== Rolling OOS 模型訓練 ===")
     if not settings.rolling_authorized:
-        print("目前Active Profile未授權Rolling OOS；本次BLOCKED，不以menu重整改寫scientific authorization。")
+        print("目前Profile不在current Training／Model-Test SSOT，且沒有historical Rolling authorization；本次BLOCKED。")
         return 0
     _print_workflow_status(settings)
     contract, standard, reason = _load_reusable_rolling_standard_report(settings, mode)
@@ -4486,7 +4486,7 @@ def _run_configured_rolling_model_comparison(program_name: str) -> int:
     if blocked:
         print(
             styled_workflow_status("[BLOCKED]")
-            + " Rolling OOS comparison要求共用清單全員具備scientific authorization；"
+            + " Rolling OOS comparison要求共用Model Compare/Test List全員可執行current Rolling；"
             + f"未授權={','.join(blocked)}。不產生partial comparison。"
         )
         return 0

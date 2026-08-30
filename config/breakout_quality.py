@@ -446,6 +446,37 @@ BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_MENU_LABEL = "模型比較（Standard
 # Backward-compatible alias; there is no second model list.
 BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES = BREAKOUT_QUALITY_MODEL_TEST_PROFILES
 
+
+def get_breakout_quality_model_workflow_profile_names() -> tuple[str, ...]:
+    """Return the single configured target set for current model workflows.
+
+    [1]/[2] consume ``BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE`` while
+    [3]～[6] consume ``BREAKOUT_QUALITY_MODEL_TEST_PROFILES``.  Membership in either
+    current work-item SSOT is itself the authorization for current Forward/Rolling
+    model evaluation; experiment-history flags remain compatibility evidence rather
+    than a second current-workflow selector.
+    """
+
+    ordered = [str(BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE).strip()]
+    ordered.extend(str(profile).strip() for _model_id, profile in BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
+    return tuple(dict.fromkeys(value for value in ordered if value))
+
+
+def is_breakout_quality_model_workflow_profile(profile_name: str) -> bool:
+    normalized = normalize_breakout_quality_experiment_profile(profile_name)
+    return normalized in set(get_breakout_quality_model_workflow_profile_names())
+
+
+def is_breakout_quality_model_test_profile(profile_name: str) -> bool:
+    """Whether a profile is selected by the one [3]～[6] compare/test SSOT."""
+
+    normalized = normalize_breakout_quality_experiment_profile(profile_name)
+    return normalized in {
+        normalize_breakout_quality_experiment_profile(profile)
+        for _model_id, profile in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+    }
+
+
 # "auto" resolves from the selected experiment profile:
 # - binary classification -> hard-filter / canonical_runtime / original
 # - continuous ranker     -> score-ranking / selection_point_in_time /
@@ -2176,9 +2207,11 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         score_semantic_id="daily_safety_product_weighted_pure_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
-        # Model-level authorization remains closed after the failed Forward Model Gate.
-        # The user-authorized C80/C81 exception is owned by Strategy Compare's
-        # CONT13AH_ROLL source and must not open generic PIT/Rolling/Fixed workflows.
+        # Historical model-level flags remain frozen after the failed Forward Model Gate.
+        # B313 makes current work-item membership the execution SSOT: when MR-13AH is
+        # selected in the shared Model Compare/Test List it may run current Rolling /
+        # Robustness workflows; outside that list these frozen flags remain fail-closed.
+        # Fixed-Window remains retired and this does not imply model/production promotion.
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),
@@ -2979,8 +3012,8 @@ def get_breakout_quality_rolling_timing_settings() -> BreakoutQualityRollingTimi
     if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
         raise ValueError("Rolling Timing只支援continuous ranker profile")
 
-    execution_recipe = get_continuous_ranker_execution_recipe(profile_name)
-    if not bool(execution_recipe.current_time_validation_authorized):
+    workflow = get_breakout_quality_workflow_settings(experiment_profile=profile_name)
+    if not workflow.rolling_authorized:
         raise ValueError(
             f"Rolling Timing profile尚未授權current Rolling: {profile_name}"
         )
@@ -3117,12 +3150,21 @@ class BreakoutQualityWorkflowSettings:
 
     @property
     def rolling_authorized(self) -> bool:
-        """Whether this research profile is allowed to build current Rolling evidence."""
+        """Whether current Rolling model evidence is authorized for this profile.
+
+        Current model-workflow membership is the work-item SSOT: the active Training
+        Profile drives [1]/[2], and the shared Model Compare/Test List drives [3]～[6].
+        Historical recipe authorization remains accepted for compatibility, but it is
+        no longer a second selector that can block a currently configured model target.
+        """
 
         if not self.supports_point_in_time_scores:
             return False
         recipe = get_continuous_ranker_execution_recipe(self.experiment_profile)
-        return bool(recipe.current_time_validation_authorized)
+        return bool(
+            recipe.current_time_validation_authorized
+            or is_breakout_quality_model_workflow_profile(self.experiment_profile)
+        )
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload = {
@@ -3746,4 +3788,7 @@ __all__ = [
     'get_breakout_quality_continuous_ranker_pit_gate_settings',
     'get_breakout_quality_model_research_settings',
     'get_breakout_quality_model_test_settings',
+    'get_breakout_quality_model_workflow_profile_names',
+    'is_breakout_quality_model_workflow_profile',
+    'is_breakout_quality_model_test_profile',
 ]

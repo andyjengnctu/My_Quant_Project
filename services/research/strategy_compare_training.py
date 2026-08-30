@@ -14,7 +14,10 @@ import sys
 import time
 from typing import Any, Mapping
 
-from config.breakout_quality import get_breakout_quality_experiment_profile
+from config.breakout_quality import (
+    get_breakout_quality_experiment_profile,
+    is_breakout_quality_model_test_profile,
+)
 from core.console_report import COMPACT_CONSOLE_ENV
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.paths import build_filter_artifact_paths_from_dir
@@ -134,12 +137,18 @@ def build_strategy_compare_trainer_command(
             "--checkpoint-cache-root",
             str(Path(checkpoint_cache_root).resolve()),
         ])
-    if bool(getattr(source, "single_seed_strategy_conversion_authorized", False)):
+    source_is_shared_model_target = is_breakout_quality_model_test_profile(
+        str(source.experiment_profile)
+    )
+    if (
+        bool(getattr(source, "single_seed_strategy_conversion_authorized", False))
+        and not source_is_shared_model_target
+    ):
         profile_id = str(strategy_compare_profile_id or "").strip()
         if not profile_id:
             raise ValueError(
                 "此DL source只授權single-seed Strategy Compare conversion；"
-                "generic PIT／multi-seed／Fixed不得使用"
+                "未進Model Compare/Test List時generic PIT／multi-seed／Fixed不得使用"
             )
         args.extend([
             "--strategy-compare-profile-id",
@@ -385,6 +394,7 @@ def run_strategy_compare_training_unit(
         audit_started = time.perf_counter()
         strategy_scoped = bool(
             getattr(source, "single_seed_strategy_conversion_authorized", False)
+            and not is_breakout_quality_model_test_profile(str(source.experiment_profile))
         )
         code = audit_selection_point_in_time_scores(
             filter_id=str(source.filter_id),
