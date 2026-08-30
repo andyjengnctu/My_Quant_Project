@@ -11107,3 +11107,8 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **PIT inline closure**：B316原本只在Daily ranker真正使用InlineProgress；`point_in_time_scores.py`仍以5% bucket逐行`print()`。本輪補正為同一`InlineProgress` contract：TTY原地刷新，redirect只保留final state。
 - **Regression**：T439由`validate_breakout_quality_continuous_ranker_contract_case`鎖定四個prompt消失、淡藍MR/seed、`seed (n/N)`與PIT inline route；T440由`validate_research_report_contract_freeze_case`鎖定黃色次標題及既有best/worst/status palette。
 
+## 2026-08-30 — B318 Standard comparison subtitle light-yellow refinement
+
+- **使用者授權顯示修正**：Standard Model Comparison各section內所有scope／transition次標題（Forward OOS、Rolling OOS、Breakout slice、Validation → OOS、OOS → Breakout slice，以及Ranking/Boundary附帶scope文字）由B317的一般黃色改為獨立淡黃色tone；section主標題仍淡藍。
+- **Palette isolation**：新增presentation-only `light_yellow` tone；既有`yellow`仍保留warning／partial／attention語意，不因本輪顯示偏好改色。Scientific identity、report schema/version/fingerprint、metric contract、seed與artifact reuse均不變。
+- **Regression**：更新T439/T440鎖定comparison次標題使用`light_yellow`與Markdown淡黃色hex，同時保留既有best/worst/status palette。

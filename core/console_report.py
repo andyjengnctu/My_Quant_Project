@@ -38,6 +38,7 @@ def paint(text: object, tone: str, *, enabled: bool, bold: bool = False) -> str:
         "cyan": C_CYAN,
         "green": C_GREEN,
         "yellow": C_YELLOW,
+        "light_yellow": "\033[38;5;229m",
         "red": C_RED,
         "gray": C_GRAY,
     }

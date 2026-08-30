@@ -3244,11 +3244,11 @@ def validate_research_report_contract_freeze_case(_base_params):
         target="markdown",
     )
     check_true(
-        "multi_model_comparison_uses_best_green_worst_red_blue_titles_yellow_subtitles_and_existing_status_palette",
+        "multi_model_comparison_uses_best_green_worst_red_blue_titles_light_yellow_subtitles_and_existing_status_palette",
         "#42A5F5" in comparison_markdown
         and "#188038" in comparison_markdown
         and "#C62828" in comparison_markdown
-        and "#B06000" in comparison_markdown
+        and "#D6B53A" in comparison_markdown
         and "### <span" in comparison_markdown
         and "Forward OOS</span>" in comparison_markdown
         and "Breakout slice</span>" in comparison_markdown

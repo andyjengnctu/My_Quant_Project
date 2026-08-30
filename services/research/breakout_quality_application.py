@@ -1433,10 +1433,11 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
 
     def scope_heading(label: str) -> str:
         # Scope / transition labels are secondary headings. Keep the main section
-        # light-blue and use yellow here so the hierarchy is visible at a glance.
+        # light-blue and use a dedicated light-yellow presentation tone here so
+        # warning-yellow semantics remain unchanged.
         if target == "console":
-            return paint(str(label), "yellow", enabled=color, bold=True)
-        return f"### {markdown_tone(label, 'yellow', bold=True)}"
+            return paint(str(label), "light_yellow", enabled=color, bold=True)
+        return f"### {markdown_tone(label, 'light_yellow', bold=True)}"
 
     def split_matches(row: dict, aliases: set[str]) -> bool:
         normalized = str(row.get("split") or "").strip().lower()

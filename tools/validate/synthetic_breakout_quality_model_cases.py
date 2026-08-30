@@ -1130,8 +1130,8 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     )
     check_true(
         "model_comparison_direct_run_palette_seed_progress_and_pit_inline_refresh",
-        'return paint(str(label), "yellow", enabled=color, bold=True)' in app_source
-        and 'return f"### {markdown_tone(label, \'yellow\', bold=True)}"' in app_source
+        'return paint(str(label), "light_yellow", enabled=color, bold=True)' in app_source
+        and 'return f"### {markdown_tone(label, \'light_yellow\', bold=True)}"' in app_source
         and 'f"seed={int(seed)} ({int(index)}/{int(total)})"' in app_source
         and 'for seed_index, (seed, payload, path, reason) in enumerate(seed_states, start=1):' in app_source
         and '確認產生{mode_label}多模型Standard SOP比較；完整者REUSE，缺失者由canonical producer補建' not in app_source

@@ -50,6 +50,7 @@ _TONE_MARKDOWN_COLORS = {
     "green": "#188038",
     "red": "#C62828",
     "yellow": "#B06000",
+    "light_yellow": "#D6B53A",
     "gray": "#667085",
     "cyan": "#42A5F5",
     "blue": "#42A5F5",
