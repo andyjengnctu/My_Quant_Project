@@ -11099,3 +11099,11 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Status presentation**：單模型[1]/[2]原本以零散`[REUSE] ...`文字顯示，comparison/robustness則使用`Model / Profile / Action / Reason`表。現在[1]～[6]全部經同一`_print_model_action_status()` renderer，action沿用canonical workflow status palette；Dataset/Model file等存在性另列`工件狀態`，不得混成model action。
 - **Progress presentation**：Daily target/index原本每5%輸出新行；改用既有`core.display_common.InlineProgress`，互動TTY原地刷新同一行，redirected output只保留final state。此變更只影響顯示，不改sample membership、target、training、SOP metric、artifact identity或reuse decision。
 - **Regression**：T438由`validate_breakout_quality_continuous_ranker_contract_case`固定MR identity、共用status renderer、工件/模型狀態分工與InlineProgress route。
+## 2026-08-30 — B317 Model direct-run / palette / seed-progress / PIT inline closure
+
+- **Direct execution**：使用者已在Model Research正式menu選定[3]～[6]工作項目，因此Forward/Rolling comparison與Forward/Rolling Robustness不再追加「確認產生... [Y/N]」二次確認；仍先顯示canonical plan/status，接著直接REUSE或由canonical producer補建，producer ownership與authorization不變。
+- **Palette / hierarchy**：Training Model、Model Compare/Test List、model-action與Standard comparison表中的`MR-*`固定淡藍；Standard comparison section主標題維持淡藍，section內Forward OOS、Breakout slice、Generalization transition等次標題改黃色，取代B311舊plain-secondary-heading顯示規則。
+- **Seed progress**：Robustness seed使用淡藍`seed=<id> (n/N)`，包含benchmark seed列與實際BUILD/REFRESH進度，讓目前跑到第幾個seed可直接辨識；seed集合、順序與aggregate semantics不變。
+- **PIT inline closure**：B316原本只在Daily ranker真正使用InlineProgress；`point_in_time_scores.py`仍以5% bucket逐行`print()`。本輪補正為同一`InlineProgress` contract：TTY原地刷新，redirect只保留final state。
+- **Regression**：T439由`validate_breakout_quality_continuous_ranker_contract_case`鎖定四個prompt消失、淡藍MR/seed、`seed (n/N)`與PIT inline route；T440由`validate_research_report_contract_freeze_case`鎖定黃色次標題及既有best/worst/status palette。
+

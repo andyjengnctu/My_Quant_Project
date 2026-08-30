@@ -832,6 +832,8 @@ def _render_model_contract_table(
         for column in table.columns:
             value = row.get(column.key)
             text = format_contract_value(column, value)
+            if column.key in {"model", "model_id"}:
+                text = _model_identity_text(text, target=target)
             if column.key == "split" and scope_styler is not None:
                 text = scope_styler(text)
             if delta_style and column.preference in {"higher", "lower"} and value is not None:
@@ -1430,11 +1432,11 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
         return f"## {markdown_tone(title, 'blue', bold=True)}"
 
     def scope_heading(label: str) -> str:
-        # Scope / transition labels are secondary headings, not status or section
-        # titles. Keep them uncolored in both console and Markdown.
+        # Scope / transition labels are secondary headings. Keep the main section
+        # light-blue and use yellow here so the hierarchy is visible at a glance.
         if target == "console":
-            return str(label)
-        return f"### {label}"
+            return paint(str(label), "yellow", enabled=color, bold=True)
+        return f"### {markdown_tone(label, 'yellow', bold=True)}"
 
     def split_matches(row: dict, aliases: set[str]) -> bool:
         normalized = str(row.get("split") or "").strip().lower()
@@ -2945,13 +2947,33 @@ def _model_display_id(profile_name: str) -> str:
     return str(get_continuous_ranker_research_spec(str(profile_name)).model_research_id)
 
 
+def _model_identity_text(value: object, *, target: str = "console") -> str:
+    """Render user-facing model identities in the shared light-blue palette."""
+
+    text = str(value)
+    if target == "console":
+        return paint(text, "cyan", enabled=console_color_enabled(), bold=True)
+    return markdown_tone(text, "blue", bold=True)
+
+
+def _seed_progress_text(seed: int, index: int, total: int) -> str:
+    """Render one robustness seed together with its deterministic progress position."""
+
+    return paint(
+        f"seed={int(seed)} ({int(index)}/{int(total)})",
+        "cyan",
+        enabled=console_color_enabled(),
+        bold=True,
+    )
+
+
 def _print_model_action_status(rows) -> None:
     """Render one canonical model workflow status table for [1]～[6]."""
 
     styled_rows = []
     for model_id, profile_name, action, reason in rows:
         styled_rows.append((
-            str(model_id),
+            _model_identity_text(model_id),
             str(profile_name),
             styled_workflow_status(str(action)),
             str(reason),
@@ -4553,11 +4575,6 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
     mode_label = "Rolling OOS" if rolling else "Forward OOS"
     print("\n" + render_title(f"{mode_label} 模型比較"))
     _print_model_action_status(display_rows)
-    if not _prompt_bool(
-        f"確認產生{mode_label}多模型Standard SOP比較；完整者REUSE，缺失者由canonical producer補建",
-        True,
-    ):
-        return 0
 
     completed = []
     for model_id, settings, contract, payload, _reason in planned:
@@ -4789,7 +4806,13 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
     model_list = get_breakout_quality_model_test_settings().model_profiles
     mode_label = "Rolling OOS" if rolling else "Forward OOS"
     print("\n" + render_title(f"{mode_label} Robustness 模型測試"))
-    print(f"Benchmark seeds：{' / '.join(str(seed) for seed in seeds)}")
+    print(
+        "Benchmark seeds："
+        + " / ".join(
+            _seed_progress_text(seed, index, len(seeds))
+            for index, seed in enumerate(seeds, start=1)
+        )
+    )
 
     plans = []
     rows = []
@@ -4809,11 +4832,6 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
         plans.append((str(model_id), settings, seed_states))
 
     _print_model_action_status(rows)
-    if not _prompt_bool(
-        f"確認產生{mode_label} Robustness多模型Standard SOP比較；缺失seed由canonical producer補建",
-        True,
-    ):
-        return 0
 
     completed = []
     for model_id, settings, seed_states in plans:
@@ -4824,9 +4842,14 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
         seed_payloads = []
         source_reports = []
         built = False
-        for seed, payload, path, reason in seed_states:
+        for seed_index, (seed, payload, path, reason) in enumerate(seed_states, start=1):
             if payload is None:
-                print(styled_workflow_status("[BUILD/REFRESH]") + f" {model_id} | seed={seed} | {reason}")
+                print(
+                    styled_workflow_status("[BUILD/REFRESH]")
+                    + " " + _model_identity_text(model_id)
+                    + " | " + _seed_progress_text(seed, seed_index, len(seeds))
+                    + f" | {reason}"
+                )
                 code = (
                     _build_rolling_robustness_seed(program_name, settings, seed=seed)
                     if rolling else _build_forward_robustness_seed(program_name, settings, seed=seed)
@@ -4880,10 +4903,14 @@ def _interactive_model_research(program_name: str) -> int:
 
     while True:
         print("\n=== Continuous DL 模型研究與驗證 ===")
-        print(f"Training Model：{_model_display_id(settings.experiment_profile)}")
-        print("Model Compare/Test List：" + " / ".join(
-            model_id for model_id, _profile in get_breakout_quality_model_test_settings().model_profiles
-        ))
+        print("Training Model：" + _model_identity_text(_model_display_id(settings.experiment_profile)))
+        print(
+            "Model Compare/Test List："
+            + " / ".join(
+                _model_identity_text(model_id)
+                for model_id, _profile in get_breakout_quality_model_test_settings().model_profiles
+            )
+        )
         print(render_menu_item(1, "Forward OOS 模型訓練", default=True))
         print(render_menu_item(2, "Rolling OOS 模型訓練"))
         print(render_menu_item(3, "Forward OOS 模型比較"))

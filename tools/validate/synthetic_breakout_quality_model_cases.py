@@ -1108,10 +1108,15 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     daily_ranker_source = (
         project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
     ).read_text(encoding="utf-8")
+    pit_score_source = (
+        project_root / "services" / "breakout_quality" / "point_in_time_scores.py"
+    ).read_text(encoding="utf-8")
     check_true(
         "model_workflow_ui_uses_mr_identity_one_status_table_and_inline_daily_target_progress",
-        'print(f"Training Model：{_model_display_id(settings.experiment_profile)}")' in app_source
+        'print("Training Model：" + _model_identity_text(_model_display_id(settings.experiment_profile)))' in app_source
         and 'print(f"Training Profile：{settings.experiment_profile}")' not in app_source
+        and 'def _model_identity_text(value: object, *, target: str = "console")' in app_source
+        and 'paint(text, "cyan"' in app_source
         and 'def _print_model_action_status(rows)' in app_source
         and app_source.count('_print_model_action_status(') >= 5
         and 'paint("工件狀態", "cyan"' in app_source
@@ -1122,6 +1127,19 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and 'daily_target_progress.update(' in daily_ranker_source
         and 'daily_target_progress.finish()' in daily_ranker_source
         and 'print("[Daily target/index] 開始建立daily stock-day index與40D target...' not in daily_ranker_source,
+    )
+    check_true(
+        "model_comparison_direct_run_palette_seed_progress_and_pit_inline_refresh",
+        'return paint(str(label), "yellow", enabled=color, bold=True)' in app_source
+        and 'return f"### {markdown_tone(label, \'yellow\', bold=True)}"' in app_source
+        and 'f"seed={int(seed)} ({int(index)}/{int(total)})"' in app_source
+        and 'for seed_index, (seed, payload, path, reason) in enumerate(seed_states, start=1):' in app_source
+        and '確認產生{mode_label}多模型Standard SOP比較；完整者REUSE，缺失者由canonical producer補建' not in app_source
+        and '確認產生{mode_label} Robustness多模型Standard SOP比較；缺失seed由canonical producer補建' not in app_source
+        and 'daily_data_progress = InlineProgress()' in pit_score_source
+        and 'daily_data_progress.update(' in pit_score_source
+        and 'daily_data_progress.finish()' in pit_score_source
+        and 'print("[PIT data] 建立daily stock-day index／40D target...' not in pit_score_source,
     )
 
     shared_training = breakout_quality_config.get_breakout_quality_model_research_settings()

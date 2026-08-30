@@ -1910,6 +1910,7 @@ def _run_point_in_time_scores(
     color_enabled = console_color_enabled()
     data_started = time.perf_counter()
     data_progress_state = {"last_bucket": -1}
+    daily_data_progress = InlineProgress()
 
     def _daily_data_progress(processed, total, target_valid, skipped):
         total = max(int(total), 1)
@@ -1919,12 +1920,11 @@ def _run_point_in_time_scores(
             return
         data_progress_state["last_bucket"] = bucket
         pct = min(100.0, 100.0 * processed / total)
-        print(
+        daily_data_progress.update(
             "[PIT data] "
             f"{processed}/{total} tickers ({pct:5.1f}%)｜"
             f"target_valid={int(target_valid):,}｜skipped={int(skipped)}｜"
-            f"elapsed={format_elapsed(time.perf_counter() - data_started)}",
-            flush=True,
+            f"elapsed={format_elapsed(time.perf_counter() - data_started)}"
         )
 
     daily_scope = (
@@ -1932,16 +1932,20 @@ def _run_point_in_time_scores(
         == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
     )
     if daily_scope:
-        print("[PIT data] 建立daily stock-day index／40D target...", flush=True)
-    bundle = load_continuous_ranker_data(
-        filter_id=args.filter_id,
-        model_architecture=args.model_architecture,
-        experiment_profile=args.experiment_profile,
-        preload_feature_bank=bool(args.preload_feature_bank),
-        allow_stale_source=bool(args.allow_stale_source),
-        project_root=PROJECT_ROOT,
-        progress_callback=_daily_data_progress if daily_scope else None,
-    )
+        daily_data_progress.update("[PIT data] 建立daily stock-day index／40D target...")
+    try:
+        bundle = load_continuous_ranker_data(
+            filter_id=args.filter_id,
+            model_architecture=args.model_architecture,
+            experiment_profile=args.experiment_profile,
+            preload_feature_bank=bool(args.preload_feature_bank),
+            allow_stale_source=bool(args.allow_stale_source),
+            project_root=PROJECT_ROOT,
+            progress_callback=_daily_data_progress if daily_scope else None,
+        )
+    finally:
+        if daily_scope:
+            daily_data_progress.finish()
     selection_start = _iso_timestamp(
         bundle.outer_policy.get("selection_start_date"), field_name="selection_start_date"
     )
