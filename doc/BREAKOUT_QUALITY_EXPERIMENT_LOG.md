@@ -11130,3 +11130,23 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Seed resume visibility**：Model Robustness每個已完整seed明確顯示`[REUSE] MR-* | seed=<id> (n/N) | <mode> Standard SOP READY`；補建成功後顯示`[DONE]`。若中斷發生於單一fold尚未寫出完整manifest/model/scores/validation sidecar前，該fold不視為已發布工件，重啟時會從該fold重新TRAIN；此前已完整發布fold照常REUSE。
 - **Semantics unchanged**：只改RUN/REUSE/DONE可見性，不改seed集合、fold schedule、resume判定、fitting identity、checkpoint cache、target、architecture、loss、Standard SOP schema/fingerprint或production promotion。
 - **Regression**：PIT synthetic新增compact REUSE來源／進度顯示contract；Model workflow synthetic新增ready-seed `[REUSE]`與補建 `[DONE]` contract。正式`apps/run_bundle.py`／`apps/test_suite.py`依PROJECT_SETTINGS不由GPT執行。
+
+## 2026-08-31 — B322 Rolling CUDA pinned-host allocator crash closure
+
+- **實機事故**：使用者在`Rolling OOS Robustness 模型測試`跑MR-13H seed=`2014432738`時，已完成2021～2023 folds，進入2024 fold後Python process於PyTorch native層abort；stack明確落在`CachingHostAllocator.cpp` pinned allocator free，並出現`Exception in pinned allocator free()`。這不是模型Gate或資料契約失敗，且沒有Python exception可由既有try/except恢復。
+- **直接依賴鏈定位**：`services/breakout_quality/train_continuous_ranker.py`的feature-only prefetch雖維持ordered batch，但background `ThreadPoolExecutor` worker會直接`torch.from_numpy(...).pin_memory()`；主training thread同時建立context/target pinned tensors並以dedicated CUDA copy stream做non-blocking H2D，造成PyTorch pinned host allocator生命週期跨多threads。
+- **工程修正**：background workers現在只做NumPy feature materialization；feature/context/target三種`.pin_memory()`全部由training主執行緒建立與釋放。CUDA仍保留pinned host、non-blocking H2D與dedicated copy stream；device iterator新增`finally: copy_stream.synchronize()`，在epoch正常結束、例外或generator close時先drain outstanding H2D，再釋放local pinned host refs。
+- **Resume語意不變**：已完整發布且identity/hash合法的Rolling folds仍逐fold REUSE。若native crash發生在某fold尚未完成publish，只有該fold重訓；前面完成fold不重跑。
+- **Scientific contract**：`train_prefetch_batches=8`、`train_prefetch_workers=4`不變；batch membership/order、same-date grouping、seed、optimizer step、loss、target、architecture、deterministic algorithms、TF32與fitting/artifact identity全部不變。此為execution ownership bug fix，不新增MR/SR identity、不改Research Queue priority。
+
+Decision：`PINNED_HOST_ALLOCATOR_THREAD_OWNERSHIP_FIXED / ASYNC_TEARDOWN_DRAINED / SCIENTIFIC_SEMANTICS_UNCHANGED`。
+
+## 2026-08-31 — B323 Rolling Robustness fold-drift cross-seed aggregation closure
+
+- **實機失敗**：MR-13H Rolling OOS Robustness 8/8 seeds與各自PIT validation均完成後，最終aggregate階段拋出`ValueError: Robustness Standard SOP list contract跨seed不一致: flagged_folds`。因此失敗位於跨seed Standard SOP彙總，而非training/PIT artifact；既有8個seed不需重訓。
+- **Root cause**：generic `_aggregate_mapping_values()`正確地把一般list／boolean視為contract invariant，但Rolling `mode_extensions.rolling.fold_drift`中的`flagged_folds`與`drift_flag`是每個seed的觀測診斷結果，本來就允許不同。若只放寬list，未來seed間`drift_flag`不同仍會再失敗。
+- **Fix**：新增Rolling-extension專屬aggregation owner。`fold_count/fold_months/direction_summary`仍走既有嚴格schema＋numeric aggregation；`fold_drift.criterion`仍要求完全一致，`max_adjacent_mean_shift_in_pooled_std`取算術平均，`flagged_folds`取排序後deterministic union，`drift_flag`取any-seed OR並與union一致。generic list/boolean contract完全不放寬。
+- **Schema / scientific semantics**：不新增／刪除Standard SOP欄位，不改`standard_model_sop_v7_robustness_mean`、report contract/fingerprint、seed、fold、模型、target、loss或任何已完成artifact。重新執行Rolling Robustness時完整seed應直接REUSE，只重新產生aggregate/report。
+- **Regression**：persistent report-contract synthetic新增兩個Rolling seeds具有不同`flagged_folds`/`drift_flag`的案例，驗union、OR、mean與criterion不變。
+
+Decision：`ROLLING_ROBUSTNESS_DIAGNOSTIC_OUTCOME_NOT_CONTRACT_DRIFT / EXISTING_SEEDS_REUSABLE / NO_RETRAIN_REQUIRED`。

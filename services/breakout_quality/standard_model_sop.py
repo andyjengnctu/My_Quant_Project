@@ -317,6 +317,65 @@ def _aggregate_mapping_values(payloads: list[Mapping[str, Any]]) -> dict[str, An
     return result
 
 
+def _aggregate_rolling_fold_drift(payloads: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """Aggregate Rolling fold-drift diagnostics across robustness seeds.
+
+    The drift criterion is a contract and must remain identical. The observed flagged
+    folds and drift flag are seed-dependent evidence, so they cannot be treated as
+    cross-seed schema invariants. Preserve the existing rolling-extension schema by
+    reporting the deterministic union of flagged folds, conservative any-seed drift,
+    and the arithmetic mean of numeric drift magnitude.
+    """
+
+    if not payloads:
+        raise ValueError("Rolling robustness fold_drift至少需要一個seed payload")
+    normalized = [dict(payload or {}) for payload in payloads]
+    key_sets = [set(payload.keys()) for payload in normalized]
+    if any(keys != key_sets[0] for keys in key_sets[1:]):
+        raise ValueError("Rolling robustness fold_drift schema跨seed不一致")
+    result: dict[str, Any] = {}
+    for key in sorted(key_sets[0]):
+        values = [payload[key] for payload in normalized]
+        if key == "flagged_folds":
+            if not all(isinstance(value, list) for value in values):
+                raise ValueError("Rolling robustness flagged_folds必須為list")
+            if any(not all(isinstance(item, str) for item in value) for value in values):
+                raise ValueError("Rolling robustness flagged_folds只允許fold-id文字")
+            result[key] = sorted({item for value in values for item in value})
+        elif key == "drift_flag":
+            if not all(isinstance(value, bool) for value in values):
+                raise ValueError("Rolling robustness drift_flag必須為boolean")
+            result[key] = bool(any(values))
+        else:
+            result[key] = _aggregate_scalar_values(values)
+    if "drift_flag" in result and "flagged_folds" in result:
+        result["drift_flag"] = bool(result["drift_flag"] or result["flagged_folds"])
+    return result
+
+
+def _aggregate_rolling_extension(payloads: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """Aggregate Rolling extension while keeping fold-drift outcome semantics explicit."""
+
+    if not payloads:
+        raise ValueError("Rolling robustness extension至少需要一個seed payload")
+    normalized = [dict(payload or {}) for payload in payloads]
+    key_sets = [set(payload.keys()) for payload in normalized]
+    if any(keys != key_sets[0] for keys in key_sets[1:]):
+        raise ValueError("Rolling robustness extension schema跨seed不一致")
+    if "fold_drift" not in key_sets[0]:
+        raise ValueError("Rolling robustness extension缺少fold_drift")
+    common_payloads = []
+    for payload in normalized:
+        common = dict(payload)
+        common.pop("fold_drift", None)
+        common_payloads.append(common)
+    result = _aggregate_mapping_values(common_payloads)
+    result["fold_drift"] = _aggregate_rolling_fold_drift(
+        [dict(payload["fold_drift"]) for payload in normalized]
+    )
+    return result
+
+
 def _top_bottom_gap(split: Mapping[str, Any]) -> float | None:
     top = split.get("top_score_decile_raw_target_mean")
     bottom = split.get("bottom_score_decile_raw_target_mean")
@@ -384,7 +443,7 @@ def aggregate_standard_model_sop_robustness(
         rolling_payloads = [dict((payload.get("mode_extensions") or {}).get("rolling") or {}) for payload in normalized]
         if any(not payload for payload in rolling_payloads):
             raise ValueError("Rolling robustness Standard SOP缺少rolling extension")
-        mode_extensions["rolling"] = _aggregate_mapping_values(rolling_payloads)
+        mode_extensions["rolling"] = _aggregate_rolling_extension(rolling_payloads)
 
     return {
         "schema": "standard_model_sop_v7_robustness_mean",

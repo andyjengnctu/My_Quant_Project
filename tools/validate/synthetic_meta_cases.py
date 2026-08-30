@@ -3309,6 +3309,34 @@ def validate_research_report_contract_freeze_case(_base_params):
     seed_b = json.loads(json.dumps(control_payload["standard_model_sop"]))
     seed_b["split_metrics"]["oos"]["mean_daily_spearman"] = 0.32
     seed_b["split_metrics"]["oos"]["pairwise_concordance"] = 0.62
+    rolling_seed_a = json.loads(json.dumps(rolling_standard))
+    rolling_seed_b = json.loads(json.dumps(rolling_standard))
+    rolling_seed_a["mode_extensions"]["rolling"]["fold_drift"].update({
+        "criterion": "adjacent fold score mean shift >= 1.0 pooled score standard deviation",
+        "drift_flag": False,
+        "flagged_folds": [],
+    })
+    rolling_seed_b["mode_extensions"]["rolling"]["fold_drift"].update({
+        "criterion": "adjacent fold score mean shift >= 1.0 pooled score standard deviation",
+        "max_adjacent_mean_shift_in_pooled_std": 0.84,
+        "drift_flag": True,
+        "flagged_folds": ["fold_20240101_20241231", "fold_20220101_20221231"],
+    })
+    rolling_robust = aggregate_standard_model_sop_robustness(
+        [rolling_seed_a, rolling_seed_b], seeds=(11, 22)
+    )
+    rolling_drift = dict((rolling_robust.get("mode_extensions") or {}).get("rolling", {}).get("fold_drift") or {})
+    check_true(
+        "rolling_robustness_aggregates_seed_dependent_flagged_folds_without_contract_drift",
+        rolling_drift.get("flagged_folds")
+        == ["fold_20220101_20221231", "fold_20240101_20241231"]
+        and rolling_drift.get("drift_flag") is True
+        and abs(float(rolling_drift.get("max_adjacent_mean_shift_in_pooled_std")) - 0.63) < 1e-12
+        and rolling_drift.get("criterion")
+        == "adjacent fold score mean shift >= 1.0 pooled score standard deviation",
+        detail=str(rolling_drift),
+    )
+
     aggregated = aggregate_standard_model_sop_robustness([seed_a, seed_b], seeds=(11, 22))
     robust_payload = {"model_research_id": "ROBUST-A", "standard_model_sop": aggregated}
     robust_comparison = app._render_standard_model_comparison(
