@@ -2836,9 +2836,9 @@ def validate_research_report_contract_freeze_case(_base_params):
         MODEL_EXTENSION_SCHEMAS,
         MODEL_STANDARD_COMPARISON,
         MODEL_STANDARD_SOP,
-        MODEL_ROLLING_STANDARD_COMPARISON,
-        MODEL_ROLLING_STANDARD_SOP,
+        MODEL_MODE_EXTENSION_SCHEMAS,
         extension_contract,
+        mode_extension_contract,
         persistent_report_contract_fingerprints,
         table_contract,
         validate_approved_persistent_report_contracts,
@@ -2865,8 +2865,8 @@ def validate_research_report_contract_freeze_case(_base_params):
         detail=str(errors),
     )
     check_true(
-        "standard_model_sop_v6_common_section_order_is_contiguous_1_to_6",
-        int(MODEL_STANDARD_SOP.version) == 6
+        "standard_model_sop_v7_common_section_order_is_contiguous_1_to_6",
+        int(MODEL_STANDARD_SOP.version) == 7
         and [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         == [
             (1, "Learnability"),
@@ -2879,7 +2879,7 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
     check_true(
         "standard_multi_model_comparison_schema_is_derived_from_standard_sop",
-        int(MODEL_STANDARD_COMPARISON.version) == 5
+        int(MODEL_STANDARD_COMPARISON.version) == 6
         and [(section.number, section.title) for section in MODEL_STANDARD_COMPARISON.sections]
         == [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         and all(
@@ -2902,15 +2902,14 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
 
     check_true(
-        "rolling_model_reports_reuse_common_sop_1_to_6_and_add_rolling_specific_contract",
-        int(MODEL_ROLLING_STANDARD_SOP.version) == 1
-        and int(MODEL_ROLLING_STANDARD_COMPARISON.version) == 1
-        and [(section.number, section.title) for section in MODEL_ROLLING_STANDARD_SOP.sections[:6]]
-            == [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
-        and MODEL_ROLLING_STANDARD_SOP.sections[-1].section_id == "rolling_stability"
-        and [(section.number, section.title) for section in MODEL_ROLLING_STANDARD_COMPARISON.sections[:6]]
-            == [(section.number, section.title) for section in MODEL_STANDARD_COMPARISON.sections]
-        and MODEL_ROLLING_STANDARD_COMPARISON.sections[-1].section_id == "rolling_stability",
+        "rolling_and_robustness_use_mode_extensions_not_duplicate_persistent_report_contracts",
+        set(MODEL_MODE_EXTENSION_SCHEMAS) == {"rolling_stability", "robustness_stability"}
+        and mode_extension_contract("rolling_stability").title
+            == "Rolling-specific Extension｜Fold / Year Stability"
+        and mode_extension_contract("robustness_stability").title
+            == "Robustness-specific Extension｜Across-seed Stability"
+        and "model.rolling_standard_sop" not in current
+        and "model.rolling_standard_comparison" not in current,
     )
 
     learn_headers = table_contract("model.standard_sop", "learnability", "learnability").headers
@@ -3022,8 +3021,9 @@ def validate_research_report_contract_freeze_case(_base_params):
         }
 
     def payload(model_id, objective):
-        return {
-            "model_research_id": model_id,
+        standard = {
+            "schema": "standard_model_sop_v7",
+            "evaluation_mode": "forward_oos",
             "training": {"objective": objective},
             "split_metrics": json.loads(json.dumps(base_metrics)),
             "upside_downside_alignment_evaluation": {
@@ -3037,6 +3037,12 @@ def validate_research_report_contract_freeze_case(_base_params):
                     target_mfe=0.24, target_safety=0.18, score_mfe=0.22, score_safety=0.16, top_n=1
                 ),
             },
+            "mode_extensions": {},
+        }
+        return {
+            "model_research_id": model_id,
+            "training": {"objective": objective},
+            "standard_model_sop": standard,
         }
 
     control_payload = payload("MODEL-CONTROL", TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING)
@@ -3093,7 +3099,7 @@ def validate_research_report_contract_freeze_case(_base_params):
         ("oos", 22.0, 0.54, 0.23, 0.22, 1.11, 1.08),
         ("breakout_candidate_oos", 24.0, 0.50, 0.24, 0.23, 1.03, 1.02),
     ):
-        h_only_payload["split_metrics"][key].update({
+        h_only_payload["standard_model_sop"]["split_metrics"][key].update({
             "population_hmhs_pct": pct,
             "global_average_precision": ap,
             "mean_daily_average_precision": daily_ap,
@@ -3230,8 +3236,8 @@ def validate_research_report_contract_freeze_case(_base_params):
         candidate = json.loads(json.dumps(control_payload))
         bump = idx * 0.01
         for split_key in ("oos", "breakout_candidate_oos"):
-            candidate["split_metrics"][split_key]["mean_daily_spearman"] += bump
-            candidate["split_metrics"][split_key]["global_spearman_vs_raw_target"] += bump
+            candidate["standard_model_sop"]["split_metrics"][split_key]["mean_daily_spearman"] += bump
+            candidate["standard_model_sop"]["split_metrics"][split_key]["global_spearman_vs_raw_target"] += bump
         comparison_payloads.append({"model_id": model_id, "payload": candidate})
     comparison_markdown = app._render_standard_model_comparison(
         comparison_payloads,
@@ -3253,21 +3259,22 @@ def validate_research_report_contract_freeze_case(_base_params):
 
     rolling_payload = json.loads(json.dumps(control_payload))
     rolling_payload.pop("safety_raw_mfe_evaluation", None)
-    rolling_payload["evaluation_mode"] = "rolling_oos"
-    rolling_payload["split_metrics"].pop("validation", None)
-    rolling_payload["upside_downside_alignment_evaluation"].pop("validation", None)
-    rolling_payload["rolling_specific"] = {
-        "fold_count": 5,
-        "fold_months": 12,
-        "direction_summary": {
-            "valid_year_count": 5,
-            "positive_spearman_year_count": 4,
-            "positive_spread_year_count": 3,
-        },
-        "fold_drift": {
-            "max_adjacent_mean_shift_in_pooled_std": 0.42,
-            "drift_flag": False,
-        },
+    rolling_standard = rolling_payload["standard_model_sop"]
+    rolling_standard["evaluation_mode"] = "rolling_oos"
+    rolling_standard["mode_extensions"] = {
+        "rolling": {
+            "fold_count": 5,
+            "fold_months": 12,
+            "direction_summary": {
+                "valid_year_count": 5,
+                "positive_spearman_year_count": 4,
+                "positive_spread_year_count": 3,
+            },
+            "fold_drift": {
+                "max_adjacent_mean_shift_in_pooled_std": 0.42,
+                "drift_flag": False,
+            },
+        }
     }
     rolling_simple = app._render_continuous_ranker_simple_console(rolling_payload)
     rolling_comparison = app._render_standard_model_comparison(
@@ -3276,23 +3283,50 @@ def validate_research_report_contract_freeze_case(_base_params):
             {"model_id": "ROLL-B", "payload": rolling_payload},
         ],
         target="console",
-        report_id="model.rolling_standard_comparison",
     )
     check_true(
-        "rolling_reports_keep_common_sop_and_append_fold_year_stability_extension",
+        "rolling_reports_use_same_common_sop_and_append_only_fold_year_stability_extension",
         "標準模型 SOP｜1. Learnability" in rolling_simple
         and "標準模型 SOP｜6. Evidence Coverage" in rolling_simple
-        and "Validation" not in rolling_simple
+        and "validation" in rolling_simple.lower()
+        and "Validation → OOS" in rolling_simple
+        and "OOS → Breakout slice" in rolling_simple
         and "Rolling-specific Extension｜Fold / Year Stability" in rolling_simple
-        and "Rolling OOS → Breakout slice" in rolling_simple
         and rolling_comparison.count("模型比較 SOP｜1. Learnability") == 1
         and "Rolling OOS" in rolling_comparison
         and "Breakout slice" in rolling_comparison
-        and "Validation → OOS" not in rolling_comparison
+        and "Validation → OOS" in rolling_comparison
+        and "OOS → Breakout slice" in rolling_comparison
         and "Rolling-specific Extension｜Fold / Year Stability" in rolling_comparison
         and "Fold count" in rolling_comparison
         and all(model in rolling_comparison for model in ("ROLL-A", "ROLL-B")),
         detail=rolling_comparison,
+    )
+
+    from services.breakout_quality.standard_model_sop import aggregate_standard_model_sop_robustness
+    seed_a = json.loads(json.dumps(control_payload["standard_model_sop"]))
+    seed_b = json.loads(json.dumps(control_payload["standard_model_sop"]))
+    seed_b["split_metrics"]["oos"]["mean_daily_spearman"] = 0.32
+    seed_b["split_metrics"]["oos"]["pairwise_concordance"] = 0.62
+    aggregated = aggregate_standard_model_sop_robustness([seed_a, seed_b], seeds=(11, 22))
+    robust_payload = {"model_research_id": "ROBUST-A", "standard_model_sop": aggregated}
+    robust_comparison = app._render_standard_model_comparison(
+        [
+            {"model_id": "ROBUST-A", "payload": robust_payload},
+            {"model_id": "ROBUST-B", "payload": robust_payload},
+        ],
+        target="console",
+    )
+    check_true(
+        "robustness_reports_keep_same_common_sop_and_append_only_across_seed_extension",
+        "模型比較 SOP｜1. Learnability" in robust_comparison
+        and "模型比較 SOP｜6. Evidence Coverage" in robust_comparison
+        and "Validation → OOS" in robust_comparison
+        and "OOS → Breakout slice" in robust_comparison
+        and "Robustness-specific Extension｜Across-seed Stability" in robust_comparison
+        and "OOS Daily rho σ" in robust_comparison
+        and all(model in robust_comparison for model in ("ROBUST-A", "ROBUST-B")),
+        detail=robust_comparison,
     )
 
     from services.breakout_quality.train_daily_ranker import _render_markdown as _render_detailed_model_markdown
@@ -3368,7 +3402,7 @@ def validate_research_report_contract_freeze_case(_base_params):
          patch.object(app, "_run_command", side_effect=AssertionError("REUSE path must not train")):
         code, contract, action = app._ensure_continuous_forward_model_report(
             "synthetic", model_id="MODEL-REUSE", settings=settings,
-            prompt_for_build=False, emit_reuse_report=False,
+            prompt_for_build=False,
         )
     check_true(
         "forward_standard_sop_reuses_valid_complete_model_report_without_training",
@@ -3376,7 +3410,7 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
 
     incomplete_payload = json.loads(json.dumps(control_payload))
-    incomplete_payload.pop("upside_downside_alignment_evaluation", None)
+    incomplete_payload["standard_model_sop"].pop("upside_downside_alignment_evaluation", None)
     incomplete_contract = SimpleNamespace(seed=42, report=incomplete_payload)
     with patch.object(
         app, "load_continuous_ranker_oos_contract", return_value=incomplete_contract
@@ -3402,7 +3436,7 @@ def validate_research_report_contract_freeze_case(_base_params):
          patch.object(app, "_clear_continuous_forward_reuse_caches", return_value=None):
         code, contract, action = app._ensure_continuous_forward_model_report(
             "synthetic", model_id="MODEL-BUILD", settings=settings,
-            prompt_for_build=False, emit_reuse_report=False,
+            prompt_for_build=False,
         )
     check_true(
         "forward_standard_sop_auto_builds_only_when_complete_contract_is_not_reusable",

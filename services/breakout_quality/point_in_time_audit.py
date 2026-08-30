@@ -45,12 +45,11 @@ from filters.breakout_quality.ranking_score_store import (
     derive_point_in_time_model_validation_gate,
 )
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
-from services.breakout_quality.train_daily_ranker import (
-    calculate_upside_downside_alignment_metrics,
-)
+from services.breakout_quality.standard_model_sop import build_standard_model_sop
 from services.breakout_quality.point_in_time_scores import (
     FOLD_MANIFEST_FILENAME,
     FOLD_SCORE_FILENAME,
+    FOLD_VALIDATION_SCORE_FILENAME,
     POINT_IN_TIME_SCHEMA_VERSION,
 )
 from config.breakout_quality import (
@@ -434,15 +433,6 @@ def _scope_metrics(frame: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-
-def _standard_sop_split_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
-    """Map PIT audit rank metrics to the canonical Standard Model SOP field names."""
-
-    row = dict(metrics or {})
-    row["global_spearman_vs_raw_target"] = row.get("global_spearman")
-    row["top_score_decile_raw_target_mean"] = row.get("top_decile_target_mean")
-    row["bottom_score_decile_raw_target_mean"] = row.get("bottom_decile_target_mean")
-    return row
 
 def _yearly_metrics(frame: pd.DataFrame) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -1399,24 +1389,44 @@ def _run_point_in_time_scores_audit(
             valid_target[valid_target["group_index"].isin(candidate_ids)].copy()
         )
 
-    oos_group_ids = valid_target["group_index"].to_numpy(dtype=np.int64)
-    oos_scores = valid_target["breakout_quality_score"].to_numpy(dtype=np.float64)
-    oos_alignment = calculate_upside_downside_alignment_metrics(
-        oos_group_ids, bundle.group_table, bundle.raw_target, oos_scores
-    )
-    candidate_alignment = {}
-    if (
-        bundle.profile.training_sample_scope
-        == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
-    ):
-        candidate_frame = valid_target[valid_target["group_index"].isin(candidate_ids)].copy()
-        if len(candidate_frame):
-            candidate_alignment = calculate_upside_downside_alignment_metrics(
-                candidate_frame["group_index"].to_numpy(dtype=np.int64),
-                bundle.group_table,
-                bundle.raw_target,
-                candidate_frame["breakout_quality_score"].to_numpy(dtype=np.float64),
+    validation_frames: list[pd.DataFrame] = []
+    fold_records_by_id = {str(item["fold_id"]): dict(item) for item in manifest.get("folds", [])}
+    for fold_id, record in fold_records_by_id.items():
+        override = str(args.point_in_time_dir_override or "").strip()
+        fold_dir = (
+            (_pit_artifact_paths(args)["manifest"].parent / "folds" / fold_id)
+            if override
+            else resolve_filter_point_in_time_fold_dir(
+                PROJECT_ROOT, args.filter_id, fold_id,
+                args.model_architecture, args.experiment_profile,
             )
+        )
+        validation_path = fold_dir / FOLD_VALIDATION_SCORE_FILENAME
+        artifacts = dict(record.get("artifacts") or {})
+        if not validation_path.is_file():
+            raise FileNotFoundError(f"Rolling Standard SOP缺少validation score sidecar: {validation_path}")
+        if build_file_manifest(validation_path) != artifacts.get("validation_scores"):
+            raise ValueError(f"Rolling Standard SOP {fold_id} validation score hash不一致")
+        validation_frame = pd.read_csv(validation_path, encoding="utf-8-sig")
+        required = {"group_index", "date", "breakout_quality_score", "fold_id"}
+        missing = sorted(required.difference(validation_frame.columns))
+        if missing:
+            raise ValueError(f"Rolling Standard SOP {fold_id} validation sidecar缺欄: {missing}")
+        validation_frame["date"] = pd.to_datetime(validation_frame["date"], errors="raise").dt.normalize()
+        validation_frame["rank_group"] = (
+            validation_frame["fold_id"].astype(str) + "|" + validation_frame["date"].dt.strftime("%Y-%m-%d")
+        )
+        validation_frames.append(validation_frame)
+    if not validation_frames:
+        raise ValueError("Rolling Standard SOP缺少validation score evidence")
+    standard_validation_frame = pd.concat(validation_frames, ignore_index=True)
+    standard_oos_frame = valid_target[["group_index", "date", "breakout_quality_score"]].copy()
+    if bundle.profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        standard_breakout_frame = valid_target[valid_target["group_index"].isin(candidate_ids)][
+            ["group_index", "date", "breakout_quality_score"]
+        ].copy()
+    else:
+        standard_breakout_frame = standard_oos_frame.copy()
 
     label_valid = merged[merged["label"].isin([LABEL_REJECT, LABEL_PASS])].copy()
     ordered = label_valid.sort_values("breakout_quality_score", kind="mergesort")
@@ -1487,6 +1497,24 @@ def _run_point_in_time_scores_audit(
             "path": str(target_manifest_path),
             **build_file_manifest(target_manifest_path),
         }
+    standard_model_sop = build_standard_model_sop(
+        group_table=bundle.group_table,
+        raw_target=bundle.raw_target,
+        training_objective=str(bundle.profile.training_objective),
+        validation_scores=standard_validation_frame,
+        oos_scores=standard_oos_frame,
+        breakout_scores=standard_breakout_frame,
+        evaluation_mode="rolling_oos",
+        mode_extensions={
+            "rolling": {
+                "fold_count": int(manifest.get("fold_count", 0) or 0),
+                "fold_months": int(manifest.get("fold_months", 0) or 0),
+                "direction_summary": _direction_summary(yearly_primary),
+                "fold_drift": fold_drift,
+            }
+        },
+    )
+
     payload = {
         "schema_version": AUDIT_SCHEMA_VERSION,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -1514,26 +1542,7 @@ def _run_point_in_time_scores_audit(
             "torch_execution": manifest.get("torch_execution"),
             "elapsed_sec": manifest.get("elapsed_sec"),
         },
-        "standard_model_sop": {
-            "evaluation_mode": "rolling_oos",
-            "training": {
-                "objective": str(bundle.profile.training_objective),
-            },
-            "split_metrics": {
-                "oos": _standard_sop_split_metrics(all_metrics),
-                "breakout_candidate_oos": _standard_sop_split_metrics(candidate_metrics),
-            },
-            "upside_downside_alignment_evaluation": {
-                "oos": oos_alignment,
-                "breakout_candidate_oos": candidate_alignment,
-            },
-            "rolling_specific": {
-                "fold_count": int(manifest.get("fold_count", 0) or 0),
-                "fold_months": int(manifest.get("fold_months", 0) or 0),
-                "direction_summary": _direction_summary(yearly_primary),
-                "fold_drift": fold_drift,
-            },
-        },
+        "standard_model_sop": standard_model_sop,
         "metrics": {
             "pass_only_target": pass_metrics,
             "reject_only_target": reject_metrics,

@@ -682,6 +682,14 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
                 },
             },
         }
+        conditional_payload["standard_model_sop"] = {
+            "schema": "standard_model_sop_v7",
+            "evaluation_mode": "forward_oos",
+            "training": {"objective": "daily_pairwise_ranking"},
+            "split_metrics": dict(conditional_payload["split_metrics"]),
+            "upside_downside_alignment_evaluation": {},
+            "mode_extensions": {},
+        }
         (conditional_output_dir / app_breakout_quality.CONTINUOUS_RANKER_REPORT_FILENAME).write_text(
             json.dumps(conditional_payload),
             encoding="utf-8",

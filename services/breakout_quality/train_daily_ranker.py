@@ -402,148 +402,10 @@ def _dual_component_metrics(
 
 
 
-def calculate_upside_downside_alignment_metrics(
-    group_ids: np.ndarray,
-    group_table: pd.DataFrame,
-    raw_target: np.ndarray,
-    scores: np.ndarray,
-) -> dict:
-    """Canonical actual-truth MFE/Safety diagnostics for every Daily Universal DL.
-
-    Standard SOP deliberately depends only on the evaluated model's Target/Score and
-    the common actual future truth.  High-MFE / High-Safety truth uses same-date
-    percentiles computed on the full Daily Universal universe; a Breakout slice only
-    filters those canonical truths and never re-ranks inside the subset.
-    """
-
-    ids = np.asarray(group_ids, dtype=np.int64)
-    score = np.asarray(scores, dtype=np.float64)
-    if score.shape != ids.shape:
-        raise ValueError("Standard MFE/Safety score/group length mismatch")
-    target_all = np.asarray(raw_target, dtype=np.float64)
-    if target_all.ndim != 1 or len(target_all) != len(group_table):
-        raise ValueError("Standard MFE/Safety raw_target length mismatch")
-
-    favorable_all = pd.to_numeric(
-        group_table["target_favorable_r"], errors="coerce"
-    ).to_numpy(dtype=np.float64)
-    adverse_all = pd.to_numeric(
-        group_table["target_adverse_r"], errors="coerce"
-    ).to_numpy(dtype=np.float64)
-    dates_all = pd.to_datetime(group_table["date"], errors="raise").to_numpy()
-    actual_valid_all = np.isfinite(favorable_all) & np.isfinite(adverse_all)
-    mfe_pct_all = build_same_date_percentile_targets(
-        favorable_all, actual_valid_all, dates_all
-    ).astype(np.float64)
-    safety_pct_all = build_same_date_percentile_targets(
-        -adverse_all, actual_valid_all, dates_all
-    ).astype(np.float64)
-
-    dates = dates_all[ids]
-    target = target_all[ids]
-    favorable = favorable_all[ids]
-    adverse = adverse_all[ids]
-    mfe_pct = mfe_pct_all[ids]
-    safety_pct = safety_pct_all[ids]
-
-    def daily_rho(left: np.ndarray, right: np.ndarray) -> float | None:
-        valid = np.isfinite(left) & np.isfinite(right)
-        if int(valid.sum()) < 2:
-            return None
-        return ranker_api.daily_rank_metrics(
-            dates[valid], left[valid], right[valid]
-        ).get("mean_daily_spearman")
-
-    base_valid = (
-        np.isfinite(score)
-        & np.isfinite(target)
-        & np.isfinite(favorable)
-        & np.isfinite(adverse)
-        & np.isfinite(mfe_pct)
-        & np.isfinite(safety_pct)
-    )
-    if int(base_valid.sum()) < 2:
-        return {
-            "available": False,
-            "group_count": int(base_valid.sum()),
-            "not_evaluated_reason": "MFE/Adverse可評估sample不足",
-        }
-
-    valid_ids = np.flatnonzero(base_valid)
-    score_pct = build_same_date_percentile_targets(
-        score, base_valid, dates
-    ).astype(np.float64)
-    top = np.flatnonzero(base_valid & (score_pct >= 0.90))
-    if len(top) == 0:
-        return {
-            "available": False,
-            "group_count": int(base_valid.sum()),
-            "not_evaluated_reason": "同日Top10 score cohort為空",
-        }
-
-    hm = mfe_pct >= 0.50
-    hs = safety_pct >= 0.50
-    quadrants = {
-        "hmhs": hm & hs,
-        "hmls": hm & ~hs,
-        "lmhs": ~hm & hs,
-        "lmls": ~hm & ~hs,
-    }
-
-    def quadrant_payload(mask: np.ndarray, cohort: np.ndarray) -> dict:
-        population_pct = float(np.mean(mask[valid_ids]) * 100.0)
-        cohort_pct = float(np.mean(mask[cohort]) * 100.0)
-        enrichment = (
-            None
-            if population_pct <= 0.0
-            else float(cohort_pct / population_pct)
-        )
-        return {
-            "pct": cohort_pct,
-            "population_pct": population_pct,
-            "enrichment": enrichment,
-        }
-
-    top_quadrants = {
-        key: quadrant_payload(mask, top)
-        for key, mask in quadrants.items()
-    }
-    population_quadrants = {
-        key: float(np.mean(mask[valid_ids]) * 100.0)
-        for key, mask in quadrants.items()
-    }
-
-    return {
-        "available": True,
-        "group_count": int(base_valid.sum()),
-        "target_to_full_mfe_daily_spearman": daily_rho(target, favorable),
-        # Safety is the monotonic inverse of adverse magnitude, so higher is safer.
-        "target_to_low_adverse_daily_spearman": daily_rho(target, -adverse),
-        "score_to_full_mfe_daily_spearman": daily_rho(score, favorable),
-        "score_to_low_adverse_daily_spearman": daily_rho(score, -adverse),
-        "population": {
-            "full_mfe_r_mean": float(np.mean(favorable[valid_ids])),
-            "adverse_r_mean": float(np.mean(adverse[valid_ids])),
-            "low_adverse_r_mean": float(np.mean(-adverse[valid_ids])),
-            "high_mfe_pct": float(np.mean(hm[valid_ids]) * 100.0),
-            "high_safety_pct": float(np.mean(hs[valid_ids]) * 100.0),
-            "quadrants": population_quadrants,
-        },
-        "top_10pct": {
-            "n": int(len(top)),
-            "full_mfe_r_mean": float(np.mean(favorable[top])),
-            "adverse_r_mean": float(np.mean(adverse[top])),
-            "low_adverse_r_mean": float(np.mean(-adverse[top])),
-            "high_mfe_pct": float(np.mean(hm[top]) * 100.0),
-            "high_safety_pct": float(np.mean(hs[top]) * 100.0),
-            "quadrants": top_quadrants,
-            # Compatibility fields retained in raw JSON for historical consumers.
-            "hmhs_pct": top_quadrants["hmhs"]["pct"],
-            "hmhs_enrichment": top_quadrants["hmhs"]["enrichment"],
-        },
-        "status": "standard_sop_actual_truth_diagnostic_only_no_fit_no_selection",
-    }
-
+from services.breakout_quality.standard_model_sop import (
+    calculate_upside_downside_alignment_metrics,
+    build_standard_model_sop,
+)
 
 # Backward-compatible private alias for historical synthetic/import consumers.
 _upside_downside_alignment_metrics = calculate_upside_downside_alignment_metrics
@@ -1827,6 +1689,27 @@ def run(args) -> int:
             "seed": int(args.seed),
         },
         "split_report": split.report,
+        "standard_model_sop": build_standard_model_sop(
+            group_table=bundle.group_table,
+            raw_target=bundle.raw_target,
+            training_objective=str(bundle.profile.training_objective),
+            validation_scores=pd.DataFrame({
+                "group_index": split.validation_ids,
+                "date": bundle.group_table.iloc[split.validation_ids]["date"].to_numpy(),
+                "breakout_quality_score": validation_scores,
+            }),
+            oos_scores=pd.DataFrame({
+                "group_index": split.oos_ids,
+                "date": bundle.group_table.iloc[split.oos_ids]["date"].to_numpy(),
+                "breakout_quality_score": oos_scores,
+            }),
+            breakout_scores=pd.DataFrame({
+                "group_index": candidate_ids,
+                "date": bundle.group_table.iloc[candidate_ids]["date"].to_numpy(),
+                "breakout_quality_score": score_by_group[candidate_ids],
+            }),
+            evaluation_mode="forward_oos",
+        ),
         "split_metrics": split_metrics,
         "all_group_split_metrics": split_metrics,
         "reference_target_evaluation": reference_target_evaluation,

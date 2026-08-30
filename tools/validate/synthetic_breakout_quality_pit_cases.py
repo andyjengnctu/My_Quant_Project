@@ -273,9 +273,11 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         cached_model = cache_entry / "model.pt"
         local_model = fold_dir / "model.pt"
         score_path = fold_dir / "scores.csv"
+        validation_score_path = fold_dir / "validation_scores.csv"
         cached_model.write_bytes(b"canonical-fitting-checkpoint")
         local_model.write_bytes(b"metadata-only-drifted-local-checkpoint")
         score_path.write_text("ticker,date\n2330,2021-01-04\n", encoding="utf-8")
+        validation_score_path.write_text("ticker,date\n2330,2020-12-31\n", encoding="utf-8")
         cached_checkpoint = build_file_manifest(cached_model)
         stale_local_checkpoint = build_file_manifest(local_model)
         cached_manifest = {
@@ -291,6 +293,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             "artifacts": {
                 "checkpoint": stale_local_checkpoint,
                 "scores": build_file_manifest(score_path),
+                "validation_scores": build_file_manifest(validation_score_path),
             },
         }
         (cache_entry / "manifest.json").write_text(

@@ -96,6 +96,7 @@ POINT_IN_TIME_SCHEMA_VERSION = 2
 AUTO_SCORE_START_VALUE = "auto"
 FOLD_MANIFEST_FILENAME = "manifest.json"
 FOLD_SCORE_FILENAME = "scores.csv"
+FOLD_VALIDATION_SCORE_FILENAME = "validation_scores.csv"
 REQUIRED_SCORE_COLUMNS = (
     "ticker",
     "date",
@@ -819,7 +820,13 @@ def _load_reusable_fold(
     manifest_path = fold_dir / FOLD_MANIFEST_FILENAME
     model_path = fold_dir / DEFAULT_MODEL_FILENAME
     score_path = fold_dir / FOLD_SCORE_FILENAME
-    if not (manifest_path.is_file() and model_path.is_file() and score_path.is_file()):
+    validation_score_path = fold_dir / FOLD_VALIDATION_SCORE_FILENAME
+    if not (
+        manifest_path.is_file()
+        and model_path.is_file()
+        and score_path.is_file()
+        and validation_score_path.is_file()
+    ):
         return None
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -831,6 +838,8 @@ def _load_reusable_fold(
         if build_file_manifest(model_path) != artifacts.get("checkpoint"):
             return None
         if build_file_manifest(score_path) != artifacts.get("scores"):
+            return None
+        if build_file_manifest(validation_score_path) != artifacts.get("validation_scores"):
             return None
         frame = pd.read_csv(
             score_path,
@@ -1117,6 +1126,7 @@ def _reload_fold_manifest_after_checkpoint_cache_sync(
     manifest_path = fold_dir / FOLD_MANIFEST_FILENAME
     model_path = fold_dir / DEFAULT_MODEL_FILENAME
     score_path = fold_dir / FOLD_SCORE_FILENAME
+    validation_score_path = fold_dir / FOLD_VALIDATION_SCORE_FILENAME
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -1134,6 +1144,8 @@ def _reload_fold_manifest_after_checkpoint_cache_sync(
         raise RuntimeError(f"PIT fold cache同步後checkpoint hash/size與manifest不一致: {fold_dir.name}")
     if build_file_manifest(score_path) != artifacts.get("scores"):
         raise RuntimeError(f"PIT fold cache同步後score hash/size與manifest不一致: {fold_dir.name}")
+    if build_file_manifest(validation_score_path) != artifacts.get("validation_scores"):
+        raise RuntimeError(f"PIT fold cache同步後validation score hash/size與manifest不一致: {fold_dir.name}")
     return manifest
 
 
@@ -1199,75 +1211,28 @@ def _rescore_fold_from_compatible_checkpoint(
         model.load_state_dict(checkpoint["model_state_dict"], strict=True)
         model.to(plan.device)
         model.eval()
-        conditional_heads = None
-        reverse_conditional_heads = None
-        joint_min_heads = None
-        if (
-            bundle.profile.training_objective
-            == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
-        ):
-            reverse_conditional_heads = predict_safety_conditional_mfe_scores(
-                torch_module,
-                model,
-                bundle,
-                ids["score_ids"],
-                batch_size=int(args.evaluation_batch_size),
-                plan=plan,
-            )
-            scores = reverse_conditional_heads["conditional_mfe"]
-        elif (
-            bundle.profile.training_objective
-            == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING
-        ):
-            joint_min_heads = predict_safety_raw_mfe_joint_min_scores(
-                torch_module,
-                model,
-                bundle,
-                ids["score_ids"],
-                batch_size=int(args.evaluation_batch_size),
-                plan=plan,
-            )
-            scores = joint_min_heads["raw_mfe"]
-        elif (
-            bundle.profile.training_objective
-            == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
-        ):
-            conditional_heads = predict_conditional_mfe_safety_scores(
-                torch_module,
-                model,
-                bundle,
-                ids["score_ids"],
-                batch_size=int(args.evaluation_batch_size),
-                plan=plan,
-            )
-            scores = conditional_heads["primary_mfe"]
-        else:
-            scores = predict_scores(
-                torch_module,
-                model,
-                bundle,
-                ids["score_ids"],
-                batch_size=int(args.evaluation_batch_size),
-                plan=plan,
-            )
-        if len(scores) != len(ids["score_ids"]):
-            return None
-        frame = bundle.group_table.iloc[ids["score_ids"]][
-            ["ticker", "date", "group_index"]
-        ].copy()
-        frame["breakout_quality_score"] = scores
-        if reverse_conditional_heads is not None:
-            frame["raw_safety_score"] = reverse_conditional_heads["raw_safety"]
-        if joint_min_heads is not None:
-            frame["raw_safety_score"] = joint_min_heads["raw_safety"]
-            frame["raw_mfe_score"] = joint_min_heads["raw_mfe"]
-            frame["joint_min_score"] = joint_min_heads["joint_min"]
-        if conditional_heads is not None:
-            frame["primary_mfe_score"] = conditional_heads["primary_mfe"]
-            frame["conditional_safety_score"] = conditional_heads["conditional_safety"]
+        scores, score_extras = _predict_primary_score_payload(
+            torch_module, model, bundle, ids["score_ids"], args=args, plan=plan
+        )
+        validation_scores, validation_extras = _predict_primary_score_payload(
+            torch_module, model, bundle, ids["validation_ids"], args=args, plan=plan
+        )
+        frame = _build_fold_score_frame(
+            bundle, ids["score_ids"], scores, score_extras,
+            fold_id=str(fold_contract["fold_id"]),
+            cutoff=fold_contract["model_information_cutoff"],
+        )
+        validation_frame = _build_fold_score_frame(
+            bundle, ids["validation_ids"], validation_scores, validation_extras,
+            fold_id=str(fold_contract["fold_id"]),
+            cutoff=fold_contract["model_information_cutoff"],
+        )
         frame["fold_id"] = str(fold_contract["fold_id"])
         frame["model_information_cutoff"] = fold_contract["model_information_cutoff"]
         frame = _validate_score_frame(frame, fold_contract=fold_contract)
+        validation_frame = _validate_validation_score_frame(
+            validation_frame, ids=ids["validation_ids"], fold_id=str(fold_contract["fold_id"])
+        )
     except (
         OSError,
         UnicodeDecodeError,
@@ -1285,7 +1250,9 @@ def _rescore_fold_from_compatible_checkpoint(
     # because fitting compatibility excludes those fields.
     source_checkpoint_manifest = build_file_manifest(model_path)
     score_path = fold_dir / FOLD_SCORE_FILENAME
+    validation_score_path = fold_dir / FOLD_VALIDATION_SCORE_FILENAME
     frame.to_csv(score_path, index=False, encoding="utf-8-sig")
+    validation_frame.to_csv(validation_score_path, index=False, encoding="utf-8-sig")
     rescored_manifest = {
         **manifest,
         **fold_contract,
@@ -1316,6 +1283,7 @@ def _rescore_fold_from_compatible_checkpoint(
         "artifacts": {
             "checkpoint": source_checkpoint_manifest,
             "scores": build_file_manifest(score_path),
+            "validation_scores": build_file_manifest(validation_score_path),
         },
     }
     write_json(manifest_path, rescored_manifest)
@@ -1545,6 +1513,73 @@ def _selection_point_in_time_manifest_path_for_args(args) -> Path:
     return _point_in_time_dir_for_args(args) / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
 
 
+def _predict_primary_score_payload(torch_module, model, bundle, group_ids, *, args, plan):
+    """Predict the canonical primary score plus model-specific sidecar score columns."""
+
+    ids = np.asarray(group_ids, dtype=np.int64)
+    extras: dict[str, np.ndarray] = {}
+    if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING:
+        heads = predict_safety_conditional_mfe_scores(
+            torch_module, model, bundle, ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+        )
+        scores = heads["conditional_mfe"]
+        extras["raw_safety_score"] = heads["raw_safety"]
+    elif bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING:
+        heads = predict_safety_raw_mfe_joint_min_scores(
+            torch_module, model, bundle, ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+        )
+        scores = heads["raw_mfe"]
+        extras["raw_safety_score"] = heads["raw_safety"]
+        extras["raw_mfe_score"] = heads["raw_mfe"]
+        extras["joint_min_score"] = heads["joint_min"]
+    elif bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
+        heads = predict_conditional_mfe_safety_scores(
+            torch_module, model, bundle, ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+        )
+        scores = heads["primary_mfe"]
+        extras["primary_mfe_score"] = heads["primary_mfe"]
+        extras["conditional_safety_score"] = heads["conditional_safety"]
+    else:
+        scores = predict_scores(
+            torch_module, model, bundle, ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+        )
+    values = np.asarray(scores, dtype=np.float64)
+    if len(values) != len(ids):
+        raise ValueError("PIT fold inference score count不一致")
+    return values, extras
+
+
+def _build_fold_score_frame(bundle, group_ids, scores, extras, *, fold_id: str, cutoff: str) -> pd.DataFrame:
+    ids = np.asarray(group_ids, dtype=np.int64)
+    frame = bundle.group_table.iloc[ids][["ticker", "date", "group_index"]].copy()
+    frame["breakout_quality_score"] = np.asarray(scores, dtype=np.float64)
+    for column, values in dict(extras or {}).items():
+        frame[str(column)] = np.asarray(values)
+    frame["fold_id"] = str(fold_id)
+    frame["model_information_cutoff"] = str(cutoff)
+    return frame
+
+
+def _validate_validation_score_frame(frame: pd.DataFrame, *, ids: np.ndarray, fold_id: str) -> pd.DataFrame:
+    work = frame.copy()
+    if len(work) != len(ids):
+        raise ValueError(f"{fold_id} validation score count不一致")
+    expected = np.asarray(ids, dtype=np.int64)
+    observed = pd.to_numeric(work["group_index"], errors="raise").to_numpy(dtype=np.int64)
+    if not np.array_equal(observed, expected):
+        raise ValueError(f"{fold_id} validation group order不一致")
+    values = pd.to_numeric(work["breakout_quality_score"], errors="raise").to_numpy(dtype=np.float64)
+    if not np.isfinite(values).all():
+        raise ValueError(f"{fold_id} validation score含非有限值")
+    if set(work["fold_id"].astype(str).unique()) != {str(fold_id)}:
+        raise ValueError(f"{fold_id} validation fold identity不一致")
+    return work.reset_index(drop=True)
+
+
 def _train_fold(
     args, bundle, fold, ids, fold_contract, contract_fingerprint, *, torch, plan
 ):
@@ -1572,80 +1607,32 @@ def _train_fold(
         args=args,
         plan=plan,
     )
-    conditional_heads = None
-    reverse_conditional_heads = None
-    joint_min_heads = None
-    if (
-        bundle.profile.training_objective
-        == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
-    ):
-        reverse_conditional_heads = predict_safety_conditional_mfe_scores(
-            torch,
-            model,
-            bundle,
-            ids["score_ids"],
-            batch_size=int(args.evaluation_batch_size),
-            plan=plan,
-        )
-        scores = reverse_conditional_heads["conditional_mfe"]
-    elif (
-        bundle.profile.training_objective
-        == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING
-    ):
-        joint_min_heads = predict_safety_raw_mfe_joint_min_scores(
-            torch,
-            model,
-            bundle,
-            ids["score_ids"],
-            batch_size=int(args.evaluation_batch_size),
-            plan=plan,
-        )
-        scores = joint_min_heads["raw_mfe"]
-    elif (
-        bundle.profile.training_objective
-        == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
-    ):
-        conditional_heads = predict_conditional_mfe_safety_scores(
-            torch,
-            model,
-            bundle,
-            ids["score_ids"],
-            batch_size=int(args.evaluation_batch_size),
-            plan=plan,
-        )
-        scores = conditional_heads["primary_mfe"]
-    else:
-        scores = predict_scores(
-            torch,
-            model,
-            bundle,
-            ids["score_ids"],
-            batch_size=int(args.evaluation_batch_size),
-            plan=plan,
-        )
-    if len(scores) != len(ids["score_ids"]):
-        raise ValueError(f"{fold_id} inference score count不一致")
-    frame = bundle.group_table.iloc[ids["score_ids"]][
-        ["ticker", "date", "group_index"]
-    ].copy()
-    frame["breakout_quality_score"] = scores
-    if reverse_conditional_heads is not None:
-        frame["raw_safety_score"] = reverse_conditional_heads["raw_safety"]
-    if joint_min_heads is not None:
-        frame["raw_safety_score"] = joint_min_heads["raw_safety"]
-        frame["raw_mfe_score"] = joint_min_heads["raw_mfe"]
-        frame["joint_min_score"] = joint_min_heads["joint_min"]
-    if conditional_heads is not None:
-        frame["primary_mfe_score"] = conditional_heads["primary_mfe"]
-        frame["conditional_safety_score"] = conditional_heads["conditional_safety"]
+    scores, score_extras = _predict_primary_score_payload(
+        torch, model, bundle, ids["score_ids"], args=args, plan=plan
+    )
+    validation_scores, validation_extras = _predict_primary_score_payload(
+        torch, model, bundle, ids["validation_ids"], args=args, plan=plan
+    )
+    frame = _build_fold_score_frame(
+        bundle, ids["score_ids"], scores, score_extras,
+        fold_id=fold_id, cutoff=fold_contract["model_information_cutoff"],
+    )
+    validation_frame = _build_fold_score_frame(
+        bundle, ids["validation_ids"], validation_scores, validation_extras,
+        fold_id=fold_id, cutoff=fold_contract["model_information_cutoff"],
+    )
     frame["fold_id"] = fold_id
     frame["model_information_cutoff"] = fold_contract["model_information_cutoff"]
     frame = _validate_score_frame(frame, fold_contract=fold_contract)
+    validation_frame = _validate_validation_score_frame(
+        validation_frame, ids=ids["validation_ids"], fold_id=fold_id
+    )
 
     fold_dir = _point_in_time_fold_dir_for_args(args, fold_id)
     fold_dir.mkdir(parents=True, exist_ok=True)
     model_path = fold_dir / DEFAULT_MODEL_FILENAME
     score_path = fold_dir / FOLD_SCORE_FILENAME
+    validation_score_path = fold_dir / FOLD_VALIDATION_SCORE_FILENAME
     checkpoint_payload = build_checkpoint_payload(
         model,
         bundle,
@@ -1656,6 +1643,7 @@ def _train_fold(
     )
     torch.save(checkpoint_payload, model_path)
     frame.to_csv(score_path, index=False, encoding="utf-8-sig")
+    validation_frame.to_csv(validation_score_path, index=False, encoding="utf-8-sig")
     manifest = {
         **fold_contract,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -1672,6 +1660,7 @@ def _train_fold(
         "artifacts": {
             "checkpoint": build_file_manifest(model_path),
             "scores": build_file_manifest(score_path),
+            "validation_scores": build_file_manifest(validation_score_path),
         },
     }
     write_json(fold_dir / FOLD_MANIFEST_FILENAME, manifest)
@@ -2574,6 +2563,7 @@ def main(argv=None) -> int:
 __all__ = [
     "FOLD_MANIFEST_FILENAME",
     "FOLD_SCORE_FILENAME",
+    "FOLD_VALIDATION_SCORE_FILENAME",
     "POINT_IN_TIME_SCHEMA_VERSION",
     "build_cross_fitted_context_scores",
     "build_selection_point_in_time_scores",

@@ -1032,7 +1032,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     ready_plan = SimpleNamespace(blocked=False, actions=(), overall_status="READY")
     gate_commands = []
 
-    def _record_model_gate_command(command, args, *, program_name):
+    def _record_model_gate_command(command, args, *, program_name, **_kwargs):
         gate_commands.append((str(command), list(args), str(program_name)))
         return 23
 
@@ -3305,11 +3305,16 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
     ).read_text(encoding="utf-8")
     check_true(
         "reverse_conditional_profiles_share_config_driven_standard_model_comparison_route_without_dedicated_menu",
-        'comparison = get_breakout_quality_standard_model_comparison_settings()' in app_source
-        and 'for model_id, profile_name in comparison.model_profiles:' in app_source
+        'model_list = get_breakout_quality_model_test_settings().model_profiles' in app_source
+        and 'for model_id, profile_name in model_list:' in app_source
         and 'render_menu_item(3, "Forward OOS 模型比較")' in app_source
+        and 'render_menu_item(4, "Rolling OOS 模型比較")' in app_source
         and 'if choice == "3":' in app_source
-        and '_run_configured_standard_model_comparison(program_name)' in app_source
+        and '_run_configured_model_comparison(program_name, rolling=False)' in app_source
+        and '_run_configured_model_comparison(program_name, rolling=True)' in app_source
+        and '_run_configured_model_robustness(program_name, rolling=False)' in app_source
+        and '_run_configured_model_robustness(program_name, rolling=True)' in app_source
+        and '_run_shared_strategy_robustness' not in app_source
         and 'Conditional-MFE Single／Duo Forward Model Gate' not in app_source,
     )
     daily_source = (

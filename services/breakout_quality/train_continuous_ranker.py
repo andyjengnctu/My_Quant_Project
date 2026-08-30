@@ -599,13 +599,20 @@ def split_metrics(
     include_top_k_quality: bool = False,
     raw_r_regression_loss_name: str | None = None,
     raw_r_huber_delta_r: float | None = None,
+    ranking_dates: np.ndarray | None = None,
 ) -> dict[str, Any]:
     ids = np.asarray(group_ids, dtype=np.int64)
     score_values = np.asarray(scores, dtype=np.float64)
     raw_values = np.asarray(raw_target[ids], dtype=np.float64)
     pct_values = np.asarray(percentile_target[ids], dtype=np.float64)
     labels = group_table.iloc[ids]["label"].to_numpy(dtype=np.int64)
-    dates = group_table.iloc[ids]["date"].to_numpy()
+    dates = (
+        group_table.iloc[ids]["date"].to_numpy()
+        if ranking_dates is None
+        else np.asarray(ranking_dates)
+    )
+    if len(dates) != len(ids):
+        raise ValueError("split_metrics ranking_dates/group長度不一致")
     if len(score_values) != len(ids):
         raise ValueError("11B score/group長度不一致")
     order = np.argsort(score_values, kind="mergesort")

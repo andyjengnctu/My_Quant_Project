@@ -76,9 +76,9 @@ S = ReportSectionContract
 
 MODEL_STANDARD_SOP = PersistentReportContract(
     report_id="model.standard_sop",
-    version=6,
-    role="persistent_standard_forward_oos",
-    menu_path=("Research", "模型訓練／驗證", "Forward OOS 模型訓練"),
+    version=7,
+    role="persistent_standard_model_sop_all_evaluation_modes",
+    menu_path=("Research", "模型訓練／驗證"),
     sections=(
         S("learnability", 1, "Learnability", "all_continuous_dl", (
             T("learnability", (
@@ -175,48 +175,43 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=5,
-    role="persistent_multi_model_comparison_forward_oos",
-    menu_path=("Research", "模型訓練／驗證", "Forward OOS 模型比較"),
+    version=6,
+    role="persistent_multi_model_comparison_all_evaluation_modes",
+    menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),
 )
 
-_ROLLING_STABILITY_SECTION = S(
-    "rolling_stability", 7, "Rolling-specific Extension｜Fold / Year Stability", "rolling_oos_only",
-    (T("rolling_stability", (
-        C("metric", "Metric", alignment="left"), C("value", "Value", alignment="right"),
-    )),),
-)
-
-_ROLLING_STABILITY_COMPARISON_SECTION = S(
-    "rolling_stability", 7, "Rolling-specific Extension｜Fold / Year Stability", "rolling_oos_only",
-    (T("rolling_stability", (
-        C("model", "Model", alignment="left"),
-        C("fold_count", "Fold count", 0, format_kind="int"),
-        C("fold_months", "Cadence", 0, "M", format_kind="number"),
-        C("valid_year_count", "Valid years", 0, preference="higher", format_kind="int"),
-        C("positive_rho_years", "Positive-rho years", alignment="right"),
-        C("positive_spread_years", "Positive Top-Bottom years", alignment="right"),
-        C("max_adjacent_mean_shift", "Max adjacent score-mean drift", 4, " pooled σ", "lower", "number"),
-        C("drift_flag", "Drift flag", alignment="center"),
-    )),),
-)
-
-MODEL_ROLLING_STANDARD_SOP = PersistentReportContract(
-    report_id="model.rolling_standard_sop",
-    version=1,
-    role="persistent_standard_rolling_oos",
-    menu_path=("Research", "模型訓練／驗證", "Rolling OOS 模型訓練"),
-    sections=(*MODEL_STANDARD_SOP.sections, _ROLLING_STABILITY_SECTION),
-)
-
-MODEL_ROLLING_STANDARD_COMPARISON = PersistentReportContract(
-    report_id="model.rolling_standard_comparison",
-    version=1,
-    role="persistent_multi_model_comparison_rolling_oos",
-    menu_path=("Research", "模型訓練／驗證", "Rolling OOS 模型比較"),
-    sections=(*_model_comparison_sections(), _ROLLING_STABILITY_COMPARISON_SECTION),
-)
+MODEL_MODE_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
+    "rolling_stability": ModelExtensionContract(
+        "rolling_stability", "Rolling-specific Extension｜Fold / Year Stability", "rolling_oos_only",
+        (T("rolling_stability", (
+            C("metric", "Metric", alignment="left"), C("value", "Value", alignment="right"),
+        )),
+         T("rolling_stability_comparison", (
+            C("model", "Model", alignment="left"),
+            C("fold_count", "Fold count", 0, format_kind="int"),
+            C("fold_months", "Cadence", 0, "M", format_kind="number"),
+            C("valid_year_count", "Valid years", 0, preference="higher", format_kind="int"),
+            C("positive_rho_years", "Positive-rho years", alignment="right"),
+            C("positive_spread_years", "Positive Top-Bottom years", alignment="right"),
+            C("max_adjacent_mean_shift", "Max adjacent score-mean drift", 4, " pooled σ", "lower", "number"),
+            C("drift_flag", "Drift flag", alignment="center"),
+        ))),
+    ),
+    "robustness_stability": ModelExtensionContract(
+        "robustness_stability", "Robustness-specific Extension｜Across-seed Stability", "robustness_only",
+        (T("robustness_stability", (
+            C("model", "Model", alignment="left"),
+            C("seed_count", "Seeds", 0, format_kind="int"),
+            C("daily_rho_mean", "OOS Daily rho mean", 4, preference="higher", format_kind="number"),
+            C("daily_rho_std", "OOS Daily rho σ", 4, preference="lower", format_kind="number"),
+            C("pair_mean", "OOS Pair mean", 2, "%", "higher", "fraction_pct"),
+            C("pair_std", "OOS Pair σ", 2, "%", "lower", "fraction_pct"),
+            C("top_bottom_mean", "OOS Top-Bottom mean", 4, preference="higher", format_kind="number"),
+            C("top_bottom_std", "OOS Top-Bottom σ", 4, preference="lower", format_kind="number"),
+        )),),
+    ),
+}
 
 
 MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
@@ -401,8 +396,7 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
 
 PERSISTENT_REPORT_CONTRACTS: Mapping[str, PersistentReportContract] = {
     contract.report_id: contract for contract in (
-        MODEL_STANDARD_SOP, MODEL_STANDARD_COMPARISON, MODEL_ROLLING_STANDARD_SOP,
-        MODEL_ROLLING_STANDARD_COMPARISON, STRATEGY_STANDARD_SOP, OPPORTUNITY_SELECTION_REPORT,
+        MODEL_STANDARD_SOP, MODEL_STANDARD_COMPARISON, STRATEGY_STANDARD_SOP, OPPORTUNITY_SELECTION_REPORT,
         TRADE_OUTCOME_PATH_REPORT, PORTFOLIO_DRAWDOWN_REPORT, STRATEGY_CONSISTENCY_REPORT,
     )
 }
@@ -474,6 +468,13 @@ def extension_contract(extension_id: str) -> ModelExtensionContract:
         raise KeyError(f"未知Model-specific extension: {extension_id}") from exc
 
 
+def mode_extension_contract(extension_id: str) -> ModelExtensionContract:
+    try:
+        return MODEL_MODE_EXTENSION_SCHEMAS[str(extension_id)]
+    except KeyError as exc:
+        raise KeyError(f"未知Model mode extension: {extension_id}") from exc
+
+
 def _persistent_schema_payload(contract: PersistentReportContract) -> dict:
     return asdict(contract)
 
@@ -502,10 +503,8 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.rolling_standard_comparison": "b8c9bb9c1c186f72",
-    "model.rolling_standard_sop": "aea55438c5b28b08",
-    "model.standard_comparison": "3e1ea007d941b1ad",
-    "model.standard_sop": "40bd02e5bcbe21b1",
+    "model.standard_comparison": "7b11c0b9ddf50e41",
+    "model.standard_sop": "56e5fb1173404d7f",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",
 }
@@ -531,13 +530,13 @@ def validate_approved_persistent_report_contracts() -> tuple[str, ...]:
 
 __all__ = [
     "APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS",
-    "MODEL_EXTENSION_SCHEMAS", "MODEL_STANDARD_SOP", "MODEL_ROLLING_STANDARD_SOP",
+    "MODEL_EXTENSION_SCHEMAS", "MODEL_MODE_EXTENSION_SCHEMAS", "MODEL_STANDARD_SOP",
     "OPPORTUNITY_SELECTION_REPORT", "PORTFOLIO_DRAWDOWN_REPORT",
-    "MODEL_STANDARD_COMPARISON", "MODEL_ROLLING_STANDARD_COMPARISON", "PERSISTENT_REPORT_CONTRACTS", "STRATEGY_CONSISTENCY_METRIC_KEYS",
+    "MODEL_STANDARD_COMPARISON", "PERSISTENT_REPORT_CONTRACTS", "STRATEGY_CONSISTENCY_METRIC_KEYS",
     "STRATEGY_CONSISTENCY_REPORT", "STRATEGY_STANDARD_SOP",
     "TRADE_OUTCOME_FIRST_PASSAGE_THRESHOLDS_R", "TRADE_OUTCOME_PATH_REPORT", "ModelExtensionContract",
     "PersistentReportContract", "ReportColumnContract", "ReportSectionContract",
-    "ReportTableContract", "column_contract", "extension_contract", "format_contract_value", "persistent_report_contract_fingerprint",
+    "ReportTableContract", "column_contract", "extension_contract", "mode_extension_contract", "format_contract_value", "persistent_report_contract_fingerprint",
     "persistent_report_contract_fingerprints", "report_contract", "section_contract",
     "table_contract", "validate_approved_persistent_report_contracts",
 ]

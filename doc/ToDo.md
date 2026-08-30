@@ -1,18 +1,7 @@
 
 
 - restreucture
-    - research 報表是否需要集中管理架構? 包含報表用色規則是否需要集中管理? 目前架構現況?
-    - [1] 下面換成
-        - [1] Foward OOS 模型訓練 <- 也就是現在的[1]
-        - [2] Rolling OOS 模型訓練 <- 報表與[1] 一致 + Rolling獨有
-        - [3] Foward OOS 模型比較 <- 也就是現在的 [4]
-        - [4] Rolling OOS 模型比較 <- 報表與[3] 一致 + Rolling獨有
-        - [5] Timing Mode｜Rolling 訓練前後比較  [工程]
-
-        原[3] Fixed-Winddow Rolling 刪除
-        只需要設定一次模型訓練對像 [1]、[2] 都可以接通使用
-        只需要設定一次模型比較與測試清單 [3]、[4] 都可接通使用
-
+    - 刪除不再需要的相容層的code，精簡程式也避免之後誤接
 
 
 - imrove DL module
