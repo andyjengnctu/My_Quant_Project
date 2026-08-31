@@ -4,6 +4,7 @@
 
 
 - imrove DL module
+    - capital-aware DL with risk%, cap, stop input
     - attention (temperal / cross-secction)
     - self-learned history and L lengths
     - hihger weight for high mfe or high safety   
