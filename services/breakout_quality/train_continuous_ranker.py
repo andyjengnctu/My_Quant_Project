@@ -786,6 +786,47 @@ def _date_coherent_batches(
 
 
 
+def _same_date_average_rank_percentile(torch, values, dates):
+    """Return detached [0,1] average-rank percentiles within each trading date.
+
+    This preserves the canonical AH predicted-Safety context scale while allowing A1
+    to source Safety from the shared head. Dates are never split by the training
+    batcher, but a batch may contain multiple complete dates. Ties use the same
+    zero-based average-rank/(N-1) contract as the persistent predicted context.
+    """
+
+    detached = values.detach().float()
+    if detached.ndim != 1:
+        raise ValueError("same-date Safety percentile input必須是一維")
+    date_values = pd.to_datetime(pd.Series(dates), errors="raise").dt.normalize().to_numpy()
+    if len(date_values) != int(detached.shape[0]):
+        raise ValueError("same-date Safety percentile日期長度不一致")
+    result = torch.empty_like(detached)
+    for date_value in pd.unique(date_values):
+        positions = np.flatnonzero(date_values == date_value)
+        pos = torch.as_tensor(positions, dtype=torch.long, device=detached.device)
+        day_values = detached.index_select(0, pos)
+        count = int(day_values.numel())
+        if count == 1:
+            day_percentile = torch.full_like(day_values, 0.5)
+        else:
+            sorted_values, sorted_to_original = torch.sort(day_values)
+            starts_new_group = torch.ones(count, dtype=torch.bool, device=detached.device)
+            starts_new_group[1:] = sorted_values[1:] != sorted_values[:-1]
+            group_ids = torch.cumsum(starts_new_group.to(torch.int64), dim=0) - 1
+            group_counts = torch.bincount(group_ids)
+            group_starts = torch.cumsum(group_counts, dim=0) - group_counts
+            group_average_zero_based_rank = (
+                group_starts.to(detached.dtype)
+                + 0.5 * (group_counts.to(detached.dtype) - 1.0)
+            )
+            sorted_percentile = group_average_zero_based_rank.index_select(0, group_ids) / float(count - 1)
+            day_percentile = torch.empty_like(sorted_percentile)
+            day_percentile.scatter_(0, sorted_to_original, sorted_percentile)
+        result.index_copy_(0, pos, day_percentile)
+    return result.detach()
+
+
 def _pairwise_logistic_loss(
     torch,
     margins,
@@ -1298,24 +1339,73 @@ def _train_epoch(
                 loss = sum(head_losses) / 3.0
                 loss_weight = int(max(1, sum(int(item[1]) for item in losses_and_counts)))
             elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE:
-                if target.ndim != 2 or int(target.shape[1]) != 2:
-                    raise ValueError("Safety→MFE duo-head target必須為[N,2]")
-                if not hasattr(model, "forward_safety_conditional_mfe_heads"):
-                    raise ValueError("Safety→MFE duo-head objective需要duo-head model architecture")
-                safety_logits, conditional_mfe_logits = model.forward_safety_conditional_mfe_heads(xb, cb)
-                safety_margin = safety_logits.float()[:, LABEL_PASS] - safety_logits.float()[:, LABEL_REJECT]
-                conditional_mfe_margin = conditional_mfe_logits.float()[:, LABEL_PASS] - conditional_mfe_logits.float()[:, LABEL_REJECT]
+                duo_policy = training_policy.duo_head_pairwise_policy
+                if duo_policy is None:
+                    raise ValueError("Safety/MFE duo-head objective缺少declarative duo-head pairwise policy")
+                required_target_width = max(int(value) for value in duo_policy.target_indices) + 1
+                if target.ndim != 2 or int(target.shape[1]) < required_target_width:
+                    raise ValueError(
+                        f"Safety/MFE duo-head target必須至少為[N,{required_target_width}]"
+                    )
+                if not hasattr(model, "forward_output_head"):
+                    raise ValueError("Safety/MFE duo-head objective需要generic multi-head model output contract")
+                combined_logits = model.forward_output_head(
+                    xb, cb, str(duo_policy.combined_output_head)
+                )
+                expected_output_width = sum(int(value) for value in duo_policy.head_widths)
+                if combined_logits.ndim != 2 or int(combined_logits.shape[1]) != expected_output_width:
+                    raise ValueError(
+                        "Safety/MFE duo-head combined output width與runtime policy不一致"
+                    )
+                head_logits = tuple(
+                    torch.split(
+                        combined_logits.float(),
+                        tuple(int(value) for value in duo_policy.head_widths),
+                        dim=1,
+                    )
+                )
                 batch_dates = group_dates_series.iloc[ids].to_numpy()
-                safety_loss, safety_supervision = _pairwise_logistic_loss(
-                    torch, safety_margin, target[:, 0], batch_dates, reduction=str(pairwise_reduction), pair_weight_policy=str(pair_weight_policy),
-                )
-                conditional_mfe_loss, conditional_mfe_supervision = _pairwise_logistic_loss(
-                    torch, conditional_mfe_margin, target[:, 1], batch_dates, reduction=str(pairwise_reduction), pair_weight_policy=str(pair_weight_policy),
-                )
-                if safety_loss is None or conditional_mfe_loss is None:
+                head_losses_and_counts = []
+                for head_index, logits_for_head in enumerate(head_logits):
+                    margin = (
+                        logits_for_head[:, LABEL_PASS] - logits_for_head[:, LABEL_REJECT]
+                    )
+                    pair_target = target[:, int(duo_policy.target_indices[head_index])]
+                    configured_pair_policy = duo_policy.pair_weight_policies[head_index]
+                    resolved_pair_policy = (
+                        str(pair_weight_policy)
+                        if configured_pair_policy is None
+                        else str(configured_pair_policy)
+                    )
+                    context_source_head = duo_policy.pair_context_source_heads[head_index]
+                    if context_source_head is not None:
+                        source_logits = head_logits[int(context_source_head)]
+                        source_probability = torch.softmax(source_logits, dim=1)[:, LABEL_PASS].detach()
+                        pair_context = _same_date_average_rank_percentile(
+                            torch, source_probability, batch_dates
+                        )
+                        pair_target = torch.stack([pair_target, pair_context], dim=1)
+                    head_losses_and_counts.append(
+                        _pairwise_logistic_loss(
+                            torch,
+                            margin,
+                            pair_target,
+                            batch_dates,
+                            reduction=str(pairwise_reduction),
+                            pair_weight_policy=resolved_pair_policy,
+                        )
+                    )
+                if any(item[0] is None for item in head_losses_and_counts):
                     continue
-                loss = 0.5 * (safety_loss + conditional_mfe_loss)
-                loss_weight = int(max(1, safety_supervision + conditional_mfe_supervision))
+                loss = sum(
+                    float(weight) * item[0]
+                    for weight, item in zip(
+                        duo_policy.loss_weights, head_losses_and_counts, strict=True
+                    )
+                )
+                loss_weight = int(
+                    max(1, sum(int(item[1]) for item in head_losses_and_counts))
+                )
             elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE:
                 if target.ndim != 2 or int(target.shape[1]) != 2:
                     raise ValueError("conditional MFE-safety target必須為[N,2]")

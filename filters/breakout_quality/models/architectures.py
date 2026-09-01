@@ -20,6 +20,7 @@ INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1 = "inception_time_predicted_upside_co
 INCEPTION_TIME_PREDICTED_SAFETY_CONTEXT_V1 = "inception_time_predicted_safety_context_v1"
 INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1 = "inception_time_conditional_mfe_safety_v1"
 INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1 = "inception_time_safety_conditional_mfe_v1"
+INCEPTION_TIME_SHARED_SAFETY_MFE_V1 = "inception_time_shared_safety_mfe_v1"
 INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1 = "inception_time_safety_raw_mfe_hmhs_v1"
 INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_MLP_V1 = "inception_time_safety_raw_mfe_hmhs_mlp_v1"
 INCEPTION_TIME_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1 = "inception_time_safety_raw_mfe_joint_attn_mlp_v1"
@@ -38,6 +39,64 @@ PATCH_TRANSFORMER_V1 = "patch_transformer_v1"
 TS2VEC_FROZEN_LINEAR_V1 = "ts2vec_frozen_linear_v1"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
 
+# Declarative active InceptionTime variants.  A new active variant belongs here;
+# supported/active architecture membership, model-spec routing and family/head topology
+# are all derived from this single owner. Tuple fields are:
+# (family, pooling/head contract, use_dataset_context, sequence_input_paths, head_width).
+INCEPTION_VARIANT_SPECS = {
+    INCEPTION_TIME_V1: ("inception_time", ("global_average",), False, ("raw_level",), None),
+    INCEPTION_TIME_RISK_CONTEXT_V1: (
+        "inception_time_risk_context",
+        ("global_average", "risk_context_mlp_concat"),
+        True,
+        ("raw_level", "universal_risk_economic_context"),
+        16,
+    ),
+    INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1: (
+        "inception_time_predicted_upside_context",
+        ("global_average", "predicted_upside_percentile_concat"),
+        True,
+        ("raw_level", "pit_safe_predicted_upside_percentile"),
+        None,
+    ),
+    INCEPTION_TIME_PREDICTED_SAFETY_CONTEXT_V1: (
+        "inception_time_predicted_safety_context",
+        ("global_average", "predicted_safety_percentile_concat"),
+        True,
+        ("raw_level", "pit_safe_predicted_safety_percentile"),
+        None,
+    ),
+    INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1: (
+        "inception_time_conditional_mfe_safety",
+        ("global_average", "primary_mfe_head", "conditional_safety_head"),
+        False,
+        ("raw_level",),
+        None,
+    ),
+    INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1: (
+        "inception_time_safety_conditional_mfe",
+        ("global_average", "raw_safety_head", "conditional_mfe_head"),
+        False,
+        ("raw_level",),
+        None,
+    ),
+    INCEPTION_TIME_SHARED_SAFETY_MFE_V1: (
+        "inception_time_shared_safety_mfe",
+        ("global_average", "raw_safety_head", "raw_mfe_head"),
+        False,
+        ("raw_level",),
+        None,
+    ),
+    INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1: (
+        "inception_time_safety_raw_mfe_hmhs",
+        ("global_average", "raw_safety_head", "safety_conditioned_raw_mfe_head", "direct_hmhs_head"),
+        False,
+        ("raw_level",),
+        None,
+    ),
+}
+INCEPTION_VARIANT_ARCHITECTURES = tuple(INCEPTION_VARIANT_SPECS)
+
 SUPPORTED_MODEL_ARCHITECTURES = (
     TINY_CNN_V1,
     MULTISCALE_CNN_V1,
@@ -51,13 +110,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     MULTISCALE_CNN_REGIME_CONTEXT_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1,
-    INCEPTION_TIME_V1,
-    INCEPTION_TIME_RISK_CONTEXT_V1,
-    INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1,
-    INCEPTION_TIME_PREDICTED_SAFETY_CONTEXT_V1,
-    INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1,
-    INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1,
-    INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1,
+    *INCEPTION_VARIANT_ARCHITECTURES,
     INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_MLP_V1,
     INCEPTION_TIME_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
     INCEPTION_TIME_MARKET_SET_V1,
@@ -75,13 +128,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
 )
 
 ACTIVE_MODEL_ARCHITECTURES = (
-    INCEPTION_TIME_V1,
-    INCEPTION_TIME_RISK_CONTEXT_V1,
-    INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1,
-    INCEPTION_TIME_PREDICTED_SAFETY_CONTEXT_V1,
-    INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1,
-    INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1,
-    INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1,
+    *INCEPTION_VARIANT_ARCHITECTURES,
     INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_MLP_V1,
     INCEPTION_TIME_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,
     MODERN_TCN_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1,

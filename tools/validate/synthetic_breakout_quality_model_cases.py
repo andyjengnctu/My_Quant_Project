@@ -775,6 +775,302 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         len(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES) - len(registered_runtime_failures),
     )
 
+    # Architecture/topology and multi-head composition are capabilities, not MR identities.
+    # This block automatically discovers every registered profile that derives pair context
+    # from another head and verifies the generic model/trainer path without a dedicated case.
+    from config.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
+        CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
+    )
+    from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.models.architectures import (
+        INCEPTION_VARIANT_ARCHITECTURES,
+        INCEPTION_VARIANT_SPECS,
+    )
+    from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.models.spec_registry import MODEL_SPEC_BUILDERS
+    from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
+    from services.breakout_quality.train_continuous_ranker import (
+        _same_date_average_rank_percentile,
+        _train_epoch,
+    )
+
+    architecture_registry_failures = []
+    for architecture in INCEPTION_VARIANT_ARCHITECTURES:
+        if architecture not in MODEL_SPEC_BUILDERS:
+            architecture_registry_failures.append(f"{architecture}: missing model-spec builder")
+            continue
+        spec = get_model_spec(architecture)
+        descriptor = INCEPTION_VARIANT_SPECS[architecture]
+        expected_family, expected_pooling, expected_context, expected_paths, expected_head_width = descriptor
+        if (
+            spec.family != expected_family
+            or tuple(spec.pooling or ()) != tuple(expected_pooling)
+            or bool(spec.use_dataset_context) != bool(expected_context)
+            or tuple(spec.sequence_input_paths or ()) != tuple(expected_paths)
+            or spec.head_width != expected_head_width
+        ):
+            architecture_registry_failures.append(
+                f"{architecture}: resolved model spec differs from canonical Inception descriptor"
+            )
+    check(
+        "continuous_ranker_inception_variants_resolve_from_single_descriptor_registry",
+        [],
+        architecture_registry_failures,
+    )
+
+    architecture_identity_leaks = []
+    for relative_path in (
+        Path("filters/breakout_quality/models/active.py"),
+        Path("filters/breakout_quality/models/spec_registry.py"),
+    ):
+        source_text = read_source_text(project_root / relative_path)
+        leaked = [
+            architecture
+            for architecture in INCEPTION_VARIANT_ARCHITECTURES
+            if architecture in source_text
+        ]
+        if leaked:
+            architecture_identity_leaks.append(
+                f"{relative_path.as_posix()}:" + ",".join(sorted(leaked))
+            )
+    check(
+        "continuous_ranker_generic_model_dispatch_does_not_repeat_inception_variant_ids",
+        [],
+        architecture_identity_leaks,
+        note=(
+            "active model dispatch and model-spec registry must derive Inception variants from "
+            "family/descriptor registration instead of repeating architecture identities"
+        ),
+    )
+
+    derived_head_context_profiles = []
+    for registered_profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+        recipe = get_continuous_ranker_execution_recipe(registered_profile_name)
+        duo_policy = recipe.training_policy.duo_head_pairwise_policy
+        if duo_policy is None:
+            continue
+        if not any(value is not None for value in duo_policy.pair_context_source_heads):
+            continue
+        derived_head_context_profiles.append((registered_profile_name, recipe, duo_policy))
+    check_true(
+        "continuous_ranker_registry_contains_derived_head_pair_context_capability",
+        len(derived_head_context_profiles) >= 1,
+    )
+
+    derived_architecture_ids = tuple(
+        sorted(
+            {
+                str(get_breakout_quality_experiment_profile(profile_name).model_architecture)
+                for profile_name, _recipe, _duo_policy in derived_head_context_profiles
+            }
+        )
+    )
+    derived_objective_ids = tuple(
+        sorted(
+            {
+                str(recipe.training_objective)
+                for _profile_name, recipe, _duo_policy in derived_head_context_profiles
+            }
+        )
+    )
+    derived_identity_leaks = []
+    canonical_architecture_owner = project_root / "filters" / "breakout_quality" / "models" / "architectures.py"
+    for source_root_name in ("filters", "services"):
+        for source_path in sorted((project_root / source_root_name).rglob("*.py")):
+            if source_path == canonical_architecture_owner:
+                continue
+            source_text = read_source_text(source_path)
+            leaked_architectures = [
+                identity for identity in derived_architecture_ids if identity in source_text
+            ]
+            leaked_objectives = [
+                identity for identity in derived_objective_ids if identity in source_text
+            ]
+            if leaked_architectures or leaked_objectives:
+                derived_identity_leaks.append(
+                    f"{source_path.relative_to(project_root).as_posix()}:"
+                    + ",".join(sorted(leaked_architectures + leaked_objectives))
+                )
+    check(
+        "continuous_ranker_derived_head_composition_identity_stays_out_of_generic_consumers",
+        [],
+        derived_identity_leaks,
+        note=(
+            "architecture identity is owned by models.architectures and training-objective "
+            "identity by config; derived-head generic consumers must resolve topology and "
+            "training composition from runtime contracts rather than branch on either ID"
+        ),
+    )
+
+    derived_head_context_failures = []
+    for registered_profile_name, recipe, duo_policy in derived_head_context_profiles:
+        registered_profile = get_breakout_quality_experiment_profile(registered_profile_name)
+        model_spec = get_model_spec(str(registered_profile.model_architecture))
+        sem = dict(
+            training_semantics(registered_profile).get("safety_raw_mfe_duo_head_contract") or {}
+        )
+        if recipe.training_policy.loss_handler != CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE:
+            derived_head_context_failures.append(f"{registered_profile_name}: non-generic duo handler")
+        if recipe.training_policy.target_builder != CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE:
+            derived_head_context_failures.append(f"{registered_profile_name}: unexpected target builder")
+        if tuple(model_spec.pooling or ())[-2:] != ("raw_safety_head", "raw_mfe_head"):
+            derived_head_context_failures.append(f"{registered_profile_name}: topology not declared by head contract")
+        if recipe.context_policy.source != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE:
+            derived_head_context_failures.append(f"{registered_profile_name}: external model context leaked in")
+        if bool(recipe.dependency_spec.requires_continuous_target_artifact):
+            derived_head_context_failures.append(f"{registered_profile_name}: unexpected continuous-target artifact dependency")
+        if tuple(duo_policy.loss_weights) != (0.5, 0.5):
+            derived_head_context_failures.append(f"{registered_profile_name}: dual-head loss weights drifted")
+        for head_index, source_head in enumerate(duo_policy.pair_context_source_heads):
+            if source_head is None:
+                continue
+            policy_id = duo_policy.pair_weight_policies[head_index]
+            if policy_id is None or not get_continuous_ranker_pair_weight_policy(policy_id).weighted:
+                derived_head_context_failures.append(
+                    f"{registered_profile_name}: derived pair context lacks explicit weighted policy"
+                )
+        if sem.get("mfe_head_inputs") != "shared_latent_only_no_safety_prediction_input":
+            derived_head_context_failures.append(f"{registered_profile_name}: MFE input isolation contract drifted")
+        if sem.get("safety_head_gradient_from_mfe_loss") is not False:
+            derived_head_context_failures.append(f"{registered_profile_name}: Safety stop-gradient contract drifted")
+        if sem.get("shared_encoder_gradient_from_both_heads") is not True:
+            derived_head_context_failures.append(f"{registered_profile_name}: shared encoder gradient contract drifted")
+    check(
+        "continuous_ranker_derived_head_pair_context_profiles_use_generic_composition",
+        [],
+        derived_head_context_failures,
+    )
+
+    # Exercise one discovered profile end-to-end.  The test selects by capability rather
+    # than MR/profile identity so future equivalent compositions receive the same guard.
+    capability_profile_name, capability_recipe, _capability_duo = derived_head_context_profiles[0]
+    capability_profile = get_breakout_quality_experiment_profile(capability_profile_name)
+    torch.manual_seed(42)
+    capability_model = build_active_model(
+        feature_count=10,
+        context_count=0,
+        architecture=str(capability_profile.model_architecture),
+    )
+    x = torch.randn(6, 300, 10)
+    empty_context = torch.empty((6, 0), dtype=torch.float32)
+    capability_model.eval()
+    with torch.no_grad():
+        safety_logits, mfe_before = capability_model.forward_safety_mfe_heads(x, empty_context)
+        both_logits = capability_model.forward_output_head(x, empty_context, "both")
+        final_logits = capability_model.forward_output_head(x, empty_context, "final")
+        capability_model.raw_safety_classifier.weight.add_(3.0)
+        capability_model.raw_safety_classifier.bias.sub_(2.0)
+        _changed_safety, mfe_after = capability_model.forward_safety_mfe_heads(x, empty_context)
+    check_true(
+        "continuous_ranker_shared_raw_mfe_head_is_independent_of_safety_prediction_input",
+        tuple(safety_logits.shape) == (6, 2)
+        and tuple(mfe_before.shape) == (6, 2)
+        and tuple(both_logits.shape) == (6, 4)
+        and torch.equal(final_logits, mfe_before)
+        and torch.equal(mfe_before, mfe_after),
+    )
+
+    torch.manual_seed(42)
+    gradient_model = build_active_model(
+        feature_count=10,
+        context_count=0,
+        architecture=str(capability_profile.model_architecture),
+    )
+    gradient_model.train()
+    safety_logits, mfe_logits = gradient_model.forward_safety_mfe_heads(x, empty_context)
+    batch_dates = pd.to_datetime(["2026-01-05"] * 6)
+    safety_probability = torch.softmax(safety_logits.float(), dim=1)[:, LABEL_PASS]
+    safety_percentile = _same_date_average_rank_percentile(torch, safety_probability, batch_dates)
+    pure_mfe_target = torch.tensor([0.0, 0.2, 0.4, 0.6, 0.8, 1.0], dtype=torch.float32)
+    weighted_target = torch.stack([pure_mfe_target, safety_percentile], dim=1)
+    mfe_margin = mfe_logits.float()[:, LABEL_PASS] - mfe_logits.float()[:, LABEL_REJECT]
+    configured_mfe_pair_policy = capability_recipe.training_policy.duo_head_pairwise_policy.pair_weight_policies[1]
+    mfe_loss, pair_count = _pairwise_logistic_loss(
+        torch,
+        mfe_margin,
+        weighted_target,
+        batch_dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        pair_weight_policy=str(configured_mfe_pair_policy),
+    )
+    gradient_model.zero_grad(set_to_none=True)
+    mfe_loss.backward()
+    safety_grad = gradient_model.raw_safety_classifier.weight.grad
+    mfe_grad = gradient_model.raw_mfe_classifier.weight.grad
+    encoder_grad = next(gradient_model.inception_modules[0].parameters()).grad
+    check_true(
+        "continuous_ranker_derived_head_context_is_detached_but_shared_encoder_still_trains",
+        mfe_loss is not None
+        and pair_count == 15
+        and safety_grad is None
+        and mfe_grad is not None
+        and bool(torch.isfinite(mfe_grad).all())
+        and float(mfe_grad.abs().sum().item()) > 0.0
+        and encoder_grad is not None
+        and bool(torch.isfinite(encoder_grad).all())
+        and float(encoder_grad.abs().sum().item()) > 0.0,
+    )
+
+    percentile_values = torch.tensor([0.2, 0.8, 0.8, 0.9, 0.1], dtype=torch.float32)
+    percentile_dates = pd.to_datetime(["2026-01-05"] * 3 + ["2026-01-06"] * 2)
+    torch_percentile = _same_date_average_rank_percentile(torch, percentile_values, percentile_dates)
+    canonical_percentile = build_daily_percentile_targets(
+        percentile_values.numpy(), np.ones(5, dtype=bool), percentile_dates
+    )
+    check_true(
+        "continuous_ranker_derived_head_same_date_percentile_matches_canonical_oracle",
+        np.array_equal(torch_percentile.cpu().numpy(), canonical_percentile),
+    )
+
+    torch.manual_seed(42)
+    epoch_model = build_active_model(
+        feature_count=10,
+        context_count=0,
+        architecture=str(capability_profile.model_architecture),
+    )
+    epoch_plan = resolve_torch_execution_plan(
+        torch,
+        requested_device="cpu",
+        mixed_precision=False,
+        mixed_precision_dtype="auto",
+        deterministic_algorithms=True,
+        allow_tf32=False,
+    )
+    epoch_model = epoch_model.to(epoch_plan.device)
+    epoch_optimizer = torch.optim.Adam(epoch_model.parameters(), lr=1e-4)
+    epoch_feature_bank = np.random.default_rng(42).normal(size=(6, 300, 10)).astype(np.float32)
+    epoch_target = np.stack(
+        [
+            np.asarray([0.1, 0.8, 0.4, 0.9, 0.2, 0.7], dtype=np.float32),
+            np.asarray([0.0, 0.2, 0.4, 0.6, 0.8, 1.0], dtype=np.float32),
+        ],
+        axis=1,
+    )
+    before_weight = epoch_model.raw_mfe_classifier.weight.detach().clone()
+    epoch_loss = _train_epoch(
+        torch,
+        epoch_model,
+        epoch_optimizer,
+        epoch_feature_bank,
+        np.empty((6, 0), dtype=np.float32),
+        np.arange(6, dtype=np.int64),
+        epoch_target,
+        batch_dates,
+        training_objective=str(capability_profile.training_objective),
+        batch_size=128,
+        seed=42,
+        gradient_clip_norm=1.0,
+        plan=epoch_plan,
+        grad_scaler=None,
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+    check_true(
+        "continuous_ranker_generic_duo_composition_executes_finite_update",
+        np.isfinite(float(epoch_loss))
+        and not torch.equal(before_weight, epoch_model.raw_mfe_classifier.weight.detach()),
+    )
+
     raw = np.asarray([1.0, 3.0, 2.0, 5.0, 5.0, 9.0], dtype=np.float32)
     valid = np.ones((6,), dtype=bool)
     dates = pd.Series(["2020-01-02"] * 3 + ["2021-05-03"] * 3)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 
 def build_inception_time(nn, torch, *, feature_count: int, context_count: int, spec):
+    head_contract = frozenset(str(value) for value in tuple(spec.pooling or ()))
     use_risk_context = str(spec.architecture) == "inception_time_risk_context_v1"
     use_predicted_upside_context = (
         str(spec.architecture) == "inception_time_predicted_upside_context_v1"
@@ -19,6 +20,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     )
     use_safety_conditional_mfe = (
         str(spec.architecture) == "inception_time_safety_conditional_mfe_v1"
+    )
+    use_shared_safety_mfe = (
+        "raw_safety_head" in head_contract and "raw_mfe_head" in head_contract
     )
     use_safety_raw_mfe_hmhs = str(spec.architecture) in {
         "inception_time_safety_raw_mfe_hmhs_v1",
@@ -165,7 +169,12 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             )
             self.raw_safety_classifier = (
                 nn.Linear(module_output_channels, 2)
-                if use_safety_conditional_mfe or use_safety_raw_mfe_hmhs
+                if use_safety_conditional_mfe or use_shared_safety_mfe or use_safety_raw_mfe_hmhs
+                else None
+            )
+            self.raw_mfe_classifier = (
+                nn.Linear(module_output_channels, 2)
+                if use_shared_safety_mfe
                 else None
             )
             self.conditional_mfe_classifier = (
@@ -257,6 +266,14 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             )
             return primary_logits, conditional_logits
 
+        def forward_safety_mfe_heads(self, x, context):
+            if self.raw_safety_classifier is None or self.raw_mfe_classifier is None:
+                raise ValueError("目前architecture沒有Shared Safety/MFE heads")
+            _primary_input, shared_encoded = self._encoded_for_heads(x, context)
+            safety_logits = self.raw_safety_classifier(shared_encoded)
+            raw_mfe_logits = self.raw_mfe_classifier(shared_encoded)
+            return safety_logits, raw_mfe_logits
+
         def forward_safety_conditional_mfe_heads(self, x, context):
             if self.raw_safety_classifier is None or self.conditional_mfe_classifier is None:
                 raise ValueError("目前architecture沒有Safety→Conditional-MFE heads")
@@ -297,6 +314,8 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             if head in {"primary", "mfe", "primary_mfe"}:
                 if self.conditional_safety_classifier is not None:
                     return self.forward_conditional_heads(x, context)[0]
+                if self.raw_mfe_classifier is not None:
+                    return self.forward_safety_mfe_heads(x, context)[1]
                 if self.conditional_mfe_classifier is not None:
                     return self.forward_safety_conditional_mfe_heads(x, context)[1]
                 primary_input, _shared = self._encoded_for_heads(x, context)
@@ -304,6 +323,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             if head in {"conditional_safety", "safety"}:
                 return self.forward_conditional_heads(x, context)[1]
             if head in {"conditional_both", "both"}:
+                if self.raw_mfe_classifier is not None:
+                    safety_logits, raw_mfe_logits = self.forward_safety_mfe_heads(x, context)
+                    return torch.cat([safety_logits, raw_mfe_logits], dim=1)
                 if self.conditional_mfe_classifier is not None:
                     safety_logits, conditional_mfe_logits = self.forward_safety_conditional_mfe_heads(x, context)
                     return torch.cat([safety_logits, conditional_mfe_logits], dim=1)
@@ -313,8 +335,12 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 safety_logits, raw_mfe_logits, joint_hmhs_logits = self.forward_safety_raw_mfe_hmhs_heads(x, context)
                 return torch.cat([safety_logits, raw_mfe_logits, joint_hmhs_logits], dim=1)
             if head in {"raw_safety", "safety_condition"}:
+                if self.raw_mfe_classifier is not None:
+                    return self.forward_safety_mfe_heads(x, context)[0]
                 return self.forward_safety_conditional_mfe_heads(x, context)[0]
-            if head in {"conditional_mfe", "final"}:
+            if head in {"conditional_mfe", "raw_mfe", "final"}:
+                if self.raw_mfe_classifier is not None:
+                    return self.forward_safety_mfe_heads(x, context)[1]
                 return self.forward_safety_conditional_mfe_heads(x, context)[1]
             if head in {"joint_hmhs", "hmhs"}:
                 return self.forward_safety_raw_mfe_hmhs_heads(x, context)[2]
@@ -323,6 +349,8 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
         def forward(self, x, context):
             if self.conditional_safety_classifier is not None:
                 return self.forward_conditional_heads(x, context)[0]
+            if self.raw_mfe_classifier is not None:
+                return self.forward_safety_mfe_heads(x, context)[1]
             if self.conditional_mfe_classifier is not None:
                 return self.forward_safety_conditional_mfe_heads(x, context)[1]
             primary_input, _shared = self._encoded_for_heads(x, context)

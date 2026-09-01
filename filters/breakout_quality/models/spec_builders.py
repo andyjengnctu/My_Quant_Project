@@ -351,19 +351,9 @@ def _build_inception_spec(
     )
 
 
-_INCEPTION_VARIANTS = {
-    INCEPTION_TIME_V1: ("inception_time", ("global_average",), False, ("raw_level",), None),
-    INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1: ("inception_time_conditional_mfe_safety", ("global_average", "primary_mfe_head", "conditional_safety_head"), False, ("raw_level",), None),
-    INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1: ("inception_time_safety_conditional_mfe", ("global_average", "raw_safety_head", "conditional_mfe_head"), False, ("raw_level",), None),
-    INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1: ("inception_time_safety_raw_mfe_hmhs", ("global_average", "raw_safety_head", "safety_conditioned_raw_mfe_head", "direct_hmhs_head"), False, ("raw_level",), None),
-    INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1: ("inception_time_predicted_upside_context", ("global_average", "predicted_upside_percentile_concat"), True, ("raw_level", "pit_safe_predicted_upside_percentile"), None),
-    INCEPTION_TIME_PREDICTED_SAFETY_CONTEXT_V1: ("inception_time_predicted_safety_context", ("global_average", "predicted_safety_percentile_concat"), True, ("raw_level", "pit_safe_predicted_safety_percentile"), None),
-    INCEPTION_TIME_RISK_CONTEXT_V1: ("inception_time_risk_context", ("global_average", "risk_context_mlp_concat"), True, ("raw_level", "universal_risk_economic_context"), 16),
-}
-
 
 def build_inception_variant_spec(architecture: str) -> BreakoutQualityModelSpec:
-    family, pooling, use_context, paths, head_width = _INCEPTION_VARIANTS[architecture]
+    family, pooling, use_context, paths, head_width = INCEPTION_VARIANT_SPECS[architecture]
     return _build_inception_spec(
         architecture,
         family=family,

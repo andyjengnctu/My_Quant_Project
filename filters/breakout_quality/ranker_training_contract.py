@@ -283,6 +283,7 @@ def training_semantics(profile) -> dict[str, Any]:
         slot, base_contract = _PAIRWISE_SPECIALIZED_CONTRACTS[semantics_key]
         pairwise_contract = _pairwise_contract_for_recipe(recipe)
         contract = dict(base_contract)
+        contract.update(recipe.training_policy.semantics_override_dict())
         contract["pair_weighting"] = str(recipe.pairwise_reduction)
         return _extended_semantics(
             batching=contract["batching"],

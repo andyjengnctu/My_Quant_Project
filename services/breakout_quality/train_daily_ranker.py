@@ -440,7 +440,7 @@ def _render_markdown(payload: dict) -> str:
     )
     conditional_mfe_single = objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING
     safety_conditional_mfe_duo = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
-    safety_raw_mfe_duo = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING
+    safety_raw_mfe_duo = bool(payload.get("safety_raw_mfe_evaluation"))
     safety_raw_mfe_hmhs_tri = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING
     safety_raw_mfe_joint_min_tri = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING
     direct_hmhs_only = objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING
@@ -738,9 +738,10 @@ def _render_markdown(payload: dict) -> str:
                 "新增shared-latent Direct HM/HS head，target=1[Safety percentile>=0.5 and Pure-MFE percentile>=0.5]；"
                 "三head固定等權full-list Delta-NDCG，epoch selection仍依Raw-MFE Validation Dailyρ。"
                 if safety_raw_mfe_hmhs_tri
-                else "- Safety→Raw-MFE objective：與MR-13R共用相同shared encoder／Raw Safety auxiliary head／"
-                "stop-gradient Safety context；唯一scientific變更是final head由J改學absolute Pure-MFE percentile U；"
-                "兩head固定等權full-list Delta-NDCG，無lambda／threshold／calibration。"
+                else "- Safety + Raw-MFE dual-head objective：共用shared encoder與Raw Safety auxiliary head；"
+                "Raw-MFE final head學absolute Pure-MFE percentile U。Safety在MFE側的使用方式由profile training contract固定"
+                "（可為stop-gradient head context或stop-gradient pair supervision）；兩head固定等權full-list Delta-NDCG，"
+                "final score只使用Raw-MFE head，無lambda／threshold／calibration。"
             ),
             "",
             section(f"Model-specific Extension｜{payload['model_research_id']}｜Multi-head Learnability"),
