@@ -101,6 +101,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE,
     CONTINUOUS_RANKER_AUX_TARGET_NONE,
@@ -115,6 +116,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SINGLE,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
+    CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN,
     CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS,
@@ -186,9 +188,21 @@ from config.breakout_quality_runtime import (
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_list_ndcg_pairwise"
-# Model-research menu may move ahead of strategy deployment. Active research profiles
+# Model-research menu may move ahead of strategy deployment. Active research models
 # must not silently change strategy defaults or the deployed strategy PIT identity.
-BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise"
+# Keep the user-facing MR identity and executable profile together as one canonical pair:
+# [1]/[2] consume the profile from this pair, while [3]~[6] MUST derive their list
+# from the same pair plus explicit historical/reference controls.  This makes
+# "trainable current DL => present in every compare/robustness list" an invariant
+# instead of a manual synchronization step whenever a new DL becomes the research focus.
+BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
+    "MR-13AK",
+    "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise",
+)
+# Compatibility alias for call sites that only need the executable profile slug.
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
+    BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[1]
+)
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = RESEARCH_SINGLE_SEED
@@ -434,15 +448,63 @@ BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_REFERENCE_ARM = "C17"
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_SUMMARY_PAIR = ("MR-12B", "MR-12A")
 # Forward-OOS top-prefix diagnostic. Values are descriptive only and never enter training.
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES = (1, 2, 3, 5, 10)
-# Model comparison / robustness / Strategy Compare shared target list.  Configure once:
-# [1][3] Forward model comparison, [1][4] Rolling model comparison, [1][5]/[1][6]
-# robustness routing and Strategy Compare model bindings all consume this same ordered list.
-# A model may remain model-only when no Strategy Compare arm is scientifically authorized;
-# Strategy Compare must report that binding gap instead of inventing a strategy conversion.
-BREAKOUT_QUALITY_MODEL_TEST_PROFILES = (
+# Explicit historical/reference controls for model comparison.  This is NOT the full
+# [3]~[6] membership list: the active [1]/[2] training model is injected below from
+# BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE so it cannot be forgotten when a new DL
+# becomes the current research model.
+BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     ("MR-13H", "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise"),
     ("MR-13AF", "daily_universal_predicted_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AH", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"),
+)
+
+
+def _merge_breakout_quality_model_profiles(
+    *groups: tuple[tuple[str, str], ...],
+) -> tuple[tuple[str, str], ...]:
+    """Merge ordered model/profile groups while rejecting identity collisions.
+
+    Exact duplicates are intentionally de-duplicated.  Reusing one MR id for a different
+    profile, or one profile under a different MR id, is a configuration error and fails
+    before any training/comparison workflow can run.
+    """
+
+    rows: list[tuple[str, str]] = []
+    by_model_id: dict[str, str] = {}
+    by_profile: dict[str, str] = {}
+    for group in groups:
+        for raw_model_id, raw_profile in group:
+            model_id = str(raw_model_id).strip()
+            profile = str(raw_profile).strip()
+            if not model_id or not profile:
+                raise ValueError("模型研究model id/profile不得為空")
+            existing_profile = by_model_id.get(model_id)
+            existing_model_id = by_profile.get(profile)
+            if existing_profile is not None and existing_profile != profile:
+                raise ValueError(
+                    f"模型研究model id重複綁定不同profile: {model_id} -> "
+                    f"{existing_profile!r} / {profile!r}"
+                )
+            if existing_model_id is not None and existing_model_id != model_id:
+                raise ValueError(
+                    f"模型研究profile重複綁定不同model id: {profile} -> "
+                    f"{existing_model_id!r} / {model_id!r}"
+                )
+            if existing_profile is not None:
+                continue
+            by_model_id[model_id] = profile
+            by_profile[profile] = model_id
+            rows.append((model_id, profile))
+    return tuple(rows)
+
+
+# Canonical [3]~[6] Model Compare/Test List.  Its required subset is generated from the
+# same canonical pair that drives [1]/[2]; reference controls may only add membership.
+# Therefore every current training DL is structurally guaranteed to appear in Forward /
+# Rolling comparison and Forward / Rolling robustness without a second manual edit.
+BREAKOUT_QUALITY_MODEL_TEST_PROFILES = _merge_breakout_quality_model_profiles(
+    BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES,
+    (BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,),
 )
 BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_MENU_LABEL = "模型比較（Standard SOP）"
 # Backward-compatible alias; there is no second model list.
@@ -2907,6 +2969,14 @@ def get_breakout_quality_model_test_settings() -> BreakoutQualityModelTestSettin
         (str(model_id).strip(), str(profile).strip())
         for model_id, profile in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
     )
+    required_training_model = tuple(
+        str(value).strip() for value in BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE
+    )
+    if len(required_training_model) != 2 or required_training_model not in model_profiles:
+        raise ValueError(
+            "模型比較／測試清單必須自動包含[1]/[2] canonical Training Model: "
+            f"{required_training_model!r}"
+        )
     if len(model_profiles) < 2:
         raise ValueError("模型比較／測試清單至少需要兩個model profile")
     model_ids = tuple(model_id for model_id, _profile in model_profiles)
@@ -3573,11 +3643,21 @@ def get_breakout_quality_continuous_ranker_pit_gate_settings(
 
 
 def get_breakout_quality_model_research_settings() -> BreakoutQualityWorkflowSettings:
-    """Return the active model-research identity without changing strategy defaults."""
+    """Return the canonical [1]/[2] training identity without changing strategy defaults."""
 
-    return get_breakout_quality_workflow_settings(
-        experiment_profile=BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE
+    model_id, profile_name = (
+        str(value).strip() for value in BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE
     )
+    if not model_id or not profile_name:
+        raise ValueError("canonical Training Model model id/profile不得為空")
+    research = get_continuous_ranker_research_spec(profile_name)
+    if str(research.model_research_id).strip() != model_id:
+        raise ValueError(
+            "canonical Training Model model id/profile research identity不一致: "
+            f"configured={model_id}, resolved={research.model_research_id}, "
+            f"profile={profile_name}"
+        )
+    return get_breakout_quality_workflow_settings(experiment_profile=profile_name)
 
 
 __all__ = [
@@ -3590,6 +3670,7 @@ __all__ = [
     'BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE',
     'BREAKOUT_QUALITY_DEFAULT_EPOCHS',
     'BREAKOUT_QUALITY_DEFAULT_FILTER_ID',
+    'BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE',
     'BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE',
     'BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE',
     'BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM',
@@ -3610,6 +3691,7 @@ __all__ = [
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_ENABLED',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_PROFILES',
+    'BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES',
     'BREAKOUT_QUALITY_MODEL_TEST_PROFILES',
     'BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_MENU_LABEL',
     'BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES',
