@@ -11175,3 +11175,14 @@ Decision：`MR13AK_IMPLEMENTED / RESULT_PENDING / SEED42_FORWARD_MODEL_GATE_NEXT
 | 2026-09-01 | B325 | Model Research [1]/[2]→[3]～[6] DL membership containment invariant；current Training Model自動注入shared compare/robustness list | NEW -> DONE | `config/breakout_quality.py`, `tools/validate/synthetic_breakout_quality_model_cases.py` |
 | 2026-09-01 | T444 | 新增training-pair required-subset／automatic-merge regression | NEW -> DONE | `validate_breakout_quality_continuous_ranker_contract_case` |
 
+## 2026-09-01 — B326 Multi-head Model-specific Extension restored to [3]/[4] comparison
+
+- **User authorization**：使用者澄清前一版報表第3/4點本來就是multi-head專用 evidence；Standard SOP v5把它們降為Model-specific Extension是正確方向，但[3]/[4] comparison不應因此完全遺失。使用者明確授權「需要補extension就補」。
+- **Persistent contract**：`model.standard_sop`維持v7 / fingerprint=`56e5fb1173404d7f`，common sections仍固定1～6；`model.standard_comparison`由v6升v7，approved fingerprint=`fb020874366cbbba`。v7 machine-readable contract明確授權`multi_head_learnability`與`truth_prediction_geometry`兩個Model-specific Extension IDs，fingerprint同時包含其canonical extension schemas。
+- **Renderer semantics**：[3]/[4]先完整輸出common Standard SOP 1～6，再逐model依既有`_model_sop_view(...).extensions` capability追加Model-specific Extension；不以MR id/profile/objective硬編。無multi-head evidence的model完全不顯示該extension；多個multi-head model則各自顯示自己的extension block。Rolling/Robustness mode extension排在Model-specific Extension之後。
+- **Restored evidence**：`Multi-head Learnability`沿用既有Raw Safety / Raw MFE（或其他已註冊multi-head）Daily rho、Global rho、Pair；`Truth / Prediction Geometry`沿用既有Actual Safety↔MFE、Pred Safety↔Raw-MFE、Actual S5×M5 / S4+×M4+、Pred S5×M5、joint product→actual HM/HS與5×5/cohort tables。renderer只消費canonical evaluation payload，不重算metric。
+- **Evaluation mode**：multi-head split label由canonical `evaluation_mode`決定Forward OOS / Rolling OOS，Breakout仍為Breakout slice；不建立第二份Rolling extension schema。
+- **Artifact boundary**：這是report-surface engineering change，不改model fitting/scientific/artifact identity。既有MR-13AK Forward/Rolling model與evaluation artifact可直接REUSE，只需重新跑[3]/[4]產生新版comparison report；不需重訓。
+- **Validation**：`validate_research_report_contract_freeze_case`擴充為capability-driven comparison regression，驗Standard 1～6不變、只有獲授權extension IDs可出現、non-multi-head model不出現空extension、Rolling extension ordering，以及approved persistent fingerprint freeze。
+
+Decision：`STANDARD_SOP_UNCHANGED / COMPARISON_V7_AUTHORIZED / MULTI_HEAD_EXTENSION_RESTORED / CAPABILITY_DRIVEN / NO_RETRAIN`。

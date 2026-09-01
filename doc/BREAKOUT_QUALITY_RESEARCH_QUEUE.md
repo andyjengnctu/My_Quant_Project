@@ -110,6 +110,7 @@
 
 - 2026-09-01：完成8-seed evidence後，研究角色正式固定為`A0=MR-13AH` architecture research base、`MR-13AF` Pure-MFE performance ceiling、`MR-13H` economic-target control；不再重開H/AF/AH base selection。下一個單線cell=`MR-13AK A1 Shared-AH`，先做Seed42 Forward OOS Model Gate；A2/A3均為conditional且尚未預占identity。
 - 2026-09-01：B325只收斂Model Research membership工程契約，不改scientific priority：任何成為[1]/[2] canonical Training Model的DL都由同一pair自動注入[3]～[6] Model Compare/Test List；H/AF/AH reference controls可額外保留，但不得靠第二份手寫清單決定current DL是否參與comparison/robustness。MR-13AK A1仍只先跑Seed42 Forward OOS Model Gate。
+- 2026-09-01：B326依使用者明確授權補回前一版multi-head專用第3/4 evidence，但不恢復Standard編號：`model.standard_comparison`升v7，common Standard SOP仍固定1～6；[3]/[4]在section 6後依payload capability追加`Multi-head Learnability`與`Truth / Prediction Geometry` Model-specific Extension，Rolling/Robustness mode extension再排其後。renderer不辨識MR identity，無multi-head payload的H/AF/AH不顯示空extension；既有AK artifact可直接REUSE，不重訓。
 
 ## 3. 已停止的相鄰方向（不得重新包裝成新項目）
 

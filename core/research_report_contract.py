@@ -60,6 +60,7 @@ class PersistentReportContract:
     role: str
     menu_path: tuple[str, ...]
     sections: tuple[ReportSectionContract, ...]
+    model_specific_extension_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -175,10 +176,14 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=6,
+    version=7,
     role="persistent_multi_model_comparison_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),
+    model_specific_extension_ids=(
+        "multi_head_learnability",
+        "truth_prediction_geometry",
+    ),
 )
 
 MODEL_MODE_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
@@ -476,7 +481,16 @@ def mode_extension_contract(extension_id: str) -> ModelExtensionContract:
 
 
 def _persistent_schema_payload(contract: PersistentReportContract) -> dict:
-    return asdict(contract)
+    payload = asdict(contract)
+    extension_ids = tuple(contract.model_specific_extension_ids)
+    if not extension_ids:
+        # Preserve existing fingerprints for reports whose schema did not change.
+        payload.pop("model_specific_extension_ids", None)
+        return payload
+    payload["model_specific_extensions"] = [
+        asdict(extension_contract(extension_id)) for extension_id in extension_ids
+    ]
+    return payload
 
 
 def persistent_report_contract_fingerprint(report_id: str) -> str:
@@ -503,7 +517,7 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "7b11c0b9ddf50e41",
+    "model.standard_comparison": "fb020874366cbbba",
     "model.standard_sop": "56e5fb1173404d7f",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",

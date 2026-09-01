@@ -530,7 +530,7 @@ def _model_sop_view(payload: dict) -> dict:
     ):
         if not evaluation:
             continue
-        for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
+        for scope_label, scope_key in (("Validation", "validation"), (oos_scope_label, "oos"), ("Breakout slice", "breakout_candidate_oos")):
             scope = dict(evaluation.get(scope_key) or {})
             for head_label, head_key in heads:
                 row = dict(scope.get(head_key) or {})
@@ -551,7 +551,7 @@ def _model_sop_view(payload: dict) -> dict:
         or {}
     )
     if raw_eval:
-        for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
+        for scope_label, scope_key in (("Validation", "validation"), (oos_scope_label, "oos"), ("Breakout slice", "breakout_candidate_oos")):
             scope = dict(raw_eval.get(scope_key) or {})
             for head_label, head_key in (("Raw Safety", "raw_safety"), ("Raw MFE", "raw_mfe")):
                 row = dict(scope.get(head_key) or {})
@@ -565,7 +565,7 @@ def _model_sop_view(payload: dict) -> dict:
                     })
 
     geometry_scopes = []
-    for scope_label, scope_key in (("Daily universal OOS", "oos"), ("Breakout candidate OOS", "breakout_candidate_oos")):
+    for scope_label, scope_key in ((oos_scope_label, "oos"), ("Breakout slice", "breakout_candidate_oos")):
         scope = dict(raw_eval.get(scope_key) or {})
         gate = dict(scope.get("model_gate") or {})
         if gate:
@@ -920,6 +920,81 @@ def _truth_geometry_extension_scopes(geometry_scopes: list[tuple[str, dict]]) ->
             "pred_s5_n": int(upper.get("n", 0) or 0),
         })
     return rendered_scopes
+
+
+def _render_model_comparison_specific_extensions(views: list[dict], *, target: str) -> list[str]:
+    """Render authorized capability-driven Model-specific extensions for [3]/[4].
+
+    The comparison surface never infers an MR identity or training objective. It
+    consumes extension payloads already derived by ``_model_sop_view`` and only
+    renders extension IDs explicitly authorized by the persistent comparison
+    contract. Models without the capability simply contribute no extension block.
+    """
+
+    contract = report_contract("model.standard_comparison")
+    allowed_ids = tuple(contract.model_specific_extension_ids)
+    if not allowed_ids:
+        return []
+    color = console_color_enabled()
+
+    def extension_heading(model_id: str, extension_id: str) -> str:
+        title = f"Model-specific Extension｜{model_id}｜{extension_contract(extension_id).title}"
+        if target == "console":
+            return render_section(paint(title, "cyan", enabled=color, bold=True))
+        return f"## {markdown_tone(title, 'blue', bold=True)}"
+
+    def scope_cell(value: str) -> str:
+        if target == "console":
+            tone = "gray" if str(value).lower() == "validation" else "light_yellow"
+            return paint(str(value), tone, enabled=color, bold=str(value).lower() != "validation")
+        tone = "gray" if str(value).lower() == "validation" else "light_yellow"
+        return markdown_tone(value, tone, bold=str(value).lower() != "validation")
+
+    def scope_heading(value: str) -> str:
+        if target == "console":
+            return paint(str(value), "light_yellow", enabled=color, bold=True)
+        return f"### {markdown_tone(value, 'light_yellow', bold=True)}"
+
+    parts: list[str] = []
+    for item in views:
+        model_id = str(item.get("model_id") or "MODEL")
+        view = dict(item.get("view") or {})
+        extensions = {str(ext.get("id")): dict(ext) for ext in list(view.get("extensions") or [])}
+        for extension_id in allowed_ids:
+            ext = extensions.get(extension_id)
+            if not ext:
+                continue
+            parts.append(extension_heading(model_id, extension_id))
+            if extension_id == "multi_head_learnability":
+                parts.append(_render_model_contract_table(
+                    extension_contract(extension_id).tables[0],
+                    list(ext.get("rows") or []),
+                    target=target,
+                    scope_styler=scope_cell,
+                ))
+                continue
+            if extension_id == "truth_prediction_geometry":
+                tables = {table.table_id: table for table in extension_contract(extension_id).tables}
+                for scope in _truth_geometry_extension_scopes(list(ext.get("geometry") or [])):
+                    parts.append(scope_heading(scope["scope"]))
+                    summary_rows = [dict(row) for row in scope["summary"]]
+                    if scope["actual_s5_n"] > 0 and scope["pred_s5_n"] == 0:
+                        for row in summary_rows:
+                            if row.get("metric") == "Pred S5×M5 N":
+                                row["value"] = styled_signal(
+                                    row["value"], SIGNAL_NEGATIVE, target=target,
+                                    enabled=color if target == "console" else None, bold=True,
+                                )
+                    parts.append(_render_model_contract_table(
+                        tables["geometry_summary"], summary_rows, target=target,
+                    ))
+                    for table_id in ("truth_5x5", "predicted_5x5", "safety_cohorts"):
+                        table_rows = list(scope.get(table_id) or [])
+                        if table_rows:
+                            parts.append(_render_model_contract_table(
+                                tables[table_id], table_rows, target=target,
+                            ))
+    return parts
 
 
 def _rolling_specific_extension_rows(view: dict) -> list[dict]:
@@ -1413,8 +1488,9 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
     [1][4] does not render Validation as a raw split table. For each scope-bearing
     Standard section, one numbered section title is followed by Forward OOS and
     Breakout slice tables. Generalization uses two independent transition tables:
-    Validation → OOS and OOS → Breakout slice. Model-specific extensions are not
-    part of this cross-model scorecard.
+    Validation → OOS and OOS → Breakout slice. The common scorecard remains
+    invariant; authorized capability-driven Model-specific extensions are appended
+    after Standard SOP section 6 and before evaluation-mode extensions.
     """
 
     views = _standard_model_comparison_views(models)
@@ -1565,6 +1641,11 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
             ),
         ])
 
+    # Model-specific evidence is appended outside the numbered Standard SOP and
+    # is capability-driven from each model payload. The persistent comparison
+    # contract authorizes which extension namespaces may appear here.
+    parts.extend(_render_model_comparison_specific_extensions(views, target=target))
+
     # Rolling keeps the exact same Standard SOP 1～6, then adds one mode-specific
     # stability extension. It is deliberately outside the numbered common SOP.
     if rolling_oos:
@@ -1641,6 +1722,7 @@ def _write_standard_model_comparison_report(
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "evaluation_mode": mode,
         "robustness": bool(robustness),
+        "model_specific_extension_ids": list(contract.model_specific_extension_ids),
         "models": [
             {
                 "model_id": str(item["model_id"]),

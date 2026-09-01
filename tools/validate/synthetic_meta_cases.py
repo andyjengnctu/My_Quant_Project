@@ -2879,7 +2879,9 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
     check_true(
         "standard_multi_model_comparison_schema_is_derived_from_standard_sop",
-        int(MODEL_STANDARD_COMPARISON.version) == 6
+        int(MODEL_STANDARD_COMPARISON.version) == 7
+        and tuple(MODEL_STANDARD_COMPARISON.model_specific_extension_ids)
+        == ("multi_head_learnability", "truth_prediction_geometry")
         and [(section.number, section.title) for section in MODEL_STANDARD_COMPARISON.sections]
         == [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         and all(
@@ -3222,6 +3224,37 @@ def validate_research_report_contract_freeze_case(_base_params):
             < comparison_text.find("模型比較 SOP｜6. Evidence Coverage"),
     )
 
+    check_true(
+        "multi_model_comparison_appends_only_authorized_capability_driven_model_specific_extensions",
+        all(
+            f"Model-specific Extension｜{model_id}｜Multi-head Learnability" in comparison_text
+            and f"Model-specific Extension｜{model_id}｜Truth / Prediction Geometry" in comparison_text
+            for model_id in ("MODEL-A", "MODEL-B", "MODEL-C")
+        )
+        and comparison_text.find("模型比較 SOP｜6. Evidence Coverage")
+            < comparison_text.find("Model-specific Extension｜MODEL-A｜Multi-head Learnability")
+        and "標準模型 SOP｜3. Multi-head Learnability" not in comparison_text
+        and "模型比較 SOP｜3. Multi-head Learnability" not in comparison_text,
+        detail=comparison_text,
+    )
+
+    non_multi_comparison = app._render_standard_model_comparison(
+        [
+            {"model_id": "MODEL-MULTI", "payload": control_payload},
+            {"model_id": "MODEL-NONMULTI", "payload": h_only_payload},
+        ],
+        target="console",
+    )
+    check_true(
+        "comparison_model_specific_extensions_are_payload_capability_driven_not_mr_or_objective_hardcoded",
+        "Model-specific Extension｜MODEL-MULTI｜Multi-head Learnability" in non_multi_comparison
+        and "Model-specific Extension｜MODEL-MULTI｜Truth / Prediction Geometry" in non_multi_comparison
+        and "Model-specific Extension｜MODEL-NONMULTI｜Multi-head Learnability" not in non_multi_comparison
+        and "Model-specific Extension｜MODEL-NONMULTI｜Truth / Prediction Geometry" not in non_multi_comparison
+        and "Direct HM/HS H-only Learnability" not in non_multi_comparison,
+        detail=non_multi_comparison,
+    )
+
     section3 = comparison_text.split("模型比較 SOP｜3. Upside / Downside Alignment", 1)[1].split("模型比較 SOP｜4. Top-tail Economic Quality", 1)[0]
     section4 = comparison_text.split("模型比較 SOP｜4. Top-tail Economic Quality", 1)[1].split("模型比較 SOP｜5. Ranking / Boundary", 1)[0]
     check_true(
@@ -3302,6 +3335,23 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "Fold count" in rolling_comparison
         and all(model in rolling_comparison for model in ("ROLL-A", "ROLL-B")),
         detail=rolling_comparison,
+    )
+
+    rolling_multi_payload = json.loads(json.dumps(control_payload))
+    rolling_multi_payload["standard_model_sop"] = json.loads(json.dumps(rolling_standard))
+    rolling_multi_comparison = app._render_standard_model_comparison(
+        [{"model_id": "ROLL-MULTI", "payload": rolling_multi_payload}],
+        target="console",
+    )
+    check_true(
+        "rolling_comparison_keeps_multi_head_extensions_outside_standard_sop_and_before_mode_extension",
+        "Model-specific Extension｜ROLL-MULTI｜Multi-head Learnability" in rolling_multi_comparison
+        and "Model-specific Extension｜ROLL-MULTI｜Truth / Prediction Geometry" in rolling_multi_comparison
+        and "Rolling OOS" in rolling_multi_comparison
+        and rolling_multi_comparison.find("模型比較 SOP｜6. Evidence Coverage")
+            < rolling_multi_comparison.find("Model-specific Extension｜ROLL-MULTI｜Multi-head Learnability")
+            < rolling_multi_comparison.find("Rolling-specific Extension｜Fold / Year Stability"),
+        detail=rolling_multi_comparison,
     )
 
     from services.breakout_quality.standard_model_sop import aggregate_standard_model_sop_robustness
