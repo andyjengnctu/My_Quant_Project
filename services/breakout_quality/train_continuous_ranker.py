@@ -38,6 +38,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
     CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
@@ -57,6 +58,9 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE,
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+    CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_ALL,
+    CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_CROSS,
+    CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_WITHIN_POSITIVE,
     CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_TRAINER_EVENT,
@@ -85,6 +89,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
@@ -853,6 +858,8 @@ def _pairwise_logistic_loss(
     reduction: str = CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     pair_weight_policy: str = CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
     item_eligibility=None,
+    pair_partition_membership=None,
+    pair_partition_relation: str = CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_ALL,
 ) -> tuple[Any | None, int]:
     """Return the configured RankNet loss over comparable within-day pairs.
 
@@ -873,7 +880,10 @@ def _pairwise_logistic_loss(
     Context-weighted pair policies receive ``[ranking percentile, context percentile]``.
     Pair direction and Delta-NDCG relevance remain target-driven; the policy registry
     supplies only the supervision multiplier. The final loss remains a normalized weighted
-    mean and context is supervision-only.
+    mean and context is supervision-only. ``pair_partition_membership`` optionally filters
+    comparable pairs by a binary cohort relation *after* the full item list has established
+    predicted rank positions and IDCG; unlike ``item_eligibility``, it never changes list
+    membership or Delta-NDCG geometry.
     """
 
     import torch.nn.functional as F
@@ -902,6 +912,35 @@ def _pairwise_logistic_loss(
         )
         if eligibility_values.ndim != 1 or len(eligibility_values) != int(margins.shape[0]):
             raise ValueError("pairwise item eligibility必須是一維且與margin長度一致")
+    partition_values = None
+    relation = str(pair_partition_relation)
+    if relation not in {
+        CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_ALL,
+        CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_CROSS,
+        CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_WITHIN_POSITIVE,
+    }:
+        raise ValueError(f"不支援的pair partition relation: {pair_partition_relation!r}")
+    if (
+        relation != CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_ALL
+        and base_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE
+    ):
+        raise ValueError("pair partition relation目前只支援scalar pairwise target，不支援Pareto target")
+    if pair_partition_membership is not None:
+        partition_tensor = (
+            pair_partition_membership.detach()
+            if hasattr(pair_partition_membership, "detach")
+            else pair_partition_membership
+        )
+        partition_values = np.asarray(
+            partition_tensor.cpu().numpy()
+            if hasattr(partition_tensor, "cpu")
+            else partition_tensor,
+            dtype=bool,
+        )
+        if partition_values.ndim != 1 or len(partition_values) != int(margins.shape[0]):
+            raise ValueError("pair partition membership必須是一維且與margin長度一致")
+    elif relation != CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_ALL:
+        raise ValueError("非all pair partition relation必須提供membership")
     pair_losses = []
     day_losses = []
     pair_count = 0
@@ -910,6 +949,11 @@ def _pairwise_logistic_loss(
         positions = np.flatnonzero(date_values == date_value)
         if eligibility_values is not None:
             positions = positions[eligibility_values[positions]]
+        day_partition = None
+        if partition_values is not None:
+            day_partition = torch.as_tensor(
+                partition_values[positions], dtype=torch.bool, device=margins.device
+            )
         if len(positions) < 2:
             continue
         pos = torch.as_tensor(positions, dtype=torch.long, device=margins.device)
@@ -959,6 +1003,15 @@ def _pairwise_logistic_loss(
             torch.ones_like(target_diff, dtype=torch.bool), diagonal=1
         )
         comparable = upper & (target_diff != 0)
+        if relation != CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_ALL:
+            if day_partition is None:
+                raise RuntimeError("pair partition relation缺少day membership")
+            left_partition = day_partition[:, None].expand_as(comparable)
+            right_partition = day_partition[None, :].expand_as(comparable)
+            if relation == CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_CROSS:
+                comparable = comparable & (left_partition != right_partition)
+            elif relation == CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_WITHIN_POSITIVE:
+                comparable = comparable & left_partition & right_partition
         count = int(comparable.sum().item())
         if count == 0:
             continue
@@ -1089,6 +1142,55 @@ def _pairwise_logistic_loss(
     if not day_losses:
         return None, 0
     return torch.stack(day_losses).mean(), int(ranked_date_count)
+
+
+def _binary_partition_stratified_pairwise_loss(
+    torch,
+    margins,
+    targets,
+    dates,
+    membership,
+    *,
+    reduction: str,
+) -> tuple[Any | None, int, int]:
+    """Normalize cross-partition and positive-within pair strata independently.
+
+    Both strata preserve the identical full item list for predicted rank positions,
+    IDCG and Delta-NDCG.  Only the comparable-pair mask differs.  If both strata are
+    rankable, their already-normalized losses receive a fixed 1:1 mean; if one stratum
+    is absent in a batch, the available stratum remains supervised without inventing
+    zero loss.
+    """
+
+    boundary_loss, boundary_supervision = _pairwise_logistic_loss(
+        torch,
+        margins,
+        targets,
+        dates,
+        reduction=str(reduction),
+        pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+        pair_partition_membership=membership,
+        pair_partition_relation=CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_CROSS,
+    )
+    within_positive_loss, within_positive_supervision = _pairwise_logistic_loss(
+        torch,
+        margins,
+        targets,
+        dates,
+        reduction=str(reduction),
+        pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+        pair_partition_membership=membership,
+        pair_partition_relation=CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_WITHIN_POSITIVE,
+    )
+    if boundary_loss is None and within_positive_loss is None:
+        combined = None
+    elif boundary_loss is None:
+        combined = within_positive_loss
+    elif within_positive_loss is None:
+        combined = boundary_loss
+    else:
+        combined = 0.5 * (boundary_loss + within_positive_loss)
+    return combined, int(boundary_supervision), int(within_positive_supervision)
 
 
 def _materialize_feature_batch(
@@ -1369,7 +1471,10 @@ def _train_epoch(
                 head_losses = [item[0] for item in losses_and_counts]
                 loss = sum(head_losses) / 3.0
                 loss_weight = int(max(1, sum(int(item[1]) for item in losses_and_counts)))
-            elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE:
+            elif loss_handler in {
+                CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+                CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
+            }:
                 if target.ndim != 2 or int(target.shape[1]) != 2:
                     raise ValueError("Shared Safety independent-secondary duo-head target必須為[N,2]")
                 if not hasattr(model, "forward_safety_mfe_heads"):
@@ -1396,15 +1501,35 @@ def _train_epoch(
                     reduction=str(pairwise_reduction),
                     pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
                 )
-                conditional_mfe_loss, conditional_mfe_supervision = _pairwise_logistic_loss(
-                    torch,
-                    conditional_mfe_margin,
-                    target[:, 1],
-                    batch_dates,
-                    reduction=str(pairwise_reduction),
-                    pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
-                    item_eligibility=secondary_item_eligibility,
-                )
+                if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE:
+                    if secondary_item_eligibility is not None:
+                        raise ValueError("stratified secondary objective不得同時使用item-scope mask")
+                    partition_membership = target[:, 1] > 0.0
+                    (
+                        conditional_mfe_loss,
+                        boundary_supervision,
+                        within_hs_supervision,
+                    ) = _binary_partition_stratified_pairwise_loss(
+                        torch,
+                        conditional_mfe_margin,
+                        target[:, 1],
+                        batch_dates,
+                        partition_membership,
+                        reduction=str(pairwise_reduction),
+                    )
+                    conditional_mfe_supervision = int(
+                        boundary_supervision + within_hs_supervision
+                    )
+                else:
+                    conditional_mfe_loss, conditional_mfe_supervision = _pairwise_logistic_loss(
+                        torch,
+                        conditional_mfe_margin,
+                        target[:, 1],
+                        batch_dates,
+                        reduction=str(pairwise_reduction),
+                        pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+                        item_eligibility=secondary_item_eligibility,
+                    )
                 if safety_loss is None and conditional_mfe_loss is None:
                     continue
                 if safety_loss is None:

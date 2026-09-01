@@ -7190,3 +7190,173 @@ def validate_breakout_quality_hs_priority_mfe_contract_case(_base_params):
 
     summary["training_performed"] = False
     return results, summary
+
+def validate_breakout_quality_hs_priority_stratified_mfe_contract_case(_base_params):
+    """Protect pair-stratified normalization while preserving MR-13AP truth/geometry."""
+
+    case_id = "BREAKOUT_QUALITY_HS_PRIORITY_STRATIFIED_MFE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    import numpy as np
+    import pandas as pd
+    import torch
+    from config.breakout_quality import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_breakout_quality_workflow_settings,
+        get_continuous_ranker_research_spec,
+    )
+    from config.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
+        CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_CROSS,
+        CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_WITHIN_POSITIVE,
+        CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
+        CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE,
+    )
+    from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from filters.breakout_quality.hs_conditional_mfe import build_hs_priority_mfe_targets
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality.train_continuous_ranker import (
+        _binary_partition_stratified_pairwise_loss,
+        _pairwise_logistic_loss,
+    )
+
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    research = get_continuous_ranker_research_spec(profile.name)
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    semantics = training_semantics(profile)
+    contract = dict(
+        semantics.get("shared_safety_hs_priority_stratified_mfe_duo_head_contract") or {}
+    )
+    workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
+
+    check_true(
+        "hs_priority_stratified_recipe_changes_only_secondary_pair_aggregation",
+        research.model_research_id == "MR-13AQ"
+        and profile.training_objective
+        == TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING
+        and recipe.training_policy.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE
+        and recipe.training_policy.loss_handler
+        == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE
+        and recipe.objective_policy.secondary_pair_scope == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL
+        and recipe.objective_policy.secondary_pair_scope_threshold is None
+        and recipe.objective_policy.pair_weight_policy == "none",
+    )
+    check_true(
+        "hs_priority_stratified_contract_keeps_ap_truth_and_full_list_geometry",
+        contract.get("priority_mfe_target")
+        == "mr13ap_truth_ls_equals_0_else_0.5_plus_0.5_times_same_date_mfe_percentile_within_true_hs"
+        and contract.get("priority_stratum_geometry")
+        == "same_full_list_predicted_rank_positions_idcg_and_delta_ndcg"
+        and contract.get("priority_stratum_normalization")
+        == "each_stratum_normalized_by_own_delta_ndcg_weight_sum_then_fixed_equal_mean"
+        and contract.get("priority_pair_safety_weight") == "none",
+    )
+    check_true(
+        "hs_priority_stratified_seed42_forward_gate_blocks_later_workflows",
+        research.current_model_workflow_rolling_authorized is False
+        and research.current_model_workflow_robustness_authorized is False
+        and research.selection_pit_authorized is False
+        and research.current_time_validation_authorized is False
+        and workflow.rolling_authorized is False
+        and workflow.robustness_authorized is False,
+    )
+
+    group_table = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2021-01-04"] * 5),
+            "target_favorable_r": [8.0, 6.0, 3.0, 2.0, 1.0],
+            "target_adverse_r": [4.0, 3.0, 2.0, 1.0, 0.0],
+            "label": [1, 1, 1, 1, 1],
+        }
+    )
+    aq_targets = build_hs_priority_mfe_targets(group_table, np.ones(5, dtype=bool))
+    ap_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    check_true(
+        "hs_priority_stratified_reuses_exact_ap_target_builder_and_truth",
+        get_continuous_ranker_execution_recipe(ap_profile.name).training_policy.target_builder
+        == recipe.training_policy.target_builder
+        and np.allclose(aq_targets.hs_priority_mfe_relevance, [0.0, 0.0, 1.0, 0.75, 0.5])
+        and np.array_equal(aq_targets.true_hs_mask, [False, False, True, True, True]),
+    )
+
+    dates = group_table["date"].to_numpy()
+    margins = torch.tensor([0.9, 0.7, 0.8, 0.1, -0.4], dtype=torch.float32)
+    target_tensor = torch.tensor(aq_targets.hs_priority_mfe_relevance, dtype=torch.float32)
+    membership = torch.tensor(aq_targets.true_hs_mask, dtype=torch.bool)
+    boundary_loss, boundary_pairs = _pairwise_logistic_loss(
+        torch,
+        margins,
+        target_tensor,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        pair_partition_membership=membership,
+        pair_partition_relation=CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_CROSS,
+    )
+    within_hs_loss, within_hs_pairs = _pairwise_logistic_loss(
+        torch,
+        margins,
+        target_tensor,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        pair_partition_membership=membership,
+        pair_partition_relation=CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_WITHIN_POSITIVE,
+    )
+    combined_loss, combined_boundary_pairs, combined_within_pairs = (
+        _binary_partition_stratified_pairwise_loss(
+            torch,
+            margins,
+            target_tensor,
+            dates,
+            membership,
+            reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        )
+    )
+    check_true(
+        "hs_priority_stratified_pair_partition_is_six_boundary_plus_three_hs_within",
+        boundary_pairs == combined_boundary_pairs == 6
+        and within_hs_pairs == combined_within_pairs == 3,
+    )
+    check_true(
+        "hs_priority_stratified_loss_is_equal_mean_after_each_stratum_normalization",
+        boundary_loss is not None
+        and within_hs_loss is not None
+        and combined_loss is not None
+        and torch.allclose(
+            combined_loss.detach(),
+            (0.5 * (boundary_loss + within_hs_loss)).detach(),
+            atol=0.0,
+            rtol=0.0,
+        ),
+    )
+
+    hs_sublist_loss, hs_sublist_pairs = _pairwise_logistic_loss(
+        torch,
+        margins,
+        target_tensor,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        item_eligibility=membership,
+    )
+    check_true(
+        "hs_priority_stratified_within_hs_filter_preserves_full_list_ndcg_not_hs_sublist_geometry",
+        hs_sublist_pairs == within_hs_pairs == 3
+        and hs_sublist_loss is not None
+        and within_hs_loss is not None
+        and not torch.allclose(
+            hs_sublist_loss.detach(), within_hs_loss.detach(), atol=1e-8, rtol=0.0
+        ),
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+

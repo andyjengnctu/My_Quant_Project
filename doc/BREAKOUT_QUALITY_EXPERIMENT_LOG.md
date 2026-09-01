@@ -11297,3 +11297,18 @@ Decision：`MR13AO_IMPLEMENTED_RESULT_PENDING / TRUE_HS_MEMBERSHIP_SUPERVISION /
 - **Scope**：Seed42 Forward OOS Model Gate only；`current_model_workflow_rolling_authorized=False`、`current_model_workflow_robustness_authorized=False`，不建PIT/strategy source。
 
 Decision：`MR13AP_IMPLEMENTED_RESULT_PENDING / ALL_DAILY_NON_COMPENSATORY_HS_PRIORITY / LS_EXPLICIT_WORST_SUPERVISION / DIRECT_FINAL_RANKING / SEED42_FORWARD_NEXT / NO_ROLLING_OR_STRATEGY`。
+
+## 2026-09-02 — MR-13AP Seed42 Forward Model Gate result
+
+- **Result**：selected epoch=`2`；HS-Priority Forward OOS rho/Pair=`0.1863/57.47%`，Breakout=`0.1434/56.73%`。
+- **Direction collapse**：Forward Standard Score→MFE/Safety=`-0.3610/+0.3462`；Top10 High-MFE/High-Safety=`19.50/77.45%`，HM/HS/HM/LS=`14.93/4.57%`。Breakout Score→MFE/Safety=`-0.3609/+0.3197`，High-MFE/High-Safety=`26.59/71.48%`，HM/HS/HM/LS=`18.80/7.79%`。Validation epoch-2 HS-only MFE rho=`-0.3813`。
+- **Interpretation**：AP成功讓HM/LS大幅下降，但方式是把final head學成Safety selector；LM/HS Forward=`62.52%`，未達「HS先qualify後在HS內最大化upside」。程式target與pair direction audit未發現MFE sign反轉。
+- **Mechanism**：同日約半數HS時，HS↔LS pair數約為HS↔HS的2×，AP relevance gap又約4.5×；canonical full-list ΔNDCG synthetic顯示boundary/within-HS supervision weight mass約8.5～9.1×。因此single normalized loss天然由boundary主導。Decision=`HS_LS_BOUNDARY_LEARNABLE / HS_MFE_ORDERING_COLLAPSED_AND_REVERSED / SAFETY_DOMINATED_PRIORITY_OBJECTIVE / MODEL_GATE_FAIL / STOP / NO_ROLLING / NO_ROBUSTNESS`。
+
+## 2026-09-02 — MR-13AQ HS-Priority Pair-Stratified MFE implementation
+
+- **Scientific identity**：分配下一個未占用`MR-13AQ`，profile=`daily_universal_shared_safety_hs_priority_stratified_mfe_full_list_ndcg_pairwise`；MR-13AP exact target、shared InceptionTime architecture、Safety auxiliary、Seed42/split/optimizer與direct all-daily inference全部固定。
+- **唯一change**：final-head comparable pairs分為`HS↔LS boundary`與`HS↔HS upside`兩stratum；兩者保留同一full daily list的predicted rank positions、IDCG與ΔNDCG weights，但各自以自身weight sum先normalize，再固定`0.5/0.5`平均。LS↔LS仍因target tie無direction。此0.5/0.5不是tunable lambda，而是兩個不可補償constraint的對稱aggregation contract；第一輪不做weight sweep。
+- **Implementation capability**：新增generic binary pair-partition relation primitive；pair mask只在comparable-pair層套用，不改list membership，因此不同於AO true-HS sublist scope。AQ由dedicated reusable loss handler組合該primitive，trainer不辨識MR identity。
+- **Authorization / Gate**：`selection_pit_authorized=False`、current Rolling/Robustness均False；只執行Seed42 Forward Model Gate。Primary要求HS-only MFE ordering由AP反向狀態恢復為正，同時HS↔LS boundary保持有效；最終仍以all-daily/Breakout HM/HS、HM/LS、High-MFE/High-Safety判定。
+

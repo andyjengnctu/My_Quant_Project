@@ -31,6 +31,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_PRIORITY_MFE,
+    CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_PRIMARY,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN,)
@@ -183,6 +184,30 @@ SHARED_SAFETY_HS_PRIORITY_MFE_DUO_HEAD_TRAINING_CONTRACT = {
     "priority_supervision_scope": "all_rows_same_date_full_list_delta_ndcg",
     "priority_pair_safety_weight": "none",
     "shared_encoder_gradient": "safety_all_rows_plus_priority_all_rows",
+    "head_weighting": "fixed_equal_mean_no_lambda_sweep",
+    "epoch_selection": "hs_priority_mfe_mean_daily_spearman",
+    "runtime_score": "hs_priority_mfe_pass_probability_direct_all_daily_ranking",
+    "runtime_status": "seed42_forward_model_gate_only_no_pit_no_strategy_conversion",
+    "batching": "whole_date_pack_no_date_split",
+}
+
+
+SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_DUO_HEAD_TRAINING_CONTRACT = {
+    "sample_scope": "daily_eligible_stock_days_full_universe_encoder_and_final_head_supervision",
+    "safety_target": "same_date_low_adverse_safety_percentile_over_full_universe",
+    "priority_mfe_target": "mr13ap_truth_ls_equals_0_else_0.5_plus_0.5_times_same_date_mfe_percentile_within_true_hs",
+    "true_hs_definition": "same_date_low_adverse_safety_percentile_gte_0.50",
+    "ranking_constraint": "every_true_hs_strictly_above_every_true_ls_then_mfe_order_within_hs",
+    "ls_ordering": "all_true_ls_tied_at_worst_relevance_no_ls_internal_direction",
+    "architecture": "shared_encoder_independent_raw_safety_and_hs_priority_mfe_heads",
+    "priority_head_inputs": "shared_latent_only_no_predicted_safety_context",
+    "safety_supervision_scope": "all_rows_same_date_full_list_delta_ndcg",
+    "priority_supervision_scope": "all_rows_same_date_full_list_delta_ndcg_pair_stratified",
+    "priority_pair_strata": "hs_vs_ls_boundary_and_hs_vs_hs_upside",
+    "priority_stratum_geometry": "same_full_list_predicted_rank_positions_idcg_and_delta_ndcg",
+    "priority_stratum_normalization": "each_stratum_normalized_by_own_delta_ndcg_weight_sum_then_fixed_equal_mean",
+    "priority_pair_safety_weight": "none",
+    "shared_encoder_gradient": "safety_all_rows_plus_pair_stratified_priority_all_rows",
     "head_weighting": "fixed_equal_mean_no_lambda_sweep",
     "epoch_selection": "hs_priority_mfe_mean_daily_spearman",
     "runtime_score": "hs_priority_mfe_pass_probability_direct_all_daily_ranking",
@@ -364,6 +389,10 @@ _PAIRWISE_SPECIALIZED_CONTRACTS = {
         "shared_safety_hs_priority_mfe_duo_head_contract",
         SHARED_SAFETY_HS_PRIORITY_MFE_DUO_HEAD_TRAINING_CONTRACT,
     ),
+    CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE: (
+        "shared_safety_hs_priority_stratified_mfe_duo_head_contract",
+        SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_DUO_HEAD_TRAINING_CONTRACT,
+    ),
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS: (
         "safety_raw_mfe_hmhs_tri_head_contract",
         SAFETY_RAW_MFE_HMHS_TRI_HEAD_TRAINING_CONTRACT,
@@ -512,6 +541,7 @@ __all__ = [
     "SHARED_SAFETY_WEIGHTED_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SHARED_SAFETY_HS_CONDITIONAL_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SHARED_SAFETY_HS_PRIORITY_MFE_DUO_HEAD_TRAINING_CONTRACT",
+    "SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SAFETY_RAW_MFE_HMHS_TRI_HEAD_TRAINING_CONTRACT",
     "SAFETY_RAW_MFE_JOINT_MIN_TRI_HEAD_TRAINING_CONTRACT",
     "training_semantics",
