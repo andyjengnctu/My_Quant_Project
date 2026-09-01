@@ -1198,14 +1198,23 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         [str(shared_training.experiment_profile)]
         + [str(profile_name) for _model_id, profile_name in shared_test]
     ))
+    def _expected_current_rolling_authorization(profile_name):
+        research = breakout_quality_config.get_continuous_ranker_research_spec(
+            str(profile_name)
+        )
+        override = research.current_model_workflow_rolling_authorized
+        return True if override is None else bool(override)
+
     check_true(
-        "model_workflow_training_and_test_ssots_are_current_rolling_authorization_sources",
+        "model_workflow_ssot_authorizes_rolling_unless_research_contract_explicitly_vetoes",
         tuple(configured_workflow_profiles) == expected_workflow_profiles
-        and shared_training.rolling_authorized is True
+        and shared_training.rolling_authorized
+        == _expected_current_rolling_authorization(shared_training.experiment_profile)
         and all(
             breakout_quality_config.get_breakout_quality_workflow_settings(
                 experiment_profile=str(profile_name)
             ).rolling_authorized
+            == _expected_current_rolling_authorization(profile_name)
             for _model_id, profile_name in shared_test
         ),
     )
@@ -3936,12 +3945,19 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
         and combined_research.current_time_validation_authorized is False,
     )
 
-    comparison_ids = [str(model_id) for model_id, _profile_name in BREAKOUT_QUALITY_MODEL_TEST_PROFILES]
+    comparison_pairs = [
+        (str(model_id), str(profile_name))
+        for model_id, profile_name in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+    ]
+    current_training_pair = tuple(
+        str(value) for value in breakout_quality_config.BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE
+    )
     check_true(
-        "continuous_dl_comparison_membership_returns_to_ak_base_after_an_closure",
-        comparison_ids == ["MR-13H", "MR-13AF", "MR-13AH", "MR-13AK", "MR-13AM"]
-        and "MR-13AL" not in comparison_ids
-        and "MR-13AN" not in comparison_ids,
+        "continuous_dl_comparison_membership_keeps_ak_reference_and_injects_current_training_identity",
+        current_training_pair in comparison_pairs
+        and any(model_id == "MR-13AK" for model_id, _profile_name in comparison_pairs)
+        and "MR-13AL" not in {model_id for model_id, _profile_name in comparison_pairs}
+        and "MR-13AN" not in {model_id for model_id, _profile_name in comparison_pairs},
     )
 
     torch.manual_seed(42)
@@ -6854,5 +6870,179 @@ def validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case
         "evaluation_reference_profile = research_spec.evaluation_reference_profile_name" in trainer_text
         and "or research_spec.reference_profile_name" not in trainer_text,
     )
+    summary["training_performed"] = False
+    return results, summary
+
+
+
+def validate_breakout_quality_true_hs_scoped_pair_membership_contract_case(_base_params):
+    """Protect true-HS Conditional-MFE list membership and lexicographic attribution semantics."""
+
+    case_id = "BREAKOUT_QUALITY_TRUE_HS_SCOPED_PAIR_MEMBERSHIP"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    import numpy as np
+    import pandas as pd
+    import torch
+    from config.breakout_quality import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_continuous_ranker_research_spec,
+    )
+    from config.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+        CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
+    )
+    from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from filters.breakout_quality.hs_conditional_mfe import build_hs_conditional_mfe_targets
+    from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality.train_continuous_ranker import _pairwise_logistic_loss
+
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    research = get_continuous_ranker_research_spec(profile.name)
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    model_spec = get_model_spec(str(profile.model_architecture))
+    semantics = training_semantics(profile)
+    contract = dict(semantics.get("shared_safety_hs_conditional_mfe_duo_head_contract") or {})
+
+    check_true(
+        "true_hs_scope_is_declarative_and_reuses_shared_ak_architecture",
+        profile.training_objective
+        == TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING
+        and recipe.training_policy.target_builder
+        == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE
+        and recipe.training_policy.loss_handler
+        == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE
+        and recipe.objective_policy.secondary_pair_scope
+        == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN
+        and float(recipe.objective_policy.secondary_pair_scope_threshold) == 0.50
+        and recipe.objective_policy.pair_weight_policy == "none"
+        and str(profile.model_architecture) == "inception_time_shared_safety_mfe_v1",
+    )
+    check_true(
+        "true_hs_scope_has_same_gate_ak_attribution_reference_only",
+        research.model_gate_reference_profile_name
+        == DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        and research.reference_profile_name is None
+        and research.evaluation_reference_profile_name is None,
+    )
+    from config.breakout_quality import get_breakout_quality_workflow_settings
+    ao_workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
+    check_true(
+        "true_hs_seed42_forward_gate_blocks_rolling_and_robustness",
+        research.current_model_workflow_rolling_authorized is False
+        and research.current_model_workflow_robustness_authorized is False
+        and ao_workflow.rolling_authorized is False
+        and ao_workflow.robustness_authorized is False,
+    )
+    check_true(
+        "true_hs_contract_is_non_compensatory_and_has_no_safety_context_or_pair_weight",
+        contract.get("conditional_mfe_supervision_scope")
+        == "true_hs_items_only_sublist_before_rank_positions_idcg_and_delta_ndcg"
+        and contract.get("conditional_mfe_head_inputs")
+        == "shared_latent_only_no_predicted_safety_context"
+        and contract.get("conditional_mfe_pair_safety_weight") == "none"
+        and contract.get("runtime_score")
+        == "conditional_mfe_pass_probability_after_predicted_safety_qualification"
+        and model_spec.final_mfe_topology_contract().get("mfe_head_inputs")
+        == "shared_latent_only_no_safety_prediction_input",
+    )
+
+    group_table = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2021-01-04"] * 5),
+            "target_favorable_r": [8.0, 6.0, 3.0, 2.0, 1.0],
+            "target_adverse_r": [4.0, 3.0, 2.0, 1.0, 0.0],
+        }
+    )
+    targets = build_hs_conditional_mfe_targets(
+        group_table,
+        np.ones(5, dtype=bool),
+        true_hs_percentile_cutoff=0.50,
+    )
+    check_true(
+        "true_hs_target_is_full_universe_safety_but_hs_cohort_mfe_percentile",
+        np.array_equal(targets.true_hs_mask, np.asarray([False, False, True, True, True]))
+        and np.isnan(targets.conditional_mfe_percentile[:2]).all()
+        and np.allclose(targets.conditional_mfe_percentile[2:], [1.0, 0.5, 0.0])
+        and np.allclose(targets.low_adverse_safety_percentile, [0.0, 0.25, 0.5, 0.75, 1.0]),
+    )
+
+    dates = group_table["date"].to_numpy()
+    target_tensor = torch.tensor(targets.conditional_mfe_percentile, dtype=torch.float32)
+    eligibility = targets.true_hs_mask
+    margins_a = torch.tensor([100.0, -100.0, 0.8, 0.1, -0.4], dtype=torch.float32)
+    margins_b = torch.tensor([-100.0, 100.0, 0.8, 0.1, -0.4], dtype=torch.float32)
+    loss_a, pair_count_a = _pairwise_logistic_loss(
+        torch,
+        margins_a,
+        target_tensor,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        item_eligibility=eligibility,
+    )
+    loss_b, pair_count_b = _pairwise_logistic_loss(
+        torch,
+        margins_b,
+        target_tensor,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        item_eligibility=eligibility,
+    )
+    check_true(
+        "ls_margin_changes_cannot_change_hs_sublist_delta_ndcg_geometry",
+        pair_count_a == pair_count_b == 3
+        and torch.allclose(loss_a.detach(), loss_b.detach(), atol=0.0, rtol=0.0),
+    )
+
+    from services.breakout_quality.train_daily_ranker import _hs_lexicographic_reference_control
+    loader_group_table = group_table.assign(
+        ticker=["A", "B", "C", "D", "E"],
+        label=np.ones(5, dtype=np.int64),
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        frozen_path = Path(tmpdir) / "ak_forward_scores.csv"
+        pd.DataFrame(
+            {
+                "ticker": ["A", "B", "C", "D", "E"],
+                "date": ["2021-01-04"] * 5,
+                "group_index": [0, 1, 2, 3, 4],
+                "raw_safety_score": [0.10, 0.20, 0.30, 0.80, 0.90],
+                "raw_mfe_score": [0.90, 0.80, 0.70, 0.60, 0.50],
+            }
+        ).to_csv(frozen_path, index=False)
+        with patch(
+            "services.breakout_quality.train_daily_ranker.resolve_continuous_ranker_oos_score_path",
+            return_value=frozen_path,
+        ):
+            reference_control = _hs_lexicographic_reference_control(
+                filter_id="breakout_quality_v1",
+                reference_profile_name=(
+                    DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+                ),
+                group_table=loader_group_table,
+                hs_targets=targets,
+                oos_ids=np.arange(5, dtype=np.int64),
+                breakout_candidate_ids=np.asarray([2, 3, 4], dtype=np.int64),
+            )
+    check_true(
+        "ak_same_gate_reference_uses_daily_universal_safety_percentile_before_breakout_filter",
+        reference_control.get("available") is True
+        and reference_control["oos"]["lexicographic_model_gate"]["predicted_hs_n"] == 3
+        and reference_control["breakout_candidate_oos"]["lexicographic_model_gate"][
+            "predicted_safety_percentile_source"
+        ]
+        == "caller_supplied_daily_universal_percentile_no_subset_rerank",
+    )
+
     summary["training_performed"] = False
     return results, summary

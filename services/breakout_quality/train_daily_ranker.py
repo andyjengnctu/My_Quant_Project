@@ -29,6 +29,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
+    CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
     normalize_continuous_ranker_pair_weight_configuration,
@@ -45,7 +46,9 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
+    get_breakout_quality_experiment_profile,
     get_continuous_ranker_research_spec,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
@@ -67,7 +70,10 @@ from filters.breakout_quality.ranker_sample_contract import (
     resolve_forward_oos_score_group_ids,
 )
 from filters.breakout_quality.paths import resolve_filter_model_output_dir
-from filters.breakout_quality.ranking_score_store import DAILY_RANKER_OOS_SCORE_FILENAME
+from filters.breakout_quality.ranking_score_store import (
+    DAILY_RANKER_OOS_SCORE_FILENAME,
+    resolve_continuous_ranker_oos_score_path,
+)
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from core.console_report import print_artifact_paths
 from core.display_common import InlineProgress
@@ -111,6 +117,116 @@ def _empty_split_metrics(group_count: int, reason: str) -> dict:
         "p_at_70pct": None,
         "raw_r_regression": None,
     }
+
+
+def _hs_lexicographic_reference_control(
+    *,
+    filter_id: str,
+    reference_profile_name: str,
+    group_table: pd.DataFrame,
+    hs_targets,
+    oos_ids: np.ndarray,
+    breakout_candidate_ids: np.ndarray,
+) -> dict:
+    """Evaluate a frozen reference ranker under the exact same P50 Safety gate.
+
+    The reference artifact is read-only.  Predicted-Safety percentiles are computed
+    over its complete persisted daily-universal Forward score universe before OOS or
+    breakout filtering, so the control cannot gain from subset re-ranking.
+    """
+
+    reference_profile = get_breakout_quality_experiment_profile(reference_profile_name)
+    score_path = resolve_continuous_ranker_oos_score_path(
+        PROJECT_ROOT,
+        filter_id,
+        reference_profile.model_architecture,
+        reference_profile_name,
+    )
+    try:
+        display_path = score_path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        display_path = score_path.name
+    base = {
+        "reference_profile": str(reference_profile_name),
+        "score_artifact": display_path,
+        "qualification_policy": "same_date_predicted_safety_percentile_ge_0.50_over_reference_daily_universal_forward_scores",
+        "ranking_policy": "reference_raw_mfe_within_predicted_hs_only",
+        "breakout_percentile_policy": "filter_daily_universal_percentiles_without_subset_rerank",
+    }
+    if not score_path.exists():
+        return {**base, "available": False, "not_available_reason": "reference_forward_oos_score_artifact_missing"}
+
+    try:
+        frame = pd.read_csv(score_path)
+        required = {"ticker", "date", "group_index", "raw_safety_score"}
+        missing = sorted(required.difference(frame.columns))
+        if missing:
+            raise ValueError(f"reference score artifact缺少欄位: {missing}")
+        mfe_column = "raw_mfe_score" if "raw_mfe_score" in frame.columns else "model_score"
+        if mfe_column not in frame.columns:
+            raise ValueError("reference score artifact缺少raw_mfe_score/model_score")
+        frame = frame[["ticker", "date", "group_index", "raw_safety_score", mfe_column]].copy()
+        frame["group_index"] = pd.to_numeric(frame["group_index"], errors="raise").astype(np.int64)
+        if frame["group_index"].duplicated().any():
+            raise ValueError("reference score artifact group_index重複")
+        frame["ticker"] = frame["ticker"].astype(str)
+        frame["date"] = pd.to_datetime(frame["date"], errors="raise").dt.normalize()
+        frame["raw_safety_score"] = pd.to_numeric(frame["raw_safety_score"], errors="coerce")
+        frame[mfe_column] = pd.to_numeric(frame[mfe_column], errors="coerce")
+        safety_values = frame["raw_safety_score"].to_numpy(dtype=np.float64)
+        mfe_values = frame[mfe_column].to_numpy(dtype=np.float64)
+        finite = np.isfinite(safety_values) & np.isfinite(mfe_values)
+        if not bool(finite.all()):
+            raise ValueError("reference Forward score artifact含非有限Raw Safety/Raw-MFE score")
+        predicted_safety_pct = build_same_date_percentile_targets(
+            safety_values,
+            np.ones(len(frame), dtype=bool),
+            frame["date"],
+        )
+        row_by_group = {int(group_id): pos for pos, group_id in enumerate(frame["group_index"].to_numpy(dtype=np.int64))}
+
+        def evaluate(required_ids: np.ndarray) -> dict:
+            ids = np.asarray(required_ids, dtype=np.int64)
+            missing_ids = [int(group_id) for group_id in ids if int(group_id) not in row_by_group]
+            if missing_ids:
+                raise ValueError(
+                    "reference Forward score artifact缺少current evaluation rows: "
+                    f"count={len(missing_ids)}, first={missing_ids[:5]}"
+                )
+            positions = np.asarray([row_by_group[int(group_id)] for group_id in ids], dtype=np.int64)
+            current = group_table.iloc[ids][["ticker", "date"]].copy()
+            current_ticker = current["ticker"].astype(str).to_numpy()
+            current_date = pd.to_datetime(current["date"], errors="raise").dt.normalize().to_numpy()
+            if not np.array_equal(current_ticker, frame.iloc[positions]["ticker"].to_numpy()):
+                raise ValueError("reference Forward artifact ticker與current group_index identity不一致")
+            if not np.array_equal(current_date, frame.iloc[positions]["date"].to_numpy()):
+                raise ValueError("reference Forward artifact date與current group_index identity不一致")
+            scores = {
+                "raw_safety": safety_values[positions].astype(np.float32),
+                "conditional_mfe": mfe_values[positions].astype(np.float32),
+            }
+            return ranker_api.hs_conditional_mfe_metrics(
+                ids,
+                group_table,
+                hs_targets,
+                scores,
+                include_top_k_quality=True,
+                predicted_safety_percentile=predicted_safety_pct[positions],
+            )
+
+        return {
+            **base,
+            "available": True,
+            "mfe_score_column": mfe_column,
+            "oos": evaluate(oos_ids),
+            "breakout_candidate_oos": evaluate(breakout_candidate_ids),
+        }
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return {
+            **base,
+            "available": False,
+            "not_available_reason": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def build_safety_raw_mfe_truth_geometry_control_from_score_frame(
@@ -444,6 +560,7 @@ def _render_markdown(payload: dict) -> str:
     )
     conditional_mfe_single = objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING
     safety_conditional_mfe_duo = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
+    hs_conditional_mfe_duo = objective == TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING
     safety_raw_mfe_duo = (
         objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING
         or bool(payload.get("safety_raw_mfe_evaluation"))
@@ -866,6 +983,81 @@ def _render_markdown(payload: dict) -> str:
                     f"| {'-' if cohort.get('hmhs_pct') is None else f"{float(cohort['hmhs_pct']):.2f}%"} |"
                 )
 
+    hs_eval = dict(payload.get("hs_conditional_mfe_evaluation") or {})
+    if hs_eval:
+        lines.extend([
+            "",
+            section(f"Model-specific Extension｜{payload['model_research_id']}｜True-HS Conditional-MFE"),
+            "",
+            "- Safety head：全daily universe supervision；Conditional-MFE head：只有true-HS items形成獨立full-list ΔNDCG sublist。",
+            "- Inference diagnostic固定為Pred-Safety同日P50 qualification → Conditional-MFE排序；Breakout沿用daily-universal predicted-Safety percentile，只filter不rerank。",
+            "",
+            "| Scope | HS-only Daily rho | HS-only Pair | Pred-HS true-LS | TopK High-MFE | TopK High-Safety | TopK HM/HS | TopK HM/LS | LS contamination lift |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ])
+        for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
+            scope = dict(hs_eval.get(key) or {})
+            learn = dict(scope.get("conditional_mfe_true_hs") or {})
+            gate = dict(scope.get("lexicographic_model_gate") or {})
+            pair = learn.get("pairwise_concordance")
+            def p(value):
+                return "-" if value is None else f"{float(value):.2f}%"
+            lines.append(
+                f"| {label} | {fmt(learn.get('mean_daily_spearman'))} "
+                f"| {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
+                f"| {p(gate.get('predicted_hs_true_ls_pct'))} "
+                f"| {p(gate.get('selected_high_mfe_pct'))} "
+                f"| {p(gate.get('selected_high_safety_pct'))} "
+                f"| {p(gate.get('selected_hmhs_pct'))} "
+                f"| {p(gate.get('selected_hmls_pct'))} "
+                f"| {fmt(gate.get('true_ls_contamination_lift_vs_predicted_hs'), 2)}× |"
+            )
+        lines.extend([
+            "",
+            "| Scope | LS Cond-rank P50 | P90 | P99 | HM/HS enrichment | Mean MFE R | Mean Adverse R |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ])
+        for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
+            gate = dict((hs_eval.get(key) or {}).get("lexicographic_model_gate") or {})
+            lines.append(
+                f"| {label} | {fmt(gate.get('true_ls_conditional_rank_percentile_p50'), 3)} "
+                f"| {fmt(gate.get('true_ls_conditional_rank_percentile_p90'), 3)} "
+                f"| {fmt(gate.get('true_ls_conditional_rank_percentile_p99'), 3)} "
+                f"| {fmt(gate.get('hmhs_enrichment_vs_predicted_hs'), 2)}× "
+                f"| {fmt(gate.get('selected_mean_favorable_r'), 3)} "
+                f"| {fmt(gate.get('selected_mean_adverse_r'), 3)} |"
+            )
+        reference_control = dict(hs_eval.get("lexicographic_reference_control") or {})
+        if reference_control.get("available"):
+            lines.extend([
+                "",
+                f"### Attribution control｜{reference_control.get('reference_profile')}",
+                "",
+                "- Control使用既有frozen Forward scores，套用與本模型完全相同的Pred-Safety P50 qualification；只有第二階段ranking改用reference Raw-MFE。",
+                "",
+                "| Scope | Model | TopK High-MFE | TopK High-Safety | TopK HM/HS | TopK HM/LS | Pred-HS true-LS |",
+                "|---|---|---:|---:|---:|---:|---:|",
+            ])
+            for label, key in (("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
+                current_gate = dict((hs_eval.get(key) or {}).get("lexicographic_model_gate") or {})
+                reference_gate = dict((reference_control.get(key) or {}).get("lexicographic_model_gate") or {})
+                for model_label, gate in ((payload.get("model_research_id"), current_gate), ("AK same-gate control", reference_gate)):
+                    lines.append(
+                        f"| {label} | {model_label} "
+                        f"| {p(gate.get('selected_high_mfe_pct'))} "
+                        f"| {p(gate.get('selected_high_safety_pct'))} "
+                        f"| {p(gate.get('selected_hmhs_pct'))} "
+                        f"| {p(gate.get('selected_hmls_pct'))} "
+                        f"| {p(gate.get('predicted_hs_true_ls_pct'))} |"
+                    )
+        elif reference_control:
+            lines.extend([
+                "",
+                "### Attribution control",
+                "",
+                f"- Reference control unavailable：`{reference_control.get('not_available_reason')}`",
+            ])
+
     pareto_eval = dict(payload.get("pareto_pair_evaluation") or {})
     if pareto_eval:
         lines.extend([
@@ -984,6 +1176,7 @@ def run(args) -> int:
     conditional_mfe_safety = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY
     conditional_mfe_single = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE
     safety_conditional_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE
+    hs_conditional_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE
     safety_raw_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE
     safety_primary_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY
     safety_raw_mfe_hmhs_tri = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS
@@ -1094,6 +1287,18 @@ def run(args) -> int:
         if conditional_mfe_single or safety_conditional_mfe_duo or safety_raw_mfe_duo or safety_raw_mfe_hmhs_tri or safety_raw_mfe_joint_min_tri or direct_hmhs_only
         else None
     )
+    hs_conditional_mfe_targets = (
+        ranker_api.build_hs_conditional_mfe_targets(
+            bundle.group_table,
+            np.isfinite(np.asarray(bundle.raw_target, dtype=np.float32)),
+            true_hs_percentile_cutoff=float(execution_recipe.objective_policy.secondary_pair_scope_threshold),
+        )
+        if hs_conditional_mfe_duo
+        else None
+    )
+    hs_conditional_mfe_evaluation = {}
+    hs_conditional_validation_heads = None
+    hs_conditional_forward_heads = None
     reverse_conditional_mfe_evaluation = {}
     reverse_validation_heads = None
     reverse_forward_heads = None
@@ -1152,6 +1357,23 @@ def run(args) -> int:
         safety_primary_forward_heads = {
             "raw_safety": forward_sidecars["raw_safety_score"],
             "primary_target": forward_scores,
+        }
+    elif hs_conditional_mfe_duo:
+        validation_scores, validation_sidecars = predict_score_output_payload(
+            torch, model, bundle, split.validation_ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+        )
+        forward_scores, forward_sidecars = predict_score_output_payload(
+            torch, model, bundle, forward_score_ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+        )
+        hs_conditional_validation_heads = {
+            "raw_safety": validation_sidecars["raw_safety_score"],
+            "conditional_mfe": validation_scores,
+        }
+        hs_conditional_forward_heads = {
+            "raw_safety": forward_sidecars["raw_safety_score"],
+            "conditional_mfe": forward_scores,
         }
     elif safety_raw_mfe_duo:
         raw_mfe_validation_heads = ranker_api.predict_safety_raw_mfe_scores(
@@ -1237,6 +1459,30 @@ def run(args) -> int:
             split.oos_ids, bundle.group_table, reverse_conditional_mfe_targets,
             oos_scores, include_top_k_quality=True,
         )
+    elif hs_conditional_mfe_duo:
+        assert hs_conditional_mfe_targets is not None
+        assert hs_conditional_validation_heads is not None and hs_conditional_forward_heads is not None
+        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
+        oos_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in split.oos_ids], dtype=np.int64)
+        forward_safety_pct = ranker_api.build_daily_percentile_targets(
+            np.asarray(hs_conditional_forward_heads["raw_safety"], dtype=np.float32),
+            np.ones(len(forward_score_ids), dtype=bool),
+            bundle.group_table.iloc[forward_score_ids]["date"].reset_index(drop=True),
+        )
+        validation_eval = ranker_api.hs_conditional_mfe_metrics(
+            split.validation_ids, bundle.group_table, hs_conditional_mfe_targets,
+            hs_conditional_validation_heads, include_top_k_quality=True,
+        )
+        oos_heads = {key: values[oos_positions] for key, values in hs_conditional_forward_heads.items()}
+        oos_eval = ranker_api.hs_conditional_mfe_metrics(
+            split.oos_ids, bundle.group_table, hs_conditional_mfe_targets,
+            oos_heads, include_top_k_quality=True,
+            predicted_safety_percentile=forward_safety_pct[oos_positions],
+        )
+        hs_conditional_mfe_evaluation["validation"] = validation_eval
+        hs_conditional_mfe_evaluation["oos"] = oos_eval
+        validation_metrics = validation_eval["conditional_mfe_true_hs"]
+        oos_metrics = oos_eval["conditional_mfe_true_hs"]
     else:
         validation_metrics = ranker_api.split_metrics(
             split.validation_ids, bundle.group_table, bundle.raw_target, percentile_target,
@@ -1253,6 +1499,36 @@ def run(args) -> int:
     candidate_ids = select_breakout_candidate_group_ids(
         bundle, split.oos_ids, allow_stale_source=bool(args.allow_stale_source)
     )
+
+    if hs_conditional_mfe_duo:
+        assert hs_conditional_mfe_targets is not None
+        assert hs_conditional_forward_heads is not None
+        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
+        if len(candidate_ids) >= 2:
+            candidate_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in candidate_ids], dtype=np.int64)
+            candidate_heads = {key: values[candidate_positions] for key, values in hs_conditional_forward_heads.items()}
+            hs_conditional_mfe_evaluation["breakout_candidate_oos"] = ranker_api.hs_conditional_mfe_metrics(
+                candidate_ids, bundle.group_table, hs_conditional_mfe_targets, candidate_heads,
+                include_top_k_quality=True,
+                predicted_safety_percentile=forward_safety_pct[candidate_positions],
+            )
+        else:
+            hs_conditional_mfe_evaluation["breakout_candidate_oos"] = {
+                "raw_safety": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
+                "conditional_mfe_true_hs": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
+                "lexicographic_model_gate": {"status": "not_evaluated_insufficient_sample"},
+            }
+        if research_spec.model_gate_reference_profile_name:
+            hs_conditional_mfe_evaluation["lexicographic_reference_control"] = (
+                _hs_lexicographic_reference_control(
+                    filter_id=str(args.filter_id),
+                    reference_profile_name=research_spec.model_gate_reference_profile_name,
+                    group_table=bundle.group_table,
+                    hs_targets=hs_conditional_mfe_targets,
+                    oos_ids=split.oos_ids,
+                    breakout_candidate_ids=candidate_ids,
+                )
+            )
 
     # Standard SOP common diagnostics depend only on actual MFE/Safety truth.
     # Model-specific predicted-Safety references are intentionally excluded.
@@ -1513,6 +1789,8 @@ def run(args) -> int:
                 score_by_group[candidate_ids], include_top_k_quality=True,
             )
             if direct_hmhs_only
+            else hs_conditional_mfe_evaluation["breakout_candidate_oos"]["conditional_mfe_true_hs"]
+            if hs_conditional_mfe_duo
             else ranker_api.split_metrics(
                 candidate_ids,
                 bundle.group_table,
@@ -1630,6 +1908,7 @@ def run(args) -> int:
 
     oos_frame = bundle.group_table.iloc[forward_score_ids][["ticker", "date", "group_index"]].copy()
     evaluable_forward_mask = np.isin(forward_score_ids, split.oos_ids)
+    evaluable_ids = forward_score_ids[evaluable_forward_mask]
     oos_frame["target_raw_r"] = np.nan
     oos_frame["target_daily_percentile"] = np.nan
     oos_frame.loc[evaluable_forward_mask, "target_raw_r"] = bundle.raw_target[
@@ -1676,6 +1955,13 @@ def run(args) -> int:
             oos_frame["target_conditional_mfe_percentile"] = np.nan
             oos_frame.loc[evaluable_forward_mask, "target_conditional_mfe_residual"] = reverse_conditional_mfe_targets.conditional_mfe_residual[evaluable_ids]
             oos_frame.loc[evaluable_forward_mask, "target_conditional_mfe_percentile"] = reverse_conditional_mfe_targets.conditional_mfe_percentile[evaluable_ids]
+    if hs_conditional_mfe_targets is not None:
+        oos_frame["target_low_adverse_safety_percentile"] = np.nan
+        oos_frame["target_pure_mfe_percentile"] = np.nan
+        oos_frame["target_hs_conditional_mfe_percentile"] = np.nan
+        oos_frame.loc[evaluable_forward_mask, "target_low_adverse_safety_percentile"] = hs_conditional_mfe_targets.low_adverse_safety_percentile[evaluable_ids]
+        oos_frame.loc[evaluable_forward_mask, "target_pure_mfe_percentile"] = hs_conditional_mfe_targets.primary_mfe_percentile[evaluable_ids]
+        oos_frame.loc[evaluable_forward_mask, "target_hs_conditional_mfe_percentile"] = hs_conditional_mfe_targets.conditional_mfe_percentile[evaluable_ids]
     if reference_raw_target is not None:
         oos_frame["reference_target_raw_r"] = np.nan
         oos_frame.loc[evaluable_forward_mask, "reference_target_raw_r"] = reference_raw_target[
@@ -1685,6 +1971,9 @@ def run(args) -> int:
     if safety_primary_forward_heads is not None:
         oos_frame["raw_safety_score"] = safety_primary_forward_heads["raw_safety"]
         oos_frame["primary_target_score"] = safety_primary_forward_heads["primary_target"]
+    if hs_conditional_forward_heads is not None:
+        oos_frame["raw_safety_score"] = hs_conditional_forward_heads["raw_safety"]
+        oos_frame["conditional_mfe_score"] = hs_conditional_forward_heads["conditional_mfe"]
     if raw_mfe_forward_heads is not None:
         oos_frame["raw_safety_score"] = raw_mfe_forward_heads["raw_safety"]
         oos_frame["raw_mfe_score"] = raw_mfe_forward_heads["raw_mfe"]
@@ -1747,6 +2036,8 @@ def run(args) -> int:
                 if conditional_mfe_safety
                 else "raw_mfe_softmax_pass_probability"
                 if safety_raw_mfe_duo or safety_raw_mfe_hmhs_tri or safety_raw_mfe_joint_min_tri
+                else "hs_conditional_mfe_softmax_pass_probability_after_safety_qualification"
+                if hs_conditional_mfe_duo
                 else "conditional_mfe_softmax_pass_probability"
                 if conditional_mfe_single or safety_conditional_mfe_duo
                 else "softmax_pass_probability_monotonic_to_two_logit_margin"
@@ -1759,6 +2050,7 @@ def run(args) -> int:
             "conditional_mfe_single_head_contract": ranker_api.training_semantics(bundle.profile).get("conditional_mfe_single_head_contract"),
             "safety_conditional_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_conditional_mfe_duo_head_contract"),
             "safety_raw_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_raw_mfe_duo_head_contract"),
+            "shared_safety_hs_conditional_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("shared_safety_hs_conditional_mfe_duo_head_contract"),
             "safety_raw_mfe_hmhs_tri_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_raw_mfe_hmhs_tri_head_contract"),
             "safety_raw_mfe_joint_min_tri_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_raw_mfe_joint_min_tri_head_contract"),
             "direct_hmhs_single_head_contract": ranker_api.training_semantics(bundle.profile).get("direct_hmhs_single_head_contract"),
@@ -1799,6 +2091,7 @@ def run(args) -> int:
         "conditional_mfe_safety_evaluation": conditional_mfe_safety_evaluation,
         "reverse_conditional_mfe_evaluation": reverse_conditional_mfe_evaluation,
         "safety_raw_mfe_evaluation": safety_raw_mfe_evaluation,
+        "hs_conditional_mfe_evaluation": hs_conditional_mfe_evaluation,
         "safety_primary_evaluation": safety_primary_evaluation,
         "safety_raw_mfe_hmhs_evaluation": safety_raw_mfe_hmhs_evaluation,
         "safety_raw_mfe_joint_min_evaluation": safety_raw_mfe_joint_min_evaluation,

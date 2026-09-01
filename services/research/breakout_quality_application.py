@@ -5117,21 +5117,36 @@ def _interactive_model_research(program_name: str) -> int:
         if choice == "1":
             return _run_continuous_forward_model_gate(program_name, settings)
         if choice == "2":
+            if not settings.rolling_authorized:
+                print("[BLOCKED] Current Model只授權Forward Model Gate；Rolling尚未授權。")
+                continue
             _run_continuous_rolling_mode_direct(program_name, settings)
             continue
         if choice == "3":
             _run_configured_model_comparison(program_name, rolling=False)
             continue
         if choice == "4":
+            if not settings.rolling_authorized:
+                print("[BLOCKED] Current Model只授權Forward Model Gate；Rolling比較尚未授權。")
+                continue
             _run_configured_model_comparison(program_name, rolling=True)
             continue
         if choice == "5":
+            if not settings.robustness_authorized:
+                print("[BLOCKED] Current Model尚未通過單一Seed Gate；Robustness尚未授權。")
+                continue
             _run_configured_model_robustness(program_name, rolling=False)
             continue
         if choice == "6":
+            if not settings.rolling_authorized or not settings.robustness_authorized:
+                print("[BLOCKED] Current Model尚未授權Rolling Robustness。")
+                continue
             _run_configured_model_robustness(program_name, rolling=True)
             continue
         if choice == "7":
+            if not settings.rolling_authorized:
+                print("[BLOCKED] Current Model尚未授權Rolling，因此不執行Rolling Timing。")
+                continue
             timing = get_breakout_quality_rolling_timing_settings()
             timing_settings = get_breakout_quality_workflow_settings(
                 experiment_profile=str(timing.experiment_profile)

@@ -52,6 +52,9 @@ TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING = (
 TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING = (
     "daily_shared_safety_weighted_primary_pairwise_ranking"
 )
+TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING = (
+    "daily_shared_safety_hs_conditional_mfe_pairwise_ranking"
+)
 TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING = (
     "daily_safety_raw_mfe_hmhs_pairwise_ranking"
 )
@@ -84,6 +87,12 @@ CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY = "min_predicted_safet
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY = "mfe_winner_predicted_safety"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY = "product_predicted_safety"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_CONFLICT_UNSAFE_WINNER_PREDICTED_SAFETY = "conflict_unsafe_winner_predicted_safety"
+CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL = "all_items"
+CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN = "primary_target_min"
+SUPPORTED_CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPES = (
+    CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
+    CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+)
 
 
 @dataclass(frozen=True)
@@ -331,6 +340,7 @@ CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE = "conditional_mfe_singl
 CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE = "safety_conditional_mfe"
 CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE = "safety_raw_mfe"
 CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY = "safety_primary"
+CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE = "hs_conditional_mfe"
 CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS = "safety_raw_mfe_hmhs"
 CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN = "safety_raw_mfe_joint_min"
 CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS = "direct_hmhs"
@@ -342,6 +352,9 @@ CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE = "conditional_duo_pairw
 CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE = "safety_mfe_duo_pairwise"
 CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE = (
     "shared_safety_weighted_mfe_duo_pairwise"
+)
+CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE = (
+    "shared_safety_scoped_mfe_duo_pairwise"
 )
 CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE = "safety_mfe_joint_tri_pairwise"
 CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE = "listwise"
@@ -359,6 +372,7 @@ CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE = "safety_conditional_mfe"
 CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE = "safety_raw_mfe"
 CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE = "shared_safety_weighted_mfe"
 CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_PRIMARY = "shared_safety_weighted_primary"
+CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE = "shared_safety_hs_conditional_mfe"
 CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS = "safety_raw_mfe_hmhs"
 CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN = "safety_raw_mfe_joint_min"
 CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS = "direct_hmhs"
@@ -466,6 +480,8 @@ class ContinuousRankerObjectivePolicy:
     pairwise_reduction: str | None
     pair_weight_policy: str = CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
     pair_target_schema: str = CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR
+    secondary_pair_scope: str = CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL
+    secondary_pair_scope_threshold: float | None = None
 
     def __post_init__(self) -> None:
         if self.pairwise_reduction is not None and self.pairwise_reduction not in SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS:
@@ -480,6 +496,15 @@ class ContinuousRankerObjectivePolicy:
         weighted = self.pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
         if weighted != (self.pair_target_schema == CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT):
             raise ValueError("pair weight policy與pair target schema不一致")
+        if self.secondary_pair_scope not in SUPPORTED_CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPES:
+            raise ValueError(f"不支援的secondary pair scope: {self.secondary_pair_scope!r}")
+        if self.secondary_pair_scope == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL:
+            if self.secondary_pair_scope_threshold is not None:
+                raise ValueError("all-items secondary pair scope不得指定threshold")
+        else:
+            threshold = self.secondary_pair_scope_threshold
+            if threshold is None or not (0.0 < float(threshold) < 1.0):
+                raise ValueError("scoped secondary pair supervision必須指定(0,1) threshold")
 
 
 @dataclass(frozen=True)
@@ -861,6 +886,15 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_PRIMARY,
             uses_pairwise_loss=True,
         ),
+        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE,
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
+            uses_pairwise_loss=True,
+        ),
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
@@ -956,6 +990,11 @@ def _resolve_continuous_ranker_context_policy(
 
 def _resolve_continuous_ranker_objective_policy(spec: Any) -> ContinuousRankerObjectivePolicy:
     reduction = spec.pairwise_reduction
+    secondary_pair_scope = str(
+        getattr(spec, "secondary_pair_scope", CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL)
+        or CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL
+    )
+    secondary_pair_scope_threshold = getattr(spec, "secondary_pair_scope_threshold", None)
     declared_pair_weight_policy = getattr(spec, "pair_weight_policy", None)
     pair_weight_policy = (
         CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
@@ -973,14 +1012,22 @@ def _resolve_continuous_ranker_objective_policy(spec: Any) -> ContinuousRankerOb
         return ContinuousRankerObjectivePolicy(
             pairwise_reduction=reduction,
             pair_target_schema=CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS,
+            secondary_pair_scope=secondary_pair_scope,
+            secondary_pair_scope_threshold=secondary_pair_scope_threshold,
         )
     if resolved_pair_weight_policy.weighted:
         return ContinuousRankerObjectivePolicy(
             pairwise_reduction=reduction,
             pair_weight_policy=resolved_pair_weight_policy.policy_id,
             pair_target_schema=CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
+            secondary_pair_scope=secondary_pair_scope,
+            secondary_pair_scope_threshold=secondary_pair_scope_threshold,
         )
-    return ContinuousRankerObjectivePolicy(pairwise_reduction=reduction)
+    return ContinuousRankerObjectivePolicy(
+        pairwise_reduction=reduction,
+        secondary_pair_scope=secondary_pair_scope,
+        secondary_pair_scope_threshold=secondary_pair_scope_threshold,
+    )
 
 
 def build_continuous_ranker_execution_recipe(
@@ -1051,6 +1098,9 @@ __all__ = (
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY",
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY",
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_CONFLICT_UNSAFE_WINNER_PREDICTED_SAFETY",
+    "CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL",
+    "CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN",
+    "SUPPORTED_CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPES",
     "SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES",
     "PREDICTED_SAFETY_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES",
     "ContinuousRankerPairWeightPolicy",
@@ -1091,6 +1141,7 @@ __all__ = (
     "CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE",
     "CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE",
     "CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE",
+    "CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE",
     "CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE",
     "CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE",
     "CONTINUOUS_RANKER_AUX_TARGET_NONE",

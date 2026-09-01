@@ -42,6 +42,7 @@ from config.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
@@ -66,6 +67,9 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_CONFLICT_UNSAFE_WINNER_PREDICTED_SAFETY,
+    CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
+    CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+    SUPPORTED_CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPES,
     SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES,
     get_continuous_ranker_pair_weight_policy,
     CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR,
@@ -94,6 +98,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY,
+    CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
     CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS,
@@ -104,6 +109,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE,
     CONTINUOUS_RANKER_AUX_TARGET_NONE,
@@ -120,6 +126,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_PRIMARY,
+    CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN,
     CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS,
@@ -190,6 +197,7 @@ from config.breakout_quality_runtime import (
 # - MR-13AL A2 Shared-AH + Safety Context: A1 loss fixed; final MFE head additionally receives detach(Safety): "daily_universal_shared_safety_context_weighted_pure_mfe_full_list_ndcg_pairwise"
 # - MR-13AM A3 AK shared architecture + H economic target: "daily_universal_shared_safety_weighted_full_horizon_opportunity_full_list_ndcg_pairwise"
 # - MR-13AN AM + A2 Safety Context: economic target fixed; final head additionally receives detach(Safety): "daily_universal_shared_safety_context_weighted_full_horizon_opportunity_full_list_ndcg_pairwise"
+# - MR-13AO true-HS Conditional-MFE: full-universe Safety supervision + true-HS-only MFE list supervision: "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
@@ -202,8 +210,8 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # "trainable current DL => present in every compare/robustness list" an invariant
 # instead of a manual synchronization step whenever a new DL becomes the research focus.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13AK",
-    "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise",
+    "MR-13AO",
+    "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
@@ -788,6 +796,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_FULL_HORIZON_OPPORTUNITY_FULL_LIST_NDCG_P
 DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_FULL_HORIZON_OPPORTUNITY_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_shared_safety_context_weighted_full_horizon_opportunity_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_safety_raw_mfe_hmhs_tri_head_full_list_ndcg_pairwise"
 )
@@ -863,6 +874,7 @@ CONTINUOUS_RANKER_TRAINING_OBJECTIVES = (
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
@@ -995,6 +1007,7 @@ class BreakoutQualityExperimentProfile:
                     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
+                    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING: "tri_head_pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING: "tri_head_pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING: "pairwise_logistic",
@@ -1012,6 +1025,8 @@ class BreakoutQualityExperimentProfile:
                     if self.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
                     else "conditional_mfe_mean_daily_spearman"
                     if self.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
+                    else "hs_conditional_mfe_mean_daily_spearman"
+                    if self.training_objective == TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING
                     else "raw_mfe_mean_daily_spearman"
                     if self.training_objective in {
                         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
@@ -1704,6 +1719,18 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_safety_conditional_mfe_v1",
     ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_v1",
+    ),
     DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         optimizer_name="adam",
@@ -1877,8 +1904,16 @@ class ContinuousRankerResearchSpec:
     score_semantic_id: str
     pairwise_reduction: str | None = None
     pair_weight_policy: str | None = None
+    secondary_pair_scope: str = CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL
+    secondary_pair_scope_threshold: float | None = None
     reference_profile_name: str | None = None
     evaluation_reference_profile_name: str | None = None
+    model_gate_reference_profile_name: str | None = None
+    # Optional current-workflow vetoes. ``None`` preserves the existing B325 rule
+    # that current model-workflow membership itself authorizes the mode.  A research
+    # cell may explicitly disable later-stage evidence until its preceding gate passes.
+    current_model_workflow_rolling_authorized: bool | None = None
+    current_model_workflow_robustness_authorized: bool | None = None
     # Historical/research PIT authorization.  This may remain true for archived
     # evidence that must still be readable/reconstructable.  Current OOS/Rolling
     # execution is governed separately by current_time_validation_authorized.
@@ -1915,6 +1950,7 @@ class ContinuousRankerResearchSpec:
             TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
+            TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
@@ -1937,6 +1973,7 @@ class ContinuousRankerResearchSpec:
                     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
                     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
                     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
+                    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
                     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
                     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
                     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
@@ -1957,6 +1994,7 @@ class ContinuousRankerResearchSpec:
                 TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
                 TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
                 TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
+                TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
                 TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
                 TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
                 TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
@@ -1967,7 +2005,22 @@ class ContinuousRankerResearchSpec:
             get_continuous_ranker_pair_weight_policy(self.pair_weight_policy)
             if self.pair_weight_policy == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE:
                 raise ValueError("research spec的pair_weight_policy=None即可表示未加權；不得顯式宣告none")
-        for reference_field in ("reference_profile_name", "evaluation_reference_profile_name"):
+        if self.secondary_pair_scope not in SUPPORTED_CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPES:
+            raise ValueError(f"不支援的secondary pair scope: {self.secondary_pair_scope!r}")
+        if self.secondary_pair_scope == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL:
+            if self.secondary_pair_scope_threshold is not None:
+                raise ValueError("all-items secondary pair scope不得指定threshold")
+        else:
+            if profile.training_objective != TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING:
+                raise ValueError("scoped secondary pair supervision只允許支援該capability的training objective")
+            threshold = self.secondary_pair_scope_threshold
+            if threshold is None or not (0.0 < float(threshold) < 1.0):
+                raise ValueError("secondary pair scope threshold必須位於(0,1)")
+        for reference_field in (
+            "reference_profile_name",
+            "evaluation_reference_profile_name",
+            "model_gate_reference_profile_name",
+        ):
             reference_value = getattr(self, reference_field)
             if reference_value is None:
                 continue
@@ -1998,7 +2051,7 @@ class ContinuousRankerResearchSpec:
                 )
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "profile_name": self.profile_name,
             "model_research_id": self.model_research_id,
             "experiment_name": self.experiment_name,
@@ -2016,6 +2069,20 @@ class ContinuousRankerResearchSpec:
                 self.current_time_validation_authorized
             ),
         }
+        if self.secondary_pair_scope != CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL:
+            payload["secondary_pair_scope"] = self.secondary_pair_scope
+            payload["secondary_pair_scope_threshold"] = float(self.secondary_pair_scope_threshold)
+        if self.model_gate_reference_profile_name is not None:
+            payload["model_gate_reference_profile_name"] = self.model_gate_reference_profile_name
+        if self.current_model_workflow_rolling_authorized is not None:
+            payload["current_model_workflow_rolling_authorized"] = bool(
+                self.current_model_workflow_rolling_authorized
+            )
+        if self.current_model_workflow_robustness_authorized is not None:
+            payload["current_model_workflow_robustness_authorized"] = bool(
+                self.current_model_workflow_robustness_authorized
+            )
+        return payload
 
 
 _CONTINUOUS_RANKER_RESEARCH_SPECS = {
@@ -2625,6 +2692,36 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days_shared_safety_context_weighted_full_horizon_opportunity_dual_head",
         score_semantic_id="daily_shared_safety_context_weighted_full_horizon_opportunity_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13AO",
+        experiment_name="MR-13AO True-HS Conditional-MFE Shared Ranker",
+        phase="13AO",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_low_adverse_safety_percentile_over_full_universe; "
+            "head2=same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "Full-universe samples仍全部進shared InceptionTime encoder且全部監督Raw Safety head；"
+            "true HS固定為same-date Safety percentile>=0.50。Conditional-MFE head只讀shared latent，"
+            "且只有true-HS items先形成獨立sublist後才計算full-list Delta-NDCG RankNet；LS rows不參與MFE pair、"
+            "predicted rank position、IDCG或Delta-NDCG geometry。MFE head不接predicted Safety、不使用Safety pair weight；"
+            "兩head loss固定1:1。Seed42 Forward Model Gate only，不授權PIT/strategy/robustness。"
+        ),
+        metric_scope="full_universe_safety_plus_true_hs_conditional_mfe",
+        score_semantic_id="daily_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        current_model_workflow_rolling_authorized=False,
+        current_model_workflow_robustness_authorized=False,
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),
@@ -3405,10 +3502,27 @@ class BreakoutQualityWorkflowSettings:
         if not self.supports_point_in_time_scores:
             return False
         recipe = get_continuous_ranker_execution_recipe(self.experiment_profile)
-        return bool(
-            recipe.current_time_validation_authorized
-            or is_breakout_quality_model_workflow_profile(self.experiment_profile)
-        )
+        current_member = is_breakout_quality_model_workflow_profile(self.experiment_profile)
+        if current_member:
+            research = get_continuous_ranker_research_spec(self.experiment_profile)
+            override = research.current_model_workflow_rolling_authorized
+            if override is not None:
+                return bool(override)
+        return bool(recipe.current_time_validation_authorized or current_member)
+
+    @property
+    def robustness_authorized(self) -> bool:
+        """Whether current multi-seed model evidence is authorized for this profile."""
+
+        if not self.is_continuous_ranker:
+            return False
+        current_member = is_breakout_quality_model_workflow_profile(self.experiment_profile)
+        if current_member:
+            research = get_continuous_ranker_research_spec(self.experiment_profile)
+            override = research.current_model_workflow_robustness_authorized
+            if override is not None:
+                return bool(override)
+        return bool(is_breakout_quality_model_test_profile(self.experiment_profile))
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload = {
@@ -3914,6 +4028,7 @@ __all__ = [
     'TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION',
     'TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING',
     'TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING',
+    'TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING',
     'TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING',
     'TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING',
     'TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING',
@@ -3941,6 +4056,7 @@ __all__ = [
     'DAILY_UNIVERSAL_PREDICTED_SAFETY_PRODUCT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_PREDICTED_SAFETY_CONFLICT_DISCOUNTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID',
     'PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID',

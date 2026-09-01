@@ -32,10 +32,10 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260823_061330_85b4aa6.zip`，SHA256 `86557e5bc9eac958dc803549ef716d06f9805de814c95af92edd066cd50c5ba4`；本輪Research SSOT稽核以fresh extraction=`research_full_ssot_audit/`開始，後續修正於同一基準的fresh worktree完成。 |
+| 基準 ZIP | `test-branch-1_20260901_234916_be3b1a90(1).zip`，SHA256 `592ef2d8701ada36ac4fe9b23bcb3821348913df041ee66565a31ef3c1bb0154`；MR-13AO implementation以fresh extraction=`/mnt/data/stock_mr13ao`進行。 |
 | SHA256／最新結果 | 本輪不新增scientific result或promotion判定。Current Strategy Compare只以`extending_current` suite執行OOS／Rolling，arms=`C61/C62/C58/C63/C59/C60`、九個same-seed contrasts；production identity仍維持既有C42/C44，除非另有正式promotion decision。 |
 | 程式版本範圍 | Active sequence architecture仍為`inception_time_v1`；current Strategy Compare第一層只保留Extending-Window Test與Extending-Window Multi-seed Robustness Test，OOS／Rolling共用同一suite。Robustness是single-seed suite的純multi-seed版本；benchmark seed count／generator／resolved sequence只讀`config/training_policy.py`當前值，目前seed_count=4；C59/C60額外model-seed-sensitive。Legacy Selection/Frozen C56/C57矩陣只保留historical compatibility。 |
-| Policy 預設 | filter=`breakout_quality_v1`、architecture=`inception_time_v1`、Seed=`42`；Model Research profile=`daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise`；Production workflow profile=`daily_universal_no_time_full_list_ndcg_pairwise`。PIT score start=`auto`、fold=`12` months、inner validation=`24` months；MR-13O research-spec固定`selection_pit_authorized=False`。 |
+| Policy 預設 | filter=`breakout_quality_v1`、Seed=`42`；Current Model Research=`MR-13AO / inception_time_shared_safety_mfe_v1 / daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise`；Production workflow仍=`MR-13E / inception_time_v1 / daily_universal_no_time_full_list_ndcg_pairwise`。MR-13AO只授權Seed42 Forward Model Gate，`selection_pit_authorized=False`、`current_time_validation_authorized=False`。 |
 | 當前最佳實證模型 | Production仍為`MR-13E / daily_universal_no_time_full_list_ndcg_pairwise` + Min/all-off + exact K/R0 constrained。C56目前是最有價值的research alternative之一，但只有Seed42 Forward正向證據；先完整補Selection/robustness再判讀。Plan C-M與Plan A依Research Queue排在C56 full-flow之後。 |
 | Dataset | 沿用既有`breakout_quality_v1` 300×10 feature bank與固定百分比Label。使用者已於2026-08-04重新訓練`inception_time_v1 / unique_group_sampling`，產生新的model／split／manifest；research report、forward-OOS scores與正式策略比較仍待選單流程執行。10A Market Bank與其他legacy工件保留於獨立路徑供歷史重現 |
 
@@ -11263,3 +11263,18 @@ Decision：`MR13AM_CLOSED_NEGATIVE_ECONOMIC_TARGET_CONTROL / MR13AN_IMPLEMENTED_
 - **Compare Suite**：`extending_current` schema=`67`；catalog新增C82/C83與三個controlled contrasts。current effective membership仍由shared Model Compare/Test List＋strategy binding派生，不建立第二份手寫current matrix。
 - **Initial scope / stop rule**：先只跑Seed42 Forward OOS與Rolling OOS。核心看Return/MDD/RoMD/EV、Exposure、High-MFE/High-Safety/HMHS、Adverse與initial-stop/path conversion；只有相對AH direct controls形成足夠大的實務差異才另行決定strategy robustness，不因小幅領先自動進8-seed。
 - **Production boundary**：C42/C44與runtime promotion truth完全不變。
+
+## 2026-09-02 — MR-13AO True-HS Conditional-MFE implementation
+
+- **Authoritative baseline**：`test-branch-1_20260901_234916_be3b1a90(1).zip`，SHA256=`592ef2d8701ada36ac4fe9b23bcb3821348913df041ee66565a31ef3c1bb0154`；fresh extract=`/mnt/data/stock_mr13ao`。
+- **Scientific identity**：分配下一個未占用`MR-13AO`，profile=`daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise`，重用`ARCH-inception_time_shared_safety_mfe_v1`。本實驗不是MR-13Q/R residual Conditional-MFE，也不是AL/AN predicted-Safety context：核心change是**MFE supervision membership**。
+- **Truth contract**：Safety truth=`same-date percentile(-target_adverse_r)`，在完整target-valid daily universe計算；`true HS = Safety percentile >= 0.50`。Conditional-MFE truth只在每個交易日的true-HS cohort內對`target_favorable_r`做average-rank percentile；true-LS rows的Conditional-MFE target刻意為NaN。
+- **Training contract**：shared encoder仍看HS+LS全universe；Raw Safety head仍以全universe full-list ΔNDCG supervision。Conditional-MFE head只讀shared latent、不接predicted Safety，且不沿用AK的predicted-Safety product pair weighting。兩head有有效loss時固定等權平均。
+- **Critical list-membership semantics**：新增generic `secondary_pair_scope=primary_target_min / threshold=0.50` capability。MFE loss不是「先建全universe ΔNDCG再把LS pair weight設0」；而是每個交易日先把LS items移出secondary sublist，再於HS sublist內建立target ordering、predicted rank positions、IDCG與ΔNDCG。若當日HS不足2筆，Conditional-MFE loss可缺席，但Raw Safety full-universe loss仍保留。
+- **Inference / Model Gate**：固定lexicographic `Pred-Safety same-date P50 qualification → Conditional-MFE ranking`，不使用product/min/harmonic/weighted sum。Breakout只filter daily-universal predicted-Safety percentile，不在subset重算。Primary evidence改為true-HS-only MFE rho/Pair/Top-tail，以及Pred-HS cohort的High-MFE/High-Safety/HM/HS/HM/LS與LS contamination。
+- **Attribution control**：AO research spec額外綁定read-only `MR-13AK` frozen Forward score artifact；AK也套完全相同Pred-Safety P50 qualification，再用AK Raw-MFE做第二階段rank。這個control只用來估`AO lexicographic − AK same-gate lexicographic`，不參與AO loss、epoch selection、target、calibration或fitting。reference artifact缺失時只在Model-specific Extension標記unavailable，不阻擋AO本身training。
+- **Research scope**：只跑Seed42 Forward OOS Model Gate；不做Rolling、multi-seed、PIT、strategy conversion、HS threshold sweep、lambda/safety target/backbone/context調整。AO另以generic current-workflow authorization veto明確阻擋Rolling／Robustness入口；不靠使用者記憶避免誤跑。C82/C83既有AK strategy implementation/artifacts保留但暫停為current下一步。
+- **Targeted validation before formal local suite**：`python -m py_compile`覆蓋AO新增/修改Python modules PASS；Continuous-ranker contract=`44/44 PASS`；Shared-AH regression=`23/23 PASS`；True-HS scoped membership capability=`7/7 PASS`。其中包含synthetic frozen AK score artifact same-gate loader，驗證group_index/ticker/date identity對齊，且Breakout沿用完整daily-universal predicted-Safety percentile、不在subset重排。正式`apps/run_bundle.py` / `apps/test_suite.py`依PROJECT_SETTINGS不由GPT執行。
+
+Decision：`MR13AO_IMPLEMENTED_RESULT_PENDING / TRUE_HS_MEMBERSHIP_SUPERVISION / AK_SAME_GATE_ATTRIBUTION_CONTROL / SEED42_FORWARD_NEXT / NO_ROLLING_OR_STRATEGY`。
+
