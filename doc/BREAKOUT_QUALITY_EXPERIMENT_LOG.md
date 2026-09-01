@@ -11278,3 +11278,22 @@ Decision：`MR13AM_CLOSED_NEGATIVE_ECONOMIC_TARGET_CONTROL / MR13AN_IMPLEMENTED_
 
 Decision：`MR13AO_IMPLEMENTED_RESULT_PENDING / TRUE_HS_MEMBERSHIP_SUPERVISION / AK_SAME_GATE_ATTRIBUTION_CONTROL / SEED42_FORWARD_NEXT / NO_ROLLING_OR_STRATEGY`。
 
+
+## 2026-09-02 — MR-13AO Seed42 Forward Model Gate result
+
+- **True-HS learnability**：Forward true-HS Conditional-MFE Daily rho/Pair=`0.3969/63.90%`；Breakout=`0.4116/67.22%`。因此「移除HM/LS MFE supervision後，HS population內是否仍有right-tail upside signal」答案為YES。
+- **Lexicographic Forward**：MR-13AO Pred-Safety P50→Conditional-MFE的High-MFE/High-Safety/HMHS/HMLS=`59.66/44.22/25.94/33.72%`；AK same-gate=`52.15/47.55/23.87/28.28%`。AO的HMHS `+2.07pp`伴隨更大的HMLS `+5.44pp`，主要是更強MFE ranking而非更純HMHS retrieval。
+- **LS contamination**：Pred-HS true-LS=`36.84%`；AO Top-tail LS contamination lift=`1.51×`，true-LS Conditional-rank P50/P90/P99=`0.616/0.934/0.996`。LS並非隨機亂飄，而是high-MFE representation合理外推到LS。
+- **Breakout replication**：AO vs AK same-gate High-MFE=`40.49 vs 39.26%`、High-Safety=`59.34 vs 60.55%`、HMHS=`24.07 vs 23.92% (+0.15pp)`、HMLS=`16.43 vs 15.34% (+1.09pp)`；HMHS增量未replicate。
+- **Decision**：`TRUE_HS_MFE_LEARNABILITY_CONFIRMED / CONDITIONAL_MFE_EXTRAPOLATES_TO_LS / LS_CONTAMINATION_AMPLIFIED / FORWARD_HMHS_GAIN_MOSTLY_MFE_DRIVEN / BREAKOUT_HMHS_INCREMENT_NOT_REPLICATED / MODEL_GATE_FAIL / STOP / NO_ROLLING / NO_ROBUSTNESS / NO_STRATEGY`。
+
+## 2026-09-02 — MR-13AP HS-Priority MFE implementation
+
+- **Authoritative baseline**：`test-branch-1_20260902_012157_6aa2e9aa.zip`，SHA256=`dc202263f0badb704cb1280e1c1ce62c6a10aa1bbee9ccdc19c72e448d2794eb`。
+- **Scientific identity**：分配下一個未占用`MR-13AP`，profile=`daily_universal_shared_safety_hs_priority_mfe_full_list_ndcg_pairwise`，重用`ARCH-inception_time_shared_safety_mfe_v1`。AO已證明HS內MFE可學，AP只改final ranking truth/supervision，直接處理AO的LS extrapolation blocker。
+- **Truth contract**：Safety仍為same-date Low-Adverse percentile，true HS固定`>=0.50`。Final relevance在完整daily list上定義：true LS固定`0`；true HS=`0.5 + 0.5 × same-date MFE percentile within true-HS cohort`。此[0,1]映射符合canonical full-list ΔNDCG relevance contract，且保證任一HS嚴格高於任一LS。
+- **Pair semantics**：all-items final list；HS↔LS pairs建立Safety-qualification boundary gradient，HS↔HS保留upside ordering，LS↔LS因同target自然tie。沒有Pred-Safety context、沒有Safety-product pair weight、沒有lambda/threshold sweep。Raw Safety auxiliary head仍以full-universe Safety truth學習，兩head有效loss固定等權。
+- **Inference / Model Gate**：final HS-Priority score直接排序all-daily universe與Breakout slice，不使用Pred-Safety gate/product/min/weighted sum。Primary看Standard SOP HMHS/HMLS/High-MFE/High-Safety/Top10 MFE/Low-Adverse與Ranking/Boundary；Model-specific Extension另外顯示Priority rho/Pair、HS-vs-LS Pair、HS-only MFE rho/Pair及Safety rho。
+- **Scope**：Seed42 Forward OOS Model Gate only；`current_model_workflow_rolling_authorized=False`、`current_model_workflow_robustness_authorized=False`，不建PIT/strategy source。
+
+Decision：`MR13AP_IMPLEMENTED_RESULT_PENDING / ALL_DAILY_NON_COMPENSATORY_HS_PRIORITY / LS_EXPLICIT_WORST_SUPERVISION / DIRECT_FINAL_RANKING / SEED42_FORWARD_NEXT / NO_ROLLING_OR_STRATEGY`。

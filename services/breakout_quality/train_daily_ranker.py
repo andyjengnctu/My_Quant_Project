@@ -30,6 +30,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
     CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
+    CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
     normalize_continuous_ranker_pair_weight_configuration,
@@ -47,6 +48,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     get_breakout_quality_experiment_profile,
     get_continuous_ranker_research_spec,
@@ -1058,6 +1060,37 @@ def _render_markdown(payload: dict) -> str:
                 f"- Reference control unavailable：`{reference_control.get('not_available_reason')}`",
             ])
 
+    hs_priority_eval = dict(payload.get("hs_priority_mfe_evaluation") or {})
+    if hs_priority_eval:
+        lines.extend([
+            "",
+            section(f"Model-specific Extension｜{payload['model_research_id']}｜HS-Priority MFE"),
+            "",
+            "- Final-head truth：true-LS relevance固定0；true-HS relevance=`0.5 + 0.5 × same-date true-HS MFE percentile`。",
+            "- 任何true-HS都嚴格高於任何true-LS；HS內再依MFE排序；LS↔LS為tie，不建立方向。",
+            "- Safety head仍作全daily universe auxiliary supervision；final HS-Priority head只讀shared latent，不吃predicted Safety。",
+            "- Inference / Standard SOP直接用HS-Priority final score排序all-daily universe；不使用Pred-Safety gate、不做product／weighted sum。",
+            "",
+            "| Scope | Priority Daily rho | Priority Pair | HS-vs-LS Pair | HS-only MFE rho | HS-only MFE Pair | Safety rho |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ])
+        for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
+            scope = dict(hs_priority_eval.get(key) or {})
+            priority = dict(scope.get("hs_priority_mfe") or {})
+            boundary = dict(scope.get("hs_vs_ls_boundary") or {})
+            hs_only = dict(scope.get("conditional_mfe_true_hs") or {})
+            safety = dict(scope.get("raw_safety") or {})
+            def pair_pct(value):
+                return "-" if value is None else f"{float(value) * 100:.2f}%"
+            lines.append(
+                f"| {label} | {fmt(priority.get('mean_daily_spearman'))} "
+                f"| {pair_pct(priority.get('pairwise_concordance'))} "
+                f"| {pair_pct(boundary.get('pairwise_concordance'))} "
+                f"| {fmt(hs_only.get('mean_daily_spearman'))} "
+                f"| {pair_pct(hs_only.get('pairwise_concordance'))} "
+                f"| {fmt(safety.get('mean_daily_spearman'))} |"
+            )
+
     pareto_eval = dict(payload.get("pareto_pair_evaluation") or {})
     if pareto_eval:
         lines.extend([
@@ -1177,6 +1210,7 @@ def run(args) -> int:
     conditional_mfe_single = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE
     safety_conditional_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE
     hs_conditional_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE
+    hs_priority_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE
     safety_raw_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE
     safety_primary_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY
     safety_raw_mfe_hmhs_tri = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS
@@ -1299,6 +1333,17 @@ def run(args) -> int:
     hs_conditional_mfe_evaluation = {}
     hs_conditional_validation_heads = None
     hs_conditional_forward_heads = None
+    hs_priority_mfe_targets = (
+        ranker_api.build_hs_priority_mfe_targets(
+            bundle.group_table,
+            np.isfinite(np.asarray(bundle.raw_target, dtype=np.float32)),
+        )
+        if hs_priority_mfe_duo
+        else None
+    )
+    hs_priority_mfe_evaluation = {}
+    hs_priority_validation_heads = None
+    hs_priority_forward_heads = None
     reverse_conditional_mfe_evaluation = {}
     reverse_validation_heads = None
     reverse_forward_heads = None
@@ -1372,6 +1417,23 @@ def run(args) -> int:
             "conditional_mfe": validation_scores,
         }
         hs_conditional_forward_heads = {
+            "raw_safety": forward_sidecars["raw_safety_score"],
+            "conditional_mfe": forward_scores,
+        }
+    elif hs_priority_mfe_duo:
+        validation_scores, validation_sidecars = predict_score_output_payload(
+            torch, model, bundle, split.validation_ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+        )
+        forward_scores, forward_sidecars = predict_score_output_payload(
+            torch, model, bundle, forward_score_ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+        )
+        hs_priority_validation_heads = {
+            "raw_safety": validation_sidecars["raw_safety_score"],
+            "conditional_mfe": validation_scores,
+        }
+        hs_priority_forward_heads = {
             "raw_safety": forward_sidecars["raw_safety_score"],
             "conditional_mfe": forward_scores,
         }
@@ -1483,6 +1545,26 @@ def run(args) -> int:
         hs_conditional_mfe_evaluation["oos"] = oos_eval
         validation_metrics = validation_eval["conditional_mfe_true_hs"]
         oos_metrics = oos_eval["conditional_mfe_true_hs"]
+    elif hs_priority_mfe_duo:
+        assert hs_priority_mfe_targets is not None
+        assert hs_priority_validation_heads is not None and hs_priority_forward_heads is not None
+        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
+        oos_positions = np.asarray(
+            [forward_position_by_group[int(group_id)] for group_id in split.oos_ids], dtype=np.int64
+        )
+        validation_eval = ranker_api.hs_priority_mfe_metrics(
+            split.validation_ids, bundle.group_table, hs_priority_mfe_targets,
+            hs_priority_validation_heads, include_top_k_quality=True,
+        )
+        oos_heads = {key: values[oos_positions] for key, values in hs_priority_forward_heads.items()}
+        oos_eval = ranker_api.hs_priority_mfe_metrics(
+            split.oos_ids, bundle.group_table, hs_priority_mfe_targets,
+            oos_heads, include_top_k_quality=True,
+        )
+        hs_priority_mfe_evaluation["validation"] = validation_eval
+        hs_priority_mfe_evaluation["oos"] = oos_eval
+        validation_metrics = validation_eval["hs_priority_mfe"]
+        oos_metrics = oos_eval["hs_priority_mfe"]
     else:
         validation_metrics = ranker_api.split_metrics(
             split.validation_ids, bundle.group_table, bundle.raw_target, percentile_target,
@@ -1529,6 +1611,27 @@ def run(args) -> int:
                     breakout_candidate_ids=candidate_ids,
                 )
             )
+
+    if hs_priority_mfe_duo:
+        assert hs_priority_mfe_targets is not None
+        assert hs_priority_forward_heads is not None
+        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
+        if len(candidate_ids) >= 2:
+            candidate_positions = np.asarray(
+                [forward_position_by_group[int(group_id)] for group_id in candidate_ids], dtype=np.int64
+            )
+            candidate_heads = {key: values[candidate_positions] for key, values in hs_priority_forward_heads.items()}
+            hs_priority_mfe_evaluation["breakout_candidate_oos"] = ranker_api.hs_priority_mfe_metrics(
+                candidate_ids, bundle.group_table, hs_priority_mfe_targets, candidate_heads,
+                include_top_k_quality=True,
+            )
+        else:
+            hs_priority_mfe_evaluation["breakout_candidate_oos"] = {
+                "raw_safety": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
+                "hs_priority_mfe": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
+                "conditional_mfe_true_hs": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
+                "hs_vs_ls_boundary": {"pairwise_concordance": None, "not_evaluated_reason": "breakout candidate OOS slice有效sample不足"},
+            }
 
     # Standard SOP common diagnostics depend only on actual MFE/Safety truth.
     # Model-specific predicted-Safety references are intentionally excluded.
@@ -1791,6 +1894,8 @@ def run(args) -> int:
             if direct_hmhs_only
             else hs_conditional_mfe_evaluation["breakout_candidate_oos"]["conditional_mfe_true_hs"]
             if hs_conditional_mfe_duo
+            else hs_priority_mfe_evaluation["breakout_candidate_oos"]["hs_priority_mfe"]
+            if hs_priority_mfe_duo
             else ranker_api.split_metrics(
                 candidate_ids,
                 bundle.group_table,
@@ -1962,6 +2067,15 @@ def run(args) -> int:
         oos_frame.loc[evaluable_forward_mask, "target_low_adverse_safety_percentile"] = hs_conditional_mfe_targets.low_adverse_safety_percentile[evaluable_ids]
         oos_frame.loc[evaluable_forward_mask, "target_pure_mfe_percentile"] = hs_conditional_mfe_targets.primary_mfe_percentile[evaluable_ids]
         oos_frame.loc[evaluable_forward_mask, "target_hs_conditional_mfe_percentile"] = hs_conditional_mfe_targets.conditional_mfe_percentile[evaluable_ids]
+    if hs_priority_mfe_targets is not None:
+        oos_frame["target_low_adverse_safety_percentile"] = np.nan
+        oos_frame["target_pure_mfe_percentile"] = np.nan
+        oos_frame["target_hs_conditional_mfe_percentile"] = np.nan
+        oos_frame["target_hs_priority_mfe_relevance"] = np.nan
+        oos_frame.loc[evaluable_forward_mask, "target_low_adverse_safety_percentile"] = hs_priority_mfe_targets.low_adverse_safety_percentile[evaluable_ids]
+        oos_frame.loc[evaluable_forward_mask, "target_pure_mfe_percentile"] = hs_priority_mfe_targets.primary_mfe_percentile[evaluable_ids]
+        oos_frame.loc[evaluable_forward_mask, "target_hs_conditional_mfe_percentile"] = hs_priority_mfe_targets.conditional_mfe_percentile[evaluable_ids]
+        oos_frame.loc[evaluable_forward_mask, "target_hs_priority_mfe_relevance"] = hs_priority_mfe_targets.hs_priority_mfe_relevance[evaluable_ids]
     if reference_raw_target is not None:
         oos_frame["reference_target_raw_r"] = np.nan
         oos_frame.loc[evaluable_forward_mask, "reference_target_raw_r"] = reference_raw_target[
@@ -1974,6 +2088,9 @@ def run(args) -> int:
     if hs_conditional_forward_heads is not None:
         oos_frame["raw_safety_score"] = hs_conditional_forward_heads["raw_safety"]
         oos_frame["conditional_mfe_score"] = hs_conditional_forward_heads["conditional_mfe"]
+    if hs_priority_forward_heads is not None:
+        oos_frame["raw_safety_score"] = hs_priority_forward_heads["raw_safety"]
+        oos_frame["hs_priority_mfe_score"] = hs_priority_forward_heads["conditional_mfe"]
     if raw_mfe_forward_heads is not None:
         oos_frame["raw_safety_score"] = raw_mfe_forward_heads["raw_safety"]
         oos_frame["raw_mfe_score"] = raw_mfe_forward_heads["raw_mfe"]
@@ -2038,6 +2155,8 @@ def run(args) -> int:
                 if safety_raw_mfe_duo or safety_raw_mfe_hmhs_tri or safety_raw_mfe_joint_min_tri
                 else "hs_conditional_mfe_softmax_pass_probability_after_safety_qualification"
                 if hs_conditional_mfe_duo
+                else "hs_priority_mfe_softmax_pass_probability_direct_all_daily_ranking"
+                if hs_priority_mfe_duo
                 else "conditional_mfe_softmax_pass_probability"
                 if conditional_mfe_single or safety_conditional_mfe_duo
                 else "softmax_pass_probability_monotonic_to_two_logit_margin"
@@ -2051,6 +2170,7 @@ def run(args) -> int:
             "safety_conditional_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_conditional_mfe_duo_head_contract"),
             "safety_raw_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_raw_mfe_duo_head_contract"),
             "shared_safety_hs_conditional_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("shared_safety_hs_conditional_mfe_duo_head_contract"),
+            "shared_safety_hs_priority_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("shared_safety_hs_priority_mfe_duo_head_contract"),
             "safety_raw_mfe_hmhs_tri_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_raw_mfe_hmhs_tri_head_contract"),
             "safety_raw_mfe_joint_min_tri_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_raw_mfe_joint_min_tri_head_contract"),
             "direct_hmhs_single_head_contract": ranker_api.training_semantics(bundle.profile).get("direct_hmhs_single_head_contract"),
@@ -2092,6 +2212,7 @@ def run(args) -> int:
         "reverse_conditional_mfe_evaluation": reverse_conditional_mfe_evaluation,
         "safety_raw_mfe_evaluation": safety_raw_mfe_evaluation,
         "hs_conditional_mfe_evaluation": hs_conditional_mfe_evaluation,
+        "hs_priority_mfe_evaluation": hs_priority_mfe_evaluation,
         "safety_primary_evaluation": safety_primary_evaluation,
         "safety_raw_mfe_hmhs_evaluation": safety_raw_mfe_hmhs_evaluation,
         "safety_raw_mfe_joint_min_evaluation": safety_raw_mfe_joint_min_evaluation,

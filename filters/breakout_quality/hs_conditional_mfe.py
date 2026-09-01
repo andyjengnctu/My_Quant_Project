@@ -37,6 +37,29 @@ class HsConditionalMfeTargets:
         ).astype(np.float32, copy=False)
 
 
+@dataclass(frozen=True)
+class HsPriorityMfeTargets:
+    """Non-compensatory all-universe ranking truth.
+
+    LS rows are tied at the worst relevance (0). HS rows occupy [0.5, 1.0]
+    according to their MFE percentile within the same-date true-HS cohort. This
+    guarantees every HS row outranks every LS row while preserving upside
+    ordering only where Safety is acceptable.
+    """
+
+    low_adverse_safety_percentile: np.ndarray
+    primary_mfe_percentile: np.ndarray
+    true_hs_mask: np.ndarray
+    conditional_mfe_percentile: np.ndarray
+    hs_priority_mfe_relevance: np.ndarray
+
+    @property
+    def training_target(self) -> np.ndarray:
+        return np.column_stack(
+            [self.low_adverse_safety_percentile, self.hs_priority_mfe_relevance]
+        ).astype(np.float32, copy=False)
+
+
 def build_hs_conditional_mfe_targets(
     group_table: pd.DataFrame,
     valid_mask: np.ndarray,
@@ -83,8 +106,49 @@ def build_hs_conditional_mfe_targets(
     )
 
 
+def build_hs_priority_mfe_targets(
+    group_table: pd.DataFrame,
+    valid_mask: np.ndarray,
+    *,
+    true_hs_percentile_cutoff: float = DEFAULT_TRUE_HS_PERCENTILE_CUTOFF,
+) -> HsPriorityMfeTargets:
+    """Build LS-floor / HS-within-cohort-MFE relevance for all-universe ranking."""
+
+    base = build_hs_conditional_mfe_targets(
+        group_table,
+        valid_mask,
+        true_hs_percentile_cutoff=true_hs_percentile_cutoff,
+    )
+    relevance = np.zeros(len(group_table), dtype=np.float32)
+    hs = np.asarray(base.true_hs_mask, dtype=bool)
+    conditional = np.asarray(base.conditional_mfe_percentile, dtype=np.float32)
+    relevance[hs] = 0.5 + 0.5 * conditional[hs]
+    valid = np.asarray(valid_mask, dtype=bool)
+    relevance[~valid] = np.nan
+
+    finite_valid = relevance[valid]
+    if len(finite_valid) and (
+        float(np.nanmin(finite_valid)) < 0.0 or float(np.nanmax(finite_valid)) > 1.0
+    ):
+        raise ValueError("HS-Priority MFE relevance必須位於0～1")
+    if bool(np.any(relevance[valid & ~hs] != 0.0)):
+        raise ValueError("LS row必須固定為最差relevance=0")
+    if bool(np.any(relevance[hs] < 0.5)):
+        raise ValueError("HS row relevance必須嚴格高於LS floor")
+
+    return HsPriorityMfeTargets(
+        low_adverse_safety_percentile=base.low_adverse_safety_percentile,
+        primary_mfe_percentile=base.primary_mfe_percentile,
+        true_hs_mask=base.true_hs_mask,
+        conditional_mfe_percentile=base.conditional_mfe_percentile,
+        hs_priority_mfe_relevance=relevance,
+    )
+
+
 __all__ = [
     "DEFAULT_TRUE_HS_PERCENTILE_CUTOFF",
     "HsConditionalMfeTargets",
+    "HsPriorityMfeTargets",
     "build_hs_conditional_mfe_targets",
+    "build_hs_priority_mfe_targets",
 ]

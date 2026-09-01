@@ -7046,3 +7046,147 @@ def validate_breakout_quality_true_hs_scoped_pair_membership_contract_case(_base
 
     summary["training_performed"] = False
     return results, summary
+
+
+def validate_breakout_quality_hs_priority_mfe_contract_case(_base_params):
+    """Protect all-daily HS-priority ranking truth and direct-score semantics."""
+
+    case_id = "BREAKOUT_QUALITY_HS_PRIORITY_MFE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    import numpy as np
+    import pandas as pd
+    import torch
+    from config.breakout_quality import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_breakout_quality_workflow_settings,
+        get_continuous_ranker_research_spec,
+    )
+    from config.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+        CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
+        CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE,
+    )
+    from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from filters.breakout_quality.hs_conditional_mfe import build_hs_priority_mfe_targets
+    from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality.train_continuous_ranker import _pairwise_logistic_loss
+
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    research = get_continuous_ranker_research_spec(profile.name)
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    model_spec = get_model_spec(str(profile.model_architecture))
+    semantics = training_semantics(profile)
+    contract = dict(semantics.get("shared_safety_hs_priority_mfe_duo_head_contract") or {})
+    workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
+
+    check_true(
+        "hs_priority_recipe_uses_all_items_without_safety_pair_weight_or_gate",
+        research.model_research_id == "MR-13AP"
+        and profile.training_objective
+        == TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING
+        and recipe.training_policy.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE
+        and recipe.training_policy.loss_handler
+        == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE
+        and recipe.objective_policy.secondary_pair_scope == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL
+        and recipe.objective_policy.secondary_pair_scope_threshold is None
+        and recipe.objective_policy.pair_weight_policy == "none"
+        and research.model_gate_reference_profile_name is None,
+    )
+    check_true(
+        "hs_priority_reuses_independent_shared_architecture_and_direct_final_head",
+        str(profile.model_architecture) == "inception_time_shared_safety_mfe_v1"
+        and model_spec.final_mfe_topology_contract().get("mfe_head_inputs")
+        == "shared_latent_only_no_safety_prediction_input"
+        and contract.get("priority_head_inputs") == "shared_latent_only_no_predicted_safety_context"
+        and contract.get("priority_pair_safety_weight") == "none"
+        and contract.get("runtime_score") == "hs_priority_mfe_pass_probability_direct_all_daily_ranking",
+    )
+    check_true(
+        "hs_priority_seed42_forward_gate_blocks_rolling_robustness_pit_and_strategy",
+        research.current_model_workflow_rolling_authorized is False
+        and research.current_model_workflow_robustness_authorized is False
+        and research.selection_pit_authorized is False
+        and research.current_time_validation_authorized is False
+        and workflow.rolling_authorized is False
+        and workflow.robustness_authorized is False,
+    )
+
+    group_table = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2021-01-04"] * 5),
+            # First two rows are deliberately huge-MFE LS examples.
+            "target_favorable_r": [8.0, 6.0, 3.0, 2.0, 1.0],
+            "target_adverse_r": [4.0, 3.0, 2.0, 1.0, 0.0],
+            "label": [1, 1, 1, 1, 1],
+        }
+    )
+    targets = build_hs_priority_mfe_targets(group_table, np.ones(5, dtype=bool))
+    check_true(
+        "hs_priority_truth_puts_every_ls_at_zero_and_orders_only_hs_by_mfe",
+        np.array_equal(targets.true_hs_mask, np.asarray([False, False, True, True, True]))
+        and np.allclose(targets.low_adverse_safety_percentile, [0.0, 0.25, 0.5, 0.75, 1.0])
+        and np.isnan(targets.conditional_mfe_percentile[:2]).all()
+        and np.allclose(targets.conditional_mfe_percentile[2:], [1.0, 0.5, 0.0])
+        and np.allclose(targets.hs_priority_mfe_relevance, [0.0, 0.0, 1.0, 0.75, 0.5]),
+    )
+    check_true(
+        "hs_priority_truth_is_non_compensatory_even_for_extreme_hmls",
+        float(targets.hs_priority_mfe_relevance[0]) == 0.0
+        and float(targets.hs_priority_mfe_relevance[1]) == 0.0
+        and float(np.min(targets.hs_priority_mfe_relevance[targets.true_hs_mask]))
+        > float(np.max(targets.hs_priority_mfe_relevance[~targets.true_hs_mask])),
+    )
+
+    dates = group_table["date"].to_numpy()
+    margins = torch.tensor([0.9, 0.7, 0.8, 0.1, -0.4], dtype=torch.float32)
+    target_tensor = torch.tensor(targets.hs_priority_mfe_relevance, dtype=torch.float32)
+    full_loss, full_pair_count = _pairwise_logistic_loss(
+        torch,
+        margins,
+        target_tensor,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+    hs_only_loss, hs_only_pair_count = _pairwise_logistic_loss(
+        torch,
+        margins,
+        target_tensor,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        item_eligibility=targets.true_hs_mask,
+    )
+    check_true(
+        "hs_priority_full_list_adds_hs_vs_ls_boundary_pairs_while_ls_vs_ls_stays_tied",
+        full_loss is not None
+        and hs_only_loss is not None
+        and full_pair_count == 9
+        and hs_only_pair_count == 3,
+    )
+
+    from services.breakout_quality.train_continuous_ranker import hs_priority_mfe_metrics
+    metric_scores = {
+        "raw_safety": np.asarray([0.0, 0.2, 0.5, 0.7, 0.9], dtype=np.float32),
+        "conditional_mfe": np.asarray([0.1, 0.2, 0.9, 0.7, 0.5], dtype=np.float32),
+    }
+    metric_payload = hs_priority_mfe_metrics(
+        np.arange(5, dtype=np.int64), group_table, targets, metric_scores,
+        include_top_k_quality=False,
+    )
+    check_true(
+        "hs_priority_metrics_separate_boundary_and_hs_only_upside_diagnostics",
+        metric_payload["hs_priority_mfe"]["pairwise_concordance"] == 1.0
+        and metric_payload["hs_vs_ls_boundary"]["pairwise_concordance"] == 1.0
+        and metric_payload["conditional_mfe_true_hs"]["pairwise_concordance"] == 1.0,
+    )
+
+    summary["training_performed"] = False
+    return results, summary
