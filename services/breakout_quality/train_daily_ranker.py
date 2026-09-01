@@ -19,6 +19,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
     CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R,
     CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
     CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY,
     CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE,
@@ -138,6 +139,11 @@ def _hs_lexicographic_reference_control(
     """
 
     reference_profile = get_breakout_quality_experiment_profile(reference_profile_name)
+    reference_recipe = get_continuous_ranker_execution_recipe(reference_profile_name)
+    output_policy = reference_recipe.training_policy.score_output_policy
+    reference_ranking_head = (
+        str(output_policy.primary_head) if output_policy is not None else "primary"
+    )
     score_path = resolve_continuous_ranker_oos_score_path(
         PROJECT_ROOT,
         filter_id,
@@ -152,7 +158,8 @@ def _hs_lexicographic_reference_control(
         "reference_profile": str(reference_profile_name),
         "score_artifact": display_path,
         "qualification_policy": "same_date_predicted_safety_percentile_ge_0.50_over_reference_daily_universal_forward_scores",
-        "ranking_policy": "reference_raw_mfe_within_predicted_hs_only",
+        "ranking_policy": f"reference_{reference_ranking_head}_within_predicted_hs_only",
+        "reference_ranking_head": reference_ranking_head,
         "breakout_percentile_policy": "filter_daily_universal_percentiles_without_subset_rerank",
     }
     if not score_path.exists():
@@ -164,9 +171,16 @@ def _hs_lexicographic_reference_control(
         missing = sorted(required.difference(frame.columns))
         if missing:
             raise ValueError(f"reference score artifact缺少欄位: {missing}")
-        mfe_column = "raw_mfe_score" if "raw_mfe_score" in frame.columns else "model_score"
-        if mfe_column not in frame.columns:
-            raise ValueError("reference score artifact缺少raw_mfe_score/model_score")
+        ranking_candidates = {
+            "raw_mfe": ("raw_mfe_score", "model_score"),
+            "conditional_mfe": ("conditional_mfe_score", "model_score"),
+        }.get(reference_ranking_head, ("model_score",))
+        mfe_column = next((name for name in ranking_candidates if name in frame.columns), None)
+        if mfe_column is None:
+            raise ValueError(
+                "reference score artifact缺少primary ranking欄位: "
+                f"head={reference_ranking_head}, candidates={ranking_candidates}"
+            )
         frame = frame[["ticker", "date", "group_index", "raw_safety_score", mfe_column]].copy()
         frame["group_index"] = pd.to_numeric(frame["group_index"], errors="raise").astype(np.int64)
         if frame["group_index"].duplicated().any():
@@ -987,12 +1001,30 @@ def _render_markdown(payload: dict) -> str:
 
     hs_eval = dict(payload.get("hs_conditional_mfe_evaluation") or {})
     if hs_eval:
+        primary_semantic = str(hs_eval.get("primary_head_semantic") or "continuous_safety_ranking")
+        direct_hs_qualification = primary_semantic == "binary_hs_qualification"
+        extension_title = (
+            "HS-Qualification + True-HS Conditional-MFE"
+            if direct_hs_qualification
+            else "True-HS Conditional-MFE"
+        )
+        primary_bullet = (
+            "- Qualification head：全daily universe exposure，但truth為Safety percentile≥0.50的binary HS；只有HS↔LS pairs有方向。"
+            if direct_hs_qualification
+            else "- Safety head：全daily universe supervision；Conditional-MFE head：只有true-HS items形成獨立full-list ΔNDCG sublist。"
+        )
+        inference_bullet = (
+            "- Inference diagnostic固定為Pred-HS同日P50 qualification → Conditional-MFE排序；Breakout沿用daily-universal qualification percentile，只filter不rerank。"
+            if direct_hs_qualification
+            else "- Inference diagnostic固定為Pred-Safety同日P50 qualification → Conditional-MFE排序；Breakout沿用daily-universal predicted-Safety percentile，只filter不rerank。"
+        )
         lines.extend([
             "",
-            section(f"Model-specific Extension｜{payload['model_research_id']}｜True-HS Conditional-MFE"),
+            section(f"Model-specific Extension｜{payload['model_research_id']}｜{extension_title}"),
             "",
-            "- Safety head：全daily universe supervision；Conditional-MFE head：只有true-HS items形成獨立full-list ΔNDCG sublist。",
-            "- Inference diagnostic固定為Pred-Safety同日P50 qualification → Conditional-MFE排序；Breakout沿用daily-universal predicted-Safety percentile，只filter不rerank。",
+            primary_bullet,
+            "- Conditional-MFE head：只有true-HS items形成獨立full-list ΔNDCG sublist；不吃第一head prediction。",
+            inference_bullet,
             "",
             "| Scope | HS-only Daily rho | HS-only Pair | Pred-HS true-LS | TopK High-MFE | TopK High-Safety | TopK HM/HS | TopK HM/LS | LS contamination lift |",
             "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -1014,6 +1046,24 @@ def _render_markdown(payload: dict) -> str:
                 f"| {p(gate.get('selected_hmls_pct'))} "
                 f"| {fmt(gate.get('true_ls_contamination_lift_vs_predicted_hs'), 2)}× |"
             )
+        if direct_hs_qualification:
+            lines.extend([
+                "",
+                "| Scope | HS-Qualification Pair | Pred-HS true-LS | True-HS recall |",
+                "|---|---:|---:|---:|",
+            ])
+            for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
+                scope = dict(hs_eval.get(key) or {})
+                qualification = dict(scope.get("hs_qualification") or {})
+                gate = dict(scope.get("lexicographic_model_gate") or {})
+                pair = qualification.get("pairwise_concordance")
+                pred_ls = gate.get("predicted_hs_true_ls_pct")
+                recall = gate.get("true_hs_recall_pct")
+                lines.append(
+                    f"| {label} | {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
+                    f"| {'-' if pred_ls is None else f'{float(pred_ls):.2f}%'} "
+                    f"| {'-' if recall is None else f'{float(recall):.2f}%'} |"
+                )
         lines.extend([
             "",
             "| Scope | LS Cond-rank P50 | P90 | P99 | HM/HS enrichment | Mean MFE R | Mean Adverse R |",
@@ -1035,7 +1085,7 @@ def _render_markdown(payload: dict) -> str:
                 "",
                 f"### Attribution control｜{reference_control.get('reference_profile')}",
                 "",
-                "- Control使用既有frozen Forward scores，套用與本模型完全相同的Pred-Safety P50 qualification；只有第二階段ranking改用reference Raw-MFE。",
+                f"- Control使用既有frozen Forward scores與reference自身第一head同日P50 qualification；第二階段ranking使用reference `{reference_control.get('reference_ranking_head', 'primary')}` score。",
                 "",
                 "| Scope | Model | TopK High-MFE | TopK High-Safety | TopK HM/HS | TopK HM/LS | Pred-HS true-LS |",
                 "|---|---|---:|---:|---:|---:|---:|",
@@ -1210,6 +1260,10 @@ def run(args) -> int:
     conditional_mfe_single = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE
     safety_conditional_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE
     hs_conditional_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE
+    hs_qualification_conditional_mfe_duo = (
+        hs_conditional_mfe_duo
+        and loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE
+    )
     hs_priority_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE
     safety_raw_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE
     safety_primary_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY
@@ -1330,7 +1384,11 @@ def run(args) -> int:
         if hs_conditional_mfe_duo
         else None
     )
-    hs_conditional_mfe_evaluation = {}
+    hs_conditional_mfe_evaluation = (
+        {"primary_head_semantic": "binary_hs_qualification"}
+        if hs_qualification_conditional_mfe_duo
+        else {}
+    )
     hs_conditional_validation_heads = None
     hs_conditional_forward_heads = None
     hs_priority_mfe_targets = (

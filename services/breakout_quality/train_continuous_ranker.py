@@ -38,6 +38,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
@@ -849,6 +850,18 @@ def _same_date_average_rank_percentile(torch, values, dates):
     return result.detach()
 
 
+def _binary_threshold_pair_target(torch, targets, threshold: float):
+    """Map a continuous cohort score to a binary pairwise truth without identity branches."""
+
+    values = targets.float()
+    if values.ndim != 1:
+        raise ValueError("binary threshold pair target必須是一維")
+    cutoff = float(threshold)
+    if not math.isfinite(cutoff) or not 0.0 < cutoff < 1.0:
+        raise ValueError("binary threshold pair target cutoff必須位於(0,1)")
+    return (values >= cutoff).to(dtype=values.dtype)
+
+
 def _pairwise_logistic_loss(
     torch,
     margins,
@@ -1473,6 +1486,7 @@ def _train_epoch(
                 loss_weight = int(max(1, sum(int(item[1]) for item in losses_and_counts)))
             elif loss_handler in {
                 CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+                CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
                 CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
             }:
                 if target.ndim != 2 or int(target.shape[1]) != 2:
@@ -1493,10 +1507,17 @@ def _train_epoch(
                 safety_margin = safety_logits.float()[:, LABEL_PASS] - safety_logits.float()[:, LABEL_REJECT]
                 conditional_mfe_margin = conditional_mfe_logits.float()[:, LABEL_PASS] - conditional_mfe_logits.float()[:, LABEL_REJECT]
                 batch_dates = group_dates_series.iloc[ids].to_numpy()
+                primary_pair_target = target[:, 0]
+                if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE:
+                    if secondary_pair_scope_threshold is None:
+                        raise ValueError("HS-qualification objective缺少true-HS threshold")
+                    primary_pair_target = _binary_threshold_pair_target(
+                        torch, target[:, 0], float(secondary_pair_scope_threshold)
+                    )
                 safety_loss, safety_supervision = _pairwise_logistic_loss(
                     torch,
                     safety_margin,
-                    target[:, 0],
+                    primary_pair_target,
                     batch_dates,
                     reduction=str(pairwise_reduction),
                     pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
@@ -1906,6 +1927,9 @@ def hs_conditional_mfe_metrics(
         safety_scores,
         include_top_k_quality=bool(include_top_k_quality),
     )
+    hs_qualification_metrics = daily_rank_metrics(
+        dates, safety_scores, true_hs.astype(np.float32)
+    )
 
     if predicted_safety_percentile is None:
         pred_safety_pct = build_same_date_percentile_targets(
@@ -1949,6 +1973,7 @@ def hs_conditional_mfe_metrics(
     ls_tail = ls_tail[np.isfinite(ls_tail)]
     return {
         "raw_safety": safety_metrics,
+        "hs_qualification": hs_qualification_metrics,
         "conditional_mfe_true_hs": conditional_metrics,
         "lexicographic_model_gate": {
             "truth_cutoff": float(HMHS_HIGH_PERCENTILE_CUTOFF),
@@ -1960,6 +1985,7 @@ def hs_conditional_mfe_metrics(
             "true_hs_n": int(true_hs.sum()),
             "predicted_hs_n": predicted_hs_count,
             "predicted_hs_true_ls_pct": pred_hs_true_ls,
+            "true_hs_recall_pct": pct(true_hs, predicted_hs),
             "predicted_hs_high_mfe_pct": pct(predicted_hs, actual_high_mfe),
             "predicted_hs_hmhs_pct": pred_hs_hmhs,
             "predicted_hs_hmls_pct": pct(predicted_hs, actual_hmls),
@@ -3569,10 +3595,17 @@ def select_epoch(
                 )
             elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE:
                 gate = dict(validation_hs_conditional_mfe_metrics.get("lexicographic_model_gate") or {})
+                if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE:
+                    qualification = dict(validation_hs_conditional_mfe_metrics.get("hs_qualification") or {})
+                    qualification_text = (
+                        f"Val HS-Qual Pair {float(qualification.get('pairwise_concordance') or 0.0):.4f}"
+                    )
+                else:
+                    qualification_text = f"Val Safety rho {float(primary_daily_spearman):.4f}"
                 print(
                     f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
                     f"| Val HS-MFE rho {float(daily_spearman):.4f} "
-                    f"| Val Safety rho {float(primary_daily_spearman):.4f} "
+                    f"| {qualification_text} "
                     f"| Pred-HS TopK HM/HS {float(gate.get('selected_hmhs_pct') or 0.0):.2f}% "
                     f"| {elapsed:.1f}s{marker}"
                 )

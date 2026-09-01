@@ -7048,6 +7048,211 @@ def validate_breakout_quality_true_hs_scoped_pair_membership_contract_case(_base
     return results, summary
 
 
+def validate_breakout_quality_hs_qualification_conditional_mfe_contract_case(_base_params):
+    """Protect direct HS qualification while reusing AO true-HS Conditional-MFE geometry."""
+
+    case_id = "BREAKOUT_QUALITY_HS_QUALIFICATION_CONDITIONAL_MFE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    import numpy as np
+    import pandas as pd
+    import torch
+    from config.breakout_quality import (
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_breakout_quality_workflow_settings,
+        get_continuous_ranker_research_spec,
+    )
+    from config.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
+        CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
+    )
+    from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from filters.breakout_quality.hs_conditional_mfe import build_hs_conditional_mfe_targets
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality.train_continuous_ranker import (
+        _binary_threshold_pair_target,
+        _pairwise_logistic_loss,
+        hs_conditional_mfe_metrics,
+    )
+
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    ao_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    research = get_continuous_ranker_research_spec(profile.name)
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    ao_recipe = get_continuous_ranker_execution_recipe(ao_profile.name)
+    semantics = training_semantics(profile)
+    contract = dict(
+        semantics.get("shared_hs_qualification_conditional_mfe_duo_head_contract") or {}
+    )
+    workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
+
+    check_true(
+        "hs_qualification_changes_only_ao_primary_head_supervision_semantic",
+        research.model_research_id == "MR-13AR"
+        and profile.training_objective
+        == TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING
+        and recipe.training_policy.target_builder
+        == ao_recipe.training_policy.target_builder
+        == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE
+        and recipe.training_policy.loss_handler
+        == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE
+        and recipe.objective_policy.secondary_pair_scope
+        == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN
+        and float(recipe.objective_policy.secondary_pair_scope_threshold) == 0.50
+        and recipe.objective_policy.pair_weight_policy == "none",
+    )
+    check_true(
+        "hs_qualification_keeps_ao_architecture_epoch_selection_and_same_gate_reference",
+        str(profile.model_architecture) == str(ao_profile.model_architecture)
+        == "inception_time_shared_safety_mfe_v1"
+        and profile.epoch_selection_metric == ao_profile.epoch_selection_metric
+        == "hs_conditional_mfe_mean_daily_spearman"
+        and research.model_gate_reference_profile_name == ao_profile.name,
+    )
+    check_true(
+        "hs_qualification_contract_is_binary_boundary_plus_true_hs_upside",
+        contract.get("qualification_target")
+        == "indicator_of_same_date_low_adverse_safety_percentile_gte_0.50"
+        and contract.get("qualification_pair_scope")
+        == "same_date_hs_vs_ls_only_same_cohort_ties_excluded"
+        and contract.get("conditional_mfe_supervision_scope")
+        == "true_hs_items_only_sublist_before_rank_positions_idcg_and_delta_ndcg"
+        and contract.get("conditional_mfe_head_inputs")
+        == "shared_latent_only_no_predicted_safety_context"
+        and contract.get("conditional_mfe_pair_safety_weight") == "none",
+    )
+    check_true(
+        "hs_qualification_seed42_forward_gate_blocks_later_workflows",
+        research.current_model_workflow_rolling_authorized is False
+        and research.current_model_workflow_robustness_authorized is False
+        and research.selection_pit_authorized is False
+        and research.current_time_validation_authorized is False
+        and workflow.rolling_authorized is False
+        and workflow.robustness_authorized is False,
+    )
+
+    group_table = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2021-01-04"] * 5),
+            "target_favorable_r": [8.0, 6.0, 3.0, 2.0, 1.0],
+            "target_adverse_r": [4.0, 3.0, 2.0, 1.0, 0.0],
+            "label": [1, 1, 1, 1, 1],
+        }
+    )
+    targets = build_hs_conditional_mfe_targets(
+        group_table, np.ones(5, dtype=bool), true_hs_percentile_cutoff=0.50
+    )
+    safety_continuous = torch.tensor(targets.low_adverse_safety_percentile, dtype=torch.float32)
+    safety_binary = _binary_threshold_pair_target(torch, safety_continuous, 0.50)
+    check_true(
+        "hs_qualification_binary_target_ties_same_cohort_and_preserves_true_hs_boundary",
+        np.array_equal(targets.true_hs_mask, [False, False, True, True, True])
+        and torch.equal(safety_binary, torch.tensor([0.0, 0.0, 1.0, 1.0, 1.0])),
+    )
+
+    dates = group_table["date"].to_numpy()
+    safety_margins = torch.tensor([-0.9, -0.5, 0.1, 0.6, 0.9], dtype=torch.float32)
+    binary_loss, binary_pairs = _pairwise_logistic_loss(
+        torch,
+        safety_margins,
+        safety_binary,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+    continuous_loss, continuous_pairs = _pairwise_logistic_loss(
+        torch,
+        safety_margins,
+        safety_continuous,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+    conditional_loss, conditional_pairs = _pairwise_logistic_loss(
+        torch,
+        torch.tensor([100.0, -100.0, 0.9, 0.3, -0.2], dtype=torch.float32),
+        torch.tensor(targets.conditional_mfe_percentile, dtype=torch.float32),
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        item_eligibility=targets.true_hs_mask,
+    )
+    check_true(
+        "hs_qualification_primary_has_only_hs_vs_ls_pairs_while_secondary_keeps_ao_hs_sublist",
+        binary_loss is not None
+        and continuous_loss is not None
+        and conditional_loss is not None
+        and binary_pairs == 6
+        and continuous_pairs == 10
+        and conditional_pairs == 3,
+    )
+
+    metric_scores = {
+        "raw_safety": np.asarray([-0.8, -0.4, 0.2, 0.6, 0.9], dtype=np.float32),
+        "conditional_mfe": np.asarray([5.0, 4.0, 0.9, 0.4, 0.1], dtype=np.float32),
+    }
+    metric_payload = hs_conditional_mfe_metrics(
+        np.arange(5, dtype=np.int64),
+        group_table,
+        targets,
+        metric_scores,
+        include_top_k_quality=False,
+    )
+    check_true(
+        "hs_qualification_metrics_measure_boundary_purity_without_changing_conditional_mfe_truth",
+        metric_payload["hs_qualification"]["pairwise_concordance"] == 1.0
+        and metric_payload["lexicographic_model_gate"]["predicted_hs_true_ls_pct"] == 0.0
+        and metric_payload["lexicographic_model_gate"]["true_hs_recall_pct"] == 100.0
+        and metric_payload["conditional_mfe_true_hs"]["pairwise_concordance"] == 1.0,
+    )
+
+    from services.breakout_quality.train_daily_ranker import _hs_lexicographic_reference_control
+    loader_group_table = group_table.assign(ticker=["A", "B", "C", "D", "E"])
+    with tempfile.TemporaryDirectory() as tmpdir:
+        frozen_path = Path(tmpdir) / "ao_forward_scores.csv"
+        pd.DataFrame(
+            {
+                "ticker": ["A", "B", "C", "D", "E"],
+                "date": ["2021-01-04"] * 5,
+                "group_index": [0, 1, 2, 3, 4],
+                "raw_safety_score": [0.10, 0.20, 0.30, 0.80, 0.90],
+                "conditional_mfe_score": [0.10, 0.20, 0.30, 0.80, 0.90],
+                "model_score": [0.90, 0.80, 0.70, 0.20, 0.10],
+            }
+        ).to_csv(frozen_path, index=False)
+        with patch(
+            "services.breakout_quality.train_daily_ranker.resolve_continuous_ranker_oos_score_path",
+            return_value=frozen_path,
+        ):
+            reference_control = _hs_lexicographic_reference_control(
+                filter_id="breakout_quality_v1",
+                reference_profile_name=ao_profile.name,
+                group_table=loader_group_table,
+                hs_targets=targets,
+                oos_ids=np.arange(5, dtype=np.int64),
+                breakout_candidate_ids=np.arange(5, dtype=np.int64),
+            )
+    check_true(
+        "hs_qualification_ao_reference_uses_conditional_mfe_primary_column_not_generic_model_score",
+        reference_control.get("available") is True
+        and reference_control.get("reference_ranking_head") == "conditional_mfe"
+        and reference_control.get("mfe_score_column") == "conditional_mfe_score"
+        and reference_control["oos"]["lexicographic_model_gate"]["selected_high_mfe_pct"]
+        != reference_control["oos"]["lexicographic_model_gate"]["selected_hmls_pct"],
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+
+
 def validate_breakout_quality_hs_priority_mfe_contract_case(_base_params):
     """Protect all-daily HS-priority ranking truth and direct-score semantics."""
 

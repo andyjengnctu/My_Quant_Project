@@ -32,10 +32,10 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260901_234916_be3b1a90(1).zip`，SHA256 `592ef2d8701ada36ac4fe9b23bcb3821348913df041ee66565a31ef3c1bb0154`；MR-13AO implementation以fresh extraction=`/mnt/data/stock_mr13ao`進行。 |
-| SHA256／最新結果 | 本輪不新增scientific result或promotion判定。Current Strategy Compare只以`extending_current` suite執行OOS／Rolling，arms=`C61/C62/C58/C63/C59/C60`、九個same-seed contrasts；production identity仍維持既有C42/C44，除非另有正式promotion decision。 |
+| 基準 ZIP | Authoritative full baseline=`test-branch-1_20260902_023507_456d81c9.zip`，SHA256 `48c85ec6e3548d65003e77d486ef0bff3fbe4e1b72e8591cac5fe496660afbe7`；再套用使用者上傳AQ patch=`MR13AQ_hs_priority_pair_stratified_mfe_patch_20260902.zip`，SHA256 `17674bbcbfb71a1c17b82495e8df3f87ca1b817c4a5740a975702af801a847f6`；MR-13AR fresh reconstructed workspace=`/mnt/data/stock_ar`。 |
+| SHA256／最新結果 | MR-13AQ Seed42 Forward已結案：HS-Priority rho/Pair Forward=`-0.0127/49.47%`、Breakout=`+0.0165/50.61%`，Decision=`PAIR_MASS_DOMINANCE_REMOVED / HS_PRIORITY_ORDERING_NEAR_RANDOM / SINGLE_SCORE_HS_PRIORITY_FAMILY_STOP / MODEL_GATE_FAIL`。Current Model Research已切MR-13AR；僅implementation，scientific result pending。 |
 | 程式版本範圍 | Active sequence architecture仍為`inception_time_v1`；current Strategy Compare第一層只保留Extending-Window Test與Extending-Window Multi-seed Robustness Test，OOS／Rolling共用同一suite。Robustness是single-seed suite的純multi-seed版本；benchmark seed count／generator／resolved sequence只讀`config/training_policy.py`當前值，目前seed_count=4；C59/C60額外model-seed-sensitive。Legacy Selection/Frozen C56/C57矩陣只保留historical compatibility。 |
-| Policy 預設 | filter=`breakout_quality_v1`、Seed=`42`；Current Model Research=`MR-13AO / inception_time_shared_safety_mfe_v1 / daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise`；Production workflow仍=`MR-13E / inception_time_v1 / daily_universal_no_time_full_list_ndcg_pairwise`。MR-13AO只授權Seed42 Forward Model Gate，`selection_pit_authorized=False`、`current_time_validation_authorized=False`。 |
+| Policy 預設 | filter=`breakout_quality_v1`、Seed=`42`；Current Model Research=`MR-13AR / inception_time_shared_safety_mfe_v1 / daily_universal_shared_hs_qualification_conditional_mfe_full_list_ndcg_pairwise`；Production workflow仍=`MR-13E / inception_time_v1 / daily_universal_no_time_full_list_ndcg_pairwise`。MR-13AR只授權Seed42 Forward Model Gate，`selection_pit_authorized=False`、`current_model_workflow_rolling_authorized=False`、`current_model_workflow_robustness_authorized=False`。 |
 | 當前最佳實證模型 | Production仍為`MR-13E / daily_universal_no_time_full_list_ndcg_pairwise` + Min/all-off + exact K/R0 constrained。C56目前是最有價值的research alternative之一，但只有Seed42 Forward正向證據；先完整補Selection/robustness再判讀。Plan C-M與Plan A依Research Queue排在C56 full-flow之後。 |
 | Dataset | 沿用既有`breakout_quality_v1` 300×10 feature bank與固定百分比Label。使用者已於2026-08-04重新訓練`inception_time_v1 / unique_group_sampling`，產生新的model／split／manifest；research report、forward-OOS scores與正式策略比較仍待選單流程執行。10A Market Bank與其他legacy工件保留於獨立路徑供歷史重現 |
 
@@ -11312,3 +11312,23 @@ Decision：`MR13AP_IMPLEMENTED_RESULT_PENDING / ALL_DAILY_NON_COMPENSATORY_HS_PR
 - **Implementation capability**：新增generic binary pair-partition relation primitive；pair mask只在comparable-pair層套用，不改list membership，因此不同於AO true-HS sublist scope。AQ由dedicated reusable loss handler組合該primitive，trainer不辨識MR identity。
 - **Authorization / Gate**：`selection_pit_authorized=False`、current Rolling/Robustness均False；只執行Seed42 Forward Model Gate。Primary要求HS-only MFE ordering由AP反向狀態恢復為正，同時HS↔LS boundary保持有效；最終仍以all-daily/Breakout HM/HS、HM/LS、High-MFE/High-Safety判定。
 
+
+
+## 2026-09-02 — MR-13AQ Seed42 Forward Model Gate result
+
+- **Result**：selected epoch=`4`；Forward HS-Priority rho/Pair=`-0.0127/49.47%`，Breakout=`+0.0165/50.61%`。pair-stratified normalization已消除MR-13AP的Safety-dominant extreme，但final HS-Priority ordering接近random。
+- **Alignment**：Forward Standard Score→MFE/Safety=`+0.1230/-0.0623`、High-MFE/High-Safety=`54.78/48.74%`、HM/HS/HM/LS=`24.67/30.10%`；Breakout Score→MFE/Safety=`+0.0348/-0.0025`、HM/HS/HM/LS=`24.74/26.39%`，HM/HS enrichment僅約`1.04×`。
+- **Epoch geometry**：Validation E1→E4 HS-Priority rho由`-0.0769→+0.0673`時，HS-only MFE rho由`+0.2916→-0.0253`；兩個stratum等權後不是共同改善，而是明顯互相抵消。
+- **Decision**：`PAIR_MASS_DOMINANCE_REMOVED / HS_PRIORITY_ORDERING_NEAR_RANDOM / HS_MFE_AND_HS_LS_OBJECTIVES_CONFLICT / BREAKOUT_HMHS_ENRICHMENT_NOT_CONFIRMED / SINGLE_SCORE_HS_PRIORITY_FAMILY_STOP / MODEL_GATE_FAIL / NO_ROLLING / NO_ROBUSTNESS / NO_STRATEGY`。不做0.4/0.6等weight sweep。
+
+## 2026-09-02 — MR-13AR Direct HS-Qualification + True-HS Conditional-MFE implementation
+
+- **Authoritative baseline**：full baseline=`test-branch-1_20260902_023507_456d81c9.zip` SHA256=`48c85ec6e3548d65003e77d486ef0bff3fbe4e1b72e8591cac5fe496660afbe7`；overlay AQ patch=`MR13AQ_hs_priority_pair_stratified_mfe_patch_20260902.zip` SHA256=`17674bbcbfb71a1c17b82495e8df3f87ca1b817c4a5740a975702af801a847f6`；fresh reconstructed workspace=`/mnt/data/stock_ar`。
+- **Scientific identity**：分配下一個未占用`MR-13AR`，profile=`daily_universal_shared_hs_qualification_conditional_mfe_full_list_ndcg_pairwise`，重用`ARCH-inception_time_shared_safety_mfe_v1`。此實驗是MR-13AO strict primary-head supervision control。
+- **唯一scientific change**：AO第一head原本以full-universe continuous Low-Adverse Safety percentile做pairwise ordering；AR在loss前把同一truth threshold為`HS = SafetyPct >= 0.50` binary target，因此primary head只有HS↔LS pair產生方向，HS↔HS與LS↔LS同target tie。沒有HS threshold sweep或額外lambda。
+- **完全固定**：AO target builder、true-HS定義、Conditional-MFE same-date percentile within true-HS、LS在secondary sublist的zero-membership、full-list ΔNDCG geometry、shared encoder、獨立兩heads、Conditional-MFE head只讀shared latent、1:1 head weighting、Seed/split/optimizer、epoch selection、Pred-HS P50 qualification→Conditional-MFE lexicographic inference全部不變。
+- **Attribution / Gate**：reference control改用frozen MR-13AO Forward scores並套AR完全相同P50 qualification，第二階段仍用AO Conditional-MFE；第一輪主要問direct HS qualification能否把AO Forward Pred-HS true-LS約`36.84%`實質壓低，同時維持AO已確認的true-HS Conditional-MFE learnability（Forward/Breakout rho約`0.3969/0.4116`）。
+- **Authorization**：Seed42 Forward Model Gate only；`selection_pit_authorized=False`、Rolling=False、Robustness=False，不建strategy runtime source。
+- **Targeted validation**：Python compile PASS；Continuous=`44/44`、Shared-AH=`23/23`、AO=`7/7`、AP=`7/7`、AQ=`7/7`、AR=`8/8`；Registry↔Checklist=`1827/1827`；Checklist G format/first-occurrence/sequence/ordering與summary sorting全部PASS。Backward identity audit：AQ composite baseline既有47個Continuous profiles之profile/spec/execution recipe/training semantics=`47/47 exact unchanged`，唯一新增AR。AR validator另以synthetic AO Forward artifact刻意讓`conditional_mfe_score`與`model_score`相反，確認AO attribution control依其canonical primary head讀`conditional_mfe_score`，不誤用generic model score。
+
+Decision：`MR13AR_IMPLEMENTED_RESULT_PENDING / DIRECT_BINARY_HS_QUALIFICATION / AO_TRUE_HS_CONDITIONAL_MFE_FIXED / AO_FROZEN_ATTRIBUTION_CONTROL / SEED42_FORWARD_NEXT / NO_ROLLING_OR_STRATEGY`。
