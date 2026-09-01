@@ -266,12 +266,28 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             return primary_logits, conditional_logits
 
         def forward_safety_mfe_heads(self, x, context):
-            if self.raw_safety_classifier is None or self.raw_mfe_classifier is None:
-                raise ValueError("目前architecture沒有Shared Safety/MFE heads")
+            """Return the canonical Raw-Safety + final-MFE pair for duo-head training.
+
+            The final MFE topology is owned by the model spec: an independent raw-MFE
+            head reads only the shared latent, while a Safety-conditioned MFE head also
+            receives stop-gradient Safety probability.  The trainer consumes this
+            capability and never needs to recognize the architecture identity.
+            """
+            if self.raw_safety_classifier is None:
+                raise ValueError("目前architecture沒有Raw Safety head")
             _primary_input, shared_encoded = self._encoded_for_heads(x, context)
             safety_logits = self.raw_safety_classifier(shared_encoded)
-            raw_mfe_logits = self.raw_mfe_classifier(shared_encoded)
-            return safety_logits, raw_mfe_logits
+            if self.raw_mfe_classifier is not None:
+                mfe_logits = self.raw_mfe_classifier(shared_encoded)
+            elif self.conditional_mfe_classifier is not None:
+                safety_probability = torch.softmax(safety_logits.float(), dim=1)[:, 1]
+                safety_context = safety_probability.detach().to(shared_encoded.dtype).unsqueeze(1)
+                mfe_logits = self.conditional_mfe_classifier(
+                    torch.cat([shared_encoded, safety_context], dim=1)
+                )
+            else:
+                raise ValueError("目前architecture沒有可用的final MFE head")
+            return safety_logits, mfe_logits
 
         def forward_safety_conditional_mfe_heads(self, x, context):
             if self.raw_safety_classifier is None or self.conditional_mfe_classifier is None:

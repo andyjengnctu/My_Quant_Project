@@ -11186,3 +11186,27 @@ Decision：`MR13AK_IMPLEMENTED / RESULT_PENDING / SEED42_FORWARD_MODEL_GATE_NEXT
 - **Validation**：`validate_research_report_contract_freeze_case`擴充為capability-driven comparison regression，驗Standard 1～6不變、只有獲授權extension IDs可出現、non-multi-head model不出現空extension、Rolling extension ordering，以及approved persistent fingerprint freeze。
 
 Decision：`STANDARD_SOP_UNCHANGED / COMPARISON_V7_AUTHORIZED / MULTI_HEAD_EXTENSION_RESTORED / CAPABILITY_DRIVEN / NO_RETRAIN`。
+
+## 2026-09-01 — MR-13AK A1 decision → MR-13AL A2 + B327 Rolling multi-head producer closure
+
+- **Authoritative baseline**：`test-branch-1_20260901_182733_0eecf87e(1).zip`，SHA256=`53f84fca6aa257cf80d829dfb13c3365cee9db2562ae993923ecf2f7f2665ee2`；本輪fresh extract=`/mnt/data/mr13_a2_work_20260901_182733_0eecf87e_1`。
+- **A1 result / decision**：MR-13AK Forward OOS Daily rho/Pair/Top-Bottom=`0.3843/63.19%/1.8360R`，Breakout=`0.3714/63.65%/2.6001R`；Rolling=`0.3844/63.26%/1.6985R`，Breakout=`0.3633/64.07%/2.3880R`，max adjacent drift=`0.7954 pooled σ / NO flag`。相對AH，shared encoder明顯提高MFE representation與time stability，因此A1 architecture question判PASS。
+- **A1 Safety mechanism**：Forward Raw Safety head本身可學，OOS rho/Pair=`0.3509/62.58%`、Breakout=`0.3108/63.65%`；但Pred Safety↔Raw-MFE Daily rho=`-0.9223`（Breakout=`-0.8848`）、Pred S5×M5=`0`（Breakout=`6`）、joint product→actual HM/HS rho=`0.0310/0.0661`，final Score→Safety=`-0.3417`（Rolling=`-0.3351`）。Decision=`ARCHITECTURE_GATE_PASS / SAFETY_GEOMETRY_COLLAPSE_PERSISTS / GO_A2 / NO_AK_ROBUSTNESS_FIRST / NOT_PROMOTED`。
+- **MR-13AL A2 identity**：分配下一個未占用`MR-13AL`，profile=`daily_universal_shared_safety_context_weighted_pure_mfe_full_list_ndcg_pairwise`。依Architecture E6/C22不建立新ARCH；直接重用既有`ARCH-inception_time_safety_conditional_mfe_v1` topology。A1的training objective、target builder、Safety/MFE truth、AH same-date Safety-percentile product weighting、pair direction、equal head-loss mean、optimizer/split/Seed固定；唯一executable change為final MFE head從`shared_latent`改為`concat(shared_latent, detach(Raw Safety probability))`。
+- **Generic composition seam**：`forward_safety_mfe_heads`改為capability interface，可由model topology選擇independent Raw-MFE head或Safety-conditioned MFE head；trainer仍只消費Raw-Safety+final-MFE capability，不辨識MR/profile/architecture。shared-Safety-weighted training semantics中的head topology改由model spec擁有，loss contract本身保持topology-agnostic。
+- **B327 Rolling extension closure**：B326 renderer本身已capability-driven；真正缺口是Rolling PIT score producer沒有為A1 `safety_raw_mfe` target builder持久化Raw Safety/Raw-MFE sidecars。現在score-output capability由`training_policy.target_builder`單一解析，A1/A2自動得到`raw_safety_score/raw_mfe_score`；`score_output_contract`仍被既有fitting identity排除，所以compatible舊AK fold checkpoint只checkpoint-only rescore，不因補head evidence重訓。PIT Audit直接消費sidecars，用canonical same-date truth percentile與既有`safety_raw_mfe_metrics`產生`safety_raw_mfe_evaluation`，B326 [4] comparison即可顯示Multi-head Learnability / Truth-Prediction Geometry。
+- **Persistent report boundary**：本輪不改`model.standard_sop v7`或`model.standard_comparison v7` schema/fingerprint；只補B326已授權extension的Rolling evidence producer。
+- **Validation before formal local suite**：Shared-AH composition synthetic=`16/16 PASS`；PIT builder/canonical score-only reuse=`26/26 PASS`；Continuous DL workflow=`44/44 PASS`；persistent report freeze=`25/25 PASS`。正式`apps/run_bundle.py` / `apps/test_suite.py`依PROJECT_SETTINGS不由GPT執行。
+
+Decision：`MR13AK_A1_CLOSED_PASS_TO_A2 / MR13AL_IMPLEMENTED_RESULT_PENDING / ROLLING_MULTIHEAD_EVIDENCE_CLOSED / NO_REPORT_FINGERPRINT_CHANGE / FORWARD_SEED42_NEXT`。
+
+## 2026-09-01 — B327 capability ownership closure｜runtime score-output SSOT + model topology semantic owner
+
+- **Scope**：engineering-only / behavior-preserving；不改MR-13AL A2 scientific identity、target/loss/pair weighting、Seed/split/optimizer、PIT authorization、Standard/comparison report fingerprint或B327 `safety_raw_mfe_evaluation`定義。
+- **Score-output SSOT**：移除`services/breakout_quality/point_in_time_scores.py`的consumer-local `_PIT_SCORE_OUTPUT_CAPABILITIES`。multi-head score output改由canonical `ContinuousRankerTrainingPolicy.score_output_policy`持有`output_head/head_names/primary_head/persisted_columns`；`continuous_ranker_pipeline.predict_score_output_payload`只依該policy generic拆解2-class heads並產生primary/sidecar。optional sidecar欄位全集也由registered score-output policies派生，`point_in_time_scores.py`與`ranking_score_store.py`不再各維護欄位 union；下一個已可由此contract表達的multi-head output不得再修改PIT producer/reader。
+- **Topology semantic owner**：Shared-AH training semantics不再於`ranker_training_contract.py`辨認`raw_mfe_head/conditional_mfe_head`；`BreakoutQualityModelSpec.final_mfe_topology_contract()`由model owner提供`architecture/mfe_head_inputs`語意，training contract只消費。
+- **Identity preservation**：42個registered continuous-ranker profiles的ExecutionRecipe、training semantics、score-output columns與34個model-spec manifest均與B327原patch逐項相同；score-output contract仍不進fitting identity。
+- **Regression contract**：PIT synthetic新增「runtime policy為sidecar唯一owner／consumer無local target-builder registry」；Shared-AH synthetic新增「final-MFE topology semantics由model spec持有／training-contract consumer不重新解碼head token」。
+
+Decision：`B327_CAPABILITY_OWNER_CLOSED / NO_SCIENCE_CHANGE / NO_FITTING_IDENTITY_CHANGE / FUTURE_MULTIHEAD_PIT_CONSUMER_NO_IDENTITY_EDIT`。
+

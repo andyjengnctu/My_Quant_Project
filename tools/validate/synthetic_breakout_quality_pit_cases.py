@@ -41,6 +41,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     from config import breakout_quality as workflow_config
     from config.breakout_quality import get_breakout_quality_workflow_settings
     from filters.breakout_quality.continuous_ranker_data import _validate_group_consistency
+    from services.breakout_quality.point_in_time_audit import _build_safety_raw_mfe_evaluation
     from filters.breakout_quality.ranker_sample_contract import (
         resolve_forward_oos_score_group_ids,
         resolve_forward_oos_target_evaluable_group_ids,
@@ -52,6 +53,8 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         _forward_checkpoint_import_issues,
         _publish_fold_checkpoint_to_cache,
         _reload_fold_manifest_after_checkpoint_cache_sync,
+        _score_output_capability,
+        _score_output_columns,
         fold_training_identity,
         _resolve_training_universe_start,
         _stable_fold_id,
@@ -347,6 +350,60 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         and not _fold_training_contract_is_compatible(changed_contract, expected_contract=expected_contract),
     )
 
+    a1_profile = workflow_config.get_breakout_quality_experiment_profile(
+        workflow_config.DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    a2_profile = workflow_config.get_breakout_quality_experiment_profile(
+        workflow_config.DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    expected_raw_duo_columns = {
+        "primary": "breakout_quality_score",
+        "raw_safety": "raw_safety_score",
+        "raw_mfe": "raw_mfe_score",
+    }
+    from config.breakout_quality_runtime import (
+        get_continuous_ranker_persisted_score_columns,
+        get_continuous_ranker_training_policy,
+    )
+    from filters.breakout_quality.ranking_score_store import PIT_OPTIONAL_SCORE_COLUMNS
+    from services.breakout_quality.point_in_time_scores import OPTIONAL_SCORE_COLUMNS
+
+    a1_training_policy = get_continuous_ranker_training_policy(a1_profile.training_objective)
+    a2_training_policy = get_continuous_ranker_training_policy(a2_profile.training_objective)
+    a1_output_policy = a1_training_policy.score_output_policy
+    a2_output_policy = a2_training_policy.score_output_policy
+    pit_score_source = read_source_text("services/breakout_quality/point_in_time_scores.py")
+    check_true(
+        "pit_runtime_training_policy_owns_sidecars_independent_of_model_topology",
+        a1_output_policy is not None
+        and a1_output_policy == a2_output_policy
+        and a1_output_policy.output_head == "both"
+        and a1_output_policy.manifest_columns() == expected_raw_duo_columns
+        and _score_output_columns(SimpleNamespace(profile=a1_profile)) == expected_raw_duo_columns
+        and _score_output_columns(SimpleNamespace(profile=a2_profile)) == expected_raw_duo_columns,
+    )
+    check_true(
+        "pit_score_output_consumer_has_no_local_target_builder_capability_registry",
+        "_PIT_SCORE_OUTPUT_CAPABILITIES" not in pit_score_source
+        and "CONTINUOUS_RANKER_TARGET_BUILDER_" not in pit_score_source,
+    )
+    expected_optional_score_columns = (
+        "primary_mfe_score",
+        "conditional_safety_score",
+        "raw_safety_score",
+        "raw_mfe_score",
+        "joint_min_score",
+    )
+    ranking_store_source = read_source_text("filters/breakout_quality/ranking_score_store.py")
+    check_true(
+        "pit_optional_sidecar_column_union_is_runtime_owned_for_producer_and_reader",
+        get_continuous_ranker_persisted_score_columns() == expected_optional_score_columns
+        and OPTIONAL_SCORE_COLUMNS == expected_optional_score_columns
+        and PIT_OPTIONAL_SCORE_COLUMNS == expected_optional_score_columns
+        and "PIT_OPTIONAL_SCORE_COLUMNS = (" not in ranking_store_source
+        and "OPTIONAL_SCORE_COLUMNS = (" not in pit_score_source,
+    )
+
     score_output_only_change = {
         **expected_contract,
         "score_output_contract": {
@@ -355,13 +412,54 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             "raw_safety": "raw_safety_score",
         },
     }
+    raw_duo_score_output_change = {
+        **expected_contract,
+        "score_output_contract": expected_raw_duo_columns,
+    }
     check_true(
         "pit_score_output_contract_change_reuses_same_fitting_identity_checkpoint",
         _fold_training_contract_is_compatible(
             score_output_only_change, expected_contract=expected_contract
         )
+        and _fold_training_contract_is_compatible(
+            raw_duo_score_output_change, expected_contract=expected_contract
+        )
         and fold_training_identity(score_output_only_change)
-        == fold_training_identity(expected_contract),
+        == fold_training_identity(expected_contract)
+        == fold_training_identity(raw_duo_score_output_change),
+    )
+
+    group_count = 20
+    dates = pd.to_datetime(["2026-01-05"] * 10 + ["2026-01-06"] * 10)
+    favorable = np.linspace(0.1, 2.0, group_count, dtype=np.float32)
+    adverse = np.linspace(1.0, 0.1, group_count, dtype=np.float32)
+    group_table = pd.DataFrame({
+        "group_index": np.arange(group_count, dtype=np.int64),
+        "date": dates,
+        "label": np.asarray([0, 1] * (group_count // 2), dtype=np.int64),
+        "target_favorable_r": favorable,
+        "target_adverse_r": adverse,
+    })
+    audit_bundle = SimpleNamespace(
+        group_table=group_table,
+        raw_target=favorable.copy(),
+        target_valid=np.ones(group_count, dtype=bool),
+    )
+    audit_frame = pd.DataFrame({
+        "group_index": np.arange(group_count, dtype=np.int64),
+        "target_available": np.ones(group_count, dtype=bool),
+        "raw_safety_score": np.linspace(0.95, 0.05, group_count),
+        "raw_mfe_score": np.linspace(0.05, 0.95, group_count),
+    })
+    raw_eval = _build_safety_raw_mfe_evaluation(
+        audit_bundle, audit_frame, np.arange(0, group_count, 2, dtype=np.int64)
+    )
+    check_true(
+        "rolling_audit_consumes_persisted_raw_head_sidecars_into_model_specific_evidence",
+        set(raw_eval) == {"oos", "breakout_candidate_oos"}
+        and int((raw_eval["oos"].get("raw_safety") or {}).get("group_count", 0)) == group_count
+        and int((raw_eval["oos"].get("raw_mfe") or {}).get("group_count", 0)) == group_count
+        and bool(raw_eval["oos"].get("model_gate")),
     )
 
     # Reproduce the C71 score-only upgrade failure: legacy code refreshed the

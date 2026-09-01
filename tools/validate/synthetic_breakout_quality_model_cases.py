@@ -3692,7 +3692,7 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
 
 
 def validate_breakout_quality_shared_ah_contract_case(_base_params):
-    """Protect MR-13AK A1 Shared-AH as the one-control-point AH architecture change."""
+    """Protect Shared-AH composition: A1 direct MFE and A2 stop-gradient Safety context."""
 
     case_id = "BREAKOUT_QUALITY_MR13AK_SHARED_AH"
     results = []
@@ -3705,6 +3705,7 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
     from config.breakout_quality import (
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
         get_continuous_ranker_research_spec,
@@ -3733,6 +3734,13 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
     research = get_continuous_ranker_research_spec(profile.name)
     recipe = get_continuous_ranker_execution_recipe(profile.name)
     model_spec = get_model_spec(str(profile.model_architecture))
+
+    a2_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    a2_research = get_continuous_ranker_research_spec(a2_profile.name)
+    a2_recipe = get_continuous_ranker_execution_recipe(a2_profile.name)
+    a2_model_spec = get_model_spec(str(a2_profile.model_architecture))
 
     check(
         "mr13ak_identity_and_model_gate_authorization",
@@ -3771,6 +3779,7 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
         "mr13ak_semantics_freeze_a1_scientific_control",
         sem.get("safety_target") == "same_date_low_adverse_safety_percentile"
         and sem.get("raw_mfe_target") == "same_date_pure_mfe_percentile"
+        and sem.get("architecture") == "shared_encoder_independent_raw_safety_and_raw_mfe_heads"
         and sem.get("mfe_head_inputs") == "shared_latent_only_no_safety_prediction_input"
         and sem.get("mfe_pair_context") == "stop_gradient_same_date_average_rank_percentile_of_raw_safety_probability"
         and sem.get("mfe_pair_safety_weight")
@@ -3782,6 +3791,72 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
         and sem.get("external_predicted_safety_dependency") is False
         and sem.get("epoch_selection") == "raw_mfe_mean_daily_spearman"
         and sem.get("runtime_score") == "raw_mfe_pass_probability_only",
+    )
+
+    check(
+        "mr13al_a2_identity_reuses_existing_safety_context_topology",
+        (
+            "MR-13AL",
+            "inception_time_safety_conditional_mfe_v1",
+            ("global_average", "raw_safety_head", "conditional_mfe_head"),
+            False,
+            False,
+        ),
+        (
+            a2_research.model_research_id,
+            a2_profile.model_architecture,
+            a2_model_spec.pooling,
+            a2_research.selection_pit_authorized,
+            a2_research.current_time_validation_authorized,
+        ),
+    )
+    check_true(
+        "shared_ah_final_mfe_topology_semantics_are_owned_by_model_spec",
+        model_spec.final_mfe_topology_contract()
+        == {
+            "architecture": "shared_encoder_independent_raw_safety_and_raw_mfe_heads",
+            "mfe_head_inputs": "shared_latent_only_no_safety_prediction_input",
+        }
+        and a2_model_spec.final_mfe_topology_contract()
+        == {
+            "architecture": "shared_encoder_raw_safety_head_plus_safety_conditioned_mfe_head",
+            "mfe_head_inputs": "shared_latent_plus_stop_gradient_raw_safety_probability",
+        },
+    )
+    training_contract_source = read_source_text(
+        "filters/breakout_quality/ranker_training_contract.py"
+    )
+    check_true(
+        "training_contract_consumer_does_not_redecode_final_mfe_head_tokens",
+        '"raw_mfe_head" in heads' not in training_contract_source
+        and '"conditional_mfe_head" in heads' not in training_contract_source,
+    )
+
+    check_true(
+        "mr13al_a2_keeps_a1_training_recipe_and_changes_only_model_topology",
+        a2_profile.training_objective == profile.training_objective
+        and a2_profile.continuous_target_id == profile.continuous_target_id
+        and a2_profile.loss_name == profile.loss_name
+        and a2_profile.epoch_selection_metric == profile.epoch_selection_metric
+        and a2_profile.optimizer_name == profile.optimizer_name
+        and a2_profile.training_sampling_mode == profile.training_sampling_mode
+        and a2_profile.training_label_scope == profile.training_label_scope
+        and a2_profile.training_sample_scope == profile.training_sample_scope
+        and a2_recipe.training_policy == recipe.training_policy
+        and a2_recipe.pairwise_reduction == recipe.pairwise_reduction
+        and a2_recipe.context_policy == recipe.context_policy
+        and a2_profile.model_architecture != profile.model_architecture,
+    )
+
+    a2_sem = dict(training_semantics(a2_profile).get("shared_safety_weighted_mfe_duo_head_contract") or {})
+    check_true(
+        "mr13al_a2_artifact_semantics_describe_stop_gradient_safety_context_topology",
+        a2_sem.get("architecture") == "shared_encoder_raw_safety_head_plus_safety_conditioned_mfe_head"
+        and a2_sem.get("mfe_head_inputs") == "shared_latent_plus_stop_gradient_raw_safety_probability"
+        and a2_sem.get("mfe_pair_context") == sem.get("mfe_pair_context")
+        and a2_sem.get("mfe_pair_safety_weight") == sem.get("mfe_pair_safety_weight")
+        and a2_sem.get("mfe_pair_direction") == sem.get("mfe_pair_direction")
+        and a2_sem.get("head_weighting") == sem.get("head_weighting"),
     )
 
     torch.manual_seed(42)
@@ -3807,6 +3882,46 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
         and tuple(both.shape) == (6, 4)
         and torch.equal(final_logits, mfe_before)
         and torch.equal(mfe_before, mfe_after),
+    )
+
+    torch.manual_seed(42)
+    a2_model = build_active_model(
+        feature_count=10,
+        context_count=0,
+        architecture="inception_time_safety_conditional_mfe_v1",
+    )
+    a2_model.eval()
+    with torch.no_grad():
+        a2_safety_before, a2_mfe_before = a2_model.forward_safety_mfe_heads(x, context)
+        a2_model.raw_safety_classifier.weight.add_(3.0)
+        a2_model.raw_safety_classifier.bias.sub_(2.0)
+        a2_safety_after, a2_mfe_after = a2_model.forward_safety_mfe_heads(x, context)
+    check_true(
+        "mr13al_a2_mfe_head_explicitly_consumes_detached_safety_context",
+        not torch.equal(a2_safety_before, a2_safety_after)
+        and not torch.equal(a2_mfe_before, a2_mfe_after),
+    )
+
+    torch.manual_seed(42)
+    a2_model = build_active_model(
+        feature_count=10,
+        context_count=0,
+        architecture="inception_time_safety_conditional_mfe_v1",
+    )
+    a2_model.train()
+    _a2_safety_logits, a2_mfe_logits = a2_model.forward_safety_mfe_heads(x, context)
+    a2_model.zero_grad(set_to_none=True)
+    a2_mfe_logits.float().sum().backward()
+    a2_safety_grad = a2_model.raw_safety_classifier.weight.grad
+    a2_mfe_grad = a2_model.conditional_mfe_classifier.weight.grad
+    a2_encoder_grad = next(a2_model.inception_modules[0].parameters()).grad
+    check_true(
+        "mr13al_a2_safety_context_is_stop_gradient_but_mfe_updates_encoder_and_final_head",
+        a2_safety_grad is None
+        and a2_mfe_grad is not None
+        and float(a2_mfe_grad.abs().sum().item()) > 0.0
+        and a2_encoder_grad is not None
+        and float(a2_encoder_grad.abs().sum().item()) > 0.0,
     )
 
     # Restore a deterministic fresh model and isolate the MFE loss. Detached Safety
@@ -3896,6 +4011,37 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
     check_true(
         "shared_safety_weighted_mfe_training_handler_executes_finite_dual_head_update",
         np.isfinite(float(epoch_loss)) and not torch.equal(before, after),
+    )
+
+    torch.manual_seed(42)
+    a2_epoch_model = build_active_model(
+        feature_count=10,
+        context_count=0,
+        architecture="inception_time_safety_conditional_mfe_v1",
+    ).to(epoch_plan.device)
+    a2_optimizer = torch.optim.Adam(a2_epoch_model.parameters(), lr=1e-4)
+    a2_before = a2_epoch_model.conditional_mfe_classifier.weight.detach().clone()
+    a2_epoch_loss = _train_epoch(
+        torch,
+        a2_epoch_model,
+        a2_optimizer,
+        epoch_feature_bank,
+        epoch_context,
+        np.arange(6, dtype=np.int64),
+        epoch_target,
+        pd.to_datetime(["2026-01-05"] * 6),
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
+        batch_size=128,
+        seed=42,
+        gradient_clip_norm=1.0,
+        plan=epoch_plan,
+        grad_scaler=None,
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+    a2_after = a2_epoch_model.conditional_mfe_classifier.weight.detach()
+    check_true(
+        "shared_safety_weighted_loss_handler_is_topology_agnostic_for_a2_context_head",
+        np.isfinite(float(a2_epoch_loss)) and not torch.equal(a2_before, a2_after),
     )
 
     percentile_fixture = _same_date_average_rank_percentile(

@@ -32,6 +32,8 @@ from config.breakout_quality import (
     get_breakout_quality_experiment_profile,
 )
 
+from config.breakout_quality_runtime import get_continuous_ranker_persisted_score_columns
+
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
 from filters.breakout_quality.ranker_training_contract import (
@@ -101,13 +103,7 @@ PIT_REQUIRED_SCORE_COLUMNS = (
     "fold_id",
     "model_information_cutoff",
 )
-PIT_OPTIONAL_SCORE_COLUMNS = (
-    "primary_mfe_score",
-    "conditional_safety_score",
-    "raw_safety_score",
-    "raw_mfe_score",
-    "joint_min_score",
-)
+PIT_OPTIONAL_SCORE_COLUMNS = get_continuous_ranker_persisted_score_columns()
 
 
 @dataclass(frozen=True)

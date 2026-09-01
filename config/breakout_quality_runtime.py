@@ -422,6 +422,7 @@ class ContinuousRankerTrainingPolicy:
     score_transform: str = CONTINUOUS_RANKER_SCORE_TRANSFORM_PROBABILITY
     epoch_loss_aggregation: str = CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED
     uses_pairwise_loss: bool = False
+    score_output_policy: ContinuousRankerScoreOutputPolicy | None = None
 
     def __post_init__(self) -> None:
         if self.batch_mode not in {
@@ -447,6 +448,10 @@ class ContinuousRankerTrainingPolicy:
             raise ValueError(
                 f"不支援的continuous-ranker epoch loss aggregation: {self.epoch_loss_aggregation!r}"
             )
+        if self.score_output_policy is not None and not isinstance(
+            self.score_output_policy, ContinuousRankerScoreOutputPolicy
+        ):
+            raise TypeError("score_output_policy必須是ContinuousRankerScoreOutputPolicy")
 
 
 @dataclass(frozen=True)
@@ -525,6 +530,83 @@ BREAKOUT_QUALITY_OUTPUT_SCHEMA = BreakoutQualityOutputSchema(
         ("safety_raw_mfe_hmhs", 6),
         ("all_three", 6),
     )
+)
+
+
+@dataclass(frozen=True)
+class ContinuousRankerScoreOutputPolicy:
+    """Canonical multi-head score-output contract consumed by PIT/inference services."""
+
+    output_head: str
+    head_names: tuple[str, ...]
+    primary_head: str
+    persisted_columns: tuple[tuple[str, str], ...]
+
+    def __post_init__(self) -> None:
+        names = tuple(str(value).strip() for value in self.head_names)
+        if not names or any(not value for value in names):
+            raise ValueError("score-output head_names不得為空")
+        if len(names) != len(set(names)):
+            raise ValueError("score-output head_names不得重複")
+        if str(self.primary_head) not in names:
+            raise ValueError("score-output primary_head必須存在於head_names")
+        expected_width = 2 * len(names)
+        actual_width = BREAKOUT_QUALITY_OUTPUT_SCHEMA.width_for(self.output_head)
+        if actual_width != expected_width:
+            raise ValueError(
+                "score-output output_head width與head_names不一致: "
+                f"output_head={self.output_head!r}, width={actual_width}, heads={names}"
+            )
+        columns = tuple((str(head), str(column)) for head, column in self.persisted_columns)
+        column_heads = tuple(head for head, _column in columns)
+        if len(column_heads) != len(set(column_heads)):
+            raise ValueError("score-output persisted head不得重複")
+        unknown = sorted(set(column_heads) - set(names))
+        if unknown:
+            raise ValueError(f"score-output persisted head不存在: {unknown}")
+        if any(not column for _head, column in columns):
+            raise ValueError("score-output persisted column不得為空")
+
+    def manifest_columns(self) -> dict[str, str]:
+        return {"primary": "breakout_quality_score", **dict(self.persisted_columns)}
+
+
+SCORE_OUTPUT_POLICY_CONDITIONAL_MFE_SAFETY = ContinuousRankerScoreOutputPolicy(
+    output_head="conditional_both",
+    head_names=("primary_mfe", "conditional_safety"),
+    primary_head="primary_mfe",
+    persisted_columns=(
+        ("primary_mfe", "primary_mfe_score"),
+        ("conditional_safety", "conditional_safety_score"),
+    ),
+)
+SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE = ContinuousRankerScoreOutputPolicy(
+    output_head="both",
+    head_names=("raw_safety", "conditional_mfe"),
+    primary_head="conditional_mfe",
+    persisted_columns=(
+        ("conditional_mfe", "breakout_quality_score"),
+        ("raw_safety", "raw_safety_score"),
+    ),
+)
+SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE = ContinuousRankerScoreOutputPolicy(
+    output_head="both",
+    head_names=("raw_safety", "raw_mfe"),
+    primary_head="raw_mfe",
+    persisted_columns=(
+        ("raw_safety", "raw_safety_score"),
+        ("raw_mfe", "raw_mfe_score"),
+    ),
+)
+SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE_JOINT_MIN = ContinuousRankerScoreOutputPolicy(
+    output_head="tri_head",
+    head_names=("raw_safety", "raw_mfe", "joint_min"),
+    primary_head="raw_mfe",
+    persisted_columns=(
+        ("raw_safety", "raw_safety_score"),
+        ("raw_mfe", "raw_mfe_score"),
+        ("joint_min", "joint_min_score"),
+    ),
 )
 
 
@@ -714,6 +796,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SAFETY,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            score_output_policy=SCORE_OUTPUT_POLICY_CONDITIONAL_MFE_SAFETY,
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -732,6 +815,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -741,6 +825,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE,
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -750,6 +835,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE,
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -768,6 +854,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE_JOINT_MIN,
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
@@ -789,6 +876,22 @@ def get_continuous_ranker_training_policy(
         raise ValueError(
             f"continuous ranker objective缺少training capability登記: {training_objective!r}"
         ) from exc
+
+
+def get_continuous_ranker_persisted_score_columns() -> tuple[str, ...]:
+    """Return the runtime-owned union of optional persisted score sidecar columns."""
+
+    columns: list[str] = []
+    for training_policy in _continuous_ranker_training_policies().values():
+        output_policy = training_policy.score_output_policy
+        if output_policy is None:
+            continue
+        for _head_name, column in output_policy.persisted_columns:
+            normalized = str(column)
+            if normalized == "breakout_quality_score" or normalized in columns:
+                continue
+            columns.append(normalized)
+    return tuple(columns)
 
 
 def _resolve_continuous_ranker_target_policy(profile: Any) -> ContinuousRankerTargetPolicy:
@@ -989,11 +1092,17 @@ __all__ = (
     "CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED",
     "ContinuousRankerTargetPolicy",
     "ContinuousRankerTrainingPolicy",
+    "ContinuousRankerScoreOutputPolicy",
+    "SCORE_OUTPUT_POLICY_CONDITIONAL_MFE_SAFETY",
+    "SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE",
+    "SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE",
+    "SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE_JOINT_MIN",
     "ContinuousRankerObjectivePolicy",
     "ContinuousRankerDependencySpec",
     "BreakoutQualityOutputSchema",
     "BREAKOUT_QUALITY_OUTPUT_SCHEMA",
     "ContinuousRankerExecutionRecipe",
     "get_continuous_ranker_training_policy",
+    "get_continuous_ranker_persisted_score_columns",
     "build_continuous_ranker_execution_recipe",
 )

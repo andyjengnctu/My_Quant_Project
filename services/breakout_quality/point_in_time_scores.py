@@ -42,12 +42,13 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
 )
 from config.breakout_quality import (
-    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_workflow_settings,
     get_continuous_ranker_research_spec,
+)
+from config.breakout_quality_runtime import (
+    get_continuous_ranker_persisted_score_columns,
+    get_continuous_ranker_training_policy,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
@@ -85,10 +86,7 @@ from services.breakout_quality.continuous_ranker_pipeline import (
     build_training_scope_mask,
     fit_final,
     load_continuous_ranker_data,
-    predict_conditional_mfe_safety_scores,
-    predict_safety_conditional_mfe_scores,
-    predict_safety_raw_mfe_joint_min_scores,
-    predict_scores,
+    predict_score_output_payload,
     resolve_ranker_execution_plan,
     select_epoch,
 )
@@ -106,13 +104,7 @@ REQUIRED_SCORE_COLUMNS = (
     "fold_id",
     "model_information_cutoff",
 )
-OPTIONAL_SCORE_COLUMNS = (
-    "primary_mfe_score",
-    "conditional_safety_score",
-    "raw_safety_score",
-    "raw_mfe_score",
-    "joint_min_score",
-)
+OPTIONAL_SCORE_COLUMNS = get_continuous_ranker_persisted_score_columns()
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -646,6 +638,36 @@ def _fold_group_ids(
     return ids
 
 
+def _score_output_policy(bundle):
+    """Resolve the runtime-owned score-output capability for this profile."""
+
+    training_policy = get_continuous_ranker_training_policy(
+        str(bundle.profile.training_objective)
+    )
+    return training_policy.score_output_policy
+
+
+def _score_output_capability(bundle) -> dict[str, Any] | None:
+    """Compatibility view of the canonical runtime score-output contract."""
+
+    policy = _score_output_policy(bundle)
+    if policy is None:
+        return None
+    return {
+        "output_head": str(policy.output_head),
+        "columns": policy.manifest_columns(),
+    }
+
+
+def _score_output_columns(bundle) -> dict[str, str]:
+    policy = _score_output_policy(bundle)
+    return (
+        {"primary": "breakout_quality_score"}
+        if policy is None
+        else policy.manifest_columns()
+    )
+
+
 def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str, Any]:
     group_dates = pd.to_datetime(bundle.group_table["date"], errors="raise").dt.normalize()
     label_end_dates = pd.to_datetime(
@@ -760,27 +782,11 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
         == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
     ):
         payload["score_eligibility_contract"] = build_score_eligibility_contract(bundle.profile)
-    if (
-        str(bundle.profile.training_objective)
-        == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
-    ):
-        # Score-output-only identity.  Deliberately excluded from the fitting identity
-        # so existing MR-13R checkpoints can be reused and rescored without training.
-        payload["score_output_contract"] = {
-            "primary": "breakout_quality_score",
-            "conditional_mfe": "breakout_quality_score",
-            "raw_safety": "raw_safety_score",
-        }
-    elif (
-        str(bundle.profile.training_objective)
-        == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING
-    ):
-        payload["score_output_contract"] = {
-            "primary": "breakout_quality_score",
-            "raw_safety": "raw_safety_score",
-            "raw_mfe": "raw_mfe_score",
-            "joint_min": "joint_min_score",
-        }
+    score_output_capability = _score_output_capability(bundle)
+    if score_output_capability is not None:
+        # Score-output-only identity. Deliberately excluded from fitting identity so
+        # compatible checkpoints are reused and rescored without model training.
+        payload["score_output_contract"] = dict(score_output_capability["columns"])
     return payload
 
 
@@ -1855,43 +1861,21 @@ def _selection_point_in_time_manifest_path_for_args(args) -> Path:
 
 
 def _predict_primary_score_payload(torch_module, model, bundle, group_ids, *, args, plan):
-    """Predict the canonical primary score plus model-specific sidecar score columns."""
+    """Predict the canonical primary score plus runtime-owned sidecar columns."""
 
     ids = np.asarray(group_ids, dtype=np.int64)
-    extras: dict[str, np.ndarray] = {}
-    if bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING:
-        heads = predict_safety_conditional_mfe_scores(
-            torch_module, model, bundle, ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
-        scores = heads["conditional_mfe"]
-        extras["raw_safety_score"] = heads["raw_safety"]
-    elif bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING:
-        heads = predict_safety_raw_mfe_joint_min_scores(
-            torch_module, model, bundle, ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
-        scores = heads["raw_mfe"]
-        extras["raw_safety_score"] = heads["raw_safety"]
-        extras["raw_mfe_score"] = heads["raw_mfe"]
-        extras["joint_min_score"] = heads["joint_min"]
-    elif bundle.profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
-        heads = predict_conditional_mfe_safety_scores(
-            torch_module, model, bundle, ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
-        scores = heads["primary_mfe"]
-        extras["primary_mfe_score"] = heads["primary_mfe"]
-        extras["conditional_safety_score"] = heads["conditional_safety"]
-    else:
-        scores = predict_scores(
-            torch_module, model, bundle, ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
+    scores, extras = predict_score_output_payload(
+        torch_module,
+        model,
+        bundle,
+        ids,
+        batch_size=int(args.evaluation_batch_size),
+        plan=plan,
+    )
     values = np.asarray(scores, dtype=np.float64)
     if len(values) != len(ids):
         raise ValueError("PIT fold inference score count不一致")
-    return values, extras
+    return values, dict(extras)
 
 
 def _build_fold_score_frame(bundle, group_ids, scores, extras, *, fold_id: str, cutoff: str) -> pd.DataFrame:
@@ -2694,32 +2678,7 @@ def _run_point_in_time_scores(
         "training_label_scope": str(bundle.profile.training_label_scope),
         "training_sample_scope": str(bundle.profile.training_sample_scope),
         "score_column": "breakout_quality_score",
-        "score_columns": (
-            {
-                "primary": "breakout_quality_score",
-                "raw_safety": "raw_safety_score",
-                "raw_mfe": "raw_mfe_score",
-                "joint_min": "joint_min_score",
-            }
-            if bundle.profile.training_objective
-            == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING
-            else
-            {
-                "primary": "breakout_quality_score",
-                "conditional_mfe": "breakout_quality_score",
-                "raw_safety": "raw_safety_score",
-            }
-            if bundle.profile.training_objective
-            == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
-            else {
-                "primary": "breakout_quality_score",
-                "primary_mfe": "primary_mfe_score",
-                "conditional_safety": "conditional_safety_score",
-            }
-            if bundle.profile.training_objective
-            == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
-            else {"primary": "breakout_quality_score"}
-        ),
+        "score_columns": _score_output_columns(bundle),
         "score_period": {
             "start": str(score_start.date()),
             "end": str(score_end.date()),

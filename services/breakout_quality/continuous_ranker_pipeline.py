@@ -18,6 +18,8 @@ from config.breakout_quality import (
     TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
 )
+from config.breakout_quality_runtime import get_continuous_ranker_training_policy
+from filters.breakout_quality.inference import strict_parallel_batched_logits
 from filters.breakout_quality.models.factory import (
     count_trainable_parameters,
     require_torch,
@@ -243,6 +245,68 @@ def predict_scores(
     )
 
 
+def predict_score_output_payload(
+    torch,
+    model,
+    bundle: ContinuousRankerDataBundle,
+    group_ids: np.ndarray,
+    *,
+    batch_size: int,
+    plan,
+) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """Return canonical primary score plus runtime-owned persisted sidecar heads."""
+
+    training_policy = get_continuous_ranker_training_policy(
+        str(bundle.profile.training_objective)
+    )
+    output_policy = training_policy.score_output_policy
+    if output_policy is None:
+        return (
+            predict_scores(
+                torch, model, bundle, group_ids,
+                batch_size=int(batch_size), plan=plan,
+            ),
+            {},
+        )
+
+    ids = np.asarray(group_ids, dtype=np.int64)
+    logits = strict_parallel_batched_logits(
+        torch,
+        model,
+        bundle.feature_bank,
+        bundle.group_context,
+        indices=ids,
+        batch_size=int(batch_size),
+        workers=1,
+        execution_plan=plan,
+        output_head=str(output_policy.output_head),
+    ).astype(np.float32)
+    expected_width = 2 * len(output_policy.head_names)
+    if logits.ndim != 2 or int(logits.shape[1]) != expected_width:
+        raise ValueError(
+            "continuous-ranker score-output logits shape不一致: "
+            f"output_head={output_policy.output_head!r}, "
+            f"expected=[N,{expected_width}], actual={tuple(logits.shape)}"
+        )
+
+    head_scores: dict[str, np.ndarray] = {}
+    for head_idx, head_name in enumerate(output_policy.head_names):
+        pair = logits[:, 2 * head_idx : 2 * head_idx + 2].astype(np.float64)
+        shifted = pair - pair.max(axis=1, keepdims=True)
+        exp = np.exp(shifted)
+        head_scores[str(head_name)] = (
+            exp[:, LABEL_PASS] / exp.sum(axis=1)
+        ).astype(np.float32)
+
+    primary = np.asarray(head_scores[str(output_policy.primary_head)], dtype=np.float32)
+    extras = {
+        str(column): np.asarray(head_scores[str(head_name)], dtype=np.float32)
+        for head_name, column in output_policy.persisted_columns
+        if str(column) != "breakout_quality_score"
+    }
+    return primary, extras
+
+
 def predict_conditional_mfe_safety_scores(
     torch,
     model,
@@ -277,6 +341,23 @@ def predict_safety_conditional_mfe_scores(
     """Return Raw Safety + final Conditional-MFE from one shared-encoder pass."""
 
     return ranker_api.predict_safety_conditional_mfe_scores(
+        torch, model, bundle.feature_bank, bundle.group_context,
+        np.asarray(group_ids, dtype=np.int64), batch_size=int(batch_size), plan=plan,
+    )
+
+
+def predict_safety_raw_mfe_scores(
+    torch,
+    model,
+    bundle: ContinuousRankerDataBundle,
+    group_ids: np.ndarray,
+    *,
+    batch_size: int,
+    plan,
+) -> dict[str, np.ndarray]:
+    """Return Raw Safety + final Raw-MFE from one shared-encoder pass."""
+
+    return ranker_api.predict_safety_raw_mfe_scores(
         torch, model, bundle.feature_bank, bundle.group_context,
         np.asarray(group_ids, dtype=np.int64), batch_size=int(batch_size), plan=plan,
     )
@@ -347,6 +428,7 @@ __all__ = [
     "load_continuous_ranker_data",
     "predict_conditional_mfe_safety_scores",
     "predict_safety_conditional_mfe_scores",
+    "predict_safety_raw_mfe_scores",
     "predict_safety_raw_mfe_joint_min_scores",
     "predict_scores",
     "primary_audit_metric_scope",

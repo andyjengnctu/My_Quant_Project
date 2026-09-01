@@ -47,6 +47,7 @@ from filters.breakout_quality.ranking_score_store import (
 )
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from services.breakout_quality.standard_model_sop import build_standard_model_sop
+from services.breakout_quality import ranker_training as ranker_api
 from services.breakout_quality.point_in_time_scores import (
     FOLD_MANIFEST_FILENAME,
     FOLD_SCORE_FILENAME,
@@ -433,6 +434,58 @@ def _scope_metrics(frame: pd.DataFrame) -> dict[str, Any]:
         **_decile_metrics(frame),
     }
 
+
+
+def _build_safety_raw_mfe_evaluation(
+    bundle,
+    merged: pd.DataFrame,
+    candidate_ids: np.ndarray,
+) -> dict[str, Any]:
+    """Build Rolling multi-head evidence from persisted capability-owned score sidecars."""
+
+    raw_head_columns = {"raw_safety_score", "raw_mfe_score"}
+    if not raw_head_columns.issubset(set(merged.columns)):
+        return {}
+
+    work = merged.copy()
+    for column in sorted(raw_head_columns):
+        work[column] = pd.to_numeric(work[column], errors="raise").astype(np.float64)
+        if not np.isfinite(work[column]).all():
+            raise ValueError(f"Rolling PIT multi-head sidecar含非有限值: {column}")
+        if bool(((work[column] < 0.0) | (work[column] > 1.0)).any()):
+            raise ValueError(f"Rolling PIT multi-head sidecar超出[0,1]: {column}")
+
+    target_scope_mask = np.asarray(
+        bundle.target_valid & np.isfinite(bundle.raw_target), dtype=bool
+    )
+    primary_mfe_percentile = ranker_api.build_daily_percentile_targets(
+        bundle.raw_target, target_scope_mask, bundle.group_table["date"]
+    )
+    raw_mfe_targets = ranker_api.build_conditional_mfe_opportunity_targets_for_training(
+        bundle.group_table, primary_mfe_percentile
+    )
+
+    def evaluate(frame: pd.DataFrame) -> dict[str, Any]:
+        ids = frame["group_index"].to_numpy(dtype=np.int64)
+        scores = {
+            "raw_safety": frame["raw_safety_score"].to_numpy(dtype=np.float64),
+            "raw_mfe": frame["raw_mfe_score"].to_numpy(dtype=np.float64),
+        }
+        return ranker_api.safety_raw_mfe_metrics(
+            ids, bundle.group_table, raw_mfe_targets, scores,
+            include_top_k_quality=True,
+        )
+
+    valid_target = work[work["target_available"]].copy()
+    evaluation: dict[str, Any] = {}
+    if len(valid_target) >= 2:
+        evaluation["oos"] = evaluate(valid_target)
+    candidate_ids = np.asarray(candidate_ids, dtype=np.int64)
+    if len(candidate_ids) >= 2:
+        breakout = valid_target[valid_target["group_index"].isin(candidate_ids)].copy()
+        if len(breakout) >= 2:
+            evaluation["breakout_candidate_oos"] = evaluate(breakout)
+    return evaluation
 
 
 def _yearly_metrics(frame: pd.DataFrame) -> list[dict[str, Any]]:
@@ -1377,6 +1430,7 @@ def _run_point_in_time_scores_audit(
     )
 
     candidate_metrics = _scope_metrics(pd.DataFrame(columns=valid_target.columns))
+    candidate_ids = np.empty(0, dtype=np.int64)
     if (
         bundle.profile.training_sample_scope
         == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
@@ -1389,6 +1443,10 @@ def _run_point_in_time_scores_audit(
         candidate_metrics = _scope_metrics(
             valid_target[valid_target["group_index"].isin(candidate_ids)].copy()
         )
+
+    safety_raw_mfe_evaluation = _build_safety_raw_mfe_evaluation(
+        bundle, merged, candidate_ids
+    )
 
     validation_frames: list[pd.DataFrame] = []
     fold_records_by_id = {str(item["fold_id"]): dict(item) for item in manifest.get("folds", [])}
@@ -1550,6 +1608,7 @@ def _run_point_in_time_scores_audit(
             "elapsed_sec": manifest.get("elapsed_sec"),
         },
         "standard_model_sop": standard_model_sop,
+        "safety_raw_mfe_evaluation": safety_raw_mfe_evaluation,
         "metrics": {
             "pass_only_target": pass_metrics,
             "reject_only_target": reject_metrics,

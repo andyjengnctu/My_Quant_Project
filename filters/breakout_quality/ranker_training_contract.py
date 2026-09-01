@@ -130,8 +130,8 @@ SHARED_SAFETY_WEIGHTED_MFE_DUO_HEAD_TRAINING_CONTRACT = {
     "sample_scope": "daily_eligible_stock_days",
     "safety_target": "same_date_low_adverse_safety_percentile",
     "raw_mfe_target": "same_date_pure_mfe_percentile",
-    "architecture": "shared_encoder_independent_raw_safety_and_raw_mfe_heads",
-    "mfe_head_inputs": "shared_latent_only_no_safety_prediction_input",
+    "architecture": "shared_encoder_raw_safety_plus_final_mfe_topology_defined_by_model_spec",
+    "mfe_head_inputs": "defined_by_model_architecture_contract",
     "mfe_pair_context": "stop_gradient_same_date_average_rank_percentile_of_raw_safety_probability",
     "mfe_pair_safety_weight": "same_date_predicted_safety_percentile_i_times_j",
     "mfe_pair_weight_combination": "delta_ndcg_times_product_detached_same_date_model_safety_percentile",
@@ -311,6 +311,20 @@ def training_semantics(profile) -> dict[str, Any]:
         pairwise_contract = _pairwise_contract_for_recipe(recipe)
         contract = dict(base_contract)
         contract["pair_weighting"] = str(recipe.pairwise_reduction)
+        if semantics_key == CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE:
+            # Artifact semantics describe the selected topology from the canonical model
+            # spec, while the loss/target contract remains experiment-agnostic. This
+            # preserves exact A1 stored semantics and gives A2 its own truthful topology
+            # description without branching on MR/profile/architecture identity.
+            from filters.breakout_quality.models.spec import get_model_spec
+
+            model_spec = get_model_spec(str(profile.model_architecture))
+            topology_contract = model_spec.final_mfe_topology_contract()
+            if topology_contract is None:
+                raise ValueError(
+                    "shared Safety-weighted MFE semantics需要canonical final-MFE topology contract"
+                )
+            contract.update(topology_contract)
         return _extended_semantics(
             batching=contract["batching"],
             pairwise_contract=pairwise_contract,
