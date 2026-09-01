@@ -4,7 +4,6 @@ from __future__ import annotations
 
 
 def build_inception_time(nn, torch, *, feature_count: int, context_count: int, spec):
-    head_contract = frozenset(str(value) for value in tuple(spec.pooling or ()))
     use_risk_context = str(spec.architecture) == "inception_time_risk_context_v1"
     use_predicted_upside_context = (
         str(spec.architecture) == "inception_time_predicted_upside_context_v1"
@@ -22,7 +21,7 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
         str(spec.architecture) == "inception_time_safety_conditional_mfe_v1"
     )
     use_shared_safety_mfe = (
-        "raw_safety_head" in head_contract and "raw_mfe_head" in head_contract
+        str(spec.architecture) == "inception_time_shared_safety_mfe_v1"
     )
     use_safety_raw_mfe_hmhs = str(spec.architecture) in {
         "inception_time_safety_raw_mfe_hmhs_v1",

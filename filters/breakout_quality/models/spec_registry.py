@@ -43,10 +43,16 @@ MODEL_SPEC_BUILDERS: dict[str, ModelSpecBuilder] = {
     PATCH_TOKEN_TRANSFORMER_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1: build_patch_token_joint_spec,
     INCEPTION_TIME_MARKET_SET_V1: build_market_set_spec,
     INCEPTION_TIME_MARKET_SET_CANDIDATE_V1: build_market_set_spec,
-    **{
-        architecture: build_inception_variant_spec
-        for architecture in INCEPTION_VARIANT_ARCHITECTURES
-    },
+    **{architecture: build_inception_variant_spec for architecture in (
+        INCEPTION_TIME_V1,
+        INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1,
+        INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1,
+        INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
+        INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1,
+        INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1,
+        INCEPTION_TIME_PREDICTED_SAFETY_CONTEXT_V1,
+        INCEPTION_TIME_RISK_CONTEXT_V1,
+    )},
     INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_MLP_V1: build_inception_hmhs_mlp_spec,
     INCEPTION_TIME_SAFETY_RAW_MFE_JOINT_ATTN_MLP_V1: build_inception_joint_spec,
     INCEPTION_TIME_GROUP_NORM_V1: build_inception_group_norm_spec,

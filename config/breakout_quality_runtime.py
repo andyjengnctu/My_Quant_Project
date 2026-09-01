@@ -336,6 +336,9 @@ CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R = "dual_component_r_regression"
 CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE = "single_pairwise"
 CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE = "conditional_duo_pairwise"
 CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE = "safety_mfe_duo_pairwise"
+CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE = (
+    "shared_safety_weighted_mfe_duo_pairwise"
+)
 CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE = "safety_mfe_joint_tri_pairwise"
 CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE = "listwise"
 CONTINUOUS_RANKER_AUX_TARGET_NONE = "none"
@@ -350,6 +353,7 @@ CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SAFETY = "conditional_mfe_safety"
 CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SINGLE = "conditional_mfe_single"
 CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE = "safety_conditional_mfe"
 CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE = "safety_raw_mfe"
+CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE = "shared_safety_weighted_mfe"
 CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS = "safety_raw_mfe_hmhs"
 CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN = "safety_raw_mfe_joint_min"
 CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS = "direct_hmhs"
@@ -406,55 +410,6 @@ class ContinuousRankerTargetPolicy:
             raise ValueError("非daily-component target policy不得指定component_target_id")
 
 
-CONTINUOUS_RANKER_DUO_PAIR_CONTEXT_NONE = "none"
-CONTINUOUS_RANKER_DUO_PAIR_CONTEXT_HEAD_PASS_PROBABILITY_SAME_DATE_PERCENTILE = (
-    "head_pass_probability_same_date_percentile"
-)
-
-
-@dataclass(frozen=True)
-class ContinuousRankerDuoHeadPairwisePolicy:
-    """Declarative two-head pairwise composition consumed by the generic trainer.
-
-    ``None`` pair-weight entries inherit the objective-level pair-weight policy.  A
-    context source head converts that head's detached PASS probability into the
-    canonical same-date average-rank percentile and appends it to the target consumed
-    by the selected pair-weight plugin.
-    """
-
-    combined_output_head: str = "both"
-    head_widths: tuple[int, int] = (2, 2)
-    target_indices: tuple[int, int] = (0, 1)
-    pair_weight_policies: tuple[str | None, str | None] = (None, None)
-    pair_context_source_heads: tuple[int | None, int | None] = (None, None)
-    loss_weights: tuple[float, float] = (0.5, 0.5)
-
-    def __post_init__(self) -> None:
-        if len(self.head_widths) != 2 or any(int(width) != 2 for width in self.head_widths):
-            raise ValueError("continuous-ranker duo-head目前只支援兩個binary logits heads")
-        if len(self.target_indices) != 2 or min(int(value) for value in self.target_indices) < 0:
-            raise ValueError("continuous-ranker duo-head target indices必須為兩個非負整數")
-        if len(self.pair_weight_policies) != 2 or len(self.pair_context_source_heads) != 2:
-            raise ValueError("continuous-ranker duo-head pair-weight contract長度必須為2")
-        if len(self.loss_weights) != 2 or any(float(value) <= 0.0 for value in self.loss_weights):
-            raise ValueError("continuous-ranker duo-head loss weights必須為兩個正值")
-        if abs(sum(float(value) for value in self.loss_weights) - 1.0) > 1e-12:
-            raise ValueError("continuous-ranker duo-head loss weights總和必須為1")
-        for policy_id in self.pair_weight_policies:
-            if policy_id is not None:
-                get_continuous_ranker_pair_weight_policy(policy_id)
-        for head_index, source_index in enumerate(self.pair_context_source_heads):
-            if source_index is None:
-                continue
-            if int(source_index) not in {0, 1}:
-                raise ValueError("duo-head pair context source只支援head 0/1")
-            policy_id = self.pair_weight_policies[head_index]
-            if policy_id is None:
-                raise ValueError("derived duo-head pair context必須明確指定pair-weight policy")
-            if not get_continuous_ranker_pair_weight_policy(policy_id).weighted:
-                raise ValueError("derived duo-head pair context只適用weighted pair policy")
-
-
 @dataclass(frozen=True)
 class ContinuousRankerTrainingPolicy:
     """Reusable training capability selected by objective, never by MR/profile identity."""
@@ -467,8 +422,6 @@ class ContinuousRankerTrainingPolicy:
     score_transform: str = CONTINUOUS_RANKER_SCORE_TRANSFORM_PROBABILITY
     epoch_loss_aggregation: str = CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED
     uses_pairwise_loss: bool = False
-    duo_head_pairwise_policy: ContinuousRankerDuoHeadPairwisePolicy | None = None
-    semantics_overrides: tuple[tuple[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if self.batch_mode not in {
@@ -494,18 +447,6 @@ class ContinuousRankerTrainingPolicy:
             raise ValueError(
                 f"不支援的continuous-ranker epoch loss aggregation: {self.epoch_loss_aggregation!r}"
             )
-        if (self.duo_head_pairwise_policy is not None) != (
-            self.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE
-        ):
-            raise ValueError(
-                "continuous-ranker duo-head pairwise policy必須且只能搭配generic safety/mfe duo handler"
-            )
-        override_keys = [str(key) for key, _value in self.semantics_overrides]
-        if len(override_keys) != len(set(override_keys)):
-            raise ValueError("continuous-ranker semantics overrides不得重複key")
-
-    def semantics_override_dict(self) -> dict[str, Any]:
-        return {str(key): value for key, value in self.semantics_overrides}
 
 
 @dataclass(frozen=True)
@@ -792,7 +733,6 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             uses_pairwise_loss=True,
-            duo_head_pairwise_policy=ContinuousRankerDuoHeadPairwisePolicy(),
         ),
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
@@ -802,38 +742,15 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             uses_pairwise_loss=True,
-            duo_head_pairwise_policy=ContinuousRankerDuoHeadPairwisePolicy(),
         ),
         TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
-            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE,
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
-            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             uses_pairwise_loss=True,
-            duo_head_pairwise_policy=ContinuousRankerDuoHeadPairwisePolicy(
-                pair_weight_policies=(
-                    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
-                    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
-                ),
-                pair_context_source_heads=(None, 0),
-            ),
-            semantics_overrides=(
-                ("architecture", "shared_encoder_independent_raw_safety_and_raw_mfe_heads"),
-                ("conditional_context", "none_safety_prediction_not_model_input"),
-                ("mfe_head_inputs", "shared_latent_only_no_safety_prediction_input"),
-                ("mfe_pair_context", "stop_gradient_same_date_average_rank_percentile_of_raw_safety_probability"),
-                ("mfe_pair_safety_weight", "same_date_predicted_safety_percentile_i_times_j"),
-                ("mfe_pair_weight_combination", "delta_ndcg_times_product_detached_same_date_model_safety_percentile"),
-                ("mfe_pair_direction", "pure_mfe_only_never_reversed_by_safety"),
-                ("safety_head_gradient_from_mfe_loss", False),
-                ("shared_encoder_gradient_from_both_heads", True),
-                ("head_weighting", "fixed_equal_mean_no_lambda_sweep"),
-                ("external_predicted_safety_dependency", False),
-                ("epoch_selection", "raw_mfe_mean_daily_spearman"),
-                ("runtime_score", "raw_mfe_pass_probability_only"),
-            ),
         ),
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
@@ -1047,6 +964,7 @@ __all__ = (
     "CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE",
     "CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE",
     "CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE",
+    "CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE",
     "CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE",
     "CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE",
     "CONTINUOUS_RANKER_AUX_TARGET_NONE",
@@ -1061,6 +979,7 @@ __all__ = (
     "CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SINGLE",
     "CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE",
     "CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE",
+    "CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE",
     "CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS",
     "CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN",
     "CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS",
@@ -1069,7 +988,6 @@ __all__ = (
     "CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH",
     "CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED",
     "ContinuousRankerTargetPolicy",
-    "ContinuousRankerDuoHeadPairwisePolicy",
     "ContinuousRankerTrainingPolicy",
     "ContinuousRankerObjectivePolicy",
     "ContinuousRankerDependencySpec",

@@ -440,7 +440,10 @@ def _render_markdown(payload: dict) -> str:
     )
     conditional_mfe_single = objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING
     safety_conditional_mfe_duo = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
-    safety_raw_mfe_duo = bool(payload.get("safety_raw_mfe_evaluation"))
+    safety_raw_mfe_duo = (
+        objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING
+        or bool(payload.get("safety_raw_mfe_evaluation"))
+    )
     safety_raw_mfe_hmhs_tri = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING
     safety_raw_mfe_joint_min_tri = objective == TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING
     direct_hmhs_only = objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING

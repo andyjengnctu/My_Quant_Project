@@ -28,6 +28,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_SEMANTICS_RAW_R,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
+    CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN,)
 from config.breakout_quality_runtime_resolver import (
@@ -125,6 +126,27 @@ SAFETY_RAW_MFE_DUO_HEAD_TRAINING_CONTRACT = {
     "batching": "whole_date_pack_no_date_split",
 }
 
+SHARED_SAFETY_WEIGHTED_MFE_DUO_HEAD_TRAINING_CONTRACT = {
+    "sample_scope": "daily_eligible_stock_days",
+    "safety_target": "same_date_low_adverse_safety_percentile",
+    "raw_mfe_target": "same_date_pure_mfe_percentile",
+    "architecture": "shared_encoder_independent_raw_safety_and_raw_mfe_heads",
+    "mfe_head_inputs": "shared_latent_only_no_safety_prediction_input",
+    "mfe_pair_context": "stop_gradient_same_date_average_rank_percentile_of_raw_safety_probability",
+    "mfe_pair_safety_weight": "same_date_predicted_safety_percentile_i_times_j",
+    "mfe_pair_weight_combination": "delta_ndcg_times_product_detached_same_date_model_safety_percentile",
+    "mfe_pair_direction": "pure_mfe_only_never_reversed_by_safety",
+    "safety_head_gradient_from_mfe_loss": False,
+    "shared_encoder_gradient_from_both_heads": True,
+    "head_losses": "safety_full_list_delta_ndcg_plus_safety_product_weighted_mfe_full_list_delta_ndcg",
+    "head_weighting": "fixed_equal_mean_no_lambda_sweep",
+    "external_predicted_safety_dependency": False,
+    "epoch_selection": "raw_mfe_mean_daily_spearman",
+    "runtime_score": "raw_mfe_pass_probability_only",
+    "runtime_status": "model_gate_only_no_pit_no_strategy_conversion",
+    "batching": "whole_date_pack_no_date_split",
+}
+
 SAFETY_RAW_MFE_HMHS_TRI_HEAD_TRAINING_CONTRACT = {
     "sample_scope": "daily_eligible_stock_days",
     "safety_target": "same_date_low_adverse_safety_percentile",
@@ -201,6 +223,7 @@ _EXTENDED_SEMANTIC_KEYS = (
     "conditional_mfe_single_head_contract",
     "safety_conditional_mfe_duo_head_contract",
     "safety_raw_mfe_duo_head_contract",
+    "shared_safety_weighted_mfe_duo_head_contract",
     "safety_raw_mfe_hmhs_tri_head_contract",
     "safety_raw_mfe_joint_min_tri_head_contract",
     "direct_hmhs_single_head_contract",
@@ -258,6 +281,10 @@ _PAIRWISE_SPECIALIZED_CONTRACTS = {
         "safety_raw_mfe_duo_head_contract",
         SAFETY_RAW_MFE_DUO_HEAD_TRAINING_CONTRACT,
     ),
+    CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE: (
+        "shared_safety_weighted_mfe_duo_head_contract",
+        SHARED_SAFETY_WEIGHTED_MFE_DUO_HEAD_TRAINING_CONTRACT,
+    ),
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS: (
         "safety_raw_mfe_hmhs_tri_head_contract",
         SAFETY_RAW_MFE_HMHS_TRI_HEAD_TRAINING_CONTRACT,
@@ -283,7 +310,6 @@ def training_semantics(profile) -> dict[str, Any]:
         slot, base_contract = _PAIRWISE_SPECIALIZED_CONTRACTS[semantics_key]
         pairwise_contract = _pairwise_contract_for_recipe(recipe)
         contract = dict(base_contract)
-        contract.update(recipe.training_policy.semantics_override_dict())
         contract["pair_weighting"] = str(recipe.pairwise_reduction)
         return _extended_semantics(
             batching=contract["batching"],
@@ -378,6 +404,7 @@ __all__ = [
     "PAIRWISE_TRAINING_CONTRACT",
     "RAW_R_REGRESSION_TRAINING_CONTRACT",
     "SAFETY_RAW_MFE_DUO_HEAD_TRAINING_CONTRACT",
+    "SHARED_SAFETY_WEIGHTED_MFE_DUO_HEAD_TRAINING_CONTRACT",
     "SAFETY_RAW_MFE_HMHS_TRI_HEAD_TRAINING_CONTRACT",
     "SAFETY_RAW_MFE_JOINT_MIN_TRI_HEAD_TRAINING_CONTRACT",
     "training_semantics",
