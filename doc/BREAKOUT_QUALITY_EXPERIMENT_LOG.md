@@ -11210,3 +11210,15 @@ Decision：`MR13AK_A1_CLOSED_PASS_TO_A2 / MR13AL_IMPLEMENTED_RESULT_PENDING / RO
 
 Decision：`B327_CAPABILITY_OWNER_CLOSED / NO_SCIENCE_CHANGE / NO_FITTING_IDENTITY_CHANGE / FUTURE_MULTIHEAD_PIT_CONSUMER_NO_IDENTITY_EDIT`。
 
+## 2026-09-01 — B329 Multi-head Model-specific Extension cross-model merged comparison
+
+- **Authoritative baseline**：`test-branch-1_20260901_193732_d9e902aa.zip`，SHA256=`8e8e08e45488535d8f2f530c88c142d28e9fe27893dd73e529988efbc72d4daa`。
+- **User authorization**：使用者要求不同multi-head方法不要各自重複一整組extension，改為同一表直接比較；並明確要求`Pred Safety / N / Raw-MFE→MFE rho / High-MFE / HM/HS`也合併為同一張表，色彩規則與Standard SOP相同。
+- **Persistent contract**：`model.standard_sop`維持v7 / fingerprint=`56e5fb1173404d7f`；`model.standard_comparison`由v7升v8，approved fingerprint=`aa7f812b9d1d936a`。新增comparison-specific extension schema，不修改single-model `MODEL_EXTENSION_SCHEMAS`。
+- **Multi-head Learnability**：comparison固定一張`Model / Split / Head / Daily rho / Global rho / Pair`表；只顯示具capability的model。best/worst沿用`core.report_style.best_worst_signals`，comparison group=`Split+Head`，因此不同split或Safety/MFE head不得互相比色。
+- **Truth / Prediction Geometry**：每個OOS/Breakout scope只印一組extension。summary改為一model一列；Actual truth 5×5在同scope驗證一致後只印一次；Predicted 5×5加Model欄合併所有方法。Safety cohorts固定一張`Model / Pred Safety / N / Raw-MFE→MFE rho / High-MFE / HM/HS`表，best/worst group=`Pred Safety quintile`。N維持neutral；Raw-MFE→MFE rho、High-MFE、HM/HS依既有higher-is-better preference上色。
+- **Geometry color boundary**：Actual truth與Pred Safety↔Raw-MFE rho沒有通用higher/lower preference，保持neutral，不以數值正負或臨時proxy建立第二套色彩語意；Pred S5×M5 N與Joint→actual HM/HS rho依canonical higher preference比較。
+- **Artifact/science boundary**：純report presentation/schema change；不改MR-13AK/MR-13AL model、training、metric producer、PIT、score sidecar、scientific/artifact/fitting identity，不需重訓或重算既有model metrics，只需重新跑[3]/[4]comparison生成v8人讀/JSON工件。
+- **Validation**：persistent contract regression新增comparison-vs-single-model schema isolation、同extension多方法合併、capability filtering、Rolling ordering，以及Pred-Safety cohort group-aware Standard-SOP best/worst色彩。
+
+Decision：`COMPARISON_V8_AUTHORIZED / MULTIHEAD_METHODS_MERGED / SOP_COLOR_CONTRACT_REUSED / SINGLE_MODEL_EXTENSION_UNCHANGED / NO_SCIENCE_CHANGE`。

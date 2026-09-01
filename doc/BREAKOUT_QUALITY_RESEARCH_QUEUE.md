@@ -38,6 +38,7 @@
 | 18 | **sizing / regime gating / cross-sectional representation**。 | **CONDITIONAL** | 一次只改一個主要研究維度。 | 更直接的economic-scalar/conditional/joint/portfolio證據不足且新證據可能改變決策時才展開。 | 最後。 |
 
 ### 2.1 Framework migration對既有研究的處理
+- 2026-09-01：B329依使用者明確授權把[3]/[4] multi-head Model-specific Extension改成跨模型合併比較表：同一extension不再每個MR各印一套；Multi-head Learnability以Model/Split/Head同表，Truth/Prediction Geometry每scope以Model summary、合併Predicted 5×5與合併Safety cohort呈現，Safety cohort欄位固定`Model / Pred Safety / N / Raw-MFE→MFE rho / High-MFE / HM/HS`。比較色彩沿用Standard SOP best/worst contract，僅在同Split+Head或同Pred-Safety quintile內比較；單模型extension格式不變。`model.standard_comparison`升v8，Standard SOP v7不變。
 - 2026-09-01：MR-13AK A1結案為`ARCHITECTURE_GATE_PASS / GO_A2 / NOT_PROMOTED`。Forward/ Rolling Pure-MFE ranking與stability明顯提升，但multi-head extension顯示Raw Safety雖可學，Pred Safety↔Raw-MFE卻約`-0.92/-0.88`且Pred S5×M5近零，故下一個單一control固定為MR-13AL A2 explicit stop-gradient Safety context；不先做AK robustness。
 - 2026-09-01：B327關閉Rolling [4] multi-head extension producer缺口：PIT score sidecar由canonical training-policy `score_output_policy`自動輸出Raw Safety/Raw-MFE，PIT producer/reader不持有target-builder capability或optional sidecar欄位第二份對照表；compatible fold只rescore既有checkpoint，PIT Audit產生同一`safety_raw_mfe_evaluation`，不改B326 Standard/comparison persistent report contract。
 

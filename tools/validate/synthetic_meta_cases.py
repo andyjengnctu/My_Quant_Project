@@ -2833,10 +2833,12 @@ def validate_research_report_contract_freeze_case(_base_params):
     import config.breakout_quality as bq
     from core.research_report_contract import (
         APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS,
+        MODEL_COMPARISON_EXTENSION_SCHEMAS,
         MODEL_EXTENSION_SCHEMAS,
         MODEL_STANDARD_COMPARISON,
         MODEL_STANDARD_SOP,
         MODEL_MODE_EXTENSION_SCHEMAS,
+        comparison_extension_contract,
         extension_contract,
         mode_extension_contract,
         persistent_report_contract_fingerprints,
@@ -2879,9 +2881,11 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
     check_true(
         "standard_multi_model_comparison_schema_is_derived_from_standard_sop",
-        int(MODEL_STANDARD_COMPARISON.version) == 7
+        int(MODEL_STANDARD_COMPARISON.version) == 8
         and tuple(MODEL_STANDARD_COMPARISON.model_specific_extension_ids)
         == ("multi_head_learnability", "truth_prediction_geometry")
+        and set(MODEL_COMPARISON_EXTENSION_SCHEMAS)
+        == {"multi_head_learnability", "truth_prediction_geometry"}
         and [(section.number, section.title) for section in MODEL_STANDARD_COMPARISON.sections]
         == [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         and all(
@@ -2901,6 +2905,16 @@ def validate_research_report_contract_freeze_case(_base_params):
                 standard_section.tables, comparison_section.tables
             )
         ),
+    )
+
+    check_true(
+        "comparison_extension_schema_adds_model_dimension_without_changing_single_model_extension_schema",
+        extension_contract("multi_head_learnability").tables[0].headers
+        == ("Split", "Head", "Daily rho", "Global rho", "Pair")
+        and comparison_extension_contract("multi_head_learnability").tables[0].headers
+        == ("Model", "Split", "Head", "Daily rho", "Global rho", "Pair")
+        and comparison_extension_contract("truth_prediction_geometry").tables[-1].headers
+        == ("Model", "Pred Safety", "N", "Raw-MFE→MFE rho", "High-MFE", "HM/HS"),
     )
 
     check_true(
@@ -3070,10 +3084,31 @@ def validate_research_report_contract_freeze_case(_base_params):
                     "safety_to_mfe_mean_daily_spearman": -0.12,
                     "s5_m5": {"n": 4, "population_pct": 4.0, "independence_enrichment": 0.9},
                     "s4plus_m4plus": {"n": 15, "population_pct": 15.0, "independence_enrichment": 0.95},
-                    "actual_joint_geometry": [],
+                    "actual_joint_geometry": [
+                        [
+                            {"n": 1 + s + m, "population_pct": 4.0, "independence_enrichment": 1.0}
+                            for m in range(5)
+                        ]
+                        for s in range(5)
+                    ],
                 },
-                "predicted_joint_geometry": [],
-                "safety_cohorts": [],
+                "predicted_joint_geometry": [
+                    [
+                        {"n": 10 + s + m, "actual_hmhs_pct": 20.0 + s + m}
+                        for m in range(5)
+                    ]
+                    for s in range(5)
+                ],
+                "safety_cohorts": [
+                    {
+                        "predicted_safety_quintile": s,
+                        "n": 100 + s,
+                        "raw_mfe_to_actual_mfe_mean_daily_spearman": 0.10 + s * 0.01,
+                        "high_mfe_pct": 70.0 - s * 10.0,
+                        "hmhs_pct": 20.0 + s,
+                    }
+                    for s in range(1, 6)
+                ],
             },
         },
         "breakout_candidate_oos": {
@@ -3225,14 +3260,18 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
 
     check_true(
-        "multi_model_comparison_appends_only_authorized_capability_driven_model_specific_extensions",
-        all(
-            f"Model-specific Extension｜{model_id}｜Multi-head Learnability" in comparison_text
-            and f"Model-specific Extension｜{model_id}｜Truth / Prediction Geometry" in comparison_text
-            for model_id in ("MODEL-A", "MODEL-B", "MODEL-C")
-        )
+        "multi_model_comparison_merges_same_extension_methods_into_shared_tables",
+        comparison_text.count("Model-specific Extension｜Multi-head Learnability") == 1
+        and comparison_text.count("Model-specific Extension｜Truth / Prediction Geometry") == 1
+        and "Model-specific Extension｜MODEL-A｜" not in comparison_text
+        and "Model-specific Extension｜MODEL-B｜" not in comparison_text
+        and "Model-specific Extension｜MODEL-C｜" not in comparison_text
+        and "Model    Split" in comparison_text
+        and "Model    Actual Safety↔MFE rho" in comparison_text
+        and "Model    Pred Safety" in comparison_text
+        and all(model_id in comparison_text for model_id in ("MODEL-A", "MODEL-B", "MODEL-C"))
         and comparison_text.find("模型比較 SOP｜6. Evidence Coverage")
-            < comparison_text.find("Model-specific Extension｜MODEL-A｜Multi-head Learnability")
+            < comparison_text.find("Model-specific Extension｜Multi-head Learnability")
         and "標準模型 SOP｜3. Multi-head Learnability" not in comparison_text
         and "模型比較 SOP｜3. Multi-head Learnability" not in comparison_text,
         detail=comparison_text,
@@ -3245,12 +3284,13 @@ def validate_research_report_contract_freeze_case(_base_params):
         ],
         target="console",
     )
+    non_multi_extension = non_multi_comparison.split("Model-specific Extension｜Multi-head Learnability", 1)[1]
     check_true(
         "comparison_model_specific_extensions_are_payload_capability_driven_not_mr_or_objective_hardcoded",
-        "Model-specific Extension｜MODEL-MULTI｜Multi-head Learnability" in non_multi_comparison
-        and "Model-specific Extension｜MODEL-MULTI｜Truth / Prediction Geometry" in non_multi_comparison
-        and "Model-specific Extension｜MODEL-NONMULTI｜Multi-head Learnability" not in non_multi_comparison
-        and "Model-specific Extension｜MODEL-NONMULTI｜Truth / Prediction Geometry" not in non_multi_comparison
+        "Model-specific Extension｜Multi-head Learnability" in non_multi_comparison
+        and "Model-specific Extension｜Truth / Prediction Geometry" in non_multi_comparison
+        and "MODEL-MULTI" in non_multi_extension
+        and "MODEL-NONMULTI" not in non_multi_extension
         and "Direct HM/HS H-only Learnability" not in non_multi_comparison,
         detail=non_multi_comparison,
     )
@@ -3289,6 +3329,31 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "OOS → Breakout slice</span>" in comparison_markdown
         and "| Model | Groups | Daily rho |" in comparison_markdown
         and "| Model | Δ Daily rho | Δ Pair | Δ Top-Bottom |" in comparison_markdown,
+    )
+
+    cohort_low = json.loads(json.dumps(control_payload))
+    cohort_high = json.loads(json.dumps(control_payload))
+    cohort_low["safety_raw_mfe_evaluation"]["oos"]["model_gate"]["safety_cohorts"][0]["high_mfe_pct"] = 40.0
+    cohort_high["safety_raw_mfe_evaluation"]["oos"]["model_gate"]["safety_cohorts"][0]["high_mfe_pct"] = 80.0
+    cohort_low["safety_raw_mfe_evaluation"]["oos"]["model_gate"]["safety_cohorts"][4]["high_mfe_pct"] = 90.0
+    cohort_high["safety_raw_mfe_evaluation"]["oos"]["model_gate"]["safety_cohorts"][4]["high_mfe_pct"] = 20.0
+    cohort_markdown = app._render_standard_model_comparison(
+        [
+            {"model_id": "COHORT-A", "payload": cohort_low},
+            {"model_id": "COHORT-B", "payload": cohort_high},
+        ],
+        target="markdown",
+    )
+    cohort_extension = cohort_markdown.split("| Model | Pred Safety | N | Raw-MFE→MFE rho | High-MFE | HM/HS |", 1)[1]
+    s1_a = next(line for line in cohort_extension.splitlines() if "COHORT-A" in line and "S1" in line)
+    s1_b = next(line for line in cohort_extension.splitlines() if "COHORT-B" in line and "S1" in line)
+    s5_a = next(line for line in cohort_extension.splitlines() if "COHORT-A" in line and "S5" in line)
+    s5_b = next(line for line in cohort_extension.splitlines() if "COHORT-B" in line and "S5" in line)
+    check_true(
+        "comparison_extension_reuses_sop_best_worst_colors_within_same_pred_safety_cohort",
+        "#C62828" in s1_a and "#188038" in s1_b
+        and "#188038" in s5_a and "#C62828" in s5_b,
+        detail="\n".join((s1_a, s1_b, s5_a, s5_b)),
     )
 
     rolling_payload = json.loads(json.dumps(control_payload))
@@ -3345,11 +3410,12 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
     check_true(
         "rolling_comparison_keeps_multi_head_extensions_outside_standard_sop_and_before_mode_extension",
-        "Model-specific Extension｜ROLL-MULTI｜Multi-head Learnability" in rolling_multi_comparison
-        and "Model-specific Extension｜ROLL-MULTI｜Truth / Prediction Geometry" in rolling_multi_comparison
+        "Model-specific Extension｜Multi-head Learnability" in rolling_multi_comparison
+        and "Model-specific Extension｜Truth / Prediction Geometry" in rolling_multi_comparison
+        and "ROLL-MULTI" in rolling_multi_comparison
         and "Rolling OOS" in rolling_multi_comparison
         and rolling_multi_comparison.find("模型比較 SOP｜6. Evidence Coverage")
-            < rolling_multi_comparison.find("Model-specific Extension｜ROLL-MULTI｜Multi-head Learnability")
+            < rolling_multi_comparison.find("Model-specific Extension｜Multi-head Learnability")
             < rolling_multi_comparison.find("Rolling-specific Extension｜Fold / Year Stability"),
         detail=rolling_multi_comparison,
     )

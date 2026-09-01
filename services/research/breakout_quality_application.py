@@ -60,6 +60,7 @@ from core.training_progress import (
 from core.strategy_comparison import validate_strategy_compare_gpu_train_workers
 from core.training_scheduler import pop_next_seed_diverse_unit
 from core.research_report_contract import (
+    comparison_extension_contract,
     extension_contract,
     mode_extension_contract,
     format_contract_value,
@@ -811,20 +812,23 @@ def _render_model_contract_table(
     scope_styler=None,
     delta_style: bool = False,
     best_worst_style: bool = False,
+    best_worst_group_keys: tuple[str, ...] = (),
 ) -> str:
     comparison_signals: dict[str, dict[str, str]] = {}
     if best_worst_style:
         for column in table.columns:
             if column.preference not in {"higher", "lower"}:
                 continue
-            values = {
-                str(index): row.get(f"__compare__{column.key}", row.get(column.key))
-                for index, row in enumerate(rows)
-            }
-            comparison_signals[column.key] = best_worst_signals(
-                values,
-                preference=column.preference,
-            )
+            grouped_values: dict[tuple[str, ...], dict[str, object]] = {}
+            for index, row in enumerate(rows):
+                group_key = tuple(str(row.get(key, "")) for key in best_worst_group_keys)
+                grouped_values.setdefault(group_key, {})[str(index)] = row.get(
+                    f"__compare__{column.key}", row.get(column.key)
+                )
+            signals: dict[str, str] = {}
+            for values in grouped_values.values():
+                signals.update(best_worst_signals(values, preference=column.preference))
+            comparison_signals[column.key] = signals
 
     rendered = []
     for index, row in enumerate(rows):
@@ -923,12 +927,12 @@ def _truth_geometry_extension_scopes(geometry_scopes: list[tuple[str, dict]]) ->
 
 
 def _render_model_comparison_specific_extensions(views: list[dict], *, target: str) -> list[str]:
-    """Render authorized capability-driven Model-specific extensions for [3]/[4].
+    """Render comparison-specific Model extensions as cross-model tables.
 
-    The comparison surface never infers an MR identity or training objective. It
-    consumes extension payloads already derived by ``_model_sop_view`` and only
-    renders extension IDs explicitly authorized by the persistent comparison
-    contract. Models without the capability simply contribute no extension block.
+    Extension capability remains per model, but the comparison surface groups every
+    method that exposes the same extension into one canonical table.  Best/worst
+    colors reuse the Standard SOP contract and are scoped to truly comparable rows
+    (same split/head or same Pred-Safety cohort).
     """
 
     contract = report_contract("model.standard_comparison")
@@ -937,8 +941,8 @@ def _render_model_comparison_specific_extensions(views: list[dict], *, target: s
         return []
     color = console_color_enabled()
 
-    def extension_heading(model_id: str, extension_id: str) -> str:
-        title = f"Model-specific Extension｜{model_id}｜{extension_contract(extension_id).title}"
+    def extension_heading(extension_id: str) -> str:
+        title = f"Model-specific Extension｜{comparison_extension_contract(extension_id).title}"
         if target == "console":
             return render_section(paint(title, "cyan", enabled=color, bold=True))
         return f"## {markdown_tone(title, 'blue', bold=True)}"
@@ -955,45 +959,105 @@ def _render_model_comparison_specific_extensions(views: list[dict], *, target: s
             return paint(str(value), "light_yellow", enabled=color, bold=True)
         return f"### {markdown_tone(value, 'light_yellow', bold=True)}"
 
-    parts: list[str] = []
+    extension_views: dict[str, list[tuple[str, dict]]] = {extension_id: [] for extension_id in allowed_ids}
     for item in views:
         model_id = str(item.get("model_id") or "MODEL")
         view = dict(item.get("view") or {})
         extensions = {str(ext.get("id")): dict(ext) for ext in list(view.get("extensions") or [])}
         for extension_id in allowed_ids:
             ext = extensions.get(extension_id)
-            if not ext:
-                continue
-            parts.append(extension_heading(model_id, extension_id))
-            if extension_id == "multi_head_learnability":
-                parts.append(_render_model_contract_table(
-                    extension_contract(extension_id).tables[0],
-                    list(ext.get("rows") or []),
-                    target=target,
-                    scope_styler=scope_cell,
-                ))
-                continue
-            if extension_id == "truth_prediction_geometry":
-                tables = {table.table_id: table for table in extension_contract(extension_id).tables}
+            if ext:
+                extension_views[extension_id].append((model_id, ext))
+
+    parts: list[str] = []
+    for extension_id in allowed_ids:
+        methods = extension_views.get(extension_id) or []
+        if not methods:
+            continue
+        parts.append(extension_heading(extension_id))
+        tables = {table.table_id: table for table in comparison_extension_contract(extension_id).tables}
+
+        if extension_id == "multi_head_learnability":
+            rows = []
+            for model_id, ext in methods:
+                for raw_row in list(ext.get("rows") or []):
+                    rows.append({"model": model_id, **dict(raw_row)})
+            parts.append(_render_model_contract_table(
+                tables["multi_head_comparison"],
+                rows,
+                target=target,
+                scope_styler=scope_cell,
+                best_worst_style=True,
+                best_worst_group_keys=("split", "head"),
+            ))
+            continue
+
+        if extension_id == "truth_prediction_geometry":
+            by_scope: dict[str, list[tuple[str, dict]]] = {}
+            scope_order: list[str] = []
+            for model_id, ext in methods:
                 for scope in _truth_geometry_extension_scopes(list(ext.get("geometry") or [])):
-                    parts.append(scope_heading(scope["scope"]))
-                    summary_rows = [dict(row) for row in scope["summary"]]
-                    if scope["actual_s5_n"] > 0 and scope["pred_s5_n"] == 0:
-                        for row in summary_rows:
-                            if row.get("metric") == "Pred S5×M5 N":
-                                row["value"] = styled_signal(
-                                    row["value"], SIGNAL_NEGATIVE, target=target,
-                                    enabled=color if target == "console" else None, bold=True,
-                                )
+                    scope_name = str(scope.get("scope") or "")
+                    if scope_name not in by_scope:
+                        by_scope[scope_name] = []
+                        scope_order.append(scope_name)
+                    by_scope[scope_name].append((model_id, scope))
+
+            for scope_name in scope_order:
+                scoped_methods = by_scope[scope_name]
+                parts.append(scope_heading(scope_name))
+
+                summary_rows = []
+                truth_rows = None
+                predicted_rows = []
+                cohort_rows = []
+                for model_id, scope in scoped_methods:
+                    summary = {str(row.get("metric")): row.get("value") for row in scope.get("summary", [])}
+                    summary_rows.append({
+                        "model": model_id,
+                        "actual_safety_to_mfe_daily_rho": summary.get("Actual Safety↔MFE Daily rho"),
+                        "pred_safety_to_raw_mfe_daily_rho": summary.get("Pred Safety↔Raw-MFE Daily rho"),
+                        "actual_s5_m5": summary.get("Actual S5×M5"),
+                        "actual_s4p_m4p": summary.get("Actual S4+×M4+"),
+                        "pred_s5_m5_n": summary.get("Pred S5×M5 N"),
+                        "joint_product_to_actual_hmhs_daily_rho": summary.get("Joint product→actual HM/HS Daily rho"),
+                    })
+
+                    current_truth = [dict(row) for row in scope.get("truth_5x5", [])]
+                    if current_truth:
+                        if truth_rows is None:
+                            truth_rows = current_truth
+                        elif current_truth != truth_rows:
+                            raise ValueError(
+                                f"Model comparison同scope Actual truth geometry不一致: scope={scope_name}"
+                            )
+                    for row in scope.get("predicted_5x5", []):
+                        predicted_rows.append({"model": model_id, **dict(row)})
+                    for row in scope.get("safety_cohorts", []):
+                        cohort_rows.append({"model": model_id, **dict(row)})
+
+                parts.append(_render_model_contract_table(
+                    tables["geometry_summary_comparison"],
+                    summary_rows,
+                    target=target,
+                    best_worst_style=True,
+                ))
+                if truth_rows:
                     parts.append(_render_model_contract_table(
-                        tables["geometry_summary"], summary_rows, target=target,
+                        tables["truth_5x5"], truth_rows, target=target,
                     ))
-                    for table_id in ("truth_5x5", "predicted_5x5", "safety_cohorts"):
-                        table_rows = list(scope.get(table_id) or [])
-                        if table_rows:
-                            parts.append(_render_model_contract_table(
-                                tables[table_id], table_rows, target=target,
-                            ))
+                if predicted_rows:
+                    parts.append(_render_model_contract_table(
+                        tables["predicted_5x5_comparison"], predicted_rows, target=target,
+                    ))
+                if cohort_rows:
+                    parts.append(_render_model_contract_table(
+                        tables["safety_cohorts_comparison"],
+                        cohort_rows,
+                        target=target,
+                        best_worst_style=True,
+                        best_worst_group_keys=("safety",),
+                    ))
     return parts
 
 

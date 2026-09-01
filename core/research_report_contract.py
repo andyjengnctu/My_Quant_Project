@@ -176,7 +176,7 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=7,
+    version=8,
     role="persistent_multi_model_comparison_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),
@@ -466,11 +466,65 @@ def column_contract(report_id: str, section_id: str, table_id: str, column_key: 
     raise KeyError(f"{report_id}/{section_id}/{table_id}沒有column: {column_key}")
 
 
+MODEL_COMPARISON_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
+    "multi_head_learnability": ModelExtensionContract(
+        "multi_head_learnability", "Multi-head Learnability", "multi_head_only",
+        (T("multi_head_comparison", (
+            C("model", "Model", alignment="left"),
+            C("split", "Split", alignment="left"),
+            C("head", "Head", alignment="left"),
+            C("mean_daily_spearman", "Daily rho", 4, preference="higher", format_kind="number"),
+            C("global_spearman_vs_raw_target", "Global rho", 4, preference="higher", format_kind="number"),
+            C("pairwise_concordance", "Pair", 2, "%", "higher", "fraction_pct"),
+        )),),
+    ),
+    "truth_prediction_geometry": ModelExtensionContract(
+        "truth_prediction_geometry", "Truth / Prediction Geometry", "geometry_models",
+        (
+            T("geometry_summary_comparison", (
+                C("model", "Model", alignment="left"),
+                C("actual_safety_to_mfe_daily_rho", "Actual Safety↔MFE rho", 4, format_kind="number"),
+                C("pred_safety_to_raw_mfe_daily_rho", "Pred Safety↔Raw-MFE rho", 4, format_kind="number"),
+                C("actual_s5_m5", "Actual S5×M5", alignment="right"),
+                C("actual_s4p_m4p", "Actual S4+×M4+", alignment="right"),
+                C("pred_s5_m5_n", "Pred S5×M5 N", 0, preference="higher", format_kind="int"),
+                C("joint_product_to_actual_hmhs_daily_rho", "Joint→actual HM/HS rho", 4, preference="higher", format_kind="number"),
+            )),
+            # Actual truth is shared by all methods in the same scope and is rendered once.
+            T("truth_5x5", (
+                C("safety", "Actual Safety \\ Pure-MFE", alignment="left"),
+                C("m1", "M1"), C("m2", "M2"), C("m3", "M3"), C("m4", "M4"), C("m5", "M5"),
+            )),
+            T("predicted_5x5_comparison", (
+                C("model", "Model", alignment="left"),
+                C("safety", "Pred Safety \\ Raw-MFE", alignment="left"),
+                C("m1", "M1"), C("m2", "M2"), C("m3", "M3"), C("m4", "M4"), C("m5", "M5"),
+            )),
+            T("safety_cohorts_comparison", (
+                C("model", "Model", alignment="left"),
+                C("safety", "Pred Safety", alignment="left"),
+                C("n", "N", 0, format_kind="int"),
+                C("raw_mfe_to_actual_mfe_mean_daily_spearman", "Raw-MFE→MFE rho", 4, preference="higher", format_kind="number"),
+                C("high_mfe_pct", "High-MFE", 2, "%", "higher", "pct"),
+                C("hmhs_pct", "HM/HS", 2, "%", "higher", "pct"),
+            )),
+        ),
+    ),
+}
+
+
 def extension_contract(extension_id: str) -> ModelExtensionContract:
     try:
         return MODEL_EXTENSION_SCHEMAS[str(extension_id)]
     except KeyError as exc:
         raise KeyError(f"未知Model-specific extension: {extension_id}") from exc
+
+
+def comparison_extension_contract(extension_id: str) -> ModelExtensionContract:
+    try:
+        return MODEL_COMPARISON_EXTENSION_SCHEMAS[str(extension_id)]
+    except KeyError as exc:
+        raise KeyError(f"未知Model comparison extension: {extension_id}") from exc
 
 
 def mode_extension_contract(extension_id: str) -> ModelExtensionContract:
@@ -487,8 +541,13 @@ def _persistent_schema_payload(contract: PersistentReportContract) -> dict:
         # Preserve existing fingerprints for reports whose schema did not change.
         payload.pop("model_specific_extension_ids", None)
         return payload
+    extension_resolver = (
+        comparison_extension_contract
+        if contract.report_id == "model.standard_comparison"
+        else extension_contract
+    )
     payload["model_specific_extensions"] = [
-        asdict(extension_contract(extension_id)) for extension_id in extension_ids
+        asdict(extension_resolver(extension_id)) for extension_id in extension_ids
     ]
     return payload
 
@@ -517,7 +576,7 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "fb020874366cbbba",
+    "model.standard_comparison": "aa7f812b9d1d936a",
     "model.standard_sop": "56e5fb1173404d7f",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",
