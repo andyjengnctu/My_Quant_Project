@@ -49,6 +49,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_BUILDER_RAW_R,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
+    CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
     CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE,
@@ -113,6 +114,7 @@ from filters.breakout_quality.conditional_mfe_safety import (
     ConditionalMfeSafetyTargets,
     build_conditional_mfe_safety_targets,
 )
+from filters.breakout_quality.safety_primary_target import build_safety_primary_targets
 from filters.breakout_quality.conditional_mfe_opportunity import (
     ConditionalMfeOpportunityTargets,
     HMHS_HIGH_PERCENTILE_CUTOFF,
@@ -1342,9 +1344,9 @@ def _train_epoch(
                 loss_weight = int(max(1, sum(int(item[1]) for item in losses_and_counts)))
             elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE:
                 if target.ndim != 2 or int(target.shape[1]) != 2:
-                    raise ValueError("Shared Safety-weighted MFE duo-head target必須為[N,2]")
+                    raise ValueError("Shared Safety-weighted duo-head target必須為[N,2]")
                 if not hasattr(model, "forward_safety_mfe_heads"):
-                    raise ValueError("Shared Safety-weighted MFE objective需要independent duo-head model architecture")
+                    raise ValueError("Shared Safety-weighted objective需要independent duo-head model architecture")
                 safety_logits, raw_mfe_logits = model.forward_safety_mfe_heads(xb, cb)
                 safety_margin = safety_logits.float()[:, LABEL_PASS] - safety_logits.float()[:, LABEL_REJECT]
                 raw_mfe_margin = raw_mfe_logits.float()[:, LABEL_PASS] - raw_mfe_logits.float()[:, LABEL_REJECT]
@@ -1355,7 +1357,7 @@ def _train_epoch(
                 safety_percentile = _same_date_average_rank_percentile(
                     torch, safety_probability, batch_dates
                 )
-                mfe_weighted_target = torch.stack([target[:, 1], safety_percentile], dim=1)
+                primary_weighted_target = torch.stack([target[:, 1], safety_percentile], dim=1)
                 safety_loss, safety_supervision = _pairwise_logistic_loss(
                     torch,
                     safety_margin,
@@ -1367,7 +1369,7 @@ def _train_epoch(
                 raw_mfe_loss, raw_mfe_supervision = _pairwise_logistic_loss(
                     torch,
                     raw_mfe_margin,
-                    mfe_weighted_target,
+                    primary_weighted_target,
                     batch_dates,
                     reduction=str(pairwise_reduction),
                     pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
@@ -1375,7 +1377,7 @@ def _train_epoch(
                 if safety_loss is None or raw_mfe_loss is None:
                     continue
                 # Both truths are canonical same-date percentiles. The scientific
-                # control fixes equal head weighting; Safety only modulates the MFE
+                # control fixes equal head weighting; Safety only modulates the final-head
                 # pair supervision through a detached probability product.
                 loss = 0.5 * (safety_loss + raw_mfe_loss)
                 loss_weight = int(max(1, safety_supervision + raw_mfe_supervision))
@@ -1862,6 +1864,46 @@ def safety_mfe_truth_geometry(
         "s4plus_m4plus": dict(geometry.get("s4plus_m4plus") or {}),
         "quintile_source": "canonical_daily_universal_same_date_percentiles_no_subset_rerank",
         "independence_expected_method": "scope_marginals_n_times_p_s_times_p_m",
+    }
+
+
+def safety_primary_metrics(
+    group_ids: np.ndarray,
+    group_table: pd.DataFrame,
+    raw_primary_target: np.ndarray,
+    targets,
+    scores: dict[str, np.ndarray],
+    *,
+    include_top_k_quality: bool = False,
+) -> dict[str, Any]:
+    """Return truthful marginal metrics for generic Safety + primary-target duo heads."""
+
+    ids = np.asarray(group_ids, dtype=np.int64)
+    safety_scores = np.asarray(scores["raw_safety"], dtype=np.float32)
+    primary_scores = np.asarray(scores["primary_target"], dtype=np.float32)
+    if len(safety_scores) != len(ids) or len(primary_scores) != len(ids):
+        raise ValueError("Safety+Primary score/group長度不一致")
+    adverse = pd.to_numeric(
+        group_table["target_adverse_r"], errors="coerce"
+    ).to_numpy(dtype=np.float32)
+    primary_raw = np.asarray(raw_primary_target, dtype=np.float32)
+    return {
+        "raw_safety": split_metrics(
+            ids,
+            group_table,
+            -adverse,
+            targets.low_adverse_safety_percentile,
+            safety_scores,
+            include_top_k_quality=bool(include_top_k_quality),
+        ),
+        "primary_target": split_metrics(
+            ids,
+            group_table,
+            primary_raw,
+            targets.primary_target_percentile,
+            primary_scores,
+            include_top_k_quality=bool(include_top_k_quality),
+        ),
     }
 
 
@@ -2382,6 +2424,10 @@ def _training_target_for_profile(
         return build_conditional_mfe_opportunity_targets_for_training(
             group_table, percentile_target
         ).duo_head_training_target
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY:
+        return build_safety_primary_targets(
+            group_table, percentile_target
+        ).training_target
     if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE:
         return build_conditional_mfe_opportunity_targets_for_training(
             group_table, percentile_target

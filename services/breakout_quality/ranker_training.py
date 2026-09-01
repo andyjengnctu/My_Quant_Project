@@ -8,6 +8,8 @@ its private helpers or inject the trainer module as an implementation object.
 
 from __future__ import annotations
 
+from filters.breakout_quality.safety_primary_target import build_safety_primary_targets
+
 from services.breakout_quality.train_continuous_ranker import (
     CONDITIONAL_MFE_SAFETY_TRAINING_CONTRACT,
     LISTWISE_TRAINING_CONTRACT,
@@ -29,6 +31,7 @@ from services.breakout_quality.train_continuous_ranker import (
     conditional_mfe_safety_metrics,
     safety_conditional_mfe_metrics,
     safety_mfe_truth_geometry,
+    safety_primary_metrics,
     safety_raw_mfe_metrics,
     safety_raw_mfe_hmhs_metrics,
     safety_raw_mfe_joint_min_metrics,
@@ -55,6 +58,7 @@ __all__ = [
     "RANKER_SCHEMA_VERSION",
     "RANKER_SCORE_FILENAME",
     "RANKER_TARGET_FILENAME",
+    "build_safety_primary_targets",
     "build_conditional_targets",
     "build_conditional_mfe_opportunity_targets_for_training",
     "build_daily_percentile_targets",
@@ -67,6 +71,7 @@ __all__ = [
     "conditional_mfe_safety_metrics",
     "safety_conditional_mfe_metrics",
     "safety_mfe_truth_geometry",
+    "safety_primary_metrics",
     "safety_raw_mfe_metrics",
     "safety_raw_mfe_hmhs_metrics",
     "safety_raw_mfe_joint_min_metrics",

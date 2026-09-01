@@ -29,6 +29,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE,
+    CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_PRIMARY,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN,)
 from config.breakout_quality_runtime_resolver import (
@@ -147,6 +148,28 @@ SHARED_SAFETY_WEIGHTED_MFE_DUO_HEAD_TRAINING_CONTRACT = {
     "batching": "whole_date_pack_no_date_split",
 }
 
+SHARED_SAFETY_WEIGHTED_PRIMARY_DUO_HEAD_TRAINING_CONTRACT = {
+    "sample_scope": "daily_eligible_stock_days",
+    "safety_target": "same_date_low_adverse_safety_percentile",
+    "primary_target": "same_date_percentile_of_profile_continuous_target",
+    "architecture": "shared_encoder_raw_safety_plus_final_primary_topology_defined_by_model_spec",
+    "primary_head_inputs": "defined_by_model_architecture_contract",
+    "primary_pair_context": "stop_gradient_same_date_average_rank_percentile_of_raw_safety_probability",
+    "primary_pair_safety_weight": "same_date_predicted_safety_percentile_i_times_j",
+    "primary_pair_weight_combination": "delta_ndcg_times_product_detached_same_date_model_safety_percentile",
+    "primary_pair_direction": "profile_primary_target_only_never_reversed_by_safety",
+    "safety_head_gradient_from_primary_loss": False,
+    "shared_encoder_gradient_from_both_heads": True,
+    "head_losses": "safety_full_list_delta_ndcg_plus_safety_product_weighted_primary_full_list_delta_ndcg",
+    "head_weighting": "fixed_equal_mean_no_lambda_sweep",
+    "external_predicted_safety_dependency": False,
+    "epoch_selection": "primary_target_mean_daily_spearman",
+    "runtime_score": "primary_target_pass_probability_only",
+    "runtime_status": "model_gate_only_no_pit_no_strategy_conversion",
+    "batching": "whole_date_pack_no_date_split",
+}
+
+
 SAFETY_RAW_MFE_HMHS_TRI_HEAD_TRAINING_CONTRACT = {
     "sample_scope": "daily_eligible_stock_days",
     "safety_target": "same_date_low_adverse_safety_percentile",
@@ -224,6 +247,7 @@ _EXTENDED_SEMANTIC_KEYS = (
     "safety_conditional_mfe_duo_head_contract",
     "safety_raw_mfe_duo_head_contract",
     "shared_safety_weighted_mfe_duo_head_contract",
+    "shared_safety_weighted_primary_duo_head_contract",
     "safety_raw_mfe_hmhs_tri_head_contract",
     "safety_raw_mfe_joint_min_tri_head_contract",
     "direct_hmhs_single_head_contract",
@@ -285,6 +309,10 @@ _PAIRWISE_SPECIALIZED_CONTRACTS = {
         "shared_safety_weighted_mfe_duo_head_contract",
         SHARED_SAFETY_WEIGHTED_MFE_DUO_HEAD_TRAINING_CONTRACT,
     ),
+    CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_PRIMARY: (
+        "shared_safety_weighted_primary_duo_head_contract",
+        SHARED_SAFETY_WEIGHTED_PRIMARY_DUO_HEAD_TRAINING_CONTRACT,
+    ),
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS: (
         "safety_raw_mfe_hmhs_tri_head_contract",
         SAFETY_RAW_MFE_HMHS_TRI_HEAD_TRAINING_CONTRACT,
@@ -325,6 +353,18 @@ def training_semantics(profile) -> dict[str, Any]:
                     "shared Safety-weighted MFE semantics需要canonical final-MFE topology contract"
                 )
             contract.update(topology_contract)
+        elif semantics_key == CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_PRIMARY:
+            from filters.breakout_quality.models.spec import get_model_spec
+
+            model_spec = get_model_spec(str(profile.model_architecture))
+            topology_contract = model_spec.final_mfe_topology_contract()
+            if topology_contract is None:
+                raise ValueError(
+                    "shared Safety-weighted primary semantics需要canonical final-head topology contract"
+                )
+            contract["architecture"] = topology_contract["architecture"]
+            contract["primary_head_inputs"] = topology_contract["mfe_head_inputs"]
+            contract["primary_target_id"] = str(profile.continuous_target_id)
         return _extended_semantics(
             batching=contract["batching"],
             pairwise_contract=pairwise_contract,

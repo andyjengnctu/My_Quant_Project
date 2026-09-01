@@ -26,6 +26,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
+    CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
     CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
@@ -74,7 +75,10 @@ from core.research_report_contract import format_contract_value, section_contrac
 from core.report_style import markdown_tone, signal_for_delta, styled_signal
 
 from services.breakout_quality import ranker_training as ranker_api
-from services.breakout_quality.continuous_ranker_pipeline import resolve_ranker_execution_plan
+from services.breakout_quality.continuous_ranker_pipeline import (
+    predict_score_output_payload,
+    resolve_ranker_execution_plan,
+)
 
 DAILY_SPLIT_FILENAME = "daily_split_by_date.csv"
 MR13S_TRUTH_GEOMETRY_JSON_FILENAME = "mr13s_truth_geometry_control.json"
@@ -981,6 +985,7 @@ def run(args) -> int:
     conditional_mfe_single = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE
     safety_conditional_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE
     safety_raw_mfe_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE
+    safety_primary_duo = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY
     safety_raw_mfe_hmhs_tri = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS
     safety_raw_mfe_joint_min_tri = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN
     direct_hmhs_only = target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS
@@ -1093,6 +1098,14 @@ def run(args) -> int:
     reverse_validation_heads = None
     reverse_forward_heads = None
     safety_raw_mfe_evaluation = {}
+    safety_primary_evaluation = {}
+    safety_primary_targets = (
+        ranker_api.build_safety_primary_targets(bundle.group_table, percentile_target)
+        if safety_primary_duo
+        else None
+    )
+    safety_primary_validation_heads = None
+    safety_primary_forward_heads = None
     safety_raw_mfe_hmhs_evaluation = {}
     safety_raw_mfe_joint_min_evaluation = {}
     raw_mfe_validation_heads = None
@@ -1123,6 +1136,23 @@ def run(args) -> int:
         )
         validation_scores = raw_mfe_validation_heads["raw_mfe"]
         forward_scores = raw_mfe_forward_heads["raw_mfe"]
+    elif safety_primary_duo:
+        validation_scores, validation_sidecars = predict_score_output_payload(
+            torch, model, bundle, split.validation_ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+        )
+        forward_scores, forward_sidecars = predict_score_output_payload(
+            torch, model, bundle, forward_score_ids,
+            batch_size=int(args.evaluation_batch_size), plan=plan,
+        )
+        safety_primary_validation_heads = {
+            "raw_safety": validation_sidecars["raw_safety_score"],
+            "primary_target": validation_scores,
+        }
+        safety_primary_forward_heads = {
+            "raw_safety": forward_sidecars["raw_safety_score"],
+            "primary_target": forward_scores,
+        }
     elif safety_raw_mfe_duo:
         raw_mfe_validation_heads = ranker_api.predict_safety_raw_mfe_scores(
             torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
@@ -1307,6 +1337,40 @@ def run(args) -> int:
                 "joint_hmhs": {"group_count": int(len(candidate_ids)), "not_evaluated_reason": "breakout candidate OOS slice有效sample不足"},
                 "joint_product_control": {},
                 "model_gate": {"status": "not_evaluated_insufficient_sample"},
+            }
+    elif safety_primary_duo:
+        assert safety_primary_targets is not None
+        assert safety_primary_validation_heads is not None and safety_primary_forward_heads is not None
+        forward_position_by_group = {int(group_id): pos for pos, group_id in enumerate(forward_score_ids)}
+        oos_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in split.oos_ids], dtype=np.int64)
+        safety_primary_evaluation["validation"] = ranker_api.safety_primary_metrics(
+            split.validation_ids, bundle.group_table, bundle.raw_target, safety_primary_targets,
+            safety_primary_validation_heads, include_top_k_quality=True,
+        )
+        oos_heads = {
+            key: values[oos_positions]
+            for key, values in safety_primary_forward_heads.items()
+            if key in {"raw_safety", "primary_target"}
+        }
+        safety_primary_evaluation["oos"] = ranker_api.safety_primary_metrics(
+            split.oos_ids, bundle.group_table, bundle.raw_target, safety_primary_targets,
+            oos_heads, include_top_k_quality=True,
+        )
+        if len(candidate_ids) >= 2:
+            candidate_positions = np.asarray([forward_position_by_group[int(group_id)] for group_id in candidate_ids], dtype=np.int64)
+            candidate_heads = {
+                key: values[candidate_positions]
+                for key, values in safety_primary_forward_heads.items()
+                if key in {"raw_safety", "primary_target"}
+            }
+            safety_primary_evaluation["breakout_candidate_oos"] = ranker_api.safety_primary_metrics(
+                candidate_ids, bundle.group_table, bundle.raw_target, safety_primary_targets,
+                candidate_heads, include_top_k_quality=True,
+            )
+        else:
+            safety_primary_evaluation["breakout_candidate_oos"] = {
+                "raw_safety": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
+                "primary_target": _empty_split_metrics(len(candidate_ids), "breakout candidate OOS slice有效sample不足"),
             }
     elif safety_raw_mfe_duo:
         assert reverse_conditional_mfe_targets is not None
@@ -1584,6 +1648,12 @@ def run(args) -> int:
         oos_frame.loc[evaluable_forward_mask, "target_conditional_safety_percentile"] = (
             conditional_targets.conditional_safety_percentile[evaluable_ids]
         )
+    if safety_primary_targets is not None:
+        oos_frame["target_low_adverse_safety_percentile"] = np.nan
+        evaluable_ids = forward_score_ids[evaluable_forward_mask]
+        oos_frame.loc[evaluable_forward_mask, "target_low_adverse_safety_percentile"] = (
+            safety_primary_targets.low_adverse_safety_percentile[evaluable_ids]
+        )
     if reverse_conditional_mfe_targets is not None:
         oos_frame["target_low_adverse_safety_percentile"] = np.nan
         evaluable_ids = forward_score_ids[evaluable_forward_mask]
@@ -1612,6 +1682,9 @@ def run(args) -> int:
             forward_score_ids[evaluable_forward_mask]
         ]
     oos_frame["model_score"] = forward_scores
+    if safety_primary_forward_heads is not None:
+        oos_frame["raw_safety_score"] = safety_primary_forward_heads["raw_safety"]
+        oos_frame["primary_target_score"] = safety_primary_forward_heads["primary_target"]
     if raw_mfe_forward_heads is not None:
         oos_frame["raw_safety_score"] = raw_mfe_forward_heads["raw_safety"]
         oos_frame["raw_mfe_score"] = raw_mfe_forward_heads["raw_mfe"]
@@ -1726,6 +1799,7 @@ def run(args) -> int:
         "conditional_mfe_safety_evaluation": conditional_mfe_safety_evaluation,
         "reverse_conditional_mfe_evaluation": reverse_conditional_mfe_evaluation,
         "safety_raw_mfe_evaluation": safety_raw_mfe_evaluation,
+        "safety_primary_evaluation": safety_primary_evaluation,
         "safety_raw_mfe_hmhs_evaluation": safety_raw_mfe_hmhs_evaluation,
         "safety_raw_mfe_joint_min_evaluation": safety_raw_mfe_joint_min_evaluation,
         "upside_downside_alignment_evaluation": upside_downside_alignment_evaluation,

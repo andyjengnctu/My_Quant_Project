@@ -544,6 +544,21 @@ def _model_sop_view(payload: dict) -> dict:
                         "pairwise_concordance": row.get("pairwise_concordance"),
                     })
 
+    safety_primary_eval = dict(source_payload.get("safety_primary_evaluation") or {})
+    if safety_primary_eval:
+        for scope_label, scope_key in (("Validation", "validation"), (oos_scope_label, "oos"), ("Breakout slice", "breakout_candidate_oos")):
+            scope = dict(safety_primary_eval.get(scope_key) or {})
+            for head_label, head_key in (("Raw Safety", "raw_safety"), ("Economic Target", "primary_target")):
+                row = dict(scope.get(head_key) or {})
+                if row:
+                    multi_head_rows.append({
+                        "split": scope_label,
+                        "head": head_label,
+                        "mean_daily_spearman": row.get("mean_daily_spearman"),
+                        "global_spearman_vs_raw_target": row.get("global_spearman_vs_raw_target"),
+                        "pairwise_concordance": row.get("pairwise_concordance"),
+                    })
+
     joint_min_eval = dict(source_payload.get("safety_raw_mfe_joint_min_evaluation") or {})
     raw_eval = dict(
         joint_min_eval

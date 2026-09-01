@@ -11222,3 +11222,18 @@ Decision：`B327_CAPABILITY_OWNER_CLOSED / NO_SCIENCE_CHANGE / NO_FITTING_IDENTI
 - **Validation**：persistent contract regression新增comparison-vs-single-model schema isolation、同extension多方法合併、capability filtering、Rolling ordering，以及Pred-Safety cohort group-aware Standard-SOP best/worst色彩。
 
 Decision：`COMPARISON_V8_AUTHORIZED / MULTIHEAD_METHODS_MERGED / SOP_COLOR_CONTRACT_REUSED / SINGLE_MODEL_EXTENSION_UNCHANGED / NO_SCIENCE_CHANGE`。
+
+
+## 2026-09-01 — MR-13AL A2 decision / MR-13AK robustness / MR-13AM A3 implementation
+
+- **Observed A2 evidence**：MR-13AL相對MR-13AK只在部分MFE指標小幅改善。Forward Daily rho/Pair/Top-Bottom=`0.3909/63.50%/1.9136R` vs AK=`0.3843/63.19%/1.8360R`；Rolling=`0.3848/63.29%/1.7440R` vs AK=`0.3844/63.26%/1.6985R`。但A2主要Safety mechanism沒有改善：Forward Pred Safety↔Raw-MFE=`-0.9446`（AK=`-0.9223`）、Pred S5×M5=`0`、Joint→actual HM/HS rho=`0.0343`、Score→Safety=`-0.3464`；Rolling Score→Safety=`-0.3401`、High-Safety/HM/HS=`29.58/21.62%`。Decision=`CONTEXT_INCREMENT_NOT_SUPPORTED / SAFETY_GEOMETRY_NOT_IMPROVED / NO_AL_ROBUSTNESS / CLOSED / NOT_PROMOTED`。
+- **AK robustness evidence**：8-seed Rolling robustness完成後，MR-13AK OOS Daily rho mean/σ=`0.3893/0.0147`、Pair mean/σ=`63.44%/0.56%`、Top-Bottom mean/σ=`1.5567R/0.2664R`；Breakout Daily rho/Pair/Top-Bottom=`0.3668/64.19%/2.3143R`。相對H/AF/AH，AK同時具有最高mean Daily rho/Pair與最低rho/Pair seed dispersion，確認A1 shared representation gain不是Seed42偶然。Safety仍弱：robust Score→Safety=`-0.3381`、High-Safety=`29.59%`。Decision=`ROBUST_MFE_BASE_CONFIRMED / SAFETY_WEAKNESS_PERSISTS / A3_BASE / NO_RUNTIME_PROMOTION`。
+- **User decision**：A3不由失敗的AL context topology延伸，改成**AK → A3**；並將MR-13AL從current Model Compare/Test List移除，但保留其historical identity/results/artifacts。
+- **MR-13AM identity**：分配下一個未占用`MR-13AM`，profile=`daily_universal_shared_safety_weighted_full_horizon_opportunity_full_list_ndcg_pairwise`。重用AK `ARCH-inception_time_shared_safety_mfe_v1` topology，不使用AL Safety-context input。AK的Low-Adverse Safety truth、Safety full-list ΔNDCG、same-date predicted-Safety percentile `detach(S_i)×detach(S_j)` pair weighting、pair direction、equal head-loss mean、Seed/split/optimizer全部固定；唯一scientific change為final primary truth由Pure-MFE percentile改成MR-13H `daily_full_horizon_opportunity_r_v1` percentile。
+- **Generic capability implementation**：A3使用generic `safety_primary` target builder／shared-Safety-weighted-primary composition，使第二head可由runtime contract標示`Economic Target`，而非錯稱Raw-MFE；Raw-MFE-specific Truth/Prediction Geometry extension不套用AM。model topology、score-output與training semantics仍由canonical capability/model-spec owner派生；不在trainer/menu/renderer增加MR-13AM identity branch。
+- **Membership SSOT**：current training pair切至`MR-13AM`後，B325 ordered merge自動得到`MR-13H / MR-13AF / MR-13AH / MR-13AK / MR-13AM`；MR-13AL不再是reference control，因此自然退出[3]～[6] current comparison/robustness list，沒有第二份exclude清單。
+- **Report boundary**：B329 `model.standard_comparison v8` / fingerprint=`aa7f812b9d1d936a`不變；本輪沒有新增、刪除或重排persistent report section。
+- **Implementation provenance**：B329文件記錄的完整baseline `test-branch-1_20260901_193732_d9e902aa.zip` binary在本輪sandbox不可取，因此工作樹由可用`test-branch-1_20260901_182733_0eecf87e(1).zip` + 已交付MR-13AL/B327 patch + B329 patch重建，並依B327 capability-owner contract補回owner closure後實作A3；交付內容以replacement patch形式包含所有相對該可驗證重建基準的必要changed files。
+- **Targeted validation before formal local suite**：Shared-AH/A3 composition=`19/19 PASS`；PIT score-output ownership=`26/26 PASS`；Continuous DL workflow=`44/44 PASS`；simple report=`15/15 PASS`；persistent report freeze=`27/27 PASS`。正式`apps/run_bundle.py` / `apps/test_suite.py`依PROJECT_SETTINGS不由GPT執行。
+
+Decision：`MR13AL_CLOSED_NEGATIVE_CONTROL / MR13AK_ROBUST_MFE_BASE / MR13AM_IMPLEMENTED_RESULT_PENDING / AL_REMOVED_FROM_CURRENT_COMPARE_LIST / FORWARD_SEED42_NEXT`。

@@ -49,6 +49,9 @@ TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING = (
 TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING = (
     "daily_shared_safety_weighted_mfe_pairwise_ranking"
 )
+TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING = (
+    "daily_shared_safety_weighted_primary_pairwise_ranking"
+)
 TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING = (
     "daily_safety_raw_mfe_hmhs_pairwise_ranking"
 )
@@ -327,6 +330,7 @@ CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY = "conditional_mfe_safet
 CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE = "conditional_mfe_single"
 CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE = "safety_conditional_mfe"
 CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE = "safety_raw_mfe"
+CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY = "safety_primary"
 CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS = "safety_raw_mfe_hmhs"
 CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN = "safety_raw_mfe_joint_min"
 CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS = "direct_hmhs"
@@ -354,6 +358,7 @@ CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SINGLE = "conditional_mfe_single"
 CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE = "safety_conditional_mfe"
 CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE = "safety_raw_mfe"
 CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE = "shared_safety_weighted_mfe"
+CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_PRIMARY = "shared_safety_weighted_primary"
 CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS = "safety_raw_mfe_hmhs"
 CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN = "safety_raw_mfe_joint_min"
 CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS = "direct_hmhs"
@@ -598,6 +603,15 @@ SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE = ContinuousRankerScoreOutputPolicy(
         ("raw_mfe", "raw_mfe_score"),
     ),
 )
+SCORE_OUTPUT_POLICY_SAFETY_PRIMARY = ContinuousRankerScoreOutputPolicy(
+    output_head="both",
+    head_names=("raw_safety", "primary_target"),
+    primary_head="primary_target",
+    persisted_columns=(
+        ("raw_safety", "raw_safety_score"),
+        ("primary_target", "primary_target_score"),
+    ),
+)
 SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE_JOINT_MIN = ContinuousRankerScoreOutputPolicy(
     output_head="tri_head",
     head_names=("raw_safety", "raw_mfe", "joint_min"),
@@ -836,6 +850,15 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE,
+            uses_pairwise_loss=True,
+        ),
+        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_PRIMARY,
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_PRIMARY,
             uses_pairwise_loss=True,
         ),
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
