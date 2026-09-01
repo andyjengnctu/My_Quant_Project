@@ -512,12 +512,13 @@ BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES = BREAKOUT_QUALITY_MODEL_TES
 
 
 def get_breakout_quality_model_workflow_profile_names() -> tuple[str, ...]:
-    """Return the configured membership set for current model workflows.
+    """Return the single configured target set for current model workflows.
 
     [1]/[2] consume ``BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE`` while
-    [3]～[6] consume ``BREAKOUT_QUALITY_MODEL_TEST_PROFILES``.  This helper describes
-    visibility/membership only; execution authorization is resolved independently from
-    each profile's canonical research recipe.
+    [3]～[6] consume ``BREAKOUT_QUALITY_MODEL_TEST_PROFILES``.  Membership in either
+    current work-item SSOT is itself the authorization for current Forward/Rolling
+    model evaluation; experiment-history flags remain compatibility evidence rather
+    than a second current-workflow selector.
     """
 
     ordered = [str(BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE).strip()]
@@ -3267,19 +3268,21 @@ class BreakoutQualityWorkflowSettings:
 
     @property
     def rolling_authorized(self) -> bool:
-        """Whether current Rolling model evidence is scientifically authorized.
+        """Whether current Rolling model evidence is authorized for this profile.
 
-        Model-workflow membership and scientific authorization are intentionally
-        separate contracts.  [1]/[2] and [3]～[6] may list a current model so that it
-        is visible and comparable, but list membership must never promote a model into
-        Rolling/PIT execution.  The canonical research recipe remains the sole source
-        of current-time validation authorization.
+        Current model-workflow membership is the work-item SSOT: the active Training
+        Profile drives [1]/[2], and the shared Model Compare/Test List drives [3]～[6].
+        Historical recipe authorization remains accepted for compatibility, but it is
+        no longer a second selector that can block a currently configured model target.
         """
 
         if not self.supports_point_in_time_scores:
             return False
         recipe = get_continuous_ranker_execution_recipe(self.experiment_profile)
-        return bool(recipe.current_time_validation_authorized)
+        return bool(
+            recipe.current_time_validation_authorized
+            or is_breakout_quality_model_workflow_profile(self.experiment_profile)
+        )
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload = {

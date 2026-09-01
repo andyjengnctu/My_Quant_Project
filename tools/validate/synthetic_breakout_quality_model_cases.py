@@ -1198,27 +1198,16 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         [str(shared_training.experiment_profile)]
         + [str(profile_name) for _model_id, profile_name in shared_test]
     ))
-    current_training_recipe = get_continuous_ranker_execution_recipe(
-        str(shared_training.experiment_profile)
-    )
-    test_authorization_matches_recipe = all(
-        breakout_quality_config.get_breakout_quality_workflow_settings(
-            experiment_profile=str(profile_name)
-        ).rolling_authorized
-        is bool(
-            get_continuous_ranker_execution_recipe(
-                str(profile_name)
-            ).current_time_validation_authorized
-        )
-        for _model_id, profile_name in shared_test
-    )
     check_true(
-        "model_workflow_membership_is_separate_from_rolling_authorization",
+        "model_workflow_training_and_test_ssots_are_current_rolling_authorization_sources",
         tuple(configured_workflow_profiles) == expected_workflow_profiles
-        and shared_training.rolling_authorized
-        is bool(current_training_recipe.current_time_validation_authorized)
-        and shared_training.rolling_authorized is False
-        and test_authorization_matches_recipe,
+        and shared_training.rolling_authorized is True
+        and all(
+            breakout_quality_config.get_breakout_quality_workflow_settings(
+                experiment_profile=str(profile_name)
+            ).rolling_authorized
+            for _model_id, profile_name in shared_test
+        ),
     )
 
     from filters.breakout_quality.contract import RUNTIME_SCOPE_WORKFLOW
