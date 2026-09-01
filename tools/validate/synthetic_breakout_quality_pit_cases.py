@@ -387,19 +387,24 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "_PIT_SCORE_OUTPUT_CAPABILITIES" not in pit_score_source
         and "CONTINUOUS_RANKER_TARGET_BUILDER_" not in pit_score_source,
     )
-    expected_optional_score_columns = (
-        "primary_mfe_score",
-        "conditional_safety_score",
-        "raw_safety_score",
-        "raw_mfe_score",
-        "joint_min_score",
-    )
+    registered_optional_score_columns = {
+        str(column)
+        for training_objective in workflow_config.CONTINUOUS_RANKER_TRAINING_OBJECTIVES
+        for training_policy in (
+            get_continuous_ranker_training_policy(training_objective),
+        )
+        if training_policy.score_output_policy is not None
+        for _head_name, column in training_policy.score_output_policy.persisted_columns
+        if str(column) != "breakout_quality_score"
+    }
+    runtime_optional_score_columns = get_continuous_ranker_persisted_score_columns()
     ranking_store_source = read_source_text("filters/breakout_quality/ranking_score_store.py")
     check_true(
         "pit_optional_sidecar_column_union_is_runtime_owned_for_producer_and_reader",
-        get_continuous_ranker_persisted_score_columns() == expected_optional_score_columns
-        and OPTIONAL_SCORE_COLUMNS == expected_optional_score_columns
-        and PIT_OPTIONAL_SCORE_COLUMNS == expected_optional_score_columns
+        set(runtime_optional_score_columns) == registered_optional_score_columns
+        and len(runtime_optional_score_columns) == len(set(runtime_optional_score_columns))
+        and OPTIONAL_SCORE_COLUMNS == runtime_optional_score_columns
+        and PIT_OPTIONAL_SCORE_COLUMNS == runtime_optional_score_columns
         and "PIT_OPTIONAL_SCORE_COLUMNS = (" not in ranking_store_source
         and "OPTIONAL_SCORE_COLUMNS = (" not in pit_score_source,
     )
