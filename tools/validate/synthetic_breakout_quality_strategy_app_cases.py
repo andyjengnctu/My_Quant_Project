@@ -421,7 +421,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and not tuple(item.consensus_reference_arm_ids)
             and tuple(spec["contrast_id"] for spec in item.paired_contrasts)
             == expected_robustness_contrast_ids
-            and {"C77", "C80", "C81"}.issubset(set(item.model_seed_sensitive_arm_ids))
+            and {"C77", "C80", "C81", "C82", "C83"}.issubset(set(item.model_seed_sensitive_arm_ids))
             for item in current_robustness
         ),
     )
@@ -434,13 +434,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and retired_ids.issubset(set(strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS)),
     )
 
-    # Current controlled comparisons keep the existing references and add two
-    # MR-13AH arms: C80 copies C59's exact K/R0 contract; C81 copies C78's
-    # No-K/No-R0 direct allocator.  In both cases only the DL source changes.
+    # Current controlled comparisons keep the existing references. MR-13AH C80/C81
+    # retain their historical exact contracts; MR-13AK C82/C83 copy C80/C81
+    # respectively so AK-vs-AH changes only the DL score source.
     expected_direct = {
         "C77": ("CONT13H_ROLL", "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise", "inception_time_v1"),
         "C78": ("CONT13AC_ROLL", "daily_universal_predicted_upside_conditional_low_adverse_full_list_ndcg_pairwise", "inception_time_predicted_upside_context_v1"),
         "C81": ("CONT13AH_ROLL", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise", "inception_time_v1"),
+        "C83": ("CONT13AK_ROLL", "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise", "inception_time_shared_safety_mfe_v1"),
     }
     controlled_checks = []
     for current_settings in settings_by_mode.values():
@@ -449,12 +450,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         c79 = current_settings.arms["C79"]
         c80 = current_settings.arms["C80"]
         c81 = current_settings.arms["C81"]
+        c82 = current_settings.arms["C82"]
+        c83 = current_settings.arms["C83"]
         c59_options = dict(c59.dl_runtime_options or {})
         c79_options = dict(c79.dl_runtime_options or {})
         c80_options = dict(c80.dl_runtime_options or {})
         c78_options = dict(current_settings.arms["C78"].dl_runtime_options or {})
         c81_options = dict(c81.dl_runtime_options or {})
+        c82_options = dict(c82.dl_runtime_options or {})
+        c83_options = dict(c83.dl_runtime_options or {})
         ah_source = current_settings.dl_sources["CONT13AH_ROLL"]
+        ak_source = current_settings.dl_sources["CONT13AK_ROLL"]
         controlled_checks.append(
             c58.dl_enabled is False
             and c58.dl_id is None
@@ -481,6 +487,23 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             == "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"
             and ah_source.model_architecture == "inception_time_v1"
             and ah_source.single_seed_strategy_conversion_authorized is True
+            and c82.dl_id == "CONT13AK_ROLL"
+            and c82.param_source == c80.param_source
+            and c82.param_policy == c80.param_policy
+            and c82.rule_policy == c80.rule_policy
+            and c82.dl_runtime_mode == c80.dl_runtime_mode
+            and c82_options == c80_options
+            and c83.dl_id == "CONT13AK_ROLL"
+            and c83.param_source == c81.param_source
+            and c83.param_policy == c81.param_policy
+            and c83.rule_policy == c81.rule_policy
+            and c83.dl_runtime_mode == c81.dl_runtime_mode
+            and c83_options == c81_options
+            and ak_source.score_source == "selection_point_in_time"
+            and ak_source.experiment_profile
+            == "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise"
+            and ak_source.model_architecture == "inception_time_shared_safety_mfe_v1"
+            and ak_source.single_seed_strategy_conversion_authorized is True
         )
         for arm_id, (dl_id, profile_name, architecture) in expected_direct.items():
             arm = current_settings.arms[arm_id]
@@ -499,7 +522,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 and source.model_architecture == architecture
             )
     check_true(
-        "current_controlled_contracts_include_ah_constrained_and_direct_arms",
+        "current_controlled_contracts_include_ah_and_ak_constrained_and_direct_arms",
         bool(controlled_checks) and all(controlled_checks),
     )
 
@@ -564,6 +587,27 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and settings.arms["C78"].dl_runtime_mode == settings.arms["C81"].dl_runtime_mode
             and dict(settings.arms["C78"].dl_runtime_options or {})
             == dict(settings.arms["C81"].dl_runtime_options or {})
+            for settings in settings_by_mode.values()
+        ),
+    )
+
+    check_true(
+        "c82_minus_c80_and_c83_minus_c81_are_ak_dl_source_only_controls",
+        all(
+            settings.arms["C82"].dl_id == "CONT13AK_ROLL"
+            and settings.arms["C80"].param_source == settings.arms["C82"].param_source
+            and settings.arms["C80"].param_policy == settings.arms["C82"].param_policy
+            and settings.arms["C80"].rule_policy == settings.arms["C82"].rule_policy
+            and settings.arms["C80"].dl_runtime_mode == settings.arms["C82"].dl_runtime_mode
+            and dict(settings.arms["C80"].dl_runtime_options or {})
+            == dict(settings.arms["C82"].dl_runtime_options or {})
+            and settings.arms["C83"].dl_id == "CONT13AK_ROLL"
+            and settings.arms["C81"].param_source == settings.arms["C83"].param_source
+            and settings.arms["C81"].param_policy == settings.arms["C83"].param_policy
+            and settings.arms["C81"].rule_policy == settings.arms["C83"].rule_policy
+            and settings.arms["C81"].dl_runtime_mode == settings.arms["C83"].dl_runtime_mode
+            and dict(settings.arms["C81"].dl_runtime_options or {})
+            == dict(settings.arms["C83"].dl_runtime_options or {})
             for settings in settings_by_mode.values()
         ),
     )
@@ -953,6 +997,25 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == [training_runtime.sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores"]
         and "--strategy-compare-profile-id" not in ah_unscoped_args
         and "--strategy-compare-source-id" not in ah_unscoped_args,
+    )
+    ak_dl = rolling_settings.dl_sources["CONT13AK_ROLL"]
+    ak_workflow = get_breakout_quality_workflow_settings(
+        experiment_profile=str(ak_dl.experiment_profile)
+    )
+    ak_command, ak_args, _ = training_runtime.build_strategy_compare_trainer_command(
+        source=ak_dl,
+        workflow=ak_workflow,
+        seed=int(ak_workflow.seed),
+        strategy_compare_profile_id=str(rolling_settings.profile_id),
+        resume=True,
+    )
+    check_true(
+        "ak_strategy_conversion_reuses_shared_model_workflow_without_second_scope",
+        ak_command[:3]
+        == [training_runtime.sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores"]
+        and "--strategy-compare-profile-id" not in ak_args
+        and "--strategy-compare-source-id" not in ak_args
+        and ak_workflow.rolling_authorized is True,
     )
     try:
         strategy_config.validate_single_seed_strategy_conversion_authorization(

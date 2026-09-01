@@ -11252,3 +11252,14 @@ Decision：`MR13AL_CLOSED_NEGATIVE_CONTROL / MR13AK_ROBUST_MFE_BASE / MR13AM_IMP
 - **Targeted validation before formal local suite**：Shared-AH composition synthetic=`23/23 PASS`，其中直接驗MR-13AN與AM recipe equality＋topology-only差異，並用production `_train_epoch`證明primary-target objective可直接訓練Safety-conditioned final head而無新trainer branch。
 
 Decision：`MR13AM_CLOSED_NEGATIVE_ECONOMIC_TARGET_CONTROL / MR13AN_IMPLEMENTED_RESULT_PENDING / AM_RETAINED_DIRECT_CONTROL / AL_STILL_EXCLUDED / FORWARD_SEED42_NEXT`。
+
+## 2026-09-01 — MR-13AN decision / MR-13AK strategy conversion C82/C83 implementation
+
+- **MR-13AN result**：Seed42 Forward own-target Daily rho/Global rho/Pair/Top-Bottom=`0.2211/0.1945/57.62%/1.3947R`；Breakout=`0.2055/0.2272/58.60%/2.1071R`。相對MR-13AM，Score→Safety由`-0.3442`改善至`-0.3308`、High-Safety=`29.50→30.92%`、Top10 Low-Adverse=`-0.5854→-0.5563R`，但Score→MFE=`0.3883→0.3775`、Top-K Lift=`1.0300→0.7755R`、Oracle overlap=`7.97→5.28%`；Breakout HM/HS=`24.95→23.89%`反向退化。Decision=`SAFETY_GAIN_SMALL_WITH_RANKING_COST / MODEL_GATE_NO_GO / NO_ROLLING / NO_ROBUSTNESS / CLOSED / NOT_PROMOTED`。
+- **User decision**：使用者明確要求進行MR-13AK strategy conversion。模型層不再新增Safety head/target cell；current model research focus回到AK robust MFE base。
+- **New strategy source**：`CONT13AK_ROLL`=`MR-13AK / inception_time_shared_safety_mfe_v1 / daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise / selection_point_in_time`。只建立downstream strategy binding，不改AK target、architecture、loss、score semantics或production。
+- **SR-C82**：完整複製C80 constrained contract，唯一change=`CONT13AH_ROLL → CONT13AK_ROLL`。Primary contrast=`C82-C80`。
+- **SR-C83**：完整複製C81 No-K/No-R0 direct contract，唯一change=`CONT13AH_ROLL → CONT13AK_ROLL`。Primary contrast=`C83-C81`；同AK allocator secondary=`C82-C83`。
+- **Compare Suite**：`extending_current` schema=`67`；catalog新增C82/C83與三個controlled contrasts。current effective membership仍由shared Model Compare/Test List＋strategy binding派生，不建立第二份手寫current matrix。
+- **Initial scope / stop rule**：先只跑Seed42 Forward OOS與Rolling OOS。核心看Return/MDD/RoMD/EV、Exposure、High-MFE/High-Safety/HMHS、Adverse與initial-stop/path conversion；只有相對AH direct controls形成足夠大的實務差異才另行決定strategy robustness，不因小幅領先自動進8-seed。
+- **Production boundary**：C42/C44與runtime promotion truth完全不變。

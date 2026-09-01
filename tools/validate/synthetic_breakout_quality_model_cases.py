@@ -3938,9 +3938,10 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
 
     comparison_ids = [str(model_id) for model_id, _profile_name in BREAKOUT_QUALITY_MODEL_TEST_PROFILES]
     check_true(
-        "continuous_dl_comparison_membership_keeps_am_control_adds_current_an_and_excludes_failed_al",
-        comparison_ids == ["MR-13H", "MR-13AF", "MR-13AH", "MR-13AK", "MR-13AM", "MR-13AN"]
-        and "MR-13AL" not in comparison_ids,
+        "continuous_dl_comparison_membership_returns_to_ak_base_after_an_closure",
+        comparison_ids == ["MR-13H", "MR-13AF", "MR-13AH", "MR-13AK", "MR-13AM"]
+        and "MR-13AL" not in comparison_ids
+        and "MR-13AN" not in comparison_ids,
     )
 
     torch.manual_seed(42)
