@@ -3474,19 +3474,20 @@ def validate_research_report_contract_freeze_case(_base_params):
         and train_call.call_args.args[0] == "train-continuous-ranker",
     )
 
-    # Current requested comparison set is H / AF / AH, while the generic config accepts 3+ arms.
+    # Current Standard Model comparison membership is config-driven and must reuse the
+    # single Model Compare/Test SSOT instead of freezing a particular MR list here.
     current_pairs = tuple(bq.get_breakout_quality_model_test_settings().model_profiles)
+    current_standard_pairs = tuple(
+        bq.get_breakout_quality_standard_model_comparison_settings().model_profiles
+    )
     check_true(
-        "current_standard_model_comparison_set_is_requested_h_af_ah",
-        current_pairs == (
-            ("MR-13H", bq.DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_FULL_LIST_NDCG_PAIRWISE_PROFILE),
-            ("MR-13AF", bq.DAILY_UNIVERSAL_PREDICTED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE),
-            ("MR-13AH", bq.DAILY_UNIVERSAL_PREDICTED_SAFETY_PRODUCT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE),
-        ),
-        detail=str(current_pairs),
+        "current_standard_model_comparison_matches_model_test_ssot",
+        current_standard_pairs == current_pairs and len(current_pairs) >= 2,
+        detail=str(current_standard_pairs),
     )
 
-    # Comparison config accepts 3+ arbitrary valid model/profile pairs rather than a fixed two-arm flow.
+    # Comparison config must accept one additional arbitrary valid model/profile pair
+    # without any fixed assumption about how many models are currently configured.
     extra_profile = bq.DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
     extra_id = str(bq.get_continuous_ranker_research_spec(extra_profile).model_research_id)
     synthetic_pairs = (*current_pairs, (extra_id, extra_profile))
@@ -3494,8 +3495,8 @@ def validate_research_report_contract_freeze_case(_base_params):
         resolved_shared = bq.get_breakout_quality_model_test_settings()
         resolved = bq.get_breakout_quality_standard_model_comparison_settings()
     check_true(
-        "standard_model_comparison_config_supports_more_than_three_models",
-        len(resolved.model_profiles) == len(synthetic_pairs) == 4
+        "standard_model_comparison_config_supports_additional_models",
+        len(resolved.model_profiles) == len(synthetic_pairs) == len(current_pairs) + 1
         and tuple(resolved.model_profiles) == tuple(synthetic_pairs)
         and tuple(resolved_shared.model_profiles) == tuple(synthetic_pairs),
         detail=str(resolved.model_profiles),
