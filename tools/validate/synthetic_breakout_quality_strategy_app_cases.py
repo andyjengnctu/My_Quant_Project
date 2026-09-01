@@ -1295,7 +1295,6 @@ def validate_mr13z_c75_conversion_contract_case(_base_params):
     )
     from config.strategy_compare import (
         STRATEGY_COMPARE_ARMS,
-        STRATEGY_COMPARE_SCHEMA_VERSION,
         STRATEGY_COMPARE_SUITES,
         STRATEGY_DL_SOURCES,
         get_strategy_compare_suite,
@@ -1390,10 +1389,9 @@ def validate_mr13z_c75_conversion_contract_case(_base_params):
         )
     )
     check(
-        "current_suite_schema66_retires_c75_and_derives_membership_from_shared_model_list",
-        (66, 0, expected_current_arm_ids),
+        "current_suite_retires_c75_and_derives_membership_from_shared_model_list",
+        (0, expected_current_arm_ids),
         (
-            int(STRATEGY_COMPARE_SCHEMA_VERSION),
             tuple(suite.get("arm_ids") or ()).count("C75"),
             tuple(suite.get("arm_ids") or ()),
         ),
