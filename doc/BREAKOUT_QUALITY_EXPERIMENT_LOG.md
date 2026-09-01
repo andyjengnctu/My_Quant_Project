@@ -11237,3 +11237,18 @@ Decision：`COMPARISON_V8_AUTHORIZED / MULTIHEAD_METHODS_MERGED / SOP_COLOR_CONT
 - **Targeted validation before formal local suite**：Shared-AH/A3 composition=`19/19 PASS`；PIT score-output ownership=`26/26 PASS`；Continuous DL workflow=`44/44 PASS`；simple report=`15/15 PASS`；persistent report freeze=`27/27 PASS`。正式`apps/run_bundle.py` / `apps/test_suite.py`依PROJECT_SETTINGS不由GPT執行。
 
 Decision：`MR13AL_CLOSED_NEGATIVE_CONTROL / MR13AK_ROBUST_MFE_BASE / MR13AM_IMPLEMENTED_RESULT_PENDING / AL_REMOVED_FROM_CURRENT_COMPARE_LIST / FORWARD_SEED42_NEXT`。
+
+## 2026-09-01 — MR-13AM result / MR-13AN economic-target + A2 Safety-context composition
+
+- **Authoritative baseline**：`test-branch-1_20260901_224053_7df685a7.zip`，SHA256=`0be59e6a15f4eb909926af86760eb0c06daa87c004adc352116a8ec7ffa06444`；fresh extract=`/mnt/data/mr13_an_work_224053`。
+- **MR-13AM Seed42 Forward evidence**：own economic-target Daily rho/Global rho/Pair/Top-Bottom=`0.2248/0.1671/57.75%/1.1989R`；Breakout=`0.2118/0.2174/58.98%/2.1352R`。Raw Safety head仍可學，Forward rho/Pair=`0.3555/62.78%`、Breakout=`0.3122/63.84%`。
+- **AM Safety/downside result**：Score→MFE=`0.3883`但Score→Safety=`-0.3442`，Top10 High-Safety/HMHS=`29.50/21.73%`；Breakout Score→MFE/Score→Safety=`0.3632/-0.3221`、High-Safety/HMHS=`31.24/24.95%`。Economic target沒有把其truth中的positive Safety component轉成final ranking，且相對H/AK沒有形成可採用的Safety improvement。
+- **AM decision**：`ECONOMIC_TARGET_SAFETY_NOT_IMPROVED / CLOSED_DIRECT_CONTROL / NO_AM_ROLLING / NO_AM_ROBUSTNESS / NOT_PROMOTED`。MR-13AM historical identity與Forward artifact保留，作下一個combined cell的direct control。
+- **User decision / new question**：使用者要求「將A2加入MR-13AM」。依identity immutability不覆寫MR-13AM，分配下一個未占用`MR-13AN`，只回答：在AM economic-target formulation上，explicit stop-gradient Safety context是否能產生AM單獨沒有的Safety/downside增量。
+- **MR-13AN identity**：profile=`daily_universal_shared_safety_context_weighted_full_horizon_opportunity_full_list_ndcg_pairwise`；重用既有`ARCH-inception_time_safety_conditional_mfe_v1`。AM的`daily_full_horizon_opportunity_r_v1` primary target、Low-Adverse Safety target、Safety full-list ΔNDCG、same-date predicted-Safety percentile `detach(S_i)×detach(S_j)` pair weighting、pair direction、equal head-loss mean、optimizer/split/Seed全部固定；唯一scientific change為final economic-target head由`shared latent only`改為`concat(shared latent, detach(Raw Safety probability))`。Safety context不接受primary loss gradient。
+- **Declarative composition**：不新增trainer/objective/architecture primitive；現有`daily_shared_safety_weighted_primary_pairwise_ranking`＋existing Safety-conditioned topology即可解析MR-13AN。current Training Model切至MR-13AN；B325 membership自動得到`MR-13H / MR-13AF / MR-13AH / MR-13AK / MR-13AM / MR-13AN`，MR-13AL仍不回current list。
+- **Report boundary**：`model.standard_sop v7`與`model.standard_comparison v8` schema/fingerprint完全不變；AM/AN的第二head維持generic `Economic Target` label，Raw-MFE-specific Truth/Prediction Geometry不錯套到AN。
+- **Gate**：下一步只跑Seed42 Forward OOS Model Gate。主要成功條件是AM→AN的Score→Safety、High-Safety/HMHS、Top10 Low-Adverse有實質改善且economic ranking不material collapse；若Safety仍無改善或僅形成小幅tradeoff，combined context+economic-target方向直接停止，不做AN Rolling/robustness/tuning。
+- **Targeted validation before formal local suite**：Shared-AH composition synthetic=`23/23 PASS`，其中直接驗MR-13AN與AM recipe equality＋topology-only差異，並用production `_train_epoch`證明primary-target objective可直接訓練Safety-conditioned final head而無新trainer branch。
+
+Decision：`MR13AM_CLOSED_NEGATIVE_ECONOMIC_TARGET_CONTROL / MR13AN_IMPLEMENTED_RESULT_PENDING / AM_RETAINED_DIRECT_CONTROL / AL_STILL_EXCLUDED / FORWARD_SEED42_NEXT`。

@@ -3692,7 +3692,7 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
 
 
 def validate_breakout_quality_shared_ah_contract_case(_base_params):
-    """Protect Shared-AH controls: A1, historical A2, and A3 target-only pivot from A1."""
+    """Protect Shared-AH controls: A1, historical A2, A3 target pivot, and AM+A2 composition."""
 
     case_id = "BREAKOUT_QUALITY_MR13AK_SHARED_AH"
     results = []
@@ -3708,6 +3708,7 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
         DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_FULL_HORIZON_OPPORTUNITY_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_FULL_HORIZON_OPPORTUNITY_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
         get_breakout_quality_experiment_profile,
@@ -3752,6 +3753,13 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
     a3_research = get_continuous_ranker_research_spec(a3_profile.name)
     a3_recipe = get_continuous_ranker_execution_recipe(a3_profile.name)
     a3_model_spec = get_model_spec(str(a3_profile.model_architecture))
+
+    combined_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_FULL_HORIZON_OPPORTUNITY_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    combined_research = get_continuous_ranker_research_spec(combined_profile.name)
+    combined_recipe = get_continuous_ranker_execution_recipe(combined_profile.name)
+    combined_model_spec = get_model_spec(str(combined_profile.model_architecture))
 
     check(
         "mr13ak_identity_and_model_gate_authorization",
@@ -3894,10 +3902,44 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
         and a3_sem.get("head_weighting") == "fixed_equal_mean_no_lambda_sweep"
         and a3_sem.get("primary_target_id") == "daily_full_horizon_opportunity_r_v1",
     )
+    combined_sem = dict(
+        training_semantics(combined_profile).get("shared_safety_weighted_primary_duo_head_contract") or {}
+    )
+    check_true(
+        "mr13an_combines_am_economic_target_with_a2_stop_gradient_safety_context_only",
+        combined_research.model_research_id == "MR-13AN"
+        and combined_profile.training_objective == a3_profile.training_objective
+        and combined_profile.continuous_target_id == a3_profile.continuous_target_id
+        and combined_profile.loss_name == a3_profile.loss_name
+        and combined_profile.epoch_selection_metric == a3_profile.epoch_selection_metric
+        and combined_profile.optimizer_name == a3_profile.optimizer_name
+        and combined_profile.training_sampling_mode == a3_profile.training_sampling_mode
+        and combined_profile.training_label_scope == a3_profile.training_label_scope
+        and combined_profile.training_sample_scope == a3_profile.training_sample_scope
+        and combined_recipe.training_policy == a3_recipe.training_policy
+        and combined_recipe.pairwise_reduction == a3_recipe.pairwise_reduction
+        and combined_recipe.context_policy == a3_recipe.context_policy
+        and combined_profile.model_architecture == a2_profile.model_architecture
+        and combined_profile.model_architecture != a3_profile.model_architecture
+        and combined_model_spec.final_mfe_topology_contract()
+        == a2_model_spec.final_mfe_topology_contract()
+        and combined_sem.get("architecture")
+        == "shared_encoder_raw_safety_head_plus_safety_conditioned_mfe_head"
+        and combined_sem.get("primary_head_inputs")
+        == "shared_latent_plus_stop_gradient_raw_safety_probability"
+        and combined_sem.get("primary_target_id") == "daily_full_horizon_opportunity_r_v1"
+        and combined_sem.get("primary_pair_safety_weight")
+        == a3_sem.get("primary_pair_safety_weight")
+        and combined_sem.get("primary_pair_direction") == a3_sem.get("primary_pair_direction")
+        and combined_sem.get("head_weighting") == a3_sem.get("head_weighting")
+        and combined_research.selection_pit_authorized is False
+        and combined_research.current_time_validation_authorized is False,
+    )
+
     comparison_ids = [str(model_id) for model_id, _profile_name in BREAKOUT_QUALITY_MODEL_TEST_PROFILES]
     check_true(
-        "continuous_dl_comparison_membership_replaces_failed_al_with_current_am",
-        comparison_ids == ["MR-13H", "MR-13AF", "MR-13AH", "MR-13AK", "MR-13AM"]
+        "continuous_dl_comparison_membership_keeps_am_control_adds_current_an_and_excludes_failed_al",
+        comparison_ids == ["MR-13H", "MR-13AF", "MR-13AH", "MR-13AK", "MR-13AM", "MR-13AN"]
         and "MR-13AL" not in comparison_ids,
     )
 
@@ -4122,6 +4164,41 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
     check_true(
         "mr13am_a3_reuses_shared_safety_weighted_engine_with_primary_target_direction",
         np.isfinite(float(a3_epoch_loss)) and not torch.equal(a3_before, a3_after),
+    )
+
+    # MR-13AN composes the same primary-target objective with the already-supported
+    # Safety-conditioned final head. The generic trainer must handle this composition
+    # without a new objective/architecture branch.
+    torch.manual_seed(42)
+    combined_epoch_model = build_active_model(
+        feature_count=10,
+        context_count=0,
+        architecture="inception_time_safety_conditional_mfe_v1",
+    ).to(epoch_plan.device)
+    combined_optimizer = torch.optim.Adam(combined_epoch_model.parameters(), lr=1e-4)
+    combined_before = combined_epoch_model.conditional_mfe_classifier.weight.detach().clone()
+    combined_epoch_loss = _train_epoch(
+        torch,
+        combined_epoch_model,
+        combined_optimizer,
+        epoch_feature_bank,
+        epoch_context,
+        np.arange(6, dtype=np.int64),
+        a3_epoch_target,
+        pd.to_datetime(["2026-01-05"] * 6),
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
+        batch_size=128,
+        seed=42,
+        gradient_clip_norm=1.0,
+        plan=epoch_plan,
+        grad_scaler=None,
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+    combined_after = combined_epoch_model.conditional_mfe_classifier.weight.detach()
+    check_true(
+        "mr13an_primary_target_plus_safety_context_uses_existing_generic_loss_engine",
+        np.isfinite(float(combined_epoch_loss))
+        and not torch.equal(combined_before, combined_after),
     )
 
     percentile_fixture = _same_date_average_rank_percentile(
