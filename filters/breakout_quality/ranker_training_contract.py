@@ -20,7 +20,6 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE,
     CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY,
-    get_continuous_ranker_primary_pair_weight_policy,
     CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SAFETY,
     CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SINGLE,
     CONTINUOUS_RANKER_SEMANTICS_DEFAULT,
@@ -415,7 +414,7 @@ def _pairwise_contract_for_recipe(recipe) -> dict[str, Any]:
             contract["predicted_safety_context_contract"] = get_predicted_safety_pure_mfe_contract()
         if context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT):
             contract["predicted_safety_pair_weight_contract"] = get_predicted_safety_pair_weight_contract(recipe.objective_policy.pair_weight_policy)
-    primary_truth_weight_policy = get_continuous_ranker_primary_pair_weight_policy(recipe.training_objective)
+    primary_truth_weight_policy = str(recipe.training_policy.primary_pair_weight_policy)
     if primary_truth_weight_policy != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE:
         contract["primary_truth_pair_weight_policy"] = primary_truth_weight_policy
         if primary_truth_weight_policy == CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY:
@@ -510,7 +509,20 @@ def training_semantics(profile) -> dict[str, Any]:
         pairwise_contract = _pairwise_contract_for_recipe(recipe)
         contract = dict(base_contract)
         contract["pair_weighting"] = str(recipe.pairwise_reduction)
-        primary_truth_weight_policy = get_continuous_ranker_primary_pair_weight_policy(recipe.training_objective)
+        composition_head_weighting = recipe.training_policy.artifact_head_weighting_semantic()
+        if "head_weighting" in contract:
+            if composition_head_weighting is None:
+                raise ValueError(
+                    "artifact contract宣告head_weighting但training composition為single"
+                )
+            # Persist the historical wording from the canonical composition owner.
+            # The base contract remains a compatibility template, not a second truth.
+            contract["head_weighting"] = composition_head_weighting
+        elif composition_head_weighting is not None:
+            raise ValueError(
+                "multi-head training composition缺少artifact head_weighting contract slot"
+            )
+        primary_truth_weight_policy = str(recipe.training_policy.primary_pair_weight_policy)
         if primary_truth_weight_policy != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE:
             contract["qualification_pair_weighting"] = primary_truth_weight_policy
             if primary_truth_weight_policy == CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY:

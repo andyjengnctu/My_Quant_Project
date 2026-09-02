@@ -438,6 +438,18 @@ CONTINUOUS_RANKER_SCORE_TRANSFORM_PROBABILITY = "pass_probability"
 CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R = "pass_minus_reject_margin"
 CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH = "mean_batch"
 CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED = "weighted_supervision"
+CONTINUOUS_RANKER_PAIRWISE_KIND_NONE = "none"
+CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR = "scalar"
+CONTINUOUS_RANKER_PAIRWISE_KIND_PARETO = "pareto"
+CONTINUOUS_RANKER_PRIMARY_SUPERVISION_CONTINUOUS = "continuous"
+CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS = "binary_hs"
+CONTINUOUS_RANKER_PRIMARY_SUPERVISION_DUAL_HS = "dual_hs"
+CONTINUOUS_RANKER_PRIMARY_SUPERVISION_TOP_HS = "top_hs"
+CONTINUOUS_RANKER_SECONDARY_SUPERVISION_STANDARD = "standard"
+CONTINUOUS_RANKER_SECONDARY_SUPERVISION_STRATIFIED = "stratified"
+CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_SINGLE = "single"
+CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED = "equal_mean_required"
+CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE = "equal_mean_available"
 
 
 @dataclass(frozen=True)
@@ -489,11 +501,27 @@ class ContinuousRankerTargetPolicy:
 
 @dataclass(frozen=True)
 class ContinuousRankerTrainingPolicy:
-    """Reusable training capability selected by objective, never by MR/profile identity."""
+    """Canonical objective/composition capability, independent of MR/profile identity.
+
+    Profile validation, research-spec legality, trainer supervision geometry and artifact
+    semantics all consume this descriptor.  New objectives should register their
+    composition here rather than teaching generic consumers another objective-name switch.
+    """
 
     batch_mode: str
     target_builder: str
     loss_handler: str
+    profile_loss_metrics: tuple[tuple[str, str], ...] = ()
+    pairwise_kind: str = CONTINUOUS_RANKER_PAIRWISE_KIND_NONE
+    allows_context_pair_weight: bool = False
+    allowed_secondary_pair_scopes: tuple[str, ...] = (
+        CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
+    )
+    primary_supervision_mode: str = CONTINUOUS_RANKER_PRIMARY_SUPERVISION_CONTINUOUS
+    secondary_supervision_mode: str = CONTINUOUS_RANKER_SECONDARY_SUPERVISION_STANDARD
+    primary_pair_weight_policy: str = CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
+    head_loss_combination: str = CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_SINGLE
+    head_loss_component_count: int = 1
     auxiliary_target_bundle: str = CONTINUOUS_RANKER_AUX_TARGET_NONE
     semantics_contract_key: str = CONTINUOUS_RANKER_SEMANTICS_DEFAULT
     score_transform: str = CONTINUOUS_RANKER_SCORE_TRANSFORM_PROBABILITY
@@ -529,6 +557,160 @@ class ContinuousRankerTrainingPolicy:
             self.score_output_policy, ContinuousRankerScoreOutputPolicy
         ):
             raise TypeError("score_output_policy必須是ContinuousRankerScoreOutputPolicy")
+        loss_names = tuple(str(loss_name) for loss_name, _metric in self.profile_loss_metrics)
+        if any(not value for value in loss_names) or len(loss_names) != len(set(loss_names)):
+            raise ValueError("profile_loss_metrics loss_name不得為空或重複")
+        if any(not str(metric).strip() for _loss_name, metric in self.profile_loss_metrics):
+            raise ValueError("profile_loss_metrics epoch metric不得為空")
+        if self.pairwise_kind not in {
+            CONTINUOUS_RANKER_PAIRWISE_KIND_NONE,
+            CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            CONTINUOUS_RANKER_PAIRWISE_KIND_PARETO,
+        }:
+            raise ValueError(f"不支援的continuous-ranker pairwise kind: {self.pairwise_kind!r}")
+        if bool(self.uses_pairwise_loss) != (
+            self.pairwise_kind != CONTINUOUS_RANKER_PAIRWISE_KIND_NONE
+        ):
+            raise ValueError("uses_pairwise_loss與pairwise_kind不一致")
+        if self.allows_context_pair_weight and self.pairwise_kind != CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR:
+            raise ValueError("context pair weight只允許scalar pairwise composition")
+        scopes = tuple(str(scope) for scope in self.allowed_secondary_pair_scopes)
+        if not scopes or len(scopes) != len(set(scopes)):
+            raise ValueError("allowed_secondary_pair_scopes不得為空或重複")
+        if any(scope not in SUPPORTED_CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPES for scope in scopes):
+            raise ValueError("allowed_secondary_pair_scopes含不支援值")
+        if CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL not in scopes:
+            raise ValueError("所有training composition都必須允許all-items secondary scope")
+        if self.primary_supervision_mode not in {
+            CONTINUOUS_RANKER_PRIMARY_SUPERVISION_CONTINUOUS,
+            CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS,
+            CONTINUOUS_RANKER_PRIMARY_SUPERVISION_DUAL_HS,
+            CONTINUOUS_RANKER_PRIMARY_SUPERVISION_TOP_HS,
+        }:
+            raise ValueError(f"不支援的primary supervision mode: {self.primary_supervision_mode!r}")
+        if self.secondary_supervision_mode not in {
+            CONTINUOUS_RANKER_SECONDARY_SUPERVISION_STANDARD,
+            CONTINUOUS_RANKER_SECONDARY_SUPERVISION_STRATIFIED,
+        }:
+            raise ValueError(f"不支援的secondary supervision mode: {self.secondary_supervision_mode!r}")
+        if self.primary_pair_weight_policy not in SUPPORTED_CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICIES:
+            raise ValueError(
+                f"不支援的primary pair weight policy: {self.primary_pair_weight_policy!r}"
+            )
+        if (
+            self.primary_pair_weight_policy != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
+            and self.primary_supervision_mode != CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS
+        ):
+            raise ValueError("truth-side primary pair weight目前只允許binary-HS supervision")
+        if self.head_loss_combination not in {
+            CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_SINGLE,
+            CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED,
+            CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
+        }:
+            raise ValueError(f"不支援的head loss combination: {self.head_loss_combination!r}")
+        if int(self.head_loss_component_count) < 1:
+            raise ValueError("head_loss_component_count必須>=1")
+        if (
+            self.head_loss_combination == CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_SINGLE
+            and int(self.head_loss_component_count) != 1
+        ):
+            raise ValueError("single head-loss combination必須宣告component_count=1")
+        if (
+            self.head_loss_combination != CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_SINGLE
+            and int(self.head_loss_component_count) < 2
+        ):
+            raise ValueError("multi-head loss combination必須宣告component_count>=2")
+
+    def artifact_head_weighting_semantic(self) -> str | None:
+        """Return canonical persisted head-weighting wording for this composition.
+
+        The wording is intentionally historical-contract compatible; the composition
+        descriptor, not ranker_training_contract.py, owns which weighting applies.
+        """
+
+        if self.head_loss_combination == CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_SINGLE:
+            return None
+        if self.primary_supervision_mode == CONTINUOUS_RANKER_PRIMARY_SUPERVISION_DUAL_HS:
+            if int(self.head_loss_component_count) != 2:
+                raise ValueError("dual-HS composition預期兩個outer head losses")
+            return (
+                "safety_branch_0.5_conditional_mfe_0.5_with_"
+                "safety_branch_split_0.5_0.5"
+            )
+        if int(self.head_loss_component_count) == 2:
+            return "fixed_equal_mean_no_lambda_sweep"
+        if int(self.head_loss_component_count) == 3:
+            return "fixed_equal_mean_three_heads_no_lambda_sweep"
+        raise ValueError(
+            "artifact head-weighting尚未定義此multi-head component count: "
+            f"{self.head_loss_component_count}"
+        )
+
+    def expected_epoch_metric(self, loss_name: str) -> str:
+        mapping = dict(self.profile_loss_metrics)
+        if not mapping:
+            raise ValueError("continuous-ranker training capability尚未宣告profile loss/epoch metric contract")
+        try:
+            return str(mapping[str(loss_name)])
+        except KeyError as exc:
+            raise ValueError(
+                "continuous ranker loss與training objective composition不一致: "
+                f"expected one of {sorted(mapping)}, actual={loss_name!r}"
+            ) from exc
+
+    def validate_profile_loss_metric(
+        self,
+        *,
+        loss_name: str,
+        epoch_selection_metric: str,
+    ) -> None:
+        expected_metric = self.expected_epoch_metric(loss_name)
+        if str(epoch_selection_metric) != expected_metric:
+            raise ValueError(
+                "continuous ranker epoch selection與training objective composition不一致: "
+                f"expected={expected_metric}, actual={epoch_selection_metric}"
+            )
+
+    def validate_research_spec(
+        self,
+        *,
+        pairwise_reduction: str | None,
+        pair_weight_policy: str | None,
+        secondary_pair_scope: str,
+        secondary_pair_scope_threshold: float | None,
+    ) -> None:
+        reduction = pairwise_reduction
+        if self.pairwise_kind == CONTINUOUS_RANKER_PAIRWISE_KIND_NONE:
+            if reduction is not None:
+                raise ValueError("非pairwise composition不得指定pairwise reduction")
+        else:
+            if reduction not in SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS:
+                raise ValueError("pairwise composition必須指定合法pairwise reduction")
+            if self.pairwise_kind == CONTINUOUS_RANKER_PAIRWISE_KIND_PARETO:
+                if reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE:
+                    raise ValueError("Pareto pairwise composition必須使用pareto_dominance_equal_pair")
+            elif reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE:
+                raise ValueError("scalar pairwise composition不得使用Pareto dominance pair scope")
+
+        if pair_weight_policy is not None:
+            if not self.allows_context_pair_weight:
+                raise ValueError("此training composition不得指定context pair weight policy")
+            get_continuous_ranker_pair_weight_policy(pair_weight_policy)
+            if pair_weight_policy == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE:
+                raise ValueError("pair_weight_policy=None即可表示未加權；不得顯式宣告none")
+
+        scope = str(secondary_pair_scope)
+        if scope not in self.allowed_secondary_pair_scopes:
+            raise ValueError(
+                f"secondary pair scope不適用於此training composition: {scope!r}"
+            )
+        if scope == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL:
+            if secondary_pair_scope_threshold is not None:
+                raise ValueError("all-items secondary pair scope不得指定threshold")
+        else:
+            threshold = secondary_pair_scope_threshold
+            if threshold is None or not (0.0 < float(threshold) < 1.0):
+                raise ValueError("secondary pair scope threshold必須位於(0,1)")
 
 
 @dataclass(frozen=True)
@@ -848,12 +1030,17 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PERCENTILE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE,
+            profile_loss_metrics=(("mse", "mean_daily_spearman"),),
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
         ),
         TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_RAW_R,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R,
+            profile_loss_metrics=(
+                ("huber_raw_r", "validation_huber_raw_r"),
+                ("mse_raw_r", "validation_mse_raw_r"),
+            ),
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_RAW_R,
             score_transform=CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
@@ -862,6 +1049,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_DUAL_COMPONENT_R,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R,
+            profile_loss_metrics=(("dual_mse_raw_r", "mean_daily_spearman"),),
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_DUAL_COMPONENT_R,
             score_transform=CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
@@ -870,6 +1058,9 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
+            profile_loss_metrics=(("pairwise_logistic", "mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_PAIRWISE,
             uses_pairwise_loss=True,
         ),
@@ -877,19 +1068,20 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
+            profile_loss_metrics=(("pairwise_logistic", "mean_daily_pareto_pair_concordance"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_PARETO,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_PAIRWISE,
             uses_pairwise_loss=True,
-        ),
-        TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: ContinuousRankerTrainingPolicy(
-            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
-            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PERCENTILE,
-            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE,
-            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_LISTWISE,
         ),
         TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE,
+            profile_loss_metrics=(("dual_head_pairwise_logistic", "conditional_safety_mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED,
+            head_loss_component_count=2,
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SAFETY,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
@@ -900,6 +1092,9 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
+            profile_loss_metrics=(("pairwise_logistic", "mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SINGLE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
@@ -909,6 +1104,11 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
+            profile_loss_metrics=(("dual_head_pairwise_logistic", "conditional_mfe_mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED,
+            head_loss_component_count=2,
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
@@ -919,6 +1119,11 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
+            profile_loss_metrics=(("dual_head_pairwise_logistic", "raw_mfe_mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED,
+            head_loss_component_count=2,
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
@@ -929,6 +1134,11 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE,
+            profile_loss_metrics=(("dual_head_pairwise_logistic", "raw_mfe_mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED,
+            head_loss_component_count=2,
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
@@ -939,6 +1149,11 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE,
+            profile_loss_metrics=(("dual_head_pairwise_logistic", "mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED,
+            head_loss_component_count=2,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_PRIMARY,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_PRIMARY,
@@ -948,6 +1163,15 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+            profile_loss_metrics=(("dual_head_pairwise_logistic", "hs_conditional_mfe_mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
+            allowed_secondary_pair_scopes=(
+                CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
+                CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+            ),
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
+            head_loss_component_count=2,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
@@ -957,6 +1181,15 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
+            profile_loss_metrics=(("dual_head_pairwise_logistic", "hs_conditional_mfe_mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allowed_secondary_pair_scopes=(
+                CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
+                CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+            ),
+            primary_supervision_mode=CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS,
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
+            head_loss_component_count=2,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
@@ -966,6 +1199,16 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
+            profile_loss_metrics=(("dual_head_pairwise_logistic", "hs_conditional_mfe_mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allowed_secondary_pair_scopes=(
+                CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
+                CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+            ),
+            primary_supervision_mode=CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS,
+            primary_pair_weight_policy=CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY,
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
+            head_loss_component_count=2,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
@@ -975,6 +1218,10 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            primary_supervision_mode=CONTINUOUS_RANKER_PRIMARY_SUPERVISION_DUAL_HS,
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
+            head_loss_component_count=2,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
@@ -984,6 +1231,10 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            primary_supervision_mode=CONTINUOUS_RANKER_PRIMARY_SUPERVISION_TOP_HS,
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
+            head_loss_component_count=2,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_TOP_HS_SAFETY_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
@@ -993,6 +1244,11 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+            profile_loss_metrics=(("dual_head_pairwise_logistic", "hs_priority_mfe_mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
+            head_loss_component_count=2,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_PRIORITY_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
@@ -1002,6 +1258,12 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
+            profile_loss_metrics=(("dual_head_pairwise_logistic", "hs_priority_mfe_mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
+            secondary_supervision_mode=CONTINUOUS_RANKER_SECONDARY_SUPERVISION_STRATIFIED,
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
+            head_loss_component_count=2,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
@@ -1011,6 +1273,11 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
+            profile_loss_metrics=(("tri_head_pairwise_logistic", "raw_mfe_mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED,
+            head_loss_component_count=3,
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_HMHS,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
@@ -1020,6 +1287,11 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
+            profile_loss_metrics=(("tri_head_pairwise_logistic", "raw_mfe_mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED,
+            head_loss_component_count=3,
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
@@ -1030,27 +1302,30 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
+            profile_loss_metrics=(("pairwise_logistic", "hmhs_pairwise_concordance"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS,
             uses_pairwise_loss=True,
         ),
+        TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PERCENTILE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE,
+            profile_loss_metrics=(("listnet_top_one_cross_entropy", "mean_daily_spearman"),),
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_LISTWISE,
+        ),
     }
 
 def get_continuous_ranker_primary_pair_weight_policy(training_objective: str) -> str:
-    """Return truth-side primary pair supervision weighting for one objective.
+    """Return truth-side primary supervision weighting from the canonical composition."""
 
-    This capability is intentionally kept outside ``ContinuousRankerTrainingPolicy`` so
-    adding a new supervision-only policy cannot mutate serialized execution recipes for
-    historical objectives.  Scientific identity remains carried by the objective itself.
-    """
-
-    policy = {
-        TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING:
-            CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY,
-    }.get(str(training_objective), CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE)
-    if policy not in SUPPORTED_CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICIES:
-        raise ValueError(f"不支援的continuous-ranker primary pair weight policy: {policy!r}")
-    return str(policy)
+    return str(
+        get_continuous_ranker_training_policy(
+            training_objective
+        ).primary_pair_weight_policy
+    )
 
 
 def get_continuous_ranker_training_policy(
@@ -1062,6 +1337,16 @@ def get_continuous_ranker_training_policy(
         raise ValueError(
             f"continuous ranker objective缺少training capability登記: {training_objective!r}"
         ) from exc
+
+
+def get_profile_enabled_continuous_ranker_training_objectives() -> tuple[str, ...]:
+    """Return objectives with a complete declarative Profile loss/metric contract."""
+
+    return tuple(
+        objective
+        for objective, policy in _continuous_ranker_training_policies().items()
+        if policy.profile_loss_metrics
+    )
 
 
 def get_continuous_ranker_persisted_score_columns() -> tuple[str, ...]:
@@ -1310,6 +1595,18 @@ __all__ = (
     "CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R",
     "CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH",
     "CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED",
+    "CONTINUOUS_RANKER_PAIRWISE_KIND_NONE",
+    "CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR",
+    "CONTINUOUS_RANKER_PAIRWISE_KIND_PARETO",
+    "CONTINUOUS_RANKER_PRIMARY_SUPERVISION_CONTINUOUS",
+    "CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS",
+    "CONTINUOUS_RANKER_PRIMARY_SUPERVISION_DUAL_HS",
+    "CONTINUOUS_RANKER_PRIMARY_SUPERVISION_TOP_HS",
+    "CONTINUOUS_RANKER_SECONDARY_SUPERVISION_STANDARD",
+    "CONTINUOUS_RANKER_SECONDARY_SUPERVISION_STRATIFIED",
+    "CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_SINGLE",
+    "CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED",
+    "CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE",
     "ContinuousRankerTargetPolicy",
     "ContinuousRankerTrainingPolicy",
     "ContinuousRankerScoreOutputPolicy",
@@ -1323,6 +1620,7 @@ __all__ = (
     "BREAKOUT_QUALITY_OUTPUT_SCHEMA",
     "ContinuousRankerExecutionRecipe",
     "get_continuous_ranker_training_policy",
+    "get_profile_enabled_continuous_ranker_training_objectives",
     "get_continuous_ranker_primary_pair_weight_policy",
     "get_continuous_ranker_persisted_score_columns",
     "build_continuous_ranker_execution_recipe",

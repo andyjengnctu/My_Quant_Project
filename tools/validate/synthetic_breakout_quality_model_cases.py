@@ -387,6 +387,9 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
         CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
         CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
+        CONTINUOUS_RANKER_PAIRWISE_KIND_NONE,
+        CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+        CONTINUOUS_RANKER_PAIRWISE_KIND_PARETO,
         CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
         CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
         CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
@@ -395,6 +398,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         ContinuousRankerObjectivePolicy,
         ContinuousRankerPairWeightPolicy,
         get_continuous_ranker_pair_weight_policy,
+        get_profile_enabled_continuous_ranker_training_objectives,
         normalize_continuous_ranker_pair_weight_configuration,
     )
     from config.breakout_quality_runtime_resolver import (
@@ -414,6 +418,15 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         "continuous_ranker_runtime_contract_has_dedicated_owner",
         "config.breakout_quality_runtime",
         continuous_ranker_runtime.ContinuousRankerExecutionRecipe.__module__,
+    )
+    check(
+        "continuous_ranker_profile_enabled_objective_membership_derives_from_composition_registry",
+        tuple(breakout_quality_config.CONTINUOUS_RANKER_TRAINING_OBJECTIVES),
+        tuple(get_profile_enabled_continuous_ranker_training_objectives()),
+        note=(
+            "config must not maintain a second hand-written objective membership list; "
+            "profile eligibility is declared by composition profile_loss_metrics"
+        ),
     )
     check_true(
         "continuous_ranker_recipe_resolver_reexports_canonical_config_resolver",
@@ -723,6 +736,45 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             reasons.append("weighted pairwise objective lacks pair-weight context role")
         if bool(recipe.training_policy.uses_pairwise_loss) != (recipe.pairwise_reduction is not None):
             reasons.append("training pairwise capability differs from objective reduction")
+        try:
+            recipe.training_policy.validate_profile_loss_metric(
+                loss_name=registered_profile.loss_name,
+                epoch_selection_metric=registered_profile.epoch_selection_metric,
+            )
+            recipe.training_policy.validate_research_spec(
+                pairwise_reduction=registered_spec.pairwise_reduction,
+                pair_weight_policy=registered_spec.pair_weight_policy,
+                secondary_pair_scope=registered_spec.secondary_pair_scope,
+                secondary_pair_scope_threshold=registered_spec.secondary_pair_scope_threshold,
+            )
+        except Exception as exc:
+            reasons.append(
+                f"training composition validation failed: {type(exc).__name__}: {exc}"
+            )
+        expected_pairwise_kind = (
+            CONTINUOUS_RANKER_PAIRWISE_KIND_NONE
+            if recipe.pairwise_reduction is None
+            else CONTINUOUS_RANKER_PAIRWISE_KIND_PARETO
+            if recipe.pairwise_reduction
+            == continuous_ranker_runtime.CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE
+            else CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR
+        )
+        if recipe.training_policy.pairwise_kind != expected_pairwise_kind:
+            reasons.append(
+                "training composition pairwise kind differs from resolved objective reduction"
+            )
+        if (
+            registered_spec.pair_weight_policy is not None
+            and not recipe.training_policy.allows_context_pair_weight
+        ):
+            reasons.append("research spec pair weight bypasses training composition capability")
+        if (
+            registered_spec.secondary_pair_scope
+            not in recipe.training_policy.allowed_secondary_pair_scopes
+        ):
+            reasons.append("research spec secondary scope bypasses training composition capability")
+        if not recipe.training_policy.profile_loss_metrics:
+            reasons.append("registered profile lacks canonical loss/epoch metric composition")
 
         expected_dependencies = [ARTIFACT_DATASET_CORE]
         if recipe.dependency_spec.requires_continuous_target_artifact:
@@ -740,6 +792,36 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
 
         try:
             registered_training_semantics = training_semantics(registered_profile)
+
+            def _semantic_values(node, key):
+                values = []
+                if isinstance(node, dict):
+                    for child_key, child_value in node.items():
+                        if child_key == key:
+                            values.append(child_value)
+                        values.extend(_semantic_values(child_value, key))
+                elif isinstance(node, (list, tuple)):
+                    for child_value in node:
+                        values.extend(_semantic_values(child_value, key))
+                return values
+
+            expected_head_weighting = (
+                recipe.training_policy.artifact_head_weighting_semantic()
+            )
+            actual_head_weightings = _semantic_values(
+                registered_training_semantics, "head_weighting"
+            )
+            if expected_head_weighting is None:
+                if actual_head_weightings:
+                    reasons.append(
+                        "single-head composition unexpectedly persists artifact head_weighting"
+                    )
+            elif actual_head_weightings != [expected_head_weighting]:
+                reasons.append(
+                    "artifact head_weighting differs from canonical training composition: "
+                    f"actual={actual_head_weightings!r}, expected={[expected_head_weighting]!r}"
+                )
+
             if weighted_pairwise:
                 expected_pair_weight_contract = (
                     breakout_quality_config.get_predicted_safety_pair_weight_contract(
@@ -773,6 +855,51 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         "continuous_ranker_generic_contract_covers_every_registered_profile",
         len(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES),
         len(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES) - len(registered_runtime_failures),
+    )
+
+    config_source = read_source_text("config/breakout_quality.py")
+    trainer_source = read_source_text(
+        "services/breakout_quality/train_continuous_ranker.py"
+    )
+    training_contract_source = read_source_text(
+        "filters/breakout_quality/ranker_training_contract.py"
+    )
+    check_true(
+        "continuous_ranker_profile_and_research_spec_delegate_objective_legality_to_composition_owner",
+        "expected_loss = {" not in config_source
+        and "scoped secondary pair supervision只允許支援該capability的training objective"
+        not in config_source
+        and ".validate_profile_loss_metric(" in config_source
+        and ".validate_research_spec(" in config_source,
+        note=(
+            "profile/research declarations must consume the runtime composition registry "
+            "instead of maintaining objective-name capability matrices"
+        ),
+    )
+    check_true(
+        "continuous_ranker_artifact_head_weighting_derives_from_composition_owner",
+        ".artifact_head_weighting_semantic()" in training_contract_source
+        and "get_continuous_ranker_primary_pair_weight_policy(recipe.training_objective)"
+        not in training_contract_source,
+        note=(
+            "persisted head weighting and truth-side primary weighting must consume the "
+            "same ContinuousRankerTrainingPolicy composition as the trainer"
+        ),
+    )
+
+    check_true(
+        "continuous_ranker_trainer_consumes_supervision_modes_and_head_combination_from_composition",
+        "training_policy.primary_supervision_mode" in trainer_source
+        and "training_policy.secondary_supervision_mode" in trainer_source
+        and "training_policy.primary_pair_weight_policy" in trainer_source
+        and "training_policy.head_loss_combination" in trainer_source
+        and "training_policy.head_loss_component_count" in trainer_source
+        and "get_continuous_ranker_primary_pair_weight_policy(training_objective)"
+        not in trainer_source,
+        note=(
+            "generic trainer may dispatch reusable primitive handlers, but scientific "
+            "supervision composition/weighting must come from ContinuousRankerTrainingPolicy"
+        ),
     )
 
     raw = np.asarray([1.0, 3.0, 2.0, 5.0, 5.0, 9.0], dtype=np.float32)

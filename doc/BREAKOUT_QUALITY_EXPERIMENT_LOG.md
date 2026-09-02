@@ -11370,3 +11370,14 @@ Decision：`MR13AS_IMPLEMENTED_RESULT_PENDING / P50_BOUNDARY_SUPERVISION_FOCUS /
 - **Training semantics report SSOT**：`train_daily_ranker.py`與`train_continuous_ranker.py`的report `training`區塊改直接展開canonical `training_semantics(profile)`；不再手寫specialized contract keys。Manifest仍使用同一canonical payload，因此AK/AR/AT/AU等後續capability不會再出現manifest有contract、report漏contract的第二來源。
 - **Research Queue**：scientific priority與stop rules不變，本工程不新增Queue item。
 
+## 2026-09-02 — Continuous-ranker Multi-head Training Composition SSOT consolidation
+
+- **Scope**：B341純engineering refactor，不建立新MR/ARCH identity，不改current Training Model（本branch仍為MR-13AS）、target、loss數值、pair direction/geometry、head ratio、Seed、optimizer、epoch-selection、PIT/Strategy authorization或checkpoint fitting identity。基準=`test-branch-1_20260902_191249_848f2201.zip`，SHA256=`f3af2b4989619126bfe2402c5a34bf7c2120a503fcfa65db7373491f1d77e5cf`。
+- **Composition SSOT（B341）**：`ContinuousRankerTrainingPolicy`升為objective/composition唯一owner，統一宣告profile loss→epoch metric、pairwise kind、context pair-weight capability、secondary pair scope、primary/secondary supervision mode、truth-side primary pair weight、head-loss combination與component count。`BreakoutQualityExperimentProfile`與`ContinuousRankerResearchSpec`不再持有objective-name capability matrices；正式`CONTINUOUS_RANKER_TRAINING_OBJECTIVES`改由宣告`profile_loss_metrics`的composition registry自動派生，兩個dormant runtime primitives因未宣告profile contract仍不會被偷偷啟用。
+- **Generic trainer**：trainer仍保留可重用primitive loss handler，但AO/AR/AS/AP/AQ類scientific差異不再靠loss-handler/objective名稱重猜；binary-HS／dual-HS／Top-HS primary supervision、stratified secondary supervision、truth-side boundary weighting與duo/tri head combination都直接讀training composition。
+- **Artifact semantics同源**：`training_semantics(profile)`的truth-side primary weighting與`head_weighting`改從同一training policy派生；`head_loss_component_count`明確區分duo/tri composition，歷史persisted wording完全保持不變。
+- **Behavior preservation**：重構前後49個Continuous research profiles的Profile、ResearchSpec、ExecutionRecipe與完整`training_semantics` canonical JSON逐一完全相同；canonical dump SHA256均為`8771e12854e46019d4e6a16357aa799ee412508e98b7e51b3b812845f42fd172`。既有checkpoint/artifact不需重訓或改identity。
+- **Regression ownership**：擴充既有`validate_breakout_quality_continuous_ranker_contract_case`，直接驗profile-enabled membership由composition派生、每個registered profile的loss/metric/spec legality、pairwise kind/scope/weight capability、artifact head weighting與generic trainer delegation；不建立每個objective一個新synthetic。
+
+Decision：`ENGINEERING_SSOT_COMPLETE / SCIENTIFIC_PAYLOAD_BIT_EQUIVALENT / NO_RETRAIN / CURRENT_MR13AS_UNCHANGED`。
+

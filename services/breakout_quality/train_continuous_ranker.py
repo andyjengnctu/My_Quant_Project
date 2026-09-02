@@ -27,6 +27,13 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE,
     CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY,
+    CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS,
+    CONTINUOUS_RANKER_PRIMARY_SUPERVISION_DUAL_HS,
+    CONTINUOUS_RANKER_PRIMARY_SUPERVISION_TOP_HS,
+    CONTINUOUS_RANKER_SECONDARY_SUPERVISION_STRATIFIED,
+    CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_SINGLE,
+    CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED,
+    CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
     normalize_continuous_ranker_pair_weight_configuration,
     CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
     CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
@@ -70,7 +77,6 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     get_continuous_ranker_training_policy,
-    get_continuous_ranker_primary_pair_weight_policy,
 )
 from config.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
@@ -1519,6 +1525,46 @@ def _listnet_top_one_loss(torch, margins, targets, dates) -> tuple[Any | None, i
     return torch.stack(day_losses).mean(), int(ranked_date_count)
 
 
+def _combine_training_head_losses(
+    head_losses,
+    *,
+    combination: str,
+    component_count: int,
+):
+    """Combine head losses from the canonical training composition.
+
+    This keeps equal-head weighting out of individual objective branches while preserving
+    the historical numeric operations: two heads use ``0.5 * (a + b)`` and three heads
+    use ``sum(...) / 3.0``. ``equal_mean_available`` renormalizes over rankable heads,
+    matching the existing scoped-secondary fallback semantics.
+    """
+
+    losses = list(head_losses)
+    expected_count = int(component_count)
+    if len(losses) != expected_count:
+        raise ValueError(
+            "head loss composition component count mismatch: "
+            f"expected={expected_count}, actual={len(losses)}"
+        )
+    available = [loss for loss in losses if loss is not None]
+    if combination == CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_SINGLE:
+        if len(losses) != 1 or len(available) != 1:
+            raise ValueError("single-head loss combination必須恰有一個有效head")
+        return available[0]
+    if combination == CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED:
+        if len(available) != len(losses):
+            return None
+    elif combination != CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE:
+        raise ValueError(f"不支援的head loss combination: {combination!r}")
+    if not available:
+        return None
+    if len(available) == 1:
+        return available[0]
+    if len(available) == 2:
+        return 0.5 * (available[0] + available[1])
+    return sum(available) / float(len(available))
+
+
 def _train_epoch(
     torch,
     model,
@@ -1607,10 +1653,14 @@ def _train_epoch(
                     )
                     for target_index, margin in enumerate(margins)
                 ]
-                if any(item[0] is None for item in losses_and_counts):
-                    continue
                 head_losses = [item[0] for item in losses_and_counts]
-                loss = sum(head_losses) / 3.0
+                loss = _combine_training_head_losses(
+                    head_losses,
+                    combination=training_policy.head_loss_combination,
+                    component_count=training_policy.head_loss_component_count,
+                )
+                if loss is None:
+                    continue
                 loss_weight = int(max(1, sum(int(item[1]) for item in losses_and_counts)))
             elif loss_handler in {
                 CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
@@ -1638,35 +1688,36 @@ def _train_epoch(
                 conditional_mfe_margin = conditional_mfe_logits.float()[:, LABEL_PASS] - conditional_mfe_logits.float()[:, LABEL_REJECT]
                 batch_dates = group_dates_series.iloc[ids].to_numpy()
                 primary_pair_target = target[:, 0]
+                primary_mode = str(training_policy.primary_supervision_mode)
                 binary_hs_pair_target = None
-                if loss_handler in {
-                    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
-                    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
-                    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+                if primary_mode in {
+                    CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS,
+                    CONTINUOUS_RANKER_PRIMARY_SUPERVISION_DUAL_HS,
+                    CONTINUOUS_RANKER_PRIMARY_SUPERVISION_TOP_HS,
                 }:
                     if secondary_pair_scope_threshold is None:
-                        raise ValueError("HS-qualification objective缺少true-HS threshold")
+                        raise ValueError("HS supervision composition缺少true-HS threshold")
                     binary_hs_pair_target = _binary_threshold_pair_target(
                         torch, target[:, 0], float(secondary_pair_scope_threshold)
                     )
-                    if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE:
+                    if primary_mode == CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS:
                         primary_pair_target = binary_hs_pair_target
+
                 top_hs_ndcg_threshold = None
-                if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE:
+                if primary_mode == CONTINUOUS_RANKER_PRIMARY_SUPERVISION_TOP_HS:
                     if secondary_pair_scope_threshold is None:
-                        raise ValueError("Top-HS Safety objective缺少true-HS threshold")
+                        raise ValueError("Top-HS Safety composition缺少true-HS threshold")
                     top_hs_ndcg_threshold = float(secondary_pair_scope_threshold)
                     primary_pair_target = _top_hs_safety_relevance(
                         torch, target[:, 0], top_hs_ndcg_threshold
                     )
-                primary_truth_weight_policy = (
-                    get_continuous_ranker_primary_pair_weight_policy(training_objective)
-                    if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE
-                    else CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
+
+                primary_truth_weight_policy = str(
+                    training_policy.primary_pair_weight_policy
                 )
-                if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE:
+                if primary_mode == CONTINUOUS_RANKER_PRIMARY_SUPERVISION_DUAL_HS:
                     if binary_hs_pair_target is None:
-                        raise ValueError("dual-supervised HS objective缺少binary HS target")
+                        raise ValueError("dual-supervised HS composition缺少binary HS target")
                     (
                         safety_loss,
                         safety_supervision,
@@ -1690,15 +1741,20 @@ def _train_epoch(
                         pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
                         pair_truth_weight_values=(
                             target[:, 0]
-                            if primary_truth_weight_policy != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
+                            if primary_truth_weight_policy
+                            != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
                             else None
                         ),
                         pair_truth_weight_policy=primary_truth_weight_policy,
                         ndcg_top_k_threshold=top_hs_ndcg_threshold,
                     )
-                if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE:
+
+                if (
+                    training_policy.secondary_supervision_mode
+                    == CONTINUOUS_RANKER_SECONDARY_SUPERVISION_STRATIFIED
+                ):
                     if secondary_item_eligibility is not None:
-                        raise ValueError("stratified secondary objective不得同時使用item-scope mask")
+                        raise ValueError("stratified secondary composition不得同時使用item-scope mask")
                     partition_membership = target[:, 1] > 0.0
                     (
                         conditional_mfe_loss,
@@ -1725,16 +1781,14 @@ def _train_epoch(
                         pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
                         item_eligibility=secondary_item_eligibility,
                     )
-                if safety_loss is None and conditional_mfe_loss is None:
+
+                loss = _combine_training_head_losses(
+                    (safety_loss, conditional_mfe_loss),
+                    combination=training_policy.head_loss_combination,
+                    component_count=training_policy.head_loss_component_count,
+                )
+                if loss is None:
                     continue
-                if safety_loss is None:
-                    loss = conditional_mfe_loss
-                elif conditional_mfe_loss is None:
-                    # A scoped secondary list can become unrankable while Safety still
-                    # contributes its required full-universe supervision.
-                    loss = safety_loss
-                else:
-                    loss = 0.5 * (safety_loss + conditional_mfe_loss)
                 loss_weight = int(max(1, safety_supervision + conditional_mfe_supervision))
             elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE:
                 if target.ndim != 2 or int(target.shape[1]) != 2:
@@ -1768,12 +1822,13 @@ def _train_epoch(
                     reduction=str(pairwise_reduction),
                     pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
                 )
-                if safety_loss is None or raw_mfe_loss is None:
+                loss = _combine_training_head_losses(
+                    (safety_loss, raw_mfe_loss),
+                    combination=training_policy.head_loss_combination,
+                    component_count=training_policy.head_loss_component_count,
+                )
+                if loss is None:
                     continue
-                # Both truths are canonical same-date percentiles. The scientific
-                # control fixes equal head weighting; Safety only modulates the final-head
-                # pair supervision through a detached probability product.
-                loss = 0.5 * (safety_loss + raw_mfe_loss)
                 loss_weight = int(max(1, safety_supervision + raw_mfe_supervision))
             elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE:
                 if target.ndim != 2 or int(target.shape[1]) != 2:
@@ -1790,9 +1845,13 @@ def _train_epoch(
                 conditional_mfe_loss, conditional_mfe_supervision = _pairwise_logistic_loss(
                     torch, conditional_mfe_margin, target[:, 1], batch_dates, reduction=str(pairwise_reduction), pair_weight_policy=str(pair_weight_policy),
                 )
-                if safety_loss is None or conditional_mfe_loss is None:
+                loss = _combine_training_head_losses(
+                    (safety_loss, conditional_mfe_loss),
+                    combination=training_policy.head_loss_combination,
+                    component_count=training_policy.head_loss_component_count,
+                )
+                if loss is None:
                     continue
-                loss = 0.5 * (safety_loss + conditional_mfe_loss)
                 loss_weight = int(max(1, safety_supervision + conditional_mfe_supervision))
             elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE:
                 if target.ndim != 2 or int(target.shape[1]) != 2:
@@ -1817,11 +1876,13 @@ def _train_epoch(
                     batch_dates,
                     reduction=str(pairwise_reduction),
                 )
-                if primary_loss is None or conditional_loss is None:
+                loss = _combine_training_head_losses(
+                    (primary_loss, conditional_loss),
+                    combination=training_policy.head_loss_combination,
+                    component_count=training_policy.head_loss_component_count,
+                )
+                if loss is None:
                     continue
-                # Both targets are canonical same-date percentiles on the same
-                # scale. Equal head mean is fixed by contract; there is no lambda.
-                loss = 0.5 * (primary_loss + conditional_loss)
                 loss_weight = int(max(1, primary_supervision + conditional_supervision))
             else:
                 logits = model(xb, cb)
@@ -3831,9 +3892,9 @@ def select_epoch(
                 )
             elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE:
                 gate = dict(validation_hs_conditional_mfe_metrics.get("lexicographic_model_gate") or {})
-                if loss_handler in {
-                    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
-                    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
+                if training_policy.primary_supervision_mode in {
+                    CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS,
+                    CONTINUOUS_RANKER_PRIMARY_SUPERVISION_DUAL_HS,
                 }:
                     qualification = dict(validation_hs_conditional_mfe_metrics.get("hs_qualification") or {})
                     qualification_text = (

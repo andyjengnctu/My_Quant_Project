@@ -150,6 +150,7 @@ from config.breakout_quality_runtime import (
     BREAKOUT_QUALITY_OUTPUT_SCHEMA,
     ContinuousRankerExecutionRecipe,
     get_continuous_ranker_training_policy,
+    get_profile_enabled_continuous_ranker_training_objectives,
     build_continuous_ranker_execution_recipe,
 )
 
@@ -889,26 +890,7 @@ SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLE_SCOPES = (
 
 TRAINING_OBJECTIVE_BINARY_CLASSIFICATION = "binary_classification"
 CONTINUOUS_RANKER_TRAINING_OBJECTIVES = (
-    TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
-    TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
-    TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
-    TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
+    get_profile_enabled_continuous_ranker_training_objectives()
 )
 SUPPORTED_BREAKOUT_QUALITY_TRAINING_OBJECTIVES = (
     TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
@@ -1008,87 +990,13 @@ class BreakoutQualityExperimentProfile:
         elif self.training_objective in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
             if not str(self.continuous_target_id or "").strip():
                 raise ValueError("continuous ranker profile 必須指定 continuous_target_id")
-            if self.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
-                if self.loss_name != "dual_mse_raw_r":
-                    raise ValueError(
-                        "dual-component R regression必須使用 dual_mse_raw_r"
-                    )
-                expected_epoch_metric = "mean_daily_spearman"
-            elif self.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
-                allowed_losses = {"huber_raw_r", "mse_raw_r"}
-                if self.loss_name not in allowed_losses:
-                    raise ValueError(
-                        "direct R regression loss不支援: "
-                        f"expected one of {sorted(allowed_losses)}, actual={self.loss_name}"
-                    )
-                expected_epoch_metric = (
-                    "validation_huber_raw_r"
-                    if self.loss_name == "huber_raw_r"
-                    else "validation_mse_raw_r"
-                )
-            else:
-                expected_loss = {
-                    TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION: "mse",
-                    TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING: "pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING: "pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING: "pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING: "tri_head_pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING: "tri_head_pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING: "pairwise_logistic",
-                    TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: "listnet_top_one_cross_entropy",
-                }[self.training_objective]
-                if self.loss_name != expected_loss:
-                    raise ValueError(
-                        "continuous ranker loss與training objective不一致: "
-                        f"objective={self.training_objective}, expected={expected_loss}, actual={self.loss_name}"
-                    )
-                expected_epoch_metric = (
-                    "mean_daily_pareto_pair_concordance"
-                    if self.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING
-                    else "conditional_safety_mean_daily_spearman"
-                    if self.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING
-                    else "conditional_mfe_mean_daily_spearman"
-                    if self.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING
-                    else "hs_conditional_mfe_mean_daily_spearman"
-                    if self.training_objective in {
-                        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                        TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                        TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                    }
-                    else "hs_priority_mfe_mean_daily_spearman"
-                    if self.training_objective in {
-                        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
-                        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING,
-                    }
-                    else "raw_mfe_mean_daily_spearman"
-                    if self.training_objective in {
-                        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-                        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
-                    }
-                    else "raw_mfe_mean_daily_spearman"
-                    if self.training_objective in {
-                        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-                        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-                    }
-                    else "hmhs_pairwise_concordance"
-                    if self.training_objective == TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING
-                    else "mean_daily_spearman"
-                )
-            if self.epoch_selection_metric != expected_epoch_metric:
-                raise ValueError(
-                    "continuous ranker epoch selection與training objective不一致: "
-                    f"objective={self.training_objective}, expected={expected_epoch_metric}, actual={self.epoch_selection_metric}"
-                )
+            training_policy = get_continuous_ranker_training_policy(
+                self.training_objective
+            )
+            training_policy.validate_profile_loss_metric(
+                loss_name=self.loss_name,
+                epoch_selection_metric=self.epoch_selection_metric,
+            )
             if self.training_objective == TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION:
                 if self.loss_name == "huber_raw_r":
                     if self.raw_r_huber_delta_r is None or not math.isfinite(float(self.raw_r_huber_delta_r)) or float(self.raw_r_huber_delta_r) <= 0.0:
@@ -2027,93 +1935,15 @@ class ContinuousRankerResearchSpec:
                 "continuous ranker trainer family與training sample scope不一致: "
                 f"profile={self.profile_name}, expected={expected_family}, actual={self.trainer_family}"
             )
-        if profile.training_objective in {
-            TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-        }:
-            if self.pairwise_reduction not in SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS:
-                raise ValueError(
-                    f"pairwise profile必須指定合法pairwise reduction: {self.profile_name}"
-                )
-            if (
-                profile.training_objective == TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING
-                and self.pairwise_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE
-            ):
-                raise ValueError("Pareto pairwise profile必須使用pareto_dominance_equal_pair")
-            if (
-                profile.training_objective in {
-                    TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-                    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
-                    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-                    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
-                    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
-                    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
-                    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING,
-                    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-                    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-                    TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-                }
-                and self.pairwise_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE
-            ):
-                raise ValueError("scalar pairwise profile不得使用Pareto dominance pair scope")
-        elif self.pairwise_reduction is not None:
-            raise ValueError(
-                f"非pairwise profile不得指定pairwise reduction: {self.profile_name}"
-            )
-        if self.pair_weight_policy is not None:
-            if profile.training_objective not in {
-                TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-            }:
-                raise ValueError(
-                    f"非scalar pairwise profile不得指定pair weight policy: {self.profile_name}"
-                )
-            get_continuous_ranker_pair_weight_policy(self.pair_weight_policy)
-            if self.pair_weight_policy == CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE:
-                raise ValueError("research spec的pair_weight_policy=None即可表示未加權；不得顯式宣告none")
-        if self.secondary_pair_scope not in SUPPORTED_CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPES:
-            raise ValueError(f"不支援的secondary pair scope: {self.secondary_pair_scope!r}")
-        if self.secondary_pair_scope == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL:
-            if self.secondary_pair_scope_threshold is not None:
-                raise ValueError("all-items secondary pair scope不得指定threshold")
-        else:
-            if profile.training_objective not in {
-                TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
-                TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
-            TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
-            }:
-                raise ValueError("scoped secondary pair supervision只允許支援該capability的training objective")
-            threshold = self.secondary_pair_scope_threshold
-            if threshold is None or not (0.0 < float(threshold) < 1.0):
-                raise ValueError("secondary pair scope threshold必須位於(0,1)")
+        training_policy = get_continuous_ranker_training_policy(
+            profile.training_objective
+        )
+        training_policy.validate_research_spec(
+            pairwise_reduction=self.pairwise_reduction,
+            pair_weight_policy=self.pair_weight_policy,
+            secondary_pair_scope=self.secondary_pair_scope,
+            secondary_pair_scope_threshold=self.secondary_pair_scope_threshold,
+        )
         for reference_field in (
             "reference_profile_name",
             "evaluation_reference_profile_name",
