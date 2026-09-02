@@ -49,6 +49,7 @@ from tools.local_regression.meta_quality_targets import (
 )
 from tools.local_regression.checklist_contract import (
     STATUS_VALUES,
+    compare_persisted_views,
     derive_checklist_state,
     ids_from_table as _ids_from_table,
     sorted_unique as _sorted_unique,
@@ -142,6 +143,16 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     main_statuses = state["main_statuses"]
     convergence_statuses = state["convergence_statuses"]
     results: List[Dict[str, Any]] = []
+
+    generated_view = compare_persisted_views(CHECKLIST_PATH)
+    results.append(
+        summarize_result(
+            "checklist_generated_views_match_canonical_contract",
+            bool(generated_view.get("ok")),
+            detail=f"mismatches={generated_view.get('mismatches', {})}",
+            extra={"mismatches": generated_view.get("mismatches", {})},
+        )
+    )
 
     invalid_statuses = {key: value for key, value in main_statuses.items() if value not in STATUS_VALUES}
     results.append(

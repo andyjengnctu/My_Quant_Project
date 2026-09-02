@@ -55,6 +55,7 @@ from .synthetic_unit_cases import (
     validate_signal_utils_unit_case,
 )
 from .synthetic_meta_cases import (
+    validate_checklist_generated_view_ssot_contract_case,
     validate_checklist_t_formal_command_single_entry_case,
     validate_checklist_done_test_summary_markdown_structure_case,
     validate_checklist_t_single_entry_delimiter_case,
@@ -422,6 +423,7 @@ def get_synthetic_validator_entries():
         _entry(validate_independent_oracle_golden_case, layer="unit_boundary", cost_class="fast"),
         _entry(validate_research_report_contract_freeze_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_registry_checklist_entry_consistency_case, layer="meta_contract", cost_class="fast"),
+        _entry(validate_checklist_generated_view_ssot_contract_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_checklist_t_formal_command_single_entry_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_checklist_done_test_summary_markdown_structure_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_checklist_t_single_entry_delimiter_case, layer="meta_contract", cost_class="fast"),

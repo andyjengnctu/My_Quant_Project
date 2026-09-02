@@ -6,6 +6,7 @@ import importlib
 import json
 import re
 import shlex
+import shutil
 import tempfile
 from unittest.mock import patch
 
@@ -39,12 +40,16 @@ from .meta_contracts import (
     summarize_synthetic_cases_import_target_resolution_contract,
 )
 from tools.local_regression.checklist_contract import (
+    apply_checklist_transaction,
+    compare_persisted_views,
+    load_checklist_contract,
     load_convergence_latest_statuses,
     load_done_b_rows,
     load_done_test_rows,
     load_main_catalog,
     load_checklist_tables,
     load_main_statuses,
+    validate_checklist_contract as _validate_checklist_contract,
 )
 from tools.local_regression.common import partition_result_statuses
 from tools.local_regression.formal_pipeline import FORMAL_STEP_SPECS
@@ -1092,6 +1097,126 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
     summary["layer_counts"] = layer_counts
     return results, summary
 
+
+
+def validate_checklist_generated_view_ssot_contract_case(_base_params):
+    results = []
+    summary = {}
+    case_id = "META_CHECKLIST_GENERATED_VIEW_SSOT"
+
+    live_view = compare_persisted_views(CHECKLIST_PATH)
+    add_check(results, "meta_checklist", case_id, "live_markdown_views_match_canonical_contract", True, bool(live_view.get("ok")))
+    summary["live_view_mismatches"] = live_view.get("mismatches", {})
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_ssot_") as temp_dir:
+        temp_root = Path(temp_dir)
+        temp_checklist = temp_root / CHECKLIST_PATH.name
+        temp_contract = temp_root / "TEST_SUITE_CHECKLIST_CONTRACT.json"
+        shutil.copy2(CHECKLIST_PATH, temp_checklist)
+        shutil.copy2(CHECKLIST_PATH.with_name("TEST_SUITE_CHECKLIST_CONTRACT.json"), temp_contract)
+
+        contract = load_checklist_contract(temp_checklist)
+        tail_date = str(contract["transitions"][-1]["date"])
+        apply_checklist_transaction(
+            temp_checklist,
+            main_definitions=(
+                {
+                    "id": "B999",
+                    "section": "B2",
+                    "priority": "P1",
+                    "category": "Meta / Test governance",
+                    "item": "synthetic canonical checklist transaction",
+                    "gap": "single transaction must regenerate B/T/G views",
+                    "entry": "`tools/local_regression/checklist_contract.py`",
+                },
+            ),
+            test_definitions=(
+                {
+                    "id": "T999",
+                    "description": "`validate_checklist_generated_view_ssot_contract_case` synthetic transaction",
+                    "b_id": "B999",
+                },
+            ),
+            transitions=(
+                {
+                    "date": tail_date,
+                    "id": "B999",
+                    "description": "register synthetic checklist owner row",
+                    "from_status": "NEW",
+                    "to_status": "DONE",
+                    "note": "`tools/local_regression/checklist_contract.py`",
+                },
+                {
+                    "date": tail_date,
+                    "id": "T999",
+                    "description": "register synthetic checklist test binding",
+                    "from_status": "NEW",
+                    "to_status": "DONE",
+                    "note": "`validate_checklist_generated_view_ssot_contract_case`",
+                },
+            ),
+        )
+
+        mutated_view = compare_persisted_views(temp_checklist)
+        add_check(results, "meta_checklist", case_id, "single_transaction_keeps_all_generated_views_in_sync", True, bool(mutated_view.get("ok")))
+        tables = load_checklist_tables(temp_checklist)
+        add_check(results, "meta_checklist", case_id, "single_transaction_generates_b_view", True, any(row and row[0] == "B999" for row in tables["B2"]))
+        add_check(results, "meta_checklist", case_id, "single_transaction_generates_t_view", True, any(row and row[0] == "T999" for row in tables["T"]))
+        add_check(results, "meta_checklist", case_id, "single_transaction_appends_b_and_t_convergence_events", 2, sum(1 for row in tables["G"] if len(row) > 1 and row[1] in {"B999", "T999"}))
+
+        invalid_contract = load_checklist_contract(temp_checklist)
+        invalid_contract["transitions"].append(
+            {
+                "date": tail_date,
+                "id": "B999",
+                "description": "invalid chain",
+                "from_status": "TODO",
+                "to_status": "DONE",
+                "note": "synthetic invalid chain",
+            }
+        )
+        rejected = False
+        try:
+            _validate_checklist_contract(invalid_contract)
+        except ValueError:
+            rejected = True
+        add_check(results, "meta_checklist", case_id, "invalid_transition_chain_fails_fast", True, rejected)
+
+        drift_text = _replace_markdown_table_row(
+            temp_checklist.read_text(encoding="utf-8"),
+            heading="T. 目前所有 `DONE` 的建議測試項目摘要",
+            row_id="T999",
+            id_col_idx=0,
+            update_cols=lambda cols: [cols[0], cols[1] + " drift", cols[2]],
+        )
+        temp_checklist.write_text(drift_text, encoding="utf-8")
+        drift_view = compare_persisted_views(temp_checklist)
+        add_check(results, "meta_checklist", case_id, "manual_generated_view_drift_is_detected", False, bool(drift_view.get("ok")))
+
+        non_new_rejected = False
+        try:
+            apply_checklist_transaction(
+                temp_checklist,
+                main_definitions=(
+                    {
+                        "id": "B998",
+                        "section": "B2",
+                        "priority": "P1",
+                        "category": "Meta / Test governance",
+                        "item": "invalid synthetic direct status",
+                        "gap": "must reject direct DONE initialization",
+                        "entry": "`tools/local_regression/checklist_contract.py`",
+                        "initial_status": "DONE",
+                    },
+                ),
+            )
+        except ValueError:
+            non_new_rejected = True
+        add_check(results, "meta_checklist", case_id, "new_definitions_cannot_bypass_transition_chain", True, non_new_rejected)
+
+    summary["canonical_owner"] = "doc/TEST_SUITE_CHECKLIST_CONTRACT.json"
+    summary["generated_views"] = ["B", "T", "G"]
+    return results, summary
 
 
 def validate_checklist_t_formal_command_single_entry_case(_base_params):
