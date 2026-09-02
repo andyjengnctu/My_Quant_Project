@@ -75,29 +75,14 @@ def build_multiscale_cnn_spec(architecture: str) -> BreakoutQualityModelSpec:
     downsample_factors = (1, 2, 4)
     branch_kernel_sizes = ((3, 5), (9, 15), (31, 31))
     branch_summary_windows_bars = ((0, 20), (0, 60), (120, 300))
-    overrides = {
-        MULTISCALE_CNN_V1: {},
-        MULTISCALE_CNN_V2: {"branch_input_representations": ("return_delta", "return_delta", "level")},
-        MULTISCALE_CNN_V3: {"branch_input_representations": ("market_relative_return_delta", "market_relative_return_delta", "level")},
-        MULTISCALE_CNN_V4: {"branch_channels": (16, 16, 8)},
-        MULTISCALE_CNN_V5: {"branch_channels": (16, 16, 12)},
-        MULTISCALE_CNN_V6: {"branch_dropouts": (0.25, 0.25, 0.40)},
-        MULTISCALE_CNN_V7: {"branch_input_representations": ("return_delta", "level", "level")},
-        MULTISCALE_CNN_V8: {"branch_input_representations": ("level", "return_delta", "level")},
-        MULTISCALE_CNN_REGIME_CONTEXT_V1: {
+    descriptor = get_architecture_descriptor(architecture)
+    overrides = descriptor.spec_options_dict()
+    if descriptor.has_capability("regime_context"):
+        overrides.update({
             "derived_context_features": REGIME_CONTEXT_FEATURES,
             "derived_context_lookback_bars": REGIME_CONTEXT_LOOKBACK_BARS,
             "derived_context_annualization_bars": REGIME_CONTEXT_ANNUALIZATION_BARS,
-        },
-        MULTISCALE_CNN_SEQUENCE_ONLY_V1: {"use_dataset_context": False},
-        MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1: {
-            "use_dataset_context": False,
-            "sequence_input_paths": ("raw_level", "window_zscore"),
-            "window_normalization_epsilon": 1e-5,
-        },
-    }
-    if architecture not in overrides:
-        raise ValueError(f"未註冊的 multiscale architecture: {architecture}")
+        })
     return BreakoutQualityModelSpec(
         architecture=architecture,
         family="multiscale_cnn",
@@ -117,7 +102,7 @@ def build_multiscale_cnn_spec(architecture: str) -> BreakoutQualityModelSpec:
         branch_downsample_factors=downsample_factors,
         branch_kernel_sizes=branch_kernel_sizes,
         branch_summary_windows_bars=branch_summary_windows_bars,
-        **overrides[architecture],
+        **overrides,
     )
 
 
@@ -351,28 +336,15 @@ def _build_inception_spec(
     )
 
 
-_INCEPTION_VARIANTS = {
-    INCEPTION_TIME_V1: ("inception_time", ("global_average",), False, ("raw_level",), None),
-    INCEPTION_TIME_CONDITIONAL_MFE_SAFETY_V1: ("inception_time_conditional_mfe_safety", ("global_average", "primary_mfe_head", "conditional_safety_head"), False, ("raw_level",), None),
-    INCEPTION_TIME_SAFETY_CONDITIONAL_MFE_V1: ("inception_time_safety_conditional_mfe", ("global_average", "raw_safety_head", "conditional_mfe_head"), False, ("raw_level",), None),
-    INCEPTION_TIME_SHARED_SAFETY_MFE_V1: ("inception_time_shared_safety_mfe", ("global_average", "raw_safety_head", "raw_mfe_head"), False, ("raw_level",), None),
-    INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1: ("inception_time_task_specific_safety_mfe", ("task_specific_final_residual_group", "global_average", "raw_safety_head", "raw_mfe_head"), False, ("raw_level",), None),
-    INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1: ("inception_time_safety_raw_mfe_hmhs", ("global_average", "raw_safety_head", "safety_conditioned_raw_mfe_head", "direct_hmhs_head"), False, ("raw_level",), None),
-    INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1: ("inception_time_predicted_upside_context", ("global_average", "predicted_upside_percentile_concat"), True, ("raw_level", "pit_safe_predicted_upside_percentile"), None),
-    INCEPTION_TIME_PREDICTED_SAFETY_CONTEXT_V1: ("inception_time_predicted_safety_context", ("global_average", "predicted_safety_percentile_concat"), True, ("raw_level", "pit_safe_predicted_safety_percentile"), None),
-    INCEPTION_TIME_RISK_CONTEXT_V1: ("inception_time_risk_context", ("global_average", "risk_context_mlp_concat"), True, ("raw_level", "universal_risk_economic_context"), 16),
-}
-
-
 def build_inception_variant_spec(architecture: str) -> BreakoutQualityModelSpec:
-    family, pooling, use_context, paths, head_width = _INCEPTION_VARIANTS[architecture]
+    options = get_architecture_descriptor(architecture).spec_options_dict()
     return _build_inception_spec(
         architecture,
-        family=family,
-        pooling=pooling,
-        use_dataset_context=use_context,
-        sequence_input_paths=paths,
-        head_width=head_width,
+        family=str(options["family"]),
+        pooling=tuple(options["pooling"]),
+        use_dataset_context=bool(options["use_dataset_context"]),
+        sequence_input_paths=tuple(options["sequence_input_paths"]),
+        head_width=options.get("head_width"),
     )
 
 
@@ -423,7 +395,7 @@ def build_inception_group_norm_spec(architecture: str) -> BreakoutQualityModelSp
 def build_market_set_spec(architecture: str) -> BreakoutQualityModelSpec:
     depth = int(BREAKOUT_QUALITY_INCEPTION_DEPTH)
     kernel_sizes = build_breakout_quality_inception_kernel_sizes()
-    candidate_conditioned = architecture == INCEPTION_TIME_MARKET_SET_CANDIDATE_V1
+    candidate_conditioned = get_architecture_descriptor(architecture).has_capability("candidate_conditioned_market_set")
     query_count = int(BREAKOUT_QUALITY_MARKET_SET_CANDIDATE_QUERY_COUNT if candidate_conditioned else BREAKOUT_QUALITY_MARKET_SET_QUERY_COUNT)
     if int(BREAKOUT_QUALITY_MARKET_SET_HISTORY_BARS) < 2:
         raise ValueError("MARKET_SET_HISTORY_BARS 必須 >= 2")

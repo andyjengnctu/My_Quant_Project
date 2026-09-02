@@ -81,6 +81,7 @@ from filters.breakout_quality.features import (
     normalize_ohlcv_array_windows,
 )
 from filters.breakout_quality.models.spec import get_model_spec, validate_model_sequence_length
+from filters.breakout_quality.models.architectures import get_architecture_descriptor
 from filters.breakout_quality.splits import resolve_breakout_quality_outer_policy
 from filters.breakout_quality.workflow_io import (
     PROJECT_ROOT,
@@ -719,12 +720,13 @@ def load_daily_universal_ranker_data(
     model_spec = get_model_spec(model_architecture)
     if bool(model_spec.requires_market_set) or bool(model_spec.derived_context_features):
         raise ValueError("daily universal ranker不支援market-set／derived-context architecture")
-    use_risk_context = str(model_spec.architecture) == "inception_time_risk_context_v1"
-    architecture_uses_predicted_upside_context = (
-        str(model_spec.architecture) == "inception_time_predicted_upside_context_v1"
+    architecture_descriptor = get_architecture_descriptor(model_spec.architecture)
+    use_risk_context = architecture_descriptor.has_capability("risk_context")
+    architecture_uses_predicted_upside_context = architecture_descriptor.has_capability(
+        "predicted_upside_context"
     )
-    architecture_uses_predicted_safety_context = (
-        str(model_spec.architecture) == "inception_time_predicted_safety_context_v1"
+    architecture_uses_predicted_safety_context = architecture_descriptor.has_capability(
+        "predicted_safety_context"
     )
     use_predicted_upside_context = bool(
         context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE

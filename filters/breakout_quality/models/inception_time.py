@@ -2,42 +2,24 @@
 
 from __future__ import annotations
 
+from filters.breakout_quality.models.architectures import get_architecture_descriptor
+
 
 def build_inception_time(nn, torch, *, feature_count: int, context_count: int, spec):
-    use_risk_context = str(spec.architecture) == "inception_time_risk_context_v1"
-    use_predicted_upside_context = (
-        str(spec.architecture) == "inception_time_predicted_upside_context_v1"
-    )
-    use_predicted_safety_context = (
-        str(spec.architecture) == "inception_time_predicted_safety_context_v1"
-    )
+    descriptor = get_architecture_descriptor(spec.architecture)
+    use_risk_context = descriptor.has_capability("risk_context")
+    use_predicted_upside_context = descriptor.has_capability("predicted_upside_context")
+    use_predicted_safety_context = descriptor.has_capability("predicted_safety_context")
     use_predicted_scalar_context = bool(
         use_predicted_upside_context or use_predicted_safety_context
     )
-    use_conditional_mfe_safety = (
-        str(spec.architecture) == "inception_time_conditional_mfe_safety_v1"
-    )
-    use_safety_conditional_mfe = (
-        str(spec.architecture) == "inception_time_safety_conditional_mfe_v1"
-    )
-    use_shared_safety_mfe = (
-        str(spec.architecture) == "inception_time_shared_safety_mfe_v1"
-    )
-    use_task_specific_safety_mfe = (
-        str(spec.architecture) == "inception_time_task_specific_safety_mfe_v1"
-    )
-    use_safety_raw_mfe_hmhs = str(spec.architecture) in {
-        "inception_time_safety_raw_mfe_hmhs_v1",
-        "inception_time_safety_raw_mfe_hmhs_mlp_v1",
-        "inception_time_safety_raw_mfe_joint_attn_mlp_v1",
-    }
-    use_nonlinear_hmhs_head = str(spec.architecture) in {
-        "inception_time_safety_raw_mfe_hmhs_mlp_v1",
-        "inception_time_safety_raw_mfe_joint_attn_mlp_v1",
-    }
-    use_joint_attention_pool = (
-        str(spec.architecture) == "inception_time_safety_raw_mfe_joint_attn_mlp_v1"
-    )
+    use_conditional_mfe_safety = descriptor.has_capability("conditional_mfe_safety")
+    use_safety_conditional_mfe = descriptor.has_capability("safety_conditional_mfe")
+    use_shared_safety_mfe = descriptor.has_capability("shared_safety_mfe")
+    use_task_specific_safety_mfe = descriptor.has_capability("task_specific_safety_mfe")
+    use_safety_raw_mfe_hmhs = descriptor.has_capability("safety_raw_mfe_hmhs")
+    use_nonlinear_hmhs_head = descriptor.has_capability("nonlinear_hmhs_head")
+    use_joint_attention_pool = descriptor.has_capability("joint_attention_pool")
     if bool(spec.use_dataset_context) != bool(use_risk_context or use_predicted_scalar_context):
         raise ValueError("InceptionTime dataset context contract與architecture不一致")
     if use_risk_context and int(context_count) != 5:

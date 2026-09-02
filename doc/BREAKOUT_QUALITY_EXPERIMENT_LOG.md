@@ -11362,3 +11362,11 @@ Decision：`MR13AS_IMPLEMENTED_RESULT_PENDING / P50_BOUNDARY_SUPERVISION_FOCUS /
 - **Formal governance closure**：此branch原先已有AP/AQ/AR/AS dedicated validators但未全數進synthetic registry/Checklist；同輪補B334～B337/T454～T457並正式註冊，避免下一次formal coverage因registry drift失敗。
 - **Approved persistent report fingerprint**：`model.standard_comparison=e2273ebf653cc71d`；`model.standard_sop v7`與其fingerprint不變。
 
+## 2026-09-02 — Architecture Descriptor / training-semantics report SSOT consolidation
+
+- **Scope**：純engineering refactor；不建立新MR/ARCH identity，不改current research priority、target、loss、pair geometry、seed、optimizer、PIT/Strategy authorization或checkpoint fitting identity。基準=`test-branch-1_20260902_185118_9a36a5f7.zip`，SHA256=`cf77e816d0c43b377bb51bbc0b78f33682e44af8861c09ff7829db4d4f04acb0`。
+- **Architecture SSOT（B340）**：`architectures.py`新增單一`ArchitectureDescriptor` registry，統一持有architecture identity、active eligibility、spec-builder/runtime-builder capability routing、architecture-only capability與variant spec options；`SUPPORTED/ACTIVE/LEGACY`清單均由registry派生。`spec_registry.py`與新`runtime_registry.py`只維護可重用builder-key implementation，不再維護architecture-ID對照；`active.py`/`legacy_compatibility.py`改成generic descriptor dispatch；`inception_time.py`與`daily_ranker_data.py`改讀capability，不再辨認architecture ID。
+- **Behavior preservation**：重構前後全部35個supported architecture的`model_spec.as_manifest_payload()`逐一完全相同；supported/active/legacy membership與原順序相同，因此不要求重訓、不改舊artifact reconstruction identity。
+- **Training semantics report SSOT**：`train_daily_ranker.py`與`train_continuous_ranker.py`的report `training`區塊改直接展開canonical `training_semantics(profile)`；不再手寫specialized contract keys。Manifest仍使用同一canonical payload，因此AK/AR/AT/AU等後續capability不會再出現manifest有contract、report漏contract的第二來源。
+- **Research Queue**：scientific priority與stop rules不變，本工程不新增Queue item。
+

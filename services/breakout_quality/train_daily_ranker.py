@@ -2230,6 +2230,7 @@ def run(args) -> int:
         "oos": oos_metrics,
         "breakout_candidate_oos": candidate_metrics,
     }
+    canonical_training_semantics = ranker_api.training_semantics(bundle.profile)
     payload = {
         "schema_version": ranker_api.RANKER_SCHEMA_VERSION + 1,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -2266,19 +2267,7 @@ def run(args) -> int:
                 if conditional_mfe_single or safety_conditional_mfe_duo
                 else "softmax_pass_probability_monotonic_to_two_logit_margin"
             ),
-            "batching": ranker_api.training_semantics(bundle.profile)["batching"],
-            "pairwise_contract": ranker_api.training_semantics(bundle.profile)["pairwise_contract"],
-            "raw_r_regression_contract": ranker_api.training_semantics(bundle.profile).get("raw_r_regression_contract"),
-            "dual_component_r_regression_contract": ranker_api.training_semantics(bundle.profile).get("dual_component_r_regression_contract"),
-            "conditional_mfe_safety_contract": ranker_api.training_semantics(bundle.profile).get("conditional_mfe_safety_contract"),
-            "conditional_mfe_single_head_contract": ranker_api.training_semantics(bundle.profile).get("conditional_mfe_single_head_contract"),
-            "safety_conditional_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_conditional_mfe_duo_head_contract"),
-            "safety_raw_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_raw_mfe_duo_head_contract"),
-            "shared_safety_hs_conditional_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("shared_safety_hs_conditional_mfe_duo_head_contract"),
-            "shared_safety_hs_priority_mfe_duo_head_contract": ranker_api.training_semantics(bundle.profile).get("shared_safety_hs_priority_mfe_duo_head_contract"),
-            "safety_raw_mfe_hmhs_tri_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_raw_mfe_hmhs_tri_head_contract"),
-            "safety_raw_mfe_joint_min_tri_head_contract": ranker_api.training_semantics(bundle.profile).get("safety_raw_mfe_joint_min_tri_head_contract"),
-            "direct_hmhs_single_head_contract": ranker_api.training_semantics(bundle.profile).get("direct_hmhs_single_head_contract"),
+            **canonical_training_semantics,
             "pairwise_reduction": execution_recipe.pairwise_reduction,
             "pair_weight_policy": execution_recipe.objective_policy.pair_weight_policy,
             "selected_epoch": selected_epoch,
@@ -2366,7 +2355,7 @@ def run(args) -> int:
         "training_objective": bundle.profile.training_objective,
         "training_label_scope": bundle.profile.training_label_scope,
         "training_sample_scope": bundle.profile.training_sample_scope,
-        "training_semantics": ranker_api.training_semantics(bundle.profile),
+        "training_semantics": canonical_training_semantics,
         "continuous_target_id": target_id,
         "sequence_length": int(bundle.feature_bank.shape[1]),
         "feature_columns": list(FEATURE_COLUMNS),

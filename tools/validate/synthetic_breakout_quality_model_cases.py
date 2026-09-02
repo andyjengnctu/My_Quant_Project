@@ -2445,7 +2445,13 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     )
     from filters.breakout_quality.daily_ranker_data import build_equal_rank_mfe_low_adverse_target
     from filters.breakout_quality.models.active import build_active_model
+    from filters.breakout_quality.models.architectures import (
+        ARCHITECTURE_DESCRIPTORS,
+        ArchitectureDescriptor,
+        get_architecture_descriptor,
+    )
     from filters.breakout_quality.models.runtime import require_torch
+    from filters.breakout_quality.models.runtime_registry import registered_runtime_builder_keys
     from filters.breakout_quality.models.spec import (
         ACTIVE_MODEL_ARCHITECTURES,
         LEGACY_MODEL_ARCHITECTURES,
@@ -3161,6 +3167,87 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         "model_spec_registry_builders_roundtrip_all_supported_architectures",
         [],
         model_spec_roundtrip_mismatches,
+    )
+
+    descriptor_ids = tuple(ARCHITECTURE_DESCRIPTORS)
+    check(
+        "architecture_descriptor_registry_is_supported_membership_ssot",
+        tuple(SUPPORTED_MODEL_ARCHITECTURES),
+        descriptor_ids,
+    )
+    active_from_descriptors = tuple(
+        descriptor.architecture_id
+        for descriptor in sorted(
+            (value for value in ARCHITECTURE_DESCRIPTORS.values() if value.active),
+            key=lambda value: int(value.active_order if value.active_order is not None else 10**9),
+        )
+    )
+    check(
+        "active_architecture_order_is_derived_from_descriptors",
+        tuple(ACTIVE_MODEL_ARCHITECTURES),
+        active_from_descriptors,
+    )
+    check_true(
+        "architecture_descriptor_runtime_builder_keys_are_registered",
+        {descriptor.runtime_builder_key for descriptor in ARCHITECTURE_DESCRIPTORS.values()}
+        <= set(registered_runtime_builder_keys()),
+    )
+    check_true(
+        "active_descriptors_have_unique_explicit_active_order",
+        all(get_architecture_descriptor(name).active_order is not None for name in ACTIVE_MODEL_ARCHITECTURES)
+        and len({get_architecture_descriptor(name).active_order for name in ACTIVE_MODEL_ARCHITECTURES})
+        == len(ACTIVE_MODEL_ARCHITECTURES),
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    generic_architecture_consumers = (
+        project_root / "filters" / "breakout_quality" / "models" / "active.py",
+        project_root / "filters" / "breakout_quality" / "models" / "runtime_registry.py",
+        project_root / "filters" / "breakout_quality" / "models" / "spec_registry.py",
+        project_root / "filters" / "breakout_quality" / "models" / "spec_builders.py",
+        project_root / "filters" / "breakout_quality" / "models" / "inception_time.py",
+        project_root / "filters" / "breakout_quality" / "daily_ranker_data.py",
+    )
+    identity_leaks = []
+    for source_path in generic_architecture_consumers:
+        source_text = read_source_text(source_path)
+        for architecture in SUPPORTED_MODEL_ARCHITECTURES:
+            if architecture in source_text:
+                identity_leaks.append(f"{source_path.name}:{architecture}")
+    check(
+        "generic_architecture_consumers_do_not_hardcode_architecture_ids",
+        [],
+        identity_leaks,
+    )
+
+    synthetic_descriptor = ArchitectureDescriptor(
+        architecture_id="synthetic_inception_registry_probe_v1",
+        active=True,
+        active_order=999,
+        spec_builder_key=get_architecture_descriptor(INCEPTION_TIME_V1).spec_builder_key,
+        runtime_builder_key=get_architecture_descriptor(INCEPTION_TIME_V1).runtime_builder_key,
+        capabilities=get_architecture_descriptor(INCEPTION_TIME_V1).capabilities,
+        spec_options=get_architecture_descriptor(INCEPTION_TIME_V1).spec_options,
+    )
+    with patch.dict(ARCHITECTURE_DESCRIPTORS, {synthetic_descriptor.architecture_id: synthetic_descriptor}):
+        synthetic_spec = get_model_spec(synthetic_descriptor.architecture_id)
+    check(
+        "new_same_family_architecture_resolves_from_one_descriptor_registration",
+        synthetic_descriptor.architecture_id,
+        synthetic_spec.architecture,
+    )
+
+    daily_trainer_source = read_source_text(
+        project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
+    )
+    continuous_trainer_source = read_source_text(
+        project_root / "services" / "breakout_quality" / "train_continuous_ranker.py"
+    )
+    check_true(
+        "training_report_consumes_canonical_training_semantics_without_contract_whitelist",
+        "**canonical_training_semantics" in daily_trainer_source
+        and "**canonical_training_semantics" in continuous_trainer_source
+        and '"shared_safety_weighted_mfe_duo_head_contract": ranker_api.training_semantics' not in daily_trainer_source,
     )
 
     summary["components"] = (

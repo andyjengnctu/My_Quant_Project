@@ -4435,6 +4435,7 @@ def run(args) -> int:
     artifact_paths.model_dir.mkdir(parents=True, exist_ok=True)
     trainable_parameter_count = count_trainable_parameters(model)
     total_parameter_count = sum(int(parameter.numel()) for parameter in model.parameters())
+    canonical_training_semantics = training_semantics(profile)
     torch.save(
         {
             "model_state_dict": {key: value.detach().cpu() for key, value in model.state_dict().items()},
@@ -4447,7 +4448,7 @@ def run(args) -> int:
             "training_objective": profile.training_objective,
             "training_label_scope": profile.training_label_scope,
             "continuous_target_contract": target_manifest.get("target_contract"),
-            "training_semantics": training_semantics(profile),
+            "training_semantics": canonical_training_semantics,
             "torch_execution": plan.as_manifest_payload(),
             "trainable_parameter_count": int(trainable_parameter_count),
             "total_parameter_count": int(total_parameter_count),
@@ -4617,10 +4618,7 @@ def run(args) -> int:
                 if training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R
                 else "softmax_pass_probability"
             ),
-            "batching": training_semantics(profile)["batching"],
-            "pairwise_contract": training_semantics(profile)["pairwise_contract"],
-            "listwise_contract": training_semantics(profile)["listwise_contract"],
-            "raw_r_regression_contract": training_semantics(profile).get("raw_r_regression_contract"),
+            **canonical_training_semantics,
             "target": contract["target_description"],
             "training_label_scope": profile.training_label_scope,
             "training_group_counts": training_group_counts,
@@ -4676,7 +4674,7 @@ def run(args) -> int:
         "model_spec": model_spec.as_manifest_payload(),
         "training_objective": profile.training_objective,
         "training_label_scope": profile.training_label_scope,
-        "training_semantics": training_semantics(profile),
+        "training_semantics": canonical_training_semantics,
         "continuous_target_id": profile.continuous_target_id,
         "sequence_length": int(feature_bank.shape[1]),
         "feature_columns": list(FEATURE_COLUMNS),
