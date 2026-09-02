@@ -2848,6 +2848,7 @@ def validate_research_report_contract_freeze_case(_base_params):
     from services.research import breakout_quality_application as app
     from config.breakout_quality import (
         TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
+        TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
         TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
@@ -3164,11 +3165,70 @@ def validate_research_report_contract_freeze_case(_base_params):
         }
     }
 
+    conditional_payload = payload("MODEL-HS-COND", TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING)
+    conditional_payload["hs_conditional_mfe_evaluation"] = {}
+    for scope_key, rho, pair, qual_pair, p40, p45, contam, recall, hmhs, hmls, oracle_hmhs in (
+        ("validation", 0.42, 0.65, 0.67, 0.60, 0.56, 36.0, 64.0, 27.0, 30.0, 45.0),
+        ("oos", 0.38, 0.63, 0.66, 0.58, 0.54, 37.0, 63.0, 25.0, 33.0, 44.0),
+        ("breakout_candidate_oos", 0.41, 0.66, 0.69, 0.61, 0.57, 36.5, 62.0, 24.0, 16.0, 42.0),
+    ):
+        conditional_payload["hs_conditional_mfe_evaluation"][scope_key] = {
+            "conditional_mfe_true_hs": {
+                "mean_daily_spearman": rho,
+                "pairwise_concordance": pair,
+            },
+            "hs_qualification": {"pairwise_concordance": qual_pair},
+            "hs_qualification_boundary": {
+                "p40_p60": {"pairwise_concordance": p40},
+                "p45_p55": {"pairwise_concordance": p45},
+            },
+            "true_hs_oracle_gate": {
+                "selected_hmhs_pct": oracle_hmhs,
+                "selected_hmls_pct": 0.0,
+                "selected_high_mfe_pct": oracle_hmhs,
+                "selected_mean_favorable_r": 2.1,
+                "selected_mean_adverse_r": 0.2,
+            },
+            "lexicographic_model_gate": {
+                "predicted_hs_true_ls_pct": contam,
+                "true_hs_recall_pct": recall,
+                "selected_high_mfe_pct": hmhs + hmls,
+                "selected_high_safety_pct": 100.0 - hmls,
+                "selected_hmhs_pct": hmhs,
+                "selected_hmls_pct": hmls,
+                "true_ls_contamination_lift_vs_predicted_hs": 1.4,
+                "true_ls_conditional_rank_percentile_p50": 0.61,
+                "true_ls_conditional_rank_percentile_p90": 0.93,
+                "true_ls_conditional_rank_percentile_p99": 0.996,
+                "hmhs_enrichment_vs_predicted_hs": 1.2,
+                "selected_mean_favorable_r": 1.6,
+                "selected_mean_adverse_r": 0.36,
+                "hmhs_gap_vs_true_hs_oracle_pp": hmhs - oracle_hmhs,
+                "high_mfe_gap_vs_true_hs_oracle_pp": (hmhs + hmls) - oracle_hmhs,
+                "mean_favorable_r_gap_vs_true_hs_oracle": -0.5,
+            },
+        }
+    conditional_payload["hs_conditional_mfe_evaluation"]["lexicographic_reference_control"] = {
+        "available": True,
+        "reference_model_id": "MODEL-HS-COND-REF",
+        "oos": {"lexicographic_model_gate": {
+            "selected_high_mfe_pct": 58.0, "selected_high_safety_pct": 44.0,
+            "selected_hmhs_pct": 25.0, "selected_hmls_pct": 33.0,
+            "predicted_hs_true_ls_pct": 36.8,
+        }},
+        "breakout_candidate_oos": {"lexicographic_model_gate": {
+            "selected_high_mfe_pct": 40.0, "selected_high_safety_pct": 60.0,
+            "selected_hmhs_pct": 24.0, "selected_hmls_pct": 16.0,
+            "predicted_hs_true_ls_pct": 36.9,
+        }},
+    }
+
     rendered = {
         "control": app._render_continuous_ranker_simple_console(control_payload),
         "joint": app._render_continuous_ranker_simple_console(joint_payload),
         "h_only": app._render_continuous_ranker_simple_console(h_only_payload),
         "joint_min": app._render_continuous_ranker_simple_console(joint_min_payload),
+        "hs_conditional": app._render_continuous_ranker_simple_console(conditional_payload),
     }
     standard_lines = {
         key: "\n".join(line for line in text.splitlines() if line.startswith("標準模型 SOP｜"))
@@ -3180,11 +3240,21 @@ def validate_research_report_contract_freeze_case(_base_params):
         "direct_hmhs_joint_retrieval": ("joint", "MODEL-JOINT"),
         "direct_hmhs_h_only": ("h_only", "MODEL-HONLY"),
         "joint_min_retrieval": ("joint_min", "MODEL-JOINT-MIN"),
+        "hs_conditional_mfe_gate": ("hs_conditional", "MODEL-HS-COND"),
     }
     check_true(
         "model_extension_registry_is_fully_covered_by_capability_payloads",
         set(extension_expectations) == set(MODEL_EXTENSION_SCHEMAS),
         detail=f"covered={sorted(extension_expectations)}, registered={sorted(MODEL_EXTENSION_SCHEMAS)}",
+    )
+    conditional_markdown = "\n".join(app._render_continuous_ranker_simple_markdown(conditional_payload))
+    check_true(
+        "hs_conditional_extension_auto_renders_true_hs_oracle_and_boundary_evidence",
+        "True-HS Oracle HM/HS" in rendered["hs_conditional"]
+        and "P45–P55 Pair" in rendered["hs_conditional"]
+        and "MODEL-HS-COND-REF" in rendered["hs_conditional"]
+        and "True-HS Oracle HM/HS" in conditional_markdown
+        and "P45–P55 Pair" in conditional_markdown,
     )
     check_true(
         "model_extensions_cannot_mutate_standard_model_sop_namespace",

@@ -7253,6 +7253,170 @@ def validate_breakout_quality_hs_qualification_conditional_mfe_contract_case(_ba
     return results, summary
 
 
+
+def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case(_base_params):
+    """Protect P50-boundary-focused HS qualification while preserving AR Conditional-MFE."""
+
+    case_id = "BREAKOUT_QUALITY_HS_BOUNDARY_WEIGHTED_CONDITIONAL_MFE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    import numpy as np
+    import pandas as pd
+    import torch
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_TEST_PROFILES,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        get_breakout_quality_experiment_profile,
+        get_breakout_quality_workflow_settings,
+        get_continuous_ranker_research_spec,
+    )
+    from config.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
+        CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY,
+        CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE,
+        get_continuous_ranker_primary_pair_weight_policy,
+        CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+    )
+    from config.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from filters.breakout_quality.hs_conditional_mfe import build_hs_conditional_mfe_targets
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality.train_continuous_ranker import (
+        _binary_threshold_pair_target,
+        _pairwise_logistic_loss,
+        hs_conditional_mfe_metrics,
+    )
+
+    profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    ar_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    research = get_continuous_ranker_research_spec(profile.name)
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    ar_recipe = get_continuous_ranker_execution_recipe(ar_profile.name)
+    semantics = training_semantics(profile)
+    contract = dict(
+        semantics.get("shared_hs_qualification_conditional_mfe_duo_head_contract") or {}
+    )
+    workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
+
+    check_true(
+        "hs_boundary_weighted_changes_only_ar_primary_truth_side_pair_weight",
+        research.model_research_id == "MR-13AS"
+        and profile.training_objective
+        == TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING
+        and recipe.training_policy.target_builder == ar_recipe.training_policy.target_builder
+        and recipe.training_policy.loss_handler == ar_recipe.training_policy.loss_handler
+        == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE
+        and recipe.objective_policy.secondary_pair_scope
+        == ar_recipe.objective_policy.secondary_pair_scope
+        == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN
+        and float(recipe.objective_policy.secondary_pair_scope_threshold) == 0.50
+        and get_continuous_ranker_primary_pair_weight_policy(profile.training_objective)
+        == CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY
+        and get_continuous_ranker_primary_pair_weight_policy(ar_profile.training_objective)
+        == CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE,
+    )
+    check_true(
+        "hs_boundary_weighted_semantics_are_truth_side_only_and_parameter_free",
+        contract.get("qualification_pair_weighting")
+        == CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY
+        and contract.get("qualification_pair_weight_formula")
+        == "1_minus_abs_same_date_safety_percentile_pair_gap"
+        and contract.get("qualification_pair_weight_role")
+        == "truth_side_supervision_only_no_model_input_no_direction_change"
+        and research.model_gate_reference_profile_name == ar_profile.name,
+    )
+    check_true(
+        "hs_boundary_weighted_compare_list_keeps_conditional_family_and_removes_af_am",
+        [model_id for model_id, _profile_name in BREAKOUT_QUALITY_MODEL_TEST_PROFILES]
+        == ["MR-13H", "MR-13AH", "MR-13AK", "MR-13AO", "MR-13AR", "MR-13AS"],
+    )
+    check_true(
+        "hs_boundary_weighted_seed42_forward_gate_blocks_later_workflows",
+        research.current_model_workflow_rolling_authorized is False
+        and research.current_model_workflow_robustness_authorized is False
+        and research.selection_pit_authorized is False
+        and research.current_time_validation_authorized is False
+        and workflow.rolling_authorized is False
+        and workflow.robustness_authorized is False,
+    )
+
+    dates = pd.to_datetime(["2021-01-04"] * 4).to_numpy()
+    safety_truth = torch.tensor([0.10, 0.49, 0.51, 0.90], dtype=torch.float32)
+    binary_target = _binary_threshold_pair_target(torch, safety_truth, 0.50)
+    margins = torch.tensor([-1.5, 0.7, -0.7, 1.5], dtype=torch.float32)
+    unweighted_loss, unweighted_pairs = _pairwise_logistic_loss(
+        torch,
+        margins,
+        binary_target,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+    )
+    boundary_loss, boundary_pairs = _pairwise_logistic_loss(
+        torch,
+        margins,
+        binary_target,
+        dates,
+        reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        pair_truth_weight_values=safety_truth,
+        pair_truth_weight_policy=CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY,
+    )
+    check_true(
+        "hs_boundary_weighting_preserves_binary_pair_direction_and_pair_membership",
+        unweighted_loss is not None
+        and boundary_loss is not None
+        and unweighted_pairs == boundary_pairs == 4
+        and not torch.allclose(unweighted_loss.detach(), boundary_loss.detach(), atol=1e-8, rtol=0.0),
+    )
+
+    group_count = 21
+    group_table = pd.DataFrame({
+        "date": pd.to_datetime(["2021-01-04"] * group_count),
+        "target_favorable_r": np.linspace(0.2, 4.2, group_count),
+        # Descending adverse produces ascending Low-Adverse safety percentiles 0..1.
+        "target_adverse_r": np.linspace(4.0, 0.0, group_count),
+        "label": np.ones(group_count, dtype=np.int64),
+    })
+    targets = build_hs_conditional_mfe_targets(
+        group_table, np.ones(group_count, dtype=bool), true_hs_percentile_cutoff=0.50
+    )
+    metric_scores = {
+        "raw_safety": np.asarray(targets.low_adverse_safety_percentile, dtype=np.float32),
+        "conditional_mfe": np.nan_to_num(
+            np.asarray(targets.conditional_mfe_percentile, dtype=np.float32), nan=-1.0
+        ),
+    }
+    metric_payload = hs_conditional_mfe_metrics(
+        np.arange(group_count, dtype=np.int64),
+        group_table,
+        targets,
+        metric_scores,
+        include_top_k_quality=False,
+        top_k=3,
+    )
+    gate = dict(metric_payload["lexicographic_model_gate"])
+    oracle = dict(metric_payload["true_hs_oracle_gate"])
+    check_true(
+        "hs_boundary_metrics_cover_p50_bands_and_true_hs_oracle_gap_without_reranking_truth",
+        metric_payload["hs_qualification_boundary"]["p40_p60"]["pairwise_concordance"] == 1.0
+        and metric_payload["hs_qualification_boundary"]["p45_p55"]["pairwise_concordance"] == 1.0
+        and gate["predicted_hs_true_ls_pct"] == 0.0
+        and gate["true_hs_recall_pct"] == 100.0
+        and gate["hmhs_gap_vs_true_hs_oracle_pp"] == 0.0
+        and gate["high_mfe_gap_vs_true_hs_oracle_pp"] == 0.0
+        and oracle["selected_hmls_pct"] == 0.0,
+    )
+
+    summary["training_performed"] = False
+    return results, summary
+
 def validate_breakout_quality_hs_priority_mfe_contract_case(_base_params):
     """Protect all-daily HS-priority ranking truth and direct-score semantics."""
 

@@ -139,6 +139,7 @@ def _hs_lexicographic_reference_control(
     """
 
     reference_profile = get_breakout_quality_experiment_profile(reference_profile_name)
+    reference_spec = get_continuous_ranker_research_spec(reference_profile_name)
     reference_recipe = get_continuous_ranker_execution_recipe(reference_profile_name)
     output_policy = reference_recipe.training_policy.score_output_policy
     reference_ranking_head = (
@@ -156,6 +157,7 @@ def _hs_lexicographic_reference_control(
         display_path = score_path.name
     base = {
         "reference_profile": str(reference_profile_name),
+        "reference_model_id": str(reference_spec.model_research_id),
         "score_artifact": display_path,
         "qualification_policy": "same_date_predicted_safety_percentile_ge_0.50_over_reference_daily_universal_forward_scores",
         "ranking_policy": f"reference_{reference_ranking_head}_within_predicted_hs_only",
@@ -1046,21 +1048,50 @@ def _render_markdown(payload: dict) -> str:
                 f"| {p(gate.get('selected_hmls_pct'))} "
                 f"| {fmt(gate.get('true_ls_contamination_lift_vs_predicted_hs'), 2)}× |"
             )
+        lines.extend([
+            "",
+            "| Scope | Pred-HS HM/HS | True-HS Oracle HM/HS | Δ vs Oracle | Pred-HS High-MFE | Oracle High-MFE | Δ vs Oracle | Pred-HS Mean MFE R | Oracle Mean MFE R | Δ vs Oracle |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ])
+        for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
+            scope = dict(hs_eval.get(key) or {})
+            gate = dict(scope.get("lexicographic_model_gate") or {})
+            oracle = dict(scope.get("true_hs_oracle_gate") or {})
+            def pp(value):
+                return "-" if value is None else f"{float(value):+.2f}pp"
+            lines.append(
+                f"| {label} | {p(gate.get('selected_hmhs_pct'))} "
+                f"| {p(oracle.get('selected_hmhs_pct'))} "
+                f"| {pp(gate.get('hmhs_gap_vs_true_hs_oracle_pp'))} "
+                f"| {p(gate.get('selected_high_mfe_pct'))} "
+                f"| {p(oracle.get('selected_high_mfe_pct'))} "
+                f"| {pp(gate.get('high_mfe_gap_vs_true_hs_oracle_pp'))} "
+                f"| {fmt(gate.get('selected_mean_favorable_r'), 3)} "
+                f"| {fmt(oracle.get('selected_mean_favorable_r'), 3)} "
+                f"| {fmt(gate.get('mean_favorable_r_gap_vs_true_hs_oracle'), 3)} |"
+            )
         if direct_hs_qualification:
             lines.extend([
                 "",
-                "| Scope | HS-Qualification Pair | Pred-HS true-LS | True-HS recall |",
-                "|---|---:|---:|---:|",
+                "| Scope | HS-Qualification Pair | P40–P60 Boundary Pair | P45–P55 Boundary Pair | Pred-HS true-LS | True-HS recall |",
+                "|---|---:|---:|---:|---:|---:|",
             ])
             for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
                 scope = dict(hs_eval.get(key) or {})
                 qualification = dict(scope.get("hs_qualification") or {})
+                boundary = dict(scope.get("hs_qualification_boundary") or {})
+                p40 = dict(boundary.get("p40_p60") or {})
+                p45 = dict(boundary.get("p45_p55") or {})
                 gate = dict(scope.get("lexicographic_model_gate") or {})
                 pair = qualification.get("pairwise_concordance")
+                p40_pair = p40.get("pairwise_concordance")
+                p45_pair = p45.get("pairwise_concordance")
                 pred_ls = gate.get("predicted_hs_true_ls_pct")
                 recall = gate.get("true_hs_recall_pct")
                 lines.append(
                     f"| {label} | {'-' if pair is None else f'{float(pair)*100:.2f}%'} "
+                    f"| {'-' if p40_pair is None else f'{float(p40_pair)*100:.2f}%'} "
+                    f"| {'-' if p45_pair is None else f'{float(p45_pair)*100:.2f}%'} "
                     f"| {'-' if pred_ls is None else f'{float(pred_ls):.2f}%'} "
                     f"| {'-' if recall is None else f'{float(recall):.2f}%'} |"
                 )
@@ -1093,7 +1124,8 @@ def _render_markdown(payload: dict) -> str:
             for label, key in (("Forward OOS", "oos"), ("Breakout candidate slice", "breakout_candidate_oos")):
                 current_gate = dict((hs_eval.get(key) or {}).get("lexicographic_model_gate") or {})
                 reference_gate = dict((reference_control.get(key) or {}).get("lexicographic_model_gate") or {})
-                for model_label, gate in ((payload.get("model_research_id"), current_gate), ("AK same-gate control", reference_gate)):
+                reference_label = f"{reference_control.get('reference_model_id', 'Reference')} same-gate control"
+                for model_label, gate in ((payload.get("model_research_id"), current_gate), (reference_label, reference_gate)):
                     lines.append(
                         f"| {label} | {model_label} "
                         f"| {p(gate.get('selected_high_mfe_pct'))} "

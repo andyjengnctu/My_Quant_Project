@@ -58,6 +58,9 @@ TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING = (
 TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING = (
     "daily_shared_hs_qualification_conditional_mfe_pairwise_ranking"
 )
+TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING = (
+    "daily_shared_hs_boundary_weighted_qualification_conditional_mfe_pairwise_ranking"
+)
 TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING = (
     "daily_shared_safety_hs_priority_mfe_pairwise_ranking"
 )
@@ -96,6 +99,12 @@ CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY = "min_predicted_safet
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY = "mfe_winner_predicted_safety"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY = "product_predicted_safety"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_CONFLICT_UNSAFE_WINNER_PREDICTED_SAFETY = "conflict_unsafe_winner_predicted_safety"
+CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE = "none"
+CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY = "binary_boundary_proximity"
+SUPPORTED_CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICIES = {
+    CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE,
+    CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY,
+}
 CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL = "all_items"
 CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN = "primary_target_min"
 CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_ALL = "all"
@@ -935,6 +944,15 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
             uses_pairwise_loss=True,
         ),
+        TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE,
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
+            uses_pairwise_loss=True,
+        ),
         TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE,
@@ -981,6 +999,23 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             uses_pairwise_loss=True,
         ),
     }
+
+def get_continuous_ranker_primary_pair_weight_policy(training_objective: str) -> str:
+    """Return truth-side primary pair supervision weighting for one objective.
+
+    This capability is intentionally kept outside ``ContinuousRankerTrainingPolicy`` so
+    adding a new supervision-only policy cannot mutate serialized execution recipes for
+    historical objectives.  Scientific identity remains carried by the objective itself.
+    """
+
+    policy = {
+        TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING:
+            CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY,
+    }.get(str(training_objective), CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE)
+    if policy not in SUPPORTED_CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICIES:
+        raise ValueError(f"不支援的continuous-ranker primary pair weight policy: {policy!r}")
+    return str(policy)
+
 
 def get_continuous_ranker_training_policy(
     training_objective: str,
@@ -1156,6 +1191,9 @@ __all__ = (
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY",
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY",
     "CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_CONFLICT_UNSAFE_WINNER_PREDICTED_SAFETY",
+    "CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE",
+    "CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY",
+    "SUPPORTED_CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICIES",
     "CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL",
     "CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN",
     "SUPPORTED_CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPES",
@@ -1245,6 +1283,7 @@ __all__ = (
     "BREAKOUT_QUALITY_OUTPUT_SCHEMA",
     "ContinuousRankerExecutionRecipe",
     "get_continuous_ranker_training_policy",
+    "get_continuous_ranker_primary_pair_weight_policy",
     "get_continuous_ranker_persisted_score_columns",
     "build_continuous_ranker_execution_recipe",
 )

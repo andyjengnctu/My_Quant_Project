@@ -25,6 +25,8 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
+    CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE,
+    CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY,
     normalize_continuous_ranker_pair_weight_configuration,
     CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
     CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
@@ -66,6 +68,7 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     get_continuous_ranker_training_policy,
+    get_continuous_ranker_primary_pair_weight_policy,
 )
 from config.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
@@ -873,6 +876,8 @@ def _pairwise_logistic_loss(
     item_eligibility=None,
     pair_partition_membership=None,
     pair_partition_relation: str = CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_ALL,
+    pair_truth_weight_values=None,
+    pair_truth_weight_policy: str = CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE,
 ) -> tuple[Any | None, int]:
     """Return the configured RankNet loss over comparable within-day pairs.
 
@@ -893,7 +898,9 @@ def _pairwise_logistic_loss(
     Context-weighted pair policies receive ``[ranking percentile, context percentile]``.
     Pair direction and Delta-NDCG relevance remain target-driven; the policy registry
     supplies only the supervision multiplier. The final loss remains a normalized weighted
-    mean and context is supervision-only. ``pair_partition_membership`` optionally filters
+    mean and context is supervision-only. ``pair_truth_weight_values`` is a separate reusable
+    truth-side supervision channel: it never changes pair direction or list relevance and may
+    only multiply the already-defined pair weight. ``pair_partition_membership`` optionally filters
     comparable pairs by a binary cohort relation *after* the full item list has established
     predicted rank positions and IDCG; unlike ``item_eligibility``, it never changes list
     membership or Delta-NDCG geometry.
@@ -905,6 +912,19 @@ def _pairwise_logistic_loss(
         str(reduction), pair_weight_policy
     )
     weighted_pairwise = bool(pair_weight_spec.weighted)
+    truth_weight_policy = str(pair_truth_weight_policy)
+    if truth_weight_policy not in {
+        CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE,
+        CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY,
+    }:
+        raise ValueError(f"不支援的pair truth weight policy: {pair_truth_weight_policy!r}")
+    if (truth_weight_policy == CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE) != (pair_truth_weight_values is None):
+        raise ValueError("pair truth weight policy/value必須同時設定或同時省略")
+    if (
+        truth_weight_policy != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
+        and base_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
+    ):
+        raise ValueError("truth-side pair weighting目前只支援full-list Delta-NDCG")
 
     if base_reduction not in {
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
@@ -925,6 +945,25 @@ def _pairwise_logistic_loss(
         )
         if eligibility_values.ndim != 1 or len(eligibility_values) != int(margins.shape[0]):
             raise ValueError("pairwise item eligibility必須是一維且與margin長度一致")
+    truth_weight_values = None
+    if pair_truth_weight_values is not None:
+        truth_weight_tensor = (
+            pair_truth_weight_values.detach()
+            if hasattr(pair_truth_weight_values, "detach")
+            else pair_truth_weight_values
+        )
+        truth_weight_values = np.asarray(
+            truth_weight_tensor.cpu().numpy()
+            if hasattr(truth_weight_tensor, "cpu")
+            else truth_weight_tensor,
+            dtype=np.float64,
+        )
+        if truth_weight_values.ndim != 1 or len(truth_weight_values) != int(margins.shape[0]):
+            raise ValueError("pair truth weight values必須是一維且與margin長度一致")
+        if not np.isfinite(truth_weight_values).all():
+            raise FloatingPointError("pair truth weight values必須為有限值")
+        if ((truth_weight_values < 0.0) | (truth_weight_values > 1.0)).any():
+            raise ValueError("pair truth weight values只接受0～1 percentile")
     partition_values = None
     relation = str(pair_partition_relation)
     if relation not in {
@@ -962,6 +1001,7 @@ def _pairwise_logistic_loss(
         positions = np.flatnonzero(date_values == date_value)
         if eligibility_values is not None:
             positions = positions[eligibility_values[positions]]
+        day_truth_weight = None
         day_partition = None
         if partition_values is not None:
             day_partition = torch.as_tensor(
@@ -972,6 +1012,10 @@ def _pairwise_logistic_loss(
         pos = torch.as_tensor(positions, dtype=torch.long, device=margins.device)
         day_margin = margins.index_select(0, pos)
         day_target = targets.index_select(0, pos)
+        if truth_weight_values is not None:
+            day_truth_weight = torch.as_tensor(
+                truth_weight_values[positions], dtype=day_margin.dtype, device=day_margin.device
+            )
         margin_diff = day_margin[:, None] - day_margin[None, :]
         if base_reduction == CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE:
             if day_target.ndim != 2 or int(day_target.shape[1]) != 2:
@@ -1113,6 +1157,15 @@ def _pairwise_logistic_loss(
                 selected_right_context,
             )
             weights = weights * context_pair_weight
+        if truth_weight_policy == CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY:
+            if day_truth_weight is None:
+                raise RuntimeError("binary-boundary proximity weighting缺少continuous truth percentile")
+            left_truth = day_truth_weight[:, None].expand_as(target_diff)[comparable]
+            right_truth = day_truth_weight[None, :].expand_as(target_diff)[comparable]
+            boundary_proximity = 1.0 - torch.abs(left_truth - right_truth)
+            if not bool(torch.isfinite(boundary_proximity).all().item()):
+                raise FloatingPointError("binary-boundary proximity pair weight必須為有限值")
+            weights = weights * boundary_proximity
         if not bool(torch.isfinite(weights).all().item()):
             raise FloatingPointError("full-list Delta-NDCG pairwise weights必須為有限值")
         pair_losses.append(losses * weights)
@@ -1150,6 +1203,8 @@ def _pairwise_logistic_loss(
                 if weighted_pairwise
                 else "full-list Delta-NDCG"
             )
+            if truth_weight_policy != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE:
+                return None, 0
             raise FloatingPointError(f"{label} pairwise weight sum必須為正有限值")
         return all_losses.sum() / weight_sum, int(pair_count)
     if not day_losses:
@@ -1514,6 +1569,11 @@ def _train_epoch(
                     primary_pair_target = _binary_threshold_pair_target(
                         torch, target[:, 0], float(secondary_pair_scope_threshold)
                     )
+                primary_truth_weight_policy = (
+                    get_continuous_ranker_primary_pair_weight_policy(training_objective)
+                    if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE
+                    else CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
+                )
                 safety_loss, safety_supervision = _pairwise_logistic_loss(
                     torch,
                     safety_margin,
@@ -1521,6 +1581,12 @@ def _train_epoch(
                     batch_dates,
                     reduction=str(pairwise_reduction),
                     pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+                    pair_truth_weight_values=(
+                        target[:, 0]
+                        if primary_truth_weight_policy != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
+                        else None
+                    ),
+                    pair_truth_weight_policy=primary_truth_weight_policy,
                 )
                 if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE:
                     if secondary_item_eligibility is not None:
@@ -1930,6 +1996,26 @@ def hs_conditional_mfe_metrics(
     hs_qualification_metrics = daily_rank_metrics(
         dates, safety_scores, true_hs.astype(np.float32)
     )
+    safety_truth = np.asarray(targets.low_adverse_safety_percentile[ids], dtype=np.float32)
+
+    def qualification_band_metrics(low: float, high: float) -> dict[str, Any]:
+        band = (safety_truth >= float(low)) & (safety_truth <= float(high))
+        if int(band.sum()) < 2:
+            return {
+                "group_count": int(band.sum()),
+                "mean_daily_spearman": None,
+                "pairwise_concordance": None,
+                "rankable_date_count": 0,
+                "not_evaluated_reason": "boundary band有效sample不足",
+            }
+        return daily_rank_metrics(
+            dates[band], safety_scores[band], true_hs[band].astype(np.float32)
+        )
+
+    hs_qualification_boundary = {
+        "p40_p60": qualification_band_metrics(0.40, 0.60),
+        "p45_p55": qualification_band_metrics(0.45, 0.55),
+    }
 
     if predicted_safety_percentile is None:
         pred_safety_pct = build_same_date_percentile_targets(
@@ -1951,13 +2037,17 @@ def hs_conditional_mfe_metrics(
     )
 
     selected = np.zeros(len(ids), dtype=bool)
+    oracle_selected = np.zeros(len(ids), dtype=bool)
     k = max(1, int(top_k))
-    for date_value in pd.unique(pd.to_datetime(dates, errors="raise")):
-        day = np.flatnonzero((pd.to_datetime(dates, errors="raise") == date_value) & predicted_hs)
-        if len(day) == 0:
-            continue
-        order = day[np.argsort(-conditional_scores[day], kind="mergesort")]
-        selected[order[: min(k, len(order))]] = True
+    normalized_dates = pd.to_datetime(dates, errors="raise")
+    for date_value in pd.unique(normalized_dates):
+        day_mask = normalized_dates == date_value
+        for eligibility, destination in ((predicted_hs, selected), (true_hs, oracle_selected)):
+            day = np.flatnonzero(day_mask & eligibility)
+            if len(day) == 0:
+                continue
+            order = day[np.argsort(-conditional_scores[day], kind="mergesort")]
+            destination[order[: min(k, len(order))]] = True
 
     def pct(mask: np.ndarray, event: np.ndarray) -> float | None:
         n = int(mask.sum())
@@ -1965,8 +2055,10 @@ def hs_conditional_mfe_metrics(
 
     predicted_hs_count = int(predicted_hs.sum())
     selected_count = int(selected.sum())
+    oracle_selected_count = int(oracle_selected.sum())
     pred_hs_hmhs = pct(predicted_hs, actual_hmhs)
     selected_hmhs = pct(selected, actual_hmhs)
+    oracle_selected_hmhs = pct(oracle_selected, actual_hmhs)
     pred_hs_true_ls = pct(predicted_hs, true_ls)
     selected_true_ls = pct(selected, true_ls)
     ls_tail = np.asarray(conditional_rank_pct[predicted_hs & true_ls], dtype=np.float64)
@@ -1974,7 +2066,28 @@ def hs_conditional_mfe_metrics(
     return {
         "raw_safety": safety_metrics,
         "hs_qualification": hs_qualification_metrics,
+        "hs_qualification_boundary": hs_qualification_boundary,
         "conditional_mfe_true_hs": conditional_metrics,
+        "true_hs_oracle_gate": {
+            "qualification": "actual_true_HS",
+            "ranking_rule": "true_HS_first_then_conditional_MFE_descending",
+            "top_k_per_day": int(k),
+            "selected_n": oracle_selected_count,
+            "selected_high_mfe_pct": pct(oracle_selected, actual_high_mfe),
+            "selected_high_safety_pct": pct(oracle_selected, true_hs),
+            "selected_hmhs_pct": oracle_selected_hmhs,
+            "selected_hmls_pct": pct(oracle_selected, actual_hmls),
+            "selected_mean_favorable_r": (
+                None
+                if oracle_selected_count == 0
+                else float(np.mean(favorable[ids][oracle_selected]))
+            ),
+            "selected_mean_adverse_r": (
+                None
+                if oracle_selected_count == 0
+                else float(np.mean(adverse[ids][oracle_selected]))
+            ),
+        },
         "lexicographic_model_gate": {
             "truth_cutoff": float(HMHS_HIGH_PERCENTILE_CUTOFF),
             "predicted_safety_qualification": "same_date_percentile_gte_0.50",
@@ -2000,6 +2113,21 @@ def hs_conditional_mfe_metrics(
             ),
             "selected_mean_adverse_r": (
                 None if selected_count == 0 else float(np.mean(adverse[ids][selected]))
+            ),
+            "hmhs_gap_vs_true_hs_oracle_pp": (
+                None
+                if selected_hmhs is None or oracle_selected_hmhs is None
+                else float(selected_hmhs - oracle_selected_hmhs)
+            ),
+            "high_mfe_gap_vs_true_hs_oracle_pp": (
+                None
+                if pct(selected, actual_high_mfe) is None or pct(oracle_selected, actual_high_mfe) is None
+                else float(pct(selected, actual_high_mfe) - pct(oracle_selected, actual_high_mfe))
+            ),
+            "mean_favorable_r_gap_vs_true_hs_oracle": (
+                None
+                if selected_count == 0 or oracle_selected_count == 0
+                else float(np.mean(favorable[ids][selected]) - np.mean(favorable[ids][oracle_selected]))
             ),
             "hmhs_enrichment_vs_predicted_hs": (
                 None

@@ -18,6 +18,9 @@ from config.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
     CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+    CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE,
+    CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY,
+    get_continuous_ranker_primary_pair_weight_policy,
     CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SAFETY,
     CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SINGLE,
     CONTINUOUS_RANKER_SEMANTICS_DEFAULT,
@@ -364,6 +367,12 @@ def _pairwise_contract_for_recipe(recipe) -> dict[str, Any]:
             contract["predicted_safety_context_contract"] = get_predicted_safety_pure_mfe_contract()
         if context_policy.has_role(CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT):
             contract["predicted_safety_pair_weight_contract"] = get_predicted_safety_pair_weight_contract(recipe.objective_policy.pair_weight_policy)
+    primary_truth_weight_policy = get_continuous_ranker_primary_pair_weight_policy(recipe.training_objective)
+    if primary_truth_weight_policy != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE:
+        contract["primary_truth_pair_weight_policy"] = primary_truth_weight_policy
+        if primary_truth_weight_policy == CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY:
+            contract["primary_truth_pair_weight_formula"] = "1_minus_abs_same_date_safety_percentile_pair_gap"
+            contract["primary_truth_pair_weight_role"] = "supervision_weight_only_never_pair_direction_or_model_input"
     if recipe.objective_policy.pair_target_schema == CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS:
         contract.update({
             "pair_scope": "same_date_strict_pareto_dominance_pairs",
@@ -445,6 +454,12 @@ def training_semantics(profile) -> dict[str, Any]:
         pairwise_contract = _pairwise_contract_for_recipe(recipe)
         contract = dict(base_contract)
         contract["pair_weighting"] = str(recipe.pairwise_reduction)
+        primary_truth_weight_policy = get_continuous_ranker_primary_pair_weight_policy(recipe.training_objective)
+        if primary_truth_weight_policy != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE:
+            contract["qualification_pair_weighting"] = primary_truth_weight_policy
+            if primary_truth_weight_policy == CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY:
+                contract["qualification_pair_weight_formula"] = "1_minus_abs_same_date_safety_percentile_pair_gap"
+                contract["qualification_pair_weight_role"] = "truth_side_supervision_only_no_model_input_no_direction_change"
         if semantics_key == CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE:
             # Artifact semantics describe the selected topology from the canonical model
             # spec, while the loss/target contract remains experiment-agnostic. This

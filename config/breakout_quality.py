@@ -44,6 +44,7 @@ from config.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
@@ -208,6 +209,7 @@ from config.breakout_quality_runtime import (
 # - MR-13AP HS-Priority MFE: LS fixed worst; HS ranked by within-HS MFE on the full daily list: "daily_universal_shared_safety_hs_priority_mfe_full_list_ndcg_pairwise"
 # - MR-13AQ AP truth + pair-stratified normalization: HS↔LS and HS↔HS Delta-NDCG strata normalized separately then 1:1 mean: "daily_universal_shared_safety_hs_priority_stratified_mfe_full_list_ndcg_pairwise"
 # - MR-13AR direct HS qualification + AO true-HS Conditional-MFE: "daily_universal_shared_hs_qualification_conditional_mfe_full_list_ndcg_pairwise"
+# - MR-13AS boundary-focused HS qualification + true-HS Conditional-MFE: "daily_universal_shared_hs_boundary_weighted_qualification_conditional_mfe_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
@@ -220,8 +222,8 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # "trainable current DL => present in every compare/robustness list" an invariant
 # instead of a manual synchronization step whenever a new DL becomes the research focus.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13AR",
-    "daily_universal_shared_hs_qualification_conditional_mfe_full_list_ndcg_pairwise",
+    "MR-13AS",
+    "daily_universal_shared_hs_boundary_weighted_qualification_conditional_mfe_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
@@ -478,10 +480,12 @@ BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES = (1, 2, 3, 5, 10)
 # becomes the current research model.
 BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     ("MR-13H", "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise"),
-    ("MR-13AF", "daily_universal_predicted_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AH", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AK", "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
-    ("MR-13AM", "daily_universal_shared_safety_weighted_full_horizon_opportunity_full_list_ndcg_pairwise"),
+    # Current true-HS Conditional-MFE family controls.  The active model is injected
+    # separately below, so the list stays H/AH/AK + completed same-family controls + current.
+    ("MR-13AO", "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
+    ("MR-13AR", "daily_universal_shared_hs_qualification_conditional_mfe_full_list_ndcg_pairwise"),
 )
 
 
@@ -818,6 +822,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_FULL_LIST_NDCG_PAIRWISE
 DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_shared_hs_qualification_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_shared_hs_boundary_weighted_qualification_conditional_mfe_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_safety_raw_mfe_hmhs_tri_head_full_list_ndcg_pairwise"
 )
@@ -895,6 +902,7 @@ CONTINUOUS_RANKER_TRAINING_OBJECTIVES = (
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
@@ -1031,6 +1039,7 @@ class BreakoutQualityExperimentProfile:
                     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
+                    TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING: "dual_head_pairwise_logistic",
                     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING: "tri_head_pairwise_logistic",
@@ -1054,6 +1063,7 @@ class BreakoutQualityExperimentProfile:
                     if self.training_objective in {
                         TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
                         TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
+                        TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
                     }
                     else "hs_priority_mfe_mean_daily_spearman"
                     if self.training_objective in {
@@ -1800,6 +1810,18 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_v1",
     ),
+    DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_v1",
+    ),
     DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         optimizer_name="adam",
@@ -2021,6 +2043,7 @@ class ContinuousRankerResearchSpec:
             TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
+            TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_MFE_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_PAIRWISE_RANKING,
             TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
@@ -2090,6 +2113,7 @@ class ContinuousRankerResearchSpec:
             if profile.training_objective not in {
                 TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
                 TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
+            TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
             }:
                 raise ValueError("scoped secondary pair supervision只允許支援該capability的training objective")
             threshold = self.secondary_pair_scope_threshold
@@ -2879,6 +2903,37 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         secondary_pair_scope_threshold=0.50,
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        current_model_workflow_rolling_authorized=False,
+        current_model_workflow_robustness_authorized=False,
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13AS",
+        experiment_name="MR-13AS Boundary-Weighted HS-Qualification + Conditional-MFE Shared Ranker",
+        phase="13AS",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=true_HS_indicator_from_same_date_low_adverse_safety_percentile_gte_0.50; "
+            "head2=same_date_pure_mfe_percentile_within_true_HS_only"
+        ),
+        objective_description=(
+            "MR-13AR strict boundary-supervision control：architecture、true-HS definition=P50、binary HS/LS pair direction、"
+            "true-HS Conditional-MFE target/sublist、independent heads、1:1 head weighting、Seed42/split/optimizer、epoch selection與"
+            "Pred-HS P50→Conditional-MFE inference全部固定。唯一scientific change是qualification head的HS↔LS pair supervision在"
+            "canonical full-list Delta-NDCG weight之上再乘`1-|SafetyPct_i-SafetyPct_j|`；跨界pair越接近P50權重越高，"
+            "P90↔P10等容易遠距pair降權。SafetyPct只作truth-side supervision weight，不進model input、不改pair direction、"
+            "不新增cutoff/lambda/temperature。Conditional-MFE head與MR-13AR完全相同。Seed42 Forward Model Gate only。"
+        ),
+        metric_scope="boundary_weighted_hs_qualification_plus_true_hs_conditional_mfe",
+        score_semantic_id="daily_boundary_weighted_hs_qualification_then_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),
         current_model_workflow_rolling_authorized=False,
         current_model_workflow_robustness_authorized=False,
@@ -4223,6 +4278,7 @@ __all__ = [
     'DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_SHARED_SAFETY_HS_PRIORITY_STRATIFIED_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID',
     'PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID',

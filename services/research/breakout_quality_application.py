@@ -718,6 +718,90 @@ def _model_sop_view(payload: dict) -> dict:
         extensions.append({"id": "multi_head_learnability", "rows": multi_head_rows})
     if geometry_scopes:
         extensions.append({"id": "truth_prediction_geometry", "geometry": geometry_scopes})
+    hs_conditional_eval = dict(source_payload.get("hs_conditional_mfe_evaluation") or {})
+    if hs_conditional_eval:
+        gate_rows = []
+        boundary_rows = []
+        oracle_rows = []
+        contamination_rows = []
+        scope_pairs = (("Validation", "validation"), (oos_scope_label, "oos"), ("Breakout slice", "breakout_candidate_oos"))
+        for scope_label, scope_key in scope_pairs:
+            scope = dict(hs_conditional_eval.get(scope_key) or {})
+            if not scope:
+                continue
+            learn = dict(scope.get("conditional_mfe_true_hs") or {})
+            qualification = dict(scope.get("hs_qualification") or {})
+            boundary = dict(scope.get("hs_qualification_boundary") or {})
+            p40 = dict(boundary.get("p40_p60") or {})
+            p45 = dict(boundary.get("p45_p55") or {})
+            gate = dict(scope.get("lexicographic_model_gate") or {})
+            oracle = dict(scope.get("true_hs_oracle_gate") or {})
+            gate_rows.append({
+                "split": scope_label,
+                "hs_only_daily_rho": learn.get("mean_daily_spearman"),
+                "hs_only_pair": learn.get("pairwise_concordance"),
+                "pred_hs_true_ls_pct": gate.get("predicted_hs_true_ls_pct"),
+                "true_hs_recall_pct": gate.get("true_hs_recall_pct"),
+                "topk_hmhs_pct": gate.get("selected_hmhs_pct"),
+                "topk_hmls_pct": gate.get("selected_hmls_pct"),
+                "ls_contamination_lift": gate.get("true_ls_contamination_lift_vs_predicted_hs"),
+            })
+            boundary_rows.append({
+                "split": scope_label,
+                "qualification_pair": qualification.get("pairwise_concordance"),
+                "p40_p60_pair": p40.get("pairwise_concordance"),
+                "p45_p55_pair": p45.get("pairwise_concordance"),
+                "pred_hs_true_ls_pct": gate.get("predicted_hs_true_ls_pct"),
+                "true_hs_recall_pct": gate.get("true_hs_recall_pct"),
+            })
+            oracle_rows.append({
+                "split": scope_label,
+                "actual_hmhs_pct": gate.get("selected_hmhs_pct"),
+                "oracle_hmhs_pct": oracle.get("selected_hmhs_pct"),
+                "hmhs_gap_pp": gate.get("hmhs_gap_vs_true_hs_oracle_pp"),
+                "actual_high_mfe_pct": gate.get("selected_high_mfe_pct"),
+                "oracle_high_mfe_pct": oracle.get("selected_high_mfe_pct"),
+                "high_mfe_gap_pp": gate.get("high_mfe_gap_vs_true_hs_oracle_pp"),
+                "actual_mean_mfe_r": gate.get("selected_mean_favorable_r"),
+                "oracle_mean_mfe_r": oracle.get("selected_mean_favorable_r"),
+                "mean_mfe_gap_r": gate.get("mean_favorable_r_gap_vs_true_hs_oracle"),
+            })
+            contamination_rows.append({
+                "split": scope_label,
+                "ls_rank_p50": gate.get("true_ls_conditional_rank_percentile_p50"),
+                "ls_rank_p90": gate.get("true_ls_conditional_rank_percentile_p90"),
+                "ls_rank_p99": gate.get("true_ls_conditional_rank_percentile_p99"),
+                "hmhs_enrichment": gate.get("hmhs_enrichment_vs_predicted_hs"),
+                "mean_mfe_r": gate.get("selected_mean_favorable_r"),
+                "mean_adverse_r": gate.get("selected_mean_adverse_r"),
+            })
+        control_rows = []
+        reference = dict(hs_conditional_eval.get("lexicographic_reference_control") or {})
+        if reference.get("available"):
+            reference_model_id = str(reference.get("reference_model_id") or "Reference")
+            current_model_id = str(source_payload.get("model_research_id") or "MODEL")
+            for scope_label, scope_key in ((oos_scope_label, "oos"), ("Breakout slice", "breakout_candidate_oos")):
+                current_gate = dict((hs_conditional_eval.get(scope_key) or {}).get("lexicographic_model_gate") or {})
+                reference_gate = dict((reference.get(scope_key) or {}).get("lexicographic_model_gate") or {})
+                for model_id, gate in ((current_model_id, current_gate), (reference_model_id, reference_gate)):
+                    control_rows.append({
+                        "model": model_id,
+                        "split": scope_label,
+                        "topk_high_mfe_pct": gate.get("selected_high_mfe_pct"),
+                        "topk_high_safety_pct": gate.get("selected_high_safety_pct"),
+                        "topk_hmhs_pct": gate.get("selected_hmhs_pct"),
+                        "topk_hmls_pct": gate.get("selected_hmls_pct"),
+                        "pred_hs_true_ls_pct": gate.get("predicted_hs_true_ls_pct"),
+                    })
+        extensions.append({
+            "id": "hs_conditional_mfe_gate",
+            "gate_rows": gate_rows,
+            "boundary_rows": boundary_rows,
+            "oracle_rows": oracle_rows,
+            "contamination_rows": contamination_rows,
+            "control_rows": control_rows,
+        })
+
     if direct_hmhs_only:
         ext_rows = []
         for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
@@ -1210,6 +1294,14 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
                     table_rows = list(scope.get(table_id) or [])
                     if table_rows:
                         lines.append(_render_model_contract_table(tables[table_id], table_rows, target="console"))
+        elif ext_id == "hs_conditional_mfe_gate":
+            tables = {table.table_id: table for table in extension_contract(ext_id).tables}
+            for table_id, row_key in (("hs_conditional_gate", "gate_rows"), ("hs_qualification_boundary", "boundary_rows"), ("true_hs_oracle_gap", "oracle_rows"), ("ls_contamination_tail", "contamination_rows"), ("hs_attribution_control", "control_rows")):
+                rows = list(ext.get(row_key) or [])
+                if rows:
+                    lines.append(_render_model_contract_table(
+                        tables[table_id], rows, target="console", scope_styler=scope_text,
+                    ))
         elif ext_id == "direct_hmhs_h_only":
             if ext.get("generalization"):
                 lines.append("Generalization")
@@ -1314,6 +1406,14 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
                     table_rows = list(scope.get(table_id) or [])
                     if table_rows:
                         lines.extend([f"#### {label}", "", _render_model_contract_table(tables[table_id], table_rows, target="markdown"), ""])
+        elif ext_id == "hs_conditional_mfe_gate":
+            tables = {table.table_id: table for table in extension_contract(ext_id).tables}
+            for table_id, row_key in (("hs_conditional_gate", "gate_rows"), ("hs_qualification_boundary", "boundary_rows"), ("true_hs_oracle_gap", "oracle_rows"), ("ls_contamination_tail", "contamination_rows"), ("hs_attribution_control", "control_rows")):
+                rows = list(ext.get(row_key) or [])
+                if rows:
+                    lines.extend([_render_model_contract_table(
+                        tables[table_id], rows, target="markdown", scope_styler=scope_text,
+                    ), ""])
         elif ext_id == "direct_hmhs_h_only":
             if ext.get("generalization"):
                 lines.extend(["### Generalization", "", _render_model_contract_table(

@@ -11332,3 +11332,22 @@ Decision：`MR13AP_IMPLEMENTED_RESULT_PENDING / ALL_DAILY_NON_COMPENSATORY_HS_PR
 - **Targeted validation**：Python compile PASS；Continuous=`44/44`、Shared-AH=`23/23`、AO=`7/7`、AP=`7/7`、AQ=`7/7`、AR=`8/8`；Registry↔Checklist=`1827/1827`；Checklist G format/first-occurrence/sequence/ordering與summary sorting全部PASS。Backward identity audit：AQ composite baseline既有47個Continuous profiles之profile/spec/execution recipe/training semantics=`47/47 exact unchanged`，唯一新增AR。AR validator另以synthetic AO Forward artifact刻意讓`conditional_mfe_score`與`model_score`相反，確認AO attribution control依其canonical primary head讀`conditional_mfe_score`，不誤用generic model score。
 
 Decision：`MR13AR_IMPLEMENTED_RESULT_PENDING / DIRECT_BINARY_HS_QUALIFICATION / AO_TRUE_HS_CONDITIONAL_MFE_FIXED / AO_FROZEN_ATTRIBUTION_CONTROL / SEED42_FORWARD_NEXT / NO_ROLLING_OR_STRATEGY`。
+
+## 2026-09-02 — MR-13AR Seed42 Forward Model Gate result
+
+- **Qualification learnability**：Forward / Breakout HS-Qualification Pair=`67.37% / 69.46%`，證明binary HS↔LS ordering本身可學；但真正Pred-HS P50 gate的true-LS contamination=`37.05% / 36.59%`，Forward較MR-13AO reference `36.84%`反而`+0.21pp`，Breakout只`-0.35pp`。
+- **Conditional-MFE preserved**：true-HS Forward rho/Pair=`0.3770/63.13%`，Breakout=`0.4077/66.25%`；相對AO `0.3969/63.90%`與`0.4116/67.22%`僅小幅下降，故第二head不是本輪blocker。
+- **Lexicographic outcome**：Forward AR vs AO same-gate High-MFE=`57.61 vs 59.66%`、High-Safety=`43.49 vs 44.22%`、HM/HS=`24.49 vs 25.94%`、HM/LS=`33.13 vs 33.72%`；Breakout HM/HS=`23.98 vs 24.07%`、HM/LS=`16.13 vs 16.43%`。沒有HM/HS增量。
+- **Decision**：`HS_QUALIFICATION_PAIR_LEARNABILITY_CONFIRMED / P50_BOUNDARY_PURITY_NOT_IMPROVED / CONDITIONAL_MFE_PRESERVED / FORWARD_HMHS_WORSE_THAN_AO / BREAKOUT_HMHS_FLAT / MODEL_GATE_FAIL / STOP / NO_ROLLING / NO_ROBUSTNESS`。
+
+## 2026-09-02 — MR-13AS P50-boundary-weighted HS qualification implementation + Conditional-MFE extension/report membership update
+
+- **Authoritative baseline**：`test-branch-1_20260902_075026_ef8804ed.zip`，SHA256=`2fe2cd7b83412fd885a074074904d833121c4a3c6791f91ed77cd395b7db1dc9`；fresh workspace=`/mnt/data/stock_as`。
+- **Scientific identity**：分配下一個未占用`MR-13AS`，profile=`daily_universal_shared_hs_boundary_weighted_qualification_conditional_mfe_full_list_ndcg_pairwise`，重用`ARCH-inception_time_shared_safety_mfe_v1`與MR-13AR exact two-head target/geometry/inference。
+- **唯一scientific change**：HS-Qualification仍以binary `HS=SafetyPct>=0.50`決定pair方向；對HS↔LS canonical full-list ΔNDCG pair weight額外乘parameter-free truth-side proximity `1-|SafetyPct_i-SafetyPct_j|`。因此P51↔P49等真正P50 boundary pair接近完整權重，P90↔P10等容易遠距pair降權；SafetyPct不進model input、不改pair direction、不新增cutoff/lambda/temperature。Conditional-MFE仍只有true-HS sublist產生gradient。
+- **Gate metrics**：整體HS-Qual Pair保留作secondary evidence；primary新增P40–P60與P45–P55 boundary Pair、Pred-HS true-LS、True-HS recall及最終HM/HS/HM/LS。reference control固定frozen MR-13AR Forward。
+- **Model-specific Extension授權落地**：依使用者明確要求，true-HS Conditional-MFE family之single-model report自動顯示Pred-HS實際gate、P40–P60/P45–P55 boundary evidence、`true-HS oracle → 同一Conditional-MFE` Top-K與actual→oracle HM/HS/High-MFE/MFE-R gap、LS contamination tail及reference control；Standard SOP 1～6 schema/fingerprint不變，console與Markdown均由同一extension contract render，不再要求使用者另行`Select-String`提供必要evidence。
+- **Model Compare/Test membership**：current reference set調整為`MR-13H / MR-13AH / MR-13AK / MR-13AO / MR-13AR`，current MR-13AS仍由B325 canonical training pair自動注入，因此正式[3]～[6]顯示`H / AH / AK / AO / AR / AS`；依使用者要求移除current reference membership中的MR-13AF與MR-13AM，歷史identity/artifact不刪除。
+- **Authorization**：Seed42 Forward Model Gate only；Rolling=False、Robustness=False、PIT=False、strategy=False。不得在AS內做boundary-weight exponent/cutoff sweep。
+
+Decision：`MR13AS_IMPLEMENTED_RESULT_PENDING / P50_BOUNDARY_SUPERVISION_FOCUS / TRUE_HS_ORACLE_EXTENSION_AUTOMATIC / CONDITIONAL_FAMILY_COMPARE_MEMBERSHIP / SEED42_FORWARD_NEXT`。
