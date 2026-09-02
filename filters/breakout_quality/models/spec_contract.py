@@ -35,6 +35,7 @@ class BreakoutQualityModelSpec:
     inception_filters: int | None = None
     inception_bottleneck_channels: int | None = None
     inception_kernel_sizes: tuple[int, ...] = ()
+    inception_module_dilations: tuple[int, ...] = ()
     inception_residual_every: int | None = None
     requires_market_set: bool = False
     market_set_history_bars: int | None = None
@@ -268,6 +269,10 @@ class BreakoutQualityModelSpec:
         if self.inception_kernel_sizes:
             payload["inception_kernel_sizes"] = [
                 int(value) for value in self.inception_kernel_sizes
+            ]
+        if self.inception_module_dilations:
+            payload["inception_module_dilations"] = [
+                int(value) for value in self.inception_module_dilations
             ]
         if self.market_set_base_features:
             payload["market_set_base_features"] = list(self.market_set_base_features)

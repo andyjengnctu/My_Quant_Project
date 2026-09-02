@@ -11453,3 +11453,15 @@ Decision：`MR13AW_CLOSED / MR13AX_IMPLEMENTED_RESULT_PENDING / AO_OBJECTIVE_FIX
 - **Authorization**：Seed42 Forward Model Gate first；Rolling/Robustness/PIT/strategy均不自動授權。current Model Compare/Test List=`MR-13H / MR-13AH / MR-13AK / MR-13AO / MR-13AZ`。
 
 Decision：`MR13AZ_IMPLEMENTED_RESULT_PENDING / SAFETY_BACKBONE_REPRESENTATION_CONTRAST / FROZEN_PATCH_RECIPE / INDEPENDENT_MFE_INCEPTION_ENCODER / SEED42_FORWARD_NEXT`。
+
+
+## 2026-09-02 — MR-13AZ closure + MR-13BA full-window receptive-field implementation
+
+- **Authoritative baseline**：`test-branch-1_20260902_232551_3907c6e4(1).zip`，SHA256=`1c78d19bfdb25082444f6d47e6e52f61cd880a8220ea84733a494425b4683eb8`。
+- **MR-13AZ result closure**：Forward Safety Daily rho=`0.3260`、Pred-HS true-LS=`38.13%`、HS-only Conditional-MFE rho=`0.3772`、TopK HM/HS/HM/LS=`23.18/37.78%`；相對AO未形成Safety突破，且qualification污染更差。Decision=`PATCH_SAFETY_REPRESENTATION_NO_BREAKTHROUGH / MODEL_GATE_FAIL / NO_ROLLING / NO_ROBUSTNESS`。
+- **Research transition**：使用者明確停止繼續排列head/encoder representation，改查物理性限制；順序固定為receptive field → pure capacity → backbone family → input horizon。
+- **MR-13BA identity**：profile=`daily_universal_shared_safety_hs_conditional_mfe_full_window_rf_full_list_ndcg_pairwise`；architecture=`inception_time_shared_safety_mfe_full_window_rf_v1`。AO continuous Safety full-list ΔNDCG、true-HS=P50 Conditional-MFE、1:1 loss、raw 300×10、Seed42/split/optimizer/epoch selection與Pred-Safety→Conditional-MFE inference全部固定。
+- **唯一scientific change**：AO shared InceptionTime kernels/depth/width不變，只把最後一個residual group的module dilation由1改為2：`(1,1,1,1,1,1) → (1,1,1,1,2,2)`。因此實際receptive field=`229 → 305` bars；kernels仍=`(39,19,9)`，trainable parameter count與AO exact相同。
+- **Primary Gate**：完整Safety Daily/Global rho與Pair需實質離開AO平台且Breakout同方向；HS-only Conditional-MFE不得崩。若FAIL，停止「AO有效RF未覆蓋300-bar input」假說，下一輪只測pure capacity scaling，不做dilation/RF sweep。
+
+Decision：`MR13BA_IMPLEMENTED_RESULT_PENDING / FULL_WINDOW_RECEPTIVE_FIELD_CONTROL / SAME_PARAMETER_COUNT_AS_AO / SEED42_FORWARD_NEXT`。

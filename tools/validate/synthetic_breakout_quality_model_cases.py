@@ -2640,6 +2640,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         INCEPTION_TIME_SHARED_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1,
+        INCEPTION_TIME_SHARED_SAFETY_MFE_FULL_WINDOW_RF_V1,
         PATCH_TRANSFORMER_SAFETY_INCEPTION_MFE_V1,
         INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1,
@@ -3383,6 +3384,27 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         all(get_architecture_descriptor(name).active_order is not None for name in ACTIVE_MODEL_ARCHITECTURES)
         and len({get_architecture_descriptor(name).active_order for name in ACTIVE_MODEL_ARCHITECTURES})
         == len(ACTIVE_MODEL_ARCHITECTURES),
+    )
+
+    full_window_descriptor = get_architecture_descriptor(
+        INCEPTION_TIME_SHARED_SAFETY_MFE_FULL_WINDOW_RF_V1
+    )
+    full_window_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_FULL_WINDOW_RF_V1)
+    ao_shared_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_V1)
+    check_true(
+        "full_window_receptive_field_capability_covers_300_bar_input_without_capacity_change",
+        full_window_descriptor.has_capability("full_window_receptive_field")
+        and int(full_window_spec.receptive_field_bars) >= 300
+        and tuple(full_window_spec.inception_kernel_sizes) == tuple(ao_shared_spec.inception_kernel_sizes) == (39, 19, 9)
+        and tuple(full_window_spec.inception_module_dilations) == (1, 1, 1, 1, 2, 2)
+        and int(full_window_spec.receptive_field_bars) == 305
+        and int(full_window_spec.inception_depth) == int(ao_shared_spec.inception_depth)
+        and int(full_window_spec.inception_filters) == int(ao_shared_spec.inception_filters)
+        and int(full_window_spec.inception_bottleneck_channels) == int(ao_shared_spec.inception_bottleneck_channels)
+        and int(full_window_spec.inception_residual_every) == int(ao_shared_spec.inception_residual_every)
+        and tuple(full_window_spec.pooling) == tuple(ao_shared_spec.pooling)
+        and tuple(ao_shared_spec.inception_module_dilations) == ()
+        and int(ao_shared_spec.receptive_field_bars) == 229,
     )
 
     project_root = Path(__file__).resolve().parents[2]

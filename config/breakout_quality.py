@@ -216,6 +216,7 @@ from config.breakout_quality_runtime import (
 # - MR-13AX AV task-specific high-level representation + Safety scalar temporal attention pooling: "daily_universal_task_specific_safety_attn_hs_conditional_mfe_full_list_ndcg_pairwise"
 # - MR-13AY AO objective + Safety single-head temporal self-attention interaction; MFE keeps AO GAP: "daily_universal_shared_safety_self_attn_hs_conditional_mfe_full_list_ndcg_pairwise"
 # - MR-13AZ AO objective + independent frozen-recipe Patch Safety encoder + InceptionTime Conditional-MFE encoder: "daily_universal_patch_safety_inception_hs_conditional_mfe_full_list_ndcg_pairwise"
+# - MR-13BA AO objective + shared InceptionTime full-window receptive field: "daily_universal_shared_safety_hs_conditional_mfe_full_window_rf_full_list_ndcg_pairwise"
 # - MR-13I daily-universal canonical-cost risk-normalized 40D NDCG ranker: "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 # - MR-13J MR-13I target + explicit universal risk/economic geometry context: "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 # Runtime Integration Gate 於 2026-08-15 正式 GO；MR-13E 成為 production workflow anchor。
@@ -228,8 +229,8 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # "trainable current DL => present in every compare/robustness list" an invariant
 # instead of a manual synchronization step whenever a new DL becomes the research focus.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13AZ",
-    "daily_universal_patch_safety_inception_hs_conditional_mfe_full_list_ndcg_pairwise",
+    "MR-13BA",
+    "daily_universal_shared_safety_hs_conditional_mfe_full_window_rf_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
@@ -844,6 +845,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_SELF_ATTN_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWI
 )
 DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_patch_safety_inception_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
+DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_WINDOW_RF_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
+    "daily_universal_shared_safety_hs_conditional_mfe_full_window_rf_full_list_ndcg_pairwise"
 )
 DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_safety_raw_mfe_hmhs_tri_head_full_list_ndcg_pairwise"
@@ -1810,6 +1814,18 @@ DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWIS
     training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     model_architecture="patch_transformer_safety_inception_mfe_v1",
 ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_WINDOW_RF_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_WINDOW_RF_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_full_window_rf_v1",
+    ),
     DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         optimizer_name="adam",
@@ -2982,6 +2998,38 @@ DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWIS
     selection_pit_authorized=False,
     current_time_validation_authorized=False,
 ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_WINDOW_RF_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_WINDOW_RF_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_research_id="MR-13BA",
+        experiment_name="MR-13BA AO-Objective Full-Window Receptive-Field InceptionTime Ranker",
+        phase="13BA",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_low_adverse_safety_percentile_over_full_universe; "
+            "head2=same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description=(
+            "MR-13AO strict receptive-field capacity control：continuous Safety full-list Delta-NDCG、true-HS=P50 "
+            "Conditional-MFE target/sublist、shared InceptionTime topology、1:1 head weighting、raw 300x10 input、"
+            "Seed42/split/optimizer/epoch selection與Pred-Safety→Conditional-MFE inference全部固定。唯一scientific "
+            "change是InceptionTime temporal receptive field由AO的229 bars擴至完整覆蓋300-bar input；depth=6、filters=32、"
+            "bottleneck=32、residual_every=3、kernels=(39,19,9)、GAP與head topology不變。只在最後一個residual group"
+            "把temporal dilation改為2，module dilations=(1,1,1,1,2,2)，actual receptive field=305；trainable params exact不變，"
+            "不增加input bars、不改target/loss/head/pooling/backbone family、不做RF/dilation/kernel sweep。"
+            "Primary Gate先看完整Safety Daily/Global rho與Pair能否實質離開AO平台且Breakout同方向，並要求HS-only "
+            "Conditional-MFE不崩。若無明顯增量，full-window RF不足假說停止，再進純capacity scaling。"
+        ),
+        metric_scope="full_window_receptive_field_safety_plus_true_hs_conditional_mfe",
+        score_semantic_id="daily_full_window_rf_safety_then_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
     DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         model_research_id="MR-13T",
@@ -4326,6 +4374,7 @@ __all__ = [
     'DAILY_UNIVERSAL_TASK_SPECIFIC_SAFETY_ATTN_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_SHARED_SAFETY_SELF_ATTN_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_PATCH_SAFETY_INCEPTION_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
+    'DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_WINDOW_RF_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE',
     'PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID',
     'PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID',

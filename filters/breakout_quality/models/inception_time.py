@@ -38,11 +38,14 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     filters = int(spec.inception_filters)
     bottleneck_channels = int(spec.inception_bottleneck_channels)
     kernel_sizes = tuple(int(value) for value in spec.inception_kernel_sizes)
+    module_dilations = tuple(int(value) for value in (spec.inception_module_dilations or (1,) * depth))
     residual_every = int(spec.inception_residual_every)
     if depth < 1 or filters < 1 or bottleneck_channels < 1 or residual_every < 1:
         raise ValueError("InceptionTime spec 必須使用正整數 depth／filters／bottleneck／residual interval")
     if not kernel_sizes or any(value < 1 or value % 2 == 0 for value in kernel_sizes):
         raise ValueError("InceptionTime kernels 必須是非空正奇數")
+    if len(module_dilations) != depth or any(value < 1 for value in module_dilations):
+        raise ValueError("InceptionTime module dilations必須與depth同長且皆為正整數")
 
     normalization = str(spec.normalization or "batch_norm").strip().lower()
     normalization_groups = (
@@ -64,7 +67,7 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
         return nn.BatchNorm1d(module_output_channels)
 
     class InceptionModule(nn.Module):
-        def __init__(self, in_channels: int):
+        def __init__(self, in_channels: int, *, dilation: int):
             super().__init__()
             self.bottleneck = nn.Conv1d(
                 int(in_channels),
@@ -78,7 +81,8 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                         bottleneck_channels,
                         filters,
                         kernel_size=kernel_size,
-                        padding=kernel_size // 2,
+                        dilation=int(dilation),
+                        padding=int(dilation) * (kernel_size // 2),
                         bias=False,
                     )
                     for kernel_size in kernel_sizes
@@ -131,7 +135,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             in_channels = int(feature_count)
             residual_channels = in_channels
             for module_index in range(shared_depth):
-                modules.append(InceptionModule(in_channels))
+                modules.append(
+                    InceptionModule(in_channels, dilation=module_dilations[module_index])
+                )
                 in_channels = module_output_channels
                 if (module_index + 1) % residual_every == 0:
                     shortcuts.append(ResidualProjection(residual_channels))
@@ -141,7 +147,10 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
 
             def build_task_specific_group():
                 branch_modules = nn.ModuleList(
-                    [InceptionModule(module_output_channels) for _ in range(residual_every)]
+                    [
+                        InceptionModule(module_output_channels, dilation=module_dilations[shared_depth + offset])
+                        for offset in range(residual_every)
+                    ]
                 )
                 branch_shortcuts = nn.ModuleList([ResidualProjection(module_output_channels)])
                 return branch_modules, branch_shortcuts
