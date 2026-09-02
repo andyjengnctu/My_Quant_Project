@@ -20,6 +20,11 @@ def validate_model_sequence_length(
     normalized_length = int(sequence_length)
     if normalized_length < 1:
         raise ValueError("model sequence_length 必須 >= 1")
+    if model_spec.input_window_bars is not None and int(model_spec.input_window_bars) != normalized_length:
+        raise ValueError(
+            "model sequence_length 與 architecture input window 不一致: "
+            f"sequence_length={normalized_length}, expected={int(model_spec.input_window_bars)}"
+        )
     if bool(model_spec.requires_market_set):
         market_history = int(model_spec.market_set_history_bars or 0)
         if market_history != normalized_length:
@@ -78,6 +83,7 @@ __all__ = [
     "INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1",
     "INCEPTION_TIME_SHARED_SAFETY_MFE_FULL_WINDOW_RF_V1",
     "INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1",
+    "INCEPTION_TIME_SHARED_SAFETY_MFE_600BAR_V1",
     "PATCH_TRANSFORMER_SAFETY_INCEPTION_MFE_V1",
     "INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_V1",
     "INCEPTION_TIME_SAFETY_RAW_MFE_HMHS_MLP_V1",

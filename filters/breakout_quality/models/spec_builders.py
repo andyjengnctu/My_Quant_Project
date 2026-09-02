@@ -351,8 +351,12 @@ def _build_inception_spec(
     descriptor_options = get_architecture_descriptor(architecture).spec_options_dict()
     filters = int(descriptor_options.get("inception_filters", 32))
     bottleneck_channels = int(descriptor_options.get("inception_bottleneck_channels", 32))
+    input_window_bars_value = descriptor_options.get("input_window_bars")
+    input_window_bars = None if input_window_bars_value is None else int(input_window_bars_value)
     if filters < 1 or bottleneck_channels < 1:
         raise ValueError("InceptionTime descriptor width必須為正整數")
+    if input_window_bars is not None and input_window_bars < 1:
+        raise ValueError("InceptionTime descriptor input_window_bars必須為正整數")
     kernel_sizes = build_breakout_quality_inception_kernel_sizes()
     declared_module_dilations = tuple(
         int(value)
@@ -371,6 +375,7 @@ def _build_inception_spec(
         pooling=pooling,
         dropout=0.0,
         receptive_field_bars=1 + (max(kernel_sizes) - 1) * sum(module_dilations),
+        input_window_bars=input_window_bars,
         normalization="batch_norm",
         normalization_groups=None,
         head_width=head_width,

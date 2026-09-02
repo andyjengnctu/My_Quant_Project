@@ -16,6 +16,7 @@ class BreakoutQualityModelSpec:
     pooling: tuple[str, ...]
     dropout: float
     receptive_field_bars: int
+    input_window_bars: int | None = None
     normalization: str | None = None
     normalization_groups: int | None = None
     head_width: int | None = None
@@ -165,6 +166,7 @@ class BreakoutQualityModelSpec:
             "receptive_field_bars": int(self.receptive_field_bars),
         }
         optional_scalars = {
+            "input_window_bars": self.input_window_bars,
             "normalization": self.normalization,
             "normalization_groups": self.normalization_groups,
             "head_width": self.head_width,

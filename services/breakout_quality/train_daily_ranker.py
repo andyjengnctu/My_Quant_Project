@@ -58,6 +58,7 @@ from config.breakout_quality import (
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
+    DEFAULT_LABEL_POLICY,
     FEATURE_COLUMNS,
     FILTER_FAMILY,
 )
@@ -619,7 +620,7 @@ def _render_markdown(payload: dict) -> str:
         f"- Context features：`{', '.join(target_manifest.get('context_features') or []) or '-'}`",
         f"- Score semantic：`{payload.get('score_semantic_id')}`",
         f"- Selected epoch：`{payload['training']['selected_epoch']}`",
-        "- Feature storage：`lazy canonical OHLCV windows`；未建立 expanded daily 300×10 feature bank。",
+        f"- Feature storage：`lazy canonical OHLCV windows`；input window=`{int(source_dataset.get('input_window_bars') or DEFAULT_LABEL_POLICY.feature_window_bars)}×10`，未建立 expanded daily feature bank。",
         "- OOS 在 checkpoint 寫入後才推論，不參與 loss／gradient／epoch selection。",
     ]
     lines.extend([
@@ -1338,6 +1339,7 @@ def run(args) -> int:
         f"score_eligible={len(bundle.group_table):,} "
         f"target_valid={int(bundle.summary.get('target_valid_sample_count', 0) or 0):,} "
         f"tickers={int(bundle.summary['ticker_count']):,} "
+        f"input_window={int(bundle.summary.get('input_window_bars') or DEFAULT_LABEL_POLICY.feature_window_bars)} "
         f"feature_storage={bundle.summary['feature_storage']}"
     )
     if bundle.summary.get("risk_param_coverage_start"):

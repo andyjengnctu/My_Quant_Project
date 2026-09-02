@@ -602,8 +602,14 @@ def load_model_artifact_contract(
             "breakout quality model policy 與filter_id正式Label契約不一致；"
             "請重新建立對應Dataset並重訓模型"
         )
-    if int(manifest.get("sequence_length", -1)) != int(DEFAULT_LABEL_POLICY.feature_window_bars):
-        raise ValueError("breakout quality manifest sequence_length 與 feature window 不一致")
+    expected_sequence_length = int(
+        model_spec.input_window_bars or DEFAULT_LABEL_POLICY.feature_window_bars
+    )
+    if int(manifest.get("sequence_length", -1)) != expected_sequence_length:
+        raise ValueError(
+            "breakout quality manifest sequence_length 與 architecture input window 不一致: "
+            f"actual={int(manifest.get('sequence_length', -1))}, expected={expected_sequence_length}"
+        )
 
     score_decision = _require_mapping(manifest, "score_decision")
     if _require_nonempty_text(score_decision, "score_column") != SCORE_COLUMN:

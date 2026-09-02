@@ -2642,6 +2642,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         INCEPTION_TIME_SHARED_SAFETY_SELF_ATTN_MFE_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_FULL_WINDOW_RF_V1,
         INCEPTION_TIME_SHARED_SAFETY_MFE_WIDE_V1,
+        INCEPTION_TIME_SHARED_SAFETY_MFE_600BAR_V1,
         PATCH_TRANSFORMER_SAFETY_INCEPTION_MFE_V1,
         INCEPTION_TIME_TASK_SPECIFIC_SAFETY_ATTN_MFE_V1,
         INCEPTION_TIME_TASK_SPECIFIC_SAFETY_MFE_V1,
@@ -3430,6 +3431,37 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and ao_params == 473734
         and wide_params == 1885446
         and wide_params > ao_params,
+    )
+
+    long_horizon_descriptor = get_architecture_descriptor(
+        INCEPTION_TIME_SHARED_SAFETY_MFE_600BAR_V1
+    )
+    long_horizon_spec = get_model_spec(INCEPTION_TIME_SHARED_SAFETY_MFE_600BAR_V1)
+    long_horizon_model = build_active_model(
+        10, 0, architecture=INCEPTION_TIME_SHARED_SAFETY_MFE_600BAR_V1
+    )
+    long_horizon_params = sum(
+        int(parameter.numel()) for parameter in long_horizon_model.parameters() if parameter.requires_grad
+    )
+    check_true(
+        "long_horizon_input_capability_doubles_history_with_parameter_neutral_full_window_rf",
+        long_horizon_descriptor.has_capability("long_horizon_input")
+        and int(long_horizon_spec.input_window_bars) == 600
+        and int(long_horizon_spec.receptive_field_bars) == 609
+        and tuple(long_horizon_spec.inception_kernel_sizes)
+        == tuple(ao_shared_spec.inception_kernel_sizes)
+        == (39, 19, 9)
+        and tuple(long_horizon_spec.inception_module_dilations) == (1, 1, 1, 1, 6, 6)
+        and int(long_horizon_spec.inception_depth) == int(ao_shared_spec.inception_depth) == 6
+        and int(long_horizon_spec.inception_filters) == int(ao_shared_spec.inception_filters) == 32
+        and int(long_horizon_spec.inception_bottleneck_channels)
+        == int(ao_shared_spec.inception_bottleneck_channels)
+        == 32
+        and int(long_horizon_spec.inception_residual_every)
+        == int(ao_shared_spec.inception_residual_every)
+        == 3
+        and tuple(long_horizon_spec.pooling) == tuple(ao_shared_spec.pooling)
+        and ao_params == long_horizon_params == 473734,
     )
 
     project_root = Path(__file__).resolve().parents[2]

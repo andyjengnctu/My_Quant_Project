@@ -11478,3 +11478,16 @@ Decision：`MR13BA_IMPLEMENTED_RESULT_PENDING / FULL_WINDOW_RECEPTIVE_FIELD_CONT
 
 Decision：`MR13BA_CLOSED_MODEL_GATE_FAIL / MR13BB_IMPLEMENTED_RESULT_PENDING / PURE_CAPACITY_CONTROL / 3P98X_PARAMS / SEED42_FORWARD_NEXT`。
 
+## 2026-09-03 — MR-13BB result closure + MR-13BC 600-bar long-horizon implementation
+
+- **Authoritative baseline**：`test-branch-1_20260903_014811_f0c8c991.zip`，SHA256=`94201a0b8d194be3a4cbc2a5902782ad66015c5a9d726613f82e7e58ee99d793`；formal Forward comparison結果由使用者貼上之2026-09-03輸出提供。
+- **MR-13BB Forward result**：完整Safety Validation Daily/Global rho/Pair=`0.3250/0.2648/61.65%`；Forward=`0.3325/0.2423/61.92%` vs AO=`0.3532/0.2929/62.68%`；Breakout=`0.2942/0.2795/63.17%` vs AO=`0.3135/0.3554/63.65%`。Forward Pred-HS true-LS=`37.52%` vs AO `36.84%`，True-HS recall=`62.33%`，P45–P55 Pair=`52.21%`。HS-only Conditional-MFE Forward rho/Pair=`0.3670/62.84%`低於AO=`0.3969/63.90%`。
+- **MR-13BB Decision**：`PURE_CAPACITY_AT_300BARS_NOT_SUPPORTED / MODEL_GATE_FAIL / NO_ROLLING / NO_ROBUSTNESS / STOP_WIDTH_CAPACITY_SWEEP`。filters/bottleneck 32/32→64/64、trainable params約3.98×未改善Safety，且qualification purity更差；但此結果只回答capacity@300 bars，不足以否定「較長input提供新資訊後capacity才有作用」的interaction。
+- **Research transition**：使用者明確提出capacity提升可能需與更長input共同存在才看得出效果，因此原先「BB FAIL後直接backbone family」順序被新的研究決策覆寫：先做600/32 long-horizon control；只有600/32顯著改善才允許600/64 capacity interaction，若600/32無增量才轉backbone family。這是人類基於迭代OOS evidence形成的新假說，不把OOS統計輸入fitting/selection pipeline。
+- **MR-13BC identity**：profile=`daily_universal_shared_safety_hs_conditional_mfe_600bar_full_list_ndcg_pairwise`；architecture=`inception_time_shared_safety_mfe_600bar_v1`。AO continuous Safety full-list ΔNDCG、true-HS=P50 Conditional-MFE、1:1 loss、filters/bottleneck=32/32、depth=6、kernels=(39,19,9)、GAP/heads、Seed42/split/optimizer/epoch selection與Pred-Safety→Conditional-MFE inference全部固定。
+- **Scientific treatment**：可利用OHLCV history由raw 300×10擴為raw 600×10。architecture descriptor新增generic `input_window_bars=600`，daily-universal lazy feature provider依model spec materialize 600-bar window；canonical dataset/label policy仍維持300-bar source/target SSOT，不改既有模型artifact identity。為使600-bar input確實可由高階representation共同利用，module dilations設為`(1,1,1,1,6,6)`，RF=`609`；此為long-horizon input的必要工程條件，params仍exact=`473,734`，不獨立解讀為RF treatment（BA已在300-bar下單獨否定RF不足）。
+- **Fair-comparison rule**：600-bar eligibility會排除歷史不足600 bars的stock-days，因此Primary Gate不得只比較各模型不同universe的raw aggregate；最終decision需優先使用MR-13BC與AO/BA **common eligible stock-days**。既有Standard SOP persistent schema不因本實驗擅自變更；common-universe contrast可由完成後的score artifact作一次性read-only diagnostic。
+- **Primary Gate**：common-universe Safety Daily/Global rho與Pair需實質離開AO/BA且Breakout同方向，Pred-HS true-LS需下降、P45–P55需改善，HS-only Conditional-MFE不得崩。若FAIL，停止input-horizon不足假說並轉backbone-family controlled contrast；若GO，下一輪才測600/64 capacity interaction。
+
+Decision：`MR13BB_CLOSED_MODEL_GATE_FAIL / MR13BC_IMPLEMENTED_RESULT_PENDING / 600BAR_LONG_HORIZON_CONTROL / SAME_473734_PARAMS / RF609 / SEED42_FORWARD_NEXT`。
+

@@ -1,13 +1,13 @@
 """Daily-universal stock/date samples for cross-sectional ranker research.
 
-The store is intentionally index-based: it never materializes one 300x10 tensor per
+The store is intentionally index-based: it never materializes one full sequence tensor per
 stock-day.  Canonical OHLCV frames remain the source of truth and sequence windows are
 materialized on demand by the existing breakout-quality feature function.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -294,7 +294,7 @@ class LazyDailyFeatureBank:
 
         # Materialize raw stock windows first, then normalize the complete batch
         # in one canonical vectorized operation.  This preserves the exact
-        # per-stock 300-bar feature contract while removing hundreds of tiny
+        # per-stock architecture-owned feature-window contract while removing hundreds of tiny
         # median/percentile calls from every training batch.
         stock_windows = np.empty((len(ids), feature_window, 5), dtype=np.float64)
         anchors = np.empty(len(ids), dtype=np.float64)
@@ -692,7 +692,7 @@ def load_daily_universal_ranker_data(
 
     ``preload_feature_bank`` is intentionally ignored for this sample scope: expanding all
     windows would multiply storage/RAM by the number of eligible stock-days.  Sanitized
-    ticker frames are kept in memory, while each 300x10 window is generated only when a
+    ticker frames are kept in memory, while each architecture-sized window is generated only when a
     training/evaluation batch requests it.
     """
 
@@ -718,6 +718,8 @@ def load_daily_universal_ranker_data(
             f"{target_policy.materialization_mode!r}"
         )
     model_spec = get_model_spec(model_architecture)
+    input_window_bars = int(model_spec.input_window_bars or DEFAULT_LABEL_POLICY.feature_window_bars)
+    input_policy = replace(DEFAULT_LABEL_POLICY, feature_window_bars=input_window_bars)
     if bool(model_spec.requires_market_set) or bool(model_spec.derived_context_features):
         raise ValueError("daily universal ranker不支援market-set／derived-context architecture")
     architecture_descriptor = get_architecture_descriptor(model_spec.architecture)
@@ -776,12 +778,12 @@ def load_daily_universal_ranker_data(
     if benchmark_path is None:
         raise FileNotFoundError(f"daily ranker找不到benchmark ticker: {benchmark_ticker}")
     min_rows = max(
-        int(DEFAULT_LABEL_POLICY.feature_window_bars) + 1,
+        input_window_bars + 1,
         int(DEFAULT_LABEL_POLICY.label_horizon_bars) + 1,
     )
     benchmark = load_dataset_frame(benchmark_path, benchmark_ticker, min_rows=min_rows)
     benchmark_index = pd.DatetimeIndex(benchmark.index).normalize()
-    first_pos = int(DEFAULT_LABEL_POLICY.feature_window_bars) - 1
+    first_pos = input_window_bars - 1
     # Daily Universal training universe must not inherit the optimizer's historical
     # selection_start cutoff.  The earliest legal stock-day is data-driven: both the
     # stock and benchmark must already have a complete feature window.  Per-stock
@@ -789,7 +791,7 @@ def load_daily_universal_ranker_data(
     # the shared market sequence side.
     sample_start = resolve_daily_training_universe_start(
         benchmark_index,
-        feature_window_bars=int(DEFAULT_LABEL_POLICY.feature_window_bars),
+        feature_window_bars=input_window_bars,
     )
     if bool(extend_score_eligibility_to_source_tail):
         source_tail = pd.Timestamp(benchmark_index.max()).normalize()
@@ -1279,7 +1281,7 @@ def load_daily_universal_ranker_data(
         ticker_ids=ticker_ids,
         source_positions=source_positions,
         benchmark_positions=benchmark_positions,
-        policy=DEFAULT_LABEL_POLICY,
+        policy=input_policy,
     )
     validate_model_sequence_length(model_spec, int(feature_bank.shape[1]))
     target_contract = _build_daily_target_contract(
@@ -1301,6 +1303,7 @@ def load_daily_universal_ranker_data(
             "end": str(pd.Timestamp(group_table["date"].max()).date()),
         },
         "feature_storage": "lazy_from_canonical_ohlcv_no_expanded_daily_feature_bank",
+        "input_window_bars": input_window_bars,
         "context_features": (
             list(RISK_GEOMETRY_CONTEXT_FEATURES)
             if use_risk_context
