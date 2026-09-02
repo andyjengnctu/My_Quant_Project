@@ -2000,11 +2000,6 @@ class ContinuousRankerResearchSpec:
     reference_profile_name: str | None = None
     evaluation_reference_profile_name: str | None = None
     model_gate_reference_profile_name: str | None = None
-    # Optional current-workflow vetoes. ``None`` preserves the existing B325 rule
-    # that current model-workflow membership itself authorizes the mode.  A research
-    # cell may explicitly disable later-stage evidence until its preceding gate passes.
-    current_model_workflow_rolling_authorized: bool | None = None
-    current_model_workflow_robustness_authorized: bool | None = None
     # Historical/research PIT authorization.  This may remain true for archived
     # evidence that must still be readable/reconstructable.  Current OOS/Rolling
     # execution is governed separately by current_time_validation_authorized.
@@ -2177,14 +2172,6 @@ class ContinuousRankerResearchSpec:
             payload["secondary_pair_scope_threshold"] = float(self.secondary_pair_scope_threshold)
         if self.model_gate_reference_profile_name is not None:
             payload["model_gate_reference_profile_name"] = self.model_gate_reference_profile_name
-        if self.current_model_workflow_rolling_authorized is not None:
-            payload["current_model_workflow_rolling_authorized"] = bool(
-                self.current_model_workflow_rolling_authorized
-            )
-        if self.current_model_workflow_robustness_authorized is not None:
-            payload["current_model_workflow_robustness_authorized"] = bool(
-                self.current_model_workflow_robustness_authorized
-            )
         return payload
 
 
@@ -2823,8 +2810,6 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),
-        current_model_workflow_rolling_authorized=False,
-        current_model_workflow_robustness_authorized=False,
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),
@@ -2848,8 +2833,6 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_daily_non_compensatory_hs_priority_then_mfe",
         score_semantic_id="daily_hs_priority_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-        current_model_workflow_rolling_authorized=False,
-        current_model_workflow_robustness_authorized=False,
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),
@@ -2873,8 +2856,6 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_daily_non_compensatory_hs_priority_pair_stratified_then_mfe",
         score_semantic_id="daily_hs_priority_stratified_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-        current_model_workflow_rolling_authorized=False,
-        current_model_workflow_robustness_authorized=False,
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),
@@ -2904,8 +2885,6 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),
-        current_model_workflow_rolling_authorized=False,
-        current_model_workflow_robustness_authorized=False,
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),
@@ -2935,8 +2914,6 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),
-        current_model_workflow_rolling_authorized=False,
-        current_model_workflow_robustness_authorized=False,
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),
@@ -3717,27 +3694,27 @@ class BreakoutQualityWorkflowSettings:
         if not self.supports_point_in_time_scores:
             return False
         recipe = get_continuous_ranker_execution_recipe(self.experiment_profile)
-        current_member = is_breakout_quality_model_workflow_profile(self.experiment_profile)
-        if current_member:
-            research = get_continuous_ranker_research_spec(self.experiment_profile)
-            override = research.current_model_workflow_rolling_authorized
-            if override is not None:
-                return bool(override)
-        return bool(recipe.current_time_validation_authorized or current_member)
+        # B313/B325: current workflow membership is the sole current-mode selector.
+        # Historical recipe authorization remains readable for profiles outside the
+        # current workflow, but it cannot veto a configured Training/Compare member.
+        return bool(
+            recipe.current_time_validation_authorized
+            or is_breakout_quality_model_workflow_profile(self.experiment_profile)
+        )
 
     @property
     def robustness_authorized(self) -> bool:
-        """Whether current multi-seed model evidence is authorized for this profile."""
+        """Whether current multi-seed model evidence is authorized for this profile.
 
-        if not self.is_continuous_ranker:
-            return False
-        current_member = is_breakout_quality_model_workflow_profile(self.experiment_profile)
-        if current_member:
-            research = get_continuous_ranker_research_spec(self.experiment_profile)
-            override = research.current_model_workflow_robustness_authorized
-            if override is not None:
-                return bool(override)
-        return bool(is_breakout_quality_model_test_profile(self.experiment_profile))
+        Robustness is a property of shared Model Compare/Test membership.  The current
+        Training Model is structurally injected into that same list, so no per-profile
+        authorization flag may create a second selector.
+        """
+
+        return bool(
+            self.is_continuous_ranker
+            and is_breakout_quality_model_test_profile(self.experiment_profile)
+        )
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload = {

@@ -2839,6 +2839,7 @@ def validate_research_report_contract_freeze_case(_base_params):
         MODEL_STANDARD_SOP,
         MODEL_MODE_EXTENSION_SCHEMAS,
         comparison_extension_contract,
+        comparison_extension_ids,
         extension_contract,
         mode_extension_contract,
         persistent_report_contract_fingerprints,
@@ -2881,12 +2882,17 @@ def validate_research_report_contract_freeze_case(_base_params):
         ],
     )
     check_true(
-        "standard_multi_model_comparison_schema_is_derived_from_standard_sop",
-        int(MODEL_STANDARD_COMPARISON.version) == 8
-        and tuple(MODEL_STANDARD_COMPARISON.model_specific_extension_ids)
-        == ("multi_head_learnability", "truth_prediction_geometry")
-        and set(MODEL_COMPARISON_EXTENSION_SCHEMAS)
-        == {"multi_head_learnability", "truth_prediction_geometry"}
+        "standard_multi_model_comparison_schema_is_derived_from_standard_sop_and_evidence_capabilities",
+        int(MODEL_STANDARD_COMPARISON.version) == 9
+        and not hasattr(MODEL_STANDARD_COMPARISON, "model_specific_extension_ids")
+        and comparison_extension_ids() == tuple(MODEL_COMPARISON_EXTENSION_SCHEMAS)
+        and comparison_extension_ids() == tuple(
+            extension_id
+            for extension_id, extension in MODEL_EXTENSION_SCHEMAS.items()
+            if extension.comparison_mode is not None
+        )
+        and set(comparison_extension_ids())
+        >= {"multi_head_learnability", "truth_prediction_geometry", "hs_conditional_mfe_gate"}
         and [(section.number, section.title) for section in MODEL_STANDARD_COMPARISON.sections]
         == [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         and all(
@@ -2909,13 +2915,26 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
 
     check_true(
-        "comparison_extension_schema_adds_model_dimension_without_changing_single_model_extension_schema",
+        "comparison_extension_schema_adds_source_model_dimension_from_single_evidence_registry",
         extension_contract("multi_head_learnability").tables[0].headers
         == ("Split", "Head", "Daily rho", "Global rho", "Pair")
         and comparison_extension_contract("multi_head_learnability").tables[0].headers
         == ("Model", "Split", "Head", "Daily rho", "Global rho", "Pair")
         and comparison_extension_contract("truth_prediction_geometry").tables[-1].headers
-        == ("Model", "Pred Safety", "N", "Raw-MFE→MFE rho", "High-MFE", "HM/HS"),
+        == ("Model", "Pred Safety", "N", "Raw-MFE→MFE rho", "High-MFE", "HM/HS")
+        and comparison_extension_contract("hs_conditional_mfe_gate").tables[0].headers[0:3]
+        == ("Model", "Split", "HS-only rho")
+        and comparison_extension_contract("hs_conditional_mfe_gate").tables[-1].headers[0:3]
+        == ("Source Model", "Model", "Split"),
+    )
+
+    app_source = Path(app.__file__).read_text(encoding="utf-8")
+    report_contract_source = (PROJECT_ROOT / "core" / "research_report_contract.py").read_text(encoding="utf-8")
+    check_true(
+        "comparison_renderer_discovers_extensions_from_capability_registry_without_secondary_allowlist",
+        "allowed_ids = comparison_extension_ids()" in app_source
+        and "contract.model_specific_extension_ids" not in app_source
+        and "model_specific_extension_ids=(" not in report_contract_source,
     )
 
     check_true(
@@ -3345,6 +3364,34 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "標準模型 SOP｜3. Multi-head Learnability" not in comparison_text
         and "模型比較 SOP｜3. Multi-head Learnability" not in comparison_text,
         detail=comparison_text,
+    )
+
+    conditional_comparison = app._render_standard_model_comparison(
+        [
+            {"model_id": "MODEL-HS-A", "payload": conditional_payload},
+            {"model_id": "MODEL-HS-B", "payload": json.loads(json.dumps(conditional_payload))},
+        ],
+        target="console",
+    )
+    check_true(
+        "hs_conditional_mfe_evidence_capability_auto_merges_all_methods_into_one_cross_model_extension",
+        conditional_comparison.count(
+            "Model-specific Extension｜HS-Qualification / Conditional-MFE Gate"
+        ) == 1
+        and "MODEL-HS-A" in conditional_comparison
+        and "MODEL-HS-B" in conditional_comparison
+        and "HS-only rho" in conditional_comparison
+        and "P45–P55 Pair" in conditional_comparison
+        and "True-HS Oracle HM/HS" in conditional_comparison
+        and "Source Model" in conditional_comparison,
+        detail=conditional_comparison,
+    )
+    check_true(
+        "comparison_extension_does_not_render_heading_for_empty_capability_payload",
+        app._render_model_comparison_specific_extensions(
+            [{"model_id": "EMPTY", "view": {"extensions": [{"id": "hs_conditional_mfe_gate"}]}}],
+            target="console",
+        ) == [],
     )
 
     non_multi_comparison = app._render_standard_model_comparison(

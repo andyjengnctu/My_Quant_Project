@@ -11351,3 +11351,14 @@ Decision：`MR13AR_IMPLEMENTED_RESULT_PENDING / DIRECT_BINARY_HS_QUALIFICATION /
 - **Authorization**：Seed42 Forward Model Gate only；Rolling=False、Robustness=False、PIT=False、strategy=False。不得在AS內做boundary-weight exponent/cutoff sweep。
 
 Decision：`MR13AS_IMPLEMENTED_RESULT_PENDING / P50_BOUNDARY_SUPERVISION_FOCUS / TRUE_HS_ORACLE_EXTENSION_AUTOMATIC / CONDITIONAL_FAMILY_COMPARE_MEMBERSHIP / SEED42_FORWARD_NEXT`。
+
+## 2026-09-02 — Continuous DL workflow / comparison-extension SSOT consolidation
+
+- **Scope**：本輪是engineering/governance consolidation，不建立新MR identity、不改MR-13AS target/architecture/loss/Seed42 scientific contract，也不改任何既有研究結果。使用者明確要求消除「Model Compare/Test List已含current model，但[4]/[5]/[6]又被profile Forward-only flag BLOCK」與「同類Conditional-MFE evidence存在但cross-model extension只顯示AK類extension」兩種第二truth。
+- **Workflow authorization SSOT（B338）**：刪除`ContinuousRankerResearchSpec.current_model_workflow_rolling_authorized/current_model_workflow_robustness_authorized`。`BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE`仍是[1]/[2] current training identity，且由B325自動注入`BREAKOUT_QUALITY_MODEL_TEST_PROFILES`；[3]～[6]只消費shared Model Compare/Test membership，menu不得再用current Training Model做整體二次gate。歷史`selection_pit_authorized/current_time_validation_authorized`仍保留歷史PIT/特殊stage語意，但不能否決current shared membership。缺artifact時由canonical planner BUILD/REFRESH，而不是authorization BLOCK。
+- **Research-priority boundary**：MR-13AS仍以Seed42 Forward Model Gate作下一個scientific priority；「current workflow eligible」只表示使用者明確選取[2]/[4]/[5]/[6]時不被第二selector擋住，不代表AS已通過Gate、不自動啟動multi-seed，也不撤銷AO/AP/AQ/AR歷史stop decisions。
+- **Extension evidence SSOT（B339）**：`model.standard_comparison`由v8升v9並移除persistent `model_specific_extension_ids` allow-list。Cross-model eligibility改由單一`MODEL_EXTENSION_SCHEMAS` evidence contract上的`comparison_mode/comparison_row_keys`宣告；comparison schema由該registry程式化派生。現有可比較evidence為`multi_head_learnability / truth_prediction_geometry / hs_conditional_mfe_gate`。因此AO/AR/AS只要各自payload含`hs_conditional_mfe_gate`，會自動合併成同一Model維度extension；`hs_attribution_control`本身已有`Model`欄時，自動增加`Source Model`避免語意衝突。
+- **Future-change invariant**：新增current DL只允許改canonical training/reference membership與其evidence producer；[3]～[6] membership由merge派生。新增可跨model evidence只需在extension contract本身宣告comparison capability，不得再改persistent report whitelist或加入`if model_id == ...` renderer branch。
+- **Formal governance closure**：此branch原先已有AP/AQ/AR/AS dedicated validators但未全數進synthetic registry/Checklist；同輪補B334～B337/T454～T457並正式註冊，避免下一次formal coverage因registry drift失敗。
+- **Approved persistent report fingerprint**：`model.standard_comparison=e2273ebf653cc71d`；`model.standard_sop v7`與其fingerprint不變。
+

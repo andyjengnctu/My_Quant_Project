@@ -1091,6 +1091,29 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and pit_gate.call_count == 0,
     )
 
+    # Regression for B338: even if the current Training Model object carries a false
+    # rolling flag (synthetic historical state), [4] belongs to the shared compare list
+    # and must not be re-gated by that current Training Model.
+    with (
+        patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
+        patch.object(
+            research_app,
+            "get_continuous_ranker_research_spec",
+            return_value=SimpleNamespace(
+                reference_profile_name=None, model_research_id="SYNTHETIC-MODEL"
+            ),
+        ),
+        patch("builtins.input", side_effect=["4", "0"]),
+        patch.object(research_app, "_run_configured_model_comparison", return_value=0) as rolling_compare,
+    ):
+        rolling_compare_menu_rc = research_app._interactive_model_research("apps/research.py model")
+    check_true(
+        "rolling_comparison_menu_ignores_current_training_model_veto_and_delegates_to_shared_list",
+        rolling_compare_menu_rc == 0
+        and rolling_compare.call_count == 1
+        and bool(rolling_compare.call_args.kwargs.get("rolling")) is True,
+    )
+
     app_source = (project_root / "services" / "research" / "breakout_quality_application.py").read_text(encoding="utf-8")
     check_true(
         "continuous_model_menu_uses_shared_forward_rolling_train_compare_robustness_workflow",
@@ -1198,25 +1221,31 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         [str(shared_training.experiment_profile)]
         + [str(profile_name) for _model_id, profile_name in shared_test]
     ))
-    def _expected_current_rolling_authorization(profile_name):
-        research = breakout_quality_config.get_continuous_ranker_research_spec(
-            str(profile_name)
-        )
-        override = research.current_model_workflow_rolling_authorized
-        return True if override is None else bool(override)
-
     check_true(
-        "model_workflow_ssot_authorizes_rolling_unless_research_contract_explicitly_vetoes",
+        "model_workflow_membership_is_the_only_current_mode_authorization_selector",
         tuple(configured_workflow_profiles) == expected_workflow_profiles
         and shared_training.rolling_authorized
-        == _expected_current_rolling_authorization(shared_training.experiment_profile)
+        and shared_training.robustness_authorized
         and all(
             breakout_quality_config.get_breakout_quality_workflow_settings(
                 experiment_profile=str(profile_name)
             ).rolling_authorized
-            == _expected_current_rolling_authorization(profile_name)
+            and breakout_quality_config.get_breakout_quality_workflow_settings(
+                experiment_profile=str(profile_name)
+            ).robustness_authorized
             for _model_id, profile_name in shared_test
-        ),
+        )
+        and "current_model_workflow_rolling_authorized" not in config_source
+        and "current_model_workflow_robustness_authorized" not in config_source,
+    )
+    check_true(
+        "comparison_and_robustness_menu_use_shared_list_without_current_training_model_regate",
+        "Rolling比較尚未授權" not in app_source
+        and "尚未通過單一Seed Gate；Robustness尚未授權" not in app_source
+        and "Current Model尚未授權Rolling Robustness" not in app_source
+        and '_run_configured_model_comparison(program_name, rolling=True)' in app_source
+        and '_run_configured_model_robustness(program_name, rolling=False)' in app_source
+        and '_run_configured_model_robustness(program_name, rolling=True)' in app_source,
     )
 
     from filters.breakout_quality.contract import RUNTIME_SCOPE_WORKFLOW
@@ -6938,11 +6967,12 @@ def validate_breakout_quality_true_hs_scoped_pair_membership_contract_case(_base
     from config.breakout_quality import get_breakout_quality_workflow_settings
     ao_workflow = get_breakout_quality_workflow_settings(experiment_profile=profile.name)
     check_true(
-        "true_hs_seed42_forward_gate_blocks_rolling_and_robustness",
-        research.current_model_workflow_rolling_authorized is False
-        and research.current_model_workflow_robustness_authorized is False
-        and ao_workflow.rolling_authorized is False
-        and ao_workflow.robustness_authorized is False,
+        "true_hs_historical_forward_gate_does_not_veto_current_shared_workflow_membership",
+        research.selection_pit_authorized is False
+        and research.current_time_validation_authorized is False
+        and breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
+        and ao_workflow.rolling_authorized is True
+        and ao_workflow.robustness_authorized is True,
     )
     check_true(
         "true_hs_contract_is_non_compensatory_and_has_no_safety_context_or_pair_weight",
@@ -7133,13 +7163,12 @@ def validate_breakout_quality_hs_qualification_conditional_mfe_contract_case(_ba
         and contract.get("conditional_mfe_pair_safety_weight") == "none",
     )
     check_true(
-        "hs_qualification_seed42_forward_gate_blocks_later_workflows",
-        research.current_model_workflow_rolling_authorized is False
-        and research.current_model_workflow_robustness_authorized is False
-        and research.selection_pit_authorized is False
+        "hs_qualification_historical_forward_gate_does_not_veto_current_shared_workflow_membership",
+        research.selection_pit_authorized is False
         and research.current_time_validation_authorized is False
-        and workflow.rolling_authorized is False
-        and workflow.robustness_authorized is False,
+        and breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
+        and workflow.rolling_authorized is True
+        and workflow.robustness_authorized is True,
     )
 
     group_table = pd.DataFrame(
@@ -7266,7 +7295,9 @@ def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case
     import pandas as pd
     import torch
     from config.breakout_quality import (
+        BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,
         BREAKOUT_QUALITY_MODEL_TEST_PROFILES,
+        BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES,
         CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         DAILY_UNIVERSAL_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -7334,18 +7365,25 @@ def validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case
         and research.model_gate_reference_profile_name == ar_profile.name,
     )
     check_true(
-        "hs_boundary_weighted_compare_list_keeps_conditional_family_and_removes_af_am",
-        [model_id for model_id, _profile_name in BREAKOUT_QUALITY_MODEL_TEST_PROFILES]
-        == ["MR-13H", "MR-13AH", "MR-13AK", "MR-13AO", "MR-13AR", "MR-13AS"],
+        "hs_boundary_weighted_current_training_pair_is_structurally_merged_with_reference_controls",
+        (research.model_research_id, profile.name)
+        == tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE)
+        and tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE)
+        in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+        and all(
+            pair in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+            for pair in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES
+        )
+        and len(BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
+        == len(BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES) + 1,
     )
     check_true(
-        "hs_boundary_weighted_seed42_forward_gate_blocks_later_workflows",
-        research.current_model_workflow_rolling_authorized is False
-        and research.current_model_workflow_robustness_authorized is False
-        and research.selection_pit_authorized is False
+        "hs_boundary_weighted_historical_forward_gate_does_not_veto_current_shared_workflow_membership",
+        research.selection_pit_authorized is False
         and research.current_time_validation_authorized is False
-        and workflow.rolling_authorized is False
-        and workflow.robustness_authorized is False,
+        and breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
+        and workflow.rolling_authorized is True
+        and workflow.robustness_authorized is True,
     )
 
     dates = pd.to_datetime(["2021-01-04"] * 4).to_numpy()
@@ -7480,11 +7518,10 @@ def validate_breakout_quality_hs_priority_mfe_contract_case(_base_params):
         and contract.get("runtime_score") == "hs_priority_mfe_pass_probability_direct_all_daily_ranking",
     )
     check_true(
-        "hs_priority_seed42_forward_gate_blocks_rolling_robustness_pit_and_strategy",
-        research.current_model_workflow_rolling_authorized is False
-        and research.current_model_workflow_robustness_authorized is False
-        and research.selection_pit_authorized is False
+        "hs_priority_outside_current_membership_remains_unavailable_without_profile_veto",
+        research.selection_pit_authorized is False
         and research.current_time_validation_authorized is False
+        and not breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
         and workflow.rolling_authorized is False
         and workflow.robustness_authorized is False,
     )
@@ -7629,11 +7666,10 @@ def validate_breakout_quality_hs_priority_stratified_mfe_contract_case(_base_par
         and contract.get("priority_pair_safety_weight") == "none",
     )
     check_true(
-        "hs_priority_stratified_seed42_forward_gate_blocks_later_workflows",
-        research.current_model_workflow_rolling_authorized is False
-        and research.current_model_workflow_robustness_authorized is False
-        and research.selection_pit_authorized is False
+        "hs_priority_stratified_outside_current_membership_remains_unavailable_without_profile_veto",
+        research.selection_pit_authorized is False
         and research.current_time_validation_authorized is False
+        and not breakout_quality_config.is_breakout_quality_model_test_profile(profile.name)
         and workflow.rolling_authorized is False
         and workflow.robustness_authorized is False,
     )

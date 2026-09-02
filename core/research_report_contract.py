@@ -60,7 +60,6 @@ class PersistentReportContract:
     role: str
     menu_path: tuple[str, ...]
     sections: tuple[ReportSectionContract, ...]
-    model_specific_extension_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -69,6 +68,11 @@ class ModelExtensionContract:
     title: str
     applicability: str
     tables: tuple[ReportTableContract, ...] = ()
+    # Cross-model comparison is an evidence capability declared on the extension
+    # itself.  This prevents the persistent report from maintaining a second
+    # extension-ID whitelist that can drift when a new model/evidence family lands.
+    comparison_mode: str | None = None
+    comparison_row_keys: tuple[tuple[str, str], ...] = ()
 
 
 C = ReportColumnContract
@@ -176,14 +180,10 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=8,
+    version=9,
     role="persistent_multi_model_comparison_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),
-    model_specific_extension_ids=(
-        "multi_head_learnability",
-        "truth_prediction_geometry",
-    ),
 )
 
 MODEL_MODE_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
@@ -229,6 +229,8 @@ MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
             C("global_spearman_vs_raw_target", "Global rho", 4, preference="higher", format_kind="number"),
             C("pairwise_concordance", "Pair", 2, "%", "higher", "fraction_pct"),
         )),),
+        comparison_mode="row_tables",
+        comparison_row_keys=(("multi_head", "rows"),),
     ),
     "truth_prediction_geometry": ModelExtensionContract(
         "truth_prediction_geometry", "Truth / Prediction Geometry",
@@ -252,6 +254,7 @@ MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
                 C("hmhs_pct", "HM/HS", 2, "%", "higher", "pct"),
             )),
         ),
+        comparison_mode="truth_geometry",
     ),
     "hs_conditional_mfe_gate": ModelExtensionContract(
         "hs_conditional_mfe_gate", "HS-Qualification / Conditional-MFE Gate",
@@ -305,6 +308,14 @@ MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
                 C("topk_hmls_pct", "TopK HM/LS", 2, "%", "lower", "pct"),
                 C("pred_hs_true_ls_pct", "Pred-HS true-LS", 2, "%", "lower", "pct"),
             )),
+        ),
+        comparison_mode="row_tables",
+        comparison_row_keys=(
+            ("hs_conditional_gate", "gate_rows"),
+            ("hs_qualification_boundary", "boundary_rows"),
+            ("true_hs_oracle_gap", "oracle_rows"),
+            ("ls_contamination_tail", "contamination_rows"),
+            ("hs_attribution_control", "control_rows"),
         ),
     ),
     "direct_hmhs_joint_retrieval": ModelExtensionContract(
@@ -520,20 +531,48 @@ def column_contract(report_id: str, section_id: str, table_id: str, column_key: 
     raise KeyError(f"{report_id}/{section_id}/{table_id}沒有column: {column_key}")
 
 
-MODEL_COMPARISON_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
-    "multi_head_learnability": ModelExtensionContract(
-        "multi_head_learnability", "Multi-head Learnability", "multi_head_only",
-        (T("multi_head_comparison", (
-            C("model", "Model", alignment="left"),
-            C("split", "Split", alignment="left"),
-            C("head", "Head", alignment="left"),
-            C("mean_daily_spearman", "Daily rho", 4, preference="higher", format_kind="number"),
-            C("global_spearman_vs_raw_target", "Global rho", 4, preference="higher", format_kind="number"),
-            C("pairwise_concordance", "Pair", 2, "%", "higher", "fraction_pct"),
-        )),),
-    ),
-    "truth_prediction_geometry": ModelExtensionContract(
-        "truth_prediction_geometry", "Truth / Prediction Geometry", "geometry_models",
+def _comparison_source_column(table: ReportTableContract) -> ReportColumnContract:
+    """Return the source-model dimension without colliding with evidence-internal Model."""
+
+    has_model_column = any(column.key == "model" for column in table.columns)
+    return C(
+        "source_model" if has_model_column else "model",
+        "Source Model" if has_model_column else "Model",
+        alignment="left",
+    )
+
+
+def _derive_row_table_comparison_contract(
+    extension: ModelExtensionContract,
+) -> ModelExtensionContract:
+    table_by_id = {table.table_id: table for table in extension.tables}
+    tables: list[ReportTableContract] = []
+    for table_id, _row_key in extension.comparison_row_keys:
+        try:
+            base = table_by_id[str(table_id)]
+        except KeyError as exc:
+            raise KeyError(
+                f"{extension.extension_id} comparison row table不存在: {table_id}"
+            ) from exc
+        tables.append(T(
+            f"{base.table_id}_comparison",
+            (_comparison_source_column(base), *base.columns),
+        ))
+    return ModelExtensionContract(
+        extension.extension_id,
+        extension.title,
+        extension.applicability,
+        tuple(tables),
+        comparison_mode=extension.comparison_mode,
+        comparison_row_keys=extension.comparison_row_keys,
+    )
+
+
+def _truth_geometry_comparison_contract(
+    extension: ModelExtensionContract,
+) -> ModelExtensionContract:
+    return ModelExtensionContract(
+        extension.extension_id, extension.title, extension.applicability,
         (
             T("geometry_summary_comparison", (
                 C("model", "Model", alignment="left"),
@@ -563,7 +602,36 @@ MODEL_COMPARISON_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
                 C("hmhs_pct", "HM/HS", 2, "%", "higher", "pct"),
             )),
         ),
-    ),
+        comparison_mode=extension.comparison_mode,
+    )
+
+
+def _derive_comparison_extension_contract(
+    extension: ModelExtensionContract,
+) -> ModelExtensionContract:
+    if extension.comparison_mode == "row_tables":
+        return _derive_row_table_comparison_contract(extension)
+    if extension.comparison_mode == "truth_geometry":
+        return _truth_geometry_comparison_contract(extension)
+    raise ValueError(
+        f"未知Model extension comparison_mode: {extension.extension_id}={extension.comparison_mode}"
+    )
+
+
+def comparison_extension_ids() -> tuple[str, ...]:
+    """Cross-model evidence capabilities, derived from the single extension registry."""
+
+    return tuple(
+        extension_id
+        for extension_id, extension in MODEL_EXTENSION_SCHEMAS.items()
+        if extension.comparison_mode is not None
+    )
+
+
+MODEL_COMPARISON_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
+    extension_id: _derive_comparison_extension_contract(extension)
+    for extension_id, extension in MODEL_EXTENSION_SCHEMAS.items()
+    if extension.comparison_mode is not None
 }
 
 
@@ -590,19 +658,13 @@ def mode_extension_contract(extension_id: str) -> ModelExtensionContract:
 
 def _persistent_schema_payload(contract: PersistentReportContract) -> dict:
     payload = asdict(contract)
-    extension_ids = tuple(contract.model_specific_extension_ids)
-    if not extension_ids:
-        # Preserve existing fingerprints for reports whose schema did not change.
-        payload.pop("model_specific_extension_ids", None)
-        return payload
-    extension_resolver = (
-        comparison_extension_contract
-        if contract.report_id == "model.standard_comparison"
-        else extension_contract
-    )
-    payload["model_specific_extensions"] = [
-        asdict(extension_resolver(extension_id)) for extension_id in extension_ids
-    ]
+    if contract.report_id == "model.standard_comparison":
+        # Comparison extensions are discovered from evidence capability metadata;
+        # there is deliberately no second persistent-report extension allow-list.
+        payload["model_specific_extensions"] = [
+            asdict(comparison_extension_contract(extension_id))
+            for extension_id in comparison_extension_ids()
+        ]
     return payload
 
 
@@ -630,7 +692,7 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "aa7f812b9d1d936a",
+    "model.standard_comparison": "e2273ebf653cc71d",
     "model.standard_sop": "56e5fb1173404d7f",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",
@@ -663,7 +725,7 @@ __all__ = [
     "STRATEGY_CONSISTENCY_REPORT", "STRATEGY_STANDARD_SOP",
     "TRADE_OUTCOME_FIRST_PASSAGE_THRESHOLDS_R", "TRADE_OUTCOME_PATH_REPORT", "ModelExtensionContract",
     "PersistentReportContract", "ReportColumnContract", "ReportSectionContract",
-    "ReportTableContract", "column_contract", "extension_contract", "mode_extension_contract", "format_contract_value", "persistent_report_contract_fingerprint",
+    "ReportTableContract", "column_contract", "comparison_extension_contract", "comparison_extension_ids", "extension_contract", "mode_extension_contract", "format_contract_value", "persistent_report_contract_fingerprint",
     "persistent_report_contract_fingerprints", "report_contract", "section_contract",
     "table_contract", "validate_approved_persistent_report_contracts",
 ]

@@ -61,6 +61,7 @@ from core.strategy_comparison import validate_strategy_compare_gpu_train_workers
 from core.training_scheduler import pop_next_seed_diverse_unit
 from core.research_report_contract import (
     comparison_extension_contract,
+    comparison_extension_ids,
     extension_contract,
     mode_extension_contract,
     format_contract_value,
@@ -1034,8 +1035,7 @@ def _render_model_comparison_specific_extensions(views: list[dict], *, target: s
     (same split/head or same Pred-Safety cohort).
     """
 
-    contract = report_contract("model.standard_comparison")
-    allowed_ids = tuple(contract.model_specific_extension_ids)
+    allowed_ids = comparison_extension_ids()
     if not allowed_ids:
         return []
     color = console_color_enabled()
@@ -1073,25 +1073,41 @@ def _render_model_comparison_specific_extensions(views: list[dict], *, target: s
         methods = extension_views.get(extension_id) or []
         if not methods:
             continue
-        parts.append(extension_heading(extension_id))
         tables = {table.table_id: table for table in comparison_extension_contract(extension_id).tables}
+        extension_parts: list[str] = []
 
-        if extension_id == "multi_head_learnability":
-            rows = []
-            for model_id, ext in methods:
-                for raw_row in list(ext.get("rows") or []):
-                    rows.append({"model": model_id, **dict(raw_row)})
-            parts.append(_render_model_contract_table(
-                tables["multi_head_comparison"],
-                rows,
-                target=target,
-                scope_styler=scope_cell,
-                best_worst_style=True,
-                best_worst_group_keys=("split", "head"),
-            ))
+        extension_spec = extension_contract(extension_id)
+        if extension_spec.comparison_mode == "row_tables":
+            base_tables = {table.table_id: table for table in extension_spec.tables}
+            for table_id, row_key in extension_spec.comparison_row_keys:
+                base_table = base_tables[table_id]
+                comparison_table = tables[f"{table_id}_comparison"]
+                source_model_key = comparison_table.columns[0].key
+                rows = []
+                for model_id, ext in methods:
+                    for raw_row in list(ext.get(row_key) or []):
+                        rows.append({**dict(raw_row), source_model_key: model_id})
+                if not rows:
+                    continue
+                group_keys = tuple(
+                    column.key
+                    for column in base_table.columns
+                    if column.format_kind == "text" and column.preference == "neutral"
+                )
+                extension_parts.append(_render_model_contract_table(
+                    comparison_table,
+                    rows,
+                    target=target,
+                    scope_styler=scope_cell if "split" in group_keys else None,
+                    best_worst_style=True,
+                    best_worst_group_keys=group_keys,
+                ))
+            if extension_parts:
+                parts.append(extension_heading(extension_id))
+                parts.extend(extension_parts)
             continue
 
-        if extension_id == "truth_prediction_geometry":
+        if extension_spec.comparison_mode == "truth_geometry":
             by_scope: dict[str, list[tuple[str, dict]]] = {}
             scope_order: list[str] = []
             for model_id, ext in methods:
@@ -1104,7 +1120,7 @@ def _render_model_comparison_specific_extensions(views: list[dict], *, target: s
 
             for scope_name in scope_order:
                 scoped_methods = by_scope[scope_name]
-                parts.append(scope_heading(scope_name))
+                extension_parts.append(scope_heading(scope_name))
 
                 summary_rows = []
                 truth_rows = None
@@ -1135,28 +1151,31 @@ def _render_model_comparison_specific_extensions(views: list[dict], *, target: s
                     for row in scope.get("safety_cohorts", []):
                         cohort_rows.append({"model": model_id, **dict(row)})
 
-                parts.append(_render_model_contract_table(
+                extension_parts.append(_render_model_contract_table(
                     tables["geometry_summary_comparison"],
                     summary_rows,
                     target=target,
                     best_worst_style=True,
                 ))
                 if truth_rows:
-                    parts.append(_render_model_contract_table(
+                    extension_parts.append(_render_model_contract_table(
                         tables["truth_5x5"], truth_rows, target=target,
                     ))
                 if predicted_rows:
-                    parts.append(_render_model_contract_table(
+                    extension_parts.append(_render_model_contract_table(
                         tables["predicted_5x5_comparison"], predicted_rows, target=target,
                     ))
                 if cohort_rows:
-                    parts.append(_render_model_contract_table(
+                    extension_parts.append(_render_model_contract_table(
                         tables["safety_cohorts_comparison"],
                         cohort_rows,
                         target=target,
                         best_worst_style=True,
                         best_worst_group_keys=("safety",),
                     ))
+            if extension_parts:
+                parts.append(extension_heading(extension_id))
+                parts.extend(extension_parts)
     return parts
 
 
@@ -1901,7 +1920,7 @@ def _write_standard_model_comparison_report(
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "evaluation_mode": mode,
         "robustness": bool(robustness),
-        "model_specific_extension_ids": list(contract.model_specific_extension_ids),
+        "model_specific_extension_ids": list(comparison_extension_ids()),
         "models": [
             {
                 "model_id": str(item["model_id"]),
@@ -5226,21 +5245,14 @@ def _interactive_model_research(program_name: str) -> int:
             _run_configured_model_comparison(program_name, rolling=False)
             continue
         if choice == "4":
-            if not settings.rolling_authorized:
-                print("[BLOCKED] Current Model只授權Forward Model Gate；Rolling比較尚未授權。")
-                continue
+            # [3]～[6] authorization is owned by the shared Model Compare/Test List.
+            # Do not re-gate the whole comparison by the current Training Model.
             _run_configured_model_comparison(program_name, rolling=True)
             continue
         if choice == "5":
-            if not settings.robustness_authorized:
-                print("[BLOCKED] Current Model尚未通過單一Seed Gate；Robustness尚未授權。")
-                continue
             _run_configured_model_robustness(program_name, rolling=False)
             continue
         if choice == "6":
-            if not settings.rolling_authorized or not settings.robustness_authorized:
-                print("[BLOCKED] Current Model尚未授權Rolling Robustness。")
-                continue
             _run_configured_model_robustness(program_name, rolling=True)
             continue
         if choice == "7":
